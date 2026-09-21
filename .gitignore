@@ -1,0 +1,98 @@
+# ---------------------------------------------------------------------------
+# Secrets -- never commit these.
+# The DEX Bridge group key lets anyone on the tailnet talk to a vending machine
+# that is in service and taking real money. Treat it as a live credential.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Postman exports carry the group apiKey in plaintext under "values".
+# Keep them locally for Postman, but never in the repo.
+*postman_environment.json
+*postman_globals.json
+
+# ---------------------------------------------------------------------------
+# Machine data
+# Raw polls are our own archive, not source. They get large and they are
+# append-only; keep them out of git and back them up separately.
+# ---------------------------------------------------------------------------
+data/
+snapshots/
+*.dex
+*.sqlite
+*.sqlite3
+*.db
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# ---------------------------------------------------------------------------
+# Node
+# ---------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Editors / IDEs
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*~
+
+# ---------------------------------------------------------------------------
+# OS
+# ---------------------------------------------------------------------------
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---------------------------------------------------------------------------
+# Secrets -- additional patterns.
+# Push protection catches well-known vendor key formats, but it does NOT know
+# what a `vend-b-...` DEX key looks like. These rules are the real defense.
+# ---------------------------------------------------------------------------
+*.p12
+*.pfx
+*.token
+credentials.json
+client_secret*.json
+
+# ---------------------------------------------------------------------------
+# Local run state
+# Written by our own tooling to track the last successful poll. Machine-local,
+# differs per person, would conflict on every merge.
+# ---------------------------------------------------------------------------
+.last_snapshot
+
+# ---------------------------------------------------------------------------
+# Notebooks
+# ---------------------------------------------------------------------------
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# Tooling / editors (additions)
+# ---------------------------------------------------------------------------
+.claude/settings.local.json
+.vs/
+*.log
