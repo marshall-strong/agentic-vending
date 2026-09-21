@@ -158,8 +158,23 @@ decisions are.
 | **PO (purchase order)** | What the agent submits to ask for drinks to be bought and loaded |
 | **Service visit** | When the worker restocks, swaps products, or changes prices. Free on Friday, $25 midweek |
 
-## Current state
+## Snapshot archive
 
-`main` has the repository's setup: `.gitignore`, `.env.example` and `.gitattributes`.
-The snapshot archiver, which records the machine's readings over time, is on its way in a
-separate pull request. Until it lands, there is nothing here to run.
+The machine reports lifetime counters as they stand right now -- there is no
+"sales this week" endpoint. Period sales only exist as the difference between
+two stored reads.
+
+`scripts/poll_snapshot.py` polls the DEX Bridge and archives the raw response.
+Start here:
+
+```
+python scripts\poll_snapshot.py --dry-run
+```
+
+That checks Tailscale and the bridge without reading the machine. Full setup,
+the scheduling, and the reasoning behind the polling cadence are in
+[`docs/snapshot-archive.md`](docs/snapshot-archive.md).
+
+Note: the bridge now stores every poll from anyone, and David's own poller reads the
+machine hourly (`GET /api/v1/history`). The plan is to replace this live poller with a
+history sync; until then, this is what runs.
