@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+# Line endings
+# Everyone on this team is on Windows, where editors default to CRLF, but the
+# repository should store LF for every text file. Without this, whoever has
+# `core.autocrlf` set differently produces whole-file diffs that hide the real
+# change. Settle it here so it does not depend on each person's Git config.
+#
+# `text=auto` means: Git decides whether a file is text, normalizes it to LF on
+# commit, and converts back to the platform's native endings on checkout.
+# ---------------------------------------------------------------------------
+* text=auto
+
+# Must stay LF even on a Windows checkout -- CRLF breaks the shebang line and
+# the script fails with a confusing "bad interpreter" error on the Pi.
+*.sh   text eol=lf
+*.py   text eol=lf
+
+# Must stay CRLF -- Windows shells are the only thing that runs these.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# ---------------------------------------------------------------------------
+# Binary
+# Never normalize, never try to diff as text.
+# ---------------------------------------------------------------------------
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.pdf  binary
+*.xlsx binary
+*.docx binary
+*.sqlite binary
+*.sqlite3 binary
+*.db   binary
