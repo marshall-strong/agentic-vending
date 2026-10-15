@@ -34,3 +34,10 @@
 *.sqlite binary
 *.sqlite3 binary
 *.db   binary
+
+# Raw EVA-DTS snapshots from the vending machine. They are plain text, but they must be
+# stored byte-for-byte: the lines end in CRLF and the `G85` checksum covers those exact
+# bytes, so normalizing them to LF would make every checksum fail. They are gitignored
+# today; this protects them if a sample is ever committed as a test fixture.
+*.dex     binary
+*.headers binary
