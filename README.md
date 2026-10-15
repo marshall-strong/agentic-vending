@@ -59,7 +59,14 @@ from day one.
   product swap, or a price change. Prices are physical tags, so they only change when
   someone visits.
 
-The detailed build plan lives in the team's shared folder in Teams, not in this repo.
+## Planning documents
+
+| File | What it is |
+|---|---|
+| [`docs/planning/tool-list.md`](docs/planning/tool-list.md) | **Start here.** The agent's proposed tools, what the bridge API actually offers, and the open questions. A snapshot of the [live Claude doc](https://claude.ai/code/artifact/82ae22ab-53a2-48c0-b4d5-c636efcc877d), where edits and comments go |
+| [`docs/planning/build-plan.md`](docs/planning/build-plan.md) | The 21 September build plan: architecture, guardrails, order of work |
+| [`docs/planning/2026-09-21-design-brief-meeting.md`](docs/planning/2026-09-21-design-brief-meeting.md) | What Graham and David answered in the Design Brief meeting, and what they still owe us |
+| [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 
 ## Getting set up
 
@@ -108,11 +115,13 @@ because they contain the same key in plain text. Two things worth knowing:
 ### 4. Check that you can reach the machine
 
 ```
-curl http://aihub-pi:8000/health
+python scripts/bridge.py health
 ```
 
-A `200` response means you are set. If the name will not resolve at all, Tailscale is not
-connected, and that is a network problem rather than an API one.
+`"status": "ok"` means you are set. If it says it could not reach the bridge, Tailscale is
+not connected, and that is a network problem rather than an API one. Then try
+`python scripts/bridge.py latest --summary` to see our slots' prices and lifetime sales.
+[`docs/dex-bridge.md`](docs/dex-bridge.md) covers every command.
 
 ## Working on this repo
 
