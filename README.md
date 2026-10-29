@@ -65,7 +65,9 @@ from day one.
 |---|---|
 | [`docs/planning/tool-list.md`](docs/planning/tool-list.md) | **Start here.** The agent's proposed tools, what the bridge API actually offers, and the open questions. A snapshot of the [live Claude doc](https://claude.ai/code/artifact/82ae22ab-53a2-48c0-b4d5-c636efcc877d), where edits and comments go |
 | [`docs/planning/build-plan.md`](docs/planning/build-plan.md) | The 21 September build plan: architecture, guardrails, order of work |
+| [`docs/planning/2026-10-19-david-api-qa.md`](docs/planning/2026-10-19-david-api-qa.md) | What David answered on 19 October about the API he is still building. These answers outrank the live spec |
 | [`docs/planning/2026-09-21-design-brief-meeting.md`](docs/planning/2026-09-21-design-brief-meeting.md) | What Graham and David answered in the Design Brief meeting, and what they still owe us |
+| [`docs/dex-api-quickstart.md`](docs/dex-api-quickstart.md) | **New to the API?** From Tailscale and a key to your first calls, plus troubleshooting |
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 
 ## Getting set up
@@ -121,7 +123,7 @@ python scripts/bridge.py health
 `"status": "ok"` means you are set. If it says it could not reach the bridge, Tailscale is
 not connected, and that is a network problem rather than an API one. Then try
 `python scripts/bridge.py latest --summary` to see our slots' prices and lifetime sales.
-[`docs/dex-bridge.md`](docs/dex-bridge.md) covers every command.
+[`docs/dex-bridge.md`](docs/dex-bridge.md) covers every command, and [`docs/dex-api-quickstart.md`](docs/dex-api-quickstart.md) walks through setup step by step.
 
 ### 5. Set up the database and sync the machine's history
 
