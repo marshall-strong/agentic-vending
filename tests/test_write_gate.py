@@ -1,6 +1,10 @@
 """Tests for the write gate and the halt switch."""
 
+import psycopg
 import pytest
+
+from tests.conftest import open_in
+from vending import halt
 
 from vending.config import is_halted, set_halted
 from vending.pricing import Refusal
@@ -79,6 +83,22 @@ def test_missing_halt_row_counts_as_halted(scratch):
     scratch.execute("delete from config where key = 'halted'")
     with pytest.raises(Refused):
         run_write(scratch, "t", {}, write_marker)
+
+
+def test_halt_waits_visibly_for_an_in_flight_write(schema_url, conn, capsys):
+    set_halted(conn, False, "test")
+    with open_in(*schema_url) as writer, writer.transaction():
+        assert not is_halted(writer, lock=True)  # a write holding the lock
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            set_halted(conn, True, "kevin", lock_timeout_ms=100)
+    halt.flip(conn, True, "kevin")  # lock released: goes straight through
+    assert is_halted(conn) and capsys.readouterr().out == ""
+
+
+def test_halt_needs_a_name_to_flip(capsys):
+    with pytest.raises(SystemExit):
+        halt.main(["on"])
+    assert "--by NAME is required" in capsys.readouterr().err
 
 
 def test_halt_flip_is_logged(conn):

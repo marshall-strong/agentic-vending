@@ -50,7 +50,8 @@ def set_price(slot: str, sale_price: str) -> Action:
     return action
 
 
-def request_catalog_product(brand: str, flavor: str, size: str) -> Action:
+def request_catalog_product(name: str, size: str, line: str | None, flavor: str | None,
+                            note: str | None) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
         raise NotBuilt("request_catalog_product", "waiting on the catalog-request routes")
     return action

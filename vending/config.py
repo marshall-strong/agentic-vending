@@ -22,9 +22,17 @@ def is_halted(conn: psycopg.Connection, *, lock: bool = False) -> bool:
     return row is None or row[0] is not False
 
 
-def set_halted(conn: psycopg.Connection, halted: bool, who: str) -> None:
-    """Flip the halt flag, and log the flip like any other write."""
+def set_halted(conn: psycopg.Connection, halted: bool, who: str, *,
+               lock_timeout_ms: int | None = None) -> None:
+    """Flip the halt flag, and log the flip like any other write.
+
+    An in-flight write holds the flag's row lock, so this waits for it to
+    finish. With `lock_timeout_ms`, it gives up after that long instead and
+    raises `psycopg.errors.LockNotAvailable`, so a caller can say it's waiting.
+    """
     with conn.transaction():
+        if lock_timeout_ms is not None:
+            conn.execute(f"set local lock_timeout = {int(lock_timeout_ms)}")
         conn.execute(
             "insert into config (key, value, updated_by) values ('halted', %s, %s)"
             " on conflict (key) do update set value = excluded.value,"

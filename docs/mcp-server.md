@@ -7,7 +7,7 @@ polls the machine.
 
 | Tool | State |
 | --- | --- |
-| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. |
+| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | Registered; logic is being built separately in `vending/tools/sales_history.py` |
 | `get_catalog`, `get_account_balance`, `preview_desired_state`, `get_purchase_requests`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
 | `submit_desired_state`, `set_price`, `request_catalog_product` | Write stubs, already behind the write gate: refused while halted, logged either way |
@@ -26,7 +26,7 @@ python -m vending.server                # waits silently on stdin: that's correc
 
 The server applies any pending migrations when it starts. Stop it with Ctrl+C.
 
-**For the live run, set `VENDING_TOOLS=built`.** Then only working tools are registered, so the
+**For the live run, set `VENDING_TOOLS=built` in the real environment** (it is not read from `.env`). Then only working tools are registered, so the
 agent doesn't pay tokens on every request to describe stubs. The default, `all`, registers all
 10 so the team can see the whole contract in a client.
 
@@ -70,12 +70,14 @@ The server reads `DATABASE_URL` from the repository's `.env`, so the config need
 
 ```
 python -m vending.halt status
-python -m vending.halt on
-python -m vending.halt off
+python -m vending.halt on --by kevin
+python -m vending.halt off --by kevin
 ```
 
 It starts **on**. Every write tool refuses with `halted` until a person turns it off. If the
-`config` row is missing, it counts as on. Every flip is logged. The harder stop needs nothing
+`config` row is missing, it counts as on. Every flip is logged with the `--by` name, which is
+required because everyone on the shared VM is the same OS user. If a write is in flight, the
+command prints "waiting for an in-flight write to finish..." and goes through when it ends. The harder stop needs nothing
 from the database: stop the server process, or remove it from the agent's MCP config.
 
 ## The write gate

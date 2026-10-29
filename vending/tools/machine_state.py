@@ -11,7 +11,7 @@ exists. They are null, not zero, so the agent can't mistake "unknown" for "empty
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 import psycopg
@@ -21,6 +21,8 @@ from vending.slots import DEVICE_ID, SLOTS
 from vending.tools import Reply
 
 WINDOW = timedelta(days=7)
+# David polls hourly; older than this means the history sync has likely stalled.
+STALE_AFTER = timedelta(hours=3)
 NEEDS_RECEIPTS = "stock_on_hand, units_sold_since_load, days_since_loaded and days_of_stock_left need restock receipts, which aren't synced yet"
 
 
@@ -38,6 +40,7 @@ class SlotState(BaseModel):
 
 class MachineState(Reply):
     as_of: datetime | None = None
+    stale: bool = False
     window_start: datetime | None = None
     data: list[SlotState] = []
 
@@ -68,7 +71,7 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, baseline: C
     return states
 
 
-def get_machine_state(conn: psycopg.Connection) -> MachineState:
+def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> MachineState:
     latest = _poll(conn, "true")
     if latest is None:
         return MachineState(success=False, message=(
@@ -82,9 +85,14 @@ def get_machine_state(conn: psycopg.Connection) -> MachineState:
                    baseline[1] if baseline else None,
                    _counters(conn, baseline[0]) if baseline else {})
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
+    age = (now or datetime.now(timezone.utc)) - as_of
+    stale = age > STALE_AFTER
+    warning = (f"STALE: the latest poll is {age.total_seconds() / 3600:.1f} hours old, so the history sync "
+               "may have stopped; don't price on these rates until it catches up. ") if stale else ""
     return MachineState(
         success=True,
-        message=f"{len(states)} slots as of the poll at {as_of:%Y-%m-%d %H:%M} UTC; sales window {window}. {NEEDS_RECEIPTS}.",
+        stale=stale,
+        message=f"{warning}{len(states)} slots as of the poll at {as_of:%Y-%m-%d %H:%M} UTC; sales window {window}. {NEEDS_RECEIPTS}.",
         count=len(states),
         as_of=as_of,
         window_start=baseline[1] if baseline else None,

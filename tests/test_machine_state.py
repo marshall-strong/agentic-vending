@@ -50,8 +50,8 @@ def test_reads_stored_polls(conn):
     store_poll(conn, "mid", "2026-10-26T12:00:00+00:00", {"15": (250, 104)})
     store_poll(conn, "latest", "2026-10-29T12:00:00+00:00", {"15": (275, 114), "16": (300, 7), "11": (100, 999)})
     store_poll(conn, "other-device", "2026-10-30T12:00:00+00:00", {"15": (1, 1)}, device_id="vmc2")
-    reply = get_machine_state(conn)
-    assert reply.success and reply.count == 20
+    reply = get_machine_state(conn, now=NOW + timedelta(hours=1))
+    assert reply.success and reply.count == 20 and not reply.stale
     assert [s.slot for s in reply.data] == list(SLOTS)  # slot 11 isn't ours
     assert reply.as_of == NOW  # the vmc2 poll is ignored
     assert reply.window_start == NOW - timedelta(days=7)
@@ -63,5 +63,12 @@ def test_reads_stored_polls(conn):
 def test_short_history_uses_the_first_poll(conn):
     store_poll(conn, "a", "2026-10-28T12:00:00+00:00", {"15": (250, 100)})
     store_poll(conn, "b", "2026-10-29T12:00:00+00:00", {"15": (250, 103)})
-    states = by_slot(get_machine_state(conn).data)
+    states = by_slot(get_machine_state(conn, now=NOW).data)
     assert states["15"].units_per_day == "3.00"
+
+
+def test_an_old_poll_is_flagged_stale(conn):
+    store_poll(conn, "a", "2026-10-29T12:00:00+00:00", {"15": (250, 100)})
+    assert not get_machine_state(conn, now=NOW + timedelta(hours=3)).stale
+    reply = get_machine_state(conn, now=NOW + timedelta(hours=3, minutes=1))
+    assert reply.stale and reply.message.startswith("STALE: the latest poll is 3.0 hours old")

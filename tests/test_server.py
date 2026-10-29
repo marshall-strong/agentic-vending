@@ -13,7 +13,7 @@ from vending.config import set_halted
 WRITE_ARGS = {
     "submit_desired_state": {"desired": {"slots": [{"slot": "15", "keep": True}]}},
     "set_price": {"slot": "15", "sale_price": "2.50"},
-    "request_catalog_product": {"brand": "Coca-Cola", "flavor": "Cherry", "size": "20 oz"},
+    "request_catalog_product": {"name": "Coca-Cola Cherry", "size": "20 oz"},
 }
 
 
@@ -30,8 +30,11 @@ def call(tool: str | None, arguments: dict | None = None):
 @pytest.fixture
 def db(schema_url, monkeypatch):
     monkeypatch.setattr(server, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(server, "_conn", None)
     with open_in(*schema_url) as conn:
         yield conn
+    if server._conn is not None:
+        server._conn.close()
 
 
 def test_lists_all_ten_tools():
@@ -45,6 +48,7 @@ def test_lists_all_ten_tools():
 def test_machine_state_end_to_end(db):
     store_poll(db, "a", "2026-10-22T12:00:00+00:00", {"15": (250, 100)})
     store_poll(db, "b", "2026-10-29T12:00:00+00:00", {"15": (250, 121)})
+    store_poll(db, "c", "2026-10-29T12:00:00+00:00", {"15": (250, 121)}, device_id="other")
     result = call("get_machine_state")
     assert not result.isError
     slot = result.structuredContent["data"][0]
@@ -83,6 +87,22 @@ def test_reads_are_logged_with_their_arguments_and_result(db):
                       " from action_log order by id").fetchall()
     assert rows[0] == ("read", "get_machine_state", "done", {}, "2.50")
     assert rows[1][:4] == ("read", "get_pnl", "failed", {"start": "2026-10-01", "end": None})
+
+
+def test_a_read_with_no_data_is_logged_as_failed(db):
+    result = call("get_machine_state")
+    assert result.structuredContent["success"] is False
+    assert db.execute("select outcome from action_log").fetchall() == [("failed",)]
+
+
+def test_the_connection_is_reused_and_reopened(db):
+    call("get_account_balance")
+    first = server._conn
+    call("get_account_balance")
+    assert server._conn is first
+    first.close()
+    call("get_account_balance")
+    assert server._conn is not first and not server._conn.closed
 
 
 def test_built_only_hides_the_stubs(monkeypatch):
