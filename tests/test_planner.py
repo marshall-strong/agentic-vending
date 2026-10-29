@@ -360,6 +360,13 @@ class Refusals(unittest.TestCase):
         p = plan(pickle_17(), now=FRIDAY_MIDNIGHT, sourcing=[given])
         self.assertEqual(codes(p), ["past_cutoff"])
 
+    def test_off_cycle_ignores_the_friday_cutoffs(self):
+        # Ordered on a Friday for a visit on another day: no refusal, no Amazon warning.
+        p = plan(restock_15(), pickle_17(), now=FRIDAY_MIDNIGHT, off_cycle=True)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertFalse(any("cutoff" in w for w in p.warnings))
+        self.assertEqual(p.cost.visit_fee_cents, 2500)
+
     def test_request_pending(self):
         p = plan(restock_15(), pending=[PendingRequest("pr-41")])
         self.assertEqual(codes(p), ["request_pending"])

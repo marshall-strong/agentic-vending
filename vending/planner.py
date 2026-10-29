@@ -191,8 +191,9 @@ class DesiredSlot:
 class DesiredState:
     """The agent's whole request: all 20 slots, how to buy, and the visit.
 
-    `off_cycle=True` asks for a midweek visit, which costs
-    `config.midweek_fee_cents` on top of the purchases.
+    `off_cycle=True` asks for a visit on any day but Friday, which costs
+    `config.midweek_fee_cents` on top of the purchases (confirmed 29 Oct) and
+    skips the store cutoffs, which only time purchases for the Friday visit.
     """
     slots: tuple[DesiredSlot, ...]
     off_cycle: bool = False
@@ -232,6 +233,7 @@ class Config:
     warning, not a refusal, because David saw no hard Amazon deadline. The
     week turns over on `week_starts` (Saturday, after the Friday restock), so
     a cutoff passed on Thursday stops mattering once the visit is done.
+    Cutoffs apply only to the Friday visit, never to an off-cycle one.
 
     `timezone` may be a name or a tzinfo. A name needs the IANA database,
     which Windows lacks unless the `tzdata` package is installed.
@@ -547,7 +549,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     cost = _cost_plan(slots, desired.off_cycle, config, current.balance_cents)
 
     # 7. Gates.
-    used = _stores_used(slots)
+    # The cutoffs exist to get stock to the Friday visit. An off-cycle visit
+    # happens on another day, so they don't apply to it.
+    used = {} if desired.off_cycle else _stores_used(slots)
     now_local = now.astimezone(_tz(config.timezone)) if used else now
     for store, slot_names in sorted(used.items()):
         cutoff = config.cutoffs.get(store)

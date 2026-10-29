@@ -15,7 +15,7 @@ there; this file is a point-in-time copy so the plan sits next to the code.
 | Open question (19 Oct) | What the live API says |
 | --- | --- |
 | Final desired-state schema and field names | Body is `off_cycle`, `note`, `lines`. Each line is a slot with `source: "purchase"` (a `primary` and optional `alternate` choice) or `source: "back_stock"` (a `load`). The spec does not say every one of our 20 slots must be listed. |
-| Is a $25 midweek visit a flag or its own route? | A flag: `off_cycle: true` on the request. The spec does not mention the fee. |
+| Is a $25 midweek visit a flag or its own route? | A flag: `off_cycle: true` on the request, for a visit on any day but Friday. The spec does not mention the fee, but the team confirmed on 29 Oct that it is still $25. |
 | Store list | `Walmart`, `Costco`, `Amazon`, `BJs`, spelled exactly. Our planned codes (`WALMART`, `BJS` and so on) must map to these. |
 | Can the alternate be a different product, with its own sale price? | The schema allows it: the alternate has its own `sku` and `sale_price`. Only `alternate_same_as_primary` is refused. |
 | Catalog-request routes (#11) | Shipped: `POST /api/v1/product-requests` (`name`, `size`, optional `line`, `flavor`, `note`) and `GET /api/v1/product-requests/{id}` (`pending`, `rejected`, or `approved` with the SKU). |
