@@ -12,6 +12,19 @@ that is sent is the plan that was checked. That only works if this function
 has no side effects: it reads its arguments and returns a `Plan`, nothing else.
 See "The restock planner" in docs/planning/tool-list.md for the eight steps.
 
+The lines follow the bridge's live purchase-request schema (checked against
+openapi.json on 29 Oct; see docs/dex-bridge.md). Its shape forces three things
+the 19 Oct plan didn't expect:
+
+- A line has one source, a purchase or a back-stock load, and a slot gets one
+  line. So a slot loads from the closet only when the closet covers all of it.
+- Units pulled at this visit can't be loaded at this visit until David
+  confirms a line may load what another line pulls. They go to the closet.
+- Every line loads at least one unit, so a price change alone can't be sent,
+  and slots that don't change get no line.
+
+`Plan.request()` is the body to POST, so the field mapping lives here too.
+
 A plan with problems still comes back with its lines, costs and floors filled
 in as far as they could be worked out, plus *every* refusal at once, so the
 agent can fix the whole plan in one turn instead of one problem per call.
@@ -28,10 +41,11 @@ import hashlib
 import json
 from collections import defaultdict
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, time, tzinfo
 from decimal import Decimal
 from fractions import Fraction
+from urllib.parse import urlparse
 
 from vending.pricing import (
     DEFAULT_TAX_PERCENT,
@@ -49,28 +63,36 @@ from vending.pricing import (
 OUR_SLOTS: tuple[str, ...] = tuple(
     f"{row}{col}" for row in range(1, 6) for col in range(5, 9))
 
-# The store list waits on David; Costco was mentioned but not confirmed.
-STORES = frozenset({"WALMART", "AMAZON", "BJS", "COSTCO"})
+# Spelled exactly as the API wants them.
+AMAZON = "Amazon"
+STORES = frozenset({"Walmart", "Costco", AMAZON, "BJs"})
 
-SCHEDULED = "scheduled"     # the Friday visit, free
-MIDWEEK = "midweek"         # costs config.midweek_fee_cents
+# Limits from the live schema. Going over any of them gets the request refused.
+MAX_PACKS = 20
+MAX_UNITS_PER_PACK = 60
+MAX_PRICE_PER_PACK_CENTS = 20000
+MAX_SALE_PRICE_CENTS = 1000
+MAX_PACK_DESCRIPTION = 100
 
 # David's cases, one per slot.
 NO_CHANGE = "no_change"
 RESTOCK = "restock"
-PRICE_ONLY = "price_only"
-REPOSITION = "reposition"
+PRICE_ONLY = "price_only"   # refused: the API has no way to send it yet
 SWITCH = "switch"
+
+# Where a line's units come from (the API's `source`).
+PURCHASE = "purchase"
+BACK_STOCK = "back_stock"
 
 # A price as the agent or the database hands it over. See `to_cents`.
 Price = str | Decimal | int
 
 
 # --- Inputs ------------------------------------------------------------------
-# Field names follow tool-list.md so these can be filled from Postgres later.
-# Prices that come from people (the agent, the team's sourcing table) keep the
-# spec's names and are parsed here; prices that come from our own database are
-# already integer cents and say so in the name.
+# Field names follow the API where it has one, and tool-list.md otherwise, so
+# these can be filled from Postgres later. Prices that come from people (the
+# agent, the team's sourcing table) are parsed here; prices that come from our
+# own database are already integer cents and say so in the name.
 
 @dataclass(frozen=True)
 class SlotState:
@@ -84,7 +106,7 @@ class SlotState:
 
 @dataclass(frozen=True)
 class ClosetStock:
-    """Units of one product in the closet, at their actual cost after spoilage."""
+    """Units of one product in the closet, at their actual cost after losses."""
     product: str
     units: int
     unit_cost: Fraction | int           # cents per unit
@@ -107,15 +129,17 @@ class CatalogProduct:
 class PurchaseOption:
     """One way to buy a product: a store, a pack, and the most to pay for it.
 
-    `expected_pack_price` is what we think the pack costs. The agent usually
-    gives only the max; the planner then borrows the expected price from the
-    sourcing table for the same store and pack, or falls back to the max.
+    `expected_price_per_pack` is what we think the pack costs. The agent
+    usually gives only the max; the planner then borrows the expected price
+    from the sourcing table for the same store and pack, or falls back to the
+    max. `pack_description` is passed to the worker as what to look for.
     """
     store: str
-    pack_size: int
-    max_pack_price: Price
-    link: str | None = None
-    expected_pack_price: Price | None = None
+    units_per_pack: int
+    max_price_per_pack: Price
+    url: str | None = None
+    expected_price_per_pack: Price | None = None
+    pack_description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -153,8 +177,8 @@ class DesiredSlot:
 
     `keep=True` means no change and ignores the other fields. Otherwise the
     agent gives the product and the sale price; `fill_to` defaults to the
-    slot's capacity. `product=None` asks for an empty slot, which is refused
-    until David confirms a slot may be left empty.
+    slot's capacity. `product=None` asks for an empty slot, which the API
+    can't express yet, so it is refused.
     """
     slot: str
     keep: bool = False
@@ -165,16 +189,20 @@ class DesiredSlot:
 
 @dataclass(frozen=True)
 class DesiredState:
-    """The agent's whole request: the visit, all 20 slots, and how to buy."""
-    visit: str
+    """The agent's whole request: all 20 slots, how to buy, and the visit.
+
+    `off_cycle=True` asks for a midweek visit, which costs
+    `config.midweek_fee_cents` on top of the purchases.
+    """
     slots: tuple[DesiredSlot, ...]
+    off_cycle: bool = False
     sourcing: tuple[Sourcing, ...] = ()
 
     def __post_init__(self):
-        # The tool schema should already stop this; a typo here would
-        # otherwise turn a midweek visit into a free one, or the reverse.
-        if self.visit not in (SCHEDULED, MIDWEEK):
-            raise ValueError(f"visit must be {SCHEDULED!r} or {MIDWEEK!r}, not {self.visit!r}")
+        # The tool schema should already stop this; a truthy string here would
+        # otherwise turn a free visit into a $25 one, or the reverse.
+        if not isinstance(self.off_cycle, bool):
+            raise ValueError(f"off_cycle must be true or false, not {self.off_cycle!r}")
 
 
 @dataclass(frozen=True)
@@ -189,8 +217,8 @@ AMAZON_CUTOFF = Cutoff(2, time(23, 59))     # Wednesday 23:59, two-day shipping
 
 
 def _default_cutoffs() -> dict[str, Cutoff]:
-    return {"WALMART": IN_STORE_CUTOFF, "BJS": IN_STORE_CUTOFF,
-            "COSTCO": IN_STORE_CUTOFF, "AMAZON": AMAZON_CUTOFF}
+    return {"Walmart": IN_STORE_CUTOFF, "BJs": IN_STORE_CUTOFF,
+            "Costco": IN_STORE_CUTOFF, AMAZON: AMAZON_CUTOFF}
 
 
 @dataclass(frozen=True)
@@ -198,11 +226,12 @@ class Config:
     """The `config` table. Most of it is still undecided, so all of it is data.
 
     `slot_capacity` has no default because nobody has measured a rail yet.
-    The ceiling default is the team's $6.00 proposal. Cutoffs are per store
-    and in `timezone`; past a cutoff in `soft_cutoff_stores` is a warning,
-    not a refusal, because David saw no hard Amazon deadline. The week turns
-    over on `week_starts` (Saturday, after the Friday restock), so a cutoff
-    passed on Thursday stops mattering once the visit is done.
+    The ceiling default is the team's $6.00 proposal; the API refuses any
+    sale price over $10.00, so a higher ceiling is an error. Cutoffs are per
+    store and in `timezone`; past a cutoff in `soft_cutoff_stores` is a
+    warning, not a refusal, because David saw no hard Amazon deadline. The
+    week turns over on `week_starts` (Saturday, after the Friday restock), so
+    a cutoff passed on Thursday stops mattering once the visit is done.
 
     `timezone` may be a name or a tzinfo. A name needs the IANA database,
     which Windows lacks unless the `tzdata` package is installed.
@@ -215,9 +244,15 @@ class Config:
     slots: tuple[str, ...] = OUR_SLOTS
     stores: frozenset[str] = STORES
     cutoffs: Mapping[str, Cutoff] = field(default_factory=_default_cutoffs)
-    soft_cutoff_stores: frozenset[str] = frozenset({"AMAZON"})
+    soft_cutoff_stores: frozenset[str] = frozenset({AMAZON})
     week_starts: int = 5
     timezone: str | tzinfo = "America/New_York"
+
+    def __post_init__(self):
+        if self.price_ceiling_cents > MAX_SALE_PRICE_CENTS:
+            raise ValueError(
+                f"price ceiling {_dollars(self.price_ceiling_cents)} is over the API's "
+                f"{_dollars(MAX_SALE_PRICE_CENTS)}")
 
 
 # --- Outputs -----------------------------------------------------------------
@@ -226,42 +261,68 @@ class Config:
 class PlannedPurchase:
     """One option the worker may buy for one line, sized for that line alone."""
     store: str
-    link: str | None
-    pack_size: int
+    url: str | None
+    units_per_pack: int
     packs: int
-    max_pack_price_cents: int
-    expected_pack_price_cents: int
+    max_price_per_pack_cents: int
+    expected_price_per_pack_cents: int
+    pack_description: str | None
     units_to_closet: int        # bought beyond the slot's shortfall
 
 
 @dataclass(frozen=True)
 class Purchase:
-    units_short: int            # what the slot still needs after moves and closet
+    units_short: int            # what the slot needs loaded
     primary: PlannedPurchase
     alternate: PlannedPurchase | None
 
 
 @dataclass(frozen=True)
 class Line:
-    """One slot's part of the request. Every slot gets one, even unchanged.
+    """One slot that loads something. The API takes no other kind.
 
-    `change_product` is what the bridge checks: true exactly when the product
-    differs from what the slot holds now. Units arrive from other slots first,
-    then the closet, then the purchase.
+    `source` is `purchase` (then `purchase` is set) or `back_stock` (the
+    units come from the closet). `change_product` is what the bridge checks:
+    true exactly when the product differs from what the slot holds now.
+    Pulled units go to the closet.
     """
     slot: str
+    source: str
     action: str
-    product: str | None
-    sale_price_cents: int | None
+    product: str
+    sale_price_cents: int
     change_product: bool
     fill_to: int
     units_staying: int
     units_to_load: int
-    from_slots: tuple[tuple[str, int], ...]
-    from_back_stock: int
     purchase: Purchase | None
     pulled_product: str | None
     units_pulled: int
+
+    def to_api(self) -> dict:
+        """This line as the bridge's PurchaseLine or BackStockLine."""
+        if self.source == BACK_STOCK:
+            return {"slot": self.slot, "source": BACK_STOCK, "load": {
+                "sku": self.product, "units": self.units_to_load,
+                "sale_price": _money(self.sale_price_cents),
+                "change_product": self.change_product}}
+        body = {"slot": self.slot, "source": PURCHASE,
+                "primary": self._choice(self.purchase.primary)}
+        if self.purchase.alternate is not None:
+            body["alternate"] = self._choice(self.purchase.alternate)
+        return body
+
+    def _choice(self, o: PlannedPurchase) -> dict:
+        choice = {"sku": self.product, "store": o.store, "packs": o.packs,
+                  "units_per_pack": o.units_per_pack,
+                  "max_price_per_pack": _money(o.max_price_per_pack_cents),
+                  "sale_price": _money(self.sale_price_cents),
+                  "change_product": self.change_product}
+        if o.url:
+            choice["url"] = o.url
+        if o.pack_description:
+            choice["pack_description"] = o.pack_description
+        return choice
 
 
 @dataclass(frozen=True)
@@ -302,8 +363,8 @@ class SlotFloor:
 class Plan:
     """The planner's answer. Submittable only when `refusals` is empty.
 
-    `plan_hash` is set only then, and depends only on the visit and the lines,
-    so #6 can tell the same plan submitted twice.
+    `plan_hash` is set only then. It hashes the request body, so #6 can tell
+    the same plan submitted twice whenever it was computed.
     """
     lines: tuple[Line, ...]
     directive: str
@@ -312,10 +373,15 @@ class Plan:
     warnings: tuple[str, ...]
     refusals: tuple[Refusal, ...]
     plan_hash: str | None
+    off_cycle: bool = False
 
     @property
     def ok(self) -> bool:
         return not self.refusals
+
+    def request(self) -> dict:
+        """The body for POST /api/v1/purchase-requests."""
+        return {"off_cycle": self.off_cycle, "lines": [line.to_api() for line in self.lines]}
 
 
 # --- Working state -----------------------------------------------------------
@@ -323,10 +389,11 @@ class Plan:
 @dataclass
 class _Option:
     store: str
-    link: str | None
-    pack_size: int
+    url: str | None
+    units_per_pack: int
     max_cents: int
     expected_cents: int | None
+    pack_description: str | None
 
 
 @dataclass
@@ -338,11 +405,9 @@ class _Source:
 
 @dataclass
 class _Lot:
-    """Units that can be drawn on: freed from a switching slot, or in the closet."""
-    source: str
-    from_slot: str | None
+    """Units of one product in the closet, as the allocation draws them down."""
     units: int
-    unit_cost: Fraction | None
+    unit_cost: Fraction
 
 
 @dataclass
@@ -356,7 +421,6 @@ class _Slot:
     staying: int
     need: int = 0
     changes_product: bool = False
-    from_slots: list[tuple[str, int]] = field(default_factory=list)
     from_back_stock: int = 0
     shortfall: int = 0
     purchase: Purchase | None = None
@@ -369,7 +433,7 @@ class _Slot:
     @property
     def action(self) -> str:
         if self.changes_product:
-            return REPOSITION if self.from_slots else SWITCH
+            return SWITCH
         if self.need > 0:
             return RESTOCK
         if self.price_changed:
@@ -406,38 +470,40 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     slots = [_intend(slot, states.get(slot), targets.get(slot), active, config, refusals)
              for slot in config.slots]
 
-    # 3. Supply per product: units freed by slots switching away, then the closet.
-    freed: dict[str, list[_Lot]] = defaultdict(list)
+    # 3. Supply: only what the closet holds before the visit. Units pulled at
+    #    this visit can't be loaded until the next request, until David
+    #    confirms a line may load what another line pulls.
     closet: dict[str, list[_Lot]] = defaultdict(list)
-    for s in slots:
-        if s.changes_product and s.state.product is not None and s.on_hand > 0:
-            freed[s.state.product].append(_Lot(
-                f"slot {s.slot}", s.slot, s.on_hand, _cost(s.state.unit_cost)))
     for c in current.closet:
         if c.units > 0:
-            closet[c.product].append(_Lot("back stock", None, c.units, _cost(c.unit_cost)))
-    stocked = {p for p, lots in (*freed.items(), *closet.items()) if lots}
+            closet[c.product].append(_Lot(c.units, Fraction(c.unit_cost)))
 
-    # 4. Allocate: slot-to-slot moves first, then the closet, then purchases.
+    # 4. Allocate. A line has one source, so a slot loads from the closet only
+    #    if the closet covers all of it; otherwise it buys all of it.
     for s in slots:
         if s.staying and (s.need or s.price_changed):
             # Units staying in the slot sell at its new price too.
             _add_part(s, "on hand", s.state.unit_cost, config, warnings, s.staying)
+        if not s.need:
+            continue
+        lots = closet.get(s.product, [])
+        available = sum(lot.units for lot in lots)
+        if available < s.need:
+            s.shortfall = s.need
+            if available:
+                warnings.append(
+                    f"slot {s.slot}: {available} {s.product} in the closet go unused, because "
+                    f"a line loads from one source; fill_to {s.staying + available} would "
+                    f"load them instead of buying")
+            continue
         remaining = s.need
-        for lot in (*freed.get(s.product, ()), *closet.get(s.product, ())):
-            if remaining == 0:
-                break
+        for lot in lots:
             take = min(remaining, lot.units)
-            if take == 0:
-                continue
-            lot.units -= take
-            remaining -= take
-            if lot.from_slot is None:
-                s.from_back_stock += take
-            else:
-                s.from_slots.append((lot.from_slot, take))
-            _add_part(s, lot.source, lot.unit_cost, config, warnings, take)
-        s.shortfall = remaining
+            if take:
+                lot.units -= take
+                remaining -= take
+                _add_part(s, "back stock", lot.unit_cost, config, warnings, take)
+        s.from_back_stock = s.need
 
     # 5. Size each purchase, separately per slot until David confirms one
     #    line may load units bought on another.
@@ -448,10 +514,10 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         source = sources.get(s.product)
         if source is None:
             if not sources.is_bad(s.product):
-                code = "insufficient_stock" if s.product in stocked else "no_sourcing"
+                code = "insufficient_stock" if closet.get(s.product) else "no_sourcing"
                 refusals.append(Refusal(code, (
-                    f"slot {s.slot} is {s.shortfall} short of {s.product} after moves and "
-                    f"back stock, and there is no sourcing for it, given or in the table; "
+                    f"slot {s.slot} needs {s.shortfall} {s.product}, the closet can't cover "
+                    f"it, and there is no sourcing for it, given or in the table; "
                     f"add sourcing or lower fill_to"), s.slot))
             continue
         extra = 0
@@ -461,17 +527,24 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         primary = _size(source.primary, s.shortfall, extra)
         alternate = source.alternate and _size(source.alternate, s.shortfall, extra)
         s.purchase = Purchase(s.shortfall, primary, alternate)
-        for label, option in (("primary", source.primary), ("alternate", source.alternate)):
-            if option is not None:
-                s.parts.append(FloorPart(
-                    f"{label} {option.store} {option.pack_size}-pack, max {_dollars(option.max_cents)}",
-                    Fraction(option.max_cents, option.pack_size),
-                    pack_floor_cents(option.max_cents, option.pack_size, config.tax_percent)))
+        for label, option, planned in (("primary", source.primary, primary),
+                                       ("alternate", source.alternate, alternate)):
+            if option is None:
+                continue
+            s.parts.append(FloorPart(
+                f"{label} {option.store} {option.units_per_pack}-pack, max {_dollars(option.max_cents)}",
+                Fraction(option.max_cents, option.units_per_pack),
+                pack_floor_cents(option.max_cents, option.units_per_pack, config.tax_percent)))
+            if planned.packs > MAX_PACKS:
+                refusals.append(Refusal("too_many_packs", (
+                    f"slot {s.slot} needs {planned.packs} {option.units_per_pack}-packs from "
+                    f"{option.store}, and a line takes at most {MAX_PACKS}; use a bigger pack, "
+                    f"or lower fill_to or extra_units_to_closet"), s.slot))
     for product in sources.extras_wanted() - extras_placed:
         warnings.append(f"extra_units_to_closet for {product} ignored: no line buys {product}")
 
     # 6. Cost: expected at the primary's expected price, max at the dearer option.
-    cost = _cost_plan(slots, desired.visit, config, current.balance_cents)
+    cost = _cost_plan(slots, desired.off_cycle, config, current.balance_cents)
 
     # 7. Gates.
     used = _stores_used(slots)
@@ -505,25 +578,35 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     for s in slots:
         if s.action == NO_CHANGE:
             continue
+        if s.action == PRICE_ONLY:
+            refusals.append(Refusal("price_only_unsupported", (
+                f"slot {s.slot} changes only its price, but every line must load at least "
+                f"one unit and there is no price-change route yet; load at least one unit "
+                f"or keep the old price"), s.slot))
         floor = slot_floor_cents([p.floor_cents for p in s.parts]) if s.parts else 0
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
         refusals.extend(check_price(s.price_cents, floor, config.price_ceiling_cents, s.slot))
 
-    if desired.visit == MIDWEEK and all(s.action == NO_CHANGE for s in slots):
-        refusals.append(Refusal("midweek_no_op", (
-            f"a midweek visit costs {_dollars(config.midweek_fee_cents)} and this plan "
-            f"changes nothing; don't spend it")))
-
-    for cycle in _move_cycles(slots):
-        refusals.append(Refusal("swap_unconfirmed", (
-            f"slots {', '.join(cycle)} swap products, which needs a pull and a load in "
-            f"one request; spread it over two visits until David confirms"), cycle[0]))
-
     # 8. The plan, with every refusal found.
-    lines = tuple(_line(s) for s in slots)
-    plan_hash = None if refusals else _hash(desired.visit, lines)
-    return Plan(lines, _directive(desired.visit, slots), cost, tuple(floors),
-                tuple(warnings), tuple(refusals), plan_hash)
+    lines = tuple(_line(s) for s in slots if s.need)
+    if not lines and not refusals:
+        # Only when nothing else is wrong: a refused slot already says why
+        # it loads nothing, and the API refuses a request with no lines.
+        if desired.off_cycle:
+            refusals.append(Refusal("midweek_no_op", (
+                f"a midweek visit costs {_dollars(config.midweek_fee_cents)} and this plan "
+                f"loads nothing; don't spend it")))
+        else:
+            refusals.append(Refusal("nothing_to_load", (
+                "no slot loads anything, so there is no request to send; "
+                "skip this week's request")))
+    plan = Plan(lines, _directive(desired.off_cycle, slots), cost, tuple(floors),
+                tuple(warnings), tuple(refusals), None, desired.off_cycle)
+    if refusals:
+        return plan
+    body = json.dumps(plan.request(), sort_keys=True)
+    return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
+                hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle)
 
 
 # --- Step 1 helpers ----------------------------------------------------------
@@ -563,7 +646,7 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
     if target.product is None:
         usable = False
         refusals.append(Refusal("empty_slot", (
-            f"slot {slot} would be left empty, which David hasn't confirmed; "
+            f"slot {slot} would be left empty, which the API can't do yet; "
             f"keep or switch it"), slot))
     elif target.product not in active:
         usable = False
@@ -581,6 +664,10 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
         except ValueError as e:
             usable = False
             refusals.append(Refusal("price_off_step", f"slot {slot}: {e}", slot))
+        else:
+            if price <= 0:
+                usable = False
+                refusals.append(Refusal("below_floor", f"slot {slot}: a sale price must be above $0.00", slot))
 
     fill_to = config.slot_capacity if target.fill_to is None else target.fill_to
     if not 0 <= fill_to <= config.slot_capacity:
@@ -651,25 +738,37 @@ class _Sources:
         before = len(problems)
         if o.store not in self._config.stores:
             problems.append(f"{label} store {o.store!r} is not one of {', '.join(sorted(self._config.stores))}")
-        if o.store == "AMAZON" and not o.link:
-            problems.append(f"{label} is from Amazon but has no link")
-        if isinstance(o.pack_size, bool) or not isinstance(o.pack_size, int) or o.pack_size <= 0:
-            problems.append(f"{label} pack size must be a positive whole number, not {o.pack_size!r}")
-        max_cents = self._money(o.max_pack_price, f"{label} max pack price", problems)
+        if o.store == AMAZON:
+            if not o.url:
+                problems.append(f"{label} is from Amazon but has no url")
+            elif "amazon." not in (urlparse(o.url).hostname or ""):
+                problems.append(f"{label} url {o.url!r} is not an Amazon link")
+        if isinstance(o.units_per_pack, bool) or not isinstance(o.units_per_pack, int) \
+                or not 1 <= o.units_per_pack <= MAX_UNITS_PER_PACK:
+            problems.append(
+                f"{label} units_per_pack must be a whole number from 1 to {MAX_UNITS_PER_PACK}, "
+                f"not {o.units_per_pack!r}")
+        max_cents = self._cents(o.max_price_per_pack, f"{label} max_price_per_pack", problems)
+        if max_cents == 0 or max_cents > MAX_PRICE_PER_PACK_CENTS:
+            problems.append(
+                f"{label} max_price_per_pack must be above $0.00 and at most "
+                f"{_dollars(MAX_PRICE_PER_PACK_CENTS)}")
         expected = None
-        if o.expected_pack_price is not None:
-            expected = self._money(o.expected_pack_price, f"{label} expected pack price", problems)
+        if o.expected_price_per_pack is not None:
+            expected = self._cents(o.expected_price_per_pack, f"{label} expected_price_per_pack", problems)
+        if o.pack_description is not None and not 1 <= len(o.pack_description) <= MAX_PACK_DESCRIPTION:
+            problems.append(f"{label} pack_description must be 1-{MAX_PACK_DESCRIPTION} characters")
         if len(problems) > before:
             return None
-        return _Option(o.store, o.link, o.pack_size, max_cents, expected)
+        return _Option(o.store, o.url, o.units_per_pack, max_cents, expected, o.pack_description)
 
     @staticmethod
-    def _money(value: Price, what: str, problems: list[str]) -> int:
+    def _cents(value: Price, what: str, problems: list[str]) -> int:
         try:
             cents = to_cents(value)
         except ValueError as e:
             problems.append(f"{what}: {e}")
-            return 0
+            return -1
         if cents < 0:
             problems.append(f"{what} cannot be negative")
         return cents
@@ -679,20 +778,16 @@ class _Sources:
             return
         row = self._table.get(product)
         for o in (row.primary, row.alternate) if row else ():
-            if o is not None and o.store == option.store and o.pack_size == option.pack_size \
-                    and o.expected_pack_price is not None:
+            if o is not None and o.store == option.store and o.units_per_pack == option.units_per_pack \
+                    and o.expected_price_per_pack is not None:
                 try:
-                    option.expected_cents = to_cents(o.expected_pack_price)
+                    option.expected_cents = to_cents(o.expected_price_per_pack)
                 except ValueError:
                     pass
                 return
 
 
 # --- Steps 4-6 helpers -------------------------------------------------------
-
-def _cost(unit_cost: Fraction | int | None) -> Fraction | None:
-    return None if unit_cost is None else Fraction(unit_cost)
-
 
 def _add_part(s: _Slot, source: str, unit_cost: Fraction | int | None,
               config: Config, warnings: list[str], units: int) -> None:
@@ -708,27 +803,29 @@ def _add_part(s: _Slot, source: str, unit_cost: Fraction | int | None,
 
 def _size(option: _Option, short: int, extra: int) -> PlannedPurchase:
     """Whole packs covering the shortfall plus extras; the rest goes to the closet."""
-    packs = round_up_to_step(Fraction(short + extra), option.pack_size) // option.pack_size
+    packs = round_up_to_step(Fraction(short + extra), option.units_per_pack) // option.units_per_pack
     expected = option.max_cents if option.expected_cents is None else option.expected_cents
-    return PlannedPurchase(option.store, option.link, option.pack_size, packs,
-                           option.max_cents, expected, packs * option.pack_size - short)
+    return PlannedPurchase(option.store, option.url, option.units_per_pack, packs,
+                           option.max_cents, expected, option.pack_description,
+                           packs * option.units_per_pack - short)
 
 
-def _cost_plan(slots: list[_Slot], visit: str, config: Config, balance: int) -> Cost:
+def _cost_plan(slots: list[_Slot], off_cycle: bool, config: Config, balance: int) -> Cost:
     """Expected assumes the primary at its expected price. Max assumes the worst
     option at its max, because the worker may buy either and won't call back."""
     lines = []
     for s in slots:
         p = s.purchase
         if p is None:
-            lines.append(LineCost(s.slot, 0, 0))
+            if s.need:
+                lines.append(LineCost(s.slot, 0, 0))
             continue
         options = [o for o in (p.primary, p.alternate) if o is not None]
         lines.append(LineCost(
             s.slot,
-            p.primary.packs * p.primary.expected_pack_price_cents,
-            max(o.packs * o.max_pack_price_cents for o in options)))
-    fee = config.midweek_fee_cents if visit == MIDWEEK else 0
+            p.primary.packs * p.primary.expected_price_per_pack_cents,
+            max(o.packs * o.max_price_per_pack_cents for o in options)))
+    fee = config.midweek_fee_cents if off_cycle else 0
     expected = sum(c.expected_cents for c in lines) + fee
     worst = sum(c.max_cents for c in lines) + fee
     return Cost(tuple(lines), fee, expected, worst, balance, balance - worst)
@@ -769,44 +866,18 @@ def _stores_used(slots: list[_Slot]) -> dict[str, list[str]]:
     return used
 
 
-def _move_cycles(slots: list[_Slot]) -> list[list[str]]:
-    """Groups of slots whose moves form a loop (A -> B -> A, or longer).
-
-    A loop needs every slot pulled before any is loaded, all in one request,
-    which David hasn't confirmed. A one-way chain can be done in order.
-    """
-    edges: dict[str, set[str]] = defaultdict(set)
-    for s in slots:
-        for source, _ in s.from_slots:
-            edges[source].add(s.slot)
-
-    def reach(start: str) -> set[str]:
-        seen, todo = set(), [start]
-        while todo:
-            for nxt in edges[todo.pop()]:
-                if nxt not in seen:
-                    seen.add(nxt)
-                    todo.append(nxt)
-        return seen
-
-    reachable = {s.slot: reach(s.slot) for s in slots}
-    order = [s.slot for s in slots]
-    cycles, done = [], set()
-    for slot in order:
-        if slot in done or slot not in reachable[slot]:
-            continue
-        cycle = [o for o in order if o in reachable[slot] and slot in reachable[o]]
-        done.update(cycle)
-        cycles.append(cycle)
-    return cycles
-
-
 # --- Step 8 helpers ----------------------------------------------------------
+
+def _money(cents: int) -> str:
+    """Cents as the API's dollar string. A string, so no float ever carries it."""
+    return f"{cents // 100}.{cents % 100:02d}"
+
 
 def _line(s: _Slot) -> Line:
     pulled = s.state.product if s.changes_product and s.on_hand else None
     return Line(
         slot=s.slot,
+        source=BACK_STOCK if s.purchase is None else PURCHASE,
         action=s.action,
         product=s.product,
         sale_price_cents=s.price_cents,
@@ -814,36 +885,27 @@ def _line(s: _Slot) -> Line:
         fill_to=s.fill_to,
         units_staying=s.staying,
         units_to_load=s.need,
-        from_slots=tuple(s.from_slots),
-        from_back_stock=s.from_back_stock,
         purchase=s.purchase,
         pulled_product=pulled,
         units_pulled=s.on_hand if pulled else 0)
 
 
-def _hash(visit: str, lines: tuple[Line, ...]) -> str:
-    """Same visit and same lines give the same hash, whenever it is computed."""
-    body = json.dumps({"visit": visit, "lines": [asdict(line) for line in lines]},
-                      sort_keys=True, default=str)
-    return hashlib.sha256(body.encode()).hexdigest()
-
-
-def _directive(visit: str, slots: list[_Slot]) -> str:
+def _directive(off_cycle: bool, slots: list[_Slot]) -> str:
     """The plan as the worker reads it: one row per slot, then what to buy where."""
     rows = [("Slot", "Action", "Product", "Price", "Load", "From", "Pull")]
     for s in slots:
-        sources = [f"slot {src} {n}" for src, n in s.from_slots]
-        if s.from_back_stock:
-            sources.append(f"back stock {s.from_back_stock}")
+        source = "-"
         if s.purchase:
-            sources.append(f"buy {s.purchase.units_short}")
-        pull = f"{s.on_hand} {s.state.product}" if s.changes_product and s.on_hand else "-"
+            source = "buy"
+        elif s.from_back_stock:
+            source = "back stock"
+        pull = f"{s.on_hand} {s.state.product} to closet" if s.changes_product and s.on_hand else "-"
         rows.append((
             s.slot, s.action.replace("_", " "), s.product or "-",
             _dollars(s.price_cents) if s.price_cents is not None else "-",
-            str(s.need) if s.need else "-", ", ".join(sources) or "-", pull))
+            str(s.need) if s.need else "-", source, pull))
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
-    out = [f"Visit: {visit}", ""]
+    out = [f"Visit: {'midweek (off cycle)' if off_cycle else 'scheduled'}", ""]
     out += ["  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows]
 
     shopping: dict[str, list[str]] = defaultdict(list)
@@ -863,12 +925,12 @@ def _directive(visit: str, slots: list[_Slot]) -> str:
 
 
 def _shopping_row(s: _Slot, o: PlannedPurchase, alternate_for: str | None) -> str:
-    row = (f"  {s.product}: {o.packs} x {o.pack_size}-pack, max "
-           f"{_dollars(o.max_pack_price_cents)} a pack, for slot {s.slot}")
+    row = (f"  {s.product}: {o.packs} x {o.units_per_pack}-pack, max "
+           f"{_dollars(o.max_price_per_pack_cents)} a pack, for slot {s.slot}")
     if o.units_to_closet:
         row += f" ({o.units_to_closet} to closet)"
     if alternate_for:
         row += f"; only if {alternate_for} is unavailable or over its max"
-    if o.link:
-        row += f"\n    {o.link}"
+    if o.url:
+        row += f"\n    {o.url}"
     return row
