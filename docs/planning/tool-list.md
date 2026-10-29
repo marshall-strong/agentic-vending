@@ -6,7 +6,7 @@ there; this file is a point-in-time copy so the plan sits next to the code.
 
 **Changelog, 19 Oct 2026:** write side redesigned around David's desired-state purchase request: revised tools table, plus new sections on the desired state, the restock planner and the pricing gate. The 15 Oct version is in this file's Git history and in the doc's history.
 
-**Update, 29 Oct 2026 (repo only, not yet in the live doc):** David has shipped the new purchase-request schema and the product-request routes. The sections below still describe the 19 Oct plan; read "What the live API answered on 29 Oct" first. Field details are in [`../dex-bridge.md`](../dex-bridge.md).
+**Update, 29 Oct 2026 (repo only, not yet in the live doc):** David has shipped the new purchase-request schema and the product-request routes. The sections below still describe the 19 Oct plan; read "What the live API answered on 29 Oct" first. Field details are in [`../dex-bridge.md`](../dex-bridge.md). The planner's refusal table below is also updated to match; the live doc still needs it.
 
 ## What the live API answered on 29 Oct
 
@@ -15,7 +15,7 @@ there; this file is a point-in-time copy so the plan sits next to the code.
 | Open question (19 Oct) | What the live API says |
 | --- | --- |
 | Final desired-state schema and field names | Body is `off_cycle`, `note`, `lines`. Each line is a slot with `source: "purchase"` (a `primary` and optional `alternate` choice) or `source: "back_stock"` (a `load`). The spec does not say every one of our 20 slots must be listed. |
-| Is a $25 midweek visit a flag or its own route? | A flag: `off_cycle: true` on the request. The spec does not mention the fee. |
+| Is a $25 midweek visit a flag or its own route? | A flag: `off_cycle: true` on the request, for a visit on any day but Friday. The spec does not mention the fee, but the team confirmed on 29 Oct that it is still $25. |
 | Store list | `Walmart`, `Costco`, `Amazon`, `BJs`, spelled exactly. Our planned codes (`WALMART`, `BJS` and so on) must map to these. |
 | Can the alternate be a different product, with its own sale price? | The schema allows it: the alternate has its own `sku` and `sale_price`. Only `alternate_same_as_primary` is refused. |
 | Catalog-request routes (#11) | Shipped: `POST /api/v1/product-requests` (`name`, `size`, optional `line`, `flavor`, `note`) and `GET /api/v1/product-requests/{id}` (`pending`, `rejected`, or `approved` with the SKU). |
@@ -195,23 +195,25 @@ The planner reduces each slot to one of David's cases:
 | Code | Refused when | What the agent does next |
 | --- | --- | --- |
 | `halted` | The halt switch is on | Nothing; stop |
-| `past_cutoff` | Past `config.cutoff` for an in-store purchase in the plan | Switch to Amazon, or wait for next week |
+| `past_cutoff` | Past `config.cutoff` for an in-store purchase in a Friday-visit plan (never for `off_cycle`) | Switch to Amazon, or wait for next week |
 | `request_pending` | Another request is unresolved | Wait for its receipts (#7) |
 | `slot_list` | A slot is missing, listed twice, or not ours | List all 20 once |
 | `product_unknown` | A product is not in the catalog or is inactive | Request it (#11) and wait for approval |
-| `no_sourcing` | A product is short and has no sourcing, given or in the table | Add `sourcing` for it |
-| `bad_sourcing` | Store not allowed, Amazon without a link, or a bad pack size | Fix the field |
+| `no_sourcing` | A slot needs more than the closet holds, the closet has none of the product, and it has no sourcing, given or in the table | Add `sourcing` for it |
+| `bad_sourcing` | Store not `Walmart`, `Costco`, `Amazon` or `BJs`; Amazon without an Amazon `url`; `units_per_pack` outside 1-60; `max_price_per_pack` not above $0 or over $200; `pack_description` over 100 characters | Fix the field |
 | `over_capacity` | `fill_to` exceeds the slot's capacity | Lower `fill_to` |
-| `insufficient_stock` | A move draws more units than exist and nothing is bought to cover it | Add sourcing or lower `fill_to` |
-| `price_off_step` | A price is not a multiple of 5 cents | Pick a legal price; it is not rounded for you |
-| `below_floor` | A price is under the slot's floor | Raise the price or lower the max pack price; the refusal shows the floor |
-| `above_ceiling` | A price is over `config.price_ceiling` | Lower it |
-| `insufficient_balance` | Max cost, plus $25 if midweek, exceeds the spendable balance | Buy less or cheaper |
-| `empty_slot` | `product: null`, until David confirms empty slots | Keep or switch the slot |
-| `midweek_no_op` | A midweek plan changes nothing | Don't spend the $25 |
-| `swap_unconfirmed` | Two slots swap products, which needs a pull and a load in one request | Spread it over two visits, until David confirms |
+| `insufficient_stock` | A slot needs more than the closet holds, the closet has some of the product, and there's no sourcing to buy it | Add sourcing, or lower `fill_to` to what the closet holds |
+| `price_off_step` | A price is missing, unreadable, or not a multiple of 5 cents | Pick a legal price; it is not rounded for you |
+| `below_floor` | A price is under the slot's floor, or is $0.00 | Raise the price or lower the max pack price; the refusal shows the floor |
+| `above_ceiling` | A price is over `config.price_ceiling` (at most $10.00, the API's limit) | Lower it |
+| `insufficient_balance` | Max cost, plus $25 if `off_cycle`, exceeds the spendable balance | Buy less or cheaper |
+| `empty_slot` | `product: null`; the API can't leave a slot empty | Keep or switch the slot |
+| `midweek_no_op` | An `off_cycle` plan loads nothing | Don't spend the $25 |
+| `price_only_unsupported` | A slot changes only its price; every line must load at least one unit, and there's no price-change route yet | Load at least one unit, or keep the old price |
+| `too_many_packs` | A line needs more than 20 packs | Use a bigger pack, or lower `fill_to` or `extra_units_to_closet` |
+| `nothing_to_load` | A Friday-visit plan loads nothing, so there is no request to send | Skip this week's request |
 
-Where two slots need the same product, the planner buys once and loads both. Until David confirms a line can load units bought on another line, it buys for each slot separately instead.
+**Updated 29 Oct to match the live API (repo only):** `swap_unconfirmed` is gone and the last three codes are new. A line has one source and a slot gets one line, so a slot loads from the closet only when the closet covers all of it; otherwise it buys all of it. Units pulled at a visit go to the closet and aren't loaded at the same visit, until David confirms a line may load what another line pulls. That makes swapping products between slots impossible to plan, so there is nothing left to refuse. Each slot still buys separately, for the same reason. Cutoffs apply only to the Friday visit.
 
 ## The pricing gate
 
