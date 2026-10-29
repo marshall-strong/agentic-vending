@@ -23,6 +23,10 @@ class BridgeError(RuntimeError):
     """The bridge could not be reached, rejected us, or answered with an error."""
 
 
+class BridgeUnreachable(BridgeError):
+    """No network or a rejected key: every later call would fail the same way."""
+
+
 class Bridge:
     def __init__(self, base_url: str | None = None, api_key: str | None = None):
         self.base_url = (base_url or settings.require(
@@ -46,14 +50,14 @@ class Bridge:
                     delay *= 2
                     continue
                 if error.code in (401, 403):
-                    raise BridgeError(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
+                    raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
                 raise BridgeError(f"{error.code} from {path}: {error.read()[:200]!r}") from None
             except (urllib.error.URLError, TimeoutError, OSError) as error:
                 if attempt < RETRIES:
                     time.sleep(delay)
                     delay *= 2
                     continue
-                raise BridgeError(
+                raise BridgeUnreachable(
                     f"Could not reach {self.base_url} ({getattr(error, 'reason', error)}). "
                     "Is Tailscale connected?"
                 ) from None

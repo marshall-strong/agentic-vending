@@ -43,7 +43,7 @@ class Poll:
     crc_expected: str | None
     crc_actual: str
     machine_serial: str | None
-    decimal_places: int
+    decimal_places: int | None  # None when the checksum failed
     total_paid_cents: int | None
     total_paid_units: int | None
     selections: list[Selection] = field(default_factory=list)
@@ -74,7 +74,11 @@ def _checksum(raw: bytes) -> tuple[str | None, str]:
 
 
 def _int(value: str) -> int:
-    return int(value) if value.strip() else 0
+    try:
+        return int(value) if value.strip() else 0
+    except ValueError:
+        # A plain ValueError would escape the sync and stop it on this poll for good.
+        raise ParseError(f"expected a number, got {value!r}") from None
 
 
 def _to_cents(value: int, decimal_places: int) -> int:
@@ -91,7 +95,11 @@ def parse(raw: bytes) -> Poll:
         raise ParseError("document has no DXE record, so it is incomplete")
 
     expected, actual = _checksum(raw)
-    crc_ok = expected == actual
+    if expected != actual:
+        # None of the counters can be trusted, and a garbled field must not
+        # turn a checksum failure into a crash, so don't read them at all.
+        return Poll(crc_ok=False, crc_expected=expected, crc_actual=actual, machine_serial=None,
+                    decimal_places=None, total_paid_cents=None, total_paid_units=None)
 
     machine_serial: str | None = None
     decimal_places = 2
@@ -109,8 +117,8 @@ def parse(raw: bytes) -> Poll:
             machine_serial = next(
                 (f.strip() for f in fields[1:3] if f.strip() and f.strip() != ">"), None
             )
-        elif tag == "ID4" and len(fields) > 1 and fields[1].strip().isdigit():
-            decimal_places = int(fields[1])
+        elif tag == "ID4" and len(fields) > 1 and fields[1].strip():
+            decimal_places = _int(fields[1])
         elif tag == "VA1" and len(fields) > 2:
             total_paid = (_int(fields[1]), _int(fields[2]))
         elif tag == "PA1" and len(fields) > 1:
@@ -134,7 +142,7 @@ def parse(raw: bytes) -> Poll:
         for sel, (units, value) in counters.items()
     ]
     return Poll(
-        crc_ok=crc_ok,
+        crc_ok=True,
         crc_expected=expected,
         crc_actual=actual,
         machine_serial=machine_serial,
