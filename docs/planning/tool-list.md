@@ -6,6 +6,35 @@ there; this file is a point-in-time copy so the plan sits next to the code.
 
 **Changelog, 19 Oct 2026:** write side redesigned around David's desired-state purchase request: revised tools table, plus new sections on the desired state, the restock planner and the pricing gate. The 15 Oct version is in this file's Git history and in the doc's history.
 
+**Update, 29 Oct 2026 (repo only, not yet in the live doc):** David has shipped the new purchase-request schema and the product-request routes. The sections below still describe the 19 Oct plan; read "What the live API answered on 29 Oct" first. Field details are in [`../dex-bridge.md`](../dex-bridge.md).
+
+## What the live API answered on 29 Oct
+
+**Checked against `http://aihub-pi:8000/openapi.json` on 29 Oct. The bridge still reports version `0.1.0`, so the version number doesn't show changes.**
+
+| Open question (19 Oct) | What the live API says |
+| --- | --- |
+| Final desired-state schema and field names | Body is `off_cycle`, `note`, `lines`. Each line is a slot with `source: "purchase"` (a `primary` and optional `alternate` choice) or `source: "back_stock"` (a `load`). The spec does not say every one of our 20 slots must be listed. |
+| Is a $25 midweek visit a flag or its own route? | A flag: `off_cycle: true` on the request. The spec does not mention the fee. |
+| Store list | `Walmart`, `Costco`, `Amazon`, `BJs`, spelled exactly. Our planned codes (`WALMART`, `BJS` and so on) must map to these. |
+| Can the alternate be a different product, with its own sale price? | The schema allows it: the alternate has its own `sku` and `sale_price`. Only `alternate_same_as_primary` is refused. |
+| Catalog-request routes (#11) | Shipped: `POST /api/v1/product-requests` (`name`, `size`, optional `line`, `flavor`, `note`) and `GET /api/v1/product-requests/{id}` (`pending`, `rejected`, or `approved` with the SKU). |
+| Spoilage field | Shipped: `units_lost` and `loss_note` on each receipt, plus `later_losses`, which can grow after a request is fulfilled. |
+| Catalog shape | Single items: `sku`, `name`, `line`, `flavor`, `size`. Pack size goes on the purchase line as `units_per_pack`. Three products on 29 Oct, one a test entry. |
+
+**Field names that differ from our 19 Oct draft:** `units_per_pack` (we wrote `pack_size`), `max_price_per_pack` (`max_pack_price`), `url` (`link`), `off_cycle` (`visit: "midweek"`).
+
+**Limits the planner and pricing gate must respect:** `sale_price` at most $10.00 in 0.05 steps, so our ceiling must be $10.00 or lower; `packs` 1-20; `units_per_pack` 1-60; back-stock `units` 1-200; `max_price_per_pack` up to $200; `note` up to 500 characters.
+
+**Still not in the API:**
+
+- A price change without a load. Every line loads at least one pack or unit, so `set_price` (#8) is still blocked.
+- Leaving a slot empty.
+- A route that lists our requests. We still save every ID.
+- How many requests may be open before `429 too_many_open_requests`.
+- Whether one line can load units bought or pulled by another line in the same request.
+- Whether the catalog is shared with group A.
+
 ## Purpose
 
 The group-b vending agent should get **10 MCP tools**: 7 that read and 3 that write. Every write is checked in code before it runs. This is the working list for the team. It reconciles the 21 September build plan, the bridge's live API spec (`http://aihub-pi:8000/docs`, version `0.1.0`), the whiteboard from the 8 October team meeting, and David's answers of 19 October, which outrank the spec.
