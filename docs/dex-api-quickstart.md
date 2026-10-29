@@ -59,7 +59,7 @@ If all three work, you're set up. The rest of the commands:
 | `history --start 2026-10-20 --end 2026-10-21` | Stored polls in that range: `session_id`, `started_at`, size. Dates are UTC days. |
 | `raw SESSION_ID --out poll.dex` | One stored poll as the raw EVA-DTS text the machine sent |
 | `latest --out latest.dex` | The newest stored poll, raw |
-| `products` | The catalog we can order from (still empty on 22 Oct) |
+| `products` | The catalog we can order from: single items with `line`, `flavor` and `size`, no prices or pack sizes (three products on 29 Oct, one a test entry) |
 | `request REQUEST_ID` | Where one of our purchase requests has got to |
 
 `python scripts/bridge.py --help` lists them all. [`dex-bridge.md`](dex-bridge.md) explains each one in more detail.
@@ -82,6 +82,8 @@ Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/history?start=2026-10-21&end
 
 - **Read history, not the machine.** The bridge stores every poll anyone makes, back to 28 August, and the course staff's poller reads the machine every hour. A live poll (`POST /api/v1/poll`) ties up a machine that's selling drinks for about 9 seconds, so the script refuses to do one without `--live`. You'll almost never need it.
 - **Never submit a purchase request.** `POST /api/v1/purchase-requests` spends real money from our $600. Nothing in the script can do it, on purpose; leave that `POST` alone in Swagger too.
+- **Don't submit a product request on your own either.** `POST /api/v1/product-requests` asks the course staff to add a drink to the catalog. It costs nothing, but each one is a team decision, and too many open requests get a `429`.
+- **The version number won't tell you the API changed.** `/health` still says `0.1.0` after several changes. Check the Swagger page and [`dex-bridge.md`](dex-bridge.md), which notes the date it was last checked against the live spec.
 - **History comes in UTC days, at most 500 polls per request.** A longer range comes back with `truncated: true` and silently misses the rest, so ask a few days at a time.
 - **The key stays in `.env`.** It never goes in code, commits, docs, chat or screenshots. The repo is public.
 
@@ -89,6 +91,7 @@ Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/history?start=2026-10-21&end
 
 | You see | It means | Do this |
 | --- | --- | --- |
+| "Python was not found; run without arguments to install from the Microsoft Store" | Windows is running its Store placeholder, not a real Python | Install Python from python.org (or `winget install --id Python.Python.3.13 -e`), turn off the `python.exe` and `python3.exe` App execution aliases in Settings, and open a new terminal. If you use uv, `uv run scripts/bridge.py health` works without either. |
 | "Could not reach ... Is Tailscale connected?" | The network can't see the Pi | `tailscale status`; reconnect, and check you're signed in to the right account |
 | "`DEX_BASE_URL` is not set" | No `.env`, or it's in the wrong folder | Put `.env` in the repo's top folder, next to `README.md` |
 | `401` or `403` | The bridge rejected the key | Recopy `DEX_API_KEY` exactly: no quotes, no spaces |
