@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parent.parent
 def build(records: list[str], *, corrupt: bool = False) -> bytes:
     """Wrap records in DXS/ST ... G85/SE/DXE with a correct (or broken) checksum."""
     head = b"DXS*0000000000*VA*V1/1*1**\r\n"
-    body = ("\r\n".join(["ST*001*0001", *records]) + "\r\n").encode("ascii")
+    body = ("\r\n".join(["ST*001*0001", *records]) + "\r\n").encode("latin-1")
     crc = crc16_arc(body) ^ (1 if corrupt else 0)
     tail = f"G85*{crc:04X}\r\nSE*{len(records) + 3}*0001\r\nDXE*1*1\r\n".encode("ascii")
     return head + body + tail
@@ -63,6 +63,24 @@ def test_bad_checksum_is_reported_not_raised():
     poll = parse(build(SAMPLE, corrupt=True))
     assert not poll.crc_ok
     assert poll.crc_expected != poll.crc_actual
+
+
+def test_bad_checksum_reads_no_counters():
+    poll = parse(build(SAMPLE, corrupt=True))
+    assert poll.selections == [] and poll.total_paid_cents is None and poll.decimal_places is None
+
+
+# A byte garbled in transit (0xFF), which the parser decodes as "3�".
+GARBLED = [r if not r.startswith("PA2*30") else "PA2*3\xff*13500*0*0*0*0" for r in SAMPLE]
+
+
+def test_garbled_number_is_a_parse_error():
+    with pytest.raises(ParseError):
+        parse(build(GARBLED))
+
+
+def test_garbled_number_with_bad_checksum_is_reported_not_raised():
+    assert not parse(build(GARBLED, corrupt=True)).crc_ok
 
 
 def test_decimal_places_scale_to_cents():
