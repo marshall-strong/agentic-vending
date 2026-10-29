@@ -15,6 +15,8 @@ import psycopg
 from vending import settings
 
 MIGRATIONS = settings.REPO_ROOT / "db" / "migrations"
+# Any fixed number will do; it only has to be the same for every run.
+MIGRATION_LOCK = 4_200_001
 
 
 def connect() -> psycopg.Connection:
@@ -30,19 +32,24 @@ def connect() -> psycopg.Connection:
 
 
 def migrate(conn: psycopg.Connection) -> list[str]:
-    """Apply every migration not yet applied. Returns the names applied."""
+    """Apply every migration not yet applied. Returns the names applied.
+
+    Two runs can start together (the hourly sync and a manual one), so each
+    transaction takes the same advisory lock and re-checks before applying.
+    """
     with conn.transaction():
+        conn.execute("select pg_advisory_xact_lock(%s)", (MIGRATION_LOCK,))
         conn.execute(
             "create table if not exists schema_migrations ("
             " version text primary key,"
             " applied_at timestamptz not null default now())"
         )
-    done = {row[0] for row in conn.execute("select version from schema_migrations")}
     applied = []
     for path in sorted(MIGRATIONS.glob("*.sql")):
-        if path.name in done:
-            continue
         with conn.transaction():
+            conn.execute("select pg_advisory_xact_lock(%s)", (MIGRATION_LOCK,))
+            if conn.execute("select 1 from schema_migrations where version = %s", (path.name,)).fetchone():
+                continue
             conn.execute(path.read_text(encoding="utf-8"))
             conn.execute("insert into schema_migrations (version) values (%s)", (path.name,))
         applied.append(path.name)
