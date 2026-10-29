@@ -60,7 +60,9 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
             on conflict (session_id) do nothing
             """,
             (
-                meta["session_id"], meta.get("device_id") or "unknown", meta["started_at"], raw, len(raw), ok,
+                # crc_ok stays null when the document couldn't be read at all.
+                meta["session_id"], meta.get("device_id") or "unknown", meta["started_at"], raw, len(raw),
+                None if poll is None else poll.crc_ok,
                 poll.machine_serial if ok else None, poll.decimal_places if ok else None,
                 poll.total_paid_cents if ok else None, poll.total_paid_units if ok else None,
             ),

@@ -1,6 +1,7 @@
 """Tests for storing polls. Each test runs in a throwaway schema in the local
 database, and is skipped when DATABASE_URL isn't set or the database is down."""
 
+import threading
 import uuid
 
 import psycopg
@@ -100,7 +101,46 @@ def test_unreachable_bridge_stops_the_sync(conn):
 def test_garbled_poll_is_stored_not_raised(conn):
     raw = build(GARBLED)
     assert store(conn, META, raw) == "bad"
-    assert conn.execute("select count(*) from polls").fetchone()[0] == 1
+    assert conn.execute("select crc_ok from polls").fetchall() == [(None,)]
+
+
+def test_not_evadts_is_stored_with_no_checksum_result(conn):
+    assert store(conn, META, b"<html>502 Bad Gateway</html>") == "bad"
+    assert conn.execute("select crc_ok, raw from polls").fetchone() == (None, b"<html>502 Bad Gateway</html>")
+
+
+def test_two_runs_migrating_at_once_do_not_collide():
+    url = settings.get("DATABASE_URL")
+    if not url:
+        pytest.skip("DATABASE_URL not set")
+    schema = f"test_{uuid.uuid4().hex[:8]}"
+    connections = [psycopg.connect(url, autocommit=True) for _ in range(2)]
+    connections[0].execute(f"create schema {schema}")
+    for connection in connections:
+        connection.execute(f"set search_path to {schema}")
+    start = threading.Barrier(2)
+    results, errors = [], []
+
+    def run(connection):
+        start.wait()
+        try:
+            results.append(db.migrate(connection))
+        except Exception as error:  # noqa: BLE001 - the test reports any failure
+            errors.append(error)
+
+    threads = [threading.Thread(target=run, args=(c,)) for c in connections]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert errors == []
+        # Each migration ran exactly once, in one of the two runs.
+        assert sorted(sum(results, [])) == sorted(p.name for p in db.MIGRATIONS.glob("*.sql"))
+    finally:
+        connections[0].execute(f"drop schema {schema} cascade")
+        for connection in connections:
+            connection.close()
 
 
 def test_default_since_rechecks_the_day_before(conn):
