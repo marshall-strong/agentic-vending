@@ -6,9 +6,12 @@ import uuid
 import psycopg
 import pytest
 
-from tests.test_evadts import SAMPLE, build
+from datetime import date
+
+from tests.test_evadts import GARBLED, SAMPLE, build
 from vending import db, settings
-from vending.sync_history import store
+from vending.bridge import BridgeError, BridgeUnreachable
+from vending.sync_history import HISTORY_START, default_since, store, sync
 
 
 @pytest.fixture
@@ -49,6 +52,61 @@ def test_checksum_failure_keeps_raw_but_no_counters(conn):
     crc_ok, stored, total = conn.execute("select crc_ok, raw, total_paid_cents from polls").fetchone()
     assert crc_ok is False and bytes(stored) == raw and total is None
     assert conn.execute("select count(*) from poll_selections").fetchone()[0] == 0
+
+
+class FakeBridge:
+    """Serves stored history from a dict. A value that is an exception is raised."""
+
+    def __init__(self, days, raws):
+        self.days, self.raws = days, raws
+
+    def history(self, day):
+        result = self.days.get(day, [])
+        if isinstance(result, Exception):
+            raise result
+        return [dict(m, device_id="vmc1") for m in result]
+
+    def raw(self, session_id):
+        result = self.raws[session_id]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def poll_meta(session_id, started_at):
+    return {"session_id": session_id, "started_at": started_at}
+
+
+def test_one_bad_day_or_poll_does_not_stop_the_sync(conn):
+    bridge = FakeBridge(
+        days={
+            "2026-10-01": [poll_meta("a", "2026-10-01T12:00:00+00:00"), poll_meta("gone", "2026-10-01T13:00:00+00:00")],
+            "2026-10-02": BridgeError("history for 2026-10-02 was truncated at 500 polls"),
+            "2026-10-03": [poll_meta("b", "2026-10-03T12:00:00+00:00")],
+        },
+        raws={"a": build(SAMPLE), "gone": BridgeError("404 from /raw"), "b": build(SAMPLE)},
+    )
+    report = sync(conn, bridge, date(2026, 10, 1), date(2026, 10, 3), log=lambda _: None)
+    assert (report.days, report.new, report.failed_days, report.failed_polls) == (3, 2, 1, 1)
+    assert {r[0] for r in conn.execute("select session_id from polls")} == {"a", "b"}
+
+
+def test_unreachable_bridge_stops_the_sync(conn):
+    bridge = FakeBridge(days={"2026-10-01": BridgeUnreachable("Is Tailscale connected?")}, raws={})
+    with pytest.raises(BridgeUnreachable):
+        sync(conn, bridge, date(2026, 10, 1), date(2026, 10, 2), log=lambda _: None)
+
+
+def test_garbled_poll_is_stored_not_raised(conn):
+    raw = build(GARBLED)
+    assert store(conn, META, raw) == "bad"
+    assert conn.execute("select count(*) from polls").fetchone()[0] == 1
+
+
+def test_default_since_rechecks_the_day_before(conn):
+    assert default_since(conn) == HISTORY_START
+    store(conn, {**META, "started_at": "2026-10-02T00:05:00+00:00"}, build(SAMPLE))
+    assert default_since(conn) == date(2026, 10, 1)
 
 
 def test_migrate_twice_is_a_no_op(conn):
