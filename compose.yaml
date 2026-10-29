@@ -1,0 +1,27 @@
+# Local development database: the same Postgres major version as the team's Azure
+# database (17), so code written against this runs there unchanged.
+#
+#   docker compose up -d db
+#
+# The password comes from VENDING_DB_PASSWORD in .env. The port is bound to
+# 127.0.0.1 only, and 55432 avoids clashing with any Postgres already on 5432.
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vending
+      POSTGRES_USER: vending
+      POSTGRES_PASSWORD: ${VENDING_DB_PASSWORD:?Set VENDING_DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - vending-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vending -d vending"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  vending-pgdata:
