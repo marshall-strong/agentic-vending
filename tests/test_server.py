@@ -72,6 +72,16 @@ def test_unbuilt_write_tools_still_log_when_running(db, tool):
     assert db.execute("select outcome from action_log where tool = %s", (tool,)).fetchall() == [("failed",)]
 
 
+def test_sales_history_end_to_end(db):
+    store_poll(db, "a", "2026-10-22T12:00:00+00:00", {"15": (250, 100)})
+    store_poll(db, "b", "2026-10-29T12:00:00+00:00", {"15": (250, 121)})
+    result = call("get_sales_history", {"start": "2026-10-22T12:00:00Z", "end": "2026-10-29T12:00:00Z", "slots": ["15"]})
+    assert not result.isError
+    assert result.structuredContent["data"] == [
+        {"slot": "15", "units": 21, "revenue": "52.50", "revenue_ex_tax": "48.61"}]
+    assert db.execute("select tool, outcome from action_log").fetchall() == [("get_sales_history", "done")]
+
+
 def test_read_stub_says_not_built_and_is_logged(db):
     result = call("get_account_balance")
     assert result.isError and "not built yet" in result.content[0].text
@@ -109,7 +119,7 @@ def test_built_only_hides_the_stubs(monkeypatch):
     monkeypatch.setenv("VENDING_TOOLS", "built")
     try:
         importlib.reload(server)
-        assert [t.name for t in call(None).tools] == ["get_machine_state"]
+        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)

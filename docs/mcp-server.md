@@ -8,7 +8,7 @@ polls the machine.
 | Tool | State |
 | --- | --- |
 | `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
-| `get_sales_history` | Registered; logic is being built separately in `vending/tools/sales_history.py` |
+| `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_catalog`, `get_account_balance`, `preview_desired_state`, `get_purchase_requests`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
 | `submit_desired_state`, `set_price`, `request_catalog_product` | Write stubs, already behind the write gate: refused while halted, logged either way |
 

@@ -116,7 +116,7 @@ async def get_machine_state() -> machine_state.MachineState:
     return await _read("get_machine_state", machine_state.get_machine_state)
 
 
-@_tool(built=False)  # set built=True when sales_history.py has its logic
+@_tool(built=True)
 async def get_sales_history(start: datetime, end: datetime, slots: list[str] | None = None) -> sales_history.SalesHistory:
     """Units and ex-tax revenue per slot between two times (UTC). Omit slots for all 20."""
     return await _read("get_sales_history", sales_history.get_sales_history, start=start, end=end, slots=slots)
