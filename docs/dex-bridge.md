@@ -27,7 +27,7 @@ the tailnet is down, not the bridge.
 | `health` | `GET /health` | Bridge status. The only route that needs no key |
 | `slots` | `GET /api/v1/slots` | Our 20 selections on `vmc1`: 15-18, 25-28, 35-38, 45-48, 55-58 |
 | `products` | `GET /api/v1/products` | What we can order: `sku`, `name`, `pack_size`. No prices. Empty as of 15 Oct |
-| `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes` |
+| `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes`. **At most 500 per request**: a longer range comes back with `truncated: true`, so ask a day or a week at a time |
 | `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text |
 | `latest [--summary]` | history + raw | The newest stored poll. `--summary` prints price and lifetime sales for our slots |
 | `request REQUEST_ID` | `GET /api/v1/purchase-requests/{id}` | `pending`, `rejected` with a `decision_note`, or the full receipts |
