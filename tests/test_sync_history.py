@@ -1,18 +1,20 @@
 """Tests for storing polls. Each test runs in a throwaway schema in the local
-database, and is skipped when DATABASE_URL isn't set or the database is down."""
+database, and is skipped when psycopg isn't installed, DATABASE_URL isn't set
+or the database is down."""
 
 import threading
 import uuid
-
-import psycopg
-import pytest
-
 from datetime import date
 
-from tests.test_evadts import GARBLED, SAMPLE, build
-from vending import db, settings
-from vending.bridge import BridgeError, BridgeUnreachable
-from vending.sync_history import HISTORY_START, default_since, store, sync
+import pytest
+
+psycopg = pytest.importorskip("psycopg")
+
+# These import psycopg too, so they come after the skip.
+from tests.test_evadts import GARBLED, SAMPLE, build  # noqa: E402
+from vending import db, settings  # noqa: E402
+from vending.bridge import BridgeError, BridgeUnreachable  # noqa: E402
+from vending.sync_history import HISTORY_START, default_since, store, sync  # noqa: E402
 
 
 @pytest.fixture
