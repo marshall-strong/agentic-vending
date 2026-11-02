@@ -11,16 +11,29 @@ from vending import db, settings
 from vending.sync_history import store
 
 
-@pytest.fixture
-def schema_url():
-    """(url, schema) for a fresh, migrated schema, dropped after the test."""
+# Seconds to wait for the test database. Without a limit, a connect to a closed
+# port on Windows waits on TCP retries for minutes instead of failing.
+CONNECT_TIMEOUT = 3
+
+
+@pytest.fixture(scope="session")
+def database_url():
+    """DATABASE_URL, checked once per run so a down database skips every test fast."""
     url = settings.get("DATABASE_URL")
     if not url:
         pytest.skip("DATABASE_URL not set")
     try:
-        admin = psycopg.connect(url, autocommit=True)
+        psycopg.connect(url, connect_timeout=CONNECT_TIMEOUT).close()
     except psycopg.OperationalError:
         pytest.skip("database not reachable (docker compose up -d db)")
+    return url
+
+
+@pytest.fixture
+def schema_url(database_url):
+    """(url, schema) for a fresh, migrated schema, dropped after the test."""
+    url = database_url
+    admin = psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
     schema = f"test_{uuid.uuid4().hex[:8]}"
     admin.execute(f"create schema {schema}")
     with open_in(url, schema) as conn:
@@ -31,7 +44,8 @@ def schema_url():
 
 
 def open_in(url: str, schema: str) -> psycopg.Connection:
-    return psycopg.connect(url, autocommit=True, options=f"-c search_path={schema}")
+    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
+                           options=f"-c search_path={schema}")
 
 
 @pytest.fixture

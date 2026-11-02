@@ -12,20 +12,15 @@ psycopg = pytest.importorskip("psycopg")
 
 # These import psycopg too, so they come after the skip.
 from tests.test_evadts import GARBLED, SAMPLE, build  # noqa: E402
-from vending import db, settings  # noqa: E402
+from tests.conftest import CONNECT_TIMEOUT  # noqa: E402
+from vending import db  # noqa: E402
 from vending.bridge import BridgeError, BridgeUnreachable  # noqa: E402
 from vending.sync_history import HISTORY_START, default_since, store, sync  # noqa: E402
 
 
 @pytest.fixture
-def conn():
-    url = settings.get("DATABASE_URL")
-    if not url:
-        pytest.skip("DATABASE_URL not set")
-    try:
-        connection = psycopg.connect(url, autocommit=True)
-    except psycopg.OperationalError:
-        pytest.skip("database not reachable (docker compose up -d db)")
+def conn(database_url):
+    connection = psycopg.connect(database_url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
     schema = f"test_{uuid.uuid4().hex[:8]}"
     connection.execute(f"create schema {schema}")
     connection.execute(f"set search_path to {schema}")
@@ -111,12 +106,10 @@ def test_not_evadts_is_stored_with_no_checksum_result(conn):
     assert conn.execute("select crc_ok, raw from polls").fetchone() == (None, b"<html>502 Bad Gateway</html>")
 
 
-def test_two_runs_migrating_at_once_do_not_collide():
-    url = settings.get("DATABASE_URL")
-    if not url:
-        pytest.skip("DATABASE_URL not set")
+def test_two_runs_migrating_at_once_do_not_collide(database_url):
     schema = f"test_{uuid.uuid4().hex[:8]}"
-    connections = [psycopg.connect(url, autocommit=True) for _ in range(2)]
+    connections = [psycopg.connect(database_url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
+                   for _ in range(2)]
     connections[0].execute(f"create schema {schema}")
     for connection in connections:
         connection.execute(f"set search_path to {schema}")
