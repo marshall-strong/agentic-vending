@@ -114,10 +114,11 @@ Each request goes to an instructor, and too many open ones get a `429`, so befor
 refuses, all at once: a field the bridge would reject, a size that isn't a liquid volume (`20 oz
 bottle`, `12 fl oz can`, `500 mL`), alcohol or THC (root beer and ginger ale are fine), a product
 already in the catalog, a product we already asked for, and a request over our weekly limit.
-The limit counts every request filed in the last 7 days: **3** normally, **15** while the bridge
-catalog has fewer than 25 products, so the first big ask can happen without anyone flipping a
-switch. Change `WEEKLY_LIMIT`, `STARTUP_WEEKLY_LIMIT` and `SMALL_CATALOG` in
-`vending/tools/catalog_request.py`. Duplicates match one way: a
+The limit counts every request filed in the last 7 days, with a higher limit while the bridge
+catalog is small, so the first big ask can happen without anyone flipping a switch. **The numbers
+are placeholders the team still has to set:** for now 3 per week normally, 15 while the catalog has
+fewer than 25 products (`WEEKLY_LIMIT`, `STARTUP_WEEKLY_LIMIT` and `SMALL_CATALOG` in
+`vending/tools/catalog_request.py`). Duplicates match one way: a
 request is a duplicate when every word of its name, flavor and size is already in an earlier one,
 so "Cherry Zero 20 oz" after "Cherry 20 oz" goes through.
 

@@ -43,6 +43,8 @@ MAX_NOTE = 500
 # Our own limit on requests filed in any 7 days, so the agent can't flood the
 # instructors. While the catalog is small there's more worth asking for, so the
 # limit is higher until the catalog reaches SMALL_CATALOG products.
+# PLACEHOLDERS: these three numbers are guesses, not a team decision. See
+# "Open questions for the team" in PR #14 and docs/mcp-server.md.
 WEEKLY_LIMIT = 3
 STARTUP_WEEKLY_LIMIT = 15
 SMALL_CATALOG = 25
