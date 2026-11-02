@@ -144,6 +144,10 @@ The last command creates the tables and copies every stored poll since 28 August
 any time to pick up new polls; it only fetches what it doesn't have. It never touches the
 machine itself: it reads the bridge's stored history. Run the tests with `pytest`.
 
+`python -m vending.sync_requests` does the same for our purchase requests: it reads back
+every request still pending, and every one fulfilled in the last 30 days, and stores the
+receipts the stock counts come from. It only reads; it never submits a request.
+
 ## Working on this repo
 
 - **Everything goes through a branch and a pull request.** Nobody pushes to `main`.
