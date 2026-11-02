@@ -1,0 +1,5 @@
+# Runtime
+psycopg[binary]==3.2.*
+
+# Development
+pytest==8.*
