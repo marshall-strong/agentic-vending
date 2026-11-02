@@ -382,7 +382,9 @@ class Plan:
         return not self.refusals
 
     def request(self) -> dict:
-        """The body for POST /api/v1/purchase-requests."""
+        """The body for POST /api/v1/purchase-requests. A refused plan has none."""
+        if self.refusals:
+            raise ValueError("this plan has refusals, so there is no request to send; check `ok` first")
         return {"off_cycle": self.off_cycle, "lines": [line.to_api() for line in self.lines]}
 
 
@@ -483,6 +485,10 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     # 4. Allocate. A line has one source, so a slot loads from the closet only
     #    if the closet covers all of it; otherwise it buys all of it.
     for s in slots:
+        if s.staying > s.fill_to:
+            warnings.append(
+                f"slot {s.slot}: fill_to {s.fill_to} is below the {s.staying} units already there; "
+                f"they stay, because a visit only pulls units when the slot switches product")
         if s.staying and (s.need or s.price_changed):
             # Units staying in the slot sell at its new price too.
             _add_part(s, "on hand", s.state.unit_cost, config, warnings, s.staying)
@@ -592,7 +598,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         refusals.extend(check_price(s.price_cents, floor, config.price_ceiling_cents, s.slot))
 
     # 8. The plan, with every refusal found.
-    lines = tuple(_line(s) for s in slots if s.need)
+    # Only slots with a source get a line. A slot that couldn't be stocked is
+    # already refused, and must not look like a back-stock load.
+    lines = tuple(_line(s) for s in slots if s.purchase or s.from_back_stock)
     if not lines and not refusals:
         # Only when nothing else is wrong: a refused slot already says why
         # it loads nothing, and the API refuses a request with no lines.
@@ -678,6 +686,12 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
         usable = False
         refusals.append(Refusal("over_capacity", (
             f"slot {slot} fill_to {fill_to} is outside 0-{config.slot_capacity}"), slot))
+    if usable and fill_to == 0 and target.product != state.product:
+        # A switch that loads nothing gets no request line, so it would silently never happen.
+        usable = False
+        refusals.append(Refusal("empty_slot", (
+            f"slot {slot} would switch to {target.product} with fill_to 0, which leaves it empty; "
+            f"the API can't do that yet, so load at least one unit or keep the slot"), slot))
 
     if not usable:
         return held
@@ -685,6 +699,15 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
     staying = on_hand if same else 0
     return _Slot(slot, state, on_hand, target.product, price, fill_to, staying,
                  need=max(0, fill_to - staying), changes_product=not same)
+
+
+def _is_amazon_url(url: str) -> bool:
+    """True only for amazon.com and its subdomains. A URL too malformed to parse is not one."""
+    try:
+        host = urlparse(url).hostname or ""
+    except ValueError:
+        return False
+    return host == "amazon.com" or host.endswith(".amazon.com")
 
 
 class _Sources:
@@ -736,6 +759,17 @@ class _Sources:
             self._borrow_expected(s.product, primary)
             if alternate is not None:
                 self._borrow_expected(s.product, alternate)
+        for label, option in (("primary", primary), ("alternate", alternate)):
+            # The worker can't pay more than the max, so a max under what the
+            # pack costs leaves the slot empty. The expected price is an
+            # estimate, so the agent may give its own when it knows better.
+            if option and option.expected_cents is not None and option.expected_cents > option.max_cents:
+                self._bad.add(s.product)
+                self._refusals.append(Refusal("bad_sourcing", (
+                    f"{s.product}: {label} max_price_per_pack {_dollars(option.max_cents)} is below "
+                    f"the expected {_dollars(option.expected_cents)}, so the worker couldn't buy it; "
+                    f"raise the max, or give expected_price_per_pack if you know the pack costs less")))
+                return None
         return _Source(primary, alternate, s.extra_units_to_closet)
 
     def _option(self, o: PurchaseOption, label: str, problems: list[str]) -> _Option | None:
@@ -745,7 +779,7 @@ class _Sources:
         if o.store == AMAZON:
             if not o.url:
                 problems.append(f"{label} is from Amazon but has no url")
-            elif "amazon." not in (urlparse(o.url).hostname or ""):
+            elif not _is_amazon_url(o.url):
                 problems.append(f"{label} url {o.url!r} is not an Amazon link")
         if isinstance(o.units_per_pack, bool) or not isinstance(o.units_per_pack, int) \
                 or not 1 <= o.units_per_pack <= MAX_UNITS_PER_PACK:
@@ -821,7 +855,7 @@ def _cost_plan(slots: list[_Slot], off_cycle: bool, config: Config, balance: int
     for s in slots:
         p = s.purchase
         if p is None:
-            if s.need:
+            if s.from_back_stock:
                 lines.append(LineCost(s.slot, 0, 0))
             continue
         options = [o for o in (p.primary, p.alternate) if o is not None]

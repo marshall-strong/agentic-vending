@@ -200,14 +200,14 @@ The planner reduces each slot to one of David's cases:
 | `slot_list` | A slot is missing, listed twice, or not ours | List all 20 once |
 | `product_unknown` | A product is not in the catalog or is inactive | Request it (#11) and wait for approval |
 | `no_sourcing` | A slot needs more than the closet holds, the closet has none of the product, and it has no sourcing, given or in the table | Add `sourcing` for it |
-| `bad_sourcing` | Store not `Walmart`, `Costco`, `Amazon` or `BJs`; Amazon without an Amazon `url`; `units_per_pack` outside 1-60; `max_price_per_pack` not above $0 or over $200; `pack_description` over 100 characters | Fix the field |
+| `bad_sourcing` | Store not `Walmart`, `Costco`, `Amazon` or `BJs`; Amazon without an Amazon `url`; `units_per_pack` outside 1-60; `max_price_per_pack` not above $0, over $200, or below the expected price; `pack_description` over 100 characters | Fix the field; for a max below the expected price, give your own `expected_price_per_pack` if you know the pack costs less |
 | `over_capacity` | `fill_to` exceeds the slot's capacity | Lower `fill_to` |
 | `insufficient_stock` | A slot needs more than the closet holds, the closet has some of the product, and there's no sourcing to buy it | Add sourcing, or lower `fill_to` to what the closet holds |
 | `price_off_step` | A price is missing, unreadable, or not a multiple of 5 cents | Pick a legal price; it is not rounded for you |
-| `below_floor` | A price is under the slot's floor, or is $0.00 | Raise the price or lower the max pack price; the refusal shows the floor |
+| `below_floor` | A price is under the slot's floor, or is $0.00 | Raise the price, lower the max pack price (no lower than the pack costs), or pick a cheaper store or pack; the refusal shows the floor |
 | `above_ceiling` | A price is over `config.price_ceiling` (at most $10.00, the API's limit) | Lower it |
 | `insufficient_balance` | Max cost, plus $25 if `off_cycle`, exceeds the spendable balance | Buy less or cheaper |
-| `empty_slot` | `product: null`; the API can't leave a slot empty | Keep or switch the slot |
+| `empty_slot` | `product: null`, or a switch with `fill_to: 0`; the API can't leave a slot empty | Load at least one unit, or keep the slot |
 | `midweek_no_op` | An `off_cycle` plan loads nothing | Don't spend the $25 |
 | `price_only_unsupported` | A slot changes only its price; every line must load at least one unit, and there's no price-change route yet | Load at least one unit, or keep the old price |
 | `too_many_packs` | A line needs more than 20 packs | Use a bigger pack, or lower `fill_to` or `extra_units_to_closet` |

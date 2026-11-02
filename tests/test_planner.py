@@ -475,6 +475,47 @@ class Refusals(unittest.TestCase):
         self.assertEqual(line(p, "26").purchase.primary.packs, 1)
         self.assertEqual(floor_of(p, "26").floor_cents, 270)
 
+    def test_max_below_the_expected_price(self):
+        # The table expects $10.00 for this pack, so a $9.00 max can't be filled.
+        given = Sourcing(MTDEW, PurchaseOption("BJs", 24, "9.00"))
+        self.assertEqual(codes(plan(restock_15(), sourcing=[given])), ["bad_sourcing"])
+
+    def test_own_expected_price_overrides_the_table(self):
+        # The agent knows this pack is on sale, so a $9.00 max is fine.
+        given = Sourcing(MTDEW, PurchaseOption("BJs", 24, "9.00", expected_price_per_pack="8.50"))
+        self.assertTrue(plan(restock_15(), sourcing=[given]).ok)
+
+    def test_switch_that_loads_nothing_is_an_empty_slot(self):
+        p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=0), restock_15())
+        self.assertEqual(codes(p), ["empty_slot"])
+
+    def test_malformed_url_is_bad_sourcing(self):
+        given = Sourcing(SPRITE, PurchaseOption("Amazon", 12, "6.00", url="http://[bad"))
+        p = plan(DesiredSlot("17", product=SPRITE, sale_price="2.00"), sourcing=[given])
+        self.assertEqual(codes(p), ["bad_sourcing"])
+
+    def test_only_amazon_hosts_count(self):
+        for url in ("https://notamazon.com/dp/x", "https://amazon.evil.example/dp/x"):
+            given = Sourcing(SPRITE, PurchaseOption("Amazon", 12, "6.00", url=url))
+            p = plan(DesiredSlot("17", product=SPRITE, sale_price="2.00"), sourcing=[given])
+            self.assertEqual(codes(p), ["bad_sourcing"], url)
+
+    def test_refused_plan_has_no_request_body(self):
+        with self.assertRaises(ValueError):
+            plan(restock_15(price="2.53")).request()
+
+    def test_unstocked_slot_gets_no_line(self):
+        # Nothing in the closet and no sourcing: refused, and not shown as a back-stock load.
+        p = plan(DesiredSlot("17", product=SPRITE, sale_price="2.00"), restock_15())
+        self.assertEqual(codes(p), ["no_sourcing"])
+        self.assertEqual([ln.slot for ln in p.lines], ["15"])
+        self.assertEqual([c.slot for c in p.cost.lines], ["15"])
+
+    def test_fill_below_on_hand_warns_when_another_slot_loads(self):
+        p = plan(restock_15(fill_to=1), pickle_17())
+        self.assertTrue(p.ok, p.refusals)
+        self.assertTrue(any("fill_to 1" in w for w in p.warnings))
+
 
 class Request(unittest.TestCase):
     """The body for POST /api/v1/purchase-requests, per the 29 Oct schema."""
