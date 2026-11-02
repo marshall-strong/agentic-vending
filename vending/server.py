@@ -36,11 +36,14 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import to_jsonable_python
 
 from vending import db
-from vending.tools import NotBuilt, Reply, RefusalOut, WriteReply, machine_state, sales_history, stubs
+from vending.bridge import Bridge
+from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, catalog_request, machine_state, sales_history,
+                           stubs)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
 T = TypeVar("T", bound=BaseModel)
+W = TypeVar("W", bound=WriteReply)
 
 class _LoggedMCP(FastMCP):
     """Logs calls whose arguments fail validation: they never reach `_read` or `_write`."""
@@ -58,6 +61,8 @@ mcp = _LoggedMCP("vending")
 
 # Tests swap this to point at a throwaway schema, and reset `_conn`.
 connect: Callable[[], psycopg.Connection] = db.connect
+# The DEX bridge, for the write tools that call it. Tests point it at a local fake.
+bridge: Callable[[], Bridge] = Bridge
 _conn: psycopg.Connection | None = None
 # Transactions can't overlap on one connection, so tool calls take turns.
 _conn_lock = threading.Lock()
@@ -123,15 +128,18 @@ def _read_sync(tool: str, fn: Callable[..., T], arguments: dict[str, Any]) -> T:
     return result
 
 
-async def _write(tool: str, arguments: dict[str, Any], action: stubs.Action) -> WriteReply:
-    return await anyio.to_thread.run_sync(partial(_locked, _write_sync, tool, arguments, action))
+async def _write(tool: str, arguments: dict[str, Any], action: Callable[[psycopg.Connection], W],
+                 reply: type[W] = WriteReply) -> W:
+    return await anyio.to_thread.run_sync(partial(_locked, _write_sync, tool, arguments, action, reply))
 
 
-def _write_sync(tool: str, arguments: dict[str, Any], action: stubs.Action) -> WriteReply:
+def _write_sync(tool: str, arguments: dict[str, Any], action: Callable[[psycopg.Connection], W],
+                reply: type[W]) -> W:
+    """Run a write through the gate. A refusal comes back as `reply`, the tool's declared output type."""
     try:
         return run_write(_connection(), tool, to_jsonable_python(arguments), action)
     except Refused as refusal:
-        return WriteReply(
+        return reply(
             success=False,
             message=f"{tool} refused; nothing was written.",
             count=len(refusal.refusals),
@@ -195,13 +203,14 @@ async def get_pnl(start: date | None = None, end: date | None = None) -> Reply:
     return await _read("get_pnl", stubs.get_pnl, start=start, end=end)
 
 
-@_tool(built=False)
+@_tool(built=True)
 async def request_catalog_product(name: str, size: str, line: str | None = None, flavor: str | None = None,
-                                  note: str | None = None) -> WriteReply:
-    """Ask the instructors to add a single-item drink to the catalog, e.g. name "Coca-Cola Cherry", size "20 oz"."""
+                                  note: str | None = None) -> catalog_request.CatalogRequestReply:
+    """Ask the instructors to add a single-item drink to the catalog, e.g. name "Coca-Cola Cherry", size "20 oz bottle". Refused if already in the catalog or already requested."""
     arguments = {"name": name, "size": size, "line": line, "flavor": flavor, "note": note}
     return await _write("request_catalog_product", arguments,
-                        stubs.request_catalog_product(name, size, line, flavor, note))
+                        catalog_request.request_catalog_product(name, size, line, flavor, note, lambda: bridge()),
+                        catalog_request.CatalogRequestReply)
 
 
 def main() -> None:

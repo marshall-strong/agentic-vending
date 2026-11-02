@@ -49,9 +49,3 @@ def set_price(slot: str, sale_price: str) -> Action:
         raise NotBuilt("set_price", "no price-change route; waiting on the Cantaloupe check")
     return action
 
-
-def request_catalog_product(name: str, size: str, line: str | None, flavor: str | None,
-                            note: str | None) -> Action:
-    def action(conn: psycopg.Connection) -> WriteReply:
-        raise NotBuilt("request_catalog_product", "the route is live, but this tool isn't built yet")
-    return action

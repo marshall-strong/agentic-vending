@@ -65,7 +65,7 @@ def test_every_write_tool_refuses_when_halted(db, tool):
     assert db.execute("select tool, outcome from action_log").fetchall() == [(tool, "refused")]
 
 
-@pytest.mark.parametrize("tool", sorted(WRITE_ARGS))
+@pytest.mark.parametrize("tool", ["set_price", "submit_desired_state"])
 def test_unbuilt_write_tools_still_log_when_running(db, tool):
     set_halted(db, False, "test")
     result = call(tool, WRITE_ARGS[tool])
@@ -120,7 +120,8 @@ def test_built_only_hides_the_stubs(monkeypatch):
     monkeypatch.setenv("VENDING_TOOLS", "built")
     try:
         importlib.reload(server)
-        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history"]
+        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history",
+                                                      "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)
