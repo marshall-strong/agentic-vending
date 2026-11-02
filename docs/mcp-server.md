@@ -22,11 +22,14 @@ You need the local database from the history sync first ([`README.md`](../README
 ```
 pip install -r requirements.txt
 docker compose up -d db
+python -m vending.db migrate            # creates or updates the tables
 python -m vending.sync_history          # needs the class tailnet; loads real polls
 python -m vending.server                # waits silently on stdin: that's correct
 ```
 
-The server applies any pending migrations when it starts. Stop it with Ctrl+C.
+The server never migrates. If the database is missing a migration, it refuses to start and names
+the missing ones; check that `DATABASE_URL` points where you mean (on the VM it's the shared Azure
+database), then run `python -m vending.db migrate`. Stop the server with Ctrl+C.
 
 **For the live run, set `VENDING_TOOLS=built` in the real environment** (it is not read from `.env`). Then only working tools are registered, so the
 agent doesn't pay tokens on every request to describe stubs. The default, `all`, registers all
@@ -110,7 +113,11 @@ refused and logged while halted. A write tool registered without the gate fails 
 Each request goes to an instructor, and too many open ones get a `429`, so before sending it
 refuses, all at once: a field the bridge would reject, a size that isn't a liquid volume (`20 oz
 bottle`, `12 fl oz can`, `500 mL`), alcohol or THC (root beer and ginger ale are fine), a product
-already in the catalog, and a product we already asked for. Duplicates match one way: a
+already in the catalog, a product we already asked for, and a request over our weekly limit.
+The limit counts every request filed in the last 7 days: **3** normally, **15** while the bridge
+catalog has fewer than 25 products, so the first big ask can happen without anyone flipping a
+switch. Change `WEEKLY_LIMIT`, `STARTUP_WEEKLY_LIMIT` and `SMALL_CATALOG` in
+`vending/tools/catalog_request.py`. Duplicates match one way: a
 request is a duplicate when every word of its name, flavor and size is already in an earlier one,
 so "Cherry Zero 20 oz" after "Cherry 20 oz" goes through.
 

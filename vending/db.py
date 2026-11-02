@@ -60,6 +60,15 @@ def migrate(conn: psycopg.Connection) -> list[str]:
     return applied
 
 
+def pending(conn: psycopg.Connection) -> list[str]:
+    """The migrations not yet applied, in order. Reads only; changes nothing."""
+    names = [path.name for path in sorted(MIGRATIONS.glob("*.sql"))]
+    if conn.execute("select to_regclass('schema_migrations')").fetchone()[0] is None:
+        return names
+    applied = {row[0] for row in conn.execute("select version from schema_migrations")}
+    return [name for name in names if name not in applied]
+
+
 def main(argv: list[str]) -> int:
     if argv != ["migrate"]:
         print("usage: python -m vending.db migrate", file=sys.stderr)

@@ -167,3 +167,31 @@ def test_halted_never_calls_the_bridge(db, fake):  # noqa: F811
     set_halted(db, True, "test")
     assert codes(ask()) == ["halted"]
     assert fake.gets == 0 and fake.posts == []
+
+
+def test_the_weekly_limit_is_higher_while_the_catalog_is_small(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "STARTUP_WEEKLY_LIMIT", 3)
+    monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
+    for i, drink in enumerate(["Sprite", "Fanta", "Pibb"]):
+        fake.answer = (201, {"id": f"req-{i}", "status": "pending"}, 0.0)
+        assert ask(name=drink)["success"]
+    reply = ask(name="Fresca")
+    assert codes(reply) == ["request_limit"] and "start-up limit" in reply["refusals"][0]["message"]
+    assert len(fake.posts) == 3
+
+
+def test_the_normal_limit_applies_once_the_catalog_is_full(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "SMALL_CATALOG", len(CATALOG))
+    monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
+    assert ask(name="Sprite")["success"]
+    reply = ask(name="Fanta")
+    assert codes(reply) == ["request_limit"] and "start-up" not in reply["refusals"][0]["message"]
+
+
+def test_requests_older_than_a_week_do_not_count(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "SMALL_CATALOG", len(CATALOG))
+    monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
+    assert ask(name="Sprite")["success"]
+    db.execute("update product_requests set requested_at = now() - interval '8 days'")
+    fake.answer = (201, {"id": "req-2", "status": "pending"}, 0.0)
+    assert ask(name="Fanta")["success"]

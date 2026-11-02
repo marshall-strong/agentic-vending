@@ -5,7 +5,8 @@
 It costs nothing and orders nothing, but each request goes to a person, and
 too many open ones get a `429`. So before sending, it refuses, all at once:
 a field the bridge would reject, a size that isn't a liquid volume, alcohol or
-THC, a product already in the catalog, and one we have already requested.
+THC, a product already in the catalog, one we have already requested, and any
+request over our own weekly limit (larger while the catalog is still small).
 
 The bridge has no route that lists our requests, so `product_requests` is our
 only record, and the duplicate check reads it. Runs inside the write gate, so
@@ -39,6 +40,12 @@ TIMEOUT_SECONDS = 20
 # The live schema's limits (ProductRequestCreate, checked 2 Nov 2026).
 MAX_FIELD = 100
 MAX_NOTE = 500
+# Our own limit on requests filed in any 7 days, so the agent can't flood the
+# instructors. While the catalog is small there's more worth asking for, so the
+# limit is higher until the catalog reaches SMALL_CATALOG products.
+WEEKLY_LIMIT = 3
+STARTUP_WEEKLY_LIMIT = 15
+SMALL_CATALOG = 25
 
 # A size the bridge would sell as a drink: "20 oz bottle", "12 fl oz can", "500 mL".
 VOLUME = re.compile(r"\d+(?:\.\d+)?\s*(?:fl\.?\s*oz|oz|ounces?|ml|l|liters?|litres?)\b", re.IGNORECASE)
@@ -108,6 +115,19 @@ def already_in_catalog(catalog: list[dict], wanted: list[str]) -> list[Refusal]:
     return [Refusal("already_in_catalog", f"already in the catalog: {listed}; order it by SKU instead")]
 
 
+def over_weekly_limit(conn: psycopg.Connection, catalog_size: int) -> list[Refusal]:
+    """A refusal if we've already filed this week's share of requests."""
+    limit = STARTUP_WEEKLY_LIMIT if catalog_size < SMALL_CATALOG else WEEKLY_LIMIT
+    (recent,) = conn.execute(
+        "select count(*) from product_requests where requested_at > now() - interval '7 days'").fetchone()
+    if recent < limit:
+        return []
+    why = (f"the catalog has {catalog_size} products, under {SMALL_CATALOG}, so the start-up limit applies"
+           if limit == STARTUP_WEEKLY_LIMIT else f"the catalog has {catalog_size} products")
+    return [Refusal("request_limit", f"we've filed {recent} product requests in the last 7 days, the limit is "
+                                     f"{limit} ({why}); pick the most wanted ones and try again later")]
+
+
 def request_catalog_product(name: str, size: str, line: str | None, flavor: str | None, note: str | None,
                             bridge: Callable[[], Bridge]) -> Callable[[psycopg.Connection], CatalogRequestReply]:
     """The write action for the gate. `bridge` is called only once the halt check has passed."""
@@ -127,7 +147,7 @@ def request_catalog_product(name: str, size: str, line: str | None, flavor: str 
             if refusals:
                 raise Refused(refusals) from None
             return CatalogRequestReply(success=False, message=f"Couldn't read the catalog to check for duplicates ({error}); nothing was sent.")
-        refusals += already_in_catalog(catalog, wanted)
+        refusals += already_in_catalog(catalog, wanted) + over_weekly_limit(conn, len(catalog))
         if refusals:
             raise Refused(refusals)
         return _send(conn, client, body, wanted)

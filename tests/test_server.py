@@ -1,6 +1,7 @@
 """Tests through a real MCP client session, in memory: what the agent would see."""
 
 import importlib
+import uuid
 import time
 
 import anyio
@@ -163,3 +164,28 @@ def test_calls_with_bad_arguments_are_logged(db):
     assert call("get_sales_history", {"start": "yesterday", "end": "today"}).isError
     assert db.execute("select kind, tool, outcome from action_log").fetchall() == [
         ("read", "get_sales_history", "refused")]
+
+
+def test_startup_refuses_a_schema_missing_migrations(database_url, monkeypatch):
+    schema = f"test_{uuid.uuid4().hex[:8]}"
+    with open_in(database_url, "public") as admin:
+        admin.execute(f"create schema {schema}")
+        try:
+            monkeypatch.setattr(server, "connect", lambda: open_in(database_url, schema))
+            monkeypatch.setattr(server.mcp, "run", lambda: pytest.fail("started on an unmigrated schema"))
+            with pytest.raises(SystemExit) as stopped:
+                server.main()
+            assert "001_polls.sql" in str(stopped.value) and "python -m vending.db migrate" in str(stopped.value)
+            # It only looked: nothing was created.
+            with open_in(database_url, schema) as conn:
+                assert conn.execute("select to_regclass('schema_migrations')").fetchone() == (None,)
+        finally:
+            admin.execute(f"drop schema {schema} cascade")
+
+
+def test_startup_runs_on_a_migrated_schema(schema_url, monkeypatch):
+    started = []
+    monkeypatch.setattr(server, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(server.mcp, "run", lambda: started.append(True))
+    server.main()
+    assert started == [True]

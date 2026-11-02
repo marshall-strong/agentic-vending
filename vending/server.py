@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import threading
+import sys
 from collections.abc import Callable
 from datetime import date, datetime
 from functools import partial
@@ -214,8 +215,14 @@ async def request_catalog_product(name: str, size: str, line: str | None = None,
 
 
 def main() -> None:
-    with db.connect() as conn:
-        db.migrate(conn)
+    # The server never migrates: on the VM, DATABASE_URL is the shared Azure
+    # database, and a schema change there should be a person's decision. It
+    # refuses to start on a schema that's behind, rather than fail mid-call.
+    with connect() as conn:
+        behind = db.pending(conn)
+    if behind:
+        sys.exit(f"The database is missing migrations: {', '.join(behind)}.\n"
+                 "Check DATABASE_URL points where you mean, then run: python -m vending.db migrate")
     mcp.run()  # stdio
 
 
