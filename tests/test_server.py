@@ -1,6 +1,7 @@
 """Tests through a real MCP client session, in memory: what the agent would see."""
 
 import importlib
+import time
 
 import anyio
 import pytest
@@ -124,3 +125,40 @@ def test_built_only_hides_the_stubs(monkeypatch):
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)
     assert len(call(None).tools) == 10
+
+
+def test_parallel_calls_do_not_collide(db):
+    store_poll(db, "a", "2026-10-29T12:00:00+00:00", {"15": (250, 100)})
+
+    async def run():
+        results = []
+
+        async def one(client, i):
+            if i % 3 == 0:
+                results.append(await client.call_tool("set_price", WRITE_ARGS["set_price"]))
+            else:
+                results.append(await client.call_tool("get_machine_state", {}))
+
+        async with create_connected_server_and_client_session(server.mcp._mcp_server) as client:
+            with anyio.fail_after(20):
+                async with anyio.create_task_group() as group:
+                    for i in range(30):
+                        group.start_soon(one, client, i)
+        return results
+
+    results = anyio.run(run)
+    assert len(results) == 30 and not any(r.isError for r in results)
+    assert db.execute("select count(*) from action_log").fetchone()[0] == 30
+
+
+def test_a_connection_that_died_is_replaced(db):
+    call("get_account_balance")
+    db.execute("select pg_terminate_backend(%s)", (server._conn.info.backend_pid,))
+    time.sleep(0.2)
+    assert "not built yet" in call("get_account_balance").content[0].text
+
+
+def test_calls_with_bad_arguments_are_logged(db):
+    assert call("get_sales_history", {"start": "yesterday", "end": "today"}).isError
+    assert db.execute("select kind, tool, outcome from action_log").fetchall() == [
+        ("read", "get_sales_history", "refused")]

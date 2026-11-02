@@ -34,7 +34,7 @@ agent doesn't pay tokens on every request to describe stubs. The default, `all`,
 sign in to the class account once with `tailscale login`, then move between tailnets with
 `tailscale switch <tailnet>` (`tailscale switch --list` shows them). Only one tailnet is active
 at a time, so your personal machines drop off while you're on the class one. In production the
-sync runs on the Azure VM, which stays on the class tailnet.
+sync runs in our Azure Container App, which has to join the class tailnet.
 
 ### Try it in the MCP Inspector
 

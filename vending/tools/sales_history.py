@@ -69,7 +69,7 @@ def build(first: Counters, last: Counters, slots: list[str]) -> tuple[list[SlotS
 def get_sales_history(conn: psycopg.Connection, start: datetime, end: datetime,
                       slots: list[str] | None) -> SalesHistory:
     start, end = _utc(start), _utc(end)
-    wanted = list(SLOTS) if not slots else slots
+    wanted = list(SLOTS) if not slots else list(dict.fromkeys(slots))
     unknown = sorted(set(wanted) - set(SLOTS))
     if unknown:
         return SalesHistory(success=False, message=(

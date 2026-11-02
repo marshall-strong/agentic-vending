@@ -32,10 +32,14 @@ def main(argv: list[str]) -> int:
     if args.action != "status" and not (args.by or "").strip():
         parser.error("--by NAME is required to turn the halt switch on or off")
     with db.connect() as conn:
-        db.migrate(conn)
         if args.action != "status":
+            db.migrate(conn)
             flip(conn, args.action == "on", args.by.strip())
-        print("halted" if is_halted(conn) else "running: writes allowed")
+        try:
+            halted = is_halted(conn)
+        except psycopg.errors.UndefinedTable:  # never migrated, so nothing can write yet
+            halted = True
+        print("halted" if halted else "running: writes allowed")
     return 0
 
 

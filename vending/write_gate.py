@@ -11,10 +11,12 @@ then logged on its own, so every attempt leaves a row, including refused ones.
 can fix a plan in one turn. Anything else it raises is logged as `failed` and
 re-raised.
 
-Not covered here yet: a write that calls the bridge cannot be rolled back. When
-`submit_desired_state` is built, it must record the request ID in the same
-transaction as the bridge call's result, so a crash after the call still leaves
-a trace. Decide that against David's final schema.
+Not covered here yet: a write that calls the bridge cannot be rolled back, and
+the bridge has no route that lists our requests. When `submit_desired_state` is
+built, it must commit a row saying what it is about to send before the call,
+then update that row with the request ID after it. A transaction around the
+call isn't enough: a crash before the commit loses the ID, and a retry could
+order twice.
 """
 
 from __future__ import annotations
@@ -51,7 +53,8 @@ def run_write(conn: psycopg.Connection, tool: str, arguments: dict[str, Any],
             if is_halted(conn, lock=True):
                 raise Refused([HALTED])
             result = action(conn)
-            log(conn, "write", tool, arguments, "done", None, result)
+            log(conn, "write", tool, arguments, "done" if result.success else "failed",
+                None if result.success else result.message, result)
         return result
     except Refused as refusal:
         with conn.transaction():

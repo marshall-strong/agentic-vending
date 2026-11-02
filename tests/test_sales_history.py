@@ -62,3 +62,10 @@ def test_naive_times_are_utc(conn):
     store_poll(conn, "a", "2026-10-20T12:00:00+00:00", {"15": (250, 100)})
     store_poll(conn, "b", "2026-10-22T12:00:00+00:00", {"15": (250, 104)})
     assert get_sales_history(conn, datetime(2026, 10, 20, 12), datetime(2026, 10, 22, 12), ["15"]).data[0].units == 4
+
+
+def test_a_repeated_slot_counts_once(conn):
+    store_poll(conn, "a", "2026-10-20T12:00:00+00:00", {"15": (250, 100)})
+    store_poll(conn, "b", "2026-10-22T12:00:00+00:00", {"15": (250, 104)})
+    reply = get_sales_history(conn, at(19), at(23), ["15", "15"])
+    assert reply.count == 1 and reply.revenue == "10.00"

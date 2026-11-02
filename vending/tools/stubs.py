@@ -40,7 +40,7 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> R
 
 def submit_desired_state(desired: DesiredState) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
-        raise NotBuilt("submit_desired_state", "waiting on David's purchase-request schema")
+        raise NotBuilt("submit_desired_state", "needs plan_restock wired to the ledger and our request records")
     return action
 
 
@@ -53,5 +53,5 @@ def set_price(slot: str, sale_price: str) -> Action:
 def request_catalog_product(name: str, size: str, line: str | None, flavor: str | None,
                             note: str | None) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
-        raise NotBuilt("request_catalog_product", "waiting on the catalog-request routes")
+        raise NotBuilt("request_catalog_product", "the route is live, but this tool isn't built yet")
     return action

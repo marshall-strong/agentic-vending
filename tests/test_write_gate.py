@@ -107,3 +107,19 @@ def test_halt_flip_is_logged(conn):
     assert is_halted(conn)
     assert conn.execute("select detail from action_log where tool = 'halt' order by id").fetchall() == [
         ("halt turned off by kevin",), ("halt turned on by kevin",)]
+
+
+def test_a_write_that_reports_failure_is_logged_as_failed(scratch):
+    set_halted(scratch, False, "test")
+    run_write(scratch, "t", {}, lambda conn: WriteReply(success=False, message="the bridge said no"))
+    assert log(scratch) == [("t", "failed", "the bridge said no")]
+
+
+def test_status_does_not_migrate(schema_url, monkeypatch, capsys):
+    def no_migrate(conn):
+        raise AssertionError("status must not migrate")
+
+    monkeypatch.setattr(halt.db, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(halt.db, "migrate", no_migrate)
+    assert halt.main(["status"]) == 0
+    assert capsys.readouterr().out.strip() == "halted"

@@ -4,9 +4,10 @@ Built from the history sync's stored polls only; it never reads the machine.
 Lifetime counters never reset, so sales over the window are the latest poll
 minus the last poll at or before the window's start.
 
-The fields that need restock receipts (stock on hand, units sold since the last
-load, days since loaded, days of stock left) are `null` until the receipts sync
-exists. They are null, not zero, so the agent can't mistake "unknown" for "empty".
+The fields that need restock receipts (product, stock on hand, units sold since
+the last load, days since loaded, days of stock left) are `null` until the
+receipts sync exists. They are null, not zero, so the agent can't mistake
+"unknown" for "empty".
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from vending.tools import Reply
 WINDOW = timedelta(days=7)
 # David polls hourly; older than this means the history sync has likely stalled.
 STALE_AFTER = timedelta(hours=3)
-NEEDS_RECEIPTS = "stock_on_hand, units_sold_since_load, days_since_loaded and days_of_stock_left need restock receipts, which aren't synced yet"
+NEEDS_RECEIPTS = "product, stock_on_hand, units_sold_since_load, days_since_loaded and days_of_stock_left need restock receipts, which aren't synced yet"
 
 
 class SlotState(BaseModel):
@@ -32,6 +33,7 @@ class SlotState(BaseModel):
     lifetime_units: int | None
     units_sold_in_window: int | None
     units_per_day: str | None
+    product: str | None = None
     stock_on_hand: int | None = None
     units_sold_since_load: int | None = None
     days_since_loaded: int | None = None

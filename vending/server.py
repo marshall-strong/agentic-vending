@@ -22,6 +22,7 @@ a write tool any other way; `tests/test_server.py` checks that every tool in
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Callable
 from datetime import date, datetime
 from functools import partial
@@ -31,7 +32,7 @@ import anyio
 import psycopg
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from pydantic_core import to_jsonable_python
 
 from vending import db
@@ -41,11 +42,25 @@ from vending.write_gate import Refused, log, run_write
 
 T = TypeVar("T", bound=BaseModel)
 
-mcp = FastMCP("vending")
+class _LoggedMCP(FastMCP):
+    """Logs calls whose arguments fail validation: they never reach `_read` or `_write`."""
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        try:
+            return await super().call_tool(name, arguments)
+        except ToolError as error:
+            if isinstance(error.__cause__, ValidationError):
+                await anyio.to_thread.run_sync(partial(_locked, _log_rejected, name, arguments, str(error)))
+            raise
+
+
+mcp = _LoggedMCP("vending")
 
 # Tests swap this to point at a throwaway schema, and reset `_conn`.
 connect: Callable[[], psycopg.Connection] = db.connect
 _conn: psycopg.Connection | None = None
+# Transactions can't overlap on one connection, so tool calls take turns.
+_conn_lock = threading.Lock()
 
 WRITE_TOOLS = {"submit_desired_state", "set_price", "request_catalog_product"}
 
@@ -64,14 +79,30 @@ def _tool(*, built: bool) -> Callable[[Callable], Callable]:
 
 
 def _connection() -> psycopg.Connection:
+    """The shared connection, reopened if it died. Call it only while holding `_conn_lock`."""
     global _conn
-    if _conn is None or _conn.closed or _conn.broken:
-        _conn = connect()
+    if _conn is not None and not _conn.closed and not _conn.broken:
+        try:
+            _conn.execute("select 1")
+            return _conn
+        except psycopg.OperationalError:
+            pass
+    _conn = connect()
     return _conn
 
 
+def _locked(fn: Callable[..., T], *args: Any) -> T:
+    with _conn_lock:
+        return fn(*args)
+
+
+def _log_rejected(tool: str, arguments: dict[str, Any], detail: str) -> None:
+    kind = "write" if tool in WRITE_TOOLS else "read"
+    log(_connection(), kind, tool, to_jsonable_python(arguments), "refused", detail)
+
+
 async def _read(tool: str, fn: Callable[..., T], **arguments: Any) -> T:
-    return await anyio.to_thread.run_sync(partial(_read_sync, tool, fn, arguments))
+    return await anyio.to_thread.run_sync(partial(_locked, _read_sync, tool, fn, arguments))
 
 
 def _read_sync(tool: str, fn: Callable[..., T], arguments: dict[str, Any]) -> T:
@@ -93,7 +124,7 @@ def _read_sync(tool: str, fn: Callable[..., T], arguments: dict[str, Any]) -> T:
 
 
 async def _write(tool: str, arguments: dict[str, Any], action: stubs.Action) -> WriteReply:
-    return await anyio.to_thread.run_sync(partial(_write_sync, tool, arguments, action))
+    return await anyio.to_thread.run_sync(partial(_locked, _write_sync, tool, arguments, action))
 
 
 def _write_sync(tool: str, arguments: dict[str, Any], action: stubs.Action) -> WriteReply:
