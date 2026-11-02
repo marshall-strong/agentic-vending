@@ -2,15 +2,17 @@
 
 The agent's 10 tools, served over stdio by `python -m vending.server`. It's plain Python on the
 official MCP SDK, in the same package as the history sync, so the tools import the parser, the
-pricing gate and the database layer directly. The tools only read our database. Nothing here
-polls the machine.
+pricing gate and the database layer directly. The read tools only read our database; the one
+built write tool, `request_catalog_product`, also calls the DEX bridge. Nothing here polls the
+machine.
 
 | Tool | State |
 | --- | --- |
 | `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_catalog`, `get_account_balance`, `preview_desired_state`, `get_purchase_requests`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
-| `submit_desired_state`, `set_price`, `request_catalog_product` | Write stubs, already behind the write gate: refused while halted, logged either way |
+| `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
+| `submit_desired_state`, `set_price` | Write stubs, already behind the write gate: refused while halted, logged either way |
 
 ## Run it
 
@@ -103,6 +105,23 @@ select at, tool, outcome, detail from action_log where kind = 'write' order by a
 `tests/test_server.py` calls every write tool through an MCP client and checks that it is
 refused and logged while halted. A write tool registered without the gate fails that test.
 
+### `request_catalog_product`
+
+Each request goes to an instructor, and too many open ones get a `429`, so before sending it
+refuses, all at once: a field the bridge would reject, a size that isn't a liquid volume (`20 oz
+bottle`, `12 fl oz can`, `500 mL`), alcohol or THC (root beer and ginger ale are fine), a product
+already in the catalog, and a product we already asked for. Duplicates match one way: a
+request is a duplicate when every word of its name, flavor and size is already in an earlier one,
+so "Cherry Zero 20 oz" after "Cherry 20 oz" goes through.
+
+The bridge has no route that lists our requests, so `product_requests` (migration 005) is our only
+record, and the duplicate check reads it. The POST is never retried, because a retry after a lost
+answer could file it twice. If it may have reached the bridge but no answer came back (a timeout
+or a 5xx), the row is stored with status `unknown`, and the same product is refused until a person
+checks the bridge's Swagger page and fixes the row. Nothing updates `pending` rows yet. A later
+sync can read `GET /api/v1/product-requests/{id}`. One gap remains: a crash after the bridge
+answers but before our transaction commits loses the row.
+
 ## Adding a tool's logic
 
 1. Give it a module in `vending/tools/` with a function that takes a connection and returns a
@@ -110,7 +129,8 @@ refused and logged while halted. A write tool registered without the gate fails 
 2. In `vending/server.py`, point its registration at that function. Keep the docstring short,
    because every tool description is sent, and paid for, on every model request.
 3. A write tool returns an action for `_write`. It raises `Refused` with every refusal at once,
-   using `vending.pricing.Refusal` and the codes in the tool list.
+   using `vending.pricing.Refusal` and the codes in the tool list. If its reply is a `WriteReply`
+   subclass, pass that class to `_write` so a refusal comes back in the same type.
 4. Add tests on fixture polls. `tests/conftest.py` gives each test a throwaway schema, and
    `store_poll` stores a synthetic poll through the history sync's own `store`.
 
@@ -120,5 +140,9 @@ refused and logged while halted. A write tool registered without the gate fails 
 pytest
 ```
 
-The database tests skip when `DATABASE_URL` isn't set or the database is down. Start it with
+The database tests skip when `DATABASE_URL` isn't set or the database is down; one 3-second probe
+decides for the whole run, so a dead database doesn't hang the suite. Start it with
 `docker compose up -d db` so they run.
+
+`tests/test_catalog_request.py` runs `request_catalog_product` against a local HTTP server
+standing in for the bridge, so no test files a real request.
