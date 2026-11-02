@@ -106,10 +106,15 @@ class SlotState:
 
 @dataclass(frozen=True)
 class ClosetStock:
-    """Units of one product in the closet, at their actual cost after losses."""
+    """Units of one product in the closet, at their actual cost after losses.
+
+    `unit_cost` is None when the receipts can't say what the units cost (the
+    stock counts report that rather than guess). They can still be loaded;
+    the floor leaves them out and the plan warns, as for slot stock.
+    """
     product: str
     units: int
-    unit_cost: Fraction | int           # cents per unit
+    unit_cost: Fraction | int | None    # cents per unit
 
 
 @dataclass(frozen=True)
@@ -411,7 +416,7 @@ class _Source:
 class _Lot:
     """Units of one product in the closet, as the allocation draws them down."""
     units: int
-    unit_cost: Fraction
+    unit_cost: Fraction | None
 
 
 @dataclass
@@ -480,7 +485,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     closet: dict[str, list[_Lot]] = defaultdict(list)
     for c in current.closet:
         if c.units > 0:
-            closet[c.product].append(_Lot(c.units, Fraction(c.unit_cost)))
+            cost = None if c.unit_cost is None else Fraction(c.unit_cost)
+            closet[c.product].append(_Lot(c.units, cost))
 
     # 4. Allocate. A line has one source, so a slot loads from the closet only
     #    if the closet covers all of it; otherwise it buys all of it.

@@ -327,6 +327,16 @@ class PricingGate(unittest.TestCase):
         self.assertTrue(any("unknown" in w for w in p.warnings))
 
 
+    def test_unknown_closet_cost_still_loads_with_a_warning(self):
+        # The stock counts can't always say what closet units cost; load them,
+        # leave them out of the floor, and say so.
+        p = plan(restock_15(), closet=[ClosetStock(MTDEW, 9, None)])
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(line(p, "15").source, BACK_STOCK)
+        self.assertEqual([part.source for part in floor_of(p, "15").parts], ["on hand"])
+        self.assertTrue(any("back stock is unknown" in w for w in p.warnings))
+
+
 class Refusals(unittest.TestCase):
     """One test per refusal code."""
 
