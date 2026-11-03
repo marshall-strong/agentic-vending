@@ -13,10 +13,18 @@ only record, and the duplicate check reads it. Runs inside the write gate, so
 the halt lock is held while the request is in flight.
 
 The POST is never retried: a retry after a lost answer could file it twice.
-If the request may have reached the bridge but we got no answer (a timeout or a
-5xx), it's stored as `unknown` and the tool says so; the duplicate check then
-blocks a resend until a person has checked. The one gap left: a crash after
-the bridge answers but before our transaction commits loses the row.
+Just before sending, a `sending` row is committed on its own short connection,
+outside the gate's transaction, so a crash at any later point (before the answer
+is stored, or before the gate commits) leaves it behind. What happens next:
+
+- accepted: the row becomes `pending` with the bridge's ID, in the gate's
+  transaction, so it commits with the `action_log` row;
+- certainly not sent or refused (no connection, a 4xx, a 429): the row is
+  deleted, again on its own connection, because a refusal rolls the gate back;
+- no answer (a timeout or a 5xx): the row becomes `unknown`.
+
+A row left `sending` or `unknown` may or may not exist on the bridge. The
+duplicate check blocks a resend of it until a person has checked.
 """
 
 from __future__ import annotations
@@ -102,8 +110,8 @@ def already_requested(conn: psycopg.Connection, wanted: list[str]) -> list[Refus
     ).fetchall()
     return [Refusal("already_requested",
                     f"we already asked for {name} ({size}): request {bridge_id or 'with no ID'}, status {status}"
-                    + (" (sent, but no answer came back; a person must check before it is sent again)"
-                       if status == "unknown" else ""))
+                    + (" (sent, but no answer was stored; a person must check before it is sent again)"
+                       if status in ("sending", "unknown") else ""))
             for bridge_id, name, size, status in rows]
 
 
@@ -131,8 +139,13 @@ def over_weekly_limit(conn: psycopg.Connection, catalog_size: int) -> list[Refus
 
 
 def request_catalog_product(name: str, size: str, line: str | None, flavor: str | None, note: str | None,
-                            bridge: Callable[[], Bridge]) -> Callable[[psycopg.Connection], CatalogRequestReply]:
-    """The write action for the gate. `bridge` is called only once the halt check has passed."""
+                            bridge: Callable[[], Bridge], connect: Callable[[], psycopg.Connection],
+                            ) -> Callable[[psycopg.Connection], CatalogRequestReply]:
+    """The write action for the gate. `bridge` is called only once the halt check has passed.
+
+    `connect` opens the short, separate connection that commits the `sending`
+    row before the POST; it must reach the same database as the gate's.
+    """
     # The bridge refuses an empty optional field, so send it as absent.
     line, flavor, note = (v.strip() or None if v is not None else None for v in (line, flavor, note))
     name, size = name.strip(), size.strip()
@@ -152,12 +165,38 @@ def request_catalog_product(name: str, size: str, line: str | None, flavor: str 
         refusals += already_in_catalog(catalog, wanted) + over_weekly_limit(conn, len(catalog))
         if refusals:
             raise Refused(refusals)
-        return _send(conn, client, body, wanted)
+        row = _save_sending(connect, body, wanted)
+        try:
+            return _send(conn, client, body, row, connect)
+        except Refused:
+            _forget(connect, row)
+            raise
 
     return action
 
 
-def _send(conn: psycopg.Connection, client: Bridge, body: dict, wanted: list[str]) -> CatalogRequestReply:
+def _save_sending(connect: Callable[[], psycopg.Connection], body: dict, wanted: list[str]) -> int:
+    """Commit a `sending` row on its own connection, so a crash after this can't lose it.
+
+    The connection commits as the `with` block closes it.
+    """
+    with connect() as side:
+        (row,) = side.execute(
+            "insert into product_requests (name, size, line, flavor, note, words, status)"
+            " values (%(name)s, %(size)s, %(line)s, %(flavor)s, %(note)s, %(words)s, 'sending') returning id",
+            {**_columns(body), "words": wanted},
+        ).fetchone()
+    return row
+
+
+def _forget(connect: Callable[[], psycopg.Connection], row: int) -> None:
+    """Delete the `sending` row of a request the bridge certainly didn't file."""
+    with connect() as side:
+        side.execute("delete from product_requests where id = %s and status = 'sending'", (row,))
+
+
+def _send(conn: psycopg.Connection, client: Bridge, body: dict, row: int,
+          connect: Callable[[], psycopg.Connection]) -> CatalogRequestReply:
     request = urllib.request.Request(
         client.base_url + "/api/v1/product-requests", data=json.dumps(body).encode(), method="POST",
         headers={"X-API-Key": client.api_key, "Content-Type": "application/json"},
@@ -171,33 +210,35 @@ def _send(conn: psycopg.Connection, client: Bridge, body: dict, wanted: list[str
             raise Refused([Refusal("too_many_open_requests",
                                    "the bridge has too many of our product requests open; wait for earlier ones to be decided")]) from None
         if error.code >= 500:
-            return _unknown(conn, body, wanted, f"the bridge answered {error.code}")
+            return _unknown(conn, row, f"the bridge answered {error.code}")
+        _forget(connect, row)
         return CatalogRequestReply(success=False, message=f"The bridge refused the request ({error.code}: {detail}); nothing was stored.")
     except urllib.error.URLError as error:
         # urllib raises URLError only while connecting or sending, so the bridge never got it.
+        _forget(connect, row)
         return CatalogRequestReply(success=False, message=f"Couldn't reach the bridge ({error.reason}); nothing was sent.")
     except (OSError, ValueError) as error:
         # Sent, but the answer timed out, broke off or wasn't JSON.
-        return _unknown(conn, body, wanted, f"{type(error).__name__}: {error}")
+        return _unknown(conn, row, f"{type(error).__name__}: {error}")
+    return _record_accepted(conn, row, body, answer)
+
+
+def _record_accepted(conn: psycopg.Connection, row: int, body: dict, answer: dict) -> CatalogRequestReply:
+    """Store the bridge's ID on our row, in the gate's transaction."""
+    status = answer.get("status", "pending")
     conn.execute(
-        "insert into product_requests (name, size, line, flavor, note, words, bridge_id, status, last_response)"
-        " values (%(name)s, %(size)s, %(line)s, %(flavor)s, %(note)s, %(words)s, %(id)s, %(status)s, %(answer)s)",
-        {**_columns(body), "words": wanted, "id": answer["id"], "status": answer.get("status", "pending"),
-         "answer": Jsonb(answer)},
+        "update product_requests set bridge_id = %s, status = %s, last_response = %s where id = %s",
+        (answer["id"], status, Jsonb(answer), row),
     )
     return CatalogRequestReply(
-        success=True, count=1, request_id=answer["id"], status=answer.get("status", "pending"),
+        success=True, count=1, request_id=answer["id"], status=status,
         message=f"Requested {body['name']} ({body['size']}): product request {answer['id']} is "
-                f"{answer.get('status', 'pending')}. If approved it appears in the catalog, maybe under another name.",
+                f"{status}. If approved it appears in the catalog, maybe under another name.",
     )
 
 
-def _unknown(conn: psycopg.Connection, body: dict, wanted: list[str], why: str) -> CatalogRequestReply:
-    conn.execute(
-        "insert into product_requests (name, size, line, flavor, note, words, status)"
-        " values (%(name)s, %(size)s, %(line)s, %(flavor)s, %(note)s, %(words)s, 'unknown')",
-        {**_columns(body), "words": wanted},
-    )
+def _unknown(conn: psycopg.Connection, row: int, why: str) -> CatalogRequestReply:
+    conn.execute("update product_requests set status = 'unknown' where id = %s", (row,))
     return CatalogRequestReply(
         success=False, status="unknown",
         message=f"Sent, but no usable answer came back ({why}), so the request may or may not exist. "

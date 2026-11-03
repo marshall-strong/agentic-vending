@@ -210,7 +210,8 @@ async def request_catalog_product(name: str, size: str, line: str | None = None,
     """Ask the instructors to add a single-item drink to the catalog, e.g. name "Coca-Cola Cherry", size "20 oz bottle". Refused if already in the catalog or already requested."""
     arguments = {"name": name, "size": size, "line": line, "flavor": flavor, "note": note}
     return await _write("request_catalog_product", arguments,
-                        catalog_request.request_catalog_product(name, size, line, flavor, note, lambda: bridge()),
+                        catalog_request.request_catalog_product(name, size, line, flavor, note,
+                                                                lambda: bridge(), lambda: connect()),
                         catalog_request.CatalogRequestReply)
 
 

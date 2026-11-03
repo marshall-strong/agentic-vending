@@ -124,11 +124,23 @@ so "Cherry Zero 20 oz" after "Cherry 20 oz" goes through.
 
 The bridge has no route that lists our requests, so `product_requests` (migration 005) is our only
 record, and the duplicate check reads it. The POST is never retried, because a retry after a lost
-answer could file it twice. If it may have reached the bridge but no answer came back (a timeout
-or a 5xx), the row is stored with status `unknown`, and the same product is refused until a person
-checks the bridge's Swagger page and fixes the row. Nothing updates `pending` rows yet. A later
-sync can read `GET /api/v1/product-requests/{id}`. One gap remains: a crash after the bridge
-answers but before our transaction commits loses the row.
+answer could file it twice.
+
+**The row is saved before the request is sent.** Just before the POST, the tool commits a row with
+status `sending` on its own short connection, outside the write gate's transaction. So if the
+server crashes or is stopped after the bridge files the request but before we store its answer,
+the row survives. Then:
+
+| What happened | The row |
+| --- | --- |
+| The bridge accepted it | becomes `pending`, with the bridge's request ID |
+| It certainly wasn't filed (no connection, a 4xx, a `429`) | is deleted |
+| No answer came back (a timeout or a 5xx) | becomes `unknown` |
+| The server died before storing the answer | stays `sending` |
+
+A request left `sending` or `unknown` may or may not exist on the bridge, so the same product is
+refused until a person checks the bridge's Swagger page and fixes the row. Nothing updates
+`pending` rows yet. A later sync can read `GET /api/v1/product-requests/{id}`.
 
 ## Adding a tool's logic
 

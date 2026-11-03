@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from tests.conftest import open_in
 from tests.test_server import call, db  # noqa: F401  (db is a fixture)
 from vending import bridge as bridge_module
 from vending import server
@@ -29,6 +30,8 @@ class FakeBridge:
         self.gets = 0
         self.catalog_status = 200
         self.answer = (201, {"id": "req-1", "status": "pending"}, 0.0)
+        # Called as each POST arrives, before it is answered.
+        self.on_post = lambda: None
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -51,6 +54,7 @@ class FakeBridge:
             def do_POST(self):
                 assert self.path == "/api/v1/product-requests" and self.headers["X-API-Key"] == "test-key"
                 fake.posts.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                fake.on_post()
                 status, body, delay = fake.answer
                 time.sleep(delay)
                 try:
@@ -151,6 +155,34 @@ def test_no_answer_is_stored_as_unknown_and_blocks_a_resend(db, fake, monkeypatc
     assert not reply["success"] and reply["status"] == "unknown"
     assert db.execute("select bridge_id, status from product_requests").fetchall() == [(None, "unknown")]
     fake.answer = (201, {"id": "req-9", "status": "pending"}, 0.0)
+    again = ask()
+    assert codes(again) == ["already_requested"] and "a person must check" in again["refusals"][0]["message"]
+    assert len(fake.posts) == 1
+
+
+def test_the_request_is_saved_before_it_is_sent(db, fake, schema_url):  # noqa: F811
+    seen = []
+
+    def look():
+        # A separate connection sees only committed rows.
+        with open_in(*schema_url) as other:
+            seen.extend(other.execute("select status from product_requests").fetchall())
+
+    fake.on_post = look
+    assert ask()["success"]
+    assert seen == [("sending",)]
+    assert db.execute("select bridge_id, status from product_requests").fetchall() == [("req-1", "pending")]
+
+
+def test_a_crash_after_the_bridge_accepts_keeps_the_row_and_blocks_a_resend(db, fake, monkeypatch):  # noqa: F811
+    def crash(*args):
+        raise RuntimeError("simulated crash before the answer was stored")
+
+    original = catalog_request._record_accepted
+    monkeypatch.setattr(catalog_request, "_record_accepted", crash)
+    assert call("request_catalog_product", {"name": "Coca-Cola Cherry", "size": "20 oz bottle"}).isError
+    assert db.execute("select bridge_id, status from product_requests").fetchall() == [(None, "sending")]
+    monkeypatch.setattr(catalog_request, "_record_accepted", original)
     again = ask()
     assert codes(again) == ["already_requested"] and "a person must check" in again["refusals"][0]["message"]
     assert len(fake.posts) == 1
