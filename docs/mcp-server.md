@@ -28,8 +28,8 @@ python -m vending.server                # waits silently on stdin: that's correc
 ```
 
 The server never migrates. If the database is missing a migration, it refuses to start and names
-the missing ones; check that `DATABASE_URL` points where you mean (on the VM it's the shared Azure
-database), then run `python -m vending.db migrate`. Stop the server with Ctrl+C.
+the missing ones; check that `DATABASE_URL` points where you mean (in production, our Azure
+Container App, it's the shared Azure database), then run `python -m vending.db migrate`. Stop the server with Ctrl+C.
 
 **For the live run, set `VENDING_TOOLS=built` in the real environment** (it is not read from `.env`). Then only working tools are registered, so the
 agent doesn't pay tokens on every request to describe stubs. The default, `all`, registers all

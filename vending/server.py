@@ -216,8 +216,9 @@ async def request_catalog_product(name: str, size: str, line: str | None = None,
 
 
 def main() -> None:
-    # The server never migrates: on the VM, DATABASE_URL is the shared Azure
-    # database, and a schema change there should be a person's decision. It
+    # The server never migrates: in production (our Azure Container App),
+    # DATABASE_URL is the shared Azure database, and a schema change there
+    # should be a person's decision. It
     # refuses to start on a schema that's behind, rather than fail mid-call.
     with connect() as conn:
         behind = db.pending(conn)
