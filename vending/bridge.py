@@ -1,8 +1,8 @@
 """Read-only client for the DEX Bridge, for code that runs unattended.
 
 `scripts/bridge.py` is the command-line tool for people; this is the library the
-sync job uses. It never polls the machine live and cannot submit a purchase
-request: it only reads stored history.
+sync jobs use. It never polls the machine live and cannot submit a purchase
+request: it only reads stored history and our purchase requests.
 """
 
 from __future__ import annotations
@@ -27,6 +27,10 @@ class BridgeUnreachable(BridgeError):
     """No network or a rejected key: every later call would fail the same way."""
 
 
+class BridgeRateLimited(BridgeError):
+    """Still `429` after every retry. Later calls in the same run would only make it worse."""
+
+
 class Bridge:
     def __init__(self, base_url: str | None = None, api_key: str | None = None):
         self.base_url = (base_url or settings.require(
@@ -46,9 +50,11 @@ class Bridge:
                 # 429 (too many requests) and 5xx are worth a retry; anything
                 # else is our mistake and retrying won't fix it.
                 if (error.code == 429 or error.code >= 500) and attempt < RETRIES:
-                    time.sleep(delay)
+                    time.sleep(_retry_after(error) or delay)
                     delay *= 2
                     continue
+                if error.code == 429:
+                    raise BridgeRateLimited(f"429 from {path}: still rate limited after {RETRIES} retries") from None
                 if error.code in (401, 403):
                     raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
                 raise BridgeError(f"{error.code} from {path}: {error.read()[:200]!r}") from None
@@ -77,3 +83,22 @@ class Bridge:
     def raw(self, session_id: str) -> bytes:
         """One stored poll, byte-for-byte."""
         return self._get(f"/api/v1/history/{urllib.parse.quote(session_id)}/raw")
+
+    def purchase_request(self, request_id: str) -> dict:
+        """One of our purchase requests, as the bridge sees it now.
+
+        `{id, status: "pending", created_at}` until the worker has dealt with
+        every line, `{..., status: "rejected", decision_note}` if it was turned
+        down, and the full listing with a receipt per line once fulfilled.
+        A GET only: submitting is `submit_desired_state`'s job, never this client's.
+        """
+        return json.loads(self._get(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}"))
+
+
+def _retry_after(error: urllib.error.HTTPError) -> float | None:
+    """The wait a 429 asks for, if it says, capped so one answer can't stall the run."""
+    value = error.headers.get("Retry-After") if error.headers else None
+    try:
+        return min(max(float(value), 0.0), 60.0) if value else None
+    except ValueError:
+        return None  # an HTTP date; the doubling delay is good enough
