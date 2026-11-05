@@ -17,6 +17,8 @@ from vending import settings
 MIGRATIONS = settings.REPO_ROOT / "db" / "migrations"
 # Any fixed number will do; it only has to be the same for every run.
 MIGRATION_LOCK = 4_200_001
+# Seconds to wait when connecting; room for a slow Azure connect.
+CONNECT_TIMEOUT = 10
 
 
 def connect() -> psycopg.Connection:
@@ -28,7 +30,9 @@ def connect() -> psycopg.Connection:
     # Autocommit, so every `conn.transaction()` block is a real transaction that
     # commits on its own. Without it, psycopg wraps everything in one implicit
     # transaction and a long backfill would lose all its work on any error.
-    return psycopg.connect(url, autocommit=True)
+    # A time limit, so a down or unreachable database fails with an error
+    # instead of hanging on TCP retries.
+    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
 
 
 def migrate(conn: psycopg.Connection) -> list[str]:
@@ -54,6 +58,15 @@ def migrate(conn: psycopg.Connection) -> list[str]:
             conn.execute("insert into schema_migrations (version) values (%s)", (path.name,))
         applied.append(path.name)
     return applied
+
+
+def pending(conn: psycopg.Connection) -> list[str]:
+    """The migrations not yet applied, in order. Reads only; changes nothing."""
+    names = [path.name for path in sorted(MIGRATIONS.glob("*.sql"))]
+    if conn.execute("select to_regclass('schema_migrations')").fetchone()[0] is None:
+        return names
+    applied = {row[0] for row in conn.execute("select version from schema_migrations")}
+    return [name for name in names if name not in applied]
 
 
 def main(argv: list[str]) -> int:
