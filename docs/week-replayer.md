@@ -213,7 +213,9 @@ the update without asking?
 **Caps:** the same `Budget` as the exam. A week's whole conversation, every tool round included,
 gets the $1 run cap; the $4 daily cap covers everything. At most 10 tool rounds a week, then it
 must answer. A week that runs out of budget part-way gets no plan, fails "valid plan", and the
-replay stops there. At most 12 weeks a run.
+replay stops there. So does any failed request, a rate limit included (retries are off), and any
+other error, such as the database dropping. The weeks already run are still shown and saved. At
+most 12 weeks a run, and `--week` must be a Friday, because Claude is told the restock is that day.
 
 ## Not built yet
 

@@ -72,7 +72,7 @@ def test_a_week_that_runs_out_of_budget_stops_the_replay(conn, api):
                  (200, "end_turn", answer(conn, WEEK))]
     # $0.10 a week: the first request fits ($0.052 spent), the second can't.
     weeks = AgentReplay(week_cap=Decimal("0.10")).run(conn, WEEK, 2)
-    assert len(weeks) == 1 and "Not sent" in weeks[0].error
+    assert len(weeks) == 1 and "Not sent" in weeks[0].error and weeks[0].turns == 1
     assert weeks[0].result.checks[0].status == "fail" and weeks[0].cost_usd == Decimal("0.052")
     assert len(api.posts) == 1
 
@@ -106,3 +106,69 @@ def test_cli_agent_needs_a_week_and_sane_length(capsys):
     assert main(["--week", "2026-10-02", "--agent", "40"]) == 2
     err = capsys.readouterr().err
     assert "--agent needs --week" in err and "1 to 12 weeks" in err
+
+
+# --- Found by the blind review ------------------------------------------------
+
+def test_a_server_error_mid_week_stops_the_replay_and_keeps_its_cost(conn, api):
+    fill_week(conn)
+    api.turns = [(200, "tool_use", tool_call("get_machine_state", {})), (500, None, None)]
+    weeks = AgentReplay().run(conn, WEEK, 2)
+    week = weeks[0]
+    assert len(weeks) == 1 and "worst case" in week.error and week.turns == 2
+    assert week.cost_usd > Decimal("0.052")   # the first request, plus the failed one at its worst case
+    assert week.result.checks[0].status == "fail"
+
+
+@pytest.mark.parametrize("reply", [
+    (200, "refusal", ""),
+    (200, "end_turn", "not json at all"),
+    (200, "end_turn", json.dumps({"update": "no plan here", "notes": ""})),
+    (200, "max_tokens", '{"plan": {"visit": "sched'),
+])
+def test_a_bad_answer_fails_valid_plan_without_crashing(conn, api, reply):
+    fill_week(conn)
+    api.turns = [reply]
+    week = AgentReplay().run(conn, WEEK, 1)[0]
+    assert week.result.checks[0].status == "fail" and not week.error
+
+
+def test_a_database_error_keeps_the_weeks_already_run(conn, api, monkeypatch, tmp_path):
+    fill_week(conn)
+    api.turns = [(200, "end_turn", answer(conn, WEEK)), (200, "tool_use", tool_call("get_machine_state", {}))]
+
+    def broken(*args):
+        raise RuntimeError("connection dropped")
+
+    monkeypatch.setattr(agent, "run_tool", broken)
+    weeks = AgentReplay().run(conn, WEEK, 2)
+    assert weeks[0].result.passed and not weeks[0].error
+    assert "RuntimeError: connection dropped" in weeks[1].error
+    assert "connection dropped" in agent.save_updates(weeks, "x", tmp_path).read_text(encoding="utf-8")
+
+
+def test_the_last_turn_still_sends_the_tools(conn, api, monkeypatch):
+    fill_week(conn)
+    monkeypatch.setattr(agent, "MAX_TURNS", 1)
+    api.turns = [(200, "tool_use", tool_call("get_machine_state", {})), (200, "end_turn", answer(conn, WEEK))]
+    AgentReplay().run(conn, WEEK, 1)
+    assert len(api.posts[1]["tools"]) == 2
+
+
+def test_thinking_blocks_go_back_unchanged(conn, api):
+    fill_week(conn)
+    thinking = {"type": "thinking", "thinking": "", "signature": "sig-abc"}
+    api.turns = [(200, "tool_use", [thinking, *tool_call("get_machine_state", {})]),
+                 (200, "end_turn", answer(conn, WEEK))]
+    AgentReplay().run(conn, WEEK, 1)
+    sent_back = api.posts[1]["messages"][1]["content"]
+    assert sent_back[0] == thinking and sent_back[1]["type"] == "tool_use"
+    results = api.posts[1]["messages"][2]["content"]
+    assert [r["tool_use_id"] for r in results] == ["tu_1"]
+
+
+def test_cli_rejects_options_the_agent_ignores(capsys):
+    assert main(["--week", "2026-10-02", "--agent", "1", "--decider", "model"]) == 2
+    assert main(["--week", "2026-10-05", "--agent", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "its own decider" in err and "must be a Friday" in err

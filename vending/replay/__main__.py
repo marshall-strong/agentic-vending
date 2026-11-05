@@ -161,11 +161,12 @@ def render_agent(replay: AgentReplay, weeks: list, updates_file) -> str:
             continue
         r, t = w.result, w.result.totals if w.result else None
         base = score(w.state, Baseline().decide(w.state), w.next_week).totals
-        counts = {k: sum(c.status == k for c in r.checks) for k in ("pass", "fail", "skip")}
-        rows.append((f"{w.day:%d %b}", " ".join(f"{n} {k}" for k, n in counts.items() if n),
+        checks = r.checks if r else ()
+        counts = {k: sum(c.status == k for c in checks) for k in ("pass", "fail", "skip")}
+        rows.append((f"{w.day:%d %b}", " ".join(f"{n} {k}" for k, n in counts.items() if n) or "not scored",
                      num(t and t.scored), num(t and t.stockout_units), num(t and t.unsold_units),
                      money(t.margin_cents) if t else "?", money(base.margin_cents) if base else "?",
-                     ", ".join(c.name for c in r.checks if c.status == "fail"),
+                     ", ".join(c.name for c in checks if c.status == "fail"),
                      str(len(w.tool_calls)), f"${w.cost_usd:.4f}"))
     widths = [max(len(str(row[i])) for row in (header, *rows)) for i in range(len(header))]
     line = lambda row: "  ".join(str(v).ljust(w) for v, w in zip(row, widths)).rstrip()
@@ -184,7 +185,8 @@ def spend(decider: Decider) -> list[str]:
         return []
     total = sum((Decimal(r["cost_usd"]) for r in runs), Decimal(0))
     lines = [f"\nModel cost: ${total:.4f} for {len(runs)} request{'' if len(runs) == 1 else 's'} "
-             f"({decider.key_env} paid; caps ${decider.run_cap} a run, ${decider.daily_cap} a day; "
+             f"({decider.key_env} paid; caps ${decider.run_cap} a {getattr(decider, 'cap_unit', 'run')}, "
+             f"${decider.daily_cap} a day; "
              f"logged in {spend_log()}). A failed request counts at its worst case unless the API rejected it."]
     for r in runs:
         tokens = (f", {r['input_tokens']} tokens in, {r['output_tokens']} out"
@@ -224,9 +226,14 @@ def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
                              "with tools, notes and weekly updates")
     args = parser.parse_args(argv)
     try:
-        if args.agent is not None and args.week is None:
-            raise ValueError("--agent needs --week: the first week to run.")
-        decider = (ModelDecider(args.model, args.effort, args.key_env) if args.decider == "model"
+        if args.agent is not None:
+            if args.week is None:
+                raise ValueError("--agent needs --week: the first week to run.")
+            if args.week.weekday() != 4:
+                raise ValueError("With --agent, --week must be a Friday: Claude is told the restock is that Friday.")
+            if args.decider != "baseline" or args.reasons:
+                raise ValueError("--agent is its own decider; leave out --decider and --reasons.")
+        decider = None if args.agent is not None else (ModelDecider(args.model, args.effort, args.key_env) if args.decider == "model"
                    else get_decider(args.decider))
         if args.cases:
             print(render_cases(decider))

@@ -24,6 +24,7 @@ budget part-way ends with no plan, which fails "valid plan", and the replay stop
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -159,6 +160,7 @@ class AgentReplay:
                  week_cap: Decimal = model.RUN_CAP, daily_cap: Decimal = model.DAILY_CAP):
         self.budget = Budget(model_id, effort, key_env, base_url, week_cap, daily_cap)
         self.name = f"agent:{model_id}@{effort}"
+        self.cap_unit = "week"   # the run cap covers one week's whole conversation
 
     # The CLI's cost summary reads these.
     runs = property(lambda self: self.budget.runs)
@@ -187,14 +189,20 @@ class AgentReplay:
                 state = replace(state, balance_cents=balance_cents)
             week = Week(day, state, next_week)
             out.append(week)
-            answer = self._week(client, conn, week, notes, unit_cost_cents, balance_cents)
+            try:
+                answer = self._week(client, conn, week, notes, unit_cost_cents, balance_cents)
+            except Exception as error:   # a database or other failure: keep the weeks already paid for
+                week.error = f"Stopped by an error: {type(error).__name__}: {error}"
+                answer = week.error
             plan = answer.get("plan") if isinstance(answer, dict) else answer
             week.result = score(state, model.strip_nulls(plan), next_week)
             if isinstance(answer, dict):
                 week.update, week.notes = str(answer.get("update", "")), str(answer.get("notes", ""))
-                notes = week.notes or notes
+                notes = week.notes or "(You left no notes last week.)"
             if week.error:
-                break   # out of budget, or the API failed: later weeks would fail the same way
+                # Out of budget, a failed request (retries are off, so a rate limit too), or an error:
+                # later weeks would fail the same way, so the replay stops here.
+                break
         return out
 
     def _week(self, client, conn, week: Week, notes: str, unit_cost, balance) -> dict | str:
@@ -208,9 +216,9 @@ class AgentReplay:
                  f"For this test, assume {'; '.join(assumed) or 'nothing about unit cost or balance: both are unknown'}.\n"
                  f"{NOT_BUILT}\n\nYour notes from last week:\n{notes}")
         messages = [{"role": "user", "content": facts}]
-        label = {"kind": "agent-week", "week_start": week.state.start.isoformat()}
+        # A fresh id per week, so its cost can't mix with another run's week of the same date.
+        label = {"kind": "agent-week", "week_start": week.state.start.isoformat(), "week_run": uuid.uuid4().hex}
         for turn in range(MAX_TURNS + 1):
-            week.turns = turn + 1
             # The tools stay defined (the history holds tool calls); on the last turn none may be called.
             request = {"system": SYSTEM, "messages": messages, "tools": TOOLS,
                        "tool_choice": {"type": "auto" if turn < MAX_TURNS else "none"},
@@ -224,8 +232,9 @@ class AgentReplay:
                 return week.error
             finally:
                 # Everything sent for this week, failed requests at what they were booked at.
-                week.cost_usd = sum((Decimal(r["cost_usd"]) for r in self.budget.runs
-                                     if r.get("week_start") == label["week_start"]), Decimal(0))
+                sent = [r for r in self.budget.runs if r.get("week_run") == label["week_run"]]
+                week.turns = len(sent)
+                week.cost_usd = sum((Decimal(r["cost_usd"]) for r in sent), Decimal(0))
             # Append the whole content, thinking blocks included: the history only ever grows.
             messages.append({"role": "assistant", "content": response.content})
             if response.stop_reason == "tool_use":
@@ -253,7 +262,7 @@ def save_updates(weeks: list[Week], name: str, folder: Path | None = None) -> Pa
     folder = folder or model.spend_log().parent / "agent-runs"
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(EASTERN).strftime("%Y-%m-%d-%H%M%S")
-    path = folder / f"{stamp}-{name.replace(':', '-').replace('@', '-')}.md"
+    path = folder / f"{stamp}-{name.replace(':', '-').replace('@', '-')}-{uuid.uuid4().hex[:6]}.md"
     parts = [f"# Agent replay: {name}\n",
              "For each week, grade the update: is the reasoning sound, and could operations act on it "
              "without asking?\n"]
