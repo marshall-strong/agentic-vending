@@ -187,6 +187,34 @@ log records which one paid. Requests go to api.anthropic.com, whatever `ANTHROPI
 `VENDING_ANTHROPIC_BASE_URL` overrides it (the tests use it for a local stand-in). Prices are in
 `PRICES` in `vending/replay/model.py` (assumption A9).
 
+## The agent replay (costs money)
+
+```
+python -m vending.replay --week 2026-09-25 --agent 4 --unit-cost 0.80 --balance 600
+```
+
+Closer to the live agent than the one-question exam above. Claude runs the weeks in order. Each
+week it's the end of the week, before the Friday restock:
+
+1. **It looks things up with the agent's own read tools,** `get_machine_state` and
+   `get_sales_history` from the MCP server (#14), with the same replies. They're cut off at that
+   week, so it can't see the weeks it's tested on: a window that runs past "now" is cut at now,
+   and one that starts after it is refused. The tools #14 hasn't built yet aren't offered, and it
+   is told so.
+2. **It gets the notes it wrote itself last week.**
+3. **It answers with three things:** the plan for every slot; a **weekly update** for the team,
+   under 150 words, on what happened and what it's changing and why; and **notes** for next week.
+
+The plan is checked and scored like any decider's. The table puts each week beside the baseline's
+margin on the same week. The weekly updates and notes go to a Markdown file under
+`~/.vending/agent-runs/`, for people to grade: is the reasoning sound, and could operations act on
+the update without asking?
+
+**Caps:** the same `Budget` as the exam. A week's whole conversation, every tool round included,
+gets the $1 run cap; the $4 daily cap covers everything. At most 10 tool rounds a week, then it
+must answer. A week that runs out of budget part-way gets no plan, fails "valid plan", and the
+replay stops there. At most 12 weeks a run.
+
 ## Not built yet
 
 - **The restock planner as a check**, once PR #13 merges.

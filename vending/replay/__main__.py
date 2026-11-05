@@ -22,7 +22,8 @@ import psycopg
 from vending import db
 from vending.pricing import to_cents
 from vending.replay.cases import all_cases
-from vending.replay.deciders import Decider, get_decider
+from vending.replay.agent import AgentReplay, save_updates
+from vending.replay.deciders import Baseline, Decider, get_decider
 from vending.replay.model import DEFAULT_EFFORT, DEFAULT_KEY_ENV, DEFAULT_MODEL, ModelDecider, spend_log
 from vending.replay.scoring import DEMAND_ASSUMPTIONS, PASS, SKIP, Score, score
 from vending.replay.state import EASTERN, NoData, WeekState, replay_week
@@ -150,6 +151,32 @@ def render_cases(decider: Decider) -> str:
                       "Each case's question and what a good answer looks like: --case NAME.", *spend(decider)])
 
 
+def render_agent(replay: AgentReplay, weeks: list, updates_file) -> str:
+    """One row per week: the agent's score beside the baseline's on the same week."""
+    header = ("Week", "Checks", "Scored", "Short", "Unsold", "Margin", "Baseline margin", "Failed", "Tools", "Cost")
+    rows = []
+    for w in weeks:
+        if w.state is None:
+            rows.append((f"{w.day:%d %b}", "not run", "", "", "", "", "", w.error, "", ""))
+            continue
+        r, t = w.result, w.result.totals if w.result else None
+        base = score(w.state, Baseline().decide(w.state), w.next_week).totals
+        counts = {k: sum(c.status == k for c in r.checks) for k in ("pass", "fail", "skip")}
+        rows.append((f"{w.day:%d %b}", " ".join(f"{n} {k}" for k, n in counts.items() if n),
+                     num(t and t.scored), num(t and t.stockout_units), num(t and t.unsold_units),
+                     money(t.margin_cents) if t else "?", money(base.margin_cents) if base else "?",
+                     ", ".join(c.name for c in r.checks if c.status == "fail"),
+                     str(len(w.tool_calls)), f"${w.cost_usd:.4f}"))
+    widths = [max(len(str(row[i])) for row in (header, *rows)) for i in range(len(header))]
+    line = lambda row: "  ".join(str(v).ljust(w) for v, w in zip(row, widths)).rstrip()
+    out = [f"Agent replay, {replay.name}, {len(weeks)} week{'' if len(weeks) == 1 else 's'}", "",
+           line(header), *(line(row) for row in rows), ""]
+    out += [f"Stopped in the week of {w.day:%d %b}: {w.error}" for w in weeks if w.error and w.state is not None]
+    out.append(f"Weekly updates and notes, for people to grade: {updates_file}")
+    out.append("Margins use the same demand assumptions as every score table (docs/assumptions.md).")
+    return "\n".join([*out, *spend(replay)])
+
+
 def spend(decider: Decider) -> list[str]:
     """What a model decider's runs cost, for the bottom of the table."""
     runs = getattr(decider, "runs", None)
@@ -192,8 +219,13 @@ def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
     parser.add_argument("--unit-cost", help="assume every unit cost this much, such as 0.80 (replayed weeks only)")
     parser.add_argument("--balance", help="assume this spendable balance, such as 600 (replayed weeks only)")
     parser.add_argument("--reasons", action="store_true", help="print the plan's reason for each slot")
+    parser.add_argument("--agent", type=int, metavar="WEEKS",
+                        help="run the agent (costs money; capped) for this many weeks from --week, "
+                             "with tools, notes and weekly updates")
     args = parser.parse_args(argv)
     try:
+        if args.agent is not None and args.week is None:
+            raise ValueError("--agent needs --week: the first week to run.")
         decider = (ModelDecider(args.model, args.effort, args.key_env) if args.decider == "model"
                    else get_decider(args.decider))
         if args.cases:
@@ -206,6 +238,10 @@ def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
         balance = None if args.balance is None else to_cents(args.balance)
         if (unit_cost is not None and unit_cost <= 0) or (balance is not None and balance < 0):
             raise ValueError("--unit-cost must be above zero and --balance can't be negative.")
+        if args.agent is not None:
+            if not 1 <= args.agent <= 12:
+                raise ValueError("--agent takes 1 to 12 weeks.")
+            replay = AgentReplay(args.model, args.effort, args.key_env)
     except (ValueError, ArithmeticError) as error:
         print(error, file=sys.stderr)
         return 2
@@ -213,6 +249,10 @@ def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
     conn = conn or db.connect()
     try:
         conn.execute("set default_transaction_read_only = on")
+        if args.agent is not None:
+            weeks = replay.run(conn, args.week, args.agent, unit_cost_cents=unit_cost, balance_cents=balance)
+            print(render_agent(replay, weeks, save_updates(weeks, replay.name)))
+            return 0
         state, next_week, result = run_week(conn, args.week, decider,
                                             unit_cost_cents=unit_cost, balance_cents=balance)
     except (NoData, ValueError) as error:
