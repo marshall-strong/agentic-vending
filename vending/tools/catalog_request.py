@@ -59,13 +59,15 @@ KNOWN_STATUSES = {"pending", "approved", "rejected"}
 
 # A size the bridge would sell as a drink: "20 oz bottle", "12 fl oz can", "500 mL".
 VOLUME = re.compile(r"\d+(?:\.\d+)?\s*(?:fl\.?\s*oz|oz|ounces?|ml|l|liters?|litres?)\b", re.IGNORECASE)
-# Words that say how a drink is packed, not which drink it is. The duplicate
-# checks ignore them, so "20 oz" and "20 oz bottle" are the same request.
-CONTAINERS = {"bottle", "bottles", "can", "cans", "pack", "packs", "pk"}
+# Words that don't tell two drinks apart: how it's packed, or that it's the
+# default flavor. The duplicate checks ignore them, so "20 oz" and "20 oz
+# bottle" are the same request, and "Coca-Cola" matches "Coca-Cola Original".
+IGNORED_WORDS = {"bottle", "bottles", "can", "cans", "pack", "packs", "pk", "original", "classic", "regular"}
 # Soft drinks whose names contain an alcohol word. Removed before the check.
 SOFT_DRINKS = re.compile(
     r"\b(?:root|ginger|birch)\s+beer\b|\bginger\s+ale\b|\bmocktails?\b"
-    r"|\bvirgin\s+(?:mojito|margarita|daiquiri|pi[nñ]a\s+colada|mary)s?\b",
+    r"|\bvirgin\s+(?:mojito|margarita|daiquiri|pi[nñ]a\s+colada|mary)s?\b"
+    r"|\bjuice\s+cocktails?\b|\bsangr[ií]a\s+se[nñ]orial\b|\bkola\s+champagne\b",
     re.IGNORECASE,
 )
 NOT_ALLOWED = re.compile(
@@ -88,14 +90,23 @@ def words(*parts: str | None) -> list[str]:
     """The lower-case words of a product description, for the duplicate checks.
 
     Units are normalised ("20oz", "20 ounce" and "20 fl oz" all become "20 oz";
-    "500 milliliters" becomes "500 ml") and container words are dropped.
+    "500 milliliters" becomes "500 ml"), and IGNORED_WORDS are dropped.
     """
     text = " ".join(p for p in parts if p).lower()
     text = re.sub(r"(\d)([a-z])", r"\1 \2", text)
     text = re.sub(r"\bfl\.?\s*oz\b|\b(?:fluid\s+)?ounces?\b", "oz", text)
     text = re.sub(r"\bmillilit(?:er|re)s?\b", "ml", text)
     text = re.sub(r"\blit(?:er|re)s?\b", "l", text)
-    return sorted(set(re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", text)) - CONTAINERS)
+    return sorted(set(re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", text)) - IGNORED_WORDS)
+
+
+def same_drink(wanted: list[str], other: list[str]) -> bool:
+    """True when two descriptions have the same words, once ignored words are dropped.
+
+    Exact, not one-way: "Sprite 20 oz" is not "Sprite Cherry 20 oz", nor the
+    reverse. Rows stored before a word was added to IGNORED_WORDS still match.
+    """
+    return set(wanted) - IGNORED_WORDS == set(other) - IGNORED_WORDS
 
 
 def check_fields(name: str, size: str, line: str | None, flavor: str | None, note: str | None) -> list[Refusal]:
@@ -115,17 +126,17 @@ def check_fields(name: str, size: str, line: str | None, flavor: str | None, not
 
 
 def already_requested(conn: psycopg.Connection, wanted: list[str]) -> list[Refusal]:
-    """Our earlier requests whose description covers every word of this one.
+    """Our earlier requests for the same drink (see `same_drink`).
 
-    One way only, like the catalog check: "Cherry 20 oz" after "Cherry 20 oz
-    bottle" is a duplicate, but "Cherry Zero 20 oz" after "Cherry 20 oz" isn't.
-    Rows stored before container words were dropped still match, since the
-    stored words only ever have more in them.
+    "Cherry 20 oz" after "Cherry 20 oz bottle" is a duplicate; "Cherry Zero
+    20 oz" after "Cherry 20 oz" isn't, and nor is "Cherry 20 oz" after "Cherry
+    Zero 20 oz". Compared in Python: the table holds one row per request, so
+    it stays small.
     """
-    rows = conn.execute(
-        "select id, bridge_id, name, size, status from product_requests where %s::text[] <@ words order by id",
-        (wanted,),
-    ).fetchall()
+    rows = [(row, bridge_id, name, size, status)
+            for row, bridge_id, name, size, status, stored in conn.execute(
+                "select id, bridge_id, name, size, status, words from product_requests order by id")
+            if same_drink(wanted, stored)]
     return [Refusal("already_requested",
                     f"we already asked for {name} ({size}): request {bridge_id or 'with no ID'}, status {status}"
                     + (f" (sent, but no answer was stored; a person must check the bridge, then run "
@@ -134,9 +145,8 @@ def already_requested(conn: psycopg.Connection, wanted: list[str]) -> list[Refus
 
 
 def already_in_catalog(catalog: list[dict], wanted: list[str]) -> list[Refusal]:
-    """Catalog products whose description covers every word of the request."""
-    matches = [p for p in catalog
-               if set(wanted) <= set(words(p.get("name"), p.get("flavor"), p.get("size")))]
+    """Catalog products that are the same drink as the request (see `same_drink`)."""
+    matches = [p for p in catalog if same_drink(wanted, words(p.get("name"), p.get("flavor"), p.get("size")))]
     if not matches:
         return []
     listed = ", ".join(f"{p['sku']} ({p['name']})" for p in matches)

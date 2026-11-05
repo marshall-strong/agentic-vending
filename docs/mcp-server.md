@@ -120,13 +120,15 @@ The limit counts every request filed in the last 7 days, with a higher limit whi
 catalog is small, so the first big ask can happen without anyone flipping a switch. **The numbers
 are placeholders the team still has to set:** for now 3 per week normally, 15 while the catalog has
 fewer than 25 products (`WEEKLY_LIMIT`, `STARTUP_WEEKLY_LIMIT` and `SMALL_CATALOG` in
-`vending/tools/catalog_request.py`). Duplicates match one way: a
-request is a duplicate when every word of its name, flavor and size is already in an earlier one,
-so "Cherry Zero 20 oz" after "Cherry 20 oz" goes through. Before comparing, units are normalised
-("20oz", "20 ounce" and "20 fl oz" are all "20 oz") and container words (bottle, can, pack) are
-dropped, so "20 oz" and "20 oz bottle" count as the same request. The catalog check works the same
-way. The alcohol check is a list of words (beer, wine, spirits, wine grapes, cocktails such as
-margarita and mojito), with exceptions for root beer, ginger ale, mocktails and "virgin" cocktails.
+`vending/tools/catalog_request.py`). A request is a duplicate of an
+earlier one, or of a catalog product, when its name, flavor and size have exactly the same words.
+Before comparing, units are normalised ("20oz", "20 ounce" and "20 fl oz" are all "20 oz"), and
+words that don't tell drinks apart are dropped: containers (bottle, can, pack) and default-flavor
+words (original, classic, regular). So "20 oz" and "20 oz bottle" are the same request, while
+"Sprite" and "Sprite Cherry" are different in either order. The alcohol check is a list of words
+(beer, wine, spirits, wine grapes, cocktails such as margarita and mojito). Exceptions cover soft
+drinks with those words in their names: root beer, ginger ale, juice cocktail, Sangría Señorial,
+Kola Champagne, mocktails and "virgin" cocktails.
 
 The bridge has no route that lists our requests, so `product_requests` (migration 005) is our only
 record, and the duplicate check reads it. Neither bridge call retries, because the halt lock is

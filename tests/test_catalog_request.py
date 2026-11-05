@@ -236,8 +236,24 @@ def test_wine_and_cocktails_are_refused(db, fake, name):  # noqa: F811
     assert codes(ask(name=name)) == ["alcohol_or_thc"]
 
 
-def test_a_virgin_mojito_is_allowed(db, fake):  # noqa: F811
-    assert ask(name="Virgin Mojito Sparkling Water")["success"]
+@pytest.mark.parametrize("name", ["Virgin Mojito Sparkling Water", "Ocean Spray Cranberry Juice Cocktail",
+                                  "Sangria Senorial", "Sangría Señorial", "Kola Champagne"])
+def test_soft_drinks_named_like_alcohol_are_allowed(db, fake, name):  # noqa: F811
+    assert ask(name=name)["success"]
+
+
+def test_a_more_general_request_is_not_the_catalogs_flavor(db, fake, monkeypatch):  # noqa: F811
+    # The fake bridge serves the module's CATALOG, read at request time.
+    monkeypatch.setitem(globals(), "CATALOG", [{"sku": "SPR-CH", "name": "Sprite Cherry", "flavor": None,
+                                                "size": "20 oz bottle"}])
+    assert ask(name="Sprite")["success"]
+
+
+def test_a_more_general_request_is_not_an_earlier_flavor(db, fake):  # noqa: F811
+    assert ask(name="Sprite Cherry")["success"]
+    fake.answer = (201, {"id": "req-2", "status": "pending"}, 0.0)
+    assert ask(name="Sprite")["success"]
+    assert len(fake.posts) == 2
 
 
 def test_an_unreadable_catalog_sends_nothing(db, fake):  # noqa: F811
