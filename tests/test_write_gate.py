@@ -115,11 +115,34 @@ def test_a_write_that_reports_failure_is_logged_as_failed(scratch):
     assert log(scratch) == [("t", "failed", "the bridge said no")]
 
 
-def test_status_does_not_migrate(schema_url, monkeypatch, capsys):
+@pytest.fixture
+def halt_cli(schema_url, monkeypatch):
+    """`halt.main` against the test schema, failing if it ever tries to migrate."""
     def no_migrate(conn):
-        raise AssertionError("status must not migrate")
+        raise AssertionError("the halt switch must never migrate")
 
     monkeypatch.setattr(halt.db, "connect", lambda: open_in(*schema_url))
     monkeypatch.setattr(halt.db, "migrate", no_migrate)
-    assert halt.main(["status"]) == 0
+    return halt.main
+
+
+def test_status_does_not_migrate(halt_cli, capsys):
+    assert halt_cli(["status"]) == 0
     assert capsys.readouterr().out.strip() == "halted"
+
+
+def test_on_and_off_do_not_migrate(halt_cli, conn, capsys):
+    assert halt_cli(["off", "--by", "kevin"]) == 0
+    assert not is_halted(conn)
+    assert halt_cli(["on", "--by", "kevin"]) == 0
+    assert is_halted(conn)
+    assert capsys.readouterr().out.split("\n")[:2] == ["running: writes allowed", "halted"]
+
+
+def test_without_the_config_table_on_holds_and_off_fails_closed(halt_cli, conn, capsys):
+    conn.execute("drop table config cascade")
+    assert halt_cli(["off", "--by", "kevin"]) == 1
+    assert "python -m vending.db migrate" in capsys.readouterr().out
+    assert halt_cli(["on", "--by", "kevin"]) == 0  # already halted: nothing can write
+    assert halt_cli(["status"]) == 0
+    assert capsys.readouterr().out.count("no config table") == 2
