@@ -80,7 +80,9 @@ python -m vending.halt off --by kevin
 ```
 
 It starts **on**. Every write tool refuses with `halted` until a person turns it off. If the
-`config` row is missing, it counts as on. Every flip is logged with the `--by` name, which is
+`config` row is missing, it counts as on. The switch never migrates, so it can't change a shared
+database's schema: on a database with no `config` table, `status` and `on` report halted, `off`
+fails, and each names `python -m vending.db migrate`. Every flip is logged with the `--by` name, which is
 required because everyone on the shared VM is the same OS user. If a write is in flight, the
 command prints "waiting for an in-flight write to finish..." and goes through when it ends. The harder stop needs nothing
 from the database: stop the server process, or remove it from the agent's MCP config.
@@ -120,27 +122,42 @@ are placeholders the team still has to set:** for now 3 per week normally, 15 wh
 fewer than 25 products (`WEEKLY_LIMIT`, `STARTUP_WEEKLY_LIMIT` and `SMALL_CATALOG` in
 `vending/tools/catalog_request.py`). Duplicates match one way: a
 request is a duplicate when every word of its name, flavor and size is already in an earlier one,
-so "Cherry Zero 20 oz" after "Cherry 20 oz" goes through.
+so "Cherry Zero 20 oz" after "Cherry 20 oz" goes through. Before comparing, units are normalised
+("20oz", "20 ounce" and "20 fl oz" are all "20 oz") and container words (bottle, can, pack) are
+dropped, so "20 oz" and "20 oz bottle" count as the same request. The catalog check works the same
+way. The alcohol check is a list of words (beer, wine, spirits, wine grapes, cocktails such as
+margarita and mojito), with exceptions for root beer, ginger ale, mocktails and "virgin" cocktails.
 
 The bridge has no route that lists our requests, so `product_requests` (migration 005) is our only
-record, and the duplicate check reads it. The POST is never retried, because a retry after a lost
-answer could file it twice.
+record, and the duplicate check reads it. Neither bridge call retries, because the halt lock is
+held while they run. The POST would never be retried anyway: a retry after a lost answer could
+file it twice.
 
-**The row is saved before the request is sent.** Just before the POST, the tool commits a row with
-status `sending` on its own short connection, outside the write gate's transaction. So if the
-server crashes or is stopped after the bridge files the request but before we store its answer,
-the row survives. Then:
+**Every step is saved on its own connection.** Just before the POST, the tool commits a row with
+status `sending` on its own short connection, outside the write gate's transaction. The bridge's
+answer is saved the same way as soon as it arrives. So whatever fails afterwards (the log insert,
+the database connection, the server), what the bridge told us survives. Then:
 
 | What happened | The row |
 | --- | --- |
 | The bridge accepted it | becomes `pending`, with the bridge's request ID |
 | It certainly wasn't filed (no connection, a 4xx, a `429`) | is deleted |
-| No answer came back (a timeout or a 5xx) | becomes `unknown` |
+| No answer came back (a timeout or a 5xx), or the answer had no request ID | becomes `unknown` |
 | The server died before storing the answer | stays `sending` |
 
 A request left `sending` or `unknown` may or may not exist on the bridge, so the same product is
-refused until a person checks the bridge's Swagger page and fixes the row. Nothing updates
-`pending` rows yet. A later sync can read `GET /api/v1/product-requests/{id}`.
+refused until a person checks the bridge and settles the row:
+
+```
+python -m vending.product_requests list
+python -m vending.product_requests resolve 7 --bridge-id np_abc123 --by kevin   # it was filed
+python -m vending.product_requests resolve 7 --not-filed --by kevin             # it wasn't
+```
+
+Check the bridge's Swagger page (`GET /api/v1/product-requests/{id}`) first, and ask the
+instructors before using `--not-filed`, because a resend of a request that was filed would file it
+twice. Each change is logged in `action_log` with the `--by` name. Nothing updates `pending` rows
+yet. A later sync can read `GET /api/v1/product-requests/{id}`.
 
 ## Adding a tool's logic
 

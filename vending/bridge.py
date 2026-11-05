@@ -23,6 +23,18 @@ class BridgeError(RuntimeError):
     """The bridge could not be reached, rejected us, or answered with an error."""
 
 
+class BridgeAnswered(BridgeError):
+    """An HTTP error status from a single, unretried call (`products`, `post`)."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(f"{status}: {detail}")
+        self.status, self.detail = status, detail
+
+
+class BridgeNoAnswer(BridgeError):
+    """Sent, but no usable answer came back: a timeout, a dropped connection, or not JSON."""
+
+
 class BridgeUnreachable(BridgeError):
     """No network or a rejected key: every later call would fail the same way."""
 
@@ -33,6 +45,44 @@ class Bridge:
             "DEX_BASE_URL", "Copy .env.example to .env and fill it in.")).rstrip("/")
         self.api_key = api_key or settings.require(
             "DEX_API_KEY", "It is in the Postman environment course staff emailed.")
+
+    # The two calls below are for write tools, which run while holding the halt
+    # lock, so they never retry: one try, then the caller decides.
+
+    def products(self) -> list[dict]:
+        """The catalog our team can order from (`GET /api/v1/products`)."""
+        return json.loads(self._once("GET", "/api/v1/products")).get("products", [])
+
+    def post(self, path: str, body: dict) -> dict:
+        """One POST, never retried: a retry after a lost answer could file it twice.
+
+        Raises `BridgeUnreachable` if the request certainly never arrived,
+        `BridgeAnswered` for an HTTP error status, and `BridgeNoAnswer` if it
+        was sent but no usable answer came back (it may or may not have run).
+        """
+        return json.loads(self._once("POST", path, body))
+
+    def _once(self, method: str, path: str, body: dict | None = None) -> bytes:
+        headers = {"X-API-Key": self.api_key}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(self.base_url + path, method=method, headers=headers,
+                                         data=None if body is None else json.dumps(body).encode())
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                data = response.read()
+        except urllib.error.HTTPError as error:
+            raise BridgeAnswered(error.code, error.read()[:300].decode(errors="replace")) from None
+        except urllib.error.URLError as error:
+            # urllib raises URLError only while connecting or sending.
+            raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
+        except OSError as error:  # includes a timeout waiting for the answer
+            raise BridgeNoAnswer(f"{type(error).__name__}: {error}") from None
+        try:
+            json.loads(data)
+        except ValueError as error:
+            raise BridgeNoAnswer(f"the answer wasn't JSON ({error})") from None
+        return data
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> bytes:
         url = self.base_url + path + ("?" + urllib.parse.urlencode(params) if params else "")
