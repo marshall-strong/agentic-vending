@@ -14,6 +14,7 @@ import argparse
 import sys
 from dataclasses import replace
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from fractions import Fraction
 
 import psycopg
@@ -22,6 +23,7 @@ from vending import db
 from vending.pricing import to_cents
 from vending.replay.cases import all_cases
 from vending.replay.deciders import Decider, get_decider
+from vending.replay.model import DEFAULT_EFFORT, DEFAULT_KEY_ENV, DEFAULT_MODEL, ModelDecider, spend_log
 from vending.replay.scoring import DEMAND_ASSUMPTIONS, PASS, SKIP, Score, score
 from vending.replay.state import EASTERN, NoData, WeekState, replay_week
 
@@ -130,7 +132,12 @@ def render_cases(decider: Decider) -> str:
     header = ("Case", "Checks", "Scored", "Short", "Unsold", "Margin", "Failed")
     rows = []
     for case in all_cases():
-        result = score(case.state, decider.decide(case.state), case.next_week)
+        try:
+            answer = decider.decide(case.state)
+        except ValueError as error:   # a model run refused by the spending cap, or a failed call
+            rows.append((case.name, "not run", "", "", "", "", str(error)))
+            continue
+        result = score(case.state, answer, case.next_week)
         counts = {status: sum(c.status == status for c in result.checks) for status in ("pass", "fail", "skip")}
         t = result.totals
         rows.append((case.name, " ".join(f"{n} {k}" for k, n in counts.items() if n),
@@ -140,7 +147,20 @@ def render_cases(decider: Decider) -> str:
     widths = [max(len(str(r[i])) for r in (header, *rows)) for i in range(len(header))]
     line = lambda r: "  ".join(str(v).ljust(w) for v, w in zip(r, widths)).rstrip()
     return "\n".join([f"Test cases, decider: {decider.name}", "", line(header), *(line(r) for r in rows), "",
-                      "Each case's question and what a good answer looks like: --case NAME."])
+                      "Each case's question and what a good answer looks like: --case NAME.", *spend(decider)])
+
+
+def spend(decider: Decider) -> list[str]:
+    """What a model decider's runs cost, for the bottom of the table."""
+    runs = getattr(decider, "runs", None)
+    if runs is None:
+        return []
+    total = sum((Decimal(r["cost_usd"]) for r in runs), Decimal(0))
+    lines = [f"\nModel cost: ${total:.4f} over {len(runs)} runs ({decider.key_env} paid; "
+             f"caps ${decider.run_cap} a run, ${decider.daily_cap} a day; logged in {spend_log()})."]
+    lines += [f"  run {r['run_id'][:8]}: ${Decimal(r['cost_usd']):.4f}, {r['input_tokens']} tokens in, "
+              f"{r['output_tokens']} out, stopped: {r['status']}" for r in runs]
+    return lines
 
 
 def render_case(name: str, decider: Decider, reasons: bool) -> str:
@@ -151,7 +171,7 @@ def render_case(name: str, decider: Decider, reasons: bool) -> str:
     title = (f"Case {case.name} ({case.source}), decider: {decider.name}\n"
              f"Question: {case.question}\nA good answer: {case.good_answer}\n"
              "The numbers in this case are made up to pose the question.")
-    return render(title, case.state, case.next_week, result, reasons=reasons)
+    return "\n".join([render(title, case.state, case.next_week, result, reasons=reasons), *spend(decider)])
 
 
 def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
@@ -160,13 +180,19 @@ def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
     what.add_argument("--week", type=date.fromisoformat, help="first day of the week, such as 2026-10-02 (a Friday)")
     what.add_argument("--cases", action="store_true", help="score the team's test cases")
     what.add_argument("--case", help="one test case in full")
-    parser.add_argument("--decider", default="baseline", help="baseline (default), or file:PATH for a JSON plan")
+    parser.add_argument("--decider", default="baseline",
+                        help="baseline (default), model (costs money; capped), or file:PATH for a JSON plan")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"with --decider model (default {DEFAULT_MODEL})")
+    parser.add_argument("--effort", default=DEFAULT_EFFORT, help=f"with --decider model (default {DEFAULT_EFFORT})")
+    parser.add_argument("--key-env", default=DEFAULT_KEY_ENV,
+                        help=f"variable holding the API key (default {DEFAULT_KEY_ENV})")
     parser.add_argument("--unit-cost", help="assume every unit cost this much, such as 0.80 (replayed weeks only)")
     parser.add_argument("--balance", help="assume this spendable balance, such as 600 (replayed weeks only)")
     parser.add_argument("--reasons", action="store_true", help="print the plan's reason for each slot")
     args = parser.parse_args(argv)
     try:
-        decider = get_decider(args.decider)
+        decider = (ModelDecider(args.model, args.effort, args.key_env) if args.decider == "model"
+                   else get_decider(args.decider))
         if args.cases:
             print(render_cases(decider))
             return 0
@@ -198,7 +224,8 @@ def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
     if balance is not None:
         assumed.append(f"a spendable balance of {money(balance)} (--balance), not the ledger.")
     title = f"Week of {_when(state.start)[:15]} (Eastern), decider: {decider.name}"
-    print(render(title, state, next_week, result, assumed=assumed, reasons=args.reasons))
+    print("\n".join([render(title, state, next_week, result, assumed=assumed, reasons=args.reasons),
+                     *spend(decider)]))
     return 0
 
 

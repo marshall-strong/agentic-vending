@@ -132,6 +132,9 @@ def check_plan(answer: object) -> tuple[Plan | None, list[Refusal]]:
         plan, refusals = answer, []
     elif isinstance(answer, Mapping):
         plan, refusals = _parse(answer)
+    elif isinstance(answer, str):
+        start = " ".join(answer.split())[:160] or "(empty)"
+        return None, [Refusal("not_a_plan", f"Expected a JSON plan, got text: {start}")]
     else:
         return None, [Refusal("not_a_plan", f"Expected a plan or a JSON object, got {type(answer).__name__}.")]
     if plan is None:

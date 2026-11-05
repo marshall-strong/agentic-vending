@@ -1,6 +1,7 @@
 # Runtime
 psycopg[binary]==3.2.*
 mcp==1.*
+anthropic==2.*
 
 # Development
 pytest==8.*

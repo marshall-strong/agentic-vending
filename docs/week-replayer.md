@@ -148,11 +148,42 @@ The issue's third layer, **a short rubric for people to grade**, is the `good_an
 case plus `--reasons`: is the reasoning sound, and could operations act on the plan without
 asking?
 
+## The model decider (costs money)
+
+```
+python -m vending.replay --case midweek-visit --decider model --reasons
+python -m vending.replay --week 2026-10-02 --decider model --model claude-sonnet-5-5 --effort low
+```
+
+Claude reads the week as JSON and answers with a plan in the decider shape above, forced by a JSON
+schema. The plan is checked and scored like any other. One API call per decision. **The default
+is Opus 5.5 at medium effort, pending a group decision**; `--model` takes `claude-sonnet-5-5` or
+`claude-haiku-5-5`, and `--effort` takes `low` to `max`. A refusal or an answer cut off mid-JSON
+fails "valid plan".
+
+**Spending is capped before each call, not discovered after it:**
+
+- **$1.00 a run.** The input is counted first, which is free. The answer's length limit, which
+  includes the model's thinking, is then set so the most the call can cost fits under the cap. If
+  even a short answer won't fit, the call isn't made.
+- **$4.00 a day, a placeholder for the team.** Today's runs (Eastern time) are summed from the log
+  first; the run cap shrinks to what's left of the day. Once it's spent, `--cases` marks the
+  remaining cases "not run".
+- **No retries**, so a timeout can't bill twice.
+- **Every run is logged** to `~/.vending/replay-spend.jsonl` (outside the repo and OneDrive):
+  the worst case before the call, the real cost after, with the model, effort, tokens, request ID
+  and which key paid. A run that crashed mid-call counts at its worst case. The table prints each
+  run's cost.
+- **The daily cap is per computer.** It can't see a teammate's runs. A team-wide cap would need
+  the log in the shared database.
+
+**The key** comes from the `VENDING_ANTHROPIC_API_KEY` environment variable, never
+`ANTHROPIC_API_KEY` (Claude Code would bill every session to that). `--key-env NAME` uses another
+variable, such as a personal key, and the log records which one paid. Prices are in
+`PRICES` in `vending/replay/model.py` (assumption A9).
+
 ## Not built yet
 
-- **Model deciders.** A later PR adds them with a dollar cap of $1 or less per run, a low daily cap
-  on all test spending (under $5 a day; the exact number is a placeholder for the team), and the
-  cost logged for every run. The default model is pending a group decision.
 - **The restock planner as a check**, once PR #13 merges.
 - **Stock, product and unit cost from receipts**, once PR #25 merges. Until then, replayed weeks
   can't score stockouts from stock, and margin needs `--unit-cost`.
