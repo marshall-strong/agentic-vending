@@ -135,7 +135,7 @@ def render_cases(decider: Decider) -> str:
         try:
             answer = decider.decide(case.state)
         except ValueError as error:   # a model run refused by the spending cap, or a failed call
-            rows.append((case.name, "not run", "", "", "", "", str(error)))
+            rows.append((case.name, "not scored", "", "", "", "", str(error)))
             continue
         result = score(case.state, answer, case.next_week)
         counts = {status: sum(c.status == status for c in result.checks) for status in ("pass", "fail", "skip")}
@@ -156,10 +156,13 @@ def spend(decider: Decider) -> list[str]:
     if runs is None:
         return []
     total = sum((Decimal(r["cost_usd"]) for r in runs), Decimal(0))
-    lines = [f"\nModel cost: ${total:.4f} over {len(runs)} runs ({decider.key_env} paid; "
-             f"caps ${decider.run_cap} a run, ${decider.daily_cap} a day; logged in {spend_log()})."]
-    lines += [f"  run {r['run_id'][:8]}: ${Decimal(r['cost_usd']):.4f}, {r['input_tokens']} tokens in, "
-              f"{r['output_tokens']} out, stopped: {r['status']}" for r in runs]
+    lines = [f"\nModel cost: ${total:.4f} for {len(runs)} request{'' if len(runs) == 1 else 's'} "
+             f"({decider.key_env} paid; caps ${decider.run_cap} a run, ${decider.daily_cap} a day; "
+             f"logged in {spend_log()}). A failed request counts at its worst case unless the API rejected it."]
+    for r in runs:
+        tokens = (f", {r['input_tokens']} tokens in, {r['output_tokens']} out"
+                  if "input_tokens" in r else "")
+        lines.append(f"  {r['run_id'][:8]}: ${Decimal(r['cost_usd']):.4f}{tokens}, {r['status']}")
     return lines
 
 

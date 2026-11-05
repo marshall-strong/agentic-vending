@@ -170,16 +170,21 @@ fails "valid plan".
   first; the run cap shrinks to what's left of the day. Once it's spent, `--cases` marks the
   remaining cases "not run".
 - **No retries**, so a timeout can't bill twice.
-- **Every run is logged** to `~/.vending/replay-spend.jsonl` (outside the repo and OneDrive):
-  the worst case before the call, the real cost after, with the model, effort, tokens, request ID
-  and which key paid. A run that crashed mid-call counts at its worst case. The table prints each
-  run's cost.
+- **Two runs at once can't both spend the same dollar.** The log is locked from reading today's
+  total until the request's worst case is written.
+- **Every request is logged** to `~/.vending/replay-spend.jsonl` (outside the repo and OneDrive):
+  the worst case before it's sent, the real cost after, with the model, effort, tokens, request ID
+  and which key paid. A request the API rejected (bad key, rate limit) isn't billed, so it closes
+  at $0. One that timed out, failed on the server, or crashed stays at its worst case. If a line
+  of the log is unreadable, nothing is sent until it's fixed. The table prints each request's cost.
 - **The daily cap is per computer.** It can't see a teammate's runs. A team-wide cap would need
   the log in the shared database.
 
-**The key** comes from the `VENDING_ANTHROPIC_API_KEY` environment variable, never
-`ANTHROPIC_API_KEY` (Claude Code would bill every session to that). `--key-env NAME` uses another
-variable, such as a personal key, and the log records which one paid. Prices are in
+**The key** comes from the `VENDING_ANTHROPIC_API_KEY` environment variable, never from an
+`ANTHROPIC_*` variable in any upper or lower case (Claude Code reads those, and the team key would
+pay for its sessions). `--key-env NAME` uses another variable, such as a personal key, and the
+log records which one paid. Requests go to api.anthropic.com, whatever `ANTHROPIC_BASE_URL` says;
+`VENDING_ANTHROPIC_BASE_URL` overrides it (the tests use it for a local stand-in). Prices are in
 `PRICES` in `vending/replay/model.py` (assumption A9).
 
 ## Not built yet
