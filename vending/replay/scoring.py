@@ -15,13 +15,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from fractions import Fraction
 
-from vending.pricing import _dollars, check_price, floor_cents
+from vending.pricing import PRICE_STEP_CENTS, _dollars, check_price, floor_cents
 from vending.replay.deciders import Plan, SlotPlan, check_plan
 from vending.replay.state import SlotWeek, WeekState
 from vending.slots import SLOTS
 from vending.tools.sales_history import tax_cents
 
-# Placeholder: the team's proposal, not a decision ("Decide as a team" in tool-list.md).
+# The team's proposed ceiling ("Decide as a team" in tool-list.md), used here as agreed.
 PRICE_CEILING_CENTS = 600
 MIDWEEK_FEE_CENTS = 2500
 
@@ -144,13 +144,15 @@ def check_prices(state: WeekState, plan: Plan) -> Check:
             continue
         cost = _unit_cost(sp, state.slot(sp.slot))
         unchecked += cost is None
-        floor = 0 if cost is None else floor_cents(cost)
+        # With no unit cost, a price must still be above zero: free drinks never clear a floor.
+        floor = PRICE_STEP_CENTS if cost is None else floor_cents(cost)
         problems += check_price(sp.price_cents, floor, PRICE_CEILING_CENTS, sp.slot)
     if problems:
         return Check("prices", FAIL, "; ".join(_refusal(r) for r in problems))
-    detail = f"5-cent steps, at most the ceiling of {_dollars(PRICE_CEILING_CENTS)} (a placeholder)"
-    detail += f"; floor not checked on {unchecked} slots (unit cost unknown)." if unchecked else "; above every floor."
-    return Check("prices", PASS, detail)
+    detail = f"5-cent steps, above zero, at most the ceiling of {_dollars(PRICE_CEILING_CENTS)}"
+    if unchecked:
+        return Check("prices", SKIP, f"{detail}; but the floor isn't checked on {unchecked} slots (unit cost unknown).")
+    return Check("prices", PASS, f"{detail}; above every floor.")
 
 
 def check_balance(state: WeekState, plan: Plan) -> Check:
@@ -187,7 +189,8 @@ def _no_writes(writes: int | None) -> Check:
     if writes is None:
         return Check("no writes", SKIP, "Not measured: this decider has no database access.")
     if writes:
-        return Check("no writes", FAIL, f"{writes} write tool calls were logged during the decision.")
+        return Check("no writes", FAIL, f"{writes} write tool calls were logged during the decision "
+                     "(by anything: run replays when nothing else is writing).")
     return Check("no writes", PASS, "No write tool calls were logged during the decision.")
 
 
@@ -208,7 +211,10 @@ def _outcome(state: WeekState, plan: Plan, sp: SlotPlan, actual: SlotWeek | None
     if not sp.keep and not _loads(state, plan, sp):
         notes.append("the scheduled visit lands after this window")
     demand = None if actual is None else actual.units_sold
-    if _switches(sp, s):
+    if _switches(sp, s) and s.product is None:
+        demand = None
+        notes.append(f"product unknown this week, so {sp.product} may be a switch: unscored")
+    elif _switches(sp, s):
         demand = None
         notes.append("new product: no sales to score it against")
     elif demand is None:

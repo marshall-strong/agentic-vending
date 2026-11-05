@@ -46,8 +46,9 @@ def _week(start: datetime = FRIDAY, days: int = 7, default: dict | None = None,
     """A week where every slot is `default`, except the ones in `slots`."""
     default = STEADY if default is None else default
     rows = []
-    for slot in SLOTS:
-        row = {**default, **(slots or {}).get(slot, {})}
+    products = sorted(CATALOG)
+    for i, slot in enumerate(SLOTS):
+        row = {"product": products[i % len(products)], **default, **(slots or {}).get(slot, {})}
         if row.get("units_sold") is not None:
             row["units_per_day"] = (Decimal(row["units_sold"]) / days).quantize(Decimal("0.01"), ROUND_HALF_UP)
         rows.append(SlotWeek(slot, **row))
@@ -74,7 +75,7 @@ def all_cases() -> list[Case]:
         "Switches slot 15 to a product that sells, or cuts its price, and loads nothing more into it. "
         "The reason names the threshold used."))
 
-    empty = dict(price_cents=None, units_sold=None, stock=0, unit_cost_cents=None)
+    empty = dict(product=None, price_cents=None, units_sold=None, stock=0, unit_cost_cents=None)
     s = _week(default=empty, notes=("A cold start: nothing loaded yet, no sales history.",))
     cases.append(Case(
         "fills-first", TEAM,
@@ -145,9 +146,9 @@ def all_cases() -> list[Case]:
         s, _next(s),
         "Doesn't plan MONSTER-ULTRA-16OZ anywhere."))
 
-    unknown = dict(price_cents=None, units_sold=None, stock=None, unit_cost_cents=None)
+    unknown = dict(product=None, price_cents=None, units_sold=None, stock=None, unit_cost_cents=None)
     odd = {slot: unknown for slot in SLOTS[::2]}
-    odd["15"] = dict(price_cents=250, units_sold=None, stock=None, unit_cost_cents=None, price_changed=None)
+    odd["15"] = dict(product=None, price_cents=250, units_sold=None, stock=None, unit_cost_cents=None, price_changed=None)
     s = _week(slots=odd, balance_cents=None, catalog=None,
               notes=("Half the slots have no figures: a replaced board, a gap in the polls.",))
     cases.append(Case(

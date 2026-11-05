@@ -38,6 +38,10 @@ from vending.slots import SLOTS
 VISITS = ("scheduled", "midweek")
 # The baseline never plans an empty rail: leaving a slot empty waits on David.
 MIN_FILL = 1
+# Placeholder sanity limit, not a capacity: rails hold "as many as physically fit"
+# (build-plan.md), and config.slot_capacity doesn't exist yet. It stops a plan like
+# fill_to: 10**30 from being scored as if it made sense.
+MAX_FILL = 50
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,8 @@ class Plan:
     slots: tuple[SlotPlan, ...]
     visit: str = "scheduled"
     reason: str = ""
+    # Passed through unchecked for the restock planner, which validates sourcing.
+    sourcing: tuple = ()
 
     def slot(self, slot: str) -> SlotPlan | None:
         return next((s for s in self.slots if s.slot == slot), None)
@@ -62,6 +68,9 @@ class Plan:
 
 class Decider(Protocol):
     name: str
+    # True if it can reach the database or the MCP tools (a model harness will).
+    # Only then is the "no writes" check measured; otherwise it's skipped.
+    uses_database: bool
 
     def decide(self, state: WeekState) -> Plan | Mapping: ...
 
@@ -72,6 +81,7 @@ class Baseline:
     Deliberately simple: it's the bar any other decider should clear.
     """
     name = "baseline"
+    uses_database = False
 
     def decide(self, state: WeekState) -> Plan:
         slots = []
@@ -94,9 +104,18 @@ class FromFile:
     def __init__(self, path: str):
         self.path = Path(path)
         self.name = f"file:{path}"
+        self.uses_database = False
 
-    def decide(self, state: WeekState) -> Mapping:
-        return json.loads(self.path.read_text(encoding="utf-8"))
+    def decide(self, state: WeekState) -> Mapping | str:
+        """The parsed plan. Text that isn't JSON comes back as text, so it fails "valid plan"."""
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise ValueError(f"Can't read the plan file {self.path}: {error.strerror}.") from None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
 
 
 def get_decider(name: str) -> Decider:
@@ -135,13 +154,20 @@ def _parse(raw: Mapping) -> tuple[Plan | None, list[Refusal]]:
         if not isinstance(slot, str):
             refusals.append(Refusal("slot_list", f"slots[{i}] has no slot name."))
             continue
-        price = None
-        if row.get("sale_price") is not None:
+        price, raw_price = None, row.get("sale_price")
+        if raw_price is not None:
+            # Text only: a number is ambiguous (to_cents reads an int as cents) and a float inexact.
             try:
-                price = to_cents(row["sale_price"])
-            except ValueError as error:
-                refusals.append(Refusal("bad_price", f"{error}. Give a price as a string, such as \"2.50\".", slot))
+                if not isinstance(raw_price, str):
+                    raise ValueError(f"sale_price must be text, not {raw_price!r}")
+                price = to_cents(raw_price)
+            except (ValueError, ArithmeticError) as error:
+                refusals.append(Refusal("bad_price", f"{error}. Give a price as text, such as \"2.50\".", slot))
                 continue
+        if "product" in row and row["product"] is None and not row.get("keep"):
+            refusals.append(Refusal("empty_slot", "product: null empties the slot, which waits on David. "
+                                    "Leave product out to keep the current one.", slot))
+            continue
         fill = row.get("fill_to")
         if fill is not None and (isinstance(fill, bool) or not isinstance(fill, int)):
             refusals.append(Refusal("bad_fill", f"fill_to must be a whole number, not {fill!r}.", slot))
@@ -152,11 +178,14 @@ def _parse(raw: Mapping) -> tuple[Plan | None, list[Refusal]]:
             refusals.append(Refusal("not_a_plan", "keep must be true or false; reason and product must be text.", slot))
             continue
         slots.append(SlotPlan(slot, reason=reason, keep=keep, fill_to=fill, price_cents=price, product=product))
-    visit, reason = raw.get("visit", "scheduled"), raw.get("reason", "")
+    visit, reason, sourcing = raw.get("visit", "scheduled"), raw.get("reason", ""), raw.get("sourcing", [])
     if not isinstance(reason, str):
         refusals.append(Refusal("not_a_plan", "reason must be text."))
         reason = ""
-    return Plan(tuple(slots), visit=visit, reason=reason), refusals
+    if not isinstance(sourcing, list):
+        refusals.append(Refusal("not_a_plan", "sourcing must be a list."))
+        sourcing = []
+    return Plan(tuple(slots), visit=visit, reason=reason, sourcing=tuple(sourcing)), refusals
 
 
 def _structure(plan: Plan) -> list[Refusal]:
@@ -176,9 +205,10 @@ def _structure(plan: Plan) -> list[Refusal]:
         if s.keep:
             continue
         if s.fill_to is None or s.price_cents is None:
-            refusals.append(Refusal("not_a_plan", "Give fill_to and sale_price, or keep: true.", s.slot))
-        elif s.fill_to < 0:
-            refusals.append(Refusal("bad_fill", f"fill_to can't be negative ({s.fill_to}).", s.slot))
+            refusals.append(Refusal("not_a_plan", "Give fill_to and sale_price, or keep: true. "
+                                    "(fill_to can't default to capacity: there is no slot capacity yet.)", s.slot))
+        elif not 0 <= s.fill_to <= MAX_FILL:
+            refusals.append(Refusal("bad_fill", f"fill_to must be 0 to {MAX_FILL}, not {s.fill_to}.", s.slot))
         if s.product is not None and not s.product.strip():
             refusals.append(Refusal("bad_product", "product is blank; leave it out to keep the current one.", s.slot))
     return refusals

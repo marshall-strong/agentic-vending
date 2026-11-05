@@ -25,8 +25,10 @@ You need the local database with real polls in it, as in [`mcp-server.md`](mcp-s
 
 1. **Rebuilds the week.** A week is 7 days from midnight Eastern on the date you give. Polls give
    each slot's price, units sold, tax-included revenue and units per day, through the same code as
-   `get_sales_history`. It notes when the price changed during the week, and when the polls cover
-   less than 6 days of it. **Product, stock and unit cost are unknown** until restock receipts are
+   `get_sales_history`. It notes when the price changed during the week, and warns when the polls
+   bounding it span more than a day away from 7 days: a gap in the polls, or a week not over yet.
+   The table shows the following week's actual poll span and warnings too, since that week is the
+   demand every plan is scored against. **Product, stock and unit cost are unknown** until restock receipts are
    synced (PR #25), so they stay unknown. Nothing unknown is ever filled with zero.
 2. **Asks a decider.** It gets the week and returns a plan: for each of the 20 slots, the units on
    the rail after the visit (`fill_to`), the price, the product if it changes, and a short reason.
@@ -40,14 +42,14 @@ You need the local database with real polls in it, as in [`mcp-server.md`](mcp-s
 
 | Check | Fails when | Skipped when |
 | --- | --- | --- |
-| valid plan | The answer isn't a plan: a slot missing, twice or not ours, a price that isn't exact text such as `"2.50"`, a negative or non-whole `fill_to`, a slot with no reason, an unknown visit type. Every reason is listed at once. | Never |
+| valid plan | The answer isn't a plan: not JSON, a slot missing, twice or not ours, a price that isn't exact text such as `"2.50"` (a bare number is refused: cents or dollars?), a `fill_to` that isn't a whole number from 0 to 50, `"product": null`, a slot with no reason, an unknown visit type. Every reason is listed at once. | Never |
 | catalog | A named product isn't in the active catalog (a pending request), or its catalog request was refused | The catalog is unknown and the plan names a product |
-| prices | A price isn't in 5-cent steps, is above the ceiling, or is below the floor, all through `vending/pricing.py` | Never; the floor is skipped per slot when its unit cost is unknown, and the detail says how many |
+| prices | A price isn't in 5-cent steps, is zero, is above the ceiling, or is below the floor, all through `vending/pricing.py` | A slot's unit cost is unknown, so its floor can't be checked. Steps, zero and the ceiling are still checked, and still fail. |
 | balance | The plan's purchases, plus $25 for a midweek visit, cost more than the balance | The balance or a unit cost is unknown |
-| no writes | A write tool call was logged in `action_log` while the decider ran | The decider has no database access (the cases) |
+| no writes | A write tool call was logged in `action_log` while the decider ran. It counts every write, so run replays when nothing else is writing. | The decider can't reach the database (the baseline and file plans) |
 
-**The price ceiling is $6.00, a placeholder:** it's the team's proposal, not a decision. It lives
-in `PRICE_CEILING_CENTS` in `vending/replay/scoring.py`. The balance check uses actual unit cost;
+**The price ceiling is $6.00**, the team's proposal in "Decide as a team". It lives in
+`PRICE_CEILING_CENTS` in `vending/replay/scoring.py`. The balance check uses actual unit cost;
 the restock planner will check the max pack price once it plugs in.
 
 ## The outcome score
@@ -66,8 +68,8 @@ demand, stock or price is unknown, or when the plan puts a new product in it.
 ## Demand assumptions
 
 **This is the known weak spot.** We only see what sold at the prices that were really set, so the
-score has to assume what demand would have been. The issue asks for these to go in the
-assumptions register; until there is one, they live here and print under every score table.
+score has to assume what demand would have been. These are entries A1 to A5 in the
+[assumptions register](assumptions.md), and they print under every score table.
 
 1. **Demand in a slot is what it actually sold the following week.** That's a floor, not the real
    demand: if the slot ran out, more would have sold. Without stock counts we can't see a sell-out,
@@ -98,7 +100,16 @@ A decider has a `name` and a `decide(state)` method, in `vending/replay/deciders
 
 The fields follow the desired state in [`planning/tool-list.md`](planning/tool-list.md). `fill_to`
 is units on the rail after the visit; `product` left out means whatever is there now; `keep` means
-no change.
+no change. A `sourcing` list is passed through unchecked, for the restock planner. It differs from
+the team's format in three places, all until the data or David settles them:
+
+- **`fill_to` can't be left out** to mean "fill to capacity", because there is no slot capacity
+  yet. It must be 0 to 50, a sanity limit (`MAX_FILL` in `deciders.py`), not a capacity.
+- **`"product": null` is refused**, as the team's format refuses an empty slot until David
+  confirms one is allowed.
+- **Naming the product already in a slot** is fine on a test case. On a replayed week we don't
+  know what's in a slot, so a named product can't be told apart from a switch, and that slot is
+  left unscored (assumption A3).
 
 | Decider | What it does |
 | --- | --- |

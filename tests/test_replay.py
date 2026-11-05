@@ -1,6 +1,7 @@
 """Tests for the week replayer: replay from stored polls, the plan checks, scoring, cases and the CLI."""
 
 import json
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -73,7 +74,8 @@ def test_cli_scores_a_week_against_the_next(conn, capsys):
     fill_week(conn)
     assert main(["--week", "2026-10-02", "--unit-cost", "0.80", "--balance", "600", "--reasons"], conn=conn) == 0
     out = capsys.readouterr().out
-    assert "PASS  valid plan" in out and "PASS  no writes" in out and "PASS  balance" in out
+    assert "PASS  valid plan" in out and "PASS  prices" in out and "PASS  balance" in out
+    assert "SKIP  no writes" in out   # the baseline can't reach the database
     row15 = next(line for line in out.splitlines() if line.startswith("15 "))
     # baseline: 7 on the rail at $2.50; 9 sold the next week, so 7 sell and 2 are short
     assert row15.split()[:10] == ["15", "$2.50", "7", "1.00", "7", "@", "$2.50", "9", "7", "2"]
@@ -105,6 +107,7 @@ def test_a_decider_that_writes_fails_no_writes(schema_url, conn):
 
     class Writer(Baseline):
         name = "writer"
+        uses_database = True
 
         def decide(self, state):   # as a model calling a write tool through the MCP server would
             with open_in(*schema_url) as other:
@@ -114,8 +117,13 @@ def test_a_decider_that_writes_fails_no_writes(schema_url, conn):
 
     _, _, result = run_week(conn, WEEK, Writer())
     assert checks(result)["no writes"].status == FAIL
-    _, _, result = run_week(conn, WEEK, Baseline())
+    class Reader(Baseline):
+        uses_database = True
+
+    _, _, result = run_week(conn, WEEK, Reader())
     assert checks(result)["no writes"].status == PASS
+    _, _, result = run_week(conn, WEEK, Baseline())
+    assert checks(result)["no writes"].status == SKIP
 
 
 # --- Checking a plan ---------------------------------------------------------
@@ -135,6 +143,14 @@ def test_a_good_json_plan_parses():
     ({"slots": "all of them"}, "not_a_plan"),
     ({"slots": [{"slot": "15", "fill_to": 5, "sale_price": "2.50", "reason": "r"}]}, "slot_list"),
     (plan_json(**{"15": {"sale_price": 2.5}}), "bad_price"),
+    (plan_json(**{"15": {"sale_price": 250}}), "bad_price"),          # a number: cents or dollars?
+    (plan_json(**{"15": {"sale_price": "sNaN"}}), "bad_price"),
+    (plan_json(**{"15": {"sale_price": "1E+999999999"}}), "bad_price"),
+    (plan_json(**{"15": {"sale_price": {}}}), "bad_price"),
+    (plan_json(**{"15": {"fill_to": 51}}), "bad_fill"),
+    (plan_json(**{"15": {"fill_to": 10**30}}), "bad_fill"),
+    (plan_json(**{"15": {"product": None}}), "empty_slot"),
+    ({**plan_json(), "sourcing": "BJs"}, "not_a_plan"),
     (plan_json(**{"15": {"sale_price": "two fifty"}}), "bad_price"),
     (plan_json(**{"15": {"fill_to": -3}}), "bad_fill"),
     (plan_json(**{"15": {"fill_to": True}}), "bad_fill"),
@@ -204,7 +220,10 @@ def test_unknown_inputs_stay_unknown():
     result = score(c.state, plan, c.next_week)
     assert checks(result)["balance"].status == SKIP and checks(result)["catalog"].status == PASS
     assert result.totals.scored == 7   # only slots known this week and the next
-    assert all(o.sold is None for o in result.slots if o.available is None)
+    unknown_next = {s.slot for s in c.next_week.slots if s.units_sold is None}
+    for o in result.slots:
+        if o.slot in unknown_next or c.state.slot(o.slot).stock is None:
+            assert (o.sold, o.margin_cents) == (None, None), o.slot   # unscored, not zero
 
 
 def test_cold_start_is_not_scoreable():
@@ -273,3 +292,68 @@ def test_cli_refuses_an_unknown_decider_or_case(capsys):
     assert main(["--cases", "--decider", "opus"]) == 2
     assert main(["--case", "nope"]) == 2
     assert "Unknown decider" in capsys.readouterr().err
+
+
+# --- Found by the blind review ------------------------------------------------
+
+def test_a_zero_price_fails_even_with_no_unit_cost():
+    c = case("catalog-request")
+    state = replace(c.state, slots=tuple(replace(s, unit_cost_cents=None) for s in c.state.slots))
+    plan = Baseline().decide(state)
+    assert checks(score(state, plan, c.next_week))["prices"].status == SKIP   # floor unchecked
+    free = Plan(tuple(SlotPlan(s.slot, s.reason, fill_to=s.fill_to, price_cents=0) if s.slot == "16" else s
+                      for s in plan.slots))
+    prices = checks(score(state, free, c.next_week))["prices"]
+    assert prices.status == FAIL and "16: $0.00 is below" in prices.detail
+
+
+def test_a_long_gap_in_the_polls_is_flagged(conn):
+    store_poll(conn, "a", "2026-09-28T12:00:00+00:00", {"15": (250, 100)})
+    store_poll(conn, "b", "2026-10-09T03:00:00+00:00", {"15": (250, 111)})
+    state = replay_week(conn, WEEK)
+    assert state.slot("15").units_sold == 11
+    assert any("span 10.6 days, not 7" in n for n in state.notes)
+
+
+def test_a_partial_following_week_is_shown(conn, capsys):
+    store_poll(conn, "a", "2026-10-02T03:00:00+00:00", {"15": (250, 100)})
+    store_poll(conn, "b", "2026-10-09T03:00:00+00:00", {"15": (250, 107)})
+    store_poll(conn, "c", "2026-10-11T03:00:00+00:00", {"15": (250, 109)})   # 2 days in
+    main(["--week", "2026-10-02"], conn=conn)
+    out = capsys.readouterr().out
+    assert "following week's polls: Thu 08 Oct 2026 23:00 to Sat 10 Oct 2026 23:00 (2.0 days)" in out
+    assert "Note, following week: WARNING: the polls cover only 2.0 days" in out
+
+
+def test_the_daylight_saving_week_ends_at_eastern_midnight(conn):
+    # 30 Oct 00:00 EDT is 04:00 UTC; 6 Nov 00:00 EST is 05:00 UTC (clocks went back 1 Nov).
+    store_poll(conn, "a", "2026-10-30T03:59:00+00:00", {"15": (250, 100)})
+    store_poll(conn, "b", "2026-11-06T04:30:00+00:00", {"15": (250, 108)})   # 23:30 EST on 5 Nov
+    store_poll(conn, "c", "2026-11-06T05:30:00+00:00", {"15": (250, 120)})   # 00:30 EST on 6 Nov
+    state = replay_week(conn, date(2026, 10, 30))
+    assert state.end == datetime(2026, 11, 6, 5, tzinfo=timezone.utc)
+    assert state.slot("15").units_sold == 8
+
+
+def test_cli_refuses_a_negative_unit_cost(capsys):
+    assert main(["--week", "2026-10-02", "--unit-cost", "-1"]) == 2
+    assert "above zero" in capsys.readouterr().err
+
+
+def test_a_plan_file_that_is_not_json_fails_valid_plan(tmp_path, capsys):
+    path = tmp_path / "plan.json"
+    path.write_text("Restock everything, thanks!", encoding="utf-8")
+    assert main(["--case", "low-balance", "--decider", f"file:{path}"]) == 0
+    assert "FAIL  valid plan" in capsys.readouterr().out
+    assert main(["--case", "low-balance", "--decider", f"file:{tmp_path / 'missing.json'}"]) == 2
+    assert "Can't read the plan file" in capsys.readouterr().err
+
+
+def test_a_named_product_on_a_replayed_week_is_unscored_and_says_why(conn):
+    fill_week(conn)
+    state, next_week, _ = run_week(conn, WEEK, Baseline())
+    plan = Baseline().decide(state)
+    named = Plan(tuple(SlotPlan(s.slot, s.reason, fill_to=s.fill_to, price_cents=s.price_cents, product="COKE-20OZ")
+                       if s.slot == "15" else s for s in plan.slots))
+    o = next(o for o in score(state, named, next_week).slots if o.slot == "15")
+    assert o.sold is None and "may be a switch" in o.notes[0]

@@ -28,8 +28,9 @@ from vending.tools.sales_history import get_sales_history
 
 EASTERN = ZoneInfo("America/New_York")
 WEEK = timedelta(days=7)
-# Below this much poll coverage, a week's rates say more about the gap than the week.
-THIN_COVERAGE = timedelta(days=6)
+# When the polls bounding a week span more than this away from 7 days (a gap in the
+# polls, or a week still in progress), its sales aren't one week's sales.
+COVERAGE_SLACK = timedelta(days=1)
 
 
 class NoData(Exception):
@@ -95,8 +96,13 @@ def replay_week(conn: psycopg.Connection, day: date) -> WeekState:
             price_changed=None if before is None or after is None else before != after,
         ))
     notes = []
-    if sales.end - sales.start < THIN_COVERAGE:
-        notes.append(f"The polls cover only {days:.1f} days of this week, so rates are per day over that.")
+    span = sales.end - sales.start
+    if span < WEEK - COVERAGE_SLACK:
+        notes.append(f"WARNING: the polls cover only {days:.1f} days of this week (a gap, or a week not "
+                     "over yet). Units sold are for those days only; rates are per day over them.")
+    elif span > WEEK + COVERAGE_SLACK:
+        notes.append(f"WARNING: the nearest polls span {days:.1f} days, not 7 (a gap in the polls). "
+                     "Units sold are for all of that; rates are per day over it.")
     if sales.start > start:
         notes.append("No poll before the week starts, so it starts at the first one.")
     notes.append("Product, stock and unit cost are unknown: they need restock receipts, which aren't synced yet.")

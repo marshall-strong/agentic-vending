@@ -39,9 +39,10 @@ def run_week(conn: psycopg.Connection, day: date, decider: Decider, *,
         state = replace(state, slots=tuple(replace(s, unit_cost_cents=unit_cost_cents) for s in state.slots))
     if balance_cents is not None:
         state = replace(state, balance_cents=balance_cents)
-    before = _writes(conn)
+    measure = getattr(decider, "uses_database", True)
+    before = _writes(conn) if measure else None
     answer = decider.decide(state)
-    after = _writes(conn)
+    after = _writes(conn) if measure else None
     writes = None if before is None or after is None else after - before
     return state, next_week, score(state, answer, next_week, writes)
 
@@ -76,10 +77,16 @@ def render(title: str, state: WeekState, next_week: WeekState | None, result: Sc
     if state.polls:
         days = (state.polls[1] - state.polls[0]).total_seconds() / 86400
         out.append(f"Polls: {_when(state.polls[0])} to {_when(state.polls[1])} Eastern ({days:.1f} days).")
-    if next_week is not None:
-        out.append(f"Scored against what sold from {_when(next_week.start)} to {_when(next_week.end)}.")
+    if next_week is not None and next_week.polls:
+        days = (next_week.polls[1] - next_week.polls[0]).total_seconds() / 86400
+        out.append(f"Scored against the following week's polls: {_when(next_week.polls[0])} to "
+                   f"{_when(next_week.polls[1])} ({days:.1f} days).")
+    elif next_week is not None:
+        out.append(f"Scored against the following week: {_when(next_week.start)} to {_when(next_week.end)}.")
     out += [f"Assumed: {a}" for a in assumed]
     out += [f"Note: {n}" for n in (*state.notes, *result.notes)]
+    if next_week is not None:
+        out += [f"Note, following week: {n}" for n in next_week.notes if "receipts" not in n]
     out.append("")
     out.append("Hard checks")
     width = max(len(c.name) for c in result.checks)
@@ -168,7 +175,9 @@ def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
             return 0
         unit_cost = None if args.unit_cost is None else to_cents(args.unit_cost)
         balance = None if args.balance is None else to_cents(args.balance)
-    except ValueError as error:
+        if (unit_cost is not None and unit_cost <= 0) or (balance is not None and balance < 0):
+            raise ValueError("--unit-cost must be above zero and --balance can't be negative.")
+    except (ValueError, ArithmeticError) as error:
         print(error, file=sys.stderr)
         return 2
     own = conn is None
@@ -177,7 +186,7 @@ def main(argv: list[str], conn: psycopg.Connection | None = None) -> int:
         conn.execute("set default_transaction_read_only = on")
         state, next_week, result = run_week(conn, args.week, decider,
                                             unit_cost_cents=unit_cost, balance_cents=balance)
-    except NoData as error:
+    except (NoData, ValueError) as error:
         print(error, file=sys.stderr)
         return 1
     finally:
