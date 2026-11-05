@@ -114,6 +114,38 @@ because they contain the same key in plain text. Two things worth knowing:
   The fix is to tell course staff so the key can be replaced. Say something immediately;
   it is a small problem caught early and a large one caught late.
 
+### The Anthropic API key is for the agent only
+
+**Building the project never needs it.** Writing code, running tests and using Claude Code
+all run on your own Claude subscription.
+
+**The team's Anthropic API key pays only for the agent's own model calls:** test runs,
+model comparisons and the live run. Kevin keeps it in his Postman Vault; ask him for it,
+and only set it up if you run those. Kevin's understanding (4 Nov) is that this key is free
+for building and testing, and that the $600 budget applies only once the competition starts
+next quarter. Even so, every run that uses it has a dollar cap and is logged.
+
+**Keep it in a user environment variable named `VENDING_ANTHROPIC_API_KEY`:**
+
+- **Not in `.env`.** That file belongs to one copy of the repository, so every worktree
+  would need its own copy of the key. And if your copy of the repository is inside OneDrive
+  or iCloud, the file gets synced to the cloud.
+- **Never under the name `ANTHROPIC_API_KEY`.** When that variable is set, Claude Code
+  uses it *instead of your subscription*, even while you're logged in
+  ([Claude Code docs](https://code.claude.com/docs/en/env-vars)). The team key would then pay
+  for everyone's development work. The agent's code reads `VENDING_ANTHROPIC_API_KEY` and
+  passes it to the Anthropic client itself.
+
+Set it once, then open a new terminal. On Windows, run this in PowerShell and paste the key
+when it asks. It's read as a prompt, so the key doesn't end up in your command history:
+
+```
+[Environment]::SetEnvironmentVariable('VENDING_ANTHROPIC_API_KEY', (Read-Host 'Key'), 'User')
+```
+
+On macOS or Linux, add `export VENDING_ANTHROPIC_API_KEY='<the key>'` to `~/.zshrc` or
+`~/.bashrc`. In production it's a secret on our Azure Container App.
+
 ### 4. Check that you can reach the machine
 
 ```
