@@ -3,6 +3,7 @@
 import importlib
 import uuid
 import time
+from datetime import datetime, timezone
 
 import anyio
 import pytest
@@ -84,6 +85,17 @@ def test_sales_history_end_to_end(db):
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_sales_history", "done")]
 
 
+def test_purchase_requests_end_to_end(db):
+    from vending.purchase_requests import record
+    record(db, "r1", datetime(2026, 11, 7, 14, tzinfo=timezone.utc), False, {"off_cycle": False, "lines": []}, "abc")
+    result = call("get_purchase_requests", {"pending_only": True})
+    assert not result.isError
+    content = result.structuredContent
+    assert (content["count"], content["pending"], content["not_checked_recently"]) == (1, 1, ["r1"])
+    assert content["data"][0]["plan_hash"] == "abc"
+    assert db.execute("select tool, outcome from action_log").fetchall() == [("get_purchase_requests", "done")]
+
+
 def test_read_stub_says_not_built_and_is_logged(db):
     result = call("get_account_balance")
     assert result.isError and "not built yet" in result.content[0].text
@@ -122,7 +134,7 @@ def test_built_only_hides_the_stubs(monkeypatch):
     try:
         importlib.reload(server)
         assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history",
-                                                      "request_catalog_product"]
+                                                      "get_purchase_requests", "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)

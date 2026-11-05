@@ -10,7 +10,8 @@ machine.
 | --- | --- |
 | `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
-| `get_catalog`, `get_account_balance`, `preview_desired_state`, `get_purchase_requests`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
+| `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours are listed in `not_checked_recently` and named in the message. |
+| `get_catalog`, `get_account_balance`, `preview_desired_state`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state`, `set_price` | Write stubs, already behind the write gate: refused while halted, logged either way |
 
