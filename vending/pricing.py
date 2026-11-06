@@ -115,7 +115,8 @@ def check_price(price_cents: int, floor: int, ceiling: int,
         refusals.append(Refusal(
             "below_floor",
             f"{_dollars(price_cents)} is below the floor of {_dollars(floor)}; "
-            f"raise the price or lower the max pack price",
+            f"raise the price, lower the max pack price (no lower than the pack costs), "
+            f"or pick a cheaper store or pack",
             slot))
     if price_cents > ceiling:
         refusals.append(Refusal(

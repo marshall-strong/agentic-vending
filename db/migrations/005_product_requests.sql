@@ -10,7 +10,8 @@
 -- `pending` means the bridge accepted it. `unknown` means we sent it but never
 -- got an answer (a timeout or a server error). For `sending` and `unknown` the
 -- request may or may not exist on the bridge: a person checks it on the Swagger
--- page, and the tool refuses to send the same product again meanwhile. Nothing
+-- page and settles it with `python -m vending.product_requests resolve`, and the
+-- tool refuses to send the same product again meanwhile. Nothing
 -- updates `pending` yet; a later sync can read `GET /api/v1/product-requests/{id}`.
 create table product_requests (
     id             bigserial   primary key,
