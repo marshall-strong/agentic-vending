@@ -95,7 +95,7 @@ def test_sends_the_request_and_records_it(db, fake):  # noqa: F811
     assert fake.posts == [{"name": "Coca-Cola Cherry", "size": "20 oz bottle", "line": "Coca-Cola",
                            "note": "students keep asking"}]
     assert db.execute("select name, bridge_id, status, words from product_requests").fetchall() == [
-        ("Coca-Cola Cherry", "req-1", "pending", ["20", "bottle", "cherry", "coca", "cola", "oz"])]
+        ("Coca-Cola Cherry", "req-1", "pending", ["20", "cherry", "coca", "cola", "oz"])]
     assert db.execute("select outcome from action_log where tool = 'request_catalog_product'").fetchall() == [
         ("done",)]
 
@@ -149,7 +149,7 @@ def test_a_rejected_request_stores_nothing(db, fake):  # noqa: F811
 
 @pytest.mark.parametrize("answer", [(503, {"detail": "down"}, 0.0), (201, {"id": "late"}, 2.0)])
 def test_no_answer_is_stored_as_unknown_and_blocks_a_resend(db, fake, monkeypatch, answer):  # noqa: F811
-    monkeypatch.setattr(catalog_request, "TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(bridge_module, "TIMEOUT_SECONDS", 0.5)
     fake.answer = answer
     reply = ask()
     assert not reply["success"] and reply["status"] == "unknown"
@@ -174,18 +174,86 @@ def test_the_request_is_saved_before_it_is_sent(db, fake, schema_url):  # noqa: 
     assert db.execute("select bridge_id, status from product_requests").fetchall() == [("req-1", "pending")]
 
 
-def test_a_crash_after_the_bridge_accepts_keeps_the_row_and_blocks_a_resend(db, fake, monkeypatch):  # noqa: F811
+def test_a_crash_before_the_answer_is_stored_keeps_the_row_and_blocks_a_resend(db, fake, monkeypatch):  # noqa: F811
     def crash(*args):
         raise RuntimeError("simulated crash before the answer was stored")
 
-    original = catalog_request._record_accepted
-    monkeypatch.setattr(catalog_request, "_record_accepted", crash)
+    original = catalog_request._record_answer
+    monkeypatch.setattr(catalog_request, "_record_answer", crash)
     assert call("request_catalog_product", {"name": "Coca-Cola Cherry", "size": "20 oz bottle"}).isError
     assert db.execute("select bridge_id, status from product_requests").fetchall() == [(None, "sending")]
-    monkeypatch.setattr(catalog_request, "_record_accepted", original)
+    monkeypatch.setattr(catalog_request, "_record_answer", original)
     again = ask()
     assert codes(again) == ["already_requested"] and "a person must check" in again["refusals"][0]["message"]
     assert len(fake.posts) == 1
+
+
+def test_the_answer_is_kept_when_the_gate_fails_after_it(db, fake, monkeypatch):  # noqa: F811
+    original = catalog_request._record_answer
+
+    def store_then_crash(*args):
+        original(*args)
+        raise RuntimeError("simulated failure after the answer was stored, e.g. the log insert")
+
+    monkeypatch.setattr(catalog_request, "_record_answer", store_then_crash)
+    assert call("request_catalog_product", {"name": "Coca-Cola Cherry", "size": "20 oz bottle"}).isError
+    assert db.execute("select bridge_id, status from product_requests").fetchall() == [("req-1", "pending")]
+    assert db.execute("select outcome from action_log where tool = 'request_catalog_product'").fetchall() == [
+        ("failed",)]
+
+
+def test_an_accepted_answer_without_an_id_is_unknown(db, fake):  # noqa: F811
+    fake.answer = (201, {"status": "pending"}, 0.0)
+    reply = ask()
+    assert not reply["success"] and reply["status"] == "unknown" and "no request ID" in reply["message"]
+    assert db.execute("select bridge_id, status, last_response from product_requests").fetchall() == [
+        (None, "unknown", {"status": "pending"})]
+    assert codes(ask()) == ["already_requested"]
+    assert len(fake.posts) == 1
+
+
+@pytest.mark.parametrize("first, again", [
+    ("20 oz bottle", "20 oz"),
+    ("20 oz", "20 oz bottle"),
+    ("20 oz", "20 ounce"),
+    ("20 fl oz", "20oz"),
+])
+def test_the_same_size_written_differently_is_a_duplicate(db, fake, first, again):  # noqa: F811
+    assert ask(size=first)["success"]
+    assert codes(ask(size=again)) == ["already_requested"]
+    assert len(fake.posts) == 1
+
+
+@pytest.mark.parametrize("name, size", [("Coca-Cola", "20 ounce"), ("Diet Coke", "12 oz"), ("Coca-Cola", "20 oz can")])
+def test_the_catalog_check_ignores_how_the_size_is_written(db, fake, name, size):  # noqa: F811
+    assert codes(ask(name=name, size=size)) == ["already_in_catalog"]
+    assert fake.posts == []
+
+
+@pytest.mark.parametrize("name", ["Brut Champagne", "Prosecco", "Red Sangria", "Lime Margarita", "Mojito",
+                                  "Peach Bellini", "Pinot Grigio"])
+def test_wine_and_cocktails_are_refused(db, fake, name):  # noqa: F811
+    assert codes(ask(name=name)) == ["alcohol_or_thc"]
+
+
+@pytest.mark.parametrize("name", ["Virgin Mojito Sparkling Water", "Ocean Spray Cranberry Juice Cocktail",
+                                  "Sangria Senorial", "Sangría Señorial", "Kola Champagne"])
+def test_soft_drinks_named_like_alcohol_are_allowed(db, fake, name):  # noqa: F811
+    assert ask(name=name)["success"]
+
+
+def test_a_more_general_request_is_not_the_catalogs_flavor(db, fake, monkeypatch):  # noqa: F811
+    # The fake bridge serves the module's CATALOG, read at request time.
+    monkeypatch.setitem(globals(), "CATALOG", [{"sku": "SPR-CH", "name": "Sprite Cherry", "flavor": None,
+                                                "size": "20 oz bottle"}])
+    assert ask(name="Sprite")["success"]
+
+
+def test_a_more_general_request_is_not_an_earlier_flavor(db, fake):  # noqa: F811
+    assert ask(name="Sprite Cherry")["success"]
+    fake.answer = (201, {"id": "req-2", "status": "pending"}, 0.0)
+    assert ask(name="Sprite")["success"]
+    assert len(fake.posts) == 2
 
 
 def test_an_unreadable_catalog_sends_nothing(db, fake):  # noqa: F811

@@ -31,14 +31,18 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.action != "status" and not (args.by or "").strip():
         parser.error("--by NAME is required to turn the halt switch on or off")
+    # Never migrates, so an emergency stop run from a branch with an unmerged
+    # migration can't change the shared Azure database's schema.
     with db.connect() as conn:
-        if args.action != "status":
-            db.migrate(conn)
-            flip(conn, args.action == "on", args.by.strip())
         try:
+            if args.action != "status":
+                flip(conn, args.action == "on", args.by.strip())
             halted = is_halted(conn)
-        except psycopg.errors.UndefinedTable:  # never migrated, so nothing can write yet
-            halted = True
+        except psycopg.errors.UndefinedTable:
+            # Never migrated, so nothing can write yet: that counts as halted.
+            print("halted: the database has no config table yet, so no write can run.\n"
+                  "Check DATABASE_URL points where you mean, then run: python -m vending.db migrate")
+            return 1 if args.action == "off" else 0
         print("halted" if halted else "running: writes allowed")
     return 0
 
