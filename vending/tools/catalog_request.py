@@ -10,41 +10,39 @@ request over our own weekly limit (larger while the catalog is still small).
 
 The bridge has no route that lists our requests, so `product_requests` is our
 only record, and the duplicate check reads it. Runs inside the write gate, so
-the halt lock is held while the request is in flight.
+the halt lock is held while the request is in flight; neither bridge call
+retries, so the lock is held for at most two timeouts.
 
 The POST is never retried: a retry after a lost answer could file it twice.
-Just before sending, a `sending` row is committed on its own short connection,
-outside the gate's transaction, so a crash at any later point (before the answer
-is stored, or before the gate commits) leaves it behind. What happens next:
+Every change to our row is committed on its own short connection, outside the
+gate's transaction, so nothing the bridge told us is lost if the gate later
+rolls back (a failed log insert, a dropped connection, a crash):
 
-- accepted: the row becomes `pending` with the bridge's ID, in the gate's
-  transaction, so it commits with the `action_log` row;
+- just before sending: a `sending` row;
+- accepted: the bridge's ID and status;
+- accepted but the answer has no ID, or no answer at all (a timeout or a
+  5xx): `unknown`;
 - certainly not sent or refused (no connection, a 4xx, a 429): the row is
-  deleted, again on its own connection, because a refusal rolls the gate back;
-- no answer (a timeout or a 5xx): the row becomes `unknown`.
+  deleted.
 
 A row left `sending` or `unknown` may or may not exist on the bridge. The
-duplicate check blocks a resend of it until a person has checked.
+duplicate check blocks a resend of it until a person checks the bridge and
+runs `python -m vending.product_requests resolve`.
 """
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending.bridge import Bridge, BridgeError
+from vending.bridge import Bridge, BridgeAnswered, BridgeError, BridgeNoAnswer, BridgeUnreachable
 from vending.pricing import Refusal
 from vending.tools import WriteReply
 from vending.write_gate import Refused
 
-# Seconds to wait for the bridge's answer to the POST. Tests shorten it.
-TIMEOUT_SECONDS = 20
 # The live schema's limits (ProductRequestCreate, checked 2 Nov 2026).
 MAX_FIELD = 100
 MAX_NOTE = 500
@@ -56,14 +54,28 @@ MAX_NOTE = 500
 WEEKLY_LIMIT = 3
 STARTUP_WEEKLY_LIMIT = 15
 SMALL_CATALOG = 25
+# Statuses the bridge can give a request that our table stores as they are.
+KNOWN_STATUSES = {"pending", "approved", "rejected"}
 
 # A size the bridge would sell as a drink: "20 oz bottle", "12 fl oz can", "500 mL".
 VOLUME = re.compile(r"\d+(?:\.\d+)?\s*(?:fl\.?\s*oz|oz|ounces?|ml|l|liters?|litres?)\b", re.IGNORECASE)
+# Words that don't tell two drinks apart: how it's packed, or that it's the
+# default flavor. The duplicate checks ignore them, so "20 oz" and "20 oz
+# bottle" are the same request, and "Coca-Cola" matches "Coca-Cola Original".
+IGNORED_WORDS = {"bottle", "bottles", "can", "cans", "pack", "packs", "pk", "original", "classic", "regular"}
 # Soft drinks whose names contain an alcohol word. Removed before the check.
-SOFT_DRINKS = re.compile(r"\b(?:root|ginger|birch)\s+beer\b|\bginger\s+ale\b", re.IGNORECASE)
+SOFT_DRINKS = re.compile(
+    r"\b(?:root|ginger|birch)\s+beer\b|\bginger\s+ale\b|\bmocktails?\b"
+    r"|\bvirgin\s+(?:mojito|margarita|daiquiri|pi[nñ]a\s+colada|mary)s?\b"
+    r"|\bjuice\s+cocktails?\b|\bsangr[ií]a\s+se[nñ]orial\b|\bkola\s+champagne\b",
+    re.IGNORECASE,
+)
 NOT_ALLOWED = re.compile(
     r"\b(?:beer|wine|ale|lager|ipa|stout|vodka|whiske?y|bourbon|rum|tequila|gin|liquor|liqueur|spirits?|"
     r"sake|soju|mead|alcohol|alcoholic|spiked|hard\s+(?:seltzer|cider|tea|lemonade|kombucha)|"
+    r"champagne|prosecco|cava|sangria|margaritas?|mojitos?|daiquiris?|mimosas?|martinis?|cocktails?|"
+    r"bellinis?|merlot|chardonnay|pinot|cabernet|sauvignon|riesling|moscato|zinfandel|malbec|shiraz|"
+    r"brandy|cognac|schnapps|absinthe|vermouth|shandy|radler|"
     r"thc|cbd|delta[\s-]?[89]|cannabis|marijuana|hemp)\b",
     re.IGNORECASE,
 )
@@ -75,11 +87,26 @@ class CatalogRequestReply(WriteReply):
 
 
 def words(*parts: str | None) -> list[str]:
-    """The lower-case words of a product description, with "20oz" split and "fl oz" as "oz"."""
+    """The lower-case words of a product description, for the duplicate checks.
+
+    Units are normalised ("20oz", "20 ounce" and "20 fl oz" all become "20 oz";
+    "500 milliliters" becomes "500 ml"), and IGNORED_WORDS are dropped.
+    """
     text = " ".join(p for p in parts if p).lower()
-    text = re.sub(r"\bfl\.?\s*oz\b", "oz", text)
     text = re.sub(r"(\d)([a-z])", r"\1 \2", text)
-    return sorted(set(re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", text)))
+    text = re.sub(r"\bfl\.?\s*oz\b|\b(?:fluid\s+)?ounces?\b", "oz", text)
+    text = re.sub(r"\bmillilit(?:er|re)s?\b", "ml", text)
+    text = re.sub(r"\blit(?:er|re)s?\b", "l", text)
+    return sorted(set(re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", text)) - IGNORED_WORDS)
+
+
+def same_drink(wanted: list[str], other: list[str]) -> bool:
+    """True when two descriptions have the same words, once ignored words are dropped.
+
+    Exact, not one-way: "Sprite 20 oz" is not "Sprite Cherry 20 oz", nor the
+    reverse. Rows stored before a word was added to IGNORED_WORDS still match.
+    """
+    return set(wanted) - IGNORED_WORDS == set(other) - IGNORED_WORDS
 
 
 def check_fields(name: str, size: str, line: str | None, flavor: str | None, note: str | None) -> list[Refusal]:
@@ -99,26 +126,27 @@ def check_fields(name: str, size: str, line: str | None, flavor: str | None, not
 
 
 def already_requested(conn: psycopg.Connection, wanted: list[str]) -> list[Refusal]:
-    """Our earlier requests whose description covers every word of this one.
+    """Our earlier requests for the same drink (see `same_drink`).
 
-    One way only, like the catalog check: "Cherry 20 oz" after "Cherry 20 oz
-    bottle" is a duplicate, but "Cherry Zero 20 oz" after "Cherry 20 oz" isn't.
+    "Cherry 20 oz" after "Cherry 20 oz bottle" is a duplicate; "Cherry Zero
+    20 oz" after "Cherry 20 oz" isn't, and nor is "Cherry 20 oz" after "Cherry
+    Zero 20 oz". Compared in Python: the table holds one row per request, so
+    it stays small.
     """
-    rows = conn.execute(
-        "select bridge_id, name, size, status from product_requests where %s::text[] <@ words order by id",
-        (wanted,),
-    ).fetchall()
+    rows = [(row, bridge_id, name, size, status)
+            for row, bridge_id, name, size, status, stored in conn.execute(
+                "select id, bridge_id, name, size, status, words from product_requests order by id")
+            if same_drink(wanted, stored)]
     return [Refusal("already_requested",
                     f"we already asked for {name} ({size}): request {bridge_id or 'with no ID'}, status {status}"
-                    + (" (sent, but no answer was stored; a person must check before it is sent again)"
-                       if status in ("sending", "unknown") else ""))
-            for bridge_id, name, size, status in rows]
+                    + (f" (sent, but no answer was stored; a person must check the bridge, then run "
+                       f"`python -m vending.product_requests resolve {row}`)" if status in ("sending", "unknown") else ""))
+            for row, bridge_id, name, size, status in rows]
 
 
 def already_in_catalog(catalog: list[dict], wanted: list[str]) -> list[Refusal]:
-    """Catalog products whose description covers every word of the request."""
-    matches = [p for p in catalog
-               if set(wanted) <= set(words(p.get("name"), p.get("flavor"), p.get("size")))]
+    """Catalog products that are the same drink as the request (see `same_drink`)."""
+    matches = [p for p in catalog if same_drink(wanted, words(p.get("name"), p.get("flavor"), p.get("size")))]
     if not matches:
         return []
     listed = ", ".join(f"{p['sku']} ({p['name']})" for p in matches)
@@ -143,8 +171,8 @@ def request_catalog_product(name: str, size: str, line: str | None, flavor: str 
                             ) -> Callable[[psycopg.Connection], CatalogRequestReply]:
     """The write action for the gate. `bridge` is called only once the halt check has passed.
 
-    `connect` opens the short, separate connection that commits the `sending`
-    row before the POST; it must reach the same database as the gate's.
+    `connect` opens the short, separate connections that record each step;
+    they must reach the same database as the gate's.
     """
     # The bridge refuses an empty optional field, so send it as absent.
     line, flavor, note = (v.strip() or None if v is not None else None for v in (line, flavor, note))
@@ -157,7 +185,7 @@ def request_catalog_product(name: str, size: str, line: str | None, flavor: str 
         refusals = check_fields(name, size, line, flavor, note) + already_requested(conn, wanted)
         client = bridge()
         try:
-            catalog = json.loads(client._get("/api/v1/products")).get("products", [])
+            catalog = client.products()
         except BridgeError as error:
             if refusals:
                 raise Refused(refusals) from None
@@ -167,7 +195,7 @@ def request_catalog_product(name: str, size: str, line: str | None, flavor: str 
             raise Refused(refusals)
         row = _save_sending(connect, body, wanted)
         try:
-            return _send(conn, client, body, row, connect)
+            return _send(client, body, row, connect)
         except Refused:
             _forget(connect, row)
             raise
@@ -195,50 +223,48 @@ def _forget(connect: Callable[[], psycopg.Connection], row: int) -> None:
         side.execute("delete from product_requests where id = %s and status = 'sending'", (row,))
 
 
-def _send(conn: psycopg.Connection, client: Bridge, body: dict, row: int,
-          connect: Callable[[], psycopg.Connection]) -> CatalogRequestReply:
-    request = urllib.request.Request(
-        client.base_url + "/api/v1/product-requests", data=json.dumps(body).encode(), method="POST",
-        headers={"X-API-Key": client.api_key, "Content-Type": "application/json"},
-    )
+def _send(client: Bridge, body: dict, row: int, connect: Callable[[], psycopg.Connection]) -> CatalogRequestReply:
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            answer = json.loads(response.read())
-    except urllib.error.HTTPError as error:
-        detail = error.read()[:300].decode(errors="replace")
-        if error.code == 429:
+        answer = client.post("/api/v1/product-requests", body)
+    except BridgeAnswered as error:
+        if error.status == 429:
             raise Refused([Refusal("too_many_open_requests",
                                    "the bridge has too many of our product requests open; wait for earlier ones to be decided")]) from None
-        if error.code >= 500:
-            return _unknown(conn, row, f"the bridge answered {error.code}")
+        if error.status >= 500:
+            return _unknown(connect, row, f"the bridge answered {error.status}", None)
         _forget(connect, row)
-        return CatalogRequestReply(success=False, message=f"The bridge refused the request ({error.code}: {detail}); nothing was stored.")
-    except urllib.error.URLError as error:
-        # urllib raises URLError only while connecting or sending, so the bridge never got it.
+        return CatalogRequestReply(success=False, message=f"The bridge refused the request ({error}); nothing was stored.")
+    except BridgeUnreachable as error:
         _forget(connect, row)
-        return CatalogRequestReply(success=False, message=f"Couldn't reach the bridge ({error.reason}); nothing was sent.")
-    except (OSError, ValueError) as error:
-        # Sent, but the answer timed out, broke off or wasn't JSON.
-        return _unknown(conn, row, f"{type(error).__name__}: {error}")
-    return _record_accepted(conn, row, body, answer)
+        return CatalogRequestReply(success=False, message=f"Couldn't reach the bridge ({error}); nothing was sent.")
+    except BridgeNoAnswer as error:
+        return _unknown(connect, row, str(error), None)
+    return _record_answer(connect, row, body, answer)
 
 
-def _record_accepted(conn: psycopg.Connection, row: int, body: dict, answer: dict) -> CatalogRequestReply:
-    """Store the bridge's ID on our row, in the gate's transaction."""
-    status = answer.get("status", "pending")
-    conn.execute(
-        "update product_requests set bridge_id = %s, status = %s, last_response = %s where id = %s",
-        (answer["id"], status, Jsonb(answer), row),
-    )
+def _record_answer(connect: Callable[[], psycopg.Connection], row: int, body: dict,
+                   answer: object) -> CatalogRequestReply:
+    """Store the bridge's answer on its own connection, before anything else can fail."""
+    request_id = answer.get("id") if isinstance(answer, dict) else None
+    if not request_id:
+        return _unknown(connect, row, "the bridge accepted it, but its answer has no request ID", answer)
+    status = answer.get("status") if answer.get("status") in KNOWN_STATUSES else "pending"
+    with connect() as side:
+        side.execute(
+            "update product_requests set bridge_id = %s, status = %s, last_response = %s where id = %s",
+            (request_id, status, Jsonb(answer), row),
+        )
     return CatalogRequestReply(
-        success=True, count=1, request_id=answer["id"], status=status,
-        message=f"Requested {body['name']} ({body['size']}): product request {answer['id']} is "
+        success=True, count=1, request_id=request_id, status=status,
+        message=f"Requested {body['name']} ({body['size']}): product request {request_id} is "
                 f"{status}. If approved it appears in the catalog, maybe under another name.",
     )
 
 
-def _unknown(conn: psycopg.Connection, row: int, why: str) -> CatalogRequestReply:
-    conn.execute("update product_requests set status = 'unknown' where id = %s", (row,))
+def _unknown(connect: Callable[[], psycopg.Connection], row: int, why: str, answer: object) -> CatalogRequestReply:
+    with connect() as side:
+        side.execute("update product_requests set status = 'unknown', last_response = %s where id = %s",
+                     (None if answer is None else Jsonb(answer), row))
     return CatalogRequestReply(
         success=False, status="unknown",
         message=f"Sent, but no usable answer came back ({why}), so the request may or may not exist. "

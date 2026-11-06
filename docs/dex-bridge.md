@@ -96,8 +96,9 @@ As of 29 Oct. **A request describes the machine we want after the restock: for e
 what goes in it and what it sells for.** The body is `off_cycle`, an optional `note` (up
 to 500 characters) and `lines`, one per slot.
 
-- **`off_cycle: true` asks for a midweek restock.** There is no separate visit route. The
-  spec does not mention the $25 fee.
+- **`off_cycle: true` asks for a visit on any day but Friday, and costs $25.** That covers
+  a restock, a product switch or a price change. There is no separate visit route. The spec
+  doesn't mention the fee; the team confirmed it on 29 Oct.
 - **A purchase line** (`"source": "purchase"`) has a `primary` choice and an optional
   `alternate`, bought if the primary can't be found. Each choice gives the `sku`, the
   `store` (`Walmart`, `Costco`, `Amazon` or `BJs`, spelled exactly), `packs` (1-20),
