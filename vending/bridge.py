@@ -132,10 +132,16 @@ class Bridge:
         The bridge returns at most 500 polls per request and marks the answer
         `truncated`, so the sync asks one day at a time and refuses a truncated day.
         """
-        body = json.loads(self._get("/api/v1/history", {"start": day, "end": day}))
+        payload = self._get("/api/v1/history", {"start": day, "end": day})
+        try:
+            body = json.loads(payload)
+        except ValueError:  # Not `JSONDecodeError`: bytes that aren't text raise `UnicodeDecodeError`.
+            raise BridgeError(f"history for {day} was not JSON: {payload[:200]!r}") from None
+        if not _is_listing(body):
+            raise BridgeError(f"history for {day} was not a listing of polls: {payload[:200]!r}")
         if body.get("truncated"):
             raise BridgeError(f"history for {day} was truncated at {body.get('limit')} polls")
-        return [dict(p, device_id=body.get("device_id")) for p in body.get("polls", [])]
+        return [dict(p, device_id=body.get("device_id")) for p in body["polls"]]
 
     def raw(self, session_id: str) -> bytes:
         """One stored poll, byte-for-byte."""
@@ -150,6 +156,14 @@ class Bridge:
         A GET only: submitting is `submit_desired_state`'s job, never this client's.
         """
         return json.loads(self._get(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}"))
+
+
+def _is_listing(body: object) -> bool:
+    """Whether `body` is a day's listing, with what the sync needs from every poll."""
+    return isinstance(body, dict) and isinstance(body.get("polls"), list) and all(
+        isinstance(p, dict) and isinstance(p.get("session_id"), str) and isinstance(p.get("started_at"), str)
+        for p in body["polls"]
+    )
 
 
 def _start_of_body(error: urllib.error.HTTPError) -> bytes:

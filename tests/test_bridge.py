@@ -220,6 +220,43 @@ def test_a_day_with_a_short_body_is_an_error_for_that_day_alone(bridge):
     refuses_with_plain_error(lambda: client.history(DAY), match="broken response")
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"<html>Tailscale login</html>",
+        b"",
+        b'{"polls": [',
+        b"\x80\x81 not text",
+    ],
+)
+def test_a_listing_that_is_not_json_is_an_error_for_that_day_alone(bridge, body):
+    client = bridge({HISTORY: Answer(body=body)})
+    refuses_with_plain_error(lambda: client.history(DAY), match="not JSON")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        None,
+        "polls",
+        3,
+        {},
+        {"polls": None},
+        {"polls": "s1"},
+        {"polls": {"session_id": "s1"}},
+        {"polls": ["s1"]},
+        {"polls": [{"started_at": POLL["started_at"]}]},
+        {"polls": [{"session_id": "s1"}]},
+        {"polls": [{"session_id": 1, "started_at": POLL["started_at"]}]},
+        {"polls": [POLL, {"session_id": None, "started_at": None}]},
+    ],
+)
+def test_json_that_is_not_a_listing_is_an_error_for_that_day_alone(bridge, body):
+    client = bridge({HISTORY: Answer(body=json.dumps(body).encode())})
+    refuses_with_plain_error(lambda: client.history(DAY), match="not a listing")
+
+
 # --- Faked at `urlopen`: the purchase-request read and the 429 back-off -------
 
 class FakeResponse(io.BytesIO):
