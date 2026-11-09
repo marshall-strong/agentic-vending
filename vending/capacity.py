@@ -37,7 +37,12 @@ CHART: tuple[tuple[str, Fraction, Fraction, int], ...] = (
 OVERRIDE_HINT = ("count how many fit in one column, then add it to the others in config with: "
                  "python -m vending.config set capacity_overrides '{\"SKU\": 8}' --by NAME")
 
-_SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(fl\.?\s*oz|oz|ml)\s+(bottle|can|carton)\b", re.IGNORECASE)
+# "20 oz bottle", "20-oz. bottles", "12 fl oz sleek can", "591 ml plastic bottle": an amount, a unit,
+# at most one word about the package, then the container.
+_SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*-?\s*(fl\.?\s*oz\.?|oz\.?|ounces?|ml)\s+(?:(\w+)\s+)?(bottle|can|carton)s?\b",
+                   re.IGNORECASE)
+# A metric label is the same package rounded: 355 ml is the 12 oz can, 591 ml the 20 oz bottle.
+ML_SLACK = Fraction(1, 100)
 
 
 def from_size(size: str | None) -> int | None:
@@ -45,10 +50,15 @@ def from_size(size: str | None) -> int | None:
     match = _SIZE.match(size or "")
     if not match:
         return None
-    amount, unit, container = match.groups()
-    oz = Fraction(amount) / ML_PER_OZ if unit.lower() == "ml" else Fraction(amount)
+    amount, unit, word, container = match.groups()
+    metric = unit.lower() == "ml"
+    oz = Fraction(amount) / ML_PER_OZ if metric else Fraction(amount)
+    slack = ML_SLACK if metric else 0
+    # The chart's 20 oz and 14 oz bottles are PET; a glass one may not fit as many.
+    if word and word.lower() == "glass" and container.lower() == "bottle" and oz != 16:
+        return None
     for kind, low, high, units in CHART:
-        if container.lower() == kind and low <= oz <= high:
+        if container.lower() == kind and low * (1 - slack) <= oz <= high * (1 + slack):
             return units
     return None
 

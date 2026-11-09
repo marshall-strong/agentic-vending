@@ -475,6 +475,25 @@ class Refusals(unittest.TestCase):
         self.assertEqual(codes(p), ["unknown_capacity"])
         self.assertIn("capacity_overrides", p.refusals[0].message)
 
+    def test_a_count_for_a_sku_not_in_the_catalog_is_named(self):
+        config = Config(capacity_overrides={MTDEW.lower(): 8}, timezone=EDT)
+        p = plan_restock(current(), desired(restock_15()), config, TUESDAY)
+        self.assertTrue(any(MTDEW.lower() in w and "ignored" in w for w in p.warnings), p.warnings)
+
+    def test_a_package_off_the_chart_needs_no_count_when_nothing_is_loaded(self):
+        # Slot 15 holds 4 Mountain Dew; nobody has counted how many fit.
+        catalog = (CatalogProduct(MTDEW, size="16 oz can"),) + CATALOG[1:]
+        state = replace(current(), catalog=catalog)
+        config = Config(timezone=EDT)
+        p = plan_restock(state, desired(restock_15(fill_to=4)), config, TUESDAY)
+        self.assertEqual(codes(p), ["nothing_to_load"])
+        # A new price alone is refused for what it is, not for the missing count.
+        p = plan_restock(state, desired(restock_15(price="2.75", fill_to=4)), config, TUESDAY)
+        self.assertEqual(codes(p), ["price_only_unsupported"])
+        for fill_to in (None, 5):
+            p = plan_restock(state, desired(restock_15(price="2.75", fill_to=fill_to)), config, TUESDAY)
+            self.assertEqual(codes(p), ["unknown_capacity"])
+
     def test_price_off_step(self):
         self.assertEqual(codes(plan(restock_15(price="2.53"))), ["price_off_step"])
 

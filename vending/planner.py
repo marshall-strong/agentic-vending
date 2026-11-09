@@ -485,6 +485,10 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     active = {p.product for p in current.catalog if p.active}
     capacities = {p.product: capacity.for_product(p.product, p.size, config.capacity_overrides)
                   for p in current.catalog}
+    for sku in sorted(set(config.capacity_overrides) - capacities.keys()):
+        # Most likely misspelt: the lookup is exact, so the count is never used.
+        warnings.append(f"capacity_overrides counts {sku}, which isn't in the catalog (SKUs match exactly, "
+                        "case included), so that count is ignored")
     sources = _Sources(desired.sourcing, current.sourcing_table, config, refusals)
 
     # 2. Classify each slot and work out how many units it needs.
@@ -707,11 +711,15 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
     fill_to = target.fill_to
     if target.product in active:
         most = capacities.get(target.product)
+        already = on_hand if target.product == state.product else 0
         if most is None:
-            usable = False
-            refusals.append(Refusal("unknown_capacity", (
-                f"nobody knows how many {target.product} fit in a column: its size isn't on the "
-                f"loading chart; {capacity.OVERRIDE_HINT}"), slot))
+            # A slot that loads nothing doesn't need to know what fits, so it gets only the
+            # refusals that are really about it (`price_only_unsupported`, say).
+            if fill_to is None or fill_to > already:
+                usable = False
+                refusals.append(Refusal("unknown_capacity", (
+                    f"nobody knows how many {target.product} fit in a column: its size isn't on the "
+                    f"loading chart; {capacity.OVERRIDE_HINT}"), slot))
         else:
             fill_to = most if fill_to is None else fill_to
             if not 0 <= fill_to <= most:

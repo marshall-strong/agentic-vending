@@ -186,7 +186,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{args.key} = {json.dumps(value)}")
             return 0
         for key, value, at, by in conn.execute("select key, value, updated_at, updated_by from config order by key"):
-            print(f"{key} = {json.dumps(value)}  ({at:%Y-%m-%d %H:%M}, {by})")
+            unused = "" if key in KNOWN or key == "halted" else "  [no longer used]"
+            print(f"{key} = {json.dumps(value)}  ({at:%Y-%m-%d %H:%M}, {by}){unused}")
     return 0
 
 

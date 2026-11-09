@@ -315,9 +315,13 @@ def test_config_cli_sets_and_shows(schema_url, monkeypatch, capsys):
     assert config.main(["set", "note", "free text", "--by", "marshall"]) == 1       # unknown key
     assert "unknown setting 'note'" in capsys.readouterr().err
     assert config.main(["set", "halted", "false", "--by", "marshall"]) == 1
+    with open_in(*schema_url) as conn:      # left over from before the loading chart
+        conn.execute("insert into config (key, value, updated_by) values ('slot_capacity', '10', 'marshall')")
     assert config.main(["show"]) == 0
     out = capsys.readouterr().out
     assert 'capacity_overrides = {"COKE20": 8}' in out and "midweek_fee_cents = 3000" in out and "note" not in out and "halted = true" in out
+    [old] = [line for line in out.splitlines() if line.startswith("slot_capacity")]
+    assert old.endswith("[no longer used]") and "[no longer used]" not in out.replace(old, "")
     with open_in(*schema_url) as conn:
         assert planning.planner_config(conn).capacity_overrides == {"COKE20": 8}
         assert conn.execute("select count(*) from action_log where tool = 'config.set'").fetchone() == (2,)

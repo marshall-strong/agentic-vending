@@ -15,6 +15,14 @@ from vending.capacity import for_product, from_size
     ("250 ml can", 11),
     ("240ml can", 11),
     ("8.4 oz can", 11),         # Red Bull's 250 ml, as the US label puts it
+    ("20-oz bottles", 7),
+    ("20 oz. bottle", 7),
+    ("20 ounce bottle", 7),
+    ("20 oz plastic bottle", 7),
+    ("12 oz sleek can", 8),
+    ("355 ml can", 8),          # the 12 oz can, labelled in metric
+    ("591 ml bottle", 7),       # the 20 oz bottle
+    ("16 oz glass bottle", 7),  # on the chart as glass
 ])
 def test_sizes_on_the_chart(size, units):
     assert from_size(size) == units
@@ -26,6 +34,9 @@ def test_sizes_on_the_chart(size, units):
     "7.5 oz can",               # Pepsi mini can
     "11 oz carton",             # Premier Protein
     "20 oz",                    # no container
+    "20 oz glass bottle",       # the chart's 20 oz is PET
+    "14 oz glass bottle",
+    "500 ml bottle",            # 16.9 oz
     "",
     None,
 ])
