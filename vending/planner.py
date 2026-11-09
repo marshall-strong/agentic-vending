@@ -58,10 +58,11 @@ from vending.pricing import (
     slot_floor_cents,
     to_cents,
 )
+from vending.slots import SLOTS
 
-# Columns 5-8 of every row on vmc1 (GET /api/v1/slots).
-OUR_SLOTS: tuple[str, ...] = tuple(
-    f"{row}{col}" for row in range(1, 6) for col in range(5, 9))
+# Our 20 selections, from `vending.slots`, the one place that lists them. Kept
+# under this name because `Config.slots` and the tests use it.
+OUR_SLOTS: tuple[str, ...] = SLOTS
 
 # Spelled exactly as the API wants them.
 AMAZON = "Amazon"
