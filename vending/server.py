@@ -39,7 +39,7 @@ from pydantic_core import to_jsonable_python
 from vending import db
 from vending.bridge import Bridge
 from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, catalog_request, machine_state,
-                           pnl, sales_history, stubs)
+                           pnl, preview, sales_history, stubs)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -174,10 +174,14 @@ async def get_account_balance() -> account_balance.AccountBalance:
     return await _read("get_account_balance", account_balance.get_account_balance)
 
 
-@_tool(built=False)
-async def preview_desired_state(desired: DesiredState) -> Reply:
-    """Plan a desired state for all 20 slots without submitting: lines, cost, floors and every refusal."""
-    return await _read("preview_desired_state", stubs.preview_desired_state, desired=desired)
+@_tool(built=True)
+async def preview_desired_state(desired: DesiredState) -> preview.PlanReply:
+    """Plan a desired state for all 20 slots without submitting: the request lines, worker directive, cost and balance left, each slot's price floor, warnings, and every refusal at once."""
+    return await _read("preview_desired_state", _preview, desired=desired)
+
+
+def _preview(conn: psycopg.Connection, desired: DesiredState) -> preview.PlanReply:
+    return preview.preview_desired_state(conn, desired, bridge())
 
 
 @_tool(built=False)

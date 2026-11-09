@@ -12,7 +12,8 @@ machine.
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening capital plus revenue, minus receipts, midweek visit fees and token spend), the sales tax set aside, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
 | `get_pnl` | **Works.** Over any window of UTC days: revenue ex tax, cost of sales at weighted-average cost, visit fees, token spend, net, purchases, and inventory at cost in the machine and the closet. Says when some sold units or stock could not be costed. |
-| `get_catalog`, `preview_desired_state`, `get_purchase_requests` | Registered stubs: they return a "not built yet" error naming what they wait on |
+| `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, or the catalog can't be read. |
+| `get_catalog`, `get_purchase_requests` | Registered stubs: they return a "not built yet" error naming what they wait on |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state`, `set_price` | Write stubs, already behind the write gate: refused while halted, logged either way |
 
@@ -198,6 +199,28 @@ day one. Every entry is logged in `action_log` with who recorded it.
 cost of sales is known only for slots we have loaded; `cost_of_sales_complete: false` and a note
 say when some sold units could not be costed, and the same for inventory. Revenue counts every
 sale from our slots, so while no receipts are stored the reply shows revenue with no cost of sales.
+
+### `preview_desired_state`: the planner on live data
+
+`vending/planning.py` gathers what `plan_restock` needs and `vending/tools/preview.py` turns the
+plan into the reply. Slots come from the receipts (`vending.stock`: product, units, unit cost) and
+the latest good poll (price); the closet from the receipts; pending requests from
+`purchase_requests`; the catalog live from the bridge (`GET /api/v1/products`, until the catalog
+sync lands and it can come from our table); the spendable balance from the ledger; and the
+planner's settings from `config`. **`slot_capacity` has no default**, because nobody has measured
+a rail, so a person sets it once:
+
+```
+python -m vending.config set slot_capacity 10 --by marshall
+python -m vending.config show
+```
+
+The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` (8) and
+`midweek_fee_cents` (2500). Until `slot_capacity` is set and the ledger is open, the tool answers
+`success: false` with the command to run. A refused plan comes back with every refusal and
+everything that could still be worked out, so the agent fixes the whole plan in one turn. There is
+no sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
+purchase without it is refused `no_sourcing`.
 
 ## Adding a tool's logic
 
