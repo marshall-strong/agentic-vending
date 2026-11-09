@@ -1400,7 +1400,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS) -> str:
               f'{_closet_html(snap["stock"])}</section>'
             + "</div>"
             + '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code>'
-              '<br>No balance or profit shown until the ledger is available.</footer>')
+              '<br>No balance or profit shown yet: the ledger (#35) has landed, and its panel is the next step.</footer>')
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<noscript><meta http-equiv="refresh" content="{int(refresh)}"></noscript>'

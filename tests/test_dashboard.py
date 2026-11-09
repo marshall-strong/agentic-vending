@@ -512,7 +512,7 @@ def test_now_and_next_friday(conn, page_conn, even_columns):
     assert '<span class="chg bad">' in page and "pulled" in page
     assert "Stock is estimated from receipts and polls, not a sensor." in page
     assert "A plan is a proposal, not a restock receipt." in page
-    assert "No balance or profit shown until the ledger is available." in page
+    assert "No balance or profit shown yet: the ledger (#35) has landed, and its panel is the next step." in page
     assert f"3 of 20 slots changed</b> since run #{first}" in page
     # The changed-only toggle: hidden until JS shows it, and the grid shows every slot without it.
     assert '<label class="only" hidden><input type="checkbox" id="changed-only">' in page

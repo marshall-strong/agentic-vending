@@ -10,7 +10,11 @@ machine.
 | --- | --- |
 | `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
-| `get_catalog`, `get_account_balance`, `preview_desired_state`, `get_purchase_requests`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
+| `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
+| `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. |
+| `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, or the catalog can't be read. |
+| `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
+| `get_catalog` | **Works, version 1.** The single-item products the bridge lists (sku, name, line, flavor, size), searchable by text, with when the catalog was last synced. Says so when that was over 36 hours ago. Our last unit cost, sourcing rows and pending catalog requests are not in it yet. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state`, `set_price` | Write stubs, already behind the write gate: refused while halted, logged either way |
 
@@ -83,7 +87,7 @@ It starts **on**. Every write tool refuses with `halted` until a person turns it
 `config` row is missing, it counts as on. The switch never migrates, so it can't change a shared
 database's schema: on a database with no `config` table, `status` and `on` report halted, `off`
 fails, and each names `python -m vending.db migrate`. Every flip is logged with the `--by` name, which is
-required because everyone on the shared VM is the same OS user. If a write is in flight, the
+required because every process in the shared Container App runs as the same user. If a write is in flight, the
 command prints "waiting for an in-flight write to finish..." and goes through when it ends. The harder stop needs nothing
 from the database: stop the server process, or remove it from the agent's MCP config.
 
@@ -160,6 +164,91 @@ Check the bridge's Swagger page (`GET /api/v1/product-requests/{id}`) first, and
 instructors before using `--not-filed`, because a resend of a request that was filed would file it
 twice. Each change is logged in `action_log` with the `--by` name. Nothing updates `pending` rows
 yet. A later sync can read `GET /api/v1/product-requests/{id}`.
+
+### `get_account_balance` and `get_pnl`: the ledger
+
+Both read `vending/ledger.py`. **The balance is computed, never stored:**
+
+```
+opening capital + later capital + takings - receipts - midweek visit fees - token spend
+- tax remitted +/- adjustments
+```
+
+Takings are the rise in the polls' lifetime sales counters for our 20 slots since the opening
+entry, tax included; `vending/counters.py` decides what a reading that goes down means (one low
+poll between good ones is a misread, two in a row a counter that restarted). Receipts are
+`purchase_lines.total_paid` on fulfilled requests, timed by each line's `resolved_at`, the same
+clock as the stock they delivered. Every fulfilled off-cycle request costs the midweek visit fee
+stored on it when it was submitted (`purchase_requests.visit_fee_cents`), or `config`
+`midweek_fee_cents` ($25.00 by default) for requests without one, so a later change to the config
+fee never rewrites past visits. The sales tax inside the takings (takings x 8/108, per week,
+rounded half up) is set aside; what is still **owed** is the set-aside less what has been
+remitted, and the **spendable** balance is the balance minus that. It is what the planner's
+balance gate checks against. Only what no other table records lives in `ledger_entries`
+(migration 007): the one opening entry, later capital, each model call's cost, tax remittances
+and adjustments. `python -m vending.ledger` is the only writer, and like the halt switch it never
+migrates:
+
+```
+python -m vending.ledger open --amount 600.00 --by marshall --at 2027-01-04T13:00:00Z
+python -m vending.ledger capital --amount 100.00 --detail "top-up from David" --by marshall
+python -m vending.ledger tokens --cost 0.0421 --model claude-sonnet-5-5 --in 8120 --out 640 --reference msg_01
+python -m vending.ledger remit --amount 8.00 --by marshall --reference "email 3 Dec"
+python -m vending.ledger adjust --amount -3.50 --detail "bottle deposit, per David" --by marshall
+python -m vending.ledger show
+python -m vending.ledger entries
+```
+
+The kinds differ in what they mean for the P&L. **Capital** (a top-up) and a **remittance** (tax
+handed over) move money without being profit or loss, so `get_pnl` shows them but leaves them out
+of net. An **adjustment** is a correction to the books (a bottle deposit, a refund), so it is in
+net. An entry dated before the opening is accepted but is outside the balance; the CLI warns and
+`get_account_balance` says so in a note.
+
+Until `open` has been run, `get_account_balance` fails and names the command, so the agent can't
+plan against a balance nobody has set. The harness records every model call with
+`ledger.record_tokens(conn, cost_usd, model, input_tokens, output_tokens, reference)`, or the
+`tokens` command above; token spend is a dollar not spent on stock, so it is in the balance from
+day one. Every entry is logged in `action_log` with who recorded it.
+
+`get_pnl` takes its window as Eastern calendar days, inclusive, so a Friday evening sale lands in
+Friday. `units_sold` counts every rise in our 20 slots' unit counters; cost of sales covers the
+units the receipts can cost (weighted average, `vending.stock`), and `units_costed`,
+`cost_of_sales_complete: false` and a note say how many could not be (sold before we first loaded
+the slot, or past what we loaded). Cost of sales is never "unknown": a quiet week with a $25 visit
+and 40 cents of tokens nets -25.40. **Shrinkage** is the cost of units lost without a sale: later
+losses, units still counted in a slot when its product changed, and a purchase line that lost
+every unit. It is its own line, taken out of net, so a lost unit's cost never silently disappears.
+
+### `preview_desired_state`: the planner on live data
+
+`vending/planning.py` gathers what `plan_restock` needs and `vending/tools/preview.py` turns the
+plan into the reply. Slots come from the receipts (`vending.stock`: product, units, unit cost) and
+the latest good poll (price); the closet from the receipts; pending requests from
+`purchase_requests`; the catalog live from the bridge (`GET /api/v1/products`, until the catalog
+sync lands and it can come from our table); the spendable balance from the ledger; and the
+planner's settings from `config`. **`slot_capacity` has no default**, because nobody has measured
+a rail, so a person sets it once:
+
+```
+python -m vending.config set slot_capacity 10 --by marshall
+python -m vending.config show
+```
+
+The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` (8) and
+`midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for
+type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
+refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
+is refused rather than saved silently. Until `slot_capacity` is set and the ledger is open, the
+tool answers `success: false` with the command to run; so does an empty or reshaped catalog reply
+(it would otherwise read as "every product unapproved"), and the halt switch is checked before the
+bridge is read, so halted with the bridge down says to stop, not to check Tailscale. A poll older
+than 3 hours adds a `STALE` note, since stock on the rails is overstated by whatever sold since.
+A refused plan comes back with every refusal and everything that could still be worked out, so the
+agent fixes the whole plan in one turn. In `cost`, `spendable` and `spendable_left_at_max` are the
+ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. There is no
+sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
+purchase without it is refused `no_sourcing`.
 
 ## Adding a tool's logic
 

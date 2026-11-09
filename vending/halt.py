@@ -4,8 +4,8 @@
     python -m vending.halt on --by kevin     # every write tool refuses from now on
     python -m vending.halt off --by kevin
 
-`--by` is required to flip it: on a shared VM everyone is the same OS user, so
-the name is what makes the log say who did it.
+`--by` is required to flip it: in the shared Container App every process runs as
+the same user, so the name is what makes the log say who did it.
 
 A second, harder stop needs nothing at all: stop the MCP server process, or
 remove it from the agent's MCP config.

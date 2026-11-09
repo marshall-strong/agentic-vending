@@ -60,7 +60,7 @@ The page shows only what something recorded, and says so when nothing did.
   what a worker loaded.
 - **Unknown stays unknown.** A selection with no receipt shows `?` and "unknown", never a guess
   from the plan. A price with no poll shows a dash. Without a plan, Next Friday says "No plan yet".
-- **No balance or profit shown until the ledger is available.**
+- **No balance or profit shown yet: the ledger (#35) has landed, and its panel is the next step.**
 
 **Not shown yet:** the balance and profit and loss. They arrive with the ledger (#35); a tile is a
 small addition once it merges. "Spent so far" is only what the receipts and run costs record.

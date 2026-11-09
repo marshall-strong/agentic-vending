@@ -38,8 +38,8 @@ from pydantic_core import to_jsonable_python
 
 from vending import db
 from vending.bridge import Bridge
-from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, catalog_request, machine_state, sales_history,
-                           stubs)
+from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, catalog, catalog_request,
+                           machine_state, pnl, preview, purchase_requests, sales_history, stubs)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -162,22 +162,26 @@ async def get_sales_history(start: datetime, end: datetime, slots: list[str] | N
     return await _read("get_sales_history", sales_history.get_sales_history, start=start, end=end, slots=slots)
 
 
-@_tool(built=False)
-async def get_catalog(search: str | None = None) -> Reply:
-    """Approved single-item products, our last unit cost and sourcing for each. Optional text search."""
-    return await _read("get_catalog", stubs.get_catalog, search=search)
+@_tool(built=True)
+async def get_catalog(search: str | None = None) -> catalog.Catalog:
+    """Approved single-item products (sku, name, line, flavor, size) and when the catalog was last synced. Optional text search: every word must appear in the name, line, flavor or size. No unit cost or sourcing yet."""
+    return await _read("get_catalog", catalog.get_catalog, search=search)
 
 
-@_tool(built=False)
-async def get_account_balance() -> Reply:
-    """Balance from the ledger, sales tax set aside, and the spendable balance."""
-    return await _read("get_account_balance", stubs.get_account_balance)
+@_tool(built=True)
+async def get_account_balance() -> account_balance.AccountBalance:
+    """Balance from the ledger: capital plus revenue, minus receipts, visit fees, token spend and tax remitted; the sales tax still owed; and the spendable balance after it."""
+    return await _read("get_account_balance", account_balance.get_account_balance)
 
 
-@_tool(built=False)
-async def preview_desired_state(desired: DesiredState) -> Reply:
-    """Plan a desired state for all 20 slots without submitting: lines, cost, floors and every refusal."""
-    return await _read("preview_desired_state", stubs.preview_desired_state, desired=desired)
+@_tool(built=True)
+async def preview_desired_state(desired: DesiredState) -> preview.PlanReply:
+    """Plan a desired state for all 20 slots without submitting: the request lines, worker directive, cost and balance left, each slot's price floor, warnings, and every refusal at once."""
+    return await _read("preview_desired_state", _preview, desired=desired)
+
+
+def _preview(conn: psycopg.Connection, desired: DesiredState) -> preview.PlanReply:
+    return preview.preview_desired_state(conn, desired, bridge())
 
 
 @_tool(built=False)
@@ -186,10 +190,10 @@ async def submit_desired_state(desired: DesiredState) -> WriteReply:
     return await _write("submit_desired_state", {"desired": desired}, stubs.submit_desired_state(desired))
 
 
-@_tool(built=False)
-async def get_purchase_requests(pending_only: bool = False) -> Reply:
-    """Our purchase requests: status, decision note, the plan sent, and per-line receipts."""
-    return await _read("get_purchase_requests", stubs.get_purchase_requests, pending_only=pending_only)
+@_tool(built=True)
+async def get_purchase_requests(pending_only: bool = False) -> purchase_requests.PurchaseRequests:
+    """Our purchase requests, newest first: status, decision note, the plan sent, and per-line receipts with losses."""
+    return await _read("get_purchase_requests", purchase_requests.get_purchase_requests, pending_only=pending_only)
 
 
 @_tool(built=False)
@@ -198,10 +202,10 @@ async def set_price(slot: str, sale_price: str) -> WriteReply:
     return await _write("set_price", {"slot": slot, "sale_price": sale_price}, stubs.set_price(slot, sale_price))
 
 
-@_tool(built=False)
-async def get_pnl(start: date | None = None, end: date | None = None) -> Reply:
-    """Profit and loss: ex-tax revenue, cost of goods, visit fees, token spend, inventory at cost."""
-    return await _read("get_pnl", stubs.get_pnl, start=start, end=end)
+@_tool(built=True)
+async def get_pnl(start: date | None = None, end: date | None = None) -> pnl.Pnl:
+    """Profit and loss over inclusive Eastern calendar days (default: opening to today): revenue ex tax, cost of sales, shrinkage, fees, token spend, net, purchases, inventory at cost."""
+    return await _read("get_pnl", pnl.get_pnl, start=start, end=end)
 
 
 @_tool(built=True)
