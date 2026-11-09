@@ -169,7 +169,7 @@ Azure database; locally it runs in Docker. Set `VENDING_DB_PASSWORD` (any passwo
 ```
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate
 python -m vending.sync_history --since 2026-08-28

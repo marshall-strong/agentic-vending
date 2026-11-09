@@ -1,6 +1,3 @@
-# Runtime
+# Runtime: what the container installs
 psycopg[binary]==3.2.*
 mcp==1.*
-
-# Development
-pytest==8.*
