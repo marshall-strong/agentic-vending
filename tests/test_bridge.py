@@ -194,6 +194,19 @@ def test_a_day_whose_connection_keeps_dropping_stops_the_run(bridge):
         client.history(DAY)
 
 
+def test_a_poll_whose_connection_keeps_dropping_is_an_error_for_that_poll_alone(bridge):
+    client = bridge({RAW: DROP, **HEALTHY})
+    refuses_with_plain_error(lambda: client.raw("s1"), match="/health answers")
+    assert client.server.requests == [RAW] * (RETRIES + 1) + ["/health"]
+
+
+@pytest.mark.parametrize("health", [DROP, Answer(status=503), Answer(status=401)])
+def test_a_poll_that_drops_with_no_healthy_bridge_is_an_outage(bridge, health):
+    client = bridge({RAW: DROP, "/health": health})
+    with pytest.raises(BridgeUnreachable, match="Tailscale"):
+        client.raw("s1")
+
+
 def test_nothing_listening_is_an_outage(sleeps, monkeypatch):
     # Windows takes about two seconds to give up on each refused connection.
     monkeypatch.setattr("vending.bridge.RETRIES", 0)

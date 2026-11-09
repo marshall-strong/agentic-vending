@@ -2,7 +2,14 @@
 
 `scripts/bridge.py` is the command-line tool for people; this is the library the
 sync jobs use. It never polls the machine live and cannot submit a purchase
-request: it only reads stored history and our purchase requests.
+request: it only reads stored history and our purchase requests, and `/health`
+to tell a bad poll from an outage.
+
+Read failures are retried, then end in one of two ways. `BridgeUnreachable`
+means every later call would fail too, so the caller should stop: the bridge is
+down or rejected our key. Plain `BridgeError` means only this day or poll
+failed: an error status, a response cut off or unreadable, or a connection that
+keeps failing on one poll while `/health` still answers.
 """
 
 from __future__ import annotations
@@ -38,6 +45,14 @@ class BridgeNoAnswer(BridgeError):
 
 class BridgeUnreachable(BridgeError):
     """No network or a rejected key: every later call would fail the same way."""
+
+
+class ConnectionFailed(BridgeUnreachable):
+    """Every attempt at one request failed to connect or lost the connection.
+
+    The bridge is probably down, but `Bridge.raw` checks, because one poll can
+    drop every time on a bridge that is otherwise fine.
+    """
 
 
 class BridgeRateLimited(BridgeError):
@@ -120,11 +135,19 @@ class Bridge:
                 # connection, so check `OSError`.
                 if not isinstance(error, OSError):
                     raise BridgeError(f"broken response from {path}: {error!r}") from None
-                raise BridgeUnreachable(
+                raise ConnectionFailed(
                     f"Could not reach {self.base_url} ({getattr(error, 'reason', error)}). "
                     "Is Tailscale connected?"
                 ) from None
         raise AssertionError("unreachable")
+
+    def _is_up(self) -> bool:
+        """Whether `/health` answers. It needs no key and doesn't read the machine."""
+        try:
+            self._get("/health")
+        except BridgeError:
+            return False
+        return True
 
     def history(self, day: str) -> list[dict]:
         """Stored polls for one UTC day (YYYY-MM-DD), oldest first.
@@ -144,8 +167,17 @@ class Bridge:
         return [dict(p, device_id=body.get("device_id")) for p in body["polls"]]
 
     def raw(self, session_id: str) -> bytes:
-        """One stored poll, byte-for-byte."""
-        return self._get(f"/api/v1/history/{urllib.parse.quote(session_id)}/raw")
+        """One stored poll, byte-for-byte.
+
+        If the connection keeps failing but `/health` answers, the fault is this
+        poll, so this raises `BridgeError` and the sync can move on to the next one.
+        """
+        try:
+            return self._get(f"/api/v1/history/{urllib.parse.quote(session_id)}/raw")
+        except ConnectionFailed:
+            if self._is_up():
+                raise BridgeError("the connection failed on every attempt, though /health answers") from None
+            raise
 
     def purchase_request(self, request_id: str) -> dict:
         """One of our purchase requests, as the bridge sees it now.

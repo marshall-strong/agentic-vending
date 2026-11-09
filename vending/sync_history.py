@@ -11,9 +11,10 @@ don't have are fetched. The last synced day and the day before it are always
 re-checked, because polls can land on them after the previous run.
 
 A day the bridge can't list, or a poll it can't return, is logged and counted
-and the run carries on, so one bad poll can't block everything after it. Re-run
-with `--since` to retry them. Only an unreachable bridge or a rejected key stops
-the run.
+and the run carries on, so one bad poll can't block everything after it. That
+includes a poll whose connection keeps dropping, as long as `/health` still
+answers. Re-run with `--since` to retry them. Only an unreachable bridge or a
+rejected key stops the run.
 """
 
 from __future__ import annotations

@@ -3,6 +3,7 @@ database, and is skipped when psycopg isn't installed, DATABASE_URL isn't set
 or the database is down."""
 
 import threading
+import time
 import uuid
 from datetime import date
 
@@ -11,11 +12,12 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 
 # These import psycopg too, so they come after the skip.
+from tests.test_bridge import DROP, HEALTHY, HISTORY, Answer, listing, serve  # noqa: E402
 from tests.test_evadts import GARBLED, SAMPLE, build  # noqa: E402
 from tests.conftest import CONNECT_TIMEOUT  # noqa: E402
 from vending import db  # noqa: E402
-from vending.bridge import BridgeError, BridgeUnreachable  # noqa: E402
-from vending.sync_history import HISTORY_START, default_since, store, sync  # noqa: E402
+from vending.bridge import Bridge, BridgeError, BridgeUnreachable  # noqa: E402
+from vending.sync_history import HISTORY_START, default_since, main, store, sync  # noqa: E402
 
 
 @pytest.fixture
@@ -93,6 +95,63 @@ def test_unreachable_bridge_stops_the_sync(conn):
     bridge = FakeBridge(days={"2026-10-01": BridgeUnreachable("Is Tailscale connected?")}, raws={})
     with pytest.raises(BridgeUnreachable):
         sync(conn, bridge, date(2026, 10, 1), date(2026, 10, 2), log=lambda _: None)
+
+
+def poll_routes(session_ids, **answers):
+    """Routes for a one-day listing of `session_ids`, each serving a good poll
+    unless `answers` says otherwise."""
+    polls = [{"session_id": s, "started_at": f"2026-10-01T{hour:02}:00:00+00:00"} for hour, s in enumerate(session_ids)]
+    raws = {f"{HISTORY}/{s}/raw": answers.get(s, Answer(body=build(SAMPLE))) for s in session_ids}
+    return {HISTORY: listing(*polls), **HEALTHY, **raws}
+
+
+@pytest.fixture
+def no_waits(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+
+@pytest.fixture
+def run_main(conn, database_url, no_waits, monkeypatch):
+    """`run_main(routes, *args)` is the real `main` in this test's schema, against a
+    real client and a fake bridge serving `routes`. Returns its exit code."""
+    schema = conn.execute("select current_schema()").fetchone()[0]
+    monkeypatch.setattr(db, "connect", lambda: psycopg.connect(
+        database_url, autocommit=True, connect_timeout=CONNECT_TIMEOUT, options=f"-c search_path={schema}"))
+
+    def run(routes, *args):
+        with serve(routes) as server:
+            monkeypatch.setenv("DEX_BASE_URL", server.url)
+            monkeypatch.setenv("DEX_API_KEY", "made-up-key")
+            return main([*args, "--until", "2026-10-01"])
+
+    return run
+
+
+def test_a_poll_whose_connection_always_drops_does_not_stall_every_run(conn, no_waits):
+    day = date(2026, 10, 1)
+    with serve(poll_routes(["before", "drops", "after"], drops=DROP)) as server:
+        bridge = Bridge(base_url=server.url, api_key="made-up-key")
+        first = sync(conn, bridge, day, day, log=lambda _: None)
+        second = sync(conn, bridge, day, day, log=lambda _: None)
+    assert (first.new, first.failed_polls) == (2, 1)
+    assert (second.new, second.failed_polls) == (0, 1)
+    assert {r[0] for r in conn.execute("select session_id from polls")} == {"before", "after"}
+
+
+def test_a_run_with_a_poll_that_always_drops_finishes_and_exits_1(conn, run_main):
+    assert run_main(poll_routes(["drops", "after"], drops=DROP), "--since", "2026-10-01") == 1
+    assert [r[0] for r in conn.execute("select session_id from polls")] == ["after"]
+
+
+def test_a_rejected_key_on_a_poll_still_stops_the_run(conn, run_main):
+    # `/health` needs no key, so it can't vouch for a rejected one.
+    assert run_main(poll_routes(["rejected", "after"], rejected=Answer(status=401)), "--since", "2026-10-01") == 3
+    assert conn.execute("select count(*) from polls").fetchone()[0] == 0
+
+
+def test_an_outage_on_a_poll_still_stops_the_run(conn, run_main):
+    assert run_main({**poll_routes(["drops", "after"], drops=DROP), "/health": DROP}, "--since", "2026-10-01") == 3
+    assert conn.execute("select count(*) from polls").fetchone()[0] == 0
 
 
 def test_garbled_poll_is_stored_not_raised(conn):
