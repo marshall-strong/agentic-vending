@@ -123,7 +123,7 @@ those hours. Keep one live read only as a fallback, if we find a real need for i
 |---|---|---|---|---|
 | A. Perception and inventory | `get_machine_state` | R | Per slot: current price, units sold since the last load, stock on hand (= loaded − sold) | `search_equipment` |
 | | `get_sales_history` | R | Units and ex-tax revenue per slot over a window | `get_rental_history` |
-| B. Pricing | `set_price` | W | Queues a price change for the **next service visit** (prices are physical tags the worker changes). **Gated on our own floor and ceiling** | `update_customer` |
+| B. Pricing | ~~`set_price`~~ | W | **Dropped (9 Nov).** Prices change only at a visit, from the sale price on each line of `submit_desired_state`. **Gated on our own floor and ceiling** | `update_customer` |
 | C. Purchasing and restocking | `get_account_balance` | R | From our ledger, never a stored figure | `get_overdue_rentals` |
 | | `preview_purchase_order` | R | Prices a PO without submitting it | `estimate_rental_cost` |
 | | `submit_purchase_order` | W | Item, link, quantity, **slot, sale price, 1–2 alternates**. Gated on balance, halt, Thursday-midnight cutoff, and the product existing in the shared product table. Returns a PO ID | `create_rental` (the gate) |

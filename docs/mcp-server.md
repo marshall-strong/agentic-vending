@@ -13,7 +13,8 @@ machine.
 | `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
 | `get_catalog`, `get_account_balance`, `preview_desired_state`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
-| `submit_desired_state`, `set_price` | Write stubs, already behind the write gate: refused while halted, logged either way |
+| `submit_desired_state` | Write stub, already behind the write gate: refused while halted, logged either way |
+| `set_price` | **Dropped.** Prices change only at a worker visit (free Friday, $25 midweek), through `submit_desired_state`. The stub stays so a call gets that answer. |
 
 ## Run it
 

@@ -42,6 +42,6 @@ def submit_desired_state(desired: DesiredState) -> Action:
 
 def set_price(slot: str, sale_price: str) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
-        raise NotBuilt("set_price", "no price-change route; waiting on the Cantaloupe check")
+        raise NotBuilt("set_price", "dropped: there are no remote price changes. Put the new price on the slot in submit_desired_state; the worker changes it at the next visit (free Friday, $25 midweek)")
     return action
 
