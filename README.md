@@ -70,6 +70,7 @@ from day one.
 | [`docs/dex-api-quickstart.md`](docs/dex-api-quickstart.md) | **New to the API?** From Tailscale and a key to your first calls, plus troubleshooting |
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
+| [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |
 
 ## Getting set up
 
