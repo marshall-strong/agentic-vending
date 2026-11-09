@@ -97,10 +97,10 @@ def test_a_refused_plan_sends_nothing_and_saves_nothing(db, fake):  # noqa: F811
 
 
 def test_not_ready_is_a_failure_not_a_refusal(db, fake):  # noqa: F811
-    ready(db, capacity=20)                                 # no ledger entry... but ready opens it; drop capacity instead
-    db.execute("delete from config where key = 'slot_capacity'")
+    ready(db, capacity=20)
+    fake.catalog_status = 503
     reply = submit()
-    assert not reply["success"] and "Can't submit yet" in reply["message"] and "slot_capacity" in reply["message"]
+    assert not reply["success"] and "Can't submit yet" in reply["message"] and "couldn't read the catalog" in reply["message"]
     assert fake.posts == []
     assert db.execute("select outcome from action_log where tool = 'submit_desired_state'").fetchall() == [("failed",)]
 

@@ -18,7 +18,8 @@ class DesiredSlot(BaseModel):
     keep: bool = False
     product: str | None = None
     sale_price: str | None = Field(None, description='Shelf price incl. tax, e.g. "2.50"')
-    fill_to: int | None = Field(None, ge=0, description="Units on the rail after the visit; omit to fill to capacity")
+    fill_to: int | None = Field(None, ge=0, description="Units on the rail after the visit; omit to fill the column. "
+                                "A column holds 7 to 11 depending on the package (20 oz bottle 7, 12 oz can 8)")
 
 
 class PurchaseOption(BaseModel):

@@ -12,7 +12,7 @@ machine.
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
 | `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. |
-| `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, or the catalog can't be read. |
+| `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open or the catalog can't be read. |
 | `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
 | `get_catalog` | **Works, version 1.** The single-item products the bridge lists (sku, name, line, flavor, size), searchable by text, with when the catalog was last synced. Says so when that was over 36 hours ago. Our last unit cost, sourcing rows and pending catalog requests are not in it yet. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
@@ -228,19 +228,28 @@ plan into the reply. Slots come from the receipts (`vending.stock`: product, uni
 the latest good poll (price); the closet from the receipts; pending requests from
 `purchase_requests`; the catalog live from the bridge (`GET /api/v1/products`, until the catalog
 sync lands and it can come from our table); the spendable balance from the ledger; and the
-planner's settings from `config`. **`slot_capacity` has no default**, because nobody has measured
-a rail, so a person sets it once:
+planner's settings from `config`.
+
+**How many units fit in a column depends on the package**, not the slot: each column is a row of
+packages in front of a pusher. `vending/capacity.py` matches each product's catalog `size` against
+the machine's Package Loading chart (photographed 9 Nov): 20 oz bottle 7, 16 oz bottle 7 (the chart
+says glass 7, PET 8, and the catalog doesn't say which), 14 oz bottle 8, 12 oz can 8, 240/250 ml can
+11. A package the chart doesn't list (a 16 oz can, a 16.9 oz bottle, a carton) is refused as
+`unknown_capacity` until a person counts how many fit and records it; a count also wins over the
+chart, which calls its own figures approximate:
 
 ```
-python -m vending.config set slot_capacity 10 --by marshall
+python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 6}' --by marshall
 python -m vending.config show
 ```
+
+`set` replaces the whole object, so copy the current one from `show` and add to it.
 
 The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` (8) and
 `midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for
 type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
 refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
-is refused rather than saved silently. Until `slot_capacity` is set and the ledger is open, the
+is refused rather than saved silently. Until the ledger is open, the
 tool answers `success: false` with the command to run; so does an empty or reshaped catalog reply
 (it would otherwise read as "every product unapproved"), and the halt switch is checked before the
 bridge is read, so halted with the bridge down says to stop, not to check Tailscale. A poll older

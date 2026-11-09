@@ -10,6 +10,7 @@ tests don't need the IANA time zone database (Windows lacks it).
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 
@@ -40,12 +41,18 @@ THURSDAY_LAST_MINUTE = datetime(2026, 10, 22, 23, 59, 30, tzinfo=EDT)
 FRIDAY_MIDNIGHT = datetime(2026, 10, 23, 0, 0, tzinfo=EDT)   # past everything
 SATURDAY = datetime(2026, 10, 24, 9, 0, tzinfo=EDT)          # a new week
 
-CONFIG = Config(slot_capacity=10, timezone=EDT)
-
 MTDEW = "MTDEW-20OZ"
 COKE = "COKE-20OZ"
 PICKLE = "PICKLE-POTION-12OZ"
 SPRITE = "SPRITE-20OZ"
+
+
+def counted(units: int) -> dict[str, int]:
+    """Every test product counted at `units` a column, so the chart doesn't apply."""
+    return {p: units for p in (MTDEW, COKE, PICKLE, SPRITE)}
+
+
+CONFIG = Config(capacity_overrides=counted(10), timezone=EDT)
 
 MTDEW_URL = "https://www.amazon.com/dp/MTDEW"
 PICKLE_URL = "https://www.amazon.com/dp/PICKLE"
@@ -216,13 +223,13 @@ class SlotCases(unittest.TestCase):
 
 class Purchases(unittest.TestCase):
     def test_packs_round_up_per_option(self):
-        config = Config(slot_capacity=30, timezone=EDT)
+        config = Config(capacity_overrides=counted(30), timezone=EDT)
         ln = line(plan(restock_15(fill_to=29), config=config), "15")    # 25 short
         self.assertEqual((ln.purchase.primary.packs, ln.purchase.primary.units_to_closet), (2, 23))
         self.assertEqual((ln.purchase.alternate.packs, ln.purchase.alternate.units_to_closet), (3, 11))
 
     def test_exact_multiple_buys_no_extra_pack(self):
-        config = Config(slot_capacity=30, timezone=EDT)
+        config = Config(capacity_overrides=counted(30), timezone=EDT)
         ln = line(plan(restock_15(fill_to=28), config=config), "15")    # 24 short
         self.assertEqual((ln.purchase.primary.packs, ln.purchase.primary.units_to_closet), (1, 0))
         self.assertEqual(ln.purchase.alternate.packs, 2)
@@ -271,7 +278,7 @@ class Costs(unittest.TestCase):
 
     def test_alternate_can_be_the_worst_case(self):
         # 13 short: one 24-pack at $12.00, or two 12-packs at $7.50 = $15.00.
-        config = Config(slot_capacity=30, timezone=EDT)
+        config = Config(capacity_overrides=counted(30), timezone=EDT)
         p = plan(restock_15(fill_to=17), config=config)
         self.assertEqual(p.cost.max_cents, 1500)
         self.assertEqual(p.cost.expected_cents, 1000)
@@ -341,7 +348,7 @@ class Refusals(unittest.TestCase):
     """One test per refusal code."""
 
     def test_halted(self):
-        p = plan(restock_15(), config=Config(slot_capacity=10, timezone=EDT, halted=True))
+        p = plan(restock_15(), config=Config(capacity_overrides=counted(10), timezone=EDT, halted=True))
         self.assertEqual(codes(p), ["halted"])
         self.assertEqual(p.lines, ())
 
@@ -440,6 +447,33 @@ class Refusals(unittest.TestCase):
 
     def test_over_capacity(self):
         self.assertEqual(codes(plan(restock_15(fill_to=11))), ["over_capacity"])
+
+    def test_capacity_comes_from_the_loading_chart(self):
+        # A 20 oz bottle is 7 a column on the chart; nobody has counted Mountain Dew.
+        catalog = (CatalogProduct(MTDEW, size="20 oz bottle"),) + CATALOG[1:]
+        state = replace(current(), catalog=catalog)
+        config = Config(capacity_overrides={}, timezone=EDT)
+        ln = line(plan_restock(state, desired(DesiredSlot("15", product=MTDEW, sale_price="2.50")),
+                               config, TUESDAY), "15")
+        self.assertEqual((ln.fill_to, ln.units_to_load), (7, 3))
+        p = plan_restock(state, desired(restock_15(fill_to=8)), config, TUESDAY)
+        self.assertEqual(codes(p), ["over_capacity"])
+        self.assertIn("0-7", p.refusals[0].message)
+
+    def test_a_count_wins_over_the_chart(self):
+        catalog = (CatalogProduct(MTDEW, size="20 oz bottle"),) + CATALOG[1:]
+        state = replace(current(), catalog=catalog)
+        config = Config(capacity_overrides={MTDEW: 8}, timezone=EDT)
+        ln = line(plan_restock(state, desired(DesiredSlot("15", product=MTDEW, sale_price="2.50")),
+                               config, TUESDAY), "15")
+        self.assertEqual(ln.fill_to, 8)
+
+    def test_a_package_off_the_chart_needs_a_count(self):
+        catalog = (CatalogProduct(MTDEW, size="16 oz can"),) + CATALOG[1:]
+        state = replace(current(), catalog=catalog)
+        p = plan_restock(state, desired(restock_15(fill_to=6)), Config(timezone=EDT), TUESDAY)
+        self.assertEqual(codes(p), ["unknown_capacity"])
+        self.assertIn("capacity_overrides", p.refusals[0].message)
 
     def test_price_off_step(self):
         self.assertEqual(codes(plan(restock_15(price="2.53"))), ["price_off_step"])
@@ -611,7 +645,7 @@ class Inputs(unittest.TestCase):
 
     def test_ceiling_cannot_pass_the_api_limit(self):
         with self.assertRaises(ValueError):
-            Config(slot_capacity=10, price_ceiling_cents=1005)
+            Config(price_ceiling_cents=1005)
 
     def test_our_slots(self):
         self.assertEqual(OUR_SLOTS, ("15", "16", "17", "18", "25", "26", "27", "28", "35", "36",

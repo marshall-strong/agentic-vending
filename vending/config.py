@@ -1,7 +1,7 @@
 """The `config` table: settings the code reads at run time, starting with the halt flag.
 
     python -m vending.config show
-    python -m vending.config set slot_capacity 10 --by marshall
+    python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 8}' --by marshall
     python -m vending.config set price_ceiling_cents 600 --by marshall
 
 The halt flag fails closed: a missing row, or anything that isn't JSON
@@ -62,9 +62,21 @@ def _ceiling(value: Any) -> str | None:
     return None
 
 
+def _overrides(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return f'must be a JSON object of SKU to units, like {{"MONSTER-WHITE-16CAN": 8}}, not {json.dumps(value)}'
+    for sku, units in value.items():
+        if not sku.strip():
+            return "has a blank SKU"
+        problem = _whole(units, 1, 30, "units")
+        if problem:
+            return f"{sku} {problem}"
+    return None
+
+
 KNOWN: dict[str, Setting] = {
-    "slot_capacity": Setting("units one rail holds; no default, a person measures it",
-                             lambda v: _whole(v, 1, 100, "units")),
+    "capacity_overrides": Setting("units per column for products a person counted; replaces the whole "
+                                  "object, wins over the loading chart (default none)", _overrides),
     "price_ceiling_cents": Setting("highest sale price the planner allows (default 600)", _ceiling),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
