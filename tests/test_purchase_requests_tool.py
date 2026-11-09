@@ -13,8 +13,9 @@ from vending.tools.purchase_requests import get_purchase_requests
 NOW = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
 
 
-def row(request_id, status="pending", last_checked="2026-11-09T10:00:00+00:00"):
-    return {"request_id": request_id, "status": status, "submitted_at": "2026-11-07T14:00:00+00:00",
+def row(request_id, status="pending", last_checked="2026-11-09T10:00:00+00:00",
+        submitted_at="2026-11-07T14:00:00+00:00"):
+    return {"request_id": request_id, "status": status, "submitted_at": submitted_at,
             "off_cycle": False, "plan_hash": "abc123", "decision_note": None, "total_paid": None,
             "fulfilled_at": None, "last_checked": last_checked, "plan": {"off_cycle": False, "lines": []},
             "lines": []}
@@ -61,12 +62,13 @@ def test_pending_only_is_passed_through(rows):
 
 def test_flags_pending_requests_the_sync_has_not_read_lately(rows):
     rows += [
-        row("never", last_checked=None),
+        row("never_old", last_checked=None, submitted_at="2026-11-09T05:59:00+00:00"),
+        row("never_new", last_checked=None, submitted_at="2026-11-09T11:59:00+00:00"),
         row("old", last_checked="2026-11-09T05:59:00+00:00"),
         row("fresh", last_checked="2026-11-09T06:00:00+00:00"),
         row("done", status="fulfilled", last_checked="2026-11-01T00:00:00+00:00"),
     ]
     reply = get_purchase_requests(None, pending_only=False, now=NOW)
-    assert reply.not_checked_recently == ["never", "old"]
-    assert "in the last 6 hours: never, old" in reply.message
+    assert reply.not_checked_recently == ["never_old", "old"]
+    assert "in the last 6 hours: never_old, old" in reply.message
     assert "python -m vending.sync_requests" in reply.message

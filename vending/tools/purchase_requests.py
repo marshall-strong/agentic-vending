@@ -51,8 +51,10 @@ def get_purchase_requests(conn: psycopg.Connection, pending_only: bool,
         return PurchaseRequests(success=True, message=(
             "No pending purchase requests." if pending_only else "No purchase requests yet."))
     open_ = [r for r in rows if r.status == "pending"]
+    # A request the sync hasn't read yet counts from when it was submitted, so
+    # one submitted a minute ago isn't flagged.
     stale = [r.request_id for r in open_
-             if r.last_checked is None or now - datetime.fromisoformat(r.last_checked) > STALE_AFTER]
+             if now - datetime.fromisoformat(r.last_checked or r.submitted_at) > STALE_AFTER]
     message = f"{len(rows)} request{'s' if len(rows) != 1 else ''}, newest first; {len(open_)} pending."
     if stale:
         message += (f" Not read from the bridge in the last {STALE_AFTER.total_seconds() / 3600:g} hours: "

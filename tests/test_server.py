@@ -87,12 +87,15 @@ def test_sales_history_end_to_end(db):
 
 def test_purchase_requests_end_to_end(db):
     from vending.purchase_requests import record
-    record(db, "r1", datetime(2026, 11, 7, 14, tzinfo=timezone.utc), False, {"off_cycle": False, "lines": []}, "abc")
+    body = {"off_cycle": False, "lines": []}
+    record(db, "old", datetime(2026, 11, 7, 14, tzinfo=timezone.utc), False, body, "abc")
+    record(db, "just_sent", datetime.now(timezone.utc), False, body, "def")
     result = call("get_purchase_requests", {"pending_only": True})
     assert not result.isError
     content = result.structuredContent
-    assert (content["count"], content["pending"], content["not_checked_recently"]) == (1, 1, ["r1"])
-    assert content["data"][0]["plan_hash"] == "abc"
+    # Neither has been read by the sync; only the old one is flagged.
+    assert (content["count"], content["pending"], content["not_checked_recently"]) == (2, 2, ["old"])
+    assert [r["plan_hash"] for r in content["data"]] == ["def", "abc"]
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_purchase_requests", "done")]
 
 
