@@ -42,7 +42,7 @@ import json
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, time, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 from decimal import Decimal
 from fractions import Fraction
 from urllib.parse import urlparse
@@ -370,8 +370,9 @@ class SlotFloor:
 class Plan:
     """The planner's answer. Submittable only when `refusals` is empty.
 
-    `plan_hash` is set only then. It hashes the request body, so #6 can tell
-    the same plan submitted twice whenever it was computed.
+    `plan_hash` is set only then. It hashes the request body and the week the
+    visit falls in, so #6 can tell the same plan submitted twice in one week,
+    while the same restock asked for again next week is a new plan.
     """
     lines: tuple[Line, ...]
     directive: str
@@ -622,7 +623,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 tuple(warnings), tuple(refusals), None, desired.off_cycle)
     if refusals:
         return plan
-    body = json.dumps(plan.request(), sort_keys=True)
+    week = _week_of(now.astimezone(_tz(config.timezone)), config.week_starts)
+    body = json.dumps({"week": week.isoformat(), "request": plan.request()}, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
                 hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle)
 
@@ -897,6 +899,11 @@ def _past_cutoff(now_local: datetime, cutoff: Cutoff, week_starts: int) -> bool:
         return ((weekday - week_starts) % 7, hour, minute)
     return (position(now_local.weekday(), now_local.hour, now_local.minute)
             > position(cutoff.weekday, cutoff.at.hour, cutoff.at.minute))
+
+
+def _week_of(now_local: datetime, week_starts: int) -> date:
+    """The day this week began: the latest `week_starts` weekday on or before now."""
+    return now_local.date() - timedelta(days=(now_local.weekday() - week_starts) % 7)
 
 
 def _stores_used(slots: list[_Slot]) -> dict[str, list[str]]:

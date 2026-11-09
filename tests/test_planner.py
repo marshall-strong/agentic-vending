@@ -569,6 +569,13 @@ class PlanHash(unittest.TestCase):
         self.assertNotEqual(plan(restock_15()).plan_hash, plan(restock_15(price="2.55")).plan_hash)
         self.assertNotEqual(plan(restock_15()).plan_hash, plan(restock_15(), off_cycle=True).plan_hash)
 
+    def test_the_same_plan_next_week_is_a_new_hash(self):
+        # The week turns over on Saturday, so a restock asked for again after
+        # the Friday visit is a new request, not a duplicate of this week's.
+        this_week = plan(restock_15(), now=TUESDAY).plan_hash
+        self.assertNotEqual(this_week, plan(restock_15(), now=SATURDAY).plan_hash)
+        self.assertEqual(this_week, plan(restock_15(), now=THURSDAY_LAST_MINUTE).plan_hash)
+
 
 class Directive(unittest.TestCase):
     def test_worker_table_and_shopping_list(self):
