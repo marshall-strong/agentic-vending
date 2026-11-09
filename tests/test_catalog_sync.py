@@ -3,12 +3,15 @@
 
 from datetime import datetime, timedelta, timezone
 
-import psycopg
 import pytest
-from psycopg.types.json import Jsonb
 
-from vending.bridge import BridgeUnreachable
-from vending.sync_catalog import EmptyCatalog, sync
+psycopg = pytest.importorskip("psycopg")
+
+# These import psycopg too, so they come after the skip.
+from psycopg.types.json import Jsonb  # noqa: E402
+
+from vending.bridge import BridgeUnreachable  # noqa: E402
+from vending.sync_catalog import EmptyCatalog, sync  # noqa: E402
 
 
 COKE = {"sku": "COCA-20BOT", "name": "Coca-Cola 20 oz bottle", "line": "Coca-Cola", "flavor": None,
@@ -159,3 +162,39 @@ def test_an_unreachable_bridge_stops_the_sync_and_writes_nothing(conn):
     with pytest.raises(BridgeUnreachable):
         sync(conn, FakeBridge(BridgeUnreachable("Is Tailscale connected?")), NOW, log=quiet)
     assert catalog(conn) == [] and syncs(conn) == []
+
+
+def test_main_refuses_a_schema_missing_migrations(database_url, monkeypatch, capsys):
+    import uuid
+
+    from tests.conftest import open_in
+    from vending import db, sync_catalog
+
+    schema = f"test_{uuid.uuid4().hex[:8]}"
+    with open_in(database_url, "public") as admin:
+        admin.execute(f"create schema {schema}")
+        try:
+            monkeypatch.setattr(db, "connect", lambda: open_in(database_url, schema))
+            monkeypatch.setattr(sync_catalog, "Bridge", lambda: pytest.fail("ran on an unmigrated schema"))
+            assert sync_catalog.main([]) == 2
+            err = capsys.readouterr().err
+            assert "006_catalog.sql" in err and "python -m vending.db migrate" in err
+            # It only looked: nothing was created.
+            with open_in(database_url, schema) as conn:
+                assert conn.execute("select to_regclass('schema_migrations')").fetchone() == (None,)
+        finally:
+            admin.execute(f"drop schema {schema} cascade")
+
+
+@pytest.mark.parametrize("answer, code", [
+    ([COKE, {"name": "No SKU"}], 0),  # one bad row is logged, not a failed run
+    ([{"name": "No SKU"}], 1),        # nothing usable at all is a failed run
+])
+def test_main_fails_only_when_no_product_is_usable(schema_url, monkeypatch, capsys, answer, code):
+    from tests.conftest import open_in
+    from vending import db, sync_catalog
+
+    monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(sync_catalog, "Bridge", lambda: FakeBridge(answer))
+    assert sync_catalog.main([]) == code
+    assert "1 skipped as unusable" in capsys.readouterr().out

@@ -17,6 +17,14 @@ answer while we still hold listed products is treated as a bad answer, not as
 the catalog being emptied: nothing changes and the run fails, because one
 glitch would otherwise delist everything the agent can order. An unreachable
 bridge or a rejected key stops the run, as in `sync_history`.
+
+Skipped products are logged but don't fail the run: the worker runs this on a
+schedule, and one malformed row from the bridge shouldn't mark every round as
+failed. The run fails only when the bridge listed products and none was usable.
+
+It never migrates. On a database that is behind it refuses to run (exit 2) and
+names `python -m vending.db migrate`, like the other syncs, so a run started
+from a branch can't change the shared database's schema.
 """
 
 from __future__ import annotations
@@ -113,7 +121,14 @@ def main(argv: list[str] | None = None) -> int:
     argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args(argv)
     try:
         with db.connect() as conn:
-            db.migrate(conn)
+            # Never migrates: in production DATABASE_URL is the shared Azure
+            # database, and a schema change there should be a person's decision.
+            behind = db.pending(conn)
+            if behind:
+                print(f"The database is missing migrations: {', '.join(behind)}. "
+                      "Check DATABASE_URL points where you mean, then run: python -m vending.db migrate",
+                      file=sys.stderr)
+                return 2
             report = sync(conn, Bridge())
     except BridgeError as error:
         print(f"bridge error: {error}", file=sys.stderr)
@@ -123,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"done: {report.listed} listed, {report.added} new, {report.updated} changed, "
           f"{report.relisted} relisted, {report.delisted} delisted, {report.invalid} skipped as unusable")
-    return 1 if report.invalid else 0
+    # Skipped rows are already logged; fail only when nothing the bridge listed was usable.
+    return 1 if report.invalid and not report.listed else 0
 
 
 if __name__ == "__main__":
