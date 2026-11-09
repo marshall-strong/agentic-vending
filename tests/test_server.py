@@ -122,8 +122,8 @@ def test_built_only_hides_the_stubs(monkeypatch):
     try:
         importlib.reload(server)
         assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history",
-                                                      "get_account_balance", "get_pnl",
-                                                      "request_catalog_product"]
+                                                      "get_account_balance", "preview_desired_state",
+                                                      "get_pnl", "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)
