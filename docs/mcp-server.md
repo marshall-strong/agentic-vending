@@ -84,7 +84,7 @@ It starts **on**. Every write tool refuses with `halted` until a person turns it
 `config` row is missing, it counts as on. The switch never migrates, so it can't change a shared
 database's schema: on a database with no `config` table, `status` and `on` report halted, `off`
 fails, and each names `python -m vending.db migrate`. Every flip is logged with the `--by` name, which is
-required because everyone on the shared VM is the same OS user. If a write is in flight, the
+required because every process in the shared Container App runs as the same user. If a write is in flight, the
 command prints "waiting for an in-flight write to finish..." and goes through when it ends. The harder stop needs nothing
 from the database: stop the server process, or remove it from the agent's MCP config.
 
