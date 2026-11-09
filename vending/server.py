@@ -39,7 +39,7 @@ from pydantic_core import to_jsonable_python
 from vending import db
 from vending.bridge import Bridge
 from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, catalog_request, machine_state,
-                           pnl, preview, sales_history, stubs)
+                           pnl, preview, purchase_requests, sales_history, stubs)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -190,10 +190,10 @@ async def submit_desired_state(desired: DesiredState) -> WriteReply:
     return await _write("submit_desired_state", {"desired": desired}, stubs.submit_desired_state(desired))
 
 
-@_tool(built=False)
-async def get_purchase_requests(pending_only: bool = False) -> Reply:
-    """Our purchase requests: status, decision note, the plan sent, and per-line receipts."""
-    return await _read("get_purchase_requests", stubs.get_purchase_requests, pending_only=pending_only)
+@_tool(built=True)
+async def get_purchase_requests(pending_only: bool = False) -> purchase_requests.PurchaseRequests:
+    """Our purchase requests, newest first: status, decision note, the plan sent, and per-line receipts with losses."""
+    return await _read("get_purchase_requests", purchase_requests.get_purchase_requests, pending_only=pending_only)
 
 
 @_tool(built=False)

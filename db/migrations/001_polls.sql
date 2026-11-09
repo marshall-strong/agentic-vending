@@ -33,4 +33,7 @@ create table poll_selections (
     primary key (session_id, selection)
 );
 
+-- Not redundant with the primary key: that is (session_id, selection), so it
+-- only serves lookups that start with a session. This one starts with the
+-- selection, for "every poll of slot 15" (sales history, machine state).
 create index poll_selections_selection on poll_selections (selection, session_id);

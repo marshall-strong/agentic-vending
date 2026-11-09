@@ -21,10 +21,6 @@ def get_catalog(conn: psycopg.Connection, search: str | None) -> Reply:
     raise NotBuilt("get_catalog", "needs the catalog sync from /products and our sourcing table")
 
 
-def get_purchase_requests(conn: psycopg.Connection, pending_only: bool) -> Reply:
-    raise NotBuilt("get_purchase_requests", "needs the purchase-request sync")
-
-
 def submit_desired_state(desired: DesiredState) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
         raise NotBuilt("submit_desired_state", "needs plan_restock wired to the ledger and our request records")
