@@ -19,6 +19,10 @@ create table purchase_submissions (
     -- The exact body we POSTed, and the directive the worker would read.
     body         jsonb       not null,
     directive    text,
+    -- The midweek visit fee the plan quoted, for an off-cycle request; null
+    -- otherwise. It travels into `purchase_requests.visit_fee_cents` when the
+    -- row is accepted or resolved, so the ledger charges what was agreed then.
+    visit_fee_cents integer,
     status       text        not null default 'sending'
                  check (status in ('sending', 'accepted', 'refused', 'not_filed', 'unknown')),
     request_id   text,

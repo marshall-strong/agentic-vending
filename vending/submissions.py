@@ -37,12 +37,18 @@ RESOLVE_HINT = "a person must check the bridge, then run: python -m vending.subm
 
 
 def save_sending(connect: Callable[[], psycopg.Connection], plan_hash: str, body: dict,
-                 directive: str | None) -> int:
-    """Commit a `sending` row on its own connection, so a crash after this can't lose it."""
+                 directive: str | None, visit_fee_cents: int | None = None) -> int:
+    """Commit a `sending` row on its own connection, so a crash after this can't lose it.
+
+    `visit_fee_cents` is the fee the plan quoted for an off-cycle request (None
+    otherwise). It is saved here, before the POST, so even a request settled
+    later by `resolve` carries the fee that was agreed when it was sent.
+    """
     with connect() as side:
         (row,) = side.execute(
-            "insert into purchase_submissions (plan_hash, body, directive) values (%s, %s, %s) returning id",
-            (plan_hash, Jsonb(body), directive),
+            "insert into purchase_submissions (plan_hash, body, directive, visit_fee_cents)"
+            " values (%s, %s, %s, %s) returning id",
+            (plan_hash, Jsonb(body), directive, visit_fee_cents),
         ).fetchone()
     return row
 
@@ -55,7 +61,8 @@ def settle(connect: Callable[[], psycopg.Connection], row: int, status: str, *, 
     transaction, so the ID can't be stored in one place and not the other.
     """
     with connect() as side, side.transaction():
-        body, = side.execute("select body from purchase_submissions where id = %s", (row,)).fetchone()
+        body, plan_hash, fee = side.execute(
+            "select body, plan_hash, visit_fee_cents from purchase_submissions where id = %s", (row,)).fetchone()
         side.execute(
             "update purchase_submissions set status = %s, request_id = %s, response = %s, detail = %s"
             " where id = %s",
@@ -63,8 +70,7 @@ def settle(connect: Callable[[], psycopg.Connection], row: int, status: str, *, 
         )
         if status == "accepted":
             record(side, request_id, submitted_at or datetime.now(timezone.utc), bool(body.get("off_cycle")),
-                   body, plan_hash=side.execute(
-                       "select plan_hash from purchase_submissions where id = %s", (row,)).fetchone()[0])
+                   body, plan_hash=plan_hash, visit_fee_cents=fee)
 
 
 def open_rows(conn: psycopg.Connection) -> list[tuple]:
@@ -82,17 +88,18 @@ def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str
         raise ValueError("--by needs your name")
     with conn.transaction():
         found = conn.execute(
-            "select at, status, body, plan_hash from purchase_submissions where id = %s for update", (row,)).fetchone()
+            "select at, status, body, plan_hash, visit_fee_cents from purchase_submissions where id = %s for update",
+            (row,)).fetchone()
         if found is None:
             raise ValueError(f"There is no submission {row}.")
-        at, status, body, plan_hash = found
+        at, status, body, plan_hash, fee = found
         if status not in OPEN:
             raise ValueError(f"Submission {row} is {status}, not sending or unknown; nothing to settle.")
         if request_id:
             request_id = request_id.strip()
             conn.execute("update purchase_submissions set status = 'accepted', request_id = %s, resolved_by = %s,"
                          " resolved_at = now() where id = %s", (request_id, who.strip(), row))
-            record(conn, request_id, at, bool(body.get("off_cycle")), body, plan_hash=plan_hash)
+            record(conn, request_id, at, bool(body.get("off_cycle")), body, plan_hash=plan_hash, visit_fee_cents=fee)
             done = f"submission {row} recorded as filed under {request_id}, pending, by {who.strip()}"
         else:
             conn.execute("update purchase_submissions set status = 'not_filed', resolved_by = %s, resolved_at = now()"

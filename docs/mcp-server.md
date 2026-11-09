@@ -278,7 +278,7 @@ python -m vending.submissions resolve 7 --request-id pr_abc123 --by kevin   # it
 python -m vending.submissions resolve 7 --not-filed --by kevin              # it never was
 ```
 
-Resolving with a request ID also records it in `purchase_requests`. Every change is logged with the
+Resolving with a request ID also records it in `purchase_requests`. Both paths carry the midweek visit fee the plan quoted for an off-cycle request (`visit_fee_cents`, saved on the `sending` row before the POST), so the ledger charges what was agreed then even if `config.midweek_fee_cents` changes later. Every change is logged with the
 `--by` name. The reply to an accepted submit carries the request ID, the plan hash, the number of
 lines, the max cost and the directive the worker will read.
 

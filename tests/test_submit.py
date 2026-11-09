@@ -5,11 +5,15 @@ import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
+from datetime import datetime, timezone  # noqa: E402
+
 from tests.conftest import open_in  # noqa: E402
 from tests.test_desired_state import coke_sourcing, desired, fake, ready, restock_15, stocked  # noqa: E402,F401
 from tests.test_server import call, db  # noqa: E402,F401
-from vending import submissions  # noqa: E402
+from tests.test_sync_requests import fulfilled, receipt  # noqa: E402
+from vending import ledger, submissions  # noqa: E402
 from vending.config import set_value  # noqa: E402
+from vending.purchase_requests import store  # noqa: E402
 
 
 def submit(**arguments):
@@ -41,9 +45,36 @@ def test_an_accepted_request_is_recorded_everywhere(db, fake):  # noqa: F811
                       " where status = 'pending'").fetchall() == [("pr-1", "pending", reply["plan_hash"], posted)]
     assert db.execute("select status, request_id from purchase_submissions").fetchall() == [("accepted", "pr-1")]
     assert db.execute("select outcome from action_log where tool = 'submit_desired_state'").fetchall() == [("done",)]
+    # Not off-cycle, so no visit fee travels with it.
+    assert db.execute("select visit_fee_cents from purchase_requests where request_id = 'pr-1'").fetchone() == (None,)
     # The request is pending now, so the same plan is refused until the worker is done.
     again = submit()
     assert codes(again) == ["request_pending"] and len(fake.posts) == 1
+
+
+def test_an_off_cycle_request_carries_the_fee_it_was_quoted(db, fake):  # noqa: F811
+    prepared(db)
+    set_value(db, "midweek_fee_cents", 3000, "test")
+    reply = submit(off_cycle=True)
+    assert reply["success"] and "including the midweek visit fee" in reply["message"]
+    assert db.execute("select visit_fee_cents from purchase_submissions").fetchone() == (3000,)
+    assert db.execute("select off_cycle, visit_fee_cents from purchase_requests where request_id = 'pr-1'"
+                      ).fetchone() == (True, 3000)
+    # The fee changes afterwards; once the worker is done, the ledger still charges what was quoted.
+    set_value(db, "midweek_fee_cents", 9900, "test")
+    store(db, "pr-1", fulfilled("pr-1", receipt(resolved_at="2026-11-10T16:00:00Z")),
+          datetime(2026, 11, 10, 17, tzinfo=timezone.utc))
+    assert ledger.balance(db, datetime(2026, 11, 11, tzinfo=timezone.utc)).visit_fees_cents == 3000
+
+
+def test_a_resolved_submission_carries_the_fee_too(db, fake, schema_url, monkeypatch):  # noqa: F811
+    prepared(db)
+    set_value(db, "midweek_fee_cents", 3000, "test")
+    fake.answer = (503, {"detail": "down"})
+    assert submit(off_cycle=True)["status"] == "unknown"
+    assert submissions.resolve(db, 1, "pr-x", "kevin").startswith("Submission 1 recorded as filed")
+    assert db.execute("select off_cycle, visit_fee_cents from purchase_requests where request_id = 'pr-x'"
+                      ).fetchone() == (True, 3000)
 
 
 def test_a_refused_plan_sends_nothing_and_saves_nothing(db, fake):  # noqa: F811

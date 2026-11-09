@@ -65,7 +65,10 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
                 f"submission {row} from {at:%Y-%m-%d %H:%M} UTC is still {status}, so a request may already "
                 f"exist on the bridge; {submissions.RESOLVE_HINT.format(row=row)}"))])
         body = plan.request()
-        row = submissions.save_sending(connect, plan.plan_hash, body, plan.directive)
+        # The fee the plan quoted goes with the request, so the ledger charges what was
+        # agreed now even if config.midweek_fee_cents changes later.
+        fee = plan.cost.visit_fee_cents if plan.off_cycle else None
+        row = submissions.save_sending(connect, plan.plan_hash, body, plan.directive, fee)
         return _send(client, plan, body, row, connect, gathered.now)
 
     return action
