@@ -38,8 +38,8 @@ from pydantic_core import to_jsonable_python
 
 from vending import db
 from vending.bridge import Bridge
-from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, catalog_request, machine_state, sales_history,
-                           stubs)
+from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, catalog, catalog_request, machine_state,
+                           sales_history, stubs)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -162,10 +162,10 @@ async def get_sales_history(start: datetime, end: datetime, slots: list[str] | N
     return await _read("get_sales_history", sales_history.get_sales_history, start=start, end=end, slots=slots)
 
 
-@_tool(built=False)
-async def get_catalog(search: str | None = None) -> Reply:
-    """Approved single-item products, our last unit cost and sourcing for each. Optional text search."""
-    return await _read("get_catalog", stubs.get_catalog, search=search)
+@_tool(built=True)
+async def get_catalog(search: str | None = None) -> catalog.Catalog:
+    """Approved single-item products (sku, name, line, flavor, size) and when the catalog was last synced. Optional text search: every word must appear in the name, line, flavor or size. No unit cost or sourcing yet."""
+    return await _read("get_catalog", catalog.get_catalog, search=search)
 
 
 @_tool(built=False)
