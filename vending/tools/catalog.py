@@ -19,7 +19,8 @@ from pydantic import BaseModel
 
 from vending.tools import Reply
 
-# The sync runs daily, so a catalog older than a day and a half means a missed run.
+# The sync is meant to run daily (nothing schedules it yet), so a catalog older
+# than a day and a half means a missed run.
 STALE_AFTER = timedelta(hours=36)
 
 SYNC_COMMAND = "python -m vending.sync_catalog"
