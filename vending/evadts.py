@@ -60,7 +60,7 @@ def crc16_arc(data: bytes) -> int:
 
 
 def _checksum(raw: bytes) -> tuple[str | None, str]:
-    """Return (the G85 value in the document, the value we compute)."""
+    """Return (the `G85` value in the document, the value we compute)."""
     start = raw.find(b"\r\nST*")
     end = raw.find(b"\r\nG85*")
     if start < 0 or end < 0:

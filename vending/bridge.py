@@ -2,11 +2,19 @@
 
 `scripts/bridge.py` is the command-line tool for people; this is the library the
 sync jobs use. It never polls the machine live and cannot submit a purchase
-request: it only reads stored history and our purchase requests.
+request: it only reads stored history and our purchase requests, and `/health`
+to tell a bad poll from an outage.
+
+Read failures are retried, then end in one of two ways. `BridgeUnreachable`
+means every later call would fail too, so the caller should stop: the bridge is
+down or rejected our key. Plain `BridgeError` means only this day or poll
+failed: an error status, a response cut off or unreadable, or a connection that
+keeps failing on one poll while `/health` still answers.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -37,6 +45,14 @@ class BridgeNoAnswer(BridgeError):
 
 class BridgeUnreachable(BridgeError):
     """No network or a rejected key: every later call would fail the same way."""
+
+
+class ConnectionFailed(BridgeUnreachable):
+    """Every attempt at one request failed to connect or lost the connection.
+
+    The bridge is probably down, but `Bridge.raw` checks, because one poll can
+    drop every time on a bridge that is otherwise fine.
+    """
 
 
 class BridgeRateLimited(BridgeError):
@@ -80,7 +96,9 @@ class Bridge:
         except urllib.error.URLError as error:
             # urllib raises URLError only while connecting or sending.
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
-        except OSError as error:  # includes a timeout waiting for the answer
+        except (OSError, http.client.HTTPException) as error:
+            # A timeout waiting for the answer, or an answer cut off part way
+            # (`IncompleteRead`): either way it was sent and may have run.
             raise BridgeNoAnswer(f"{type(error).__name__}: {error}") from None
         try:
             json.loads(data)
@@ -107,17 +125,31 @@ class Bridge:
                     raise BridgeRateLimited(f"429 from {path}: still rate limited after {RETRIES} retries") from None
                 if error.code in (401, 403):
                     raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
-                raise BridgeError(f"{error.code} from {path}: {error.read()[:200]!r}") from None
-            except (urllib.error.URLError, TimeoutError, OSError) as error:
+                raise BridgeError(f"{error.code} from {path}: {_start_of_body(error)!r}") from None
+            except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
                 if attempt < RETRIES:
                     time.sleep(delay)
                     delay *= 2
                     continue
-                raise BridgeUnreachable(
+                # A response cut off or unreadable (`IncompleteRead`, `BadStatusLine`)
+                # is this request's fault alone. `RemoteDisconnected` is an
+                # `HTTPException` as well as an `OSError`, and it is a lost
+                # connection, so check `OSError`.
+                if not isinstance(error, OSError):
+                    raise BridgeError(f"broken response from {path}: {error!r}") from None
+                raise ConnectionFailed(
                     f"Could not reach {self.base_url} ({getattr(error, 'reason', error)}). "
                     "Is Tailscale connected?"
                 ) from None
         raise AssertionError("unreachable")
+
+    def _is_up(self) -> bool:
+        """Whether `/health` answers. It needs no key and doesn't read the machine."""
+        try:
+            self._get("/health")
+        except BridgeError:
+            return False
+        return True
 
     def history(self, day: str) -> list[dict]:
         """Stored polls for one UTC day (YYYY-MM-DD), oldest first.
@@ -125,14 +157,29 @@ class Bridge:
         The bridge returns at most 500 polls per request and marks the answer
         `truncated`, so the sync asks one day at a time and refuses a truncated day.
         """
-        body = json.loads(self._get("/api/v1/history", {"start": day, "end": day}))
+        payload = self._get("/api/v1/history", {"start": day, "end": day})
+        try:
+            body = json.loads(payload)
+        except ValueError:  # Not `JSONDecodeError`: bytes that aren't text raise `UnicodeDecodeError`.
+            raise BridgeError(f"history for {day} was not JSON: {payload[:200]!r}") from None
+        if not _is_listing(body):
+            raise BridgeError(f"history for {day} was not a listing of polls: {payload[:200]!r}")
         if body.get("truncated"):
             raise BridgeError(f"history for {day} was truncated at {body.get('limit')} polls")
-        return [dict(p, device_id=body.get("device_id")) for p in body.get("polls", [])]
+        return [dict(p, device_id=body.get("device_id")) for p in body["polls"]]
 
     def raw(self, session_id: str) -> bytes:
-        """One stored poll, byte-for-byte."""
-        return self._get(f"/api/v1/history/{urllib.parse.quote(session_id)}/raw")
+        """One stored poll, byte-for-byte.
+
+        If the connection keeps failing but `/health` answers, the fault is this
+        poll, so this raises `BridgeError` and the sync can move on to the next one.
+        """
+        try:
+            return self._get(f"/api/v1/history/{urllib.parse.quote(session_id)}/raw")
+        except ConnectionFailed:
+            if self._is_up():
+                raise BridgeError("the connection failed on every attempt, though /health answers") from None
+            raise
 
     def purchase_request(self, request_id: str) -> dict:
         """One of our purchase requests, as the bridge sees it now.
@@ -143,6 +190,22 @@ class Bridge:
         A GET only: submitting is `submit_desired_state`'s job, never this client's.
         """
         return json.loads(self._get(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}"))
+
+
+def _is_listing(body: object) -> bool:
+    """Whether `body` is a day's listing, with what the sync needs from every poll."""
+    return isinstance(body, dict) and isinstance(body.get("polls"), list) and all(
+        isinstance(p, dict) and isinstance(p.get("session_id"), str) and isinstance(p.get("started_at"), str)
+        for p in body["polls"]
+    )
+
+
+def _start_of_body(error: urllib.error.HTTPError) -> bytes:
+    """The start of an error response, for the message. It can be cut off too."""
+    try:
+        return error.read(200)
+    except (OSError, http.client.HTTPException):
+        return b""
 
 
 def _retry_after(error: urllib.error.HTTPError) -> float | None:

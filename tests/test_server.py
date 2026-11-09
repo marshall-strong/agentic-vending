@@ -3,6 +3,7 @@
 import importlib
 import uuid
 import time
+from datetime import datetime, timezone
 
 import anyio
 import pytest
@@ -84,6 +85,31 @@ def test_sales_history_end_to_end(db):
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_sales_history", "done")]
 
 
+def test_catalog_end_to_end(db):
+    db.execute("insert into catalog_products (sku, name, line, flavor, size, last_response)"
+               " values ('CCC20', 'Coca-Cola Cherry', 'Coca-Cola', 'Cherry', '20 oz', '{}')")
+    db.execute("insert into catalog_syncs (product_count) values (1)")
+    result = call("get_catalog", {"search": "cherry"})
+    assert not result.isError
+    assert result.structuredContent["data"] == [
+        {"sku": "CCC20", "name": "Coca-Cola Cherry", "line": "Coca-Cola", "flavor": "Cherry", "size": "20 oz"}]
+    assert db.execute("select tool, outcome from action_log").fetchall() == [("get_catalog", "done")]
+
+
+def test_purchase_requests_end_to_end(db):
+    from vending.purchase_requests import record
+    body = {"off_cycle": False, "lines": []}
+    record(db, "old", datetime(2026, 11, 7, 14, tzinfo=timezone.utc), False, body, "abc")
+    record(db, "just_sent", datetime.now(timezone.utc), False, body, "def")
+    result = call("get_purchase_requests", {"pending_only": True})
+    assert not result.isError
+    content = result.structuredContent
+    # Neither has been read by the sync; only the old one is flagged.
+    assert (content["count"], content["pending"], content["not_checked_recently"]) == (2, 2, ["old"])
+    assert [r["plan_hash"] for r in content["data"]] == ["def", "abc"]
+    assert db.execute("select tool, outcome from action_log").fetchall() == [("get_purchase_requests", "done")]
+
+
 def test_read_stub_says_not_built_and_is_logged(db):
     result = call("get_account_balance")
     assert result.isError and "not built yet" in result.content[0].text
@@ -121,8 +147,8 @@ def test_built_only_hides_the_stubs(monkeypatch):
     monkeypatch.setenv("VENDING_TOOLS", "built")
     try:
         importlib.reload(server)
-        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history",
-                                                      "request_catalog_product"]
+        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history", "get_catalog",
+                                                      "get_purchase_requests", "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)

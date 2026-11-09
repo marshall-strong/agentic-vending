@@ -15,6 +15,11 @@ logged and counted and the run carries on with the rest. A run that is still
 rate limited after the bridge client's retries stops there and leaves the rest
 for next time, since every further call would only add to the load. An
 unreachable bridge or a rejected key stops the run, as in `sync_history`.
+
+It never migrates. On a database that is behind it refuses to run (exit 2) and
+names `python -m vending.db migrate`, like the server, the halt switch and the
+history sync, so a run started from a branch can't change the shared database's
+schema.
 """
 
 from __future__ import annotations
@@ -98,7 +103,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         with db.connect() as conn:
-            db.migrate(conn)
+            # Never migrates: in production DATABASE_URL is the shared Azure
+            # database, and a schema change there should be a person's decision.
+            behind = db.pending(conn)
+            if behind:
+                print(f"The database is missing migrations: {', '.join(behind)}. "
+                      "Check DATABASE_URL points where you mean, then run: python -m vending.db migrate",
+                      file=sys.stderr)
+                return 2
             report = sync(conn, Bridge(), recheck_days=args.recheck_days)
     except BridgeError as error:
         print(f"bridge error: {error}", file=sys.stderr)
