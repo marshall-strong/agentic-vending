@@ -85,6 +85,17 @@ def test_sales_history_end_to_end(db):
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_sales_history", "done")]
 
 
+def test_catalog_end_to_end(db):
+    db.execute("insert into catalog_products (sku, name, line, flavor, size, last_response)"
+               " values ('CCC20', 'Coca-Cola Cherry', 'Coca-Cola', 'Cherry', '20 oz', '{}')")
+    db.execute("insert into catalog_syncs (product_count) values (1)")
+    result = call("get_catalog", {"search": "cherry"})
+    assert not result.isError
+    assert result.structuredContent["data"] == [
+        {"sku": "CCC20", "name": "Coca-Cola Cherry", "line": "Coca-Cola", "flavor": "Cherry", "size": "20 oz"}]
+    assert db.execute("select tool, outcome from action_log").fetchall() == [("get_catalog", "done")]
+
+
 def test_purchase_requests_end_to_end(db):
     from vending.purchase_requests import record
     body = {"off_cycle": False, "lines": []}
@@ -97,13 +108,6 @@ def test_purchase_requests_end_to_end(db):
     assert (content["count"], content["pending"], content["not_checked_recently"]) == (2, 2, ["old"])
     assert [r["plan_hash"] for r in content["data"]] == ["def", "abc"]
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_purchase_requests", "done")]
-
-
-def test_read_stub_says_not_built_and_is_logged(db):
-    result = call("get_catalog")
-    assert result.isError and "not built yet" in result.content[0].text
-    assert db.execute("select kind, tool, outcome from action_log").fetchall() == [
-        ("read", "get_catalog", "failed")]
 
 
 def test_reads_are_logged_with_their_arguments_and_result(db):
@@ -136,7 +140,7 @@ def test_built_only_hides_the_stubs(monkeypatch):
     monkeypatch.setenv("VENDING_TOOLS", "built")
     try:
         importlib.reload(server)
-        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history",
+        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history", "get_catalog",
                                                       "get_account_balance", "preview_desired_state",
                                                       "submit_desired_state", "get_purchase_requests",
                                                       "get_pnl", "request_catalog_product"]

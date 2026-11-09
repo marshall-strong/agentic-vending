@@ -11,13 +11,9 @@ from collections.abc import Callable
 
 import psycopg
 
-from vending.tools import NotBuilt, Reply, WriteReply
+from vending.tools import NotBuilt, WriteReply
 
 Action = Callable[[psycopg.Connection], WriteReply]
-
-
-def get_catalog(conn: psycopg.Connection, search: str | None) -> Reply:
-    raise NotBuilt("get_catalog", "needs the catalog sync from /products and our sourcing table")
 
 
 def set_price(slot: str, sale_price: str) -> Action:
