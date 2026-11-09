@@ -34,6 +34,8 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
+from vending.slots import DEVICE_ID
+
 if TYPE_CHECKING:  # the replay itself needs no database, so its tests run without psycopg
     import psycopg
 
@@ -292,11 +294,12 @@ def stock(conn: psycopg.Connection) -> Stock:
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
     slots = sorted({line["slot"] for line in lines})
-    # poll_selections only has rows for polls whose checksum passed.
+    # poll_selections only has rows for polls whose checksum passed. Other
+    # machines' polls are stored too, with the same selection names.
     counters = conn.execute(
         "select s.selection, p.started_at, s.lifetime_units from poll_selections s"
-        " join polls p using (session_id) where s.selection = any(%s)",
-        (slots,),
+        " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)",
+        (DEVICE_ID, slots),
     ).fetchall()
     return weighted_average(movements_from_receipts(lines, losses) + sales_from_counters(counters))
 

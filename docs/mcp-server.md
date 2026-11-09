@@ -8,7 +8,7 @@ machine.
 
 | Tool | State |
 | --- | --- |
-| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
+| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls; and from the receipts (`vending.stock`), the product, stock on hand (since the product went in), units sold and days since the last load, and days of stock left. The closet per product with its value at cost, and any stock warnings. A slot with no receipts has those fields `null` and is named in the message. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
 | `get_catalog`, `get_account_balance`, `preview_desired_state`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
