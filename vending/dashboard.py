@@ -1152,9 +1152,11 @@ a.pill { text-decoration:none }
   padding:4px 12px; cursor:pointer }
 .seg button[aria-pressed="true"] { background:var(--accent); color:var(--surface) }
 .vm[data-view="now"] .v-next, .vm[data-view="next"] .v-now { display:none !important }
-.vm-wrap { display:grid; grid-template-columns:minmax(0, 560px) minmax(0, 1fr); gap:14px; align-items:start }
+/* The cabinet is drawn the shape of the real machine: about twice as tall as it is wide. */
+.vm-wrap { display:grid; grid-template-columns:minmax(0, 400px) minmax(0, 1fr); gap:18px; align-items:start }
 .cab { background:linear-gradient(90deg, var(--cab), var(--cab-2) 60%, var(--cab)); border-radius:14px 14px 6px 6px;
-  padding:10px; display:grid; grid-template-columns:minmax(0, 1fr) 56px; gap:8px; box-shadow:inset 0 0 0 2px var(--cab-edge) }
+  padding:10px; display:grid; grid-template-columns:minmax(0, 1fr) 48px; gap:8px; box-shadow:inset 0 0 0 2px var(--cab-edge);
+  width:100%; max-width:400px }
 .brand { grid-column:1 / -1; color:#fff; font-weight:800; letter-spacing:.14em; font-size:11px; text-align:center; padding:5px 0;
   background:var(--cab-brand); border-radius:6px }
 .glass { position:relative; background:linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.02) 35%, rgba(255,255,255,.05));
@@ -1162,14 +1164,14 @@ a.pill { text-decoration:none }
 .shelf { display:grid; grid-template-columns:repeat(8, minmax(0, 1fr)); gap:3px; border-bottom:3px solid #505968;
   padding-bottom:2px; margin-bottom:3px }
 .slot { position:relative; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; min-width:0;
-  height:92px; padding:12px 1px 2px; border-radius:4px 4px 0 0; color:#cfd6df; text-decoration:none }
+  height:128px; padding:13px 1px 2px; border-radius:4px 4px 0 0; color:#cfd6df; text-decoration:none }
 .slot .num { position:absolute; top:1px; left:0; right:0; text-align:center; font:600 9px ui-monospace, Consolas, monospace; color:#9aa5b2 }
 .theirs { background:repeating-linear-gradient(45deg, rgba(255,255,255,.05) 0 5px, transparent 5px 10px) }
 .theirs .num { color:rgba(255,255,255,.3); top:40% }
 .ours { background:rgba(255,255,255,.04) }
 a.ours:hover, a.ours:focus-visible { background:rgba(255,255,255,.1); outline:none }
 .vm[data-view="next"] .ours.changed { box-shadow:inset 0 0 0 2px var(--accent) }
-.bottle { position:relative; flex:1 1 auto; width:60%; max-width:22px; min-height:20px; max-height:52px; margin-top:5px;
+.bottle { position:relative; flex:1 1 auto; width:62%; max-width:18px; min-height:40px; max-height:84px; margin-top:6px;
   border-radius:7px 7px 3px 3px; background:rgba(255,255,255,.08); overflow:hidden; box-shadow:inset 0 0 0 1px rgba(255,255,255,.18) }
 .bottle i { position:absolute; left:0; right:0; bottom:0; display:block }
 .bottle b { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
