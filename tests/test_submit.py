@@ -1,13 +1,15 @@
 """`submit_desired_state` through the MCP client, the write gate and Postgres, against the
 local fake bridge from `tests/test_desired_state.py`."""
 
+import threading
+
 import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
 from datetime import datetime, timezone  # noqa: E402
 
-from tests.conftest import open_in  # noqa: E402
+from tests.conftest import open_in, store_poll  # noqa: E402
 from tests.test_desired_state import coke_sourcing, desired, fake, ready, restock_15, stocked  # noqa: E402,F401
 from tests.test_server import call, db  # noqa: E402,F401
 from tests.test_sync_requests import fulfilled, receipt  # noqa: E402
@@ -16,11 +18,19 @@ from vending.config import set_value  # noqa: E402
 from vending.purchase_requests import store  # noqa: E402
 
 
-def submit(**arguments):
+def submit(expected_plan_hash=None, **arguments):
     body = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()], **arguments).model_dump()
-    result = call("submit_desired_state", {"desired": body})
+    args = {"desired": body}
+    if expected_plan_hash:
+        args["expected_plan_hash"] = expected_plan_hash
+    result = call("submit_desired_state", args)
     assert not result.isError, result.content[0].text
     return result.structuredContent
+
+
+def preview():
+    body = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()]).model_dump()
+    return call("preview_desired_state", {"desired": body}).structuredContent
 
 
 def codes(reply):
@@ -143,20 +153,123 @@ def test_a_submission_the_bridge_never_filed_can_be_sent_again(db, fake):  # noq
     assert db.execute("select tool from action_log where tool = 'submissions.resolve'").fetchall() == [("submissions.resolve",)]
 
 
-def test_a_crash_after_the_post_leaves_the_sending_row(db, fake, monkeypatch):  # noqa: F811
+def test_a_settle_failure_after_the_bridge_accepted_still_names_the_request_id(db, fake, monkeypatch, capsys):  # noqa: F811
     prepared(db)
 
     def crash(*args, **kwargs):
-        raise RuntimeError("simulated crash before the answer was stored")
+        raise RuntimeError("simulated: the database dropped after the POST")
 
     original = submissions.settle
     monkeypatch.setattr(submissions, "settle", crash)
     body = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()]).model_dump()
-    assert call("submit_desired_state", {"desired": body}).isError
+    result = call("submit_desired_state", {"desired": body})
+    assert result.isError
+    text = result.content[0].text
+    # The agent is told the ID and what a person must do; nothing says "try again".
+    assert "ACCEPTED purchase request pr-1" in text and "resolve 1 --request-id pr-1" in text
+    assert "Don't submit again" in text
+    # The answer is kept on stderr, where the server log has it even if the database stays down.
+    err = capsys.readouterr().err
+    assert "LOST ANSWER" in err and '"request_id": "pr-1"' in err
     assert len(fake.posts) == 1
     assert db.execute("select status from purchase_submissions").fetchall() == [("sending",)]
+    [(detail,)] = db.execute("select detail from action_log where tool = 'submit_desired_state'").fetchall()
+    assert "pr-1" in detail
     monkeypatch.setattr(submissions, "settle", original)
     assert codes(submit()) == ["submission_unresolved"] and len(fake.posts) == 1
+    submissions.resolve(db, 1, "pr-1", "kevin")
+    assert db.execute("select request_id from purchase_requests where status = 'pending'").fetchall() == [("pr-1",)]
+
+
+def test_a_side_connection_that_fails_before_the_post_sends_nothing(db, fake, schema_url, monkeypatch):  # noqa: F811
+    prepared(db)
+    from vending import server
+
+    def refuse():
+        raise psycopg.OperationalError("too many connections")
+
+    body = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()]).model_dump()
+    # The gate keeps its own connection; only the side connection the submit opens fails.
+    with open_in(*schema_url) as gate:
+        monkeypatch.setattr(server, "_conn", gate)
+        monkeypatch.setattr(server, "connect", refuse)
+        result = call("submit_desired_state", {"desired": body})
+    assert result.isError and "too many connections" in result.content[0].text
+    assert fake.posts == [] and db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
+
+
+def test_a_cut_off_answer_is_unknown_not_a_crash(db, fake):  # noqa: F811
+    prepared(db)
+    fake.cut = True
+    reply = submit()
+    assert not reply["success"] and reply["status"] == "unknown"
+    assert "IncompleteRead" in reply["message"] and "Don't submit again" in reply["message"]
+    assert db.execute("select status from purchase_submissions").fetchall() == [("unknown",)]
+
+
+def test_a_5xx_keeps_the_body_the_bridge_sent(db, fake):  # noqa: F811
+    prepared(db)
+    fake.answer = (503, {"detail": "worker portal is being redeployed"})
+    reply = submit()
+    assert reply["status"] == "unknown" and "503" in reply["message"] and "redeployed" in reply["message"]
+    assert "redeployed" in db.execute("select detail from purchase_submissions").fetchone()[0]
+
+
+def test_a_plan_that_changed_since_the_preview_is_refused_when_its_hash_is_given(db, fake):  # noqa: F811
+    prepared(db)
+    previewed = preview()
+    assert previewed["success"] and previewed["plan_hash"]
+    # Three more sold since the preview: the rail holds 5, so the plan now buys 15, not 12.
+    store_poll(db, "b", "2026-11-09T10:00:00+00:00", {"15": (250, 103)})
+    reply = submit(expected_plan_hash=previewed["plan_hash"])
+    assert codes(reply) == ["plan_changed"] and previewed["plan_hash"] in reply["refusals"][0]["message"]
+    assert fake.posts == []
+    again = preview()
+    assert again["plan_hash"] != previewed["plan_hash"]
+    assert submit(expected_plan_hash=again["plan_hash"])["success"] and len(fake.posts) == 1
+
+
+def test_preview_refuses_too_while_a_submission_is_unresolved(db, fake):  # noqa: F811
+    prepared(db)
+    fake.answer = (503, {"detail": "down"})
+    assert submit()["status"] == "unknown"
+    previewed = preview()
+    assert not previewed["success"] and [r["code"] for r in previewed["refusals"]] == ["submission_unresolved"]
+    assert "ask the instructors" in previewed["refusals"][0]["message"]
+
+
+def test_every_refusal_is_shown_at_once_including_an_unresolved_submission(db, fake):  # noqa: F811
+    prepared(db)
+    fake.answer = (503, {"detail": "down"})
+    submit()
+    body = desired(restock_15(price="1.20", fill_to=20), sourcing=[coke_sourcing()]).model_dump()
+    reply = call("submit_desired_state", {"desired": body}).structuredContent
+    assert codes(reply) == ["below_floor", "submission_unresolved"]
+
+
+def test_two_concurrent_submits_file_one_request(db, fake, schema_url):  # noqa: F811
+    prepared(db)
+    from vending.tools import submit as submit_tool
+    from vending.write_gate import Refused, run_write
+    plan = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()])
+    outcomes = []
+
+    def one():
+        with open_in(*schema_url) as conn:
+            action = submit_tool.submit_desired_state(plan, fake.client, lambda: open_in(*schema_url))
+            try:
+                outcomes.append(("ok", run_write(conn, "submit_desired_state", {}, action).request_id))
+            except Refused as refused:
+                outcomes.append(("refused", sorted(r.code for r in refused.refusals)))
+
+    threads = [threading.Thread(target=one) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+    # The halt-row lock serializes them: the second plans after the first's request is pending.
+    assert sorted(outcomes) == [("ok", "pr-1"), ("refused", ["request_pending"])]
+    assert len(fake.posts) == 1
 
 
 def test_unreachable_bridge_is_not_filed(db, fake, monkeypatch):  # noqa: F811

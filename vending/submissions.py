@@ -5,62 +5,68 @@
     python -m vending.submissions resolve 7 --not-filed --by kevin              # it never did
 
 `submit_desired_state` commits a `sending` row here before it POSTs, and
-settles it after. A row left `sending` (a crash in between) or `unknown` (sent,
-but no usable answer) may or may not exist on the bridge, and the tool refuses
-to submit again until a person settles it. Check the bridge first: its Swagger
-page has `GET /api/v1/purchase-requests/{id}`, and the request would carry the
-lines in the row's `body`. If you can't find it, ask the instructors before
-`--not-filed`, because a resend of a request that was filed would order twice.
+settles it after, on the same connection. A row left `sending` (a crash in
+between) or `unknown` (sent, but no usable answer) may or may not exist on the
+bridge, and both the tool and `preview_desired_state` refuse
+(`submission_unresolved`) until a person settles it.
+
+To settle one, find out whether the bridge filed it. If the request ID is known
+(the server log has a `LOST ANSWER` line, or the row's `response` holds it),
+the bridge's Swagger page has `GET /api/v1/purchase-requests/{id}`. If it isn't,
+**ask the instructors first**: the bridge has no route that lists our requests,
+and a resend of a request that was filed would order twice. The request would
+carry the lines in the row's `body`.
 
 Resolving with a request ID also records the request in `purchase_requests`,
-so the request sync reads it back from then on. `--by` is required: every
-change is logged in `action_log` with your name. This never migrates, and the
-halt switch doesn't block it, because it's a person correcting our records.
+with the visit fee the plan quoted, so the request sync reads it back from then
+on. `--by` is required: every change is logged in `action_log` with your name.
+This never migrates, and the halt switch doesn't block it, because it's a
+person correcting our records.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Callable
 from datetime import datetime, timezone
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from vending import db
+from vending.pricing import Refusal
 from vending.purchase_requests import record
 from vending.write_gate import log
 
 OPEN = ("sending", "unknown")
-RESOLVE_HINT = "a person must check the bridge, then run: python -m vending.submissions resolve {row} ..."
+RESOLVE_HINT = ("a person must find out whether the bridge filed it (ask the instructors if the request ID is "
+                "unknown), then run: python -m vending.submissions resolve {row} ...")
 
 
-def save_sending(connect: Callable[[], psycopg.Connection], plan_hash: str, body: dict,
+def save_sending(side: psycopg.Connection, plan_hash: str, body: dict,
                  directive: str | None, visit_fee_cents: int | None = None) -> int:
-    """Commit a `sending` row on its own connection, so a crash after this can't lose it.
+    """Commit a `sending` row on `side`, an autocommit connection of its own, so a crash after this can't lose it.
 
     `visit_fee_cents` is the fee the plan quoted for an off-cycle request (None
     otherwise). It is saved here, before the POST, so even a request settled
     later by `resolve` carries the fee that was agreed when it was sent.
     """
-    with connect() as side:
-        (row,) = side.execute(
-            "insert into purchase_submissions (plan_hash, body, directive, visit_fee_cents)"
-            " values (%s, %s, %s, %s) returning id",
-            (plan_hash, Jsonb(body), directive, visit_fee_cents),
-        ).fetchone()
+    (row,) = side.execute(
+        "insert into purchase_submissions (plan_hash, body, directive, visit_fee_cents)"
+        " values (%s, %s, %s, %s) returning id",
+        (plan_hash, Jsonb(body), directive, visit_fee_cents),
+    ).fetchone()
     return row
 
 
-def settle(connect: Callable[[], psycopg.Connection], row: int, status: str, *, request_id: str | None = None,
+def settle(side: psycopg.Connection, row: int, status: str, *, request_id: str | None = None,
            response: object = None, detail: str | None = None, submitted_at: datetime | None = None) -> None:
-    """Record how a submission ended, on its own connection.
+    """Record how a submission ended, on the connection that saved it.
 
     `accepted` also records the request in `purchase_requests`, in the same
     transaction, so the ID can't be stored in one place and not the other.
     """
-    with connect() as side, side.transaction():
+    with side.transaction():
         body, plan_hash, fee = side.execute(
             "select body, plan_hash, visit_fee_cents from purchase_submissions where id = %s", (row,)).fetchone()
         side.execute(
@@ -80,6 +86,17 @@ def open_rows(conn: psycopg.Connection) -> list[tuple]:
         " where status = any(%s) order by id",
         (list(OPEN),),
     ).fetchall()
+
+
+def unresolved(conn: psycopg.Connection) -> Refusal | None:
+    """The refusal both preview and submit raise while any submission is still open, naming every one."""
+    rows = open_rows(conn)
+    if not rows:
+        return None
+    named = ", ".join(f"{row} ({status} since {at:%Y-%m-%d %H:%M} UTC)" for row, at, status, _, _ in rows)
+    return Refusal("submission_unresolved", (
+        f"submission{'s' if len(rows) > 1 else ''} {named} may already exist on the bridge, so nothing can be "
+        f"submitted; {RESOLVE_HINT.format(row=rows[0][0])}"))
 
 
 def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str) -> str:

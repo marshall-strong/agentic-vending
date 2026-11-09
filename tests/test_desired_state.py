@@ -40,6 +40,7 @@ class FakeBridge:
         self.posts: list[dict] = []
         self.catalog_status = 200
         self.catalog_body = None     # set to serve something other than {"products": CATALOG}
+        self.cut = False             # answer the POST with a body shorter than its Content-Length
         self.answer = (201, {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
         fake = self
 
@@ -63,6 +64,16 @@ class FakeBridge:
             def do_POST(self):
                 assert self.path == "/api/v1/purchase-requests" and self.headers["X-API-Key"] == "test-key"
                 fake.posts.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                if fake.cut:
+                    data = b'{"id": "pr-1", "status": "pen'
+                    self.send_response(201)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data) + 40))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    self.wfile.flush()
+                    self.close_connection = True
+                    return
                 self._reply(*fake.answer)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

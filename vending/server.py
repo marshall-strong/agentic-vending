@@ -185,10 +185,11 @@ def _preview(conn: psycopg.Connection, desired: DesiredState) -> preview.PlanRep
 
 
 @_tool(built=True)
-async def submit_desired_state(desired: DesiredState) -> submit.SubmitReply:
-    """Submit a desired state for all 20 slots as a purchase request, after planning it again on live data. Same input as preview_desired_state; preview first. Refused with every problem at once; spends real money when accepted."""
-    return await _write("submit_desired_state", {"desired": desired},
-                        submit.submit_desired_state(desired, lambda: bridge(), lambda: connect()),
+async def submit_desired_state(desired: DesiredState, expected_plan_hash: str | None = None) -> submit.SubmitReply:
+    """Submit a desired state for all 20 slots as a purchase request, after planning it again on live data. Same input as preview_desired_state; pass its plan_hash as expected_plan_hash to be refused if anything changed since. Refused with every problem at once; spends real money when accepted."""
+    return await _write("submit_desired_state", {"desired": desired, "expected_plan_hash": expected_plan_hash},
+                        submit.submit_desired_state(desired, lambda: bridge(), lambda: connect(),
+                                                    expected_plan_hash=expected_plan_hash),
                         submit.SubmitReply)
 
 

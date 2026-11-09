@@ -253,24 +253,37 @@ purchase without it is refused `no_sourcing`.
 
 ### `submit_desired_state`: the only way to buy
 
-Same input as `preview_desired_state`, so the agent previews, fixes every refusal, then submits the
-same desired state. Inside the write gate (halt lock held) it runs the planner **again** on live
-data, so the plan that is sent is the plan that was checked; if anything changed since the preview,
-it refuses with every problem at once and nothing is sent. Then, like `request_catalog_product`:
+Same input as `preview_desired_state`, plus an optional `expected_plan_hash`: the `plan_hash` the
+preview returned. The agent previews, fixes every refusal, then submits the same desired state with
+that hash. Inside the write gate (halt lock held) it runs the planner **again** on live data, so the
+plan that is sent is the plan that was checked; if stock, prices, the balance or the catalog moved
+since the preview, the hash differs and it refuses `plan_changed`. Without the hash nothing is
+compared, and whatever the planner produces now is sent. Every refusal comes at once: the planner's,
+`plan_changed`, and `submission_unresolved` (below), which the preview reports too. Then, on one
+side connection opened before anything is sent:
 
-1. It commits a `sending` row in `purchase_submissions` (migration 008) on its own connection, with
-   the exact body and the directive, **before** the POST. A crash after the POST can't lose the fact
-   that we sent something, which matters because the bridge has no route that lists our requests.
+1. It commits a `sending` row in `purchase_submissions` (migration 008), with the exact body, the
+   directive and the quoted visit fee, **before** the POST. A crash after the POST can't lose the
+   fact that we sent something, which matters because the bridge has no route that lists our
+   requests.
 2. It POSTs `/api/v1/purchase-requests` once, never retried: a retry after a lost answer could order
    twice.
-3. It settles the row: `accepted` (and the request goes into `purchase_requests` in the same
-   transaction, so `python -m vending.sync_requests` reads it back from then on), `refused` (a
-   `4xx`; the reply carries the bridge's reason, such as `422 invalid_lines`), `not_filed` (it never
-   left), or `unknown` (sent, but a timeout, a `5xx` or a cut-off answer).
+3. It settles the row on that same connection: `accepted` (and the request goes into
+   `purchase_requests` in the same transaction, so `python -m vending.sync_requests` reads it back
+   from then on), `refused` (a `4xx`; the reply carries the bridge's reason, such as `422
+   invalid_lines`), `not_filed` (it never left), or `unknown` (sent, but a timeout, a `5xx` whose
+   body is kept in `detail`, or a cut-off answer).
 
-While any row is `sending` or `unknown`, the request may or may not exist on the bridge, so the tool
-refuses every submit (`submission_unresolved`) until a person checks the bridge's Swagger page and
-runs one of:
+If the bridge accepted the request but storing that fails anyway (the database dropped between the
+POST and the settle), the answer is written to the server's stderr as a `LOST ANSWER` line and the
+error the agent sees names the request ID and the `resolve` command, so the ID is never only in
+memory. The row stays `sending`.
+
+While any row is `sending` or `unknown`, the request may or may not exist on the bridge, so both
+tools refuse (`submission_unresolved`) until a person settles it. With the request ID (from the
+`LOST ANSWER` line or the row's `response`), the bridge's Swagger page has
+`GET /api/v1/purchase-requests/{id}`. **Without it, ask the instructors first**: a resend of a
+request that was filed would order twice. Then run one of:
 
 ```
 python -m vending.submissions list
@@ -278,9 +291,12 @@ python -m vending.submissions resolve 7 --request-id pr_abc123 --by kevin   # it
 python -m vending.submissions resolve 7 --not-filed --by kevin              # it never was
 ```
 
-Resolving with a request ID also records it in `purchase_requests`. Both paths carry the midweek visit fee the plan quoted for an off-cycle request (`visit_fee_cents`, saved on the `sending` row before the POST), so the ledger charges what was agreed then even if `config.midweek_fee_cents` changes later. Every change is logged with the
-`--by` name. The reply to an accepted submit carries the request ID, the plan hash, the number of
-lines, the max cost and the directive the worker will read.
+Resolving with a request ID also records it in `purchase_requests`. Both paths carry the midweek
+visit fee the plan quoted for an off-cycle request (`visit_fee_cents`, saved on the `sending` row
+before the POST), so the ledger charges what was agreed then even if `config.midweek_fee_cents`
+changes later. Every change is logged with the `--by` name. The reply to an accepted submit carries
+the request ID, the plan hash, the number of lines, the max cost and the directive the worker will
+read.
 
 ## Adding a tool's logic
 

@@ -1,9 +1,10 @@
-"""Read-only client for the DEX Bridge, for code that runs unattended.
+"""Client for the DEX Bridge, for code that runs unattended.
 
 `scripts/bridge.py` is the command-line tool for people; this is the library the
-sync jobs use. It never polls the machine live and cannot submit a purchase
-request: it only reads stored history and our purchase requests, and `/health`
-to tell a bad poll from an outage.
+sync jobs and the write tools use. It never polls the machine live. The sync
+jobs read stored history and our purchase requests through it, with retries;
+`submit_desired_state` and `request_catalog_product` send their one POST through
+`post`, never retried, and `/health` tells a bad poll from an outage.
 
 Read failures are retried, then end in one of two ways. `BridgeUnreachable`
 means every later call would fail too, so the caller should stop: the bridge is
