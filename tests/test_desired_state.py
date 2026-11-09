@@ -40,7 +40,7 @@ class FakeBridge:
         self.posts: list[dict] = []
         self.catalog_status = 200
         self.catalog_body = None     # set to serve something other than {"products": CATALOG}
-        self.cut = False             # answer the POST with a body shorter than its Content-Length
+        self.cut = False             # answer the POST (with `answer`'s status) with a body shorter than its Content-Length
         self.answer = (201, {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
         fake = self
 
@@ -66,7 +66,7 @@ class FakeBridge:
                 fake.posts.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
                 if fake.cut:
                     data = b'{"id": "pr-1", "status": "pen'
-                    self.send_response(201)
+                    self.send_response(fake.answer[0])
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(data) + 40))
                     self.end_headers()

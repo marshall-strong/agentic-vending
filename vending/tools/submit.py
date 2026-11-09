@@ -3,8 +3,8 @@
 Inside the write gate (halt lock held), it runs the planner again on live data,
 so the plan that is sent is the plan that was checked. Given `expected_plan_hash`
 (the `plan_hash` that `preview_desired_state` returned) it also refuses,
-`plan_changed`, when stock, prices, the balance or the catalog moved since the
-preview. Every refusal is reported at once, including an earlier submission a
+`plan_changed`, when the lines, their worst-case cost or the visit fee changed
+since the preview. Every refusal is reported at once, including an earlier submission a
 person still has to settle. Then, on one side connection opened before
 anything is sent:
 
@@ -80,10 +80,11 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
         except planning.NotReady as blocked:
             return SubmitReply(success=False, message=f"Can't submit yet: {blocked}")
         refusals = list(plan.refusals)
-        if expected_plan_hash and plan.plan_hash != expected_plan_hash:
+        # A plan with refusals has no hash; those refusals already say what changed.
+        if expected_plan_hash and plan.plan_hash and plan.plan_hash != expected_plan_hash:
             refusals.append(Refusal("plan_changed", (
-                f"the plan now hashes to {plan.plan_hash}, not {expected_plan_hash} as previewed: stock, prices, "
-                "the balance or the catalog changed since. Preview again and submit what it shows.")))
+                f"the plan now hashes to {plan.plan_hash}, not {expected_plan_hash} as previewed: the lines, their "
+                "worst-case cost or the visit fee changed since. Preview again and submit what it shows.")))
         if unresolved := submissions.unresolved(conn):
             refusals.append(unresolved)
         if refusals:
