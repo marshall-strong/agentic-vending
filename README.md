@@ -183,6 +183,10 @@ server migrates on its own: on a database that is behind, each refuses to run an
 `migrate`, so nothing started from a branch can change the shared Azure database's schema.
 Run the tests with `pytest`.
 
+Before the live run starts, a person records the opening capital once with
+`python -m vending.ledger open --amount 600.00 --by NAME`; until then `get_account_balance`
+refuses and names that command. See "the ledger" in `docs/mcp-server.md`.
+
 `python -m vending.sync_requests` does the same for our purchase requests: it reads back
 every request still pending, and every one fulfilled in the last 30 days, and stores the
 receipts the stock counts come from. It only reads; it never submits a request.

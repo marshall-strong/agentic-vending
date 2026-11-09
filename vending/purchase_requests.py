@@ -37,16 +37,20 @@ class Stored:
 
 
 def record(conn: psycopg.Connection, request_id: str, submitted_at: datetime, off_cycle: bool,
-           body: dict, plan_hash: str | None = None) -> None:
+           body: dict, plan_hash: str | None = None, visit_fee_cents: int | None = None) -> None:
     """Remember a request the bridge has just accepted, as `pending`.
+
+    `visit_fee_cents` is the midweek visit fee as it stood when an off-cycle
+    request was submitted, so the ledger charges what was agreed then even if
+    the config fee changes later.
 
     Safe to call twice for the same ID: the second call changes nothing, so a
     retry after a dropped connection can't overwrite what the sync has learned.
     """
     conn.execute(
-        "insert into purchase_requests (request_id, submitted_at, off_cycle, plan_hash, request_body)"
-        " values (%s, %s, %s, %s, %s) on conflict (request_id) do nothing",
-        (request_id, submitted_at, off_cycle, plan_hash, Jsonb(body)),
+        "insert into purchase_requests (request_id, submitted_at, off_cycle, plan_hash, request_body, visit_fee_cents)"
+        " values (%s, %s, %s, %s, %s, %s) on conflict (request_id) do nothing",
+        (request_id, submitted_at, off_cycle, plan_hash, Jsonb(body), visit_fee_cents),
     )
 
 
