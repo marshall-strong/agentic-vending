@@ -57,8 +57,8 @@ SMALL_CATALOG = 25
 # Statuses the bridge can give a request that our table stores as they are.
 KNOWN_STATUSES = {"pending", "approved", "rejected"}
 
-# A size the bridge would sell as a drink: "20 oz bottle", "12 fl oz can", "500 mL".
-VOLUME = re.compile(r"\d+(?:\.\d+)?\s*(?:fl\.?\s*oz|oz|ounces?|ml|l|liters?|litres?)\b", re.IGNORECASE)
+# A size the bridge would sell as a drink: "20 oz bottle", "12 fl oz can", "500 mL", "2-liter".
+VOLUME = re.compile(r"\d+(?:\.\d+)?[\s-]*(?:fl\.?\s*oz|oz|ounces?|ml|l|liters?|litres?)\b", re.IGNORECASE)
 # Words that don't tell two drinks apart: how it's packed, or that it's the
 # default flavor. The duplicate checks ignore them, so "20 oz" and "20 oz
 # bottle" are the same request, and "Coca-Cola" matches "Coca-Cola Original".
