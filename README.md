@@ -171,13 +171,17 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 docker compose up -d db
+python -m vending.db migrate
 python -m vending.sync_history --since 2026-08-28
 ```
 
-The last command creates the tables and copies every stored poll since 28 August into
-`polls` and `poll_selections` (about 830 polls on 22 October, two minutes). Run it again
-any time to pick up new polls; it only fetches what it doesn't have. It never touches the
-machine itself: it reads the bridge's stored history. Run the tests with `pytest`.
+`migrate` creates or updates the tables. The sync then copies every stored poll since
+28 August into `polls` and `poll_selections` (about 830 polls on 22 October, two minutes).
+Run it again any time to pick up new polls; it only fetches what it doesn't have. It never
+touches the machine itself: it reads the bridge's stored history. Neither the sync nor the
+server migrates on its own: on a database that is behind, each refuses to run and names
+`migrate`, so nothing started from a branch can change the shared Azure database's schema.
+Run the tests with `pytest`.
 
 `python -m vending.sync_requests` does the same for our purchase requests: it reads back
 every request still pending, and every one fulfilled in the last 30 days, and stores the
