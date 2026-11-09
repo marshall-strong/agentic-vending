@@ -492,8 +492,10 @@ def test_now_and_next_friday(conn, page_conn, even_columns):
         {"slot": "16", "fill_to": 0, "reason": "dead"}))
     snap = dashboard.snapshot(page_conn, MONDAY)
     view = dashboard.machine_view(snap)
-    assert view["12"]["now"] == {"product": "COKE-20OZ", "units": 4, "price": "2.50"}
-    assert view["14"]["now"] == {"product": None, "units": None, "price": "2.00"}    # no receipt: unknown
+    assert view["12"]["now"] == {"product": "COKE-20OZ", "units": 4, "price": "2.50", "source": "receipt",
+                                 "counted_at": None}
+    assert view["14"]["now"] == {"product": None, "units": None, "price": "2.00", "source": None,
+                                 "counted_at": None}    # no receipt or count: unknown
     assert view["12"]["next"]["units"] == 7 and view["12"]["next"]["old_price"] == "2.50"
     assert (view["12"]["change"]["kind"], view["14"]["change"]["kind"], view["16"]["change"]["kind"]) == \
         ("warn", "info", "bad")
@@ -530,3 +532,19 @@ def test_bottle_level_uses_capacity_only_when_the_package_is_known():
     assert dashboard._level(9, "MYSTERY", 6) == 100              # more than the fill: against itself
     assert dashboard._level(None, "COKE-20OZ", 6) == 0
     assert dashboard._colour("COKE-20OZ") == dashboard._colour(" coke-20oz ") != dashboard._colour("SPRITE-20OZ")
+
+
+def test_a_photo_count_fills_in_what_receipts_dont_know(conn, page_conn):
+    from tests.conftest import store_poll
+    from vending import slot_counts
+    store_poll(conn, "a", "2026-11-09T15:00:00+00:00", {"25": (400, 100)})
+    store_poll(conn, "b", "2026-11-10T15:00:00+00:00", {"25": (400, 101)})
+    slot_counts.record(conn, slot_counts.parse({
+        "count_id": "p1", "counted_at": "2026-11-09T11:30:00-05:00", "source": "photo", "device_id": "vmc1",
+        "selections": [{"selection": "25", "product": "Premier Protein <shake>", "units": 4, "price_on_tag": "4.00"}]}),
+        "kevin")
+    snap = dashboard.snapshot(page_conn)
+    now = dashboard.machine_view(snap)["25"]["now"]
+    assert (now["product"], now["units"], now["source"]) == ("Premier Protein <shake>", 3, "photo")
+    page = dashboard.render(snap)
+    assert "~3" in page and "Premier Protein &lt;shake&gt;" in page and "<shake>" not in page

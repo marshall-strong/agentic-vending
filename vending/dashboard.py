@@ -47,7 +47,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import db, settings
+from vending import db, settings, slot_counts
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
 from vending.slots import DEVICE_ID, SLOTS
@@ -315,6 +315,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         "recent_calls": _panel(lambda: _recent_calls(conn, now)),
         "sales": _panel(lambda: _sales(conn, now)),
         "stock": _panel(lambda: _stock(conn)),
+        "counts": _panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))),
         "spend": _panel(lambda: _spend(conn, now)),
         "purchase_requests": _panel(lambda: _rows(conn, """
             select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,
@@ -613,11 +614,19 @@ def machine_view(snap: dict) -> dict:
     planned = {s["slot"]: s for s in p["slots"]} if p else {}
     prices = sales["data"]["slots"] if sales["ok"] else {}
     held = stock["data"]["slots"] if stock["ok"] else {}
+    counted = snap["counts"]["data"] if snap.get("counts", {}).get("ok") else {}
     out = {}
     for slot in SLOTS:
         h = held.get(slot) or {}
         now = {"product": h.get("product"), "units": h.get("on_hand"),
-               "price": (prices.get(slot) or {}).get("price")}
+               "price": (prices.get(slot) or {}).get("price"), "source": "receipt" if h else None,
+               "counted_at": None}
+        c = counted.get(slot)
+        # A person's count fills in what receipts don't know, and replaces them when it is newer.
+        if c is not None and (not h or h.get("since") is None or c["counted_at"] > h["since"]):
+            now.update(product=c["product"], units=c["on_hand"], source=c["source"], counted_at=c["counted_at"])
+            if now["price"] is None:
+                now["price"] = c["price_on_tag"]
         entry = (planned.get(slot) or {}).get("now")
         nxt = change = None
         if p is not None:
@@ -640,13 +649,14 @@ def machine_view(snap: dict) -> dict:
     return out
 
 
-def _bottle(units: int | None, product: str | None, fill_to: Any, view: str) -> str:
+def _bottle(units: int | None, product: str | None, fill_to: Any, view: str, estimate: bool = False) -> str:
     if units is None:
         return (f'<span class="bottle unknown v-{view}" role="img" aria-label="units unknown">'
                 '<b>?</b></span>')
-    return (f'<span class="bottle v-{view}" role="img" aria-label="{units} units">'
+    shown = f"~{units}" if estimate else str(units)
+    return (f'<span class="bottle v-{view}" role="img" aria-label="{"about " if estimate else ""}{units} units">'
             f'<i style="height:{_level(units, product, fill_to)}%;background:{_colour(product)}"></i>'
-            f'<b>{units}</b></span>')
+            f'<b>{shown}</b></span>')
 
 
 def _price_text(price: Any) -> str:
@@ -664,11 +674,13 @@ def _ours(slot: str, v: dict, linked: bool) -> str:
     title = [f"{slot}: {now['product'] or 'product unknown'}",
              "price unknown" if now["price"] is None else f"${now['price']} on the tag",
              "units unknown" if now["units"] is None else f"{now['units']} on hand"]
+    if now["source"] in ("photo", "door"):
+        title.append(f"counted from a {now['source']} on {now['counted_at']:%d %b}, less sales since")
     parts = [f'<span class="num">{_e(slot)}</span>']
     if change:
         parts.append(f'<span class="chg {change["kind"]}"></span>')
         title.append("next: " + ", ".join(change["labels"]) + (f" ({change['reason']})" if change["reason"] else ""))
-    parts.append(_bottle(now["units"], now["product"], v["fill_to"], "now"))
+    parts.append(_bottle(now["units"], now["product"], v["fill_to"], "now", estimate=now["source"] == "photo"))
     parts.append(f'<span class="lbl v-now">{_e(now["product"]) or "unknown"}</span>')
     parts.append(f'<span class="tag v-now">{_price_text(now["price"])}</span>')
     if nxt is not None:
@@ -702,7 +714,7 @@ def _cabinet_html(snap: dict) -> str:
     noplan = '' if p is not None else '<div class="noplan v-next">No plan yet</div>'
     keys = "".join(f"<span>{k}</span>" for k in "123456789")
     cabinet = (f'<div class="cab" aria-label="The machine, {SHELVES} shelves of {COLUMNS} selections">'
-               f'<div class="brand">{_e(DEVICE_ID.upper())}</div>'
+               f'<div class="brand">ROYAL VISION VENDER &middot; {_e(DEVICE_ID.upper())}</div>'
                f'<div class="glass">{"".join(shelves)}{noplan}</div>'
                f'<div class="ctl" aria-hidden="true"><div class="lcd"><span class="v-now">NOW</span>'
                f'<span class="v-next">FRI</span></div><div class="bill"></div><div class="keys">{keys}</div>'
@@ -744,7 +756,7 @@ def _cabinet_html(snap: dict) -> str:
     legend = ('<div class="vm-legend"><div><i class="dotk info"></i>swap or fill</div>'
               '<div><i class="dotk warn"></i>price change</div><div><i class="dotk bad"></i>pull</div>'
               f'<p>Striped selections aren\'t ours. The number on a bottle is units on hand (Now) or the plan\'s '
-              f'fill (Next Friday); <b>?</b> and "unknown" mean no receipt yet. {polled}{stock_note}'
+              f'fill (Next Friday); <b>~3</b> is an estimate from a photo count, less sales since; <b>?</b> and "unknown" mean no receipt or count yet. {polled}{stock_note}'
               'Bottle levels use approximate capacities from the loading label.</p>'
               '<p class="honest">Stock is estimated from receipts and polls, not a sensor.</p></div>')
     seg = ('<span class="seg" role="group" aria-label="Show" hidden>'
