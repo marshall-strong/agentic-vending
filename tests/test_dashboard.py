@@ -271,17 +271,21 @@ def test_refuses_a_host_that_isnt_local(served):
         assert reply.status == 200
 
 
-@pytest.mark.parametrize("now, before, labels", [
-    ({"slot": "16", "product": "MTDEW", "fill_to": 4}, {"slot": "16", "keep": True}, ["swap", "change"]),
-    ({"slot": "15", "fill_to": 8, "sale_price": "2.75"}, {"slot": "15", "fill_to": 6, "sale_price": "2.50"},
+@pytest.mark.parametrize("now, before, tag, labels", [
+    ({"slot": "16", "product": "MTDEW", "fill_to": 4}, {"slot": "16", "keep": True}, None, ["swap"]),
+    ({"slot": "15", "fill_to": 8, "sale_price": "2.75"}, {"slot": "15", "fill_to": 6, "sale_price": "2.50"}, None,
      ["$2.50 to $2.75", "fill 6 to 8"]),
-    ({"slot": "15", "sale_price": "2.75"}, {"slot": "15", "keep": True}, ["price", "change"]),
-    ({"slot": "15", "fill_to": 0}, {"slot": "15", "fill_to": 6}, ["pull"]),
-    ({"slot": "15", "keep": True}, None, ["new"]),
-    ({"slot": "15", "sale_price": Decimal("2.50")}, {"slot": "15", "sale_price": "2.50"}, ["changed"]),
+    # After a "keep", a price is judged against the tag: a change only when it differs.
+    ({"slot": "15", "sale_price": "2.75"}, {"slot": "15", "keep": True}, "2.50", ["$2.50 to $2.75"]),
+    ({"slot": "15", "fill_to": 8, "sale_price": "3.00"}, {"slot": "15", "keep": True}, "3.00", ["restock"]),
+    ({"slot": "15", "fill_to": 0}, {"slot": "15", "fill_to": 6}, None, ["pull"]),
+    ({"slot": "15", "sale_price": "2.75"}, {"slot": "15", "keep": True}, None, ["set $2.75"]),
+    ({"slot": "15", "keep": True}, None, None, ["new"]),
+    ({"slot": "15", "keep": True}, {"slot": "15", "fill_to": 6}, None, ["keep"]),
+    ({"slot": "15", "sale_price": Decimal("2.50")}, {"slot": "15", "sale_price": "2.50"}, None, ["changed"]),
 ])
-def test_change_labels(now, before, labels):
-    assert dashboard._changes(now, before) == labels
+def test_change_labels(now, before, tag, labels):
+    assert dashboard._changes(now, before, tag) == labels
 
 
 # --- the redesign: runs, machine, attention ------------------------------------------------------
@@ -537,7 +541,7 @@ def test_bottle_level_uses_capacity_only_when_the_package_is_known():
 def test_a_photo_count_fills_in_what_receipts_dont_know(conn, page_conn):
     from tests.conftest import store_poll
     from vending import slot_counts
-    store_poll(conn, "a", "2026-11-09T15:00:00+00:00", {"25": (400, 100)})
+    store_poll(conn, "a", "2026-11-09T17:00:00+00:00", {"25": (400, 100)})
     store_poll(conn, "b", "2026-11-10T15:00:00+00:00", {"25": (400, 101)})
     slot_counts.record(conn, slot_counts.parse({
         "count_id": "p1", "counted_at": "2026-11-09T11:30:00-05:00", "source": "photo", "device_id": "vmc1",
@@ -548,3 +552,14 @@ def test_a_photo_count_fills_in_what_receipts_dont_know(conn, page_conn):
     assert (now["product"], now["units"], now["source"]) == ("Premier Protein <shake>", 3, "photo")
     page = dashboard.render(snap)
     assert "~3" in page and "Premier Protein &lt;shake&gt;" in page and "<shake>" not in page
+
+
+def test_the_plan_agrees_with_the_machine_about_a_counted_slot(conn, page_conn):
+    from vending import slot_counts
+    slot_counts.record(conn, slot_counts.parse({
+        "count_id": "p1", "counted_at": "2026-11-09T11:30:00-05:00", "source": "photo", "device_id": "vmc1",
+        "selections": [{"selection": "25", "product": "Vita Coco", "units": 3}]}), "kevin")
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "25", "keep": True}))
+    page = dashboard.render(dashboard.snapshot(page_conn))
+    assert "3 on hand of Vita Coco" in page

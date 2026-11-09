@@ -56,21 +56,57 @@ def test_record_writes_once_and_logs(conn):
     assert conn.execute("select count(*) from slot_counts").fetchone()[0] == 2
 
 
-def test_on_hand_is_the_count_minus_sales_since(conn):
-    store_poll(conn, "a", "2026-11-09T15:00:00+00:00", {"25": (400, 100)})   # before the count (16:30 UTC)
-    store_poll(conn, "b", "2026-11-10T15:00:00+00:00", {"25": (400, 103)})
+def test_sales_before_the_count_are_not_taken_off_again(conn):
+    # Poll at 10:00 ET reads 100; 3 sell; the count at 11:30 sees 4; polls after read 103, then 105.
+    store_poll(conn, "a", "2026-11-09T15:00:00+00:00", {"25": (400, 100)})
+    store_poll(conn, "b", "2026-11-09T17:00:00+00:00", {"25": (400, 103)})
+    store_poll(conn, "c", "2026-11-10T15:00:00+00:00", {"25": (400, 105)})
     slot_counts.record(conn, parse(count()), "kevin")
-    seen = slot_counts.latest(conn)
-    assert (seen["25"]["sold_since"], seen["25"]["on_hand"]) == (3, 1)
-    # A selection with no poll before the count has nothing to subtract from yet.
-    assert (seen["26"]["sold_since"], seen["26"]["on_hand"]) == (None, 0)
+    seen = slot_counts.latest(conn)["25"]
+    assert (seen["sold_since"], seen["on_hand"]) == (2, 2)
+
+
+def test_no_poll_before_the_count_still_counts_sales_after_it(conn):
+    store_poll(conn, "b", "2026-11-09T17:00:00+00:00", {"25": (400, 100)})
+    store_poll(conn, "c", "2026-11-10T15:00:00+00:00", {"25": (400, 103)})
+    slot_counts.record(conn, parse(count()), "kevin")
+    assert slot_counts.latest(conn)["25"]["on_hand"] == 1
+
+
+def test_a_counter_reset_starts_from_its_new_value(conn):
+    store_poll(conn, "b", "2026-11-09T17:00:00+00:00", {"25": (400, 100)})
+    store_poll(conn, "c", "2026-11-10T15:00:00+00:00", {"25": (400, 1)})     # board swapped, then 1 sold
+    store_poll(conn, "d", "2026-11-11T15:00:00+00:00", {"25": (400, 2)})
+    slot_counts.record(conn, parse(count()), "kevin")
+    assert slot_counts.latest(conn)["25"]["sold_since"] == 2
+
+
+def test_no_poll_since_the_count_keeps_the_counted_units(conn):
+    store_poll(conn, "a", "2026-11-09T15:00:00+00:00", {"25": (400, 100)})
+    slot_counts.record(conn, parse(count()), "kevin")
+    seen = slot_counts.latest(conn)["25"]
+    assert (seen["sold_since"], seen["on_hand"]) == (None, 4)
+
+
+def test_missing_poll_tables_keep_the_count(conn):
+    slot_counts.record(conn, parse(count()), "kevin")
+    conn.execute("drop table poll_selections")
+    seen = slot_counts.latest(conn)["25"]
+    assert (seen["product"], seen["sold_since"], seen["on_hand"]) == ("Premier Protein", None, 4)
 
 
 def test_more_sales_than_counted_never_goes_negative(conn):
-    store_poll(conn, "a", "2026-11-09T15:00:00+00:00", {"25": (400, 100)})
-    store_poll(conn, "b", "2026-11-12T15:00:00+00:00", {"25": (400, 110)})
+    store_poll(conn, "b", "2026-11-09T17:00:00+00:00", {"25": (400, 100)})
+    store_poll(conn, "c", "2026-11-12T15:00:00+00:00", {"25": (400, 110)})
     slot_counts.record(conn, parse(count()), "kevin")
     assert slot_counts.latest(conn)["25"]["on_hand"] == 0
+
+
+def test_a_count_for_another_device_or_with_a_bad_note_is_refused():
+    with pytest.raises(CountError, match="device_id"):
+        parse(count(device_id="vmc-1"))
+    with pytest.raises(CountError, match="25: note must be text"):
+        parse(count(selections=[{"selection": "25", "product": "x", "units": 1, "note": {"a": 1}}]))
 
 
 def test_a_later_count_replaces_an_earlier_one(conn):

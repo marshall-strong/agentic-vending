@@ -59,6 +59,8 @@ REFRESH_SECONDS = 30
 ACTIVITY_ROWS = 50
 RUN_ROWS = 10
 REQUEST_ROWS = 10
+# Purchase requests shown before the rest fold away.
+REQUESTS_SHOWN = 5
 # Every transaction on the dashboard's connection is read-only; Postgres refuses any write.
 READ_ONLY = "-c default_transaction_read_only=on"
 # The runs the Status and Plan panels follow. Replays of past weeks show only under Runs.
@@ -324,7 +326,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
                    count(*) filter (where l.outcome = 'unavailable') as unavailable,
                    count(*) filter (where l.outcome = 'alternate') as alternates
               from purchase_requests r left join purchase_lines l using (request_id)
-             group by r.request_id order by r.submitted_at desc limit %s""", (REQUEST_ROWS,))),
+             group by r.request_id order by r.submitted_at desc, r.request_id desc limit %s""", (REQUEST_ROWS,))),
         "catalog_requests": _panel(lambda: _rows(
             conn, "select id, requested_at, name, size, status, decision_note"
                   " from product_requests order by requested_at desc, id desc limit %s", (REQUEST_ROWS,))),
@@ -500,8 +502,12 @@ def _change_tone(label: str) -> str:
     return "info"
 
 
-def _changes(now: dict | None, before: dict | None) -> list[str]:
-    """Short labels for how a slot's entry moved from the previous plan: swap, $2.50 to $2.75, fill 6 to 8..."""
+def _changes(now: dict | None, before: dict | None, tag: Any = None) -> list[str]:
+    """Short labels for how a slot's entry moved from the previous plan: swap, $2.50 to $2.75, fill 6 to 8...
+
+    A price counts as changed against the previous plan's price, or, when that plan gave none
+    (a "keep"), against `tag`, the price on the tag now; with neither, it reads "set $2.75".
+    """
     if now is None:
         return []
     if before is None:
@@ -511,15 +517,18 @@ def _changes(now: dict | None, before: dict | None) -> list[str]:
         return ["pull"]
     if now.get("product") and now.get("product") != before.get("product"):
         labels.append("swap")
-    if "sale_price" in now and str(now["sale_price"]) != str(before.get("sale_price")):
-        labels.append(f"${before['sale_price']} to ${now['sale_price']}" if before.get("sale_price") is not None
-                      else "price")
+    was = before.get("sale_price") if before.get("sale_price") is not None else tag
+    if now.get("sale_price") is not None and was is not None and not _same_price(now["sale_price"], was):
+        labels.append(f"${was} to ${now['sale_price']}")
+    elif now.get("sale_price") is not None and was is None:
+        labels.append(f"set ${now['sale_price']}")   # no earlier price known to compare with
     old, new = before.get("fill_to"), now.get("fill_to")
     if isinstance(old, int) and isinstance(new, int) and new != old:
         labels.append(f"fill {old} to {new}")
-    if bool(now.get("keep")) != bool(before.get("keep")):
-        labels.append("keep" if now.get("keep") else "change")
-    return labels or ["changed"]
+    if now.get("keep") and not before.get("keep"):
+        labels.append("keep")
+    # Leaving "keep as is" for an explicit entry that asks for nothing new says nothing more.
+    return labels or (["restock"] if before.get("keep") else ["changed"])
 
 
 def _entry_text(entry: dict) -> str:
@@ -643,7 +652,8 @@ def machine_view(snap: dict) -> dict:
                        "price": price, "old_price": now["price"] if moved else None,
                        "pulled": fill == 0 and not keep, "fill_to": fill}
             if planned.get(slot, {}).get("changed"):
-                labels = _changes(entry, planned[slot]["before"]) if entry is not None else ["dropped"]
+                labels = (_changes(entry, planned[slot]["before"], now["price"]) if entry is not None
+                          else ["dropped"])
                 change = {"labels": labels, "kind": _change_kind(labels), "reason": (entry or {}).get("reason")}
         out[slot] = {"now": now, "next": nxt, "change": change, "fill_to": _fill(entry)}
     return out
@@ -680,8 +690,10 @@ def _ours(slot: str, v: dict, linked: bool) -> str:
     if change:
         parts.append(f'<span class="chg {change["kind"]}"></span>')
         title.append("next: " + ", ".join(change["labels"]) + (f" ({change['reason']})" if change["reason"] else ""))
-    parts.append(_bottle(now["units"], now["product"], v["fill_to"], "now", estimate=now["source"] == "photo"))
-    parts.append(f'<span class="lbl v-now">{_e(now["product"]) or "unknown"}</span>')
+    counted_empty = now["source"] in ("photo", "door") and now["product"] is None and now["units"] == 0
+    parts.append(_bottle(now["units"], now["product"], v["fill_to"], "now",
+                         estimate=now["source"] == "photo" and not counted_empty))
+    parts.append(f'<span class="lbl v-now">{"empty" if counted_empty else (_e(now["product"]) or "unknown")}</span>')
     parts.append(f'<span class="tag v-now">{_price_text(now["price"])}</span>')
     if nxt is not None:
         if nxt["pulled"]:
@@ -787,17 +799,18 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None) ->
         if "fill_to" in entry:
             terms.append("pull" if entry.get("fill_to") == 0 else f"fill to {_e(entry['fill_to'])}")
         what = " &middot; ".join(terms)
-    labels = (_changes(entry, s["before"]) if entry is not None else ["dropped"]) if changed else []
+    labels = (_changes(entry, s["before"], price_now) if entry is not None else ["dropped"]) if changed else []
     tags = "".join(_pill(t, _change_tone(t)) for t in labels)
     body = []
     reason = (entry or {}).get("reason")
     body.append(f'<div class="why">{_e(reason)}</div>' if reason else '<div class="dim">No reason given.</div>')
     if changed and s["before"] is not None:
         body.append(f'<div class="was">was: {_entry_text(s["before"])}</div>')
-    stock_text = f'{held["on_hand"]} on hand' if held is not None else "stock unknown"
+    on_hand = (held or {}).get("on_hand")
+    stock_text = f"{on_hand} on hand" if on_hand is not None else "stock unknown"
     sold_n = (sold or {}).get("sold")
     sales_text = f"{sold_n} sold" if sold_n is not None else "sales unknown"
-    holds = f' of {_e(held["product"])}' if held is not None else ""
+    holds = f' of {_e(held["product"])}' if held is not None and held.get("product") else ""
     tag = f"${_e(price_now)} on the tag &middot; " if price_now is not None else ""
     body.append(f'<div class="sub">now: {tag}{stock_text}{holds} &middot; {sales_text} this week</div>')
     return (f'<details class="pc{" changed" if changed else ""}" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
@@ -814,7 +827,11 @@ def _plan_html(snap: dict) -> str:
         return ('<p class="empty">No plan yet. Once the agent loop records a run with '
                 '<code>vending.agent_runs</code>, each slot shows what it plans, why, and what changed.</p>')
     sold = sales["data"]["slots"] if sales["ok"] else {}
-    held = stock["data"]["slots"] if stock["ok"] else {}
+    held = dict(stock["data"]["slots"]) if stock["ok"] else {}
+    # The same "now" as the machine view, so a slot known only from a count agrees in both panels.
+    for slot, v in machine_view(snap).items():
+        if v["now"]["product"] is not None or v["now"]["units"] is not None:
+            held[slot] = {"product": v["now"]["product"], "on_hand": v["now"]["units"]}
     run = p["run"]
     changed = [s for s in p["slots"] if s["changed"]]
     head = (f'<p class="lede">Plan from run <b>#{run["id"]}</b> ({_e(run["mode"])}, '
@@ -830,7 +847,8 @@ def _plan_html(snap: dict) -> str:
     if p["previous_run"] and changed:
         chips = "".join(
             f'<a class="pill {_change_tone(lab)}" href="#slot-{_e(s["slot"])}">{_e(s["slot"])} {_e(lab)}</a>'
-            for s in changed for lab in (_changes(s["now"], s["before"]) if s["now"] is not None else ["dropped"]))
+            for s in changed for lab in (_changes(s["now"], s["before"], (sold.get(s["slot"]) or {}).get("price"))
+                                         if s["now"] is not None else ["dropped"]))
         controls = (f'<div class="chips">{chips}</div>'
                     '<label class="only" hidden><input type="checkbox" id="changed-only"> '
                     'Show changed slots only</label>')
@@ -1033,7 +1051,10 @@ def _requests_html(purchases: dict, catalog: dict, now: datetime) -> str:
                 f'<div class="meta">{"midweek ($25 visit)" if r["off_cycle"] else "Friday"} &middot; '
                 f'sent {_time(r["submitted_at"], "ago", now)}{lines}</div>'
                 + (f'<div class="detail">{_e(r["decision_note"])}</div>' if r["decision_note"] else "") + "</li>")
-        out += f'<ul class="list">{"".join(items)}</ul>'
+        out += f'<ul class="list">{"".join(items[:REQUESTS_SHOWN])}</ul>'
+        if len(items) > REQUESTS_SHOWN:
+            out += (f'<details class="more" data-key="more-requests"><summary>{len(items) - REQUESTS_SHOWN} older'
+                    f'</summary><ul class="list">{"".join(items[REQUESTS_SHOWN:])}</ul></details>')
     out += '<h3>Catalog requests</h3>'
     if (missing := _missing(catalog)) is not None:
         out += missing
@@ -1131,7 +1152,7 @@ a.pill { text-decoration:none }
   padding:4px 12px; cursor:pointer }
 .seg button[aria-pressed="true"] { background:var(--accent); color:var(--surface) }
 .vm[data-view="now"] .v-next, .vm[data-view="next"] .v-now { display:none !important }
-.vm-wrap { display:grid; grid-template-columns:minmax(0, 440px) minmax(0, 1fr); gap:14px; align-items:start }
+.vm-wrap { display:grid; grid-template-columns:minmax(0, 560px) minmax(0, 1fr); gap:14px; align-items:start }
 .cab { background:linear-gradient(90deg, var(--cab), var(--cab-2) 60%, var(--cab)); border-radius:14px 14px 6px 6px;
   padding:10px; display:grid; grid-template-columns:minmax(0, 1fr) 56px; gap:8px; box-shadow:inset 0 0 0 2px var(--cab-edge) }
 .brand { grid-column:1 / -1; color:#fff; font-weight:800; letter-spacing:.14em; font-size:11px; text-align:center; padding:5px 0;
@@ -1176,6 +1197,7 @@ a.ours:hover, a.ours:focus-visible { background:rgba(255,255,255,.1); outline:no
 .bin, .coinret { height:32px; border-radius:6px; background:#0f1216; box-shadow:inset 0 3px 6px rgba(0,0,0,.7) }
 .bin { color:#5f6b7a; font-size:10px; letter-spacing:.2em; text-align:center; line-height:32px }
 .vm-side { display:grid; gap:10px; min-width:0 }
+details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; margin:6px 0 }
 .card { background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:10px 12px; min-width:0 }
 .card p { margin:4px 0 0 }
 .changes { list-style:none; margin:6px 0 0; padding:0; display:grid; gap:6px }

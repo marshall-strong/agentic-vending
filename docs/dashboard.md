@@ -26,7 +26,7 @@ what changed and why.
 | Verdict | **OK**, **Check** or **Problem** next to the title (and in the browser tab), from the worst item in Needs attention | everything below |
 | Tiles | The halt switch and who last changed it; the latest run and how long it has run; a countdown to the Thursday 23:59 Eastern cutoff; how old the last machine poll is and units sold since; what has been spent on drinks (fulfilled requests) and on the model (run costs) | `config`, `agent_runs`, `polls`, `purchase_requests` |
 | Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours. **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot |
-| In the machine | The machine's face, upright: 5 shelves of 8 selections (row r, column c is selection "rc"), with our selections lit and the rest striped. Which selections are ours comes only from `vending.slots.SLOTS`. Each of ours shows its number, a bottle filled to the units on hand with the count on it, the product under it and the price tag. **Now** is the tag price from the latest poll and the product and units on hand from the receipts. **Next Friday** is the latest plan: its product, price (the tag now struck through when it changes) and fill; slots the plan changed are outlined, with a dot for the kind (blue swap or fill, amber price, red pull). Beside it, each change with the agent's reason. Click a selection to open it in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs` |
+| In the machine | The machine's face, upright: 5 shelves of 8 selections (row r, column c is selection "rc"), with our selections lit and the rest striped. Which selections are ours comes only from `vending.slots.SLOTS`. Each of ours shows its number, a bottle filled to the units on hand with the count on it, the product under it and the price tag. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next Friday** is the latest plan: its product, price (the tag now struck through when it changes) and fill; slots the plan changed are outlined, with a dot for the kind (blue swap or fill, amber price, red pull). Beside it, each change with the agent's reason. Click a selection to open it in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs` |
 | The plan | "N of 20 slots changed since run #X", a chip per change that jumps to the slot and opens its reason, a "Show changed slots only" switch, then one line per slot (product, price, fill, change tags) that opens to the reason, what it was, and what the slot holds and sold this week. Under it, the weekly update for the team and the notes to itself | `agent_runs`, `vending.stock`, `get_machine_state` |
 | Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it | `agent_runs` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
@@ -64,6 +64,31 @@ The page shows only what something recorded, and says so when nothing did.
 
 **Not shown yet:** the balance and profit and loss. They arrive with the ledger (#35); a tile is a
 small addition once it merges. "Spent so far" is only what the receipts and run costs record.
+
+## What is in the machine: counts
+
+The polls never say which product is in a selection, and receipts only name what we stocked
+ourselves. So a person records what they see, and the dashboard takes it from there:
+
+```
+python -m vending.slot_counts record db/counts/2026-11-09-photo.json --by kevin --dry-run   # check it
+python -m vending.slot_counts record db/counts/2026-11-09-photo.json --by kevin             # record it
+python -m vending.slot_counts show
+```
+
+A count file lists every selection looked at, ours or not: the product as seen (or null when
+empty), the units on the rail and the price on the tag. `source` is `photo` (an estimate: a
+picture can't see how deep a rail goes) or `door` (counted with the door open, exact). Recording
+writes the whole count in one transaction and logs it to `action_log`; a count id can be recorded
+once, and the command never migrates. It isn't gated by the halt switch, because a count changes
+nothing in the machine.
+
+On the page, a counted slot shows units counted less what sold since, from the polls: sales
+start at the first poll after the count, so nothing sold before it is taken off twice. A photo
+count shows as "~3"; a slot the count saw empty shows "0 · empty". A restock receipt newer than
+the count replaces it. `db/counts/2026-11-09-photo.json` is the first count, read from photos of
+the machine on 9 Nov; its units are estimates and brands that couldn't be read are kept as the
+visible description.
 
 ## Safety
 

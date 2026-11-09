@@ -10,8 +10,9 @@ A count file is JSON: `count_id`, `counted_at` (with a time zone), `source`
 (`photo` or `door`), `device_id`, an optional `note`, and `selections`, each
 with `selection`, `product` (null when empty), `units` (null when it couldn't be
 counted), `price_on_tag` (exact text such as "2.50", or null) and an optional
-`note`. Every selection in the machine goes in, ours or not, so a change in
-which slots are ours loses nothing. A photo count is never exact; a door count is.
+`note`. List every selection you looked at, ours or not, so a change in which
+slots are ours loses nothing; a selection left out keeps its last count. A photo
+count is never exact; a door count is.
 
 Recording writes the whole count in one transaction and logs it to
 `action_log`, like the halt switch. It doesn't go through the write gate: a
@@ -88,6 +89,10 @@ def parse(data: Any) -> Count:
     if source not in SOURCES:
         problems.append(f"source must be one of {', '.join(SOURCES)}")
     device_id = data.get("device_id", DEVICE_ID)
+    if device_id != DEVICE_ID:
+        problems.append(f"device_id must be {DEVICE_ID!r}, the machine the dashboard reads")
+    if data.get("note") is not None and not isinstance(data.get("note"), str):
+        problems.append("note must be text")
     seen: list[Seen] = []
     entries = data.get("selections")
     if not isinstance(entries, list) or not entries:
@@ -104,6 +109,8 @@ def parse(data: Any) -> Count:
         if name not in SELECTIONS:
             problems.append(f"{name!r} isn't a selection in this machine (11 to 58)")
             continue
+        if entry.get("note") is not None and not isinstance(entry.get("note"), str):
+            problems.append(f"{name}: note must be text")
         product = entry.get("product")
         if product is not None and (not isinstance(product, str) or not product.strip()):
             problems.append(f"{name}: product must be text or null")
@@ -157,17 +164,23 @@ def record(conn: psycopg.Connection, count: Count, by: str) -> int:
 def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID) -> dict[str, dict]:
     """Each selection's most recent count, with units sold since it from the polls.
 
-    `on_hand` is the counted units minus sales since the count, never below 0,
-    or None when the units weren't counted. `sold_since` is None when no poll
-    brackets the count, so there's nothing to subtract from yet.
+    Sales since a count start at the first good poll at or after it (the count already
+    reflects what sold before), and add up the rises between consecutive polls; a counter
+    that drops (a board swap) starts again from its new value, as in `vending.stock`.
+    `sold_since` is None, and `on_hand` is the counted units, when no poll has come in
+    since the count, or the poll tables aren't there. Sales between the count and the
+    first poll after it can't be seen, so on hand is an estimate, never below 0.
     """
     rows = conn.execute(
         "select distinct on (selection) selection, count_id, counted_at, source, product, units, exact,"
         " price_on_tag, note from slot_counts where device_id = %s"
         " order by selection, counted_at desc, recorded_at desc", (device_id,)).fetchall()
+    if not rows:
+        return {}
+    counters = _counters_since(conn, device_id, min(r[2] for r in rows))
     out: dict[str, dict] = {}
     for selection, count_id, counted_at, source, product, units, exact, price, note in rows:
-        sold = _sold_since(conn, device_id, selection, counted_at)
+        sold = None if counters is None else _sold_since(counters.get(selection, []), counted_at)
         on_hand = None if units is None else (units if sold is None else max(0, units - sold))
         out[selection] = {"count_id": count_id, "counted_at": counted_at, "source": source, "product": product,
                           "units_counted": units, "exact": exact, "price_on_tag": price, "note": note,
@@ -175,24 +188,35 @@ def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID) -> dict[str, di
     return out
 
 
-def _sold_since(conn: psycopg.Connection, device_id: str, selection: str, since: datetime) -> int | None:
-    """Units sold between the last good poll at or before `since` and the newest good poll."""
-    row = conn.execute(
-        """
-        with before as (
-            select ps.lifetime_units from polls p join poll_selections ps using (session_id)
-             where p.device_id = %(d)s and p.crc_ok and ps.selection = %(s)s and p.started_at <= %(t)s
-             order by p.started_at desc limit 1),
-        after as (
-            select ps.lifetime_units from polls p join poll_selections ps using (session_id)
-             where p.device_id = %(d)s and p.crc_ok and ps.selection = %(s)s and p.started_at > %(t)s
-             order by p.started_at desc limit 1)
-        select (select lifetime_units from before), (select lifetime_units from after)
-        """, {"d": device_id, "s": selection, "t": since}).fetchone()
-    before, after = row
-    if before is None:
+def _counters_since(conn: psycopg.Connection, device_id: str, since: datetime) -> dict[str, list] | None:
+    """Every good poll's lifetime units per selection from `since` on, oldest first, or None
+    when the poll tables aren't there (a savepoint keeps the caller's transaction usable)."""
+    try:
+        with conn.transaction():
+            found = conn.execute(
+                "select ps.selection, p.started_at, ps.lifetime_units from polls p join poll_selections ps"
+                " using (session_id) where p.device_id = %s and p.crc_ok and p.started_at >= %s"
+                " order by ps.selection, p.started_at", (device_id, since)).fetchall()
+    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         return None
-    return 0 if after is None else max(0, after - before)
+    out: dict[str, list] = {}
+    for selection, at, units in found:
+        out.setdefault(selection, []).append((at, units))
+    return out
+
+
+def _sold_since(polls: list[tuple[datetime, int]], counted_at: datetime) -> int | None:
+    """Units sold across the polls at or after the count; None when none has come in yet."""
+    after = [units for at, units in polls if at >= counted_at]
+    if not after:
+        return None
+    sold = 0
+    for previous, current in zip(after, after[1:]):
+        if current >= previous:
+            sold += current - previous
+        else:               # the counter went back: a new board starts from its new value
+            sold += current
+    return sold
 
 
 def main(argv: list[str]) -> int:
