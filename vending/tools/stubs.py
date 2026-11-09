@@ -20,10 +20,6 @@ def get_catalog(conn: psycopg.Connection, search: str | None) -> Reply:
     raise NotBuilt("get_catalog", "needs the catalog sync from /products and our sourcing table")
 
 
-def get_purchase_requests(conn: psycopg.Connection, pending_only: bool) -> Reply:
-    raise NotBuilt("get_purchase_requests", "needs the purchase-request sync")
-
-
 def set_price(slot: str, sale_price: str) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
         raise NotBuilt("set_price", "no price-change route; waiting on the Cantaloupe check")

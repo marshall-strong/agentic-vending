@@ -31,9 +31,12 @@ from vending import config, ledger, planner, stock
 from vending.bridge import Bridge, BridgeError
 from vending.slots import DEVICE_ID, SLOTS
 from vending.tools import desired_state as schema
+from vending.tools.machine_state import STALE_AFTER
 
 SLOT_CAPACITY_HINT = ("config has no slot_capacity. Count how many units fit on one rail, then set it once with: "
                       "python -m vending.config set slot_capacity 10 --by NAME")
+HALTED_HINT = ("the halt switch is on, so nothing can be planned or submitted until a person runs: "
+               "python -m vending.halt off")
 
 
 class NotReady(RuntimeError):
@@ -83,6 +86,10 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     if poll_at is None:
         notes.append("no good poll is stored, so current prices are unknown; every slot's price change "
                      "will look like a change")
+    elif now - poll_at > STALE_AFTER:
+        notes.append(f"STALE: the latest poll is {(now - poll_at).total_seconds() / 3600:.1f} hours old, so "
+                     "stock on the rails is overstated by whatever has sold since and prices may have changed; "
+                     "run the history sync (python -m vending.sync_history) before trusting this plan")
     slots = tuple(
         planner.SlotState(
             slot=slot,
@@ -107,12 +114,20 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
 
 
 def read_catalog(bridge: Bridge) -> list[dict]:
-    """The catalog from the bridge, or `NotReady` saying it couldn't be read."""
+    """The catalog from the bridge, or `NotReady` saying it couldn't be read or can't be used.
+
+    An empty or reshaped reply is refused too: treating it as a catalog would
+    tell the agent to request products that are already approved.
+    """
     try:
-        return bridge.products()
+        products = bridge.products()
     except BridgeError as error:
         raise NotReady(f"couldn't read the catalog from the bridge ({error}), so products can't be checked; "
                        "is Tailscale connected?") from None
+    if not products or not all(isinstance(p, dict) and p.get("sku") for p in products):
+        raise NotReady("the bridge returned an empty or unreadable catalog, so no product can be checked; "
+                       "try again, and ask the instructors if it stays empty")
+    return products
 
 
 def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
@@ -134,8 +149,19 @@ def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
 
 def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
          now: datetime | None = None) -> tuple[planner.Plan, Gathered]:
-    """Run the planner on live data. Raises `NotReady` when a person has to act first."""
-    gathered = gather(conn, read_catalog(bridge), now)
+    """Run the planner on live data. Raises `NotReady` when a person has to act first.
+
+    The halt switch is checked before the bridge is read, so that halted with
+    the bridge down tells the agent to stop, not to check Tailscale.
+    """
+    halted = config.is_halted(conn)
+    try:
+        catalog = read_catalog(bridge)
+    except NotReady as blocked:
+        if halted:
+            raise NotReady(f"{HALTED_HINT} (and {blocked})") from None
+        raise
+    gathered = gather(conn, catalog, now)
     return planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now), gathered
 
 

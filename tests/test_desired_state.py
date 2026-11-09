@@ -39,6 +39,7 @@ class FakeBridge:
         self.gets = 0
         self.posts: list[dict] = []
         self.catalog_status = 200
+        self.catalog_body = None     # set to serve something other than {"products": CATALOG}
         self.answer = (201, {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
         fake = self
 
@@ -57,7 +58,7 @@ class FakeBridge:
             def do_GET(self):
                 assert self.path == "/api/v1/products" and self.headers["X-API-Key"] == "test-key"
                 fake.gets += 1
-                self._reply(fake.catalog_status, {"products": CATALOG})
+                self._reply(fake.catalog_status, {"products": CATALOG} if fake.catalog_body is None else fake.catalog_body)
 
             def do_POST(self):
                 assert self.path == "/api/v1/purchase-requests" and self.headers["X-API-Key"] == "test-key"
@@ -136,6 +137,33 @@ def test_an_unreadable_catalog_is_not_ready(db, fake):  # noqa: F811
     assert not reply.success and "couldn't read the catalog" in reply.message
 
 
+@pytest.mark.parametrize("body", [{"products": []}, [], {"items": CATALOG}, {"products": [{"name": "no sku"}]}])
+def test_an_empty_or_reshaped_catalog_is_not_ready_rather_than_all_unapproved(db, fake, body):  # noqa: F811
+    ready(db)
+    fake.catalog_body = body
+    reply = preview_desired_state(db, desired(restock_15()), fake.client(), NOW)
+    assert not reply.success and "empty or unreadable catalog" in reply.message
+    assert reply.refusals == []
+
+
+def test_halted_with_the_bridge_down_says_to_stop_not_to_check_tailscale(db, fake):  # noqa: F811
+    ready(db)
+    set_halted(db, True, "test")
+    fake.catalog_status = 503
+    reply = preview_desired_state(db, desired(restock_15()), fake.client(), NOW)
+    assert not reply.success and "halt switch is on" in reply.message and "vending.halt off" in reply.message
+
+
+def test_an_old_poll_is_flagged_as_stale(db, fake):  # noqa: F811
+    ready(db)
+    stocked(db)                                     # the poll is 19 hours before NOW
+    reply = preview_desired_state(db, desired(restock_15(), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.success and any(n.startswith("STALE: the latest poll is 19.0 hours old") for n in reply.notes)
+    fresh = preview_desired_state(db, desired(restock_15(), sourcing=[coke_sourcing()]), fake.client(),
+                                  datetime(2026, 11, 8, 18, 0, tzinfo=timezone.utc))
+    assert not any(n.startswith("STALE") for n in fresh.notes)
+
+
 # --- Plans -----------------------------------------------------------------------------------
 
 def test_a_restock_plans_one_purchase_line_priced_against_its_floor(db, fake):  # noqa: F811
@@ -154,7 +182,7 @@ def test_a_restock_plans_one_purchase_line_priced_against_its_floor(db, fake):  
     assert (floor.slot, floor.floor) == ("15", "1.25")
     assert sorted(p.source for p in floor.parts) == ["on hand", "primary Costco 12-pack, max $13.00"]
     # Spendable: 600.00 opening - 12.37 receipt, no sales yet; max cost one pack at 13.00.
-    assert (reply.cost.max, reply.cost.balance, reply.cost.balance_left_at_max) == ("13.00", "587.63", "574.63")
+    assert (reply.cost.max, reply.cost.spendable, reply.cost.spendable_left_at_max) == ("13.00", "587.63", "574.63")
     assert "Shopping list" in reply.directive and "Costco" in reply.directive
     assert reply.prices_as_of == datetime(2026, 11, 8, 17, 0, tzinfo=timezone.utc)
     assert any("no receipts yet for slots 16" in n for n in reply.notes)
@@ -270,11 +298,30 @@ def test_config_cli_sets_and_shows(schema_url, monkeypatch, capsys):
     from vending import config, db as db_module
     monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
     assert config.main(["set", "slot_capacity", "10", "--by", "marshall"]) == 0
-    assert config.main(["set", "note", "free text", "--by", "marshall"]) == 0
+    assert config.main(["set", "midweek_fee_cents", "3000", "--by", "marshall"]) == 0
+    assert config.main(["set", "note", "free text", "--by", "marshall"]) == 1       # unknown key
+    assert "unknown setting 'note'" in capsys.readouterr().err
     assert config.main(["set", "halted", "false", "--by", "marshall"]) == 1
     assert config.main(["show"]) == 0
     out = capsys.readouterr().out
-    assert 'slot_capacity = 10' in out and 'note = "free text"' in out and "halted = true" in out
+    assert "slot_capacity = 10" in out and "midweek_fee_cents = 3000" in out and "note" not in out and "halted = true" in out
     with open_in(*schema_url) as conn:
         assert planning.planner_config(conn).slot_capacity == 10
         assert conn.execute("select count(*) from action_log where tool = 'config.set'").fetchone() == (2,)
+
+
+@pytest.mark.parametrize("key, value, problem", [
+    ("midweek_fee_cents", 25, "less than a dollar"),          # dollars typed: would bill 25 cents a visit
+    ("midweek_fee_cents", -2500, "between 0 and 10000"),      # a visit that adds money
+    ("midweek_fee_cents", "2500", "whole number of cents"),
+    ("price_ceiling_cents", 1200, "over 1000 cents"),         # the API's $10.00 limit
+    ("price_ceiling_cents", 603, "multiple of 5"),
+    ("slot_capacity", 0, "between 1 and 100"),
+    ("slot_capacity", True, "whole number of units"),
+    ("tax_percent", 108, "between 0 and 100"),
+    ("midweek_fee", 2500, "unknown setting"),
+])
+def test_config_refuses_values_that_would_be_charged_for_real(db, key, value, problem):  # noqa: F811
+    with pytest.raises(ValueError, match=problem):
+        set_value(db, key, value, "test")
+    assert db.execute("select count(*) from config where key = %s", (key,)).fetchone() == (0,)

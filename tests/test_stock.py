@@ -82,15 +82,37 @@ def test_a_top_up_blends_old_and_new_cost():
     assert (slot.units, slot.unit_cost, slot.loaded, slot.sold) == (14, Fraction(1000, 14), 20, 6)
 
 
-def test_later_losses_come_out_where_they_were_found():
+def test_later_losses_come_out_where_they_were_found_as_shrinkage():
     stock = book(
         [line(units_loaded=10, units_to_back_stock=2, total_paid="6.00")],          # 50 cents each
         [loss("coil", 2, at=5), loss("back_stock", 1, at=6)],
     )
     [slot] = stock.slots
     [closet] = stock.closet
-    assert (slot.units, slot.lost, slot.unit_cost) == (8, 2, Fraction(500, 8))
-    assert (closet.units, closet.unit_cost) == (1, 100)
+    # The lost units take their own cost with them; the rest still cost 50 each.
+    assert (slot.units, slot.lost, slot.unit_cost) == (8, 2, 50)
+    assert (closet.units, closet.unit_cost) == (1, 50)
+    assert [(x.at, x.where, x.product, x.units, x.cost_cents) for x in stock.shrinkage] == [
+        (hours(5), "slot 15", "COKE20", 2, 100), (hours(6), "the closet", "COKE20", 1, 50)]
+    # Every cent of the $6.00 is accounted for: on hand, or written off.
+    assert slot.units * slot.unit_cost + closet.units * closet.unit_cost + sum(x.cost_cents for x in stock.shrinkage) == 600
+
+
+def test_units_still_counted_when_the_product_changes_are_shrinkage():
+    stock = book([line(units_loaded=10, total_paid="5.00"),
+                  line(sku="PEPSI20", units_loaded=10, total_paid="8.00", slot_reassigned=True, at=48, request_id="r2")],
+                 counters=[("15", hours(-1), 0), ("15", hours(24), 7)])
+    [x] = stock.shrinkage
+    assert (x.at, x.where, x.product, x.units, x.cost_cents) == (hours(48), "slot 15", "COKE20", 3, 150)
+    assert any("written off as shrinkage" in w for w in stock.warnings)
+
+
+def test_a_line_that_lost_every_unit_is_shrinkage_and_leaves_the_closet_cost_known():
+    stock = book([line(units_loaded=0, units_to_back_stock=6, total_paid="3.00"),              # 50 each
+                  line(units_loaded=0, units_lost=12, total_paid="6.00", at=2, request_id="r2")])  # all broken
+    assert [(c.units, c.unit_cost) for c in stock.closet] == [(6, 50)]
+    [x] = stock.shrinkage
+    assert (x.units, x.cost_cents) == (12, 600)
 
 
 def test_rereading_the_same_losses_gives_the_same_count():
@@ -114,6 +136,11 @@ def test_sales_from_counters_skip_a_counter_that_goes_down():
         ("15", hours(0), 10), ("15", hours(1), 12), ("15", hours(2), 3), ("15", hours(3), 5), ("16", hours(1), 7),
     ])
     assert [(m.slot, m.at, m.units) for m in moves] == [("15", hours(1), 2), ("15", hours(3), 2)]
+
+
+def test_sales_from_counters_ignore_one_misread_between_good_polls():
+    moves = sales_from_counters([("15", hours(0), 100000), ("15", hours(1), 500), ("15", hours(2), 100250)])
+    assert [(m.at, m.units) for m in moves] == [(hours(2), 250)]
 
 
 def test_sales_before_we_first_load_a_slot_are_not_ours():
