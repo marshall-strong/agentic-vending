@@ -67,6 +67,7 @@ MILLION = Decimal(1_000_000)
 DEFAULT_RUN_CAP_CENTS = 100
 DEFAULT_DAILY_CAP_CENTS = 400
 DEFAULT_MIN_TOKENS = 1024
+MAX_NON_STREAMING = 21_333      # above this the SDK insists on streaming (default 10-minute timeout)
 LOCK_KEY = 0x76656E64           # "vend": one cap check and estimate at a time
 LOCK_TIMEOUT = "30s"
 COUNT_MARGIN = Decimal("1.10")  # count_tokens is an estimate: allow 10% more, plus a fixed pad
@@ -249,6 +250,7 @@ class Harness:
         wanted = int(request.get("max_tokens") or 0)
         if wanted < 1:
             raise HarnessError("the request needs a max_tokens")
+        wanted = min(wanted, MAX_NON_STREAMING)     # the SDK refuses more without streaming, after we'd reserved
         floor = min(self.min_tokens, wanted)
         budget = (request.get("thinking") or {}).get("budget_tokens")
         if budget:
@@ -265,8 +267,7 @@ class Harness:
         max_tokens, worst, entry = self._reserve(model, counted, wanted, floor, caches, reference, now)
         self.spent += worst
 
-        body = {**request, "max_tokens": max_tokens}
-        body.setdefault("service_tier", "standard_only")
+        body = {**request, "max_tokens": max_tokens, "service_tier": "standard_only"}
         try:
             response = self.client.messages.create(**body)
         except anthropic.APIStatusError as error:
@@ -295,6 +296,13 @@ class Harness:
             if getattr(getattr(usage, "server_tool_use", None), "web_search_requests", 0):
                 note += " (server tool use not priced)"
                 log.error("model call used server tools, which aren't priced: %s", usage.server_tool_use)
+            tier = getattr(usage, "service_tier", None)
+            if tier not in (None, "standard"):
+                note, paid = f" (served at {tier} capacity, not priced; kept at worst case)", worst
+                log.error("model call was served at %s capacity, which has no price; kept at its worst case", tier)
+            if paid <= 0:       # usage reported nothing (a proxy stripped it?): never erase a paid call
+                note, paid = " (usage reported no tokens; kept at worst case)", worst
+                log.error("model call %s reported no usage; kept at its worst case", reference)
             tokens_in = _n(usage.input_tokens) + _n(usage.cache_read_input_tokens) + _n(usage.cache_creation_input_tokens)
             recorded = self._settle(entry, paid, answered_by, tokens_in, _n(usage.output_tokens),
                                     f"{reference} {response.id}{note}")

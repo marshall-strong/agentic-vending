@@ -293,6 +293,25 @@ def test_a_fallback_answer_is_priced_at_the_model_that_answered(connect, conn):
     assert amount == Decimal("-0.7") and detail.startswith("claude-sonnet-5-5")
 
 
+@pytest.mark.parametrize("answer_usage", [
+    usage(),                                                                  # a proxy that zeroed usage
+    SimpleNamespace(**vars(usage(i=1000, o=500)), service_tier="priority"),   # capacity we can't price
+])
+def test_an_answer_we_cant_price_keeps_its_worst_case(connect, conn, answer_usage):
+    answer = SimpleNamespace(id="msg_z", model="claude-opus-5-5", usage=answer_usage)
+    harness(connect, FakeClient(answer=answer)).call(REQUEST)
+    (amount, _, reference, _), = tokens_entries(conn)
+    assert amount == -100 * worst_case_usd("claude-opus-5-5", 1000, 16000, PRICES, caches=None)
+    assert "kept at worst case" in reference
+
+
+def test_standard_capacity_is_forced_and_max_tokens_kept_sendable(connect, conn):
+    client = FakeClient()
+    harness(connect, client, run_cap_usd=Decimal(5)).call({**REQUEST, "service_tier": None, "max_tokens": 64000})
+    sent = client.messages.sent[0]
+    assert sent["service_tier"] == "standard_only" and sent["max_tokens"] == 21_333
+
+
 def test_purpose_must_be_live_or_test(connect):
     with pytest.raises(HarnessError, match="purpose"):
         Harness(FakeClient(), connect, purpose="demo")
