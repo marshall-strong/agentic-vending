@@ -228,20 +228,61 @@ def _time(value: datetime | None) -> str:
     return f'<time datetime="{utc.isoformat()}">{utc:%Y-%m-%d %H:%M} UTC</time>'
 
 
-def _entry(entry: dict | None) -> str:
-    if entry is None:
-        return '<span class="muted">not in plan</span>'
-    if entry.get("keep"):
-        text = "keep as is"
+def _changes(now: dict | None, before: dict | None) -> list[str]:
+    """Short labels for how a slot's entry moved from the previous plan: swap, price, fill up..."""
+    if now is None:
+        return []
+    if before is None:
+        return ["new"]
+    labels = []
+    if now.get("fill_to") == 0 and before.get("fill_to") != 0:
+        return ["pull"]
+    if now.get("product") and now.get("product") != before.get("product"):
+        labels.append("swap")
+    if "sale_price" in now and str(now["sale_price"]) != str(before.get("sale_price")):
+        labels.append("price")
+    old, new = before.get("fill_to"), now.get("fill_to")
+    if isinstance(old, int) and isinstance(new, int) and new != old:
+        labels.append(f"fill {old} to {new}")
+    if bool(now.get("keep")) != bool(before.get("keep")):
+        labels.append("keep" if now.get("keep") else "change")
+    return labels or ["changed"]
+
+
+def _cell(s: dict, compared: bool) -> str:
+    """One slot of the machine grid: what the plan asks for, how it changed, and why."""
+    now = s["now"]
+    tags = "".join(f'<span class="tag {"pull" if t == "pull" else ""}">{_e(t)}</span>'
+                   for t in (_changes(now, s["before"]) if s["changed"] else []))
+    if now is None:
+        body = '<div class="muted">not in plan</div>'
+    elif now.get("keep"):
+        body = '<div class="what">keep as is</div>'
     else:
-        parts = [entry.get("product") or "same product"]
-        if "fill_to" in entry:
-            parts.append(f"fill to {entry['fill_to']}")
-        if "sale_price" in entry:
-            parts.append(f"${entry['sale_price']}")
-        text = ", ".join(str(p) for p in parts)
-    reason = entry.get("reason")
-    return _e(text) + (f'<div class="muted small">{_e(reason)}</div>' if reason else "")
+        terms = []
+        if "sale_price" in now:
+            terms.append(f"${_e(now['sale_price'])}")
+        if "fill_to" in now:
+            terms.append(f"fill to {_e(now['fill_to'])}")
+        body = (f'<div class="what">{_e(now.get("product") or "same product")}</div>'
+                f'<div class="muted">{" &middot; ".join(terms)}</div>')
+    reason = now.get("reason") if now else None
+    was = (f'<div class="muted small">was: {_entry_text(s["before"])}</div>'
+           if compared and s["changed"] and s["before"] is not None else "")
+    return (f'<div class="cell{" changed" if s["changed"] else ""}"><div class="top"><b>{_e(s["slot"])}</b>'
+            f'<span>{tags}</span></div>{body}'
+            + (f'<div class="muted small">{_e(reason)}</div>' if reason else "") + was + "</div>")
+
+
+def _entry_text(entry: dict) -> str:
+    if entry.get("keep"):
+        return "keep as is"
+    parts = [entry.get("product") or "same product"]
+    if "sale_price" in entry:
+        parts.append(f"${entry['sale_price']}")
+    if "fill_to" in entry:
+        parts.append(f"fill to {entry['fill_to']}")
+    return _e(", ".join(str(p) for p in parts))
 
 
 def _table(headers: list[str], rows: list[list[str]], *, row_class: list[str] | None = None) -> str:
@@ -295,10 +336,10 @@ def _plan_html(panel: dict) -> str:
     texts = "".join(f'<h3>{title}</h3><div class="text">{_e(body)}</div>'
                     for title, body in (("Weekly update", p["update"]), ("Notes to itself", p["notes"])) if body)
     changed = sum(1 for s in p["slots"] if s["changed"])
-    rows = [[_e(s["slot"]), _entry(s["now"]), _entry(s["before"]) if p["previous_run"] else ""] for s in p["slots"]]
-    classes = ["changed" if s["changed"] else "" for s in p["slots"]]
-    summary = f'<p class="muted">{changed} slot{"s" if changed != 1 else ""} changed.</p>' if p["previous_run"] else ""
-    return head + texts + summary + _table(["Slot", "This plan", "Previous plan"], rows, row_class=classes)
+    summary = (f'<p class="muted">{changed} slot{"s" if changed != 1 else ""} changed. '
+               if p["previous_run"] else '<p class="muted">') +         "Laid out like the machine: our slots are rows 1 to 5, columns 5 to 8.</p>"
+    cells = "".join(_cell(s, bool(p["previous_run"])) for s in p["slots"])
+    return head + texts + "<h3>The plan, slot by slot</h3>" + summary + f'<div class="machine">{cells}</div>'
 
 
 def _runs_html(panel: dict) -> str:
@@ -352,9 +393,10 @@ def _requests_html(purchases: dict, catalog: dict) -> str:
 
 STYLE = """
 :root { --bg:#fff; --fg:#1d232b; --muted:#5f6b7a; --line:#d9dee5; --panel:#f6f8fa;
-        --go:#1a7f37; --stop:#b42318; --warn:#fff4d6; --bad:#fde8e7; --chg:#e8f1ff; }
+        --go:#1a7f37; --stop:#b42318; --warn:#fff4d6; --bad:#fde8e7; --chg:#e8f1ff; --accent:#0b5cd5; }
 @media (prefers-color-scheme: dark) { :root { --bg:#14181d; --fg:#e6e9ee; --muted:#9aa5b2; --line:#2c333c;
-        --panel:#1b2027; --go:#3fb950; --stop:#f85149; --warn:#3a3016; --bad:#3d1d1c; --chg:#172a45; } }
+        --panel:#1b2027; --go:#3fb950; --stop:#f85149; --warn:#3a3016; --bad:#3d1d1c; --chg:#172a45;
+        --accent:#58a6ff; } }
 * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg);
   font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif }
 main { max-width:1200px; margin:0 auto; padding:16px } h1 { font-size:20px; margin:0 0 4px }
@@ -367,9 +409,18 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:0
 .scroll { overflow-x:auto } table { border-collapse:collapse; width:100% }
 th, td { text-align:left; vertical-align:top; padding:6px 8px; border-bottom:1px solid var(--line) }
 th { font-weight:600; color:var(--muted) } tr.refused, tr.failed { background:var(--bad) }
-tr.write { background:var(--warn) } tr.changed { background:var(--chg) }
+tr.write { background:var(--warn) }
+.machine { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px }
+.cell { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-width:0 }
+.cell.changed { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) }
+.cell .top { display:flex; justify-content:space-between; gap:6px; align-items:baseline }
+.cell .what { font-weight:600; overflow-wrap:anywhere }
+.tag { display:inline-block; font-size:11px; font-weight:600; padding:0 7px; border-radius:999px;
+       background:var(--chg); color:var(--accent); margin-left:4px; white-space:nowrap }
+.tag.pull { background:var(--bad); color:var(--stop) }
 .text { white-space:pre-wrap; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px 10px }
-@media (max-width:600px) { dl { grid-template-columns:1fr } dt { margin-top:6px } }
+@media (max-width:600px) { dl { grid-template-columns:1fr } dt { margin-top:6px }
+                           .machine { grid-template-columns:repeat(2, minmax(0, 1fr)) } }
 """
 
 # Shows each <time> in the viewer's local time zone; without it, times stay in UTC.

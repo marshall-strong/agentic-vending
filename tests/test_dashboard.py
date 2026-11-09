@@ -101,8 +101,9 @@ def test_plan_compares_with_the_run_before(conn, page_conn):
     assert by_slot["17"] == {"slot": "17", "now": None, "before": None, "changed": False}
     assert [s["slot"] for s in p["slots"]][:4] == ["15", "16", "17", "18"]
     page = dashboard.render(dashboard.snapshot(page_conn))
-    assert "Swapping 16 to Mountain Dew." in page and "MTDEW-20OZ, fill to 4, $2.25" in page
-    assert "1 slot changed." in page
+    assert "Swapping 16 to Mountain Dew." in page and "MTDEW-20OZ" in page
+    assert "$2.25 &middot; fill to 4" in page and "was: keep as is" in page
+    assert "1 slot changed." in page and page.count('class="cell changed"') == 1
 
 
 def test_a_plan_of_the_wrong_shape_still_renders(conn, page_conn):
@@ -262,3 +263,15 @@ def test_refuses_a_host_that_isnt_local(served):
     request = urllib.request.Request(served + "/", headers={"Host": "localhost"})
     with urllib.request.urlopen(request, timeout=10) as reply:
         assert reply.status == 200
+
+
+@pytest.mark.parametrize("now, before, labels", [
+    ({"slot": "16", "product": "MTDEW", "fill_to": 4}, {"slot": "16", "keep": True}, ["swap", "change"]),
+    ({"slot": "15", "fill_to": 8, "sale_price": "2.75"}, {"slot": "15", "fill_to": 6, "sale_price": "2.50"},
+     ["price", "fill 6 to 8"]),
+    ({"slot": "15", "fill_to": 0}, {"slot": "15", "fill_to": 6}, ["pull"]),
+    ({"slot": "15", "keep": True}, None, ["new"]),
+    ({"slot": "15", "sale_price": Decimal("2.50")}, {"slot": "15", "sale_price": "2.50"}, ["changed"]),
+])
+def test_change_labels(now, before, labels):
+    assert dashboard._changes(now, before) == labels

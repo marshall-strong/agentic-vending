@@ -12,12 +12,16 @@ It reads whatever database `DATABASE_URL` points at: your local one, or the team
 database. The page refreshes every 30 seconds. `/state.json` returns the same data as JSON, for a
 script or another agent.
 
+![The dashboard with sample data](dashboard/current.png)
+
+*Sample data from a throwaway database, not a real run.*
+
 ## What it shows
 
 | Panel | What's in it | Where it comes from |
 |---|---|---|
 | Status | The halt switch and who last changed it, the latest run, the last tool call, and the next Thursday 23:59 Eastern cutoff | `config`, `agent_runs`, `action_log` |
-| Plan | The latest run's plan for every slot next to the run before it, with changed slots highlighted, plus the agent's weekly update for the team and its notes to itself | `agent_runs` |
+| Plan | The latest run's plan for every slot, laid out like the machine (rows 1 to 5, columns 5 to 8). Slots that changed since the last plan are outlined and tagged (swap, price, fill 6 to 8, pull) and say what they were. Above it, the agent's weekly update for the team and its notes to itself | `agent_runs` |
 | Runs | The last 10 runs: mode, model, how each ended, what it cost, the request it sent | `agent_runs` |
 | Activity | The last 50 tool calls, reads and writes. Writes are shaded; refused and failed calls stand out | `action_log` |
 | Requests | Our last 10 purchase requests and catalog requests, and where each stands | `purchase_requests`, `product_requests` |
@@ -61,3 +65,26 @@ shape (`docs/week-replayer.md` on #28). `cost_usd` must be a `Decimal`, and a `D
 
 Times on the page show in your browser's time zone. On Windows, the cutoff date needs the
 `tzdata` package (`pip install tzdata`); without it the page says "Thursday 23:59 Eastern".
+
+## Where it could go next
+
+Mockups with made-up numbers, for the team to react to. None of this is built.
+
+**A. Headline numbers and stock.** Tiles for the halt switch, the cutoff countdown, the balance
+and the week's profit, and a stock bar in each slot. The tiles need the ledger (#35) and token
+spend (#40); the stock bars can use `vending.stock` today.
+
+![Idea A: headline tiles and stock bars](dashboard/idea-a-machine.png)
+
+**B. Plan history.** One card per week: the update, the slots that changed, the notes, what it
+cost. Everything it needs is in `agent_runs` once #39 writes it.
+
+![Idea B: plan history, week by week](dashboard/idea-b-history.png)
+
+**C. A live run.** Each tool call as it happens, the draft plans as they change, and the run's
+budget. The tool calls are already in `action_log`, and every `preview_desired_state` call logs
+the draft plan it checked, so "plan v1 to v2" can be read from it. It needs a run id on
+`action_log` rows to group them, and the budget needs #40. The model's reasoning between calls
+isn't recorded anywhere yet.
+
+![Idea C: a live run](dashboard/idea-c-live-run.png)
