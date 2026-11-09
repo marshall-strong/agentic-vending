@@ -12,7 +12,7 @@ from http.server import ThreadingHTTPServer
 import psycopg
 import pytest
 
-from tests.conftest import CONNECT_TIMEOUT
+from tests.conftest import CONNECT_TIMEOUT, store_poll
 from vending import agent_runs, dashboard
 from vending.config import set_halted
 from vending.write_gate import log
@@ -101,9 +101,9 @@ def test_plan_compares_with_the_run_before(conn, page_conn):
     assert by_slot["17"] == {"slot": "17", "now": None, "before": None, "changed": False}
     assert [s["slot"] for s in p["slots"]][:4] == ["15", "16", "17", "18"]
     page = dashboard.render(dashboard.snapshot(page_conn))
-    assert "Swapping 16 to Mountain Dew." in page and "MTDEW-20OZ" in page
+    assert "Swapping 16 to Mountain Dew." in page and "see if 16 sells" in page and "MTDEW-20OZ" in page
     assert "$2.25 &middot; fill to 4" in page and "was: keep as is" in page
-    assert "1 slot changed." in page and page.count('class="cell changed"') == 1
+    assert "1 slot changed" in page and page.count('class="cell changed') == 1
 
 
 def test_a_plan_of_the_wrong_shape_still_renders(conn, page_conn):
@@ -126,8 +126,12 @@ def test_status_and_activity(conn, page_conn):
     assert status["latest_run"]["id"] == run and status["latest_run"]["stale"] is True
     assert status["last_action"]["tool"] == "set_price"
     assert [r["tool"] for r in snap["activity"]["data"]] == ["set_price", "halt"]
+    assert snap["recent_calls"]["data"] == {"calls": 2, "writes": 2, "refused": 1, "failed": 0}
+    assert dashboard.verdict(snap["attention"]) == "problem"
+    assert snap["attention"][0]["level"] == "bad" and "probably died" in snap["attention"][0]["text"]
+    assert any("1 refused" in a["text"] for a in snap["attention"])
     page = dashboard.render(snap)
-    assert '<tr class="refused">' in page and "probably died" in page and "RUNNING" in page
+    assert 'class="write refused problem"' in page and "Probably died" in page and "writes allowed" in page
 
 
 def test_text_from_the_database_is_escaped(conn, page_conn):
@@ -268,10 +272,133 @@ def test_refuses_a_host_that_isnt_local(served):
 @pytest.mark.parametrize("now, before, labels", [
     ({"slot": "16", "product": "MTDEW", "fill_to": 4}, {"slot": "16", "keep": True}, ["swap", "change"]),
     ({"slot": "15", "fill_to": 8, "sale_price": "2.75"}, {"slot": "15", "fill_to": 6, "sale_price": "2.50"},
-     ["price", "fill 6 to 8"]),
+     ["$2.50 to $2.75", "fill 6 to 8"]),
+    ({"slot": "15", "sale_price": "2.75"}, {"slot": "15", "keep": True}, ["price", "change"]),
     ({"slot": "15", "fill_to": 0}, {"slot": "15", "fill_to": 6}, ["pull"]),
     ({"slot": "15", "keep": True}, None, ["new"]),
     ({"slot": "15", "sale_price": Decimal("2.50")}, {"slot": "15", "sale_price": "2.50"}, ["changed"]),
 ])
 def test_change_labels(now, before, labels):
     assert dashboard._changes(now, before) == labels
+
+
+# --- the redesign: runs, machine, attention ------------------------------------------------------
+
+# Monday 9 Nov 2026, 14:00 UTC: three days before the cutoff. THURSDAY_NOON is 12 h before it.
+MONDAY = datetime(2026, 11, 9, 14, 0, tzinfo=timezone.utc)
+THURSDAY_NOON = datetime(2026, 11, 12, 17, 0, tzinfo=timezone.utc)
+
+
+def fulfilled(conn, request_id, slot, sku, *, units_loaded, paid, at, to_back_stock=0):
+    """A fulfilled purchase request with one primary line, as the requests sync stores it."""
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status,"
+                 " total_paid, fulfilled_at) values (%s, %s, false, '{}', 'fulfilled', %s, %s)",
+                 (request_id, at - timedelta(days=1), Decimal(paid), at))
+    conn.execute(
+        "insert into purchase_lines (request_id, line_no, slot, source, asked, outcome, sku, store, packs_bought,"
+        " units_per_pack, units_bought, total_paid, unit_cost_paid, units_loaded, units_lost,"
+        " units_to_back_stock, units_from_back_stock, units_pulled, slot_reassigned, resolved_at)"
+        " values (%s, 0, %s, 'purchase', '{}', 'primary', %s, 'Walmart', 1, %s, %s, %s, null, %s, 0, %s, 0, 0,"
+        " false, %s)",
+        (request_id, slot, sku, units_loaded + to_back_stock, units_loaded + to_back_stock, Decimal(paid),
+         units_loaded, to_back_stock, at))
+
+
+def test_runs_list_what_each_plan_changed(conn, page_conn):
+    a = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, a, "submitted", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "2.50"},
+                                                      {"slot": "28", "fill_to": 6}))
+    b = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, b, "halted", detail="halted before submitting")
+    c = agent_runs.start(conn, mode="live", model="m")
+    agent_runs.finish(conn, c, "submitted", update="raise 15, pull 28", cost_usd=Decimal("0.44"),
+                      plan=plan({"slot": "15", "fill_to": 8, "sale_price": "2.75"}, {"slot": "28", "fill_to": 0}))
+    runs = {r["id"]: r for r in dashboard.snapshot(page_conn, MONDAY)["runs"]["data"]}
+    assert runs[c]["changes"] == [{"slot": "15", "labels": ["$2.50 to $2.75", "fill 6 to 8"]},
+                                  {"slot": "28", "labels": ["pull"]}]
+    assert (runs[b]["has_plan"], runs[b]["changes"]) == (False, [])   # a run without a plan isn't compared
+    assert (runs[a]["has_plan"], runs[a]["compared"]) == (True, False)
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    assert "28 pull" in page and "halted before submitting" in page and "first plan of this mode" in page
+
+
+def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
+    fulfilled(conn, "pr-1", "15", "COKE-20OZ", units_loaded=8, paid="9.60", to_back_stock=4,
+              at=MONDAY - timedelta(days=3))
+    store_poll(conn, "p1", (MONDAY - timedelta(days=4)).isoformat(), {"15": (250, 100)})
+    store_poll(conn, "p2", (MONDAY - timedelta(days=2)).isoformat(), {"15": (250, 103)})
+    store_poll(conn, "p3", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (250, 105)})
+    run = agent_runs.start(conn, mode="dry-run")
+    agent_runs.finish(conn, run, "skipped", plan=plan({"slot": "15", "fill_to": 8, "sale_price": "2.75"}))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    held = snap["stock"]["data"]["slots"]["15"]
+    assert (held["product"], held["loaded"], held["sold"], held["on_hand"]) == ("COKE-20OZ", 8, 5, 3)
+    assert held["unit_cost"] == "0.80"                    # $9.60 over 12 units, exact
+    assert snap["stock"]["data"]["closet"] == [{"product": "COKE-20OZ", "units": 4, "unit_cost": "0.80"}]
+    assert snap["sales"]["data"]["slots"]["15"] == {"price": "2.50", "sold": 5, "per_day": "1.26"}   # 5 over 3 d 23 h
+    assert snap["sales"]["data"]["stale"] is False
+    assert snap["spend"]["data"]["drinks"]["paid"] == Decimal("9.60")
+    page = dashboard.render(snap)
+    assert "3 on hand &middot; 5 sold" in page
+    assert "<s>$2.50</s> <b>$2.75</b>" in page             # the tag now, and what the plan sets it to
+    assert '"paid": "9.60"' in dashboard.to_json(snap)
+
+
+def test_a_fresh_database_is_ok_but_explains_every_empty_panel(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert dashboard.verdict(snap["attention"]) == "ok"   # halted, no polls: worth knowing, not wrong
+    assert {a["level"] for a in snap["attention"]} == {"info"}
+    page = dashboard.render(snap)
+    for words in ("No plan yet", "No runs recorded yet", "No tool calls yet", "No machine polls stored yet",
+                  "None submitted yet", "Nothing in back stock"):
+        assert words in page, words
+    assert page.count('data-slot="') == 20
+
+
+def test_close_to_the_cutoff_halted_and_no_request_needs_checking(conn, page_conn):
+    snap = dashboard.snapshot(page_conn, THURSDAY_NOON)
+    texts = [a["text"] for a in snap["attention"] if a["level"] == "warn"]
+    assert dashboard.verdict(snap["attention"]) == "check"
+    assert any("halted" in t and "cutoff is in 11 h 59 min" in t for t in texts)
+    assert any("No purchase request for Friday yet" in t for t in texts)
+    # A request sent since last week's cutoff settles the second one.
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body)"
+                 " values ('pr-9', %s, false, '{}')", (THURSDAY_NOON - timedelta(hours=2),))
+    snap = dashboard.snapshot(page_conn, THURSDAY_NOON)
+    assert not any("No purchase request" in a["text"] for a in snap["attention"])
+
+
+def test_stale_polls_and_unsettled_catalog_requests_need_checking(conn, page_conn):
+    store_poll(conn, "old", (MONDAY - timedelta(hours=5)).isoformat(), {"15": (250, 1)})
+    conn.execute("insert into product_requests (name, size, words, status) values"
+                 " ('Mountain Dew', '20 oz', '{mountain,dew,20,oz}', 'unknown')")
+    items = dashboard.snapshot(page_conn, MONDAY)["attention"]
+    warns = [a["text"] for a in items if a["level"] == "warn"]
+    assert any("latest machine poll is 5 h old" in t for t in warns)
+    assert any("Mountain Dew 20 oz" in t and "`unknown`" in t for t in warns)
+
+
+def test_a_missing_poll_table_blanks_only_sales_and_stock(conn, page_conn):
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "15", "keep": True}))
+    conn.execute("drop table poll_selections, polls")
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["sales"]["ok"] is False and snap["stock"]["ok"] is False
+    assert snap["plan"]["ok"] is True and snap["runs"]["ok"] is True
+    assert any("Sales isn't available" in a["text"] for a in snap["attention"])
+    assert "keep as is" in dashboard.render(snap)
+
+
+def test_attention_text_from_the_database_is_escaped(conn, page_conn):
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status,"
+                 " decision_note) values ('pr-x', now(), false, '{}', 'rejected', '<img src=x onerror=alert(1)>')")
+    snap = dashboard.snapshot(page_conn)
+    assert any("rejected" in a["text"] for a in snap["attention"])
+    page = dashboard.render(snap)
+    assert "<img src=x" not in page and "&lt;img src=x" in page
+
+
+def test_state_json_carries_the_verdict_inputs(served):
+    state = json.loads(get(served + "/state.json")[2])
+    assert {a["level"] for a in state["attention"]} <= {"bad", "warn", "info"}
+    assert {"sales", "stock", "spend", "recent_calls"} <= state.keys()
