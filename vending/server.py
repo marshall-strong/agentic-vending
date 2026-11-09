@@ -194,7 +194,7 @@ async def get_purchase_requests(pending_only: bool = False) -> purchase_requests
 
 @_tool(built=False)
 async def set_price(slot: str, sale_price: str) -> WriteReply:
-    """Change one slot's price remotely between visits. sale_price like "2.50"."""
+    """DROPPED: prices can't change remotely. Set sale_price on the slot in submit_desired_state; the worker changes the tag at a visit."""
     return await _write("set_price", {"slot": slot, "sale_price": sale_price}, stubs.set_price(slot, sale_price))
 
 

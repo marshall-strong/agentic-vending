@@ -12,7 +12,7 @@ from datetime import date
 
 import psycopg
 
-from vending.tools import NotBuilt, Reply, WriteReply
+from vending.tools import Dropped, NotBuilt, Reply, WriteReply
 from vending.tools.desired_state import DesiredState
 
 Action = Callable[[psycopg.Connection], WriteReply]
@@ -42,6 +42,6 @@ def submit_desired_state(desired: DesiredState) -> Action:
 
 def set_price(slot: str, sale_price: str) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
-        raise NotBuilt("set_price", "dropped: there are no remote price changes. Put the new price on the slot in submit_desired_state; the worker changes it at the next visit (free Friday, $25 midweek)")
+        raise Dropped("set_price", "prices can't change remotely. Set sale_price on that slot in submit_desired_state; the worker changes the tag at the Friday visit (free), or at a midweek visit if you set off_cycle: true ($25)")
     return action
 

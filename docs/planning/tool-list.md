@@ -68,7 +68,7 @@ What matters for the tools:
 
 ## Proposed tools
 
-Ten tools: seven read data and three change something (#9 is folded into #6). **Every check on a write tool runs in code and in the same statement as the write,** so the model can't get around it. None of the three write tools can be built against the live spec yet: David is reshaping the purchase request and adding the price and catalog routes. Items still waiting on him are flagged below and listed under the open questions.
+Nine tools: seven read data and two change something (#9 is folded into #6; #8 is dropped). **Every check on a write tool runs in code and in the same statement as the write,** so the model can't get around it. None of the write tools could be built against the live spec yet: David is reshaping the purchase request and adding the catalog routes. Items still waiting on him are flagged below and listed under the open questions.
 
 | # | Tool | R/W | What it returns or does | Checks before it runs | Backed by |
 | --- | --- | --- | --- | --- | --- |
@@ -321,7 +321,7 @@ Each unit carries its `unit_cost_paid`, so the closet's value and our cost of go
 
 **The three write tools (#6, #8, #11) can't be built until David ships the routes behind the first four questions (prices, midweek visits, catalog requests).** Tick each one off as it's answered and note the answer beside it.
 
-**19 Oct: David answered most of these in person, and his answers outrank the current API spec.** Full notes: [`2026-10-19-david-api-qa.md`](2026-10-19-david-api-qa.md). The tool table above predates them: the purchase request is becoming a desired state for all our slots, with store, max price per pack and sale price on every line, so `submit_purchase_request`, `set_price` and `request_service_visit` have been redesigned; see "What changed on 19 October" and the sections after it. The items still waiting on David are added at the end of this list.
+**19 Oct: David answered most of these in person, and his answers outrank the current API spec.** Full notes: [`2026-10-19-david-api-qa.md`](2026-10-19-david-api-qa.md). The tool table above predates them: the purchase request is becoming a desired state for all our slots, with store, max price per pack and sale price on every line, so `submit_purchase_request`, `set_price` and `request_service_visit` have been redesigned (`set_price` was later dropped, 9 Nov); see "What changed on 19 October" and the sections after it. The items still waiting on David are added at the end of this list.
 
 ### Ask David
 
