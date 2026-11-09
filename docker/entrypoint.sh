@@ -77,4 +77,7 @@ else
     echo "TS_AUTHKEY is not set: running without Tailscale, so the bridge is unreachable" >&2
 fi
 
+# exec, so the command is PID 1 and gets Azure's SIGTERM itself; the worker
+# handles it. Nothing logs tailscaled out: the node is ephemeral, so Tailscale
+# removes it once it goes offline.
 exec "$@"

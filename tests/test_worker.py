@@ -1,6 +1,7 @@
 """The worker's rounds and health check, with the jobs faked. No database."""
 
 import json
+import signal
 import threading
 import urllib.request
 from contextlib import nullcontext
@@ -46,6 +47,21 @@ def test_the_loop_sleeps_between_rounds_and_stops_on_interrupt():
     code = worker.main(["--every", "5", "--port", "0"], jobs=[("a", lambda: rounds.append(1) or 0)],
                        sleep=sleep, log=lambda _: None)
     assert code == 0 and len(rounds) == 2 and sleeps == [300.0, 300.0]
+
+
+def test_sigterm_stops_the_loop_and_the_handler_is_put_back():
+    before = signal.getsignal(signal.SIGTERM)
+    rounds = []
+
+    def sleep(seconds):
+        # Without the worker's handler a real SIGTERM would end the test run.
+        if signal.getsignal(signal.SIGTERM) is before:
+            pytest.fail("no SIGTERM handler while the loop sleeps")
+        signal.raise_signal(signal.SIGTERM)
+    code = worker.main(["--every", "5", "--port", "0"], jobs=[("a", lambda: rounds.append(1) or 0)],
+                       sleep=sleep, log=lambda _: None)
+    assert code == 0 and rounds == [1]
+    assert signal.getsignal(signal.SIGTERM) is before
 
 
 def test_health_reports_the_last_round():

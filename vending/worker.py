@@ -22,6 +22,12 @@ browser, and a 503 there means the last round failed. It never shows error
 text, because the endpoint is public and a database error names the host and
 user; the errors are in the log.
 
+SIGTERM, which Azure sends before stopping a replica, ends the loop like
+Ctrl+C: the health check closes and the process exits 0, and a job in flight
+is cut off. The process is PID 1 in the container, which ignores SIGTERM
+unless a handler is set, so without this a restart would wait out the grace
+period and end in SIGKILL.
+
 The agent itself (the model loop) does not run here yet; when it does, it
 starts `python -m vending.server` over stdio from the same image.
 """
@@ -31,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -154,6 +161,14 @@ def serve_health(state: State, port: int) -> ThreadingHTTPServer:
     return server
 
 
+class Stopped(Exception):
+    """SIGTERM arrived; raised in the main thread to end the loop."""
+
+
+def _stop(signum, frame):
+    raise Stopped
+
+
 def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
          sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print) -> int:
     parser = argparse.ArgumentParser(prog="python -m vending.worker", description=__doc__.splitlines()[0])
@@ -173,7 +188,11 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
     state = State()
     running: dict[str, threading.Thread] = {}
     server = serve_health(state, args.port) if args.port and not args.once else None
+    previous = None
     try:
+        # Only the main thread may set a signal handler.
+        if threading.current_thread() is threading.main_thread():
+            previous = signal.signal(signal.SIGTERM, _stop)
         while True:
             state.results = run_round(jobs, log, args.timeout * 60, running)
             state.rounds += 1
@@ -184,9 +203,12 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             state.next_round_at = due.isoformat()
             log(f"next round at {due:%Y-%m-%d %H:%M:%S} UTC")
             sleep(args.every * 60)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, Stopped):
+        log("stopping")
         return 0
     finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
         if server is not None:
             server.shutdown()
             server.server_close()
