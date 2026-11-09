@@ -709,13 +709,17 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
                  need=max(0, fill_to - staying), changes_product=not same)
 
 
+# Hosts an Amazon product link may use: the store itself and its short links.
+AMAZON_HOSTS = frozenset({"amazon.com", "amzn.com", "amzn.to", "a.co"})
+
+
 def _is_amazon_url(url: str) -> bool:
-    """True only for amazon.com and its subdomains. A URL too malformed to parse is not one."""
+    """True only for an Amazon host or one of its subdomains. A URL too malformed to parse is not one."""
     try:
         host = urlparse(url).hostname or ""
     except ValueError:
         return False
-    return host == "amazon.com" or host.endswith(".amazon.com")
+    return any(host == h or host.endswith("." + h) for h in AMAZON_HOSTS)
 
 
 class _Sources:
