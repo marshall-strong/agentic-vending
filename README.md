@@ -181,6 +181,12 @@ machine itself: it reads the bridge's stored history. Run the tests with `pytest
 every request still pending, and every one fulfilled in the last 30 days, and stores the
 receipts the stock counts come from. It only reads; it never submits a request.
 
+## Deploying
+
+The agent runs in an Azure Container App; `docs/deploy.md` has the one-time setup, the deploy
+script (`scripts/deploy_container_app.ps1`), how to check `/health` and the logs, and how to roll
+back. Nothing in the image migrates the database: a person runs `python -m vending.db migrate`.
+
 ## Working on this repo
 
 - **Everything goes through a branch and a pull request.** Nobody pushes to `main`.
