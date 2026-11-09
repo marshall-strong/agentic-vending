@@ -7,6 +7,7 @@ request: it only reads stored history and our purchase requests.
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -107,12 +108,18 @@ class Bridge:
                     raise BridgeRateLimited(f"429 from {path}: still rate limited after {RETRIES} retries") from None
                 if error.code in (401, 403):
                     raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
-                raise BridgeError(f"{error.code} from {path}: {error.read()[:200]!r}") from None
-            except (urllib.error.URLError, TimeoutError, OSError) as error:
+                raise BridgeError(f"{error.code} from {path}: {_start_of_body(error)!r}") from None
+            except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
                 if attempt < RETRIES:
                     time.sleep(delay)
                     delay *= 2
                     continue
+                # A response cut off or unreadable (`IncompleteRead`, `BadStatusLine`)
+                # is this request's fault alone. `RemoteDisconnected` is an
+                # `HTTPException` as well as an `OSError`, and it is a lost
+                # connection, so check `OSError`.
+                if not isinstance(error, OSError):
+                    raise BridgeError(f"broken response from {path}: {error!r}") from None
                 raise BridgeUnreachable(
                     f"Could not reach {self.base_url} ({getattr(error, 'reason', error)}). "
                     "Is Tailscale connected?"
@@ -143,6 +150,14 @@ class Bridge:
         A GET only: submitting is `submit_desired_state`'s job, never this client's.
         """
         return json.loads(self._get(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}"))
+
+
+def _start_of_body(error: urllib.error.HTTPError) -> bytes:
+    """The start of an error response, for the message. It can be cut off too."""
+    try:
+        return error.read(200)
+    except (OSError, http.client.HTTPException):
+        return b""
 
 
 def _retry_after(error: urllib.error.HTTPError) -> float | None:
