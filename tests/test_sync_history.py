@@ -185,6 +185,43 @@ def test_not_evadts_is_stored_with_no_checksum_result(conn):
     assert conn.execute("select crc_ok, raw from polls").fetchone() == (None, b"<html>502 Bad Gateway</html>")
 
 
+def test_an_unparseable_poll_is_fetched_again_only_on_a_retry_pass(conn):
+    day = date(2026, 10, 1)
+    meta = poll_meta("cut", "2026-10-01T12:00:00+00:00")
+    assert store(conn, meta, b"DXS*cut off") == "bad"
+    bridge = FakeBridge(days={"2026-10-01": [meta]}, raws={"cut": build(SAMPLE)})
+
+    plain = sync(conn, bridge, day, day, log=lambda _: None)
+    assert (plain.new, plain.unparseable) == (0, 0)
+    assert conn.execute("select crc_ok from polls").fetchall() == [(None,)]
+
+    retry = sync(conn, bridge, day, day, log=lambda _: None, retry_bad=True)
+    assert (retry.new, retry.unparseable) == (1, 0)
+    assert conn.execute("select crc_ok, total_paid_units from polls").fetchall() == [(True, 42)]
+    assert conn.execute("select count(*) from poll_selections").fetchone()[0] == 2
+
+
+def test_a_retry_pass_leaves_a_still_bad_poll_and_a_checksum_failure_alone(conn):
+    day = date(2026, 10, 1)
+    bad = poll_meta("bad", "2026-10-01T12:00:00+00:00")
+    crc = poll_meta("crc", "2026-10-01T13:00:00+00:00")
+    assert store(conn, bad, build(GARBLED)) == "bad"
+    assert store(conn, crc, build(SAMPLE, corrupt=True)) == "crc"
+    bridge = FakeBridge(days={"2026-10-01": [bad, crc]},
+                        raws={"bad": b"<html>still broken</html>", "crc": BridgeError("must not be fetched")})
+    report = sync(conn, bridge, day, day, log=lambda _: None, retry_bad=True)
+    assert (report.new, report.unparseable, report.failed_polls) == (0, 1, 0)
+    assert conn.execute("select session_id, crc_ok from polls order by session_id").fetchall() == [
+        ("bad", None), ("crc", False)]
+
+
+def test_store_never_replaces_a_readable_poll(conn):
+    assert store(conn, META, build(SAMPLE)) == "ok"
+    assert store(conn, META, build(GARBLED)) == "bad"
+    assert store(conn, META, build(SAMPLE, corrupt=True)) == "crc"
+    assert conn.execute("select crc_ok, total_paid_units from polls").fetchall() == [(True, 42)]
+
+
 def test_two_runs_migrating_at_once_do_not_collide(database_url):
     schema = f"test_{uuid.uuid4().hex[:8]}"
     connections = [psycopg.connect(database_url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)

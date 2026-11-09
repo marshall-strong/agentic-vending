@@ -13,8 +13,9 @@ re-checked, because polls can land on them after the previous run.
 A day the bridge can't list, or a poll it can't return, is logged and counted
 and the run carries on, so one bad poll can't block everything after it. That
 includes a poll whose connection keeps dropping, as long as `/health` still
-answers. Re-run with `--since` to retry them. Only an unreachable bridge or a
-rejected key stops the run.
+answers. Re-run with `--since` to retry them; that pass also fetches again any
+poll stored as unparseable, in case the bridge sent a cut-off document. Only an
+unreachable bridge or a rejected key stops the run.
 
 It never migrates. On a database that is behind it refuses to run (exit 2) and
 names `python -m vending.db migrate`, like the server and the halt switch, so a
@@ -50,7 +51,11 @@ class Report:
 
 
 def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
-    """Insert one poll and its selections in one transaction. Returns 'ok', 'crc' or 'bad'."""
+    """Insert one poll and its selections in one transaction. Returns 'ok', 'crc' or 'bad'.
+
+    A poll already stored is left alone, except one stored as unparseable
+    (`crc_ok` null, so no selections): a document that can now be read replaces it.
+    """
     try:
         poll = parse(raw)
     except ParseError:
@@ -62,10 +67,16 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
             insert into polls (session_id, device_id, started_at, raw, byte_count, crc_ok,
                                machine_serial, decimal_places, total_paid_cents, total_paid_units)
             values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (session_id) do nothing
+            on conflict (session_id) do update set
+                device_id = excluded.device_id, started_at = excluded.started_at,
+                raw = excluded.raw, byte_count = excluded.byte_count, crc_ok = excluded.crc_ok,
+                machine_serial = excluded.machine_serial, decimal_places = excluded.decimal_places,
+                total_paid_cents = excluded.total_paid_cents, total_paid_units = excluded.total_paid_units,
+                synced_at = now()
+            where polls.crc_ok is null and excluded.crc_ok is not null
             """,
             (
-                # crc_ok stays null when the document couldn't be read at all.
+                # `crc_ok` stays null when the document couldn't be read at all.
                 meta["session_id"], meta.get("device_id") or "unknown", meta["started_at"], raw, len(raw),
                 None if poll is None else poll.crc_ok,
                 poll.machine_serial if ok else None, poll.decimal_places if ok else None,
@@ -85,10 +96,21 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
     return "ok" if ok else "crc"
 
 
-def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log=print) -> Report:
+def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log=print,
+         retry_bad: bool = False) -> Report:
+    """Fetch and store every poll from `since` to `until` that we don't hold.
+
+    With `retry_bad`, polls stored as unparseable (`crc_ok` null) are fetched
+    again, in case the bridge returned a cut-off or garbled document last time.
+    A poll whose checksum failed (`crc_ok` false) was read whole and is left alone.
+    """
     report = Report()
+    start = datetime.combine(since, datetime.min.time(), timezone.utc)
     known = {row[0] for row in conn.execute(
-        "select session_id from polls where started_at >= %s", (datetime.combine(since, datetime.min.time(), timezone.utc),))}
+        "select session_id from polls where started_at >= %s" + (" and crc_ok is not null" if retry_bad else ""),
+        (start,))}
+    retrying = set() if not retry_bad else {row[0] for row in conn.execute(
+        "select session_id from polls where started_at >= %s and crc_ok is null", (start,))}
     day = since
     while day <= until:
         report.days += 1
@@ -115,13 +137,17 @@ def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log
                 continue
             outcome = store(conn, meta, raw)
             known.add(meta["session_id"])
+            again = meta["session_id"] in retrying
+            if outcome == "bad":
+                report.unparseable += 1
+                log(f"  {'still ' if again else ''}not EVA-DTS: {meta['session_id']} ({meta['started_at']}); kept raw")
+                continue
             report.new += 1
+            if again:
+                log(f"  re-fetched {meta['session_id']} ({meta['started_at']}): now readable")
             if outcome == "crc":
                 report.crc_failed += 1
                 log(f"  checksum failed: {meta['session_id']} ({meta['started_at']}); kept raw, counters skipped")
-            elif outcome == "bad":
-                report.unparseable += 1
-                log(f"  not EVA-DTS: {meta['session_id']} ({meta['started_at']}); kept raw")
         log(f"{day}: {len(listing)} listed")
         day += timedelta(days=1)
     return report
@@ -155,7 +181,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             since = args.since or default_since(conn)
             until = args.until or datetime.now(timezone.utc).date()
-            report = sync(conn, Bridge(), since, until)
+            # An explicit `--since` is a retry pass, so unparseable polls are fetched again.
+            report = sync(conn, Bridge(), since, until, retry_bad=args.since is not None)
     except BridgeError as error:
         print(f"bridge error: {error}", file=sys.stderr)
         return 3
