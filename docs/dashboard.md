@@ -14,7 +14,7 @@ script or another agent.
 
 ![The dashboard with sample data](dashboard/current.png)
 
-*Sample data from a throwaway database, not a real run.*
+*Sample data from a throwaway database, not a real run. For the picture our slots are set to columns 2, 4, 6 and 8, to show the page follows `vending.slots`.*
 
 ## What it shows
 
@@ -26,11 +26,18 @@ what changed and why.
 | Verdict | **OK**, **Check** or **Problem** next to the title (and in the browser tab), from the worst item in Needs attention | everything below |
 | Tiles | The halt switch and who last changed it; the latest run and how long it has run; a countdown to the Thursday 23:59 Eastern cutoff; how old the last machine poll is and units sold since; what has been spent on drinks (fulfilled requests) and on the model (run costs) | `config`, `agent_runs`, `polls`, `purchase_requests` |
 | Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours. **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot |
-| The machine | Every slot, laid out like the machine (rows 1 to 5, columns 5 to 8): the latest plan's product, price and fill, with the price on the tag now struck through when the plan changes it; units on hand as a bar against the fill target; units sold this week; the agent's reason. Slots that changed since the plan before are outlined, tagged (swap, $2.50 to $2.75, fill 6 to 8, pull) and say what they were. Under it, the weekly update for the team and the notes to itself | `agent_runs`, `vending.stock` (receipts and polls), `get_machine_state` (polls) |
+| In the machine | The machine's face, upright: 5 shelves of 8 selections (row r, column c is selection "rc"), with our selections lit and the rest striped. Which selections are ours comes only from `vending.slots.SLOTS`. Each of ours shows its number, a bottle filled to the units on hand with the count on it, the product under it and the price tag. **Now** is the tag price from the latest poll and the product and units on hand from the receipts. **Next Friday** is the latest plan: its product, price (the tag now struck through when it changes) and fill; slots the plan changed are outlined, with a dot for the kind (blue swap or fill, amber price, red pull). Beside it, each change with the agent's reason. Click a selection to open it in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs` |
+| The plan | "N of 20 slots changed since run #X", a chip per change that jumps to the slot and opens its reason, a "Show changed slots only" switch, then one line per slot (product, price, fill, change tags) that opens to the reason, what it was, and what the slot holds and sold this week. Under it, the weekly update for the team and the notes to itself | `agent_runs`, `vending.stock`, `get_machine_state` |
 | Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it | `agent_runs` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates) and catalog requests | `purchase_requests`, `purchase_lines`, `product_requests` |
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
+
+A bottle's level is the units over the package's capacity from the machine's loading label
+(`PACKAGE_CAPACITY`: 20 oz PET 7, 16 oz glass 7, 16 oz PET 8, 12 oz can 8, 240/250 ml can 11,
+14 oz PET 8; approximate), used only when the product name states the package. Otherwise it is
+drawn against the plan's fill, or the count itself. Bottle colours come from a hash of the product
+name, so there is no brand table to keep up.
 
 A slot counts as changed when what the plan asks for changes (product, fill, price, keep). A
 reworded reason alone is not a change. Status and the machine follow `live` and `dry-run` runs
@@ -38,8 +45,22 @@ only, and a plan is compared only with the last plan of the same mode; replays o
 under Runs, dimmed. Model spend counts `live` and `dry-run` runs.
 
 The page refreshes itself in place every 30 seconds, keeping your scroll position, any open
-arguments and the tool-call filter. If a refresh fails (the database is down) it keeps the last
+slot or arguments, the tool-call filter, the Now / Next Friday choice and the changed-only switch,
+and the verdict in the tab title. Without JavaScript the machine shows Now, the plan shows every
+slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
 page and says how old it is. Without JavaScript it reloads the whole page instead.
+
+## Honesty rules
+
+The page shows only what something recorded, and says so when nothing did.
+
+- **Stock is estimated from receipts and polls, not a sensor.** Units on hand are what the
+  fulfilled receipts loaded, minus what the polls' counters say sold, minus recorded losses.
+- **A plan is a proposal, not a restock receipt.** Next Friday is what the agent asked for, not
+  what a worker loaded.
+- **Unknown stays unknown.** A selection with no receipt shows `?` and "unknown", never a guess
+  from the plan. A price with no poll shows a dash. Without a plan, Next Friday says "No plan yet".
+- **No balance or profit shown until the ledger is available.**
 
 **Not shown yet:** the balance and profit and loss. They arrive with the ledger (#35); a tile is a
 small addition once it merges. "Spent so far" is only what the receipts and run costs record.

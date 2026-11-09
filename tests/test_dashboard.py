@@ -103,7 +103,9 @@ def test_plan_compares_with_the_run_before(conn, page_conn):
     page = dashboard.render(dashboard.snapshot(page_conn))
     assert "Swapping 16 to Mountain Dew." in page and "see if 16 sells" in page and "MTDEW-20OZ" in page
     assert "$2.25 &middot; fill to 4" in page and "was: keep as is" in page
-    assert "1 slot changed" in page and page.count('class="cell changed') == 1
+    assert f"1 of {len(dashboard.SLOTS)} slots changed</b> since run #{first}" in page
+    assert page.count('class="pc changed"') == 1
+    assert '<a class="pill info" href="#slot-16">16 swap</a>' in page and 'id="slot-16"' in page
 
 
 def test_a_plan_of_the_wrong_shape_still_renders(conn, page_conn):
@@ -339,7 +341,7 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
     assert snap["sales"]["data"]["stale"] is False
     assert snap["spend"]["data"]["drinks"]["paid"] == Decimal("9.60")
     page = dashboard.render(snap)
-    assert "3 on hand &middot; 5 sold" in page
+    assert "3 on hand of COKE-20OZ &middot; 5 sold this week" in page
     assert "<s>$2.50</s> <b>$2.75</b>" in page             # the tag now, and what the plan sets it to
     assert '"paid": "9.60"' in dashboard.to_json(snap)
 
@@ -402,3 +404,129 @@ def test_state_json_carries_the_verdict_inputs(served):
     state = json.loads(get(served + "/state.json")[2])
     assert {a["level"] for a in state["attention"]} <= {"bad", "warn", "info"}
     assert {"sales", "stock", "spend", "recent_calls"} <= state.keys()
+
+
+# --- v2: merged from the bakeoff, and the upright machine ------------------------------------------
+
+def test_the_refresh_keeps_the_tab_title_current():
+    # The in-place refresh swaps <main>; the verdict lives in <title>, so it must be copied too.
+    assert "document.title = doc.title" in dashboard.SCRIPT
+
+
+@pytest.mark.parametrize("halted, at, by, words, absent", [
+    (False, None, None, "writes allowed", "by "),
+    (False, MONDAY - timedelta(hours=3), None, "turned off <time", " by"),
+    (False, None, "kevin", "turned off by kevin", "&mdash;"),
+    (True, None, None, "no halt row: counts as halted", "turned on"),
+])
+def test_the_halt_tile_reads_cleanly_without_who_or_when(page_conn, halted, at, by, words, absent):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    snap["status"].update(halted=halted, halt_changed_at=at, halt_changed_by=by)
+    tile = dashboard._tiles(snap).split('<div class="tile">')[1]
+    assert words in tile and absent not in tile
+
+
+def test_snapshot_is_repeatable_read_even_across_optional_readers(conn, page_conn, monkeypatch):
+    # Every guarded read, even one that runs in a savepoint, sees the one read-only snapshot.
+    seen = []
+    original = dashboard._guarded
+
+    def inspect(connection, read):
+        seen.append((connection.execute("show transaction_isolation").fetchone()[0],
+                     connection.execute("show transaction_read_only").fetchone()[0]))
+        return original(connection, read)
+    monkeypatch.setattr(dashboard, "_guarded", inspect)
+    dashboard.snapshot(page_conn)
+    assert len(seen) > 5 and set(seen) == {("repeatable read", "on")}
+
+
+@pytest.mark.parametrize("table, column, broken", [
+    ("polls", "crc_ok", {"sales"}),
+    ("purchase_lines", "units_loaded", {"stock", "purchase_requests"}),
+])
+def test_optional_readers_roll_back_only_their_panel(conn, page_conn, table, column, broken):
+    conn.execute(f"alter table {table} drop column {column}")
+    snap = dashboard.snapshot(page_conn)
+    panels = ("plan", "runs", "activity", "recent_calls", "sales", "stock", "spend",
+              "purchase_requests", "catalog_requests")
+    assert {k for k in panels if not snap[k]["ok"]} == broken
+    page = dashboard.render(snap)
+    assert "Not available" in page or "isn&#x27;t available" in page
+    assert page.count('class="slot ours') == len(dashboard.SLOTS)    # the machine still draws
+
+
+EVEN = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
+
+
+@pytest.fixture
+def even_columns(monkeypatch):
+    """Our slots on every other column, so nothing assumes columns 5 to 8."""
+    from vending.tools import machine_state
+    monkeypatch.setattr(dashboard, "SLOTS", EVEN)
+    monkeypatch.setattr(machine_state, "SLOTS", EVEN)
+    return EVEN
+
+
+def test_the_machine_lights_only_our_slots_from_slots(page_conn, even_columns):
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    assert page.count('class="slot ours') == 20 and page.count('class="slot theirs"') == 20
+    assert 'data-slot="12"' in page and 'data-slot="15"' not in page
+    assert 'title="15: not our selection"' in page
+    assert "No plan yet" in page and 'class="noplan v-next"' in page
+    assert page.count("units unknown") >= 20                # no receipts: never a made-up count
+    assert 'class="seg" role="group" aria-label="Show" hidden' in page   # the toggle needs JS
+
+
+def test_now_and_next_friday(conn, page_conn, even_columns):
+    fulfilled(conn, "pr-1", "12", "COKE-20OZ", units_loaded=6, paid="7.20", at=MONDAY - timedelta(days=3))
+    store_poll(conn, "p1", (MONDAY - timedelta(days=4)).isoformat(), {"12": (250, 10), "14": (200, 5)})
+    store_poll(conn, "p2", (MONDAY - timedelta(hours=1)).isoformat(), {"12": (250, 12), "14": (200, 5)})
+    first = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "12", "fill_to": 6, "sale_price": "2.50"},
+                                                          {"slot": "14", "keep": True},
+                                                          {"slot": "16", "fill_to": 4}))
+    second = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, second, "submitted", plan=plan(
+        {"slot": "12", "fill_to": 7, "sale_price": "2.75", "reason": "<i>sells out</i>"},
+        {"slot": "14", "product": "MTDEW-20OZ", "fill_to": 4, "sale_price": "2.25", "reason": "try it"},
+        {"slot": "16", "fill_to": 0, "reason": "dead"}))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    view = dashboard.machine_view(snap)
+    assert view["12"]["now"] == {"product": "COKE-20OZ", "units": 4, "price": "2.50"}
+    assert view["14"]["now"] == {"product": None, "units": None, "price": "2.00"}    # no receipt: unknown
+    assert view["12"]["next"]["units"] == 7 and view["12"]["next"]["old_price"] == "2.50"
+    assert (view["12"]["change"]["kind"], view["14"]["change"]["kind"], view["16"]["change"]["kind"]) == \
+        ("warn", "info", "bad")
+    assert view["16"]["next"]["pulled"] is True
+    assert view["18"]["next"]["in_plan"] is False and view["18"]["change"] is None
+    page = dashboard.render(snap)
+    assert '<s>2.50</s>2.75' in page                       # the tag next Friday, old price struck
+    assert '<span class="lbl v-now">unknown</span>' in page
+    assert "&lt;i&gt;sells out&lt;/i&gt;" in page and "<i>sells out</i>" not in page
+    assert '<span class="chg bad">' in page and "pulled" in page
+    assert "Stock is estimated from receipts and polls, not a sensor." in page
+    assert "A plan is a proposal, not a restock receipt." in page
+    assert "No balance or profit shown until the ledger is available." in page
+    assert f"3 of 20 slots changed</b> since run #{first}" in page
+    # The changed-only toggle: hidden until JS shows it, and the grid shows every slot without it.
+    assert '<label class="only" hidden><input type="checkbox" id="changed-only">' in page
+    assert 'class="plan-grid" data-only="false"' in page
+
+
+@pytest.mark.parametrize("name, package", [
+    ("COKE-20OZ", "20oz PET"), ("Sprite 20 oz bottle", "20oz PET"), ("Jarritos 16oz glass", "16oz glass"),
+    ("Water 16 oz PET", "16oz PET"), ("Snapple 16 oz", None), ("Coke 12 oz can", "12oz can"),
+    ("Coke 12 oz", None), ("Red Bull 250ml", "240/250ml can"), ("Starbucks 14 fl oz", "14oz PET"),
+    ("Gatorade 28 oz", None), ("MTDEW", None), (None, None),
+])
+def test_package_from_the_name(name, package):
+    assert dashboard._package(name) == package
+
+
+def test_bottle_level_uses_capacity_only_when_the_package_is_known():
+    assert dashboard._level(7, "COKE-20OZ", None) == 100
+    assert dashboard._level(4, "Red Bull 250ml", 11) == 36       # 4 of 11
+    assert dashboard._level(3, "MYSTERY", 6) == 50               # no package: against the fill
+    assert dashboard._level(9, "MYSTERY", 6) == 100              # more than the fill: against itself
+    assert dashboard._level(None, "COKE-20OZ", 6) == 0
+    assert dashboard._colour("COKE-20OZ") == dashboard._colour(" coke-20oz ") != dashboard._colour("SPRITE-20OZ")

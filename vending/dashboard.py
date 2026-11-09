@@ -15,9 +15,13 @@ The page, top to bottom:
  - Verdict and tiles: OK / check / problem, the halt switch, the latest run,
    the order cutoff countdown, the machine's last poll, and what has been spent.
  - Needs attention: each thing that is wrong or about to be, in a sentence.
- - The machine: the latest plan for every slot, laid out like the machine, with
-   what changed since the plan before, stock on hand (receipts) and sales (polls).
- - The agent's weekly update and its notes to itself.
+ - In the machine: the machine's face, upright, with our selections (from
+   `vending.slots.SLOTS`) lit. Now shows the tag price (polls) and the product
+   and units on hand (receipts); Next Friday shows the latest plan. Anything
+   without a record says unknown.
+ - The plan: what changed since the plan before, then one line per slot that
+   opens to the agent's reason, what it was, and what the slot holds and sold.
+   Then the agent's weekly update and its notes to itself.
  - Runs: each run, how it ended, what it cost, and which slots its plan changed.
  - Tool calls: the last calls from `action_log`, filterable to writes or problems.
  - Requests and back stock: purchase and catalog requests, and what is in the closet.
@@ -27,7 +31,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import zlib
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, localcontext
@@ -44,7 +50,7 @@ from psycopg.types.json import set_json_loads
 from vending import db, settings
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
-from vending.slots import SLOTS
+from vending.slots import DEVICE_ID, SLOTS
 from vending.tools import machine_state
 
 HOST = "127.0.0.1"
@@ -65,6 +71,12 @@ STALE_RUN = timedelta(hours=2)
 RECENT = timedelta(hours=24)
 # Halted this close to the cutoff means no request can go out in time.
 CUTOFF_SOON = timedelta(hours=24)
+# Units a selection holds, by package, from the machine's loading label. Approximate: it only
+# scales the bottle drawn in "In the machine", and only when the product name says the package.
+PACKAGE_CAPACITY = {"20oz PET": 7, "16oz glass": 7, "16oz PET": 8, "12oz can": 8, "240/250ml can": 11,
+                    "14oz PET": 8}
+# The machine's face: 5 shelves of 8 selections. Row r, column c is selection "rc".
+SHELVES, COLUMNS = 5, 8
 
 
 def _connect() -> psycopg.Connection:
@@ -527,64 +539,300 @@ def _same_price(a: Any, b: Any) -> bool:
         return str(a) == str(b)
 
 
-def _cell(slot: str, planned: dict | None, sold: dict | None, held: dict | None) -> str:
-    """One slot of the machine: what the plan asks for and how it changed, what is in it, what it sold."""
-    now = planned and planned["now"]
-    changed = bool(planned and planned["changed"])
-    if not now and not held and not (sold and (sold["price"] or sold["sold"] is not None)):
-        return f'<div class="cell unknown" data-slot="{_e(slot)}"><b class="num">{_e(slot)}</b> <span>nothing known</span></div>'
+def _package(product: str | None) -> str | None:
+    """The loading-label package a product name states, like `20oz PET`, or None when it doesn't say
+    clearly enough. Reads names such as `COKE-20OZ`, `Red Bull 250ml can` or `Jarritos 12.5 oz glass`."""
+    if not product:
+        return None
+    text = product.lower()
+    found = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*-?\s*(fl\.?\s*oz|oz|ounces?|ml)(?![a-z])", text)
+    if not found:
+        return None
+    size, unit = Decimal(found.group(1)), found.group(2)
+    glass = re.search(r"\bglass\b", text) is not None
+    can = re.search(r"\bcans?\b", text) is not None
+    pet = re.search(r"\b(pet|plastic)\b", text) is not None
+    if unit == "ml":
+        return "240/250ml can" if size in (240, 250) and not glass and "bottle" not in text else None
+    if size == 20 and not glass and not can:
+        return "20oz PET"
+    if size == 14 and not glass and not can:
+        return "14oz PET"
+    if size == 16:
+        return "16oz glass" if glass and not pet else "16oz PET" if pet and not glass else None
+    if size == 12 and can:
+        return "12oz can"
+    return None
 
-    tags = "".join(_pill(t, _change_tone(t)) for t in (_changes(now, planned["before"]) if changed else []))
-    product = (now or {}).get("product") or (held or {}).get("product")
+
+def _level(units: int | None, product: str | None, fill_to: Any) -> int:
+    """How full to draw a bottle, in percent: units over the package's capacity when the name gives
+    the package, otherwise over the larger of the units and the plan's fill."""
+    if not units:
+        return 0
+    capacity = PACKAGE_CAPACITY.get(_package(product) or "")
+    if capacity is None:
+        fill = fill_to if isinstance(fill_to, int) and not isinstance(fill_to, bool) else 0
+        capacity = max(units, fill)
+    return min(100, round(100 * units / capacity))
+
+
+def _colour(product: str | None) -> str:
+    """A steady colour per product, from a hash of its name, so no brand table needs keeping."""
+    if not product:
+        return "var(--muted)"
+    return f"hsl({zlib.crc32(product.strip().lower().encode('utf-8')) % 360}, 62%, 46%)"
+
+
+def _change_kind(labels: list[str]) -> str:
+    """The tone of a slot's change dot: a pull is `bad`, a price change `warn`, a swap or fill `info`."""
+    if "pull" in labels or "dropped" in labels:
+        return "bad"
+    if "swap" in labels or "new" in labels:
+        return "info"
+    if any(label.startswith("$") or label == "price" for label in labels):
+        return "warn"
+    return "info"
+
+
+def _fill(entry: dict | None) -> int | None:
+    fill = (entry or {}).get("fill_to")
+    return fill if isinstance(fill, int) and not isinstance(fill, bool) else None
+
+
+def machine_view(snap: dict) -> dict:
+    """What "In the machine" draws for each of our slots, Now and Next Friday. Reads nothing.
+
+    Now: the price on the tag from the latest poll, and the product and units on hand from the
+    receipts (`vending.stock`); each is None when there is no record of it. Next Friday: the latest
+    plan's product, price and fill, falling back to Now for what the plan leaves as is. `next` is
+    None when there is no plan.
+    """
+    plan, sales, stock = snap["plan"], snap["sales"], snap["stock"]
+    p = plan["data"] if plan["ok"] else None
+    planned = {s["slot"]: s for s in p["slots"]} if p else {}
+    prices = sales["data"]["slots"] if sales["ok"] else {}
+    held = stock["data"]["slots"] if stock["ok"] else {}
+    out = {}
+    for slot in SLOTS:
+        h = held.get(slot) or {}
+        now = {"product": h.get("product"), "units": h.get("on_hand"),
+               "price": (prices.get(slot) or {}).get("price")}
+        entry = (planned.get(slot) or {}).get("now")
+        nxt = change = None
+        if p is not None:
+            if entry is None:
+                nxt = {"in_plan": False, "product": now["product"], "units": None, "price": None,
+                       "old_price": None, "pulled": False, "fill_to": None}
+            else:
+                keep, fill = bool(entry.get("keep")), _fill(entry)
+                price = entry.get("sale_price") if not keep and entry.get("sale_price") is not None else now["price"]
+                moved = (price is not None and now["price"] is not None and not _same_price(price, now["price"]))
+                nxt = {"in_plan": True,
+                       "product": (None if keep else entry.get("product")) or now["product"],
+                       "units": now["units"] if keep or fill is None else fill,
+                       "price": price, "old_price": now["price"] if moved else None,
+                       "pulled": fill == 0 and not keep, "fill_to": fill}
+            if planned.get(slot, {}).get("changed"):
+                labels = _changes(entry, planned[slot]["before"]) if entry is not None else ["dropped"]
+                change = {"labels": labels, "kind": _change_kind(labels), "reason": (entry or {}).get("reason")}
+        out[slot] = {"now": now, "next": nxt, "change": change, "fill_to": _fill(entry)}
+    return out
+
+
+def _bottle(units: int | None, product: str | None, fill_to: Any, view: str) -> str:
+    if units is None:
+        return (f'<span class="bottle unknown v-{view}" role="img" aria-label="units unknown">'
+                '<b>?</b></span>')
+    return (f'<span class="bottle v-{view}" role="img" aria-label="{units} units">'
+            f'<i style="height:{_level(units, product, fill_to)}%;background:{_colour(product)}"></i>'
+            f'<b>{units}</b></span>')
+
+
+def _price_text(price: Any) -> str:
+    return "&mdash;" if price is None else _e(price)
+
+
+def _ours(slot: str, v: dict, linked: bool) -> str:
+    """One of our selections: number, bottle, product label and price tag, for Now and Next Friday."""
+    now, nxt, change = v["now"], v["next"], v["change"]
+    classes = ["slot", "ours"]
+    if change:
+        classes.append("changed")
+    if now["units"] == 0:
+        classes.append("empty-now")
+    title = [f"{slot}: {now['product'] or 'product unknown'}",
+             "price unknown" if now["price"] is None else f"${now['price']} on the tag",
+             "units unknown" if now["units"] is None else f"{now['units']} on hand"]
+    parts = [f'<span class="num">{_e(slot)}</span>']
+    if change:
+        parts.append(f'<span class="chg {change["kind"]}"></span>')
+        title.append("next: " + ", ".join(change["labels"]) + (f" ({change['reason']})" if change["reason"] else ""))
+    parts.append(_bottle(now["units"], now["product"], v["fill_to"], "now"))
+    parts.append(f'<span class="lbl v-now">{_e(now["product"]) or "unknown"}</span>')
+    parts.append(f'<span class="tag v-now">{_price_text(now["price"])}</span>')
+    if nxt is not None:
+        if nxt["pulled"]:
+            classes.append("empty-next")
+        parts.append(_bottle(nxt["units"], nxt["product"], nxt["fill_to"], "next"))
+        label = "pulled" if nxt["pulled"] else (_e(nxt["product"]) or "unknown") if nxt["in_plan"] else "not in plan"
+        parts.append(f'<span class="lbl v-next">{label}</span>')
+        old = f'<s>{_e(nxt["old_price"])}</s>' if nxt["old_price"] is not None else ""
+        parts.append(f'<span class="tag v-next">{old}{_price_text(nxt["price"])}</span>')
+    tag = "a" if linked else "span"
+    href = f' href="#slot-{_e(slot)}"' if linked else ""
+    return (f'<{tag} class="{" ".join(classes)}" data-slot="{_e(slot)}"{href} title="{_e("; ".join(title))}">'
+            + "".join(parts) + f"</{tag}>")
+
+
+def _cabinet_html(snap: dict) -> str:
+    """In the machine: the whole machine face, upright, with our selections lit, and the plan's changes."""
+    now, plan, sales, stock = snap["as_of"], snap["plan"], snap["sales"], snap["stock"]
+    p = plan["data"] if plan["ok"] else None
+    view = machine_view(snap)
+    face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
+    shelves = []
+    for r in range(1, SHELVES + 1):
+        cells = []
+        for c in range(1, COLUMNS + 1):
+            slot = f"{r}{c}"
+            cells.append(_ours(slot, view[slot], p is not None) if slot in view else
+                         f'<span class="slot theirs" title="{slot}: not our selection"><span class="num">{slot}</span></span>')
+        shelves.append(f'<div class="shelf">{"".join(cells)}</div>')
+    noplan = '' if p is not None else '<div class="noplan v-next">No plan yet</div>'
+    keys = "".join(f"<span>{k}</span>" for k in "123456789")
+    cabinet = (f'<div class="cab" aria-label="The machine, {SHELVES} shelves of {COLUMNS} selections">'
+               f'<div class="brand">{_e(DEVICE_ID.upper())}</div>'
+               f'<div class="glass">{"".join(shelves)}{noplan}</div>'
+               f'<div class="ctl" aria-hidden="true"><div class="lcd"><span class="v-now">NOW</span>'
+               f'<span class="v-next">FRI</span></div><div class="bill"></div><div class="keys">{keys}</div>'
+               f'<div class="coin"></div></div>'
+               f'<div class="bin" aria-hidden="true">PUSH</div><div class="coinret" aria-hidden="true"></div></div>')
+    off_face = [s for s in SLOTS if s not in face]
+    if off_face:
+        cabinet += f'<p class="sub">Also ours, not on the {SHELVES}&times;{COLUMNS} face: {_e(", ".join(off_face))}</p>'
+
+    # The side: what the plan changes, with the agent's reasons.
+    if not plan["ok"]:
+        changes = _missing(plan)
+    elif p is None:
+        changes = '<div class="label">Next Friday</div><p class="dim">No plan yet.</p>'
+    else:
+        run = p["run"]
+        head = (f'<div class="label">Plan changes &middot; run #{run["id"]} {_run_pill(run)}</div>')
+        if not p["previous_run"]:
+            changes = head + '<p class="dim">First plan of this mode: nothing earlier to compare with.</p>'
+        else:
+            items = [(slot, v["change"]) for slot, v in view.items() if v["change"]]
+            items += [(s["slot"], {"labels": ["dropped"], "kind": "bad", "reason": None})
+                      for s in p["slots"] if s["changed"] and s["slot"] not in view]
+            rows = "".join(
+                f'<li><span class="dotk {c["kind"]}"></span><a href="#slot-{_e(slot)}"><b>{_e(slot)}</b></a>'
+                f'<span>{_e(", ".join(c["labels"]))}'
+                + (f'<span class="why">{_e(c["reason"])}</span>' if c["reason"] else "") + "</span></li>"
+                for slot, c in items)
+            changes = head + (f'<ul class="changes">{rows}</ul>' if rows else
+                              f'<p class="dim">No slot changes since run #{p["previous_run"]}.</p>')
+    polled = ""
+    if sales["ok"] and sales["data"]["as_of"] is not None:
+        polled = f'Prices from the poll {_time(sales["data"]["as_of"], "ago", now)}. '
+    elif sales["ok"]:
+        polled = "No poll yet, so no prices. "
+    else:
+        polled = "Prices aren't available. "
+    stock_note = "" if stock["ok"] else "Stock isn't available. "
+    legend = ('<div class="vm-legend"><div><i class="dotk info"></i>swap or fill</div>'
+              '<div><i class="dotk warn"></i>price change</div><div><i class="dotk bad"></i>pull</div>'
+              f'<p>Striped selections aren\'t ours. The number on a bottle is units on hand (Now) or the plan\'s '
+              f'fill (Next Friday); <b>?</b> and "unknown" mean no receipt yet. {polled}{stock_note}'
+              'Bottle levels use approximate capacities from the loading label.</p>'
+              '<p class="honest">Stock is estimated from receipts and polls, not a sensor.</p></div>')
+    seg = ('<span class="seg" role="group" aria-label="Show" hidden>'
+           '<button type="button" data-view="now" aria-pressed="true">Now</button>'
+           '<button type="button" data-view="next" aria-pressed="false">Next Friday</button></span>')
+    return (f'<section id="vm" class="vm" data-view="now"><h2>In the machine '
+            f'<span class="hint">lit selections are ours</span>{seg}</h2>'
+            f'<div class="vm-wrap"><div class="vm-cab">{cabinet}</div>'
+            f'<div class="vm-side"><div class="card">{changes}</div>{legend}</div></div></section>')
+
+
+def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None) -> str:
+    """One slot of the plan as a <details>: what it asks for in the summary; the reason, what it was
+    and what the slot holds and sold inside."""
+    slot, entry, changed = s["slot"], s["now"], compared and s["changed"]
     price_now = (sold or {}).get("price")
-    pulled = bool(now and now.get("fill_to") == 0)
-
-    lines = []
-    if product:
-        lines.append(f'<div class="product">{_e(product)}</div>')
+    if entry is None:
+        what = '<span class="dim">not in this plan</span>'
+    elif entry.get("keep"):
+        what = "keep as is"
     else:
-        lines.append('<div class="product dim">no product known</div>')
-    if held and now and now.get("product") and now["product"] != held["product"]:
-        lines.append(f'<div class="sub">in it now: {_e(held["product"])}</div>')
-
-    terms = []
-    planned_price = now.get("sale_price") if now else None
-    if planned_price is not None and price_now is not None and not _same_price(planned_price, price_now):
-        terms.append(f'<s>${_e(price_now)}</s> <b>${_e(planned_price)}</b>')
-    elif planned_price is not None or price_now is not None:
-        terms.append(f"${_e(planned_price if planned_price is not None else price_now)}")
-    if now and now.get("keep"):
-        terms.append("keep as is")
-    elif now and "fill_to" in now:
-        terms.append("pull" if pulled else f"fill to {_e(now['fill_to'])}")
-    if terms:
-        lines.append(f'<div class="terms">{" &middot; ".join(terms)}</div>')
-
-    # Stock bar: units on hand against what the plan fills to, or what was loaded.
-    if held is not None:
-        on_hand = held["on_hand"]
-        fill_to = now.get("fill_to") if now else None
-        target = fill_to if isinstance(fill_to, int) and fill_to > 0 else max(held["loaded"], on_hand, 1)
-        share = min(on_hand / target, 1) if target else 0
-        tone = "bad" if on_hand == 0 else "warn" if share <= 0.34 else "ok"
-        lines.append(f'<div class="bar {tone}" role="img" aria-label="{on_hand} of {target} on hand">'
-                     f'<i style="width:{round(share * 100)}%"></i></div>')
-        stock_text = f"{on_hand} on hand"
-    else:
-        stock_text = "stock unknown"
+        terms = [_e(entry.get("product") or "same product")]
+        planned_price = entry.get("sale_price")
+        if planned_price is not None and price_now is not None and not _same_price(planned_price, price_now):
+            terms.append(f'<s>${_e(price_now)}</s> <b>${_e(planned_price)}</b>')
+        elif planned_price is not None:
+            terms.append(f"${_e(planned_price)}")
+        if "fill_to" in entry:
+            terms.append("pull" if entry.get("fill_to") == 0 else f"fill to {_e(entry['fill_to'])}")
+        what = " &middot; ".join(terms)
+    labels = (_changes(entry, s["before"]) if entry is not None else ["dropped"]) if changed else []
+    tags = "".join(_pill(t, _change_tone(t)) for t in labels)
+    body = []
+    reason = (entry or {}).get("reason")
+    body.append(f'<div class="why">{_e(reason)}</div>' if reason else '<div class="dim">No reason given.</div>')
+    if changed and s["before"] is not None:
+        body.append(f'<div class="was">was: {_entry_text(s["before"])}</div>')
+    stock_text = f'{held["on_hand"]} on hand' if held is not None else "stock unknown"
     sold_n = (sold or {}).get("sold")
     sales_text = f"{sold_n} sold" if sold_n is not None else "sales unknown"
-    lines.append(f'<div class="sub">{stock_text} &middot; {sales_text}</div>')
+    holds = f' of {_e(held["product"])}' if held is not None else ""
+    tag = f"${_e(price_now)} on the tag &middot; " if price_now is not None else ""
+    body.append(f'<div class="sub">now: {tag}{stock_text}{holds} &middot; {sales_text} this week</div>')
+    return (f'<details class="pc{" changed" if changed else ""}" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
+            f'<summary><b class="num">{_e(slot)}</b> <span class="what">{what}</span>'
+            f'<span class="tags">{tags}</span></summary>{"".join(body)}</details>')
 
-    reason = now.get("reason") if now else None
-    if reason:
-        lines.append(f'<div class="why" title="{_e(reason)}">{_e(reason)}</div>')
-    if changed and planned["before"] is not None:
-        lines.append(f'<div class="was">was: {_entry_text(planned["before"])}</div>')
-    classes = "cell" + (" changed" if changed else "") + (" pulled" if pulled else "") + \
-        (" empty-slot" if held is not None and held["on_hand"] == 0 else "")
-    return (f'<div class="{classes}" data-slot="{_e(slot)}"><div class="top"><b class="num">{_e(slot)}</b>'
-            f'<span class="tags">{tags}</span></div>{"".join(lines)}</div>')
+
+def _plan_html(snap: dict) -> str:
+    plan, sales, stock, now = snap["plan"], snap["sales"], snap["stock"], snap["as_of"]
+    if not plan["ok"]:
+        return _missing(plan)
+    p = plan["data"]
+    if p is None:
+        return ('<p class="empty">No plan yet. Once the agent loop records a run with '
+                '<code>vending.agent_runs</code>, each slot shows what it plans, why, and what changed.</p>')
+    sold = sales["data"]["slots"] if sales["ok"] else {}
+    held = stock["data"]["slots"] if stock["ok"] else {}
+    run = p["run"]
+    changed = [s for s in p["slots"] if s["changed"]]
+    head = (f'<p class="lede">Plan from run <b>#{run["id"]}</b> ({_e(run["mode"])}, '
+            f'{_e(run["model"] or "model not recorded")}) {_run_pill(run)} '
+            f'started {_time(run["started_at"], "ago", now)}. '
+            + (f'<b>{len(changed)} of {len(SLOTS)} slots changed</b> since run #{p["previous_run"]}.'
+               if p["previous_run"] else "No earlier plan of this mode to compare with.") + "</p>")
+    if p["visit"] or p["reason"]:
+        head += (f'<p class="lede">Visit: <b>{_e(p["visit"] or "not given")}</b>'
+                 + (f' &middot; {_e(p["reason"])}' if p["reason"] else "") + "</p>")
+    head += '<p class="honest">A plan is a proposal, not a restock receipt.</p>'
+    controls = ""
+    if p["previous_run"] and changed:
+        chips = "".join(
+            f'<a class="pill {_change_tone(lab)}" href="#slot-{_e(s["slot"])}">{_e(s["slot"])} {_e(lab)}</a>'
+            for s in changed for lab in (_changes(s["now"], s["before"]) if s["now"] is not None else ["dropped"]))
+        controls = (f'<div class="chips">{chips}</div>'
+                    '<label class="only" hidden><input type="checkbox" id="changed-only"> '
+                    'Show changed slots only</label>')
+    cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]))
+                    for s in p["slots"])
+    return head + controls + f'<div class="plan-grid" data-only="false">{cells}</div>'
+
+
+def _switched(verb: str, at: datetime | None, by: str | None, now: datetime) -> str:
+    """`turned off 3 h ago by kevin`, leaving out whichever of when and who isn't recorded."""
+    if at is None and not by:
+        return ""
+    return (verb + (f" {_time(at, 'ago', now)}" if at is not None else "")
+            + (f" by {_e(by)}" if by else ""))
 
 
 def _tiles(snap: dict) -> str:
@@ -592,13 +840,13 @@ def _tiles(snap: dict) -> str:
     tiles = []
 
     if s["halted"]:
-        sub = (f'turned on {_time(s["halt_changed_at"], "ago", now)} by {_e(s["halt_changed_by"])}'
-               if s["halt_changed_at"] else "no halt row: counts as halted")
+        sub = (_switched("turned on", s["halt_changed_at"], s["halt_changed_by"], now)
+               or "no halt row: counts as halted")
         tiles.append(("Halt switch", '<span class="big bad-text">Halted</span>', f"no write tool can run &middot; {sub}"))
     else:
+        sub = _switched("turned off", s["halt_changed_at"], s["halt_changed_by"], now)
         tiles.append(("Halt switch", '<span class="big ok-text">Off</span>',
-                      f'writes allowed &middot; turned off {_time(s["halt_changed_at"], "ago", now)} '
-                      f'by {_e(s["halt_changed_by"])}'))
+                      "writes allowed" + (f" &middot; {sub}" if sub else "")))
 
     run = s["latest_run"]
     if run is None:
@@ -666,42 +914,6 @@ def _code(text: str) -> str:
     """Escaped text with `backticks` shown as code."""
     parts = text.split("`")
     return "".join(f"<code>{p}</code>" if i % 2 else p for i, p in enumerate(parts)) if len(parts) % 2 else text
-
-
-def _machine_html(snap: dict) -> str:
-    plan, sales, stock, now = snap["plan"], snap["sales"], snap["stock"], snap["as_of"]
-    p = plan["data"] if plan["ok"] else None
-    planned = {s["slot"]: s for s in p["slots"]} if p else {}
-    sold = sales["data"]["slots"] if sales["ok"] else {}
-    held = stock["data"]["slots"] if stock["ok"] else {}
-
-    if p:
-        run = p["run"]
-        changed = sum(1 for s in p["slots"] if s["changed"])
-        head = (f'<p class="lede">Plan from run <b>#{run["id"]}</b> ({_e(run["mode"])}, '
-                f'{_e(run["model"] or "model not recorded")}) {_run_pill(run)} '
-                f'started {_time(run["started_at"], "ago", now)}. '
-                + (f'<b>{_plural(changed, "slot")} changed</b> since run #{p["previous_run"]}.'
-                   if p["previous_run"] else "No earlier plan of this mode to compare with.") + "</p>")
-        if p["visit"] or p["reason"]:
-            head += (f'<p class="lede">Visit: <b>{_e(p["visit"] or "not given")}</b>'
-                     + (f' &middot; {_e(p["reason"])}' if p["reason"] else "") + "</p>")
-    elif plan["ok"]:
-        head = ('<p class="empty">No plan yet. Once the agent loop records a run with '
-                '<code>vending.agent_runs</code>, each slot shows what it plans and what changed. '
-                'Until then this shows stock and sales.</p>')
-    else:
-        head = _missing(plan)
-    if not sold and not held and not p:
-        head += ('<p class="empty">No stock or sales either: those come from fulfilled purchase requests and '
-                 'machine polls. The grid below is our 20 slots, in machine order.</p>')
-
-    cells = "".join(_cell(slot, planned.get(slot), sold.get(slot), held.get(slot))
-                    for slot in sorted(set(SLOTS) | planned.keys(), key=_slot_order))
-    legend = ('<p class="legend"><span class="sw changed"></span>changed since the last plan '
-              '<span class="sw bar-ok"></span>on hand vs fill target '
-              '<span class="sw bar-bad"></span>empty</p>')
-    return head + f'<div class="machine">{cells}</div>' + legend
 
 
 def _words_html(plan: dict) -> str:
@@ -844,12 +1056,14 @@ STYLE = """
   --bg:#f3f5f8; --surface:#fff; --sunk:#f7f8fa; --ink:#18202a; --muted:#5d6977; --line:#dfe4ea;
   --accent:#1f5fd1; --accent-soft:#e6efff;
   --ok:#16794a; --ok-soft:#e3f5ea; --warn:#9a5b00; --warn-soft:#fff2d9; --bad:#c0262d; --bad-soft:#fde7e7;
-  --info:#1f5fd1; --info-soft:#e6efff; --bar:#e7ebf0; --shadow:0 1px 2px rgba(16,24,40,.06); }
+  --info:#1f5fd1; --info-soft:#e6efff; --bar:#e7ebf0; --shadow:0 1px 2px rgba(16,24,40,.06);
+  --cab:#262b34; --cab-2:#1e222a; --cab-edge:#3a414d; --cab-brand:linear-gradient(90deg, #b4232a, #d9363e); }
 @media (prefers-color-scheme: dark) { :root {
   --bg:#0e1116; --surface:#161b22; --sunk:#11151b; --ink:#e6eaf0; --muted:#94a0ae; --line:#2a313b;
   --accent:#6ea8ff; --accent-soft:#16294a;
   --ok:#4cc38a; --ok-soft:#12301f; --warn:#f0b450; --warn-soft:#3a2a10; --bad:#ff6b6b; --bad-soft:#3d1a1c;
-  --info:#6ea8ff; --info-soft:#16294a; --bar:#262d36; --shadow:none; } }
+  --info:#6ea8ff; --info-soft:#16294a; --bar:#262d36; --shadow:none;
+  --cab:#1f242c; --cab-2:#181c22; --cab-edge:#363d48; --cab-brand:linear-gradient(90deg, #8f1d23, #b02a31); } }
 * { box-sizing:border-box }
 html { -webkit-text-size-adjust:100% }
 body { margin:0; background:var(--bg); color:var(--ink);
@@ -895,26 +1109,82 @@ section > h2 .hint { font-weight:400; font-size:12px; color:var(--muted) }
 .pill.ok { background:var(--ok-soft); color:var(--ok) } .pill.warn { background:var(--warn-soft); color:var(--warn) }
 .pill.bad { background:var(--bad-soft); color:var(--bad) } .pill.info { background:var(--info-soft); color:var(--info) }
 .pill.muted { background:var(--sunk); color:var(--muted); border:1px solid var(--line) }
-.machine { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px }
-.cell { background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:8px 10px; min-width:0 }
-.cell.unknown { color:var(--muted); border-style:dashed; font-size:12px }
-.cell.unknown .num { color:var(--ink); margin-right:4px }
-.cell.changed { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); background:var(--surface) }
-.cell .top { display:flex; justify-content:space-between; gap:4px; align-items:flex-start; min-height:20px }
-.cell .tags { display:flex; flex-wrap:wrap; gap:3px; justify-content:flex-end }
-.cell .num { font-size:13px }
-.cell .product { font-weight:650; overflow-wrap:anywhere; margin-top:2px }
-.cell .terms { font-size:13px } .cell .terms s { color:var(--muted) }
-.cell .why { font-size:12px; color:var(--muted); margin-top:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
-  overflow:hidden; overflow-wrap:anywhere }
-.cell .was { font-size:11px; color:var(--muted); margin-top:3px; border-top:1px dashed var(--line); padding-top:3px; overflow-wrap:anywhere }
-.bar { height:6px; border-radius:3px; background:var(--bar); margin:6px 0 3px; overflow:hidden }
-.bar i { display:block; height:100%; border-radius:3px; background:var(--ok) }
-.bar.warn i { background:var(--warn) } .bar.bad { background:var(--bad-soft); box-shadow:inset 0 0 0 1px var(--bad) }
-.cell.empty-slot .num { color:var(--bad) }
-.legend { font-size:12px; color:var(--muted); margin:10px 0 0; display:flex; flex-wrap:wrap; gap:4px 14px; align-items:center }
-.sw { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:-2px }
-.sw.changed { border:2px solid var(--accent) } .sw.bar-ok { background:var(--ok) } .sw.bar-bad { background:var(--bad) }
+.honest { font-size:12px; color:var(--muted); font-style:italic; margin:0 0 8px }
+a.pill { text-decoration:none }
+/* In the machine: the cabinet is painted metal, dark in both themes. */
+.vm > h2 .seg { margin-left:auto }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; font-weight:400 }
+.seg[hidden] { display:none }
+.seg button { font:inherit; font-size:12px; font-weight:600; border:0; background:var(--surface); color:var(--muted);
+  padding:4px 12px; cursor:pointer }
+.seg button[aria-pressed="true"] { background:var(--accent); color:var(--surface) }
+.vm[data-view="now"] .v-next, .vm[data-view="next"] .v-now { display:none !important }
+.vm-wrap { display:grid; grid-template-columns:minmax(0, 440px) minmax(0, 1fr); gap:14px; align-items:start }
+.cab { background:linear-gradient(90deg, var(--cab), var(--cab-2) 60%, var(--cab)); border-radius:14px 14px 6px 6px;
+  padding:10px; display:grid; grid-template-columns:minmax(0, 1fr) 56px; gap:8px; box-shadow:inset 0 0 0 2px var(--cab-edge) }
+.brand { grid-column:1 / -1; color:#fff; font-weight:800; letter-spacing:.14em; font-size:11px; text-align:center; padding:5px 0;
+  background:var(--cab-brand); border-radius:6px }
+.glass { position:relative; background:linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.02) 35%, rgba(255,255,255,.05));
+  border-radius:8px; padding:5px 5px 0; box-shadow:inset 0 0 0 1px rgba(255,255,255,.1); min-width:0 }
+.shelf { display:grid; grid-template-columns:repeat(8, minmax(0, 1fr)); gap:3px; border-bottom:3px solid #505968;
+  padding-bottom:2px; margin-bottom:3px }
+.slot { position:relative; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; min-width:0;
+  height:92px; padding:12px 1px 2px; border-radius:4px 4px 0 0; color:#cfd6df; text-decoration:none }
+.slot .num { position:absolute; top:1px; left:0; right:0; text-align:center; font:600 9px ui-monospace, Consolas, monospace; color:#9aa5b2 }
+.theirs { background:repeating-linear-gradient(45deg, rgba(255,255,255,.05) 0 5px, transparent 5px 10px) }
+.theirs .num { color:rgba(255,255,255,.3); top:40% }
+.ours { background:rgba(255,255,255,.04) }
+a.ours:hover, a.ours:focus-visible { background:rgba(255,255,255,.1); outline:none }
+.vm[data-view="next"] .ours.changed { box-shadow:inset 0 0 0 2px var(--accent) }
+.bottle { position:relative; flex:1 1 auto; width:60%; max-width:22px; min-height:20px; max-height:52px; margin-top:5px;
+  border-radius:7px 7px 3px 3px; background:rgba(255,255,255,.08); overflow:hidden; box-shadow:inset 0 0 0 1px rgba(255,255,255,.18) }
+.bottle i { position:absolute; left:0; right:0; bottom:0; display:block }
+.bottle b { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  font:700 10px ui-monospace, Consolas, monospace; color:#fff; text-shadow:0 1px 2px #000 }
+.bottle.unknown { background:none; box-shadow:none; outline:1px dashed rgba(255,255,255,.4); outline-offset:-1px }
+.empty-now .bottle.v-now, .empty-next .bottle.v-next { box-shadow:inset 0 0 0 1.5px var(--bad) }
+.lbl { width:100%; margin-top:2px; font-size:8px; line-height:10px; text-align:center; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; color:#cfd6df }
+.tag { margin-top:2px; width:100%; background:#f3f1e7; color:#1d232b; border-radius:2px; font:700 9px/11px ui-monospace, Consolas, monospace;
+  text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.tag s { display:block; font-weight:400; opacity:.55 }
+.chg { position:absolute; top:-2px; right:-1px; width:9px; height:9px; border-radius:50%; box-shadow:0 0 0 2px var(--cab-2); z-index:1 }
+.chg.info, .dotk.info { background:var(--info) } .chg.warn, .dotk.warn { background:var(--warn) }
+.chg.bad, .dotk.bad { background:var(--bad) }
+.noplan { position:absolute; inset:0; display:grid; place-items:center; color:#fff; font-weight:700; font-size:16px;
+  background:rgba(14,17,22,.72); border-radius:8px }
+.ctl { display:flex; flex-direction:column; gap:7px; align-items:center }
+.lcd { width:100%; background:#0d1a12; color:#58e08a; font:700 10px ui-monospace, Consolas, monospace; text-align:center;
+  padding:6px 2px; border-radius:4px; box-shadow:inset 0 0 0 1px #24402e }
+.keys { display:grid; grid-template-columns:repeat(3, 1fr); gap:3px; width:100% }
+.keys span { background:var(--cab-edge); color:#cfd6df; font:700 9px ui-monospace, Consolas, monospace; text-align:center;
+  padding:3px 0; border-radius:3px }
+.coin { width:10px; height:28px; border-radius:5px; background:#0e1014; box-shadow:inset 0 0 0 2px #4b5462 }
+.bill { width:100%; height:12px; border-radius:3px; background:#0e1014; box-shadow:inset 0 0 0 2px #4b5462 }
+.bin, .coinret { height:32px; border-radius:6px; background:#0f1216; box-shadow:inset 0 3px 6px rgba(0,0,0,.7) }
+.bin { color:#5f6b7a; font-size:10px; letter-spacing:.2em; text-align:center; line-height:32px }
+.vm-side { display:grid; gap:10px; min-width:0 }
+.card { background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:10px 12px; min-width:0 }
+.card p { margin:4px 0 0 }
+.changes { list-style:none; margin:6px 0 0; padding:0; display:grid; gap:6px }
+.changes li { display:grid; grid-template-columns:auto auto minmax(0, 1fr); gap:6px; align-items:baseline; font-size:13px }
+.changes .why { display:block; color:var(--muted); font-size:12px; overflow-wrap:anywhere }
+.dotk { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px }
+.vm-legend { font-size:12px; color:var(--muted) } .vm-legend p { margin:6px 0 0 }
+.vm-legend > div { display:inline-block; margin-right:12px }
+/* The plan: one line per slot; the reason opens beneath. */
+.only { display:inline-flex; gap:6px; align-items:center; font-size:12px; margin:4px 0 8px; cursor:pointer }
+.only[hidden] { display:none }
+.plan-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:6px }
+.plan-grid[data-only="true"] .pc:not(.changed) { display:none }
+.pc { background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:6px 10px; min-width:0 }
+.pc.changed { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); background:var(--surface) }
+.pc:target { outline:2px solid var(--accent) }
+.pc summary { color:var(--ink); font-size:13px; display:flex; flex-wrap:wrap; gap:4px 8px; align-items:baseline }
+.pc summary .what { min-width:0; overflow-wrap:anywhere } .pc summary s { color:var(--muted) }
+.pc .tags { display:inline-flex; flex-wrap:wrap; gap:3px; margin-left:auto }
+.pc .why { font-size:13px; margin-top:4px; overflow-wrap:anywhere }
+.pc .was { font-size:12px; color:var(--muted); margin-top:3px; border-top:1px dashed var(--line); padding-top:3px; overflow-wrap:anywhere }
 .pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px; margin-top:12px }
 .words { background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:10px 12px }
 .text { white-space:pre-wrap; overflow-wrap:anywhere; margin-top:4px }
@@ -958,7 +1228,8 @@ footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8p
   main { padding:12px } .big { font-size:19px } header.top .meta { margin-left:0; width:100% }
   .tiles { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px } .tile { padding:10px 12px }
   .tile:last-child:nth-child(odd) { grid-column:1 / -1 }
-  .machine { grid-template-columns:repeat(2, minmax(0, 1fr)) }
+  .vm-wrap { grid-template-columns:minmax(0, 1fr) } .cab { grid-template-columns:minmax(0, 1fr) 40px; padding:8px }
+  .shelf { gap:2px } .slot { height:84px } .plan-grid { grid-template-columns:minmax(0, 1fr) }
   .feed li { grid-template-columns:auto minmax(0, 1fr) } .feed .kind { display:none } }
 """
 
@@ -966,8 +1237,12 @@ footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8p
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
 # and says so. Without JavaScript the <noscript> meta refresh reloads the page instead.
 SCRIPT = """(function () {
-  var REFRESH = %d * 1000, show = 'all', lastOk = Date.now(), failed = false;
-  try { show = localStorage.getItem('dash-show') || 'all'; } catch (e) {}
+  var REFRESH = %d * 1000, show = 'all', view = 'now', only = false, lastOk = Date.now(), failed = false;
+  try {
+    show = localStorage.getItem('dash-show') || 'all';
+    view = localStorage.getItem('dash-view') === 'next' ? 'next' : 'now';
+    only = localStorage.getItem('dash-changed') === '1';
+  } catch (e) {}
   function span(ms) {
     var m = Math.floor(Math.abs(ms) / 60000);
     if (m < 1) return 'under a minute';
@@ -997,28 +1272,50 @@ SCRIPT = """(function () {
       live.className = failed ? 'failed' : '';
     }
   }
+  function save(key, value) { try { localStorage.setItem(key, value); } catch (err) {} }
+  // The controls only work with JavaScript, so the page sends them hidden and this shows them.
   function filter() {
     document.querySelectorAll('.feed').forEach(function (f) { f.setAttribute('data-show', show); });
     document.querySelectorAll('.filter button').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b.getAttribute('data-show') === show));
     });
+    document.querySelectorAll('.vm').forEach(function (v) { v.setAttribute('data-view', view); });
+    document.querySelectorAll('.vm .seg').forEach(function (s) { s.hidden = false; });
+    document.querySelectorAll('.vm .seg button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-view') === view));
+    });
+    var box = document.getElementById('changed-only');
+    if (box) { box.checked = only; box.closest('label').hidden = false; }
+    document.querySelectorAll('.plan-grid').forEach(function (g) { g.setAttribute('data-only', String(only)); });
+  }
+  function openSlot(id) {
+    var d = document.getElementById(id);
+    if (!d || d.tagName !== 'DETAILS') return;
+    if (only && !d.classList.contains('changed')) { only = false; save('dash-changed', '0'); filter(); }
+    d.open = true;
   }
   document.addEventListener('click', function (e) {
-    var b = e.target.closest && e.target.closest('.filter button');
-    if (!b) return;
-    show = b.getAttribute('data-show');
-    try { localStorage.setItem('dash-show', show); } catch (err) {}
-    filter();
+    var t = e.target.closest ? e.target : e.target.parentElement;
+    var b = t.closest('.filter button'), v = t.closest('.vm .seg button'), a = t.closest('a[href^="#slot-"]');
+    if (b) { show = b.getAttribute('data-show'); save('dash-show', show); filter(); }
+    if (v) { view = v.getAttribute('data-view'); save('dash-view', view); filter(); }
+    if (a) openSlot(a.getAttribute('href').slice(1));
   });
+  document.addEventListener('change', function (e) {
+    if (e.target.id !== 'changed-only') return;
+    only = e.target.checked; save('dash-changed', only ? '1' : '0'); filter();
+  });
+  window.addEventListener('hashchange', function () { openSlot(location.hash.slice(1)); });
   function refresh() {
     if (document.hidden) return;
     fetch(location.pathname, {cache: 'no-store'}).then(function (r) {
       if (!r.ok) throw new Error(r.status);
       return r.text();
     }).then(function (html) {
-      var fresh = new DOMParser().parseFromString(html, 'text/html').querySelector('main');
-      var main = document.querySelector('main');
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var fresh = doc.querySelector('main'), main = document.querySelector('main');
       if (!fresh || !main) throw new Error('no page');
+      if (doc.title) document.title = doc.title;   // the verdict in the tab follows the page
       var open = Array.prototype.map.call(main.querySelectorAll('details[open][data-key]'),
                                           function (d) { return d.getAttribute('data-key'); });
       main.innerHTML = fresh.innerHTML;
@@ -1030,6 +1327,7 @@ SCRIPT = """(function () {
     }).catch(function () { failed = true; times(); });
   }
   filter(); times();
+  if (location.hash) openSlot(location.hash.slice(1));
   setInterval(refresh, REFRESH);
   setInterval(times, 15000);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
@@ -1046,15 +1344,15 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS) -> str:
         items = attention(snap)
     state = verdict(items)
     p = snap["plan"]["data"] if snap["plan"]["ok"] else None
-    machine_hint = ("rows 1 to 5, columns 5 to 8 &middot; outlined slots changed"
-                    if p and p["previous_run"] else "rows 1 to 5, columns 5 to 8")
-    head = (f'<header class="top"><h1>Agent dashboard</h1>'
+    plan_hint = ("outlined slots changed &middot; open a slot for the agent's reason"
+                 if p and p["previous_run"] else "open a slot for the agent's reason" if p else "")
+    head =(f'<header class="top"><h1>Agent dashboard</h1>'
             f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
             f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
             f'refreshes every {int(refresh)} s</span> &middot; <a href="state.json">JSON</a></span></header>')
-    body = (head + _tiles(snap) + _attention_html(items)
-            + f'<section id="machine"><h2>The machine <span class="hint">{machine_hint}</span></h2>'
-            + _machine_html(snap) + _words_html(snap["plan"]) + "</section>"
+    body = (head + _tiles(snap) + _attention_html(items) + _cabinet_html(snap)
+            + f'<section id="plan"><h2>The plan <span class="hint">{plan_hint}</span></h2>'
+            + _plan_html(snap) + _words_html(snap["plan"]) + "</section>"
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
               f'changed</span></h2>{_runs_html(snap["runs"], now)}</section>'
@@ -1067,7 +1365,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS) -> str:
             + f'<section id="closet"><h2>Back stock <span class="hint">the closet, from receipts</span></h2>'
               f'{_closet_html(snap["stock"])}</section>'
             + "</div>"
-            + '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code></footer>')
+            + '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code>'
+              '<br>No balance or profit shown until the ledger is available.</footer>')
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<noscript><meta http-equiv="refresh" content="{int(refresh)}"></noscript>'
