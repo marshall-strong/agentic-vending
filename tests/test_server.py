@@ -85,6 +85,17 @@ def test_sales_history_end_to_end(db):
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_sales_history", "done")]
 
 
+def test_catalog_end_to_end(db):
+    db.execute("insert into catalog_products (sku, name, line, flavor, size, last_response)"
+               " values ('CCC20', 'Coca-Cola Cherry', 'Coca-Cola', 'Cherry', '20 oz', '{}')")
+    db.execute("insert into catalog_syncs (product_count) values (1)")
+    result = call("get_catalog", {"search": "cherry"})
+    assert not result.isError
+    assert result.structuredContent["data"] == [
+        {"sku": "CCC20", "name": "Coca-Cola Cherry", "line": "Coca-Cola", "flavor": "Cherry", "size": "20 oz"}]
+    assert db.execute("select tool, outcome from action_log").fetchall() == [("get_catalog", "done")]
+
+
 def test_purchase_requests_end_to_end(db):
     from vending.purchase_requests import record
     body = {"off_cycle": False, "lines": []}
@@ -136,7 +147,7 @@ def test_built_only_hides_the_stubs(monkeypatch):
     monkeypatch.setenv("VENDING_TOOLS", "built")
     try:
         importlib.reload(server)
-        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history",
+        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history", "get_catalog",
                                                       "get_purchase_requests", "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")

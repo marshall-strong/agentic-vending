@@ -18,10 +18,6 @@ from vending.tools.desired_state import DesiredState
 Action = Callable[[psycopg.Connection], WriteReply]
 
 
-def get_catalog(conn: psycopg.Connection, search: str | None) -> Reply:
-    raise NotBuilt("get_catalog", "needs the catalog sync from /products and our sourcing table")
-
-
 def get_account_balance(conn: psycopg.Connection) -> Reply:
     raise NotBuilt("get_account_balance", "needs the ledger")
 
