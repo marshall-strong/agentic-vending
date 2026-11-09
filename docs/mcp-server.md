@@ -15,7 +15,8 @@ machine.
 | `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, or the catalog can't be read. |
 | `get_catalog`, `get_purchase_requests` | Registered stubs: they return a "not built yet" error naming what they wait on |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
-| `submit_desired_state`, `set_price` | Write stubs, already behind the write gate: refused while halted, logged either way |
+| `submit_desired_state` | **Works.** Plans the desired state again on live data inside the write gate, refuses with every problem at once, otherwise POSTs it once and records the request. Saves what it is about to send before sending, so a lost answer leaves a row a person settles with `python -m vending.submissions resolve`. |
+| `set_price` | Write stub, already behind the write gate: refused while halted, logged either way |
 
 ## Run it
 
@@ -221,6 +222,37 @@ The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` 
 everything that could still be worked out, so the agent fixes the whole plan in one turn. There is
 no sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
 purchase without it is refused `no_sourcing`.
+
+### `submit_desired_state`: the only way to buy
+
+Same input as `preview_desired_state`, so the agent previews, fixes every refusal, then submits the
+same desired state. Inside the write gate (halt lock held) it runs the planner **again** on live
+data, so the plan that is sent is the plan that was checked; if anything changed since the preview,
+it refuses with every problem at once and nothing is sent. Then, like `request_catalog_product`:
+
+1. It commits a `sending` row in `purchase_submissions` (migration 008) on its own connection, with
+   the exact body and the directive, **before** the POST. A crash after the POST can't lose the fact
+   that we sent something, which matters because the bridge has no route that lists our requests.
+2. It POSTs `/api/v1/purchase-requests` once, never retried: a retry after a lost answer could order
+   twice.
+3. It settles the row: `accepted` (and the request goes into `purchase_requests` in the same
+   transaction, so `python -m vending.sync_requests` reads it back from then on), `refused` (a
+   `4xx`; the reply carries the bridge's reason, such as `422 invalid_lines`), `not_filed` (it never
+   left), or `unknown` (sent, but a timeout, a `5xx` or a cut-off answer).
+
+While any row is `sending` or `unknown`, the request may or may not exist on the bridge, so the tool
+refuses every submit (`submission_unresolved`) until a person checks the bridge's Swagger page and
+runs one of:
+
+```
+python -m vending.submissions list
+python -m vending.submissions resolve 7 --request-id pr_abc123 --by kevin   # it was filed
+python -m vending.submissions resolve 7 --not-filed --by kevin              # it never was
+```
+
+Resolving with a request ID also records it in `purchase_requests`. Every change is logged with the
+`--by` name. The reply to an accepted submit carries the request ID, the plan hash, the number of
+lines, the max cost and the directive the worker will read.
 
 ## Adding a tool's logic
 
