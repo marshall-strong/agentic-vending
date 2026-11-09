@@ -39,7 +39,7 @@ from pydantic_core import to_jsonable_python
 from vending import db
 from vending.bridge import Bridge
 from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, catalog_request, machine_state,
-                           pnl, preview, sales_history, stubs)
+                           pnl, preview, sales_history, stubs, submit)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -184,10 +184,12 @@ def _preview(conn: psycopg.Connection, desired: DesiredState) -> preview.PlanRep
     return preview.preview_desired_state(conn, desired, bridge())
 
 
-@_tool(built=False)
-async def submit_desired_state(desired: DesiredState) -> WriteReply:
-    """Submit a desired state for all 20 slots as a purchase request. Same input as preview_desired_state."""
-    return await _write("submit_desired_state", {"desired": desired}, stubs.submit_desired_state(desired))
+@_tool(built=True)
+async def submit_desired_state(desired: DesiredState) -> submit.SubmitReply:
+    """Submit a desired state for all 20 slots as a purchase request, after planning it again on live data. Same input as preview_desired_state; preview first. Refused with every problem at once; spends real money when accepted."""
+    return await _write("submit_desired_state", {"desired": desired},
+                        submit.submit_desired_state(desired, lambda: bridge(), lambda: connect()),
+                        submit.SubmitReply)
 
 
 @_tool(built=False)

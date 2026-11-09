@@ -12,7 +12,6 @@ from collections.abc import Callable
 import psycopg
 
 from vending.tools import NotBuilt, Reply, WriteReply
-from vending.tools.desired_state import DesiredState
 
 Action = Callable[[psycopg.Connection], WriteReply]
 
@@ -23,12 +22,6 @@ def get_catalog(conn: psycopg.Connection, search: str | None) -> Reply:
 
 def get_purchase_requests(conn: psycopg.Connection, pending_only: bool) -> Reply:
     raise NotBuilt("get_purchase_requests", "needs the purchase-request sync")
-
-
-def submit_desired_state(desired: DesiredState) -> Action:
-    def action(conn: psycopg.Connection) -> WriteReply:
-        raise NotBuilt("submit_desired_state", "needs plan_restock wired to the ledger and our request records")
-    return action
 
 
 def set_price(slot: str, sale_price: str) -> Action:
