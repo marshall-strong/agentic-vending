@@ -265,8 +265,10 @@ purchase without it is refused `no_sourcing`.
 Same input as `preview_desired_state`, plus an optional `expected_plan_hash`: the `plan_hash` the
 preview returned. The agent previews, fixes every refusal, then submits the same desired state with
 that hash. Inside the write gate (halt lock held) it runs the planner **again** on live data, so the
-plan that is sent is the plan that was checked; if stock, prices, the balance or the catalog moved
-since the preview, the hash differs and it refuses `plan_changed`. Without the hash nothing is
+plan that is sent is the plan that was checked; if the lines it would send, their worst-case cost
+or the visit fee changed since the preview (stock, prices, the catalog or the config moved), the
+hash differs and it refuses `plan_changed`. A balance that moved but still covers the worst case
+doesn't count; the balance gate checks it either way. Without the hash nothing is
 compared, and whatever the planner produces now is sent. Every refusal comes at once: the planner's,
 `plan_changed`, and `submission_unresolved` (below), which the preview reports too. Then, on one
 side connection opened before anything is sent:

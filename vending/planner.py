@@ -379,9 +379,10 @@ class SlotFloor:
 class Plan:
     """The planner's answer. Submittable only when `refusals` is empty.
 
-    `plan_hash` is set only then. It hashes the request body and the week the
-    visit falls in, so #6 can tell the same plan submitted twice in one week,
-    while the same restock asked for again next week is a new plan.
+    `plan_hash` is set only then. It hashes the request body, its worst-case
+    cost and visit fee, and the week the visit falls in, so #6 can tell the same
+    plan submitted twice in one week, while the same restock asked for again next
+    week is a new plan. The balance isn't in it: the balance gate checks that.
     """
     lines: tuple[Line, ...]
     directive: str
@@ -635,7 +636,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     if refusals:
         return plan
     week = _week_of(now.astimezone(_tz(config.timezone)), config.week_starts)
-    body = json.dumps({"week": week.isoformat(), "request": plan.request()}, sort_keys=True)
+    # What it could cost goes in too: a new visit fee leaves the request body as it was.
+    body = json.dumps({"week": week.isoformat(), "request": plan.request(),
+                       "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents}, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
                 hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle)
 

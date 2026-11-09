@@ -229,6 +229,33 @@ def test_a_plan_that_changed_since_the_preview_is_refused_when_its_hash_is_given
     assert submit(expected_plan_hash=again["plan_hash"])["success"] and len(fake.posts) == 1
 
 
+def test_a_new_visit_fee_since_the_preview_is_a_changed_plan(db, fake):  # noqa: F811
+    prepared(db)
+    body = desired(restock_15(fill_to=20), off_cycle=True, sourcing=[coke_sourcing()]).model_dump()
+    previewed = call("preview_desired_state", {"desired": body}).structuredContent
+    assert previewed["success"]
+    # The request body is the same; only what the visit costs moved.
+    set_value(db, "midweek_fee_cents", 3000, "test")
+    reply = call("submit_desired_state", {"desired": body, "expected_plan_hash": previewed["plan_hash"]}).structuredContent
+    assert codes(reply) == ["plan_changed"] and fake.posts == []
+
+
+def test_a_plan_refused_for_other_reasons_is_not_also_called_changed(db, fake):  # noqa: F811
+    prepared(db)
+    body = desired(restock_15(fill_to=999), sourcing=[coke_sourcing()]).model_dump()
+    reply = call("submit_desired_state", {"desired": body, "expected_plan_hash": "previewed"}).structuredContent
+    assert reply["refusals"] and "plan_changed" not in codes(reply)
+
+
+@pytest.mark.parametrize(("status", "settled"), [(422, "refused"), (503, "unknown")])
+def test_an_error_answer_cut_off_part_way_is_still_that_answer(db, fake, status, settled):  # noqa: F811
+    prepared(db)
+    fake.answer, fake.cut = (status, {}), True
+    reply = submit()
+    assert not reply["success"] and str(status) in reply["message"]
+    assert db.execute("select status from purchase_submissions").fetchall() == [(settled,)]
+
+
 def test_preview_refuses_too_while_a_submission_is_unresolved(db, fake):  # noqa: F811
     prepared(db)
     fake.answer = (503, {"detail": "down"})

@@ -51,6 +51,9 @@ def save_sending(side: psycopg.Connection, plan_hash: str, body: dict,
     otherwise). It is saved here, before the POST, so even a request settled
     later by `resolve` carries the fee that was agreed when it was sent.
     """
+    if not side.autocommit:
+        # In a transaction the row would only commit after the POST, which is what it guards against.
+        raise ValueError("save_sending needs an autocommit connection")
     (row,) = side.execute(
         "insert into purchase_submissions (plan_hash, body, directive, visit_fee_cents)"
         " values (%s, %s, %s, %s) returning id",

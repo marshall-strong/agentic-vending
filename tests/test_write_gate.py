@@ -78,6 +78,21 @@ def test_crash_rolls_back_and_is_logged(scratch):
     assert log(scratch) == [("t", "failed", "RuntimeError: bridge timed out")]
 
 
+def test_a_crash_that_takes_the_database_down_still_raises_its_own_error(schema_url, conn, capsys):
+    set_halted(conn, False, "test")
+
+    def crash(gate):
+        gate.close()        # the database drops, then the action fails for its own reason
+        raise RuntimeError("bridge accepted pr-1 but storing it failed")
+
+    with open_in(*schema_url) as gate:
+        with pytest.raises(RuntimeError, match="pr-1"):
+            run_write(gate, "t", {}, crash)
+    # The log row couldn't be written, so it went to stderr rather than replacing the error.
+    assert "ACTION LOG LOST t failed" in capsys.readouterr().err
+    assert log(conn) == []
+
+
 def test_missing_halt_row_counts_as_halted(scratch):
     set_halted(scratch, False, "test")
     scratch.execute("delete from config where key = 'halted'")

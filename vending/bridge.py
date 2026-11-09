@@ -99,7 +99,8 @@ class Bridge:
             with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
                 data = response.read()
         except urllib.error.HTTPError as error:
-            raise BridgeAnswered(error.code, error.read()[:300].decode(errors="replace")) from None
+            # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
+            raise BridgeAnswered(error.code, _start_of_body(error, 300).decode(errors="replace")) from None
         except urllib.error.URLError as error:
             # urllib raises URLError only while connecting or sending.
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
@@ -194,7 +195,7 @@ class Bridge:
         `{id, status: "pending", created_at}` until the worker has dealt with
         every line, `{..., status: "rejected", decision_note}` if it was turned
         down, and the full listing with a receipt per line once fulfilled.
-        A GET only: submitting is `submit_desired_state`'s job, never this client's.
+        A GET only: `submit_desired_state` files requests, through `post`.
         """
         return json.loads(self._get(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}"))
 
@@ -207,10 +208,10 @@ def _is_listing(body: object) -> bool:
     )
 
 
-def _start_of_body(error: urllib.error.HTTPError) -> bytes:
+def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
     """The start of an error response, for the message. It can be cut off too."""
     try:
-        return error.read(200)
+        return error.read(size)
     except (OSError, http.client.HTTPException):
         return b""
 
