@@ -1,10 +1,23 @@
 """The `config` table: settings the code reads at run time, starting with the halt flag.
 
+    python -m vending.config show
+    python -m vending.config set slot_capacity 10 --by marshall
+    python -m vending.config set price_ceiling_cents 600 --by marshall
+
 The halt flag fails closed: a missing row, or anything that isn't JSON
-`false`, counts as halted.
+`false`, counts as halted. Every other key is a JSON value the planner reads
+through `vending.planning.planner_config`; the ones it knows are
+`slot_capacity` (required, no default), `price_ceiling_cents`, `tax_percent`
+and `midweek_fee_cents`. Every change is logged with who made it. The CLI
+never migrates.
 """
 
 from __future__ import annotations
+
+import argparse
+import json
+import sys
+from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -44,3 +57,68 @@ def set_halted(conn: psycopg.Connection, halted: bool, who: str, *,
             " values ('write', 'halt', %s, 'done', %s)",
             (Jsonb({"halted": halted}), f"halt turned {'on' if halted else 'off'} by {who}"),
         )
+
+
+def get_value(conn: psycopg.Connection, key: str, default: Any = None) -> Any:
+    """One setting's JSON value, or `default` when the row is missing."""
+    row = conn.execute("select value from config where key = %s", (key,)).fetchone()
+    return default if row is None else row[0]
+
+
+def set_value(conn: psycopg.Connection, key: str, value: Any, who: str) -> None:
+    """Set one setting, logged like any other write. The halt flag has its own function."""
+    if key == "halted":
+        raise ValueError("use set_halted (python -m vending.halt) for the halt flag")
+    if not who.strip():
+        raise ValueError("--by needs your name")
+    with conn.transaction():
+        conn.execute(
+            "insert into config (key, value, updated_by) values (%s, %s, %s)"
+            " on conflict (key) do update set value = excluded.value,"
+            " updated_at = now(), updated_by = excluded.updated_by",
+            (key, Jsonb(value), who.strip()),
+        )
+        conn.execute(
+            "insert into action_log (kind, tool, arguments, outcome, detail)"
+            " values ('write', 'config.set', %s, 'done', %s)",
+            (Jsonb({"key": key, "value": value}), f"config {key} set to {json.dumps(value)} by {who.strip()}"),
+        )
+
+
+def main(argv: list[str] | None = None) -> int:
+    from vending import db
+
+    parser = argparse.ArgumentParser(prog="python -m vending.config", description="Run-time settings.")
+    sub = parser.add_subparsers(dest="action", required=True)
+    sub.add_parser("show", help="every setting")
+    setter = sub.add_parser("set", help="set one setting to a JSON value (10, 2500, true, \"text\")")
+    setter.add_argument("key")
+    setter.add_argument("value", help="JSON; a bare word is taken as a string")
+    setter.add_argument("--by", required=True, help="your name, for the log")
+    args = parser.parse_args(argv)
+    with db.connect() as conn:
+        behind = db.pending(conn)
+        if behind:
+            print(f"The database is missing migrations: {', '.join(behind)}. "
+                  "Check DATABASE_URL points where you mean, then run: python -m vending.db migrate",
+                  file=sys.stderr)
+            return 2
+        if args.action == "set":
+            try:
+                value = json.loads(args.value)
+            except json.JSONDecodeError:
+                value = args.value
+            try:
+                set_value(conn, args.key, value, args.by)
+            except ValueError as error:
+                print(error, file=sys.stderr)
+                return 1
+            print(f"{args.key} = {json.dumps(value)}")
+            return 0
+        for key, value, at, by in conn.execute("select key, value, updated_at, updated_by from config order by key"):
+            print(f"{key} = {json.dumps(value)}  ({at:%Y-%m-%d %H:%M}, {by})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
