@@ -70,8 +70,14 @@ class Bridge:
     # lock, so they never retry: one try, then the caller decides.
 
     def products(self) -> list[dict]:
-        """The catalog our team can order from (`GET /api/v1/products`)."""
-        return json.loads(self._once("GET", "/api/v1/products")).get("products", [])
+        """The catalog our team can order from (`GET /api/v1/products`).
+
+        Always a list. A reply of another shape comes back as an empty list, so
+        `vending.planning.read_catalog` can refuse it instead of crashing on it.
+        """
+        body = json.loads(self._once("GET", "/api/v1/products"))
+        products = body.get("products") if isinstance(body, dict) else body
+        return products if isinstance(products, list) else []
 
     def post(self, path: str, body: dict) -> dict:
         """One POST, never retried: a retry after a lost answer could file it twice.

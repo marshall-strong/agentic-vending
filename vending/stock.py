@@ -13,10 +13,13 @@ turns receipts into stock movements and replays them in time order:
 - `units_pulled` of `pulled_sku` go from the slot to the closet at the cost
   they had in the slot.
 - `later_losses` take units out of where the receipt says they were found
-  (`coil` is the slot, `back_stock` the closet). The cost stays, so the units
-  left carry it.
+  (`coil` is the slot, `back_stock` the closet), at their average cost at that
+  moment. That cost is **shrinkage**: expensed, so the P&L sees it and the
+  units left keep their unit cost. Units still counted in a slot when its
+  product changes, and a purchase line that lost every unit, are shrinkage too.
 - sales come from the polls' lifetime counters, one movement per rise between
-  two polls, timed at the later poll.
+  two polls, timed at the later poll (`vending.counters` decides what a
+  reading that goes down means).
 
 A slot's count starts again whenever its product changes, so `loaded` and
 `sold` are since the last change, and on hand is loaded - sold - lost.
@@ -33,6 +36,8 @@ from datetime import datetime
 from decimal import Decimal
 from fractions import Fraction
 from typing import TYPE_CHECKING
+
+from vending import counters
 
 if TYPE_CHECKING:  # the replay itself needs no database, so its tests run without psycopg
     import psycopg
@@ -85,10 +90,41 @@ class SlotCount:
 
 
 @dataclass(frozen=True)
+class SaleCost:
+    """Units sold from one slot between two polls, and what they had cost us.
+
+    `cost_cents` is None when their cost was unknown; `costed_units` is how
+    many of them we had counted in the slot (sales past the count are oversold).
+    The ledger's cost of sales is the sum of these.
+    """
+    at: datetime
+    slot: str
+    product: str
+    units: int
+    costed_units: int
+    cost_cents: Fraction | None
+
+
+@dataclass(frozen=True)
+class Shrinkage:
+    """Units gone without a sale, and what they had cost us: a later loss, units
+    still counted in a slot when its product changed, or a purchase line that
+    lost every unit. `cost_cents` is None when their cost was unknown.
+    The ledger's shrinkage line is the sum of these."""
+    at: datetime
+    where: str                   # "slot 15" or "the closet"
+    product: str
+    units: int
+    cost_cents: Fraction | None
+
+
+@dataclass(frozen=True)
 class Stock:
     closet: tuple[ClosetCount, ...]
     slots: tuple[SlotCount, ...]
     warnings: tuple[str, ...] = ()
+    sales: tuple[SaleCost, ...] = ()
+    shrinkage: tuple[Shrinkage, ...] = ()
 
 
 def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movement]:
@@ -127,13 +163,13 @@ def sales_from_counters(rows: list[tuple[str, datetime, int]]) -> list[Movement]
     difference. A counter that goes down (a board swap, a misread) starts a new
     baseline instead of producing negative sales.
     """
+    by_selection: dict[str, list[tuple[datetime, int]]] = {}
+    for selection, at, lifetime in rows:
+        by_selection.setdefault(selection, []).append((at, lifetime))
     moves = []
-    previous: dict[str, int] = {}
-    for selection, at, lifetime in sorted(rows, key=lambda r: (r[0], r[1])):
-        before = previous.get(selection)
-        if before is not None and lifetime > before:
-            moves.append(Movement(at, "sale", selection, None, units=lifetime - before))
-        previous[selection] = lifetime
+    for selection in sorted(by_selection):
+        moves += [Movement(at, "sale", selection, None, units=units)
+                  for at, units in counters.rises(by_selection[selection])]
     return moves
 
 
@@ -156,6 +192,8 @@ class _Pool:
         return None if not self.units or self.cost is None else self.cost / self.units
 
     def add(self, units: int, cost: Fraction | None) -> None:
+        if not units:
+            return  # nothing arrived, so an unknown cost on nothing can't taint what is here
         self.units += units
         self.cost = None if cost is None or self.cost is None else self.cost + cost
         self._settle()
@@ -171,12 +209,9 @@ class _Pool:
         self._settle()
         return taken, cost
 
-    def lose(self, units: int) -> int:
-        """Units gone without a sale. Their cost stays, so the rest carry it."""
-        gone = min(units, self.units)
-        self.units -= gone
-        self._settle()
-        return gone
+    def lose(self, units: int) -> tuple[int, Fraction | None]:
+        """Units gone without a sale, at their average cost: shrinkage, not a cost the rest carry."""
+        return self.take(units)
 
     def _settle(self) -> None:
         if self.units == 0:
@@ -204,6 +239,8 @@ def weighted_average(movements: list[Movement]) -> Stock:
     closet: dict[str, _Pool] = {}
     slots: dict[str, _Slot] = {}
     warnings: list[str] = []
+    sales: list[SaleCost] = []
+    shrinkage: list[Shrinkage] = []
 
     def shelf(sku: str) -> _Pool:
         return closet.setdefault(sku, _Pool())
@@ -229,7 +266,8 @@ def weighted_average(movements: list[Movement]) -> Stock:
                                 f"but slot_reassigned is {str(m.reassigned).lower()}")
             if changed and slot.pool.units:
                 warnings.append(f"{m.ref}: {slot.pool.units} units of {slot.product} still counted in slot "
-                                f"{m.slot} when it changed to {m.sku}; dropped from the count")
+                                f"{m.slot} when it changed to {m.sku}; written off as shrinkage")
+                shrinkage.append(Shrinkage(m.at, f"slot {m.slot}", slot.product, slot.pool.units, slot.pool.cost))
             if slot is None or changed:
                 slot = slots[m.slot] = _Slot(product=m.sku, since=m.at)
             if m.kind == "purchase":
@@ -237,6 +275,10 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 each = None if m.paid_cents is None or not survivors else m.paid_cents / survivors
                 if m.paid_cents is None:
                     warnings.append(f"{m.ref}: bought {m.sku} with no total_paid; its cost is unknown")
+                elif not survivors and m.lost:
+                    warnings.append(f"{m.ref}: every unit of {m.sku} was lost before loading; "
+                                    "the whole line is written off as shrinkage")
+                    shrinkage.append(Shrinkage(m.at, f"slot {m.slot}", m.sku, m.lost, m.paid_cents))
                 shelf(m.sku).add(m.to_closet, None if each is None else each * m.to_closet)
                 slot.pool.add(m.to_slot, None if each is None else each * m.to_slot)
             else:
@@ -250,22 +292,25 @@ def weighted_average(movements: list[Movement]) -> Stock:
             slot.loaded += m.to_slot
         elif m.kind == "loss":
             if m.location == "back_stock":
-                gone = shelf(m.sku).lose(m.units)
+                gone, cost = shelf(m.sku).lose(m.units)
                 where = "the closet"
             elif slot is not None and slot.product == m.sku:
-                gone = slot.pool.lose(m.units)
+                gone, cost = slot.pool.lose(m.units)
                 slot.lost += gone
                 where = f"slot {m.slot}"
             else:
                 warnings.append(f"{m.ref}: {m.units} units of {m.sku} lost in slot {m.slot}, "
                                 "which no longer holds it; ignored")
                 continue
+            if gone:
+                shrinkage.append(Shrinkage(m.at, where, m.sku, gone, cost))
             if gone < m.units:
                 warnings.append(f"{m.ref}: {m.units} units of {m.sku} lost in {where} but we counted only {gone}")
         elif m.kind == "sale" and slot is not None:
-            taken, _ = slot.pool.take(m.units)
+            taken, cost = slot.pool.take(m.units)
             slot.sold += m.units
             slot.oversold += m.units - taken
+            sales.append(SaleCost(m.at, m.slot, slot.product, m.units, taken, cost))
         if slot is not None and slot.pool.units:
             slot.last_unit_cost = slot.pool.unit_cost()
 
@@ -279,11 +324,13 @@ def weighted_average(movements: list[Movement]) -> Stock:
         slots=tuple(SlotCount(name, s.product, s.pool.units, s.pool.unit_cost(), s.loaded, s.sold, s.lost, s.since)
                     for name, s in sorted(slots.items())),
         warnings=tuple(warnings),
+        sales=tuple(sales),
+        shrinkage=tuple(shrinkage),
     )
 
 
-def stock(conn: psycopg.Connection) -> Stock:
-    """Closet and slot stock now, from every fulfilled request and every good poll."""
+def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
+    """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
@@ -298,7 +345,10 @@ def stock(conn: psycopg.Connection) -> Stock:
         " join polls p using (session_id) where s.selection = any(%s)",
         (slots,),
     ).fetchall()
-    return weighted_average(movements_from_receipts(lines, losses) + sales_from_counters(counters))
+    movements = movements_from_receipts(lines, losses) + sales_from_counters(counters)
+    if until is not None:
+        movements = [m for m in movements if m.at <= until]
+    return weighted_average(movements)
 
 
 _LINE_COLUMNS = ("request_id", "line_no", "slot", "outcome", "sku", "total_paid", "units_loaded",

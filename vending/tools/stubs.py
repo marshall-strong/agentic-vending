@@ -8,7 +8,6 @@ its registration in `vending.server` at it. Write tools return an action that
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date
 
 import psycopg
 
@@ -16,18 +15,6 @@ from vending.tools import NotBuilt, Reply, WriteReply
 from vending.tools.desired_state import DesiredState
 
 Action = Callable[[psycopg.Connection], WriteReply]
-
-
-def get_account_balance(conn: psycopg.Connection) -> Reply:
-    raise NotBuilt("get_account_balance", "needs the ledger")
-
-
-def preview_desired_state(conn: psycopg.Connection, desired: DesiredState) -> Reply:
-    raise NotBuilt("preview_desired_state", "needs the restock planner, plan_restock")
-
-
-def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> Reply:
-    raise NotBuilt("get_pnl", "needs the ledger")
 
 
 def submit_desired_state(desired: DesiredState) -> Action:

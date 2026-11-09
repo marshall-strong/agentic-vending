@@ -110,13 +110,6 @@ def test_purchase_requests_end_to_end(db):
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_purchase_requests", "done")]
 
 
-def test_read_stub_says_not_built_and_is_logged(db):
-    result = call("get_account_balance")
-    assert result.isError and "not built yet" in result.content[0].text
-    assert db.execute("select kind, tool, outcome from action_log").fetchall() == [
-        ("read", "get_account_balance", "failed")]
-
-
 def test_reads_are_logged_with_their_arguments_and_result(db):
     store_poll(db, "a", "2026-10-29T12:00:00+00:00", {"15": (250, 100)})
     call("get_machine_state")
@@ -124,7 +117,7 @@ def test_reads_are_logged_with_their_arguments_and_result(db):
     rows = db.execute("select kind, tool, outcome, arguments, result->'data'->0->>'price'"
                       " from action_log order by id").fetchall()
     assert rows[0] == ("read", "get_machine_state", "done", {}, "2.50")
-    assert rows[1][:4] == ("read", "get_pnl", "failed", {"start": "2026-10-01", "end": None})
+    assert rows[1][:4] == ("read", "get_pnl", "done", {"start": "2026-10-01", "end": None})
 
 
 def test_a_read_with_no_data_is_logged_as_failed(db):
@@ -148,7 +141,8 @@ def test_built_only_hides_the_stubs(monkeypatch):
     try:
         importlib.reload(server)
         assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history", "get_catalog",
-                                                      "get_purchase_requests", "request_catalog_product"]
+                                                      "get_account_balance", "preview_desired_state",
+                                                      "get_purchase_requests", "get_pnl", "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)
@@ -183,7 +177,7 @@ def test_a_connection_that_died_is_replaced(db):
     call("get_account_balance")
     db.execute("select pg_terminate_backend(%s)", (server._conn.info.backend_pid,))
     time.sleep(0.2)
-    assert "not built yet" in call("get_account_balance").content[0].text
+    assert "no opening entry" in call("get_account_balance").content[0].text
 
 
 def test_calls_with_bad_arguments_are_logged(db):
