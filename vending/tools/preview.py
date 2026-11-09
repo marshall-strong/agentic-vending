@@ -47,8 +47,8 @@ class Cost(BaseModel):
     expected: str
     max: str
     visit_fee: str
-    balance: str
-    balance_left_at_max: str
+    spendable: str                  # the spendable balance the plan was checked against
+    spendable_left_at_max: str
     lines: list[LineCost]
 
 
@@ -131,7 +131,7 @@ def _line(ln: planner.Line) -> PlannedLine:
 def _cost(c: planner.Cost) -> Cost:
     return Cost(
         expected=money(c.expected_cents), max=money(c.max_cents), visit_fee=money(c.visit_fee_cents),
-        balance=money(c.balance_cents), balance_left_at_max=money(c.balance_left_at_max_cents),
+        spendable=money(c.balance_cents), spendable_left_at_max=money(c.balance_left_at_max_cents),
         lines=[LineCost(slot=lc.slot, expected=money(lc.expected_cents), max=money(lc.max_cents)) for lc in c.lines],
     )
 

@@ -6,10 +6,11 @@
 
 The halt flag fails closed: a missing row, or anything that isn't JSON
 `false`, counts as halted. Every other key is a JSON value the planner reads
-through `vending.planning.planner_config`; the ones it knows are
-`slot_capacity` (required, no default), `price_ceiling_cents`, `tax_percent`
-and `midweek_fee_cents`. Every change is logged with who made it. The CLI
-never migrates.
+through `vending.planning.planner_config`. Only the keys in `KNOWN` can be
+set, each checked for type and range before it is stored, because a wrong
+value here is charged for real: `midweek_fee_cents 25` (dollars typed) would
+bill 25 cents a visit, and a ceiling over the API's $10.00 would break every
+plan. Every change is logged with who made it. The CLI never migrates.
 """
 
 from __future__ import annotations
@@ -17,10 +18,57 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
+
+from vending.planner import MAX_SALE_PRICE_CENTS
+from vending.pricing import PRICE_STEP_CENTS
+
+
+@dataclass(frozen=True)
+class Setting:
+    """What a key may hold. `check` returns a reason to refuse, or None."""
+    about: str
+    check: Callable[[Any], str | None]
+
+
+def _whole(value: Any, low: int, high: int, unit: str) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return f"must be a whole number of {unit}, not {json.dumps(value)}"
+    if not low <= value <= high:
+        return f"must be between {low} and {high} {unit}, not {value}"
+    return None
+
+
+def _fee(value: Any) -> str | None:
+    problem = _whole(value, 0, 10000, "cents")
+    if problem:
+        return problem
+    if 0 < value < 100:
+        return f"{value} cents is less than a dollar; the fee is in cents (2500 is $25.00)"
+    return None
+
+
+def _ceiling(value: Any) -> str | None:
+    problem = _whole(value, PRICE_STEP_CENTS, MAX_SALE_PRICE_CENTS, "cents")
+    if problem:
+        return problem + f" (the API refuses any sale price over {MAX_SALE_PRICE_CENTS} cents)"
+    if value % PRICE_STEP_CENTS:
+        return f"must be a multiple of {PRICE_STEP_CENTS} cents, not {value}"
+    return None
+
+
+KNOWN: dict[str, Setting] = {
+    "slot_capacity": Setting("units one rail holds; no default, a person measures it",
+                             lambda v: _whole(v, 1, 100, "units")),
+    "price_ceiling_cents": Setting("highest sale price the planner allows (default 600)", _ceiling),
+    "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
+    "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
+}
 
 
 def is_halted(conn: psycopg.Connection, *, lock: bool = False) -> bool:
@@ -66,9 +114,19 @@ def get_value(conn: psycopg.Connection, key: str, default: Any = None) -> Any:
 
 
 def set_value(conn: psycopg.Connection, key: str, value: Any, who: str) -> None:
-    """Set one setting, logged like any other write. The halt flag has its own function."""
+    """Set one known setting, after checking its type and range, logged like any other write.
+
+    The halt flag has its own function. An unknown key is refused rather than
+    saved silently, so a misspelt key can't sit there doing nothing.
+    """
     if key == "halted":
         raise ValueError("use set_halted (python -m vending.halt) for the halt flag")
+    if key not in KNOWN:
+        raise ValueError(f"unknown setting {key!r}; the settings are: "
+                         + "; ".join(f"{k} ({s.about})" for k, s in KNOWN.items()))
+    problem = KNOWN[key].check(value)
+    if problem:
+        raise ValueError(f"{key} {problem}")
     if not who.strip():
         raise ValueError("--by needs your name")
     with conn.transaction():

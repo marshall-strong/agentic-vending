@@ -236,10 +236,18 @@ python -m vending.config show
 ```
 
 The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` (8) and
-`midweek_fee_cents` (2500). Until `slot_capacity` is set and the ledger is open, the tool answers
-`success: false` with the command to run. A refused plan comes back with every refusal and
-everything that could still be worked out, so the agent fixes the whole plan in one turn. There is
-no sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
+`midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for
+type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
+refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
+is refused rather than saved silently. Until `slot_capacity` is set and the ledger is open, the
+tool answers `success: false` with the command to run; so does an empty or reshaped catalog reply
+(it would otherwise read as "every product unapproved"), and the halt switch is checked before the
+bridge is read, so halted with the bridge down says to stop, not to check Tailscale. A poll older
+than 3 hours adds a `STALE` note, since stock on the rails is overstated by whatever sold since.
+A refused plan comes back with every refusal and everything that could still be worked out, so the
+agent fixes the whole plan in one turn. In `cost`, `spendable` and `spendable_left_at_max` are the
+ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. There is no
+sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
 purchase without it is refused `no_sourcing`.
 
 ## Adding a tool's logic
