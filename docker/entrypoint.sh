@@ -68,8 +68,9 @@ if [ -n "${TS_AUTHKEY:-}" ]; then
         rm -f "$key_file"
         echo "tailscale: $(tailscale --socket="$TS_SOCKET" status --peers=false 2>/dev/null | head -1)"
     fi
-    # Set either way: until the node joins, the bridge fails through the proxy,
-    # which the syncs report as unreachable.
+    # Set either way: until the node joins, the proxy answers 502 or can't
+    # connect, and `vending.bridge` reports either as unreachable once
+    # /health fails too, so the syncs stop instead of trying every day.
     export http_proxy="http://localhost:1055"
     export no_proxy="${no_proxy:-localhost,127.0.0.1}"
 else
