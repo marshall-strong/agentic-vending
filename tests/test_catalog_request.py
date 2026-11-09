@@ -241,6 +241,17 @@ def test_the_same_size_written_differently_is_a_duplicate(db, fake, first, again
     assert len(fake.posts) == 1
 
 
+@pytest.mark.parametrize("size", ["2-liter bottle", "20-oz bottle", "16.9-oz", "1.25-L"])
+def test_a_hyphenated_size_is_still_a_volume(db, fake, size):  # noqa: F811
+    assert ask(size=size)["success"], size
+
+
+def test_a_hyphenated_size_is_the_same_drink_as_the_spaced_one(db, fake):  # noqa: F811
+    assert ask(size="2-liter bottle")["success"]
+    assert codes(ask(size="2 L")) == ["already_requested"]
+    assert len(fake.posts) == 1
+
+
 @pytest.mark.parametrize("name, size", [("Coca-Cola", "20 ounce"), ("Diet Coke", "12 oz"), ("Coca-Cola", "20 oz can")])
 def test_the_catalog_check_ignores_how_the_size_is_written(db, fake, name, size):  # noqa: F811
     assert codes(ask(name=name, size=size)) == ["already_in_catalog"]
