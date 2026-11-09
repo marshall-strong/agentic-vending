@@ -85,10 +85,27 @@ class SlotCount:
 
 
 @dataclass(frozen=True)
+class SaleCost:
+    """Units sold from one slot between two polls, and what they had cost us.
+
+    `cost_cents` is None when their cost was unknown; `costed_units` is how
+    many of them we had counted in the slot (sales past the count are oversold).
+    The ledger's cost of sales is the sum of these.
+    """
+    at: datetime
+    slot: str
+    product: str
+    units: int
+    costed_units: int
+    cost_cents: Fraction | None
+
+
+@dataclass(frozen=True)
 class Stock:
     closet: tuple[ClosetCount, ...]
     slots: tuple[SlotCount, ...]
     warnings: tuple[str, ...] = ()
+    sales: tuple[SaleCost, ...] = ()
 
 
 def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movement]:
@@ -204,6 +221,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
     closet: dict[str, _Pool] = {}
     slots: dict[str, _Slot] = {}
     warnings: list[str] = []
+    sales: list[SaleCost] = []
 
     def shelf(sku: str) -> _Pool:
         return closet.setdefault(sku, _Pool())
@@ -263,9 +281,10 @@ def weighted_average(movements: list[Movement]) -> Stock:
             if gone < m.units:
                 warnings.append(f"{m.ref}: {m.units} units of {m.sku} lost in {where} but we counted only {gone}")
         elif m.kind == "sale" and slot is not None:
-            taken, _ = slot.pool.take(m.units)
+            taken, cost = slot.pool.take(m.units)
             slot.sold += m.units
             slot.oversold += m.units - taken
+            sales.append(SaleCost(m.at, m.slot, slot.product, m.units, taken, cost))
         if slot is not None and slot.pool.units:
             slot.last_unit_cost = slot.pool.unit_cost()
 
@@ -279,11 +298,12 @@ def weighted_average(movements: list[Movement]) -> Stock:
         slots=tuple(SlotCount(name, s.product, s.pool.units, s.pool.unit_cost(), s.loaded, s.sold, s.lost, s.since)
                     for name, s in sorted(slots.items())),
         warnings=tuple(warnings),
+        sales=tuple(sales),
     )
 
 
-def stock(conn: psycopg.Connection) -> Stock:
-    """Closet and slot stock now, from every fulfilled request and every good poll."""
+def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
+    """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
@@ -298,7 +318,10 @@ def stock(conn: psycopg.Connection) -> Stock:
         " join polls p using (session_id) where s.selection = any(%s)",
         (slots,),
     ).fetchall()
-    return weighted_average(movements_from_receipts(lines, losses) + sales_from_counters(counters))
+    movements = movements_from_receipts(lines, losses) + sales_from_counters(counters)
+    if until is not None:
+        movements = [m for m in movements if m.at <= until]
+    return weighted_average(movements)
 
 
 _LINE_COLUMNS = ("request_id", "line_no", "slot", "outcome", "sku", "total_paid", "units_loaded",
