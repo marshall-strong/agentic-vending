@@ -3,7 +3,10 @@
 # with Tailscale in userspace mode so the bridge is reachable from Azure.
 #
 #   docker build -t ghcr.io/marshall-strong/agentic-vending:dev .
-#   docker run --rm -p 8080:8080 --env-file .env -e DATABASE_URL=... ghcr.io/marshall-strong/agentic-vending:dev
+#   docker run --rm -p 8080:8080 -e DATABASE_URL=... -e DEX_BASE_URL=... -e DEX_API_KEY=... ghcr.io/marshall-strong/agentic-vending:dev
+#
+# Not `--env-file .env`: Docker keeps quotes and ` # comments` in the values,
+# which the app's own `.env` parser strips.
 #
 # The MCP server itself speaks stdio, so it is started by whatever drives the
 # agent, not by this image's default command. `docker run ... python -m

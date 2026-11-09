@@ -43,9 +43,13 @@ python -m vending.db migrate
 
 1. `az login --tenant golisanoinstitute.org` (your institute account; the Cognivue account sees nothing).
 2. `docker login ghcr.io -u <your GitHub user>`, password a GitHub token with `write:packages`.
-3. After the first push, make the package public on GitHub (`marshall-strong` → Packages →
+3. Once, after the first push: make the package public on GitHub (`marshall-strong` → Packages →
    `agentic-vending` → Package settings → Change visibility), so the Container App can pull it
    without registry credentials. The repository is public already, and the image holds no secrets.
+   A new package starts private, so the first deploy pushes the image and then **stops before
+   changing anything in Azure**, saying so; make the package public, then rerun with the
+   `-Tag <tag> -SkipBuild` it names. Every deploy makes the same check with an anonymous
+   `docker manifest inspect`; `-SkipPullCheck` skips it.
 
 ## Deploy
 
@@ -59,14 +63,27 @@ That builds the image tagged with the current commit, pushes it, loads `DATABASE
 `DEX_API_KEY`, `TS_AUTHKEY` and `ANTHROPIC_API_KEY` from your `.env` into Container App secrets,
 sets `DEX_BASE_URL`, points ingress at port 8080, and rolls the app to the image with one replica
 always on (`minReplicas` 1, the 29 Oct decision: it stays 0 only while the hello-world image is
-deployed).
+deployed). If the roll fails, it points ingress back at the port it had.
 
-It builds only from a clean checkout of `main`, because the tag names the commit; `-Force` builds
-anyway, and uncommitted changes then add `-dirty` to the tag. The secrets are read by
-`scripts/write_secret_files.py`, which parses `.env` exactly as the app does, into temporary files
-that `az` reads itself (`database-url=@<file>`), so no value is ever on a command line. Without
-`-SetSecrets`, the script stops if any of the four secrets doesn't exist yet. Later deploys that
-change only code:
+It builds only from a clean checkout of `main` that matches `origin/main` (it fetches to check),
+because the tag names the commit; `-SkipBuild` without `-Tag` checks the same, since the tag is
+then the current commit. `-Force` deploys anyway, and uncommitted changes then add `-dirty` to
+the tag.
+
+The secrets are read by `scripts/write_secret_files.py`, which parses `.env` exactly as the app
+does, into temporary files that `az` reads itself (`database-url=@<file>`), so no value is ever on
+a command line. Without `-SetSecrets`, the script stops if any of the four secrets doesn't exist
+yet. **A revision reads its secrets only when it starts, and changing secrets alone makes no new
+revision**, so when `-SetSecrets` leaves the latest revision as it was (same image and settings,
+as when only `TS_AUTHKEY` changed), the script restarts it with `az containerapp revision
+restart`. After changing a secret any other way (`az containerapp secret set`, the portal),
+restart the revision yourself:
+
+```
+az containerapp revision restart --name ai-group-2-vend --resource-group data_systems_resource_group --revision <latest revision>
+```
+
+Later deploys that change only code:
 
 ```
 .\scripts\deploy_container_app.ps1
@@ -98,18 +115,26 @@ Or deploy a known tag without rebuilding: `.\scripts\deploy_container_app.ps1 -T
 
 ```
 docker build -t agentic-vending:dev .
-docker run --rm -p 8080:8080 -e DATABASE_URL=postgresql://vending:<password>@host.docker.internal:55432/vending agentic-vending:dev python -m vending.worker --once --port 0
+docker run --rm -e DATABASE_URL=postgresql://vending:<password>@host.docker.internal:55432/vending -e DEX_BASE_URL=http://aihub-pi:8000 -e DEX_API_KEY=<key> agentic-vending:dev python -m vending.worker --once --port 0
 ```
 
-Without `TS_AUTHKEY` the entrypoint says so and the syncs report the bridge as unreachable, which
-is the expected outcome off the tailnet. With `--env-file .env` it joins the tailnet from your
-laptop too, as an ephemeral node named `agentic-vending` that Tailscale removes once the
-container stops.
+Without `TS_AUTHKEY` the entrypoint says so and the syncs report the bridge as unreachable
+(exit 3), which is the expected outcome off the tailnet. Leave out `DEX_BASE_URL` or
+`DEX_API_KEY` and the jobs show `crashed` instead, because the settings check fails before
+the bridge is tried. With `TS_AUTHKEY` as well it joins the tailnet from your laptop, as an
+ephemeral node named `agentic-vending` that Tailscale removes once the container stops.
+
+**Don't pass `.env` itself with `--env-file`** unless every value in it is bare. Docker takes
+each line literally, so quotes and a trailing ` # comment` become part of the value, where the
+app's own parser (`vending/settings.py`) strips them; its `DATABASE_URL` also names
+`127.0.0.1`, which inside the container is the container. Pass the few settings with `-e` as
+above, or write a separate file of bare `KEY=value` lines for `--env-file`.
 
 ## Known limits
 
 - Tailscale's default key expiry is 90 days, and the key's expiry is unknown; if the node drops
-  off the tailnet, ask David for a new key and run the deploy with `-SetSecrets`.
+  off the tailnet, ask David for a new key, put it in `.env` and run the deploy with
+  `-SetSecrets`, which restarts the revision so it joins with the new key.
 - One replica, so a deploy restarts the worker; a sync round in flight is cut off and simply
   runs again next hour.
 - A job that passes its time limit can't be stopped, only left to finish in the background;
