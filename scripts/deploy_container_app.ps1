@@ -11,13 +11,18 @@ to ghcr.io, making the package public) and for what to check afterwards.
     .\scripts\deploy_container_app.ps1 -SetSecrets           # also (re)load secrets from .env
     .\scripts\deploy_container_app.ps1 -Tag v1 -SkipBuild    # roll to an image that is already pushed
 
-Secrets never appear on the command line as plain text beyond this process: they are read from
-.env and handed to az as secret values. Nothing here migrates the database; run
+The image is tagged with the commit, so it builds only from a clean checkout of main; -Force
+builds anyway, and a tree with uncommitted changes then gets a "-dirty" tag.
+
+Secrets are read from .env by scripts/write_secret_files.py, which parses it exactly as the
+app does, into one file each in a temporary folder that is deleted afterwards. az reads each
+value from its file (name=@path), so no value is ever on a command line, where other processes
+or az's own command log could see it. Nothing here migrates the database; run
 python -m vending.db migrate yourself when a merge adds a migration.
 #>
 [CmdletBinding()]
 param(
-    [string]$Tag = (git rev-parse --short HEAD),
+    [string]$Tag,
     [string]$Image = "ghcr.io/marshall-strong/agentic-vending",
     [string]$Subscription = "6eb895dc-71d3-448b-9905-9745666c1769",
     [string]$ResourceGroup = "data_systems_resource_group",
@@ -26,29 +31,35 @@ param(
     [int]$MaxReplicas = 1,
     [switch]$SkipBuild,
     [switch]$SetSecrets,
+    [switch]$Force,
     [string]$EnvFile = (Join-Path $PSScriptRoot "..\.env")
 )
 
 $ErrorActionPreference = "Stop"
-$full = "${Image}:${Tag}"
+$root = Resolve-Path (Join-Path $PSScriptRoot "..")
+# The image runs as a normal user, which can't listen below 1024.
+$Port = 8080
+# .env setting -> Container App secret name.
+$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey"; "ANTHROPIC_API_KEY" = "anthropic-api-key" }
 
-function Read-DotEnv([string]$path) {
-    $values = @{}
-    if (-not (Test-Path $path)) { throw "$path does not exist; copy .env.example and fill it in" }
-    foreach ($line in Get-Content $path) {
-        $trimmed = $line.Trim()
-        if ($trimmed -eq "" -or $trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) { continue }
-        $key, $value = $trimmed.Split("=", 2)
-        $values[$key.Trim()] = $value.Trim().Trim('"').Trim("'")
+if (-not $SkipBuild) {
+    $branch = git -C $root rev-parse --abbrev-ref HEAD
+    $dirty = git -C $root status --porcelain
+    if (($branch -ne "main" -or $dirty) -and -not $Force) {
+        $what = if ($dirty) { "'$branch' with uncommitted changes" } else { "'$branch'" }
+        throw "Refusing to build from $what; deploy a clean checkout of main, or pass -Force"
     }
-    return $values
 }
-
+if (-not $Tag) {
+    $Tag = git -C $root rev-parse --short HEAD
+    if (-not $SkipBuild -and $dirty) { $Tag = "$Tag-dirty" }
+}
+$full = "${Image}:${Tag}"
 Write-Host "Image: $full"
 
 if (-not $SkipBuild) {
     Write-Host "Building..."
-    docker build -t $full (Join-Path $PSScriptRoot "..")
+    docker build -t $full $root
     if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
     Write-Host "Pushing..."
     docker push $full
@@ -58,21 +69,44 @@ if (-not $SkipBuild) {
 az account set --subscription $Subscription
 if ($LASTEXITCODE -ne 0) { throw "az account set failed; run az login --tenant golisanoinstitute.org first" }
 
+$dexBase = $null
 if ($SetSecrets) {
-    $env_values = Read-DotEnv $EnvFile
-    foreach ($name in @("DATABASE_URL", "DEX_BASE_URL", "DEX_API_KEY", "TS_AUTHKEY", "ANTHROPIC_API_KEY")) {
-        if (-not $env_values.ContainsKey($name) -or $env_values[$name] -eq "") { throw "$name is empty in $EnvFile" }
+    $python = Join-Path $root ".venv\Scripts\python.exe"
+    if (-not (Test-Path $python)) { $python = "python" }
+    $dir = Join-Path ([IO.Path]::GetTempPath()) "agentic-vending-secrets-$([guid]::NewGuid())"
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    try {
+        $specs = @($Secrets.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) + "DEX_BASE_URL=dex-base-url"
+        & $python (Join-Path $PSScriptRoot "write_secret_files.py") $EnvFile $dir @specs
+        if ($LASTEXITCODE -ne 0) { throw "could not read the secrets from $EnvFile" }
+        $dexBase = [IO.File]::ReadAllText((Join-Path $dir "dex-base-url"))
+        if (-not $dexBase.StartsWith("http://")) { throw "DEX_BASE_URL must start with http://: only plain-http traffic goes through Tailscale, so an https bridge URL would be unreachable" }
+        Write-Host "Setting secrets from $EnvFile (az reads each value from a file; none is on a command line)..."
+        $secretArgs = @($Secrets.Values | ForEach-Object { "$_=@" + (Join-Path $dir $_) })
+        az containerapp secret set --name $App --resource-group $ResourceGroup --secrets @secretArgs --output none
+        if ($LASTEXITCODE -ne 0) { throw "az containerapp secret set failed" }
+    } finally {
+        Remove-Item -Recurse -Force $dir
     }
-    Write-Host "Setting secrets from $EnvFile (values are not shown)..."
-    az containerapp secret set --name $App --resource-group $ResourceGroup --secrets "database-url=$($env_values['DATABASE_URL'])" "dex-api-key=$($env_values['DEX_API_KEY'])" "ts-authkey=$($env_values['TS_AUTHKEY'])" "anthropic-api-key=$($env_values['ANTHROPIC_API_KEY'])" --output none
-    if ($LASTEXITCODE -ne 0) { throw "az containerapp secret set failed" }
-    $dexBase = $env_values["DEX_BASE_URL"]
 } else {
-    $dexBase = $null
+    # The env vars below point at these secrets, and the update fails if one doesn't exist.
+    $have = @(az containerapp secret list --name $App --resource-group $ResourceGroup --query "[].name" --output tsv)
+    if ($LASTEXITCODE -ne 0) { throw "az containerapp secret list failed" }
+    $missing = @($Secrets.Values | Where-Object { $have -notcontains $_ })
+    if ($missing) { throw "$App has no secret $($missing -join ', '); run once with -SetSecrets" }
+}
+
+# Before the image changes, so the new revision's health probes go to the port it listens on.
+$targetPort = az containerapp ingress show --name $App --resource-group $ResourceGroup --query "targetPort" --output tsv
+if ($LASTEXITCODE -ne 0) { throw "az containerapp ingress show failed" }
+if ($targetPort -ne "$Port") {
+    Write-Host "Pointing ingress at port $Port (was $targetPort)..."
+    az containerapp ingress update --name $App --resource-group $ResourceGroup --target-port $Port --output none
+    if ($LASTEXITCODE -ne 0) { throw "az containerapp ingress update failed" }
 }
 
 Write-Host "Rolling $App to $full with $MinReplicas-$MaxReplicas replicas..."
-$envVars = @("DATABASE_URL=secretref:database-url", "DEX_API_KEY=secretref:dex-api-key", "TS_AUTHKEY=secretref:ts-authkey", "ANTHROPIC_API_KEY=secretref:anthropic-api-key", "VENDING_TOOLS=built", "TS_HOSTNAME=agentic-vending-azure", "PORT=80")
+$envVars = @($Secrets.GetEnumerator() | ForEach-Object { "$($_.Key)=secretref:$($_.Value)" }) + @("VENDING_TOOLS=built", "TS_HOSTNAME=agentic-vending-azure", "PORT=$Port")
 if ($dexBase) { $envVars += "DEX_BASE_URL=$dexBase" }
 az containerapp update --name $App --resource-group $ResourceGroup --image $full --min-replicas $MinReplicas --max-replicas $MaxReplicas --set-env-vars @envVars --output none
 if ($LASTEXITCODE -ne 0) { throw "az containerapp update failed" }
