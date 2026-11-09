@@ -10,8 +10,8 @@ machine.
 | --- | --- |
 | `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
-| `get_account_balance` | **Works.** The balance from the ledger (opening capital plus revenue, minus receipts, midweek visit fees and token spend), the sales tax set aside, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
-| `get_pnl` | **Works.** Over any window of UTC days: revenue ex tax, cost of sales at weighted-average cost, visit fees, token spend, net, purchases, and inventory at cost in the machine and the closet. Says when some sold units or stock could not be costed. |
+| `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
+| `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. |
 | `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, or the catalog can't be read. |
 | `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
 | `get_catalog` | Registered stub: it returns a "not built yet" error naming what it waits on |
@@ -170,25 +170,40 @@ yet. A later sync can read `GET /api/v1/product-requests/{id}`.
 Both read `vending/ledger.py`. **The balance is computed, never stored:**
 
 ```
-opening capital + takings - receipts - midweek visit fees - token spend +/- adjustments
+opening capital + later capital + takings - receipts - midweek visit fees - token spend
+- tax remitted +/- adjustments
 ```
 
 Takings are the rise in the polls' lifetime sales counters for our 20 slots since the opening
-entry, tax included. Receipts are `purchase_lines.total_paid` on fulfilled requests. Every
-fulfilled off-cycle request costs the midweek visit fee (`config` key `midweek_fee_cents`, $25.00
-by default). The sales tax inside the takings (takings x 8/108, per week, rounded half up) is set
-aside, and the **spendable** balance is what is left after it; that is what the planner's balance
-gate checks against. Only what no other table records lives in `ledger_entries` (migration 007):
-the one opening entry, each model call's cost, and adjustments. `python -m vending.ledger` is the
-only writer, and like the halt switch it never migrates:
+entry, tax included; `vending/counters.py` decides what a reading that goes down means (one low
+poll between good ones is a misread, two in a row a counter that restarted). Receipts are
+`purchase_lines.total_paid` on fulfilled requests, timed by each line's `resolved_at`, the same
+clock as the stock they delivered. Every fulfilled off-cycle request costs the midweek visit fee
+stored on it when it was submitted (`purchase_requests.visit_fee_cents`), or `config`
+`midweek_fee_cents` ($25.00 by default) for requests without one, so a later change to the config
+fee never rewrites past visits. The sales tax inside the takings (takings x 8/108, per week,
+rounded half up) is set aside; what is still **owed** is the set-aside less what has been
+remitted, and the **spendable** balance is the balance minus that. It is what the planner's
+balance gate checks against. Only what no other table records lives in `ledger_entries`
+(migration 007): the one opening entry, later capital, each model call's cost, tax remittances
+and adjustments. `python -m vending.ledger` is the only writer, and like the halt switch it never
+migrates:
 
 ```
 python -m vending.ledger open --amount 600.00 --by marshall --at 2027-01-04T13:00:00Z
+python -m vending.ledger capital --amount 100.00 --detail "top-up from David" --by marshall
 python -m vending.ledger tokens --cost 0.0421 --model claude-sonnet-5-5 --in 8120 --out 640 --reference msg_01
+python -m vending.ledger remit --amount 8.00 --by marshall --reference "email 3 Dec"
 python -m vending.ledger adjust --amount -3.50 --detail "bottle deposit, per David" --by marshall
 python -m vending.ledger show
 python -m vending.ledger entries
 ```
+
+The kinds differ in what they mean for the P&L. **Capital** (a top-up) and a **remittance** (tax
+handed over) move money without being profit or loss, so `get_pnl` shows them but leaves them out
+of net. An **adjustment** is a correction to the books (a bottle deposit, a refund), so it is in
+net. An entry dated before the opening is accepted but is outside the balance; the CLI warns and
+`get_account_balance` says so in a note.
 
 Until `open` has been run, `get_account_balance` fails and names the command, so the agent can't
 plan against a balance nobody has set. The harness records every model call with
@@ -196,10 +211,14 @@ plan against a balance nobody has set. The harness records every model call with
 `tokens` command above; token spend is a dollar not spent on stock, so it is in the balance from
 day one. Every entry is logged in `action_log` with who recorded it.
 
-`get_pnl` costs the units sold at weighted-average cost from the receipts (`vending.stock`), so
-cost of sales is known only for slots we have loaded; `cost_of_sales_complete: false` and a note
-say when some sold units could not be costed, and the same for inventory. Revenue counts every
-sale from our slots, so while no receipts are stored the reply shows revenue with no cost of sales.
+`get_pnl` takes its window as Eastern calendar days, inclusive, so a Friday evening sale lands in
+Friday. `units_sold` counts every rise in our 20 slots' unit counters; cost of sales covers the
+units the receipts can cost (weighted average, `vending.stock`), and `units_costed`,
+`cost_of_sales_complete: false` and a note say how many could not be (sold before we first loaded
+the slot, or past what we loaded). Cost of sales is never "unknown": a quiet week with a $25 visit
+and 40 cents of tokens nets -25.40. **Shrinkage** is the cost of units lost without a sale: later
+losses, units still counted in a slot when its product changed, and a purchase line that lost
+every unit. It is its own line, taken out of net, so a lost unit's cost never silently disappears.
 
 ### `preview_desired_state`: the planner on live data
 

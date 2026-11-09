@@ -170,7 +170,7 @@ async def get_catalog(search: str | None = None) -> Reply:
 
 @_tool(built=True)
 async def get_account_balance() -> account_balance.AccountBalance:
-    """Balance from the ledger: opening capital plus revenue, minus receipts, midweek visit fees and token spend; the sales tax set aside; and the spendable balance after it."""
+    """Balance from the ledger: capital plus revenue, minus receipts, visit fees, token spend and tax remitted; the sales tax still owed; and the spendable balance after it."""
     return await _read("get_account_balance", account_balance.get_account_balance)
 
 
@@ -204,7 +204,7 @@ async def set_price(slot: str, sale_price: str) -> WriteReply:
 
 @_tool(built=True)
 async def get_pnl(start: date | None = None, end: date | None = None) -> pnl.Pnl:
-    """Profit and loss between two UTC dates (default: the opening day to today): revenue ex tax, cost of sales, visit fees, token spend, net, and inventory at cost."""
+    """Profit and loss over inclusive Eastern calendar days (default: opening to today): revenue ex tax, cost of sales, shrinkage, fees, token spend, net, purchases, inventory at cost."""
     return await _read("get_pnl", pnl.get_pnl, start=start, end=end)
 
 
