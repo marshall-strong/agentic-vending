@@ -154,6 +154,26 @@ def test_an_outage_on_a_poll_still_stops_the_run(conn, run_main):
     assert conn.execute("select count(*) from polls").fetchone()[0] == 0
 
 
+def test_main_refuses_a_schema_missing_migrations(database_url, monkeypatch, capsys):
+    schema = f"test_{uuid.uuid4().hex[:8]}"
+    admin = psycopg.connect(database_url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
+    admin.execute(f"create schema {schema}")
+    try:
+        monkeypatch.setattr(db, "connect", lambda: psycopg.connect(
+            database_url, autocommit=True, connect_timeout=CONNECT_TIMEOUT, options=f"-c search_path={schema}"))
+        monkeypatch.setattr("vending.sync_history.Bridge", lambda: pytest.fail("reached the bridge on an unmigrated schema"))
+        assert main(["--since", "2026-10-01", "--until", "2026-10-01"]) == 2
+        message = capsys.readouterr().err
+        assert "001_polls.sql" in message and "python -m vending.db migrate" in message
+        # It only looked: nothing was created.
+        with admin.cursor() as cur:
+            cur.execute(f"set search_path to {schema}")
+            assert cur.execute("select to_regclass('schema_migrations')").fetchone() == (None,)
+    finally:
+        admin.execute(f"drop schema {schema} cascade")
+        admin.close()
+
+
 def test_garbled_poll_is_stored_not_raised(conn):
     raw = build(GARBLED)
     assert store(conn, META, raw) == "bad"

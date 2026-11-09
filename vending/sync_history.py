@@ -15,6 +15,10 @@ and the run carries on, so one bad poll can't block everything after it. That
 includes a poll whose connection keeps dropping, as long as `/health` still
 answers. Re-run with `--since` to retry them. Only an unreachable bridge or a
 rejected key stops the run.
+
+It never migrates. On a database that is behind it refuses to run (exit 2) and
+names `python -m vending.db migrate`, like the server and the halt switch, so a
+sync started from a branch can't change the shared database's schema.
 """
 
 from __future__ import annotations
@@ -141,7 +145,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         with db.connect() as conn:
-            db.migrate(conn)
+            # Never migrates: in production DATABASE_URL is the shared Azure
+            # database, and a schema change there should be a person's decision.
+            behind = db.pending(conn)
+            if behind:
+                print(f"The database is missing migrations: {', '.join(behind)}.\n"
+                      "Check DATABASE_URL points where you mean, then run: python -m vending.db migrate",
+                      file=sys.stderr)
+                return 2
             since = args.since or default_since(conn)
             until = args.until or datetime.now(timezone.utc).date()
             report = sync(conn, Bridge(), since, until)
