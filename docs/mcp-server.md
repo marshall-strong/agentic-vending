@@ -11,7 +11,8 @@ machine.
 | `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_catalog` | **Works, version 1.** The single-item products the bridge lists (sku, name, line, flavor, size), searchable by text, with when the catalog was last synced. Says so when that was over 36 hours ago. Our last unit cost, sourcing rows and pending catalog requests are not in it yet. |
-| `get_account_balance`, `preview_desired_state`, `get_purchase_requests`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
+| `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
+| `get_account_balance`, `preview_desired_state`, `get_pnl` | Registered stubs: they return a "not built yet" error naming what they wait on |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state`, `set_price` | Write stubs, already behind the write gate: refused while halted, logged either way |
 
@@ -84,7 +85,7 @@ It starts **on**. Every write tool refuses with `halted` until a person turns it
 `config` row is missing, it counts as on. The switch never migrates, so it can't change a shared
 database's schema: on a database with no `config` table, `status` and `on` report halted, `off`
 fails, and each names `python -m vending.db migrate`. Every flip is logged with the `--by` name, which is
-required because everyone on the shared VM is the same OS user. If a write is in flight, the
+required because every process in the shared Container App runs as the same user. If a write is in flight, the
 command prints "waiting for an in-flight write to finish..." and goes through when it ends. The harder stop needs nothing
 from the database: stop the server process, or remove it from the agent's MCP config.
 

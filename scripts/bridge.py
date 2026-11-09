@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import urllib.error
 import urllib.parse
@@ -74,25 +73,16 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def load_env(env_path: Path) -> dict[str, str]:
-    """Read `KEY=value` lines from a .env file. Same rules as `poll_snapshot.py`."""
-    values: dict[str, str] = {}
-    if not env_path.exists():
-        return values
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
+# The one `.env` reader the project has, so this script and the sync jobs agree
+# on how a value is quoted or commented. Standard library too.
+sys.path.insert(0, str(repo_root()))
+from vending import settings as env  # noqa: E402
 
 
 def settings() -> tuple[str, str]:
     """Return (base_url, api_key). Real environment variables win over .env."""
-    env = load_env(repo_root() / ".env")
-    base_url = os.environ.get("DEX_BASE_URL") or env.get("DEX_BASE_URL", "")
-    api_key = os.environ.get("DEX_API_KEY") or env.get("DEX_API_KEY", "")
+    base_url = env.get("DEX_BASE_URL") or ""
+    api_key = env.get("DEX_API_KEY") or ""
     if not base_url:
         raise BridgeError(
             "DEX_BASE_URL is not set. Copy .env.example to .env and fill it in.",
