@@ -30,10 +30,6 @@ def preview_desired_state(conn: psycopg.Connection, desired: DesiredState) -> Re
     raise NotBuilt("preview_desired_state", "needs the restock planner, plan_restock")
 
 
-def get_purchase_requests(conn: psycopg.Connection, pending_only: bool) -> Reply:
-    raise NotBuilt("get_purchase_requests", "needs the purchase-request sync")
-
-
 def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> Reply:
     raise NotBuilt("get_pnl", "needs the ledger")
 
