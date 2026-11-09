@@ -203,3 +203,38 @@ def test_a_float_amount_is_refused(conn):
     submit(conn, "r1")
     with pytest.raises(ValueError):
         store(conn, "r1", fulfilled("r1", receipt(total_paid=12.37)), NOW)
+
+
+def test_main_refuses_a_schema_missing_migrations(database_url, monkeypatch, capsys):
+    import uuid
+
+    import pytest
+
+    from tests.conftest import open_in
+    from vending import db, sync_requests
+
+    schema = f"test_{uuid.uuid4().hex[:8]}"
+    with open_in(database_url, "public") as admin:
+        admin.execute(f"create schema {schema}")
+        try:
+            monkeypatch.setattr(db, "connect", lambda: open_in(database_url, schema))
+            monkeypatch.setattr(sync_requests, "Bridge", lambda: pytest.fail("ran on an unmigrated schema"))
+            assert sync_requests.main([]) == 2
+            err = capsys.readouterr().err
+            assert "001_polls.sql" in err and "python -m vending.db migrate" in err
+            # It only looked: nothing was created.
+            with open_in(database_url, schema) as conn:
+                assert conn.execute("select to_regclass('schema_migrations')").fetchone() == (None,)
+        finally:
+            admin.execute(f"drop schema {schema} cascade")
+
+
+def test_main_runs_on_a_migrated_schema(schema_url, monkeypatch, capsys):
+    from tests.conftest import open_in
+    from vending import db, sync_requests
+
+    monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+    # Nothing is due on an empty schema, so the bridge is never asked for anything.
+    monkeypatch.setattr(sync_requests, "Bridge", lambda: object())
+    assert sync_requests.main([]) == 0
+    assert "0 read" in capsys.readouterr().out
