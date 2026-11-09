@@ -7,6 +7,7 @@ request: it only reads stored history and our purchase requests.
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -80,7 +81,9 @@ class Bridge:
         except urllib.error.URLError as error:
             # urllib raises URLError only while connecting or sending.
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
-        except OSError as error:  # includes a timeout waiting for the answer
+        except (OSError, http.client.HTTPException) as error:
+            # A timeout waiting for the answer, or an answer cut off part way
+            # (`IncompleteRead`): either way it was sent and may have run.
             raise BridgeNoAnswer(f"{type(error).__name__}: {error}") from None
         try:
             json.loads(data)

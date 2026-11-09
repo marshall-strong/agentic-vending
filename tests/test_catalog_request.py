@@ -30,6 +30,8 @@ class FakeBridge:
         self.gets = 0
         self.catalog_status = 200
         self.answer = (201, {"id": "req-1", "status": "pending"}, 0.0)
+        # When set, the POST answer promises more bytes than it sends, then closes.
+        self.cut_off = False
         # Called as each POST arrives, before it is answered.
         self.on_post = lambda: None
         fake = self
@@ -38,11 +40,11 @@ class FakeBridge:
             def log_message(self, *args):
                 pass
 
-            def _reply(self, status, body):
+            def _reply(self, status, body, cut_off=False):
                 data = json.dumps(body).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Content-Length", str(len(data) + (20 if cut_off else 0)))
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -58,7 +60,7 @@ class FakeBridge:
                 status, body, delay = fake.answer
                 time.sleep(delay)
                 try:
-                    self._reply(status, body)
+                    self._reply(status, body, fake.cut_off)
                 except OSError:
                     pass  # the client gave up waiting
 
@@ -155,6 +157,21 @@ def test_no_answer_is_stored_as_unknown_and_blocks_a_resend(db, fake, monkeypatc
     assert not reply["success"] and reply["status"] == "unknown"
     assert db.execute("select bridge_id, status from product_requests").fetchall() == [(None, "unknown")]
     fake.answer = (201, {"id": "req-9", "status": "pending"}, 0.0)
+    again = ask()
+    assert codes(again) == ["already_requested"] and "a person must check" in again["refusals"][0]["message"]
+    assert len(fake.posts) == 1
+
+
+def test_a_cut_off_answer_is_stored_as_unknown_and_blocks_a_resend(db, fake):  # noqa: F811
+    # The bridge accepted the POST but the connection dropped mid-answer, so the
+    # request may exist: the same rules as a timeout, not a crash.
+    fake.cut_off = True
+    reply = ask()
+    assert not reply["success"] and reply["status"] == "unknown" and "IncompleteRead" in reply["message"]
+    assert db.execute("select bridge_id, status from product_requests").fetchall() == [(None, "unknown")]
+    assert db.execute("select outcome from action_log where tool = 'request_catalog_product'").fetchall() == [
+        ("failed",)]
+    fake.cut_off = False
     again = ask()
     assert codes(again) == ["already_requested"] and "a person must check" in again["refusals"][0]["message"]
     assert len(fake.posts) == 1
