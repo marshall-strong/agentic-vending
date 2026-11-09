@@ -786,7 +786,7 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None) ->
     slot, entry, changed = s["slot"], s["now"], compared and s["changed"]
     price_now = (sold or {}).get("price")
     if entry is None:
-        what = '<span class="dim">not in this plan</span>'
+        what = '<span class="dim">no change</span>'
     elif entry.get("keep"):
         what = "keep as is"
     else:
@@ -813,9 +813,15 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None) ->
     holds = f' of {_e(held["product"])}' if held is not None and held.get("product") else ""
     tag = f"${_e(price_now)} on the tag &middot; " if price_now is not None else ""
     body.append(f'<div class="sub">now: {tag}{stock_text}{holds} &middot; {sales_text} this week</div>')
+    now_bits = [_e(held["product"]) if held is not None and held.get("product") else
+                ('<span class="dim">empty</span>' if on_hand == 0 else '<span class="dim">product unknown</span>')]
+    if price_now is not None:
+        now_bits.append(f"${_e(price_now)}")
+    if on_hand is not None:
+        now_bits.append(f"{on_hand} left")
     return (f'<details class="pc{" changed" if changed else ""}" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary><b class="num">{_e(slot)}</b> <span class="what">{what}</span>'
-            f'<span class="tags">{tags}</span></summary>{"".join(body)}</details>')
+            f'<summary><b class="num">{_e(slot)}</b><span class="now">{" &middot; ".join(now_bits)}</span>'
+            f'<span class="what">{what}</span><span class="tags">{tags}</span></summary>{"".join(body)}</details>')
 
 
 def _plan_html(snap: dict) -> str:
@@ -854,7 +860,9 @@ def _plan_html(snap: dict) -> str:
                     'Show changed slots only</label>')
     cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]))
                     for s in p["slots"])
-    return head + controls + f'<div class="plan-grid" data-only="false">{cells}</div>'
+    columns = ('<div class="plan-head" aria-hidden="true"><span>Slot</span><span>Now</span>'
+               '<span>Next Friday</span><span></span></div>')
+    return head + controls + f'<div class="plan-grid" data-only="false">{columns}{cells}</div>'
 
 
 def _switched(verb: str, at: datetime | None, by: str | None, now: datetime) -> str:
@@ -1209,14 +1217,20 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
 /* The plan: one line per slot; the reason opens beneath. */
 .only { display:inline-flex; gap:6px; align-items:center; font-size:12px; margin:4px 0 8px; cursor:pointer }
 .only[hidden] { display:none }
-.plan-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:6px }
+/* One row per slot, top to bottom: what is in it now beside what the plan asks for Friday. */
+.plan-grid { display:flex; flex-direction:column; gap:4px }
+.plan-head, .pc summary { display:grid; grid-template-columns:34px minmax(0, 1fr) minmax(0, 1.25fr) minmax(90px, auto);
+  gap:4px 12px; align-items:baseline }
+.plan-head { padding:0 11px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted) }
+.pc summary { cursor:pointer; list-style:none } .pc summary::-webkit-details-marker { display:none }
+.pc summary .now { min-width:0; overflow-wrap:anywhere; color:var(--muted) }
 .plan-grid[data-only="true"] .pc:not(.changed) { display:none }
 .pc { background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:6px 10px; min-width:0 }
 .pc.changed { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); background:var(--surface) }
 .pc:target { outline:2px solid var(--accent) }
-.pc summary { color:var(--ink); font-size:13px; display:flex; flex-wrap:wrap; gap:4px 8px; align-items:baseline }
+.pc summary { color:var(--ink); font-size:13px }
 .pc summary .what { min-width:0; overflow-wrap:anywhere } .pc summary s { color:var(--muted) }
-.pc .tags { display:inline-flex; flex-wrap:wrap; gap:3px; margin-left:auto }
+.pc .tags { display:inline-flex; flex-wrap:wrap; gap:3px; justify-content:flex-end }
 .pc .why { font-size:13px; margin-top:4px; overflow-wrap:anywhere }
 .pc .was { font-size:12px; color:var(--muted); margin-top:3px; border-top:1px dashed var(--line); padding-top:3px; overflow-wrap:anywhere }
 .pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px; margin-top:12px }
@@ -1263,7 +1277,10 @@ footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8p
   .tiles { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px } .tile { padding:10px 12px }
   .tile:last-child:nth-child(odd) { grid-column:1 / -1 }
   .vm-wrap { grid-template-columns:minmax(0, 1fr) } .cab { grid-template-columns:minmax(0, 1fr) 40px; padding:8px }
-  .shelf { gap:2px } .slot { height:84px } .plan-grid { grid-template-columns:minmax(0, 1fr) }
+  .shelf { gap:2px } .slot { height:84px } .plan-head { display:none }
+  .pc summary { grid-template-columns:30px minmax(0, 1fr) } .pc summary .now::before { content:"now: " }
+  .pc summary .what, .pc summary .tags { grid-column:2 } .pc summary .what::before { content:"Friday: " }
+  .pc summary .tags { justify-content:flex-start }
   .feed li { grid-template-columns:auto minmax(0, 1fr) } .feed .kind { display:none } }
 """
 
