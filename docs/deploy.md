@@ -19,6 +19,12 @@ and outcomes only; the error text is in the log. `docker/entrypoint.sh` joins th
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
 
+**Never point an HTTP liveness probe at `/health`.** Its `503` means a sync failed, for example
+while the bridge is unreachable, not that the worker is stuck, so Azure would restart a healthy
+container every round and the restarts would fix nothing. The deploy script sets no probes, so
+Azure uses its default TCP probes on port 8080, which pass whenever the worker is listening.
+Watch `/health` yourself, or alert on it, instead.
+
 The image runs as a normal user (`vending`, uid 10001), with pinned base images and no test
 packages (`pytest` is in `requirements-dev.txt`).
 
@@ -68,7 +74,11 @@ deployed). If the roll fails, it points ingress back at the port it had.
 It builds only from a clean checkout of `main` that matches `origin/main` (it fetches to check),
 because the tag names the commit; `-SkipBuild` without `-Tag` checks the same, since the tag is
 then the current commit. `-Force` deploys anyway, and uncommitted changes then add `-dirty` to
-the tag.
+the tag. Untracked files count as changes only under the paths the `Dockerfile` copies
+(`requirements.txt`, `vending/`, `db/`, `docker/`), because nothing else reaches the image: a
+stray file at the repository root doesn't block a deploy, but a new `.py` file in `vending/` that
+isn't committed does. The list is `$ImagePaths` in the script; keep it in step with the
+`Dockerfile`'s `COPY` lines.
 
 The secrets are read by `scripts/write_secret_files.py`, which parses `.env` exactly as the app
 does, into temporary files that `az` reads itself (`database-url=@<file>`), so no value is ever on

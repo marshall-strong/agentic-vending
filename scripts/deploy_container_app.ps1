@@ -13,7 +13,8 @@ to ghcr.io, making the package public) and for what to check afterwards.
 
 The image is tagged with the commit, so it builds only from a clean checkout of main that
 matches origin/main (it fetches to check), and -SkipBuild without -Tag checks the same; -Force
-deploys anyway, and a tree with uncommitted changes then gets a "-dirty" tag.
+deploys anyway, and a tree with uncommitted changes then gets a "-dirty" tag. Untracked files
+count as changes only under the paths the Dockerfile copies, since nothing else reaches the image.
 
 Before anything in Azure changes, it checks the image can be pulled anonymously, as the
 Container App pulls it. The first push of the package fails that check, because ghcr.io
@@ -45,6 +46,9 @@ $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 # The image runs as a normal user, which can't listen below 1024.
 $Port = 8080
+# What the Dockerfile copies into the image; keep in step with its COPY lines. An untracked
+# file anywhere else can't reach the image, so it doesn't block a deploy.
+$ImagePaths = @("requirements.txt", "vending", "db", "docker")
 # .env setting -> Container App secret name.
 $Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey"; "ANTHROPIC_API_KEY" = "anthropic-api-key" }
 
@@ -52,9 +56,10 @@ $Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api
 # origin/main exactly, so the tag names a commit everyone can see on main.
 if (-not ($SkipBuild -and $Tag)) {
     $branch = git -C $root rev-parse --abbrev-ref HEAD
-    $dirty = git -C $root status --porcelain
+    $dirty = @(git -C $root status --porcelain --untracked-files=no) +
+             @(git -C $root status --porcelain --untracked-files=all -- @ImagePaths | Where-Object { $_.StartsWith("??") })
     if (($branch -ne "main" -or $dirty) -and -not $Force) {
-        $what = if ($dirty) { "'$branch' with uncommitted changes" } else { "'$branch'" }
+        $what = if ($dirty) { "'$branch' with uncommitted changes ($(($dirty | ForEach-Object { $_.Substring(3) }) -join ', '))" } else { "'$branch'" }
         throw "Refusing to deploy from $what; deploy a clean checkout of main, or pass -Force"
     }
     if (-not $Force) {
