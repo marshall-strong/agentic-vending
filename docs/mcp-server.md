@@ -39,7 +39,7 @@ Container App, it's the shared Azure database), then run `python -m vending.db m
 
 **For the live run, set `VENDING_TOOLS=built` in the real environment** (it is not read from `.env`). Then only working tools are registered, so the
 agent doesn't pay tokens on every request to describe stubs. The default, `all`, registers all
-10 so the team can see the whole contract in a client.
+11 so the team can see the whole contract in a client.
 
 **The sync needs the class tailnet; the tests don't.** On a laptop also on a personal tailnet,
 sign in to the class account once with `tailscale login`, then move between tailnets with
