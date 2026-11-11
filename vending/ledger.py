@@ -377,20 +377,27 @@ def units_sold(conn: psycopg.Connection, since: datetime, until: datetime) -> in
 
 # --- Balance and P&L ----------------------------------------------------------------
 
-def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance | None:
-    """The balance now (or at `as_of`), or None when the ledger has no opening entry.
+def db_now(conn: psycopg.Connection) -> datetime:
+    """Now by the database clock, in UTC.
 
-    "Now" is the database clock, the one that stamps an entry recorded without a
-    time. The host clock can run behind it (a container, a laptop with Postgres in
-    Docker), and then an entry made a moment ago would fall after the cut-off.
+    This is the clock that stamps an entry recorded without a time. The host clock
+    can run behind it (a container, a laptop with Postgres in Docker), and then an
+    entry made a moment ago would fall after a cut-off taken from the host.
     `clock_timestamp()`, not `now()`: `now()` stays at the start of an open
     transaction and so misses entries other connections have committed since.
+    Converted to UTC because psycopg returns it in the session time zone.
     """
+    return conn.execute("select clock_timestamp()").fetchone()[0].astimezone(timezone.utc)
+
+
+def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance | None:
+    """The balance now (or at `as_of`), or None when the ledger has no opening entry.
+    "Now" is the database clock (see `db_now`)."""
     start = opening(conn)
     if start is None:
         return None
     if as_of is None:
-        as_of = conn.execute("select clock_timestamp()").fetchone()[0]
+        as_of = db_now(conn)
     notes: list[str] = []
     sold = takings(conn, start.at, as_of)
     if sold.note:
