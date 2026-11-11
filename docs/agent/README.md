@@ -14,4 +14,4 @@ Each topic file starts with a `#` title and then a one-line summary, which must 
 - `inventory-belief`: Stock on hand is an estimate with uncertainty, built from restocks as reset points; demand is censored when a slot runs out, and stockouts shift demand to substitutes.
 - `guardrails`: Five non-negotiable rules: spend only what you have, price within bounds, obey the halt switch, log every action, and order only through the approved channel.
 - `directive`: The restock and pricing directive must let a person who has never seen our code load every slot and set every price without asking a question.
-- `competition-and-integrity`: Our slot assignment is private; we may not know which other slots are a rival's; the brief and the instructor disagree on using the other team's prices, and that question is OPEN.
+- `competition-and-integrity`: Our slot assignment is private; we may not know which other slots are a rival's; the team has chosen to ignore other slots' prices, though the brief calls them a pricing input.

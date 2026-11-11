@@ -55,7 +55,7 @@ def test_topic_files_are_short():
 def test_the_rules_card_is_short_and_covers_the_guardrails():
     assert words("rules-card") <= 250
     card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
-    for phrase in ("halt switch", "price floor", "ceiling", "balance is the cap", "integrity", "open:",
+    for phrase in ("halt switch", "price floor", "ceiling", "balance is the cap", "integrity", "ignore other slots' prices",
                    "get_project_rules", "never from memory", "skip"):
         assert phrase in card, phrase
 
