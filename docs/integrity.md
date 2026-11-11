@@ -6,8 +6,18 @@ David said in class that each team knows which machine slots are its own, so tea
 with integrity. A team does not change its strategy based on the other team's slots,
 pricing or strategy, and it follows the project instructions.
 
-The machine still shows us all 40 selections this quarter. Seeing them is not permission
-to use them.
+The machine is split 50/50, with no unassigned selections (Kevin, 11 Nov). Ours are
+columns 5-8; the other team's are columns 1-4. So we know where they are. The machine
+still shows us all 40 selections in every poll. Seeing them is not permission to use them.
+
+## Why we ignore their prices, though the brief says otherwise
+
+The project brief (Revised, section 3.2) says "the other row's price is an input to your
+pricing logic". That conflicts with David's rule above. **The team chose David's rule
+(Kevin, 11 Nov): our pricing ignores the other team's prices completely.** It is the
+safer reading, and it still lets us pass the guardrails. We say this openly in Summative 2
+("how the problem is framed for the agent"), and docs/assumptions.md A10 records it. If
+David says the brief's reading applies, revisit this page first.
 
 ## What it means
 
