@@ -98,6 +98,8 @@ class Outcome:
     request_id: str | None = None       # set once a submit succeeded: the run is `submitted` from then on
     submit_sent: bool = False           # a submit reached the server, whatever came back: never send another
     unresolved: str | None = None       # a submit whose result is unknown: money may have been spent
+    turn: int = 0                       # the model response being worked through
+    plan_turn: int | None = None        # the response whose preview set `plan`: a submit must come later
     tool_calls: list[str] = field(default_factory=list)
 
 
@@ -183,6 +185,7 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
             out.status, out.detail = "failed", f"Stopped on turn {turn + 1}: {error}"
             return
         messages.append({"role": "assistant", "content": response.content})
+        out.turn = turn
         if response.stop_reason == "tool_use":
             results = []
             for block in response.content:
@@ -235,15 +238,25 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
         if out.plan is None or not _same_plan(arguments.get("desired"), previewed):
             return ("Not sent: submit exactly the plan your last preview_desired_state accepted "
                     "(preview it first if you changed anything)."), True
+        if out.plan_turn == out.turn:
+            return ("Not sent: read the preview's cost, warnings and refusals first, "
+                    "then submit in your next turn."), True
         if "expected_plan_hash" in (schemas[name].get("properties") or {}):
             arguments["expected_plan_hash"] = out.plan["plan_hash"]   # refused by the server if anything moved
         out.submit_sent = True                    # set before sending: whatever happens next, never send again
-    result = await call_tool(name, arguments)
+        try:
+            result = await call_tool(name, arguments)
+        except BaseException as error:            # the server died or we were stopped mid-send: it may have gone
+            out.unresolved = f"the submit call raised {type(error).__name__}: {error}"[:500]
+            raise
+    else:
+        result = await call_tool(name, arguments)
     text, reply = _result_text(result)
     failed = bool(getattr(result, "isError", False)) or (reply is not None and reply.get("success") is False)
     if name == PREVIEW and not out.submit_sent:
         if reply and reply.get("ok") and not failed and isinstance(arguments.get("desired"), dict):
             out.plan = {**arguments["desired"], "plan_hash": reply.get("plan_hash")}
+            out.plan_turn = out.turn
     if name == SUBMIT:
         reply = reply or {}
         if not failed and reply.get("request_id"):

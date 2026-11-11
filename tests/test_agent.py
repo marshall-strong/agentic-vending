@@ -368,3 +368,26 @@ def test_the_server_never_gets_the_model_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
     env = agent.server_env()
     assert "ANTHROPIC_API_KEY" not in env and env["VENDING_TOOLS"] == "built"
+
+
+def test_a_submit_in_the_same_response_as_its_preview_is_not_sent(connect, conn):
+    client = Script(tool_turn(use("preview_desired_state", {"desired": PLAN}, id="p1"), submit()),
+                    tool_turn(submit(id="s2")), answer("submit"))
+    tools = Tools(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED, "submit_desired_state": SENT})
+    run_id, out = go(connect, client, tools, live=True)
+    assert "next turn" in client.sent[1]["messages"][-1]["content"][1]["content"]
+    assert [n for n, _ in tools.calls] == ["preview_desired_state", "submit_desired_state"]   # sent a turn later
+    assert out.status == "submitted"
+
+
+def test_a_submit_call_that_raises_is_flagged_unresolved(connect, conn):
+    class DiesOnSubmit(Tools):
+        async def call(self, name, arguments):
+            if name == "submit_desired_state":
+                raise RuntimeError("stdio closed")
+            return await super().call(name, arguments)
+
+    client = Script(preview(), tool_turn(submit()))
+    run_id, out = go(connect, client, DiesOnSubmit(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED}), live=True)
+    status, detail = stored(conn, run_id)[1], stored(conn, run_id)[5]
+    assert status == "failed" and detail.startswith("SUBMISSION UNRESOLVED") and "stdio closed" in detail
