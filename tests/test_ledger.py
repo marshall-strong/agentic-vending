@@ -218,6 +218,21 @@ def test_entries_outside_the_window_do_not_count(conn):
     assert ledger.balance(conn, NOW + timedelta(days=2)).adjustments_cents == 1000
 
 
+def test_an_entry_made_just_now_counts_when_the_host_clock_is_behind_the_database(conn, monkeypatch):
+    # An entry with no time is stamped by the database clock. "The balance now" must
+    # use that clock too, or an entry made a moment ago drops out whenever the host
+    # runs behind the database (seen at 0.7 s on a laptop with Postgres in Docker).
+    class HostBehind(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(hours=1)
+
+    monkeypatch.setattr(ledger, "datetime", HostBehind)
+    open_ledger(conn)
+    ledger.record(conn, "capital", 10000, "top-up", "marshall")
+    assert ledger.balance(conn).capital_cents == 10000
+
+
 def test_entries_dated_before_the_opening_are_outside_the_balance_and_said_so(conn):
     open_ledger(conn)
     ledger.record_tokens(conn, "0.50", "m", 1, 1, "dev", at=OPENED - timedelta(days=10))
