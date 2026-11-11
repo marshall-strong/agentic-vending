@@ -15,7 +15,7 @@ The restock and pricing directive must let a person who has never seen our code 
 **Rules of thumb.**
 
 - One line per slot. No abbreviations the worker would not know.
-- No conditions for the worker to work out. A fallback product belongs in the alternate, which the tool already handles.
+- No conditions for the worker to work out. The `alternate` is another store or pack size for the same product, and the tool already writes it. A fallback to a different product is not supported yet.
 - No internal names, IDs or code terms.
 - Prices in 5-cent steps.
 

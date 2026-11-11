@@ -1,6 +1,6 @@
 # Pricing
 
-Prices stay within the floor and ceiling, must be explainable, may need deliberate variation to learn demand, and are set against nearby substitutes.
+Prices stay within the floor and ceiling, must be explainable, may need deliberate variation to learn demand, and come from our own costs and sales only.
 
 **The rule** (Project Brief (Revised), sections 2, 3.2 and 4). Set each product's price within the "agreed floor and ceiling", with logic you can point to and explain. The bound is enforced in code where every price change passes, not by you remembering it.
 
@@ -8,7 +8,7 @@ Prices stay within the floor and ceiling, must be explainable, may need delibera
 
 **The identification problem** (section 3.2). We set prices and observe the sales that follow. If we only ever set the price we already think is best, we never learn how demand responds to price. Deliberate price variation teaches us something but costs margin while we test. Decide whether to vary, and say so in the reason.
 
-**Not a monopolist** (section 3.2). At least one other agent prices substitutable products nearby, and the brief calls the other row's price an input to pricing. **This conflicts with what the instructor said in class. Read `competition-and-integrity` before using any other slot's price.**
+**Not a monopolist** (section 3.2). At least one other agent prices substitutable products nearby, and the brief calls the other row's price an input to pricing. **The team follows the instructor's in-class rule instead: never use another slot's price** (see `competition-and-integrity`).
 
 **Timing.** A price changes only when the worker changes the tag at a visit: free on Friday, $25 midweek. Price for the week ahead, not the next hour.
 
