@@ -211,3 +211,33 @@ def test_the_server_answers_only_a_local_host(conn, read_only):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_the_balance_is_as_of_the_end_of_the_range(conn):
+    """A past range shows the balance at the end of its last day (Eastern); a range ending today or
+    later shows the balance now."""
+    open_ledger(conn)                                                                  # $600.00, 1 Nov
+    ledger.record(conn, "adjustment", -350, "bottle deposit", "marshall", OPENED + timedelta(days=1))
+    # 4 Nov 04:30 UTC is still Tue 3 Nov in Eastern time, so it is inside a range that ends 3 Nov.
+    ledger.record(conn, "capital", 1000, "late on the 3rd", "marshall", datetime(2026, 11, 4, 4, 30, tzinfo=timezone.utc))
+    ledger.record(conn, "capital", 10000, "top-up", "marshall", datetime(2026, 11, 4, 5, 30, tzinfo=timezone.utc))
+
+    past = pr.load(conn, date(2026, 11, 1), date(2026, 11, 3))
+    assert past.balance.balance == "606.50"
+    assert past.balance.as_of == datetime(2026, 11, 4, tzinfo=pr.EASTERN) - timedelta(microseconds=1)
+    _, body = pr.render(past)
+    assert "Balance at the end of Tue 2026-11-03" in body
+    assert '<td class="num">606.50</td>' in body and "706.50" not in body
+
+    for end in (None, datetime.now(pr.EASTERN).date(), datetime.now(pr.EASTERN).date() + timedelta(days=30)):
+        current = pr.load(conn, date(2026, 11, 1), end)
+        assert current.balance.balance == "706.50", end
+        _, body = pr.render(current)
+        assert "Balance now" in body and '<td class="num">706.50</td>' in body
+
+
+def test_a_range_that_ends_before_the_opening_shows_no_balance(conn):
+    open_ledger(conn)
+    report = pr.load(conn, date(2026, 10, 1), date(2026, 10, 20))
+    _, body = pr.render(report)
+    assert "Balance" not in body and "before the ledger opened" in body

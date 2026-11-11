@@ -7,8 +7,10 @@ One row per week, Saturday to Friday in Eastern time, the ledger's week (the
 team's 19 Oct decision; the sales tax is rounded per week). Each row shows units
 sold, takings with tax, the sales tax set aside, revenue without tax, cost of
 sales, shrinkage, midweek visit fees, token spend, adjustments and profit. Under
-the weeks are the totals for the range, the balance now and the sales tax still
-owed. Print the page, or save it as a PDF, from the browser.
+the weeks are the totals for the range, then the balance, the sales tax still
+owed and the spendable balance at the end of the range: the end of its last day
+in Eastern time, where the table stops. When the range ends today or later,
+they are as of now. Print the page, or save it as a PDF, from the browser.
 
 The page computes nothing: every figure comes from `vending.ledger`
 (`pnl_by_week`, `balance`) and `vending.tools.pnl.get_pnl`. Money is shown to
@@ -83,6 +85,7 @@ class Report:
     totals: Pnl
     weeks: list[ledger.WeekPnl] = field(default_factory=list)
     balance: AccountBalance | None = None
+    balance_at: datetime | None = None  # the end of the range's last day; None means now
 
 
 def parse(path: str) -> tuple[date | None, date | None]:
@@ -119,7 +122,10 @@ def load(conn: psycopg.Connection, start: date | None, end: date | None) -> Repo
             refused = Pnl(success=False, message=f"Choose a range of at most {MAX_WEEKS} weeks.")
             return Report(start, end, printed_at, refused)
         weeks = ledger.pnl_by_week(conn, totals.start, totals.end)
-        return Report(start, end, printed_at, totals, weeks, get_account_balance(conn))
+        # The balance at the end of the last day shown, where the table stops; now when that day is today or later.
+        last_day = totals.end.astimezone(EASTERN).date()
+        balance_at = None if last_day >= printed_at.date() else totals.end
+        return Report(start, end, printed_at, totals, weeks, get_account_balance(conn, balance_at), balance_at)
 
 
 # --- Rendering ----------------------------------------------------------------------------------
@@ -208,7 +214,8 @@ def render(report: Report) -> tuple[int, str]:
              f'<tfoot>{totals_row(t, report.weeks)}</tfoot></table>'
              f'<p class="meta">{_e(ROUNDING_NOTE)}</p>')
     body = (f'{form}<p class="meta">{_e(f"{first:%a %Y-%m-%d} to {last:%a %Y-%m-%d} (Eastern days)")}'
-            f' &middot; {_e(printed)}</p>{table}{_balance(report.balance)}{_notes(t, report.balance)}')
+            f' &middot; {_e(printed)}</p>{table}{_balance(report.balance, report.balance_at)}'
+            f'{_notes(t, _shown(report.balance, report.balance_at))}')
     return 200, page(body)
 
 
@@ -221,14 +228,34 @@ def _form(start: date | None, end: date | None) -> str:
             '<span class="hint">Empty dates mean the whole run: the opening day to today.</span></form>')
 
 
-def _balance(b: AccountBalance | None) -> str:
+def _shown(b: AccountBalance | None, at: datetime | None) -> AccountBalance | None:
+    """The balance the page shows: none when it fails, or when the range ends before the ledger opened."""
+    if b is None or not b.success:
+        return None
+    if at is not None and b.opening_at is not None and at < b.opening_at:
+        return None
+    return b
+
+
+def _balance(b: AccountBalance | None, at: datetime | None) -> str:
+    """The balance, tax still owed and spendable at the end of the range (`at`), or now when `at` is None."""
     if b is None or not b.success:
         return ""
+    if _shown(b, at) is None:
+        opened = b.opening_at.astimezone(EASTERN)
+        return (f'<h2>{_e("No balance for this range")}</h2><p class="meta">'
+                f'{_e(f"The range ends before the ledger opened on {opened:%a %Y-%m-%d}.")}</p>')
+    if at is None:
+        when = b.as_of.astimezone(EASTERN) if b.as_of else None
+        caption = f"Now ({when:%Y-%m-%d %H:%M %Z}): the range ends today or later" if when else "Now"
+        prefix = "{} now"
+    else:
+        day = at.astimezone(EASTERN)
+        caption = f"At the end of {day:%a %Y-%m-%d} (Eastern), the last day in the range"
+        prefix = f"{{}} at the end of {day:%a %Y-%m-%d}"
     rows = [("Balance", b.balance), ("Sales tax still owed", b.tax_owed), ("Spendable", b.spendable)]
-    cells = "".join(f'<tr><th scope="row">{_e(label)}</th><td class="num">{_text_amount(text)}</td></tr>'
+    cells = "".join(f'<tr><th scope="row">{_e(prefix.format(label))}</th><td class="num">{_text_amount(text)}</td></tr>'
                     for label, text in rows)
-    when = b.as_of.astimezone(EASTERN) if b.as_of else None
-    caption = f"Now ({when:%Y-%m-%d %H:%M %Z}), whatever the range" if when else "Now"
     return f'<h2>{_e(caption)}</h2><table class="balance"><tbody>{cells}</tbody></table>'
 
 

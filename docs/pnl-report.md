@@ -32,11 +32,16 @@ The first and last weeks are cut to the range you chose.
 | Adjustments | Corrections recorded in the ledger |
 | Profit | Revenue ex tax less cost of sales, shrinkage, visit fees and token spend, plus adjustments |
 
-Under the weeks are the totals for the range, then the balance **now**, the sales tax still owed and
-the spendable balance. Those three don't depend on the range. The notes from the ledger come last.
+Under the weeks are the totals for the range, then the balance, the sales tax still owed and the
+spendable balance **at the end of the range**: the end of the range's last day (11:59:59 pm
+Eastern), the same place the table stops, since the last week is cut to the range. The rows say
+so, for example "Balance at the end of Mon 2026-11-09". When the range ends today or later, they
+are as of now and say "Balance now". When the range ends before the ledger opened, the page says
+there is no balance for it. The notes from the ledger come last.
 
 **The page computes nothing.** Each week comes from `ledger.pnl_by_week`, the totals from
-`get_pnl`, and the balance from `get_account_balance`. The exact weeks add up to the exact totals.
+`get_pnl`, and the balance from `get_account_balance` (which passes the range end to
+`ledger.balance` as `as_of`). The exact weeks add up to the exact totals.
 Each figure on the page is rounded on its own, so a column can differ from its total by a cent.
 The page says so under the table.
 
