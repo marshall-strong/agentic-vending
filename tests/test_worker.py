@@ -1,5 +1,6 @@
 """The worker's rounds and health check, with the jobs faked. No database."""
 
+import html
 import json
 import signal
 import threading
@@ -159,3 +160,84 @@ def test_the_default_jobs_never_migrate(monkeypatch):
     assert [r.job for r in results] == ["sync_history", "sync_requests", "sync_catalog"]
     assert migrated == []
     assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 3
+
+
+# --- The home page at / (#54) -----------------------------------------------------
+
+def _get(server, path):
+    """(status, content type, headers, text) for GET path, 4xx/5xx included."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}{path}") as response:
+            return response.status, response.headers["Content-Type"], response.headers, response.read().decode()
+    except urllib.error.HTTPError as failing:
+        return failing.code, failing.headers["Content-Type"], failing.headers, failing.read().decode()
+
+
+def test_home_page_shows_each_jobs_outcome():
+    state = worker.State()
+    state.results = worker.run_round([("sync_history", lambda: 0), ("sync_requests", lambda: 2),
+                                      ("sync_catalog", lambda: 1 / 0)], log=lambda _: None)
+    state.rounds, state.last_round_at = 1, "2026-11-11T21:05:00+00:00"
+    state.next_round_at = "2026-11-11T22:05:00+00:00"
+    server = worker.serve_health(state, 0)
+    try:
+        status, kind, headers, page = _get(server, "/")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 200 and kind == "text/html; charset=utf-8"   # the page itself loaded, even when a job failed
+    assert "The last sync round had 2 failed jobs." in page
+    assert "passed" in page and "failed, exit code 2" in page and "crashed" in page
+    assert "sync_history" in page and "sync_requests" in page and "sync_catalog" in page
+    assert "Wed 11 Nov, 4:05 PM ET" in page and "Wed 11 Nov, 5:05 PM ET" in page   # last and next round, Eastern
+    assert '<meta http-equiv="refresh" content="60">' in page and 'name="viewport"' in page
+    assert headers["Cache-Control"] == "no-store" and "default-src 'none'" in headers["Content-Security-Policy"]
+    assert "<script" not in page
+
+
+def test_home_page_before_the_first_round_says_so():
+    server = worker.serve_health(worker.State(), 0)
+    try:
+        status, _, _, page = _get(server, "/")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 200 and "first sync round hasn't finished yet" in html.unescape(page) and "No jobs have run yet." in page
+
+
+def test_home_page_never_shows_error_text():
+    # The same case as /health: a psycopg error names the database host and user, and / is public.
+    def unreachable():
+        raise ConnectionError('connection to server at "db.example.net", port 5432 failed: '
+                              'password authentication failed for user "vending"')
+    state = worker.State()
+    state.results = worker.run_round([("sync_history", unreachable)], log=lambda _: None)
+    state.rounds = 1
+    assert "db.example.net" in state.results[0].error
+    server = worker.serve_health(state, 0)
+    try:
+        _, _, _, page = _get(server, "/")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert "db.example.net" not in page and "password authentication" not in page and "5432" not in page
+    assert 'for user "vending"' not in page and "ConnectionError" not in page and "crashed" in page
+
+
+def test_home_page_escapes_what_it_shows():
+    page = worker.home_page({"status": "failing", "rounds": 1, "results": [
+        {"job": "<script>alert(1)</script>", "started_at": None, "seconds": 0, "exit_code": 1, "outcome": "finished"}]})
+    assert "<script>alert(1)</script>" not in page and "&lt;script&gt;" in page
+
+
+def test_health_is_still_json_and_the_root_is_not():
+    state = worker.State()
+    server = worker.serve_health(state, 0)
+    try:
+        assert _get(server, "/health")[1] == "application/json"
+        assert _get(server, "/health/")[1] == "application/json"
+        assert _get(server, "/")[1].startswith("text/html") and _get(server, "/?from=qr")[1].startswith("text/html")
+        assert _get(server, "/db")[0] == 404
+    finally:
+        server.shutdown()
+        server.server_close()
