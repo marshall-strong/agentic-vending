@@ -35,6 +35,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from vending import db
+from vending.counters import rises
 from vending.slots import DEVICE_ID
 
 ROWS = range(1, 6)
@@ -206,17 +207,15 @@ def _counters_since(conn: psycopg.Connection, device_id: str, since: datetime) -
 
 
 def _sold_since(polls: list[tuple[datetime, int]], counted_at: datetime) -> int | None:
-    """Units sold across the polls at or after the count; None when none has come in yet."""
-    after = [units for at, units in polls if at >= counted_at]
+    """Units sold across the polls at or after the count; None when none has come in yet.
+
+    Uses `vending.counters.rises`, the same rule as `vending.stock` and the ledger, so one
+    misread poll or a board swap counts the same here as everywhere else.
+    """
+    after = [(at, units) for at, units in polls if at >= counted_at]
     if not after:
         return None
-    sold = 0
-    for previous, current in zip(after, after[1:]):
-        if current >= previous:
-            sold += current - previous
-        else:               # the counter went back: a new board starts from its new value
-            sold += current
-    return sold
+    return sum(rise for _, rise in rises(after))
 
 
 def main(argv: list[str]) -> int:

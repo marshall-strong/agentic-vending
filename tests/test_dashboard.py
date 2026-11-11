@@ -563,3 +563,56 @@ def test_the_plan_agrees_with_the_machine_about_a_counted_slot(conn, page_conn):
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "25", "keep": True}))
     page = dashboard.render(dashboard.snapshot(page_conn))
     assert "3 on hand of Vita Coco" in page
+
+
+def _view(held, counted):
+    snap = {"plan": {"ok": False}, "sales": {"ok": False},
+            "stock": {"ok": True, "data": {"slots": {"15": held}}},
+            "counts": {"ok": True, "data": {"15": counted}}}
+    return dashboard.machine_view(snap)["15"]["now"]
+
+
+def test_a_refill_after_a_count_beats_the_count():
+    # Review on #47: COKE loaded 1 Nov, counted 1 on 9 Nov, refilled 13 Nov to 8 on hand.
+    utc = timezone.utc
+    held = {"product": "COKE-20OZ", "on_hand": 8, "since": datetime(2026, 11, 1, tzinfo=utc),
+            "last_moved": datetime(2026, 11, 13, tzinfo=utc)}
+    counted = {"product": "COKE-20OZ", "on_hand": 1, "source": "photo", "price_on_tag": "2.50",
+               "counted_at": datetime(2026, 11, 9, tzinfo=utc)}
+    assert (_view(held, counted)["units"], _view(held, counted)["source"]) == (8, "receipt")
+    held["last_moved"] = datetime(2026, 11, 5, tzinfo=utc)          # no refill since the count
+    assert (_view(held, counted)["units"], _view(held, counted)["source"]) == (1, "photo")
+
+
+def test_last_moved_is_the_latest_load_not_the_last_product_change():
+    from fractions import Fraction
+
+    from vending.stock import Movement, weighted_average
+    utc = timezone.utc
+    first, refill = datetime(2026, 11, 1, tzinfo=utc), datetime(2026, 11, 13, tzinfo=utc)
+    found = weighted_average([
+        Movement(first, "purchase", "15", "COKE-20OZ", to_slot=6, paid_cents=Fraction(600)),
+        Movement(refill, "purchase", "15", "COKE-20OZ", to_slot=2, paid_cents=Fraction(200))])
+    (slot,) = found.slots
+    assert (slot.since, slot.last_moved) == (first, refill)
+
+
+def test_a_price_written_two_ways_is_not_a_change():
+    assert dashboard._what({"slot": "15", "sale_price": "2.5"}) == dashboard._what({"slot": "15", "sale_price": "2.50"})
+    assert dashboard._what({"slot": "15", "sale_price": "2.5"}) != dashboard._what({"slot": "15", "sale_price": "2.75"})
+
+
+def test_the_count_tooltip_gives_the_eastern_date():
+    late = datetime(2026, 11, 10, 2, 0, tzinfo=timezone.utc)        # 9 Nov, 21:00 Eastern
+    assert f"{dashboard._eastern(late):%d %b}" == "09 Nov"
+
+
+def test_runs_chips_read_a_keep_against_the_tag_like_the_plan_panel(conn, page_conn):
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"28": (250, 10)})
+    a = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, a, "submitted", plan=plan({"slot": "28", "keep": True}))
+    b = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, b, "submitted", plan=plan({"slot": "28", "fill_to": 6, "sale_price": "3.00"}))
+    runs = {r["id"]: r for r in dashboard.snapshot(page_conn, MONDAY)["runs"]["data"]}
+    # Without the tag this read "set $3.00" here and "$2.50 to $3.00" in the Plan panel.
+    assert runs[b]["changes"] == [{"slot": "28", "labels": ["$2.50 to $3.00"]}]

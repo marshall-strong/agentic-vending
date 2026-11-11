@@ -14,7 +14,7 @@ script or another agent.
 
 ![The dashboard with sample data](dashboard/current.png)
 
-*Sample data from a throwaway database, not a real run. For the picture our slots are set to columns 2, 4, 6 and 8, to show the page follows `vending.slots`.*
+*Sample data from a throwaway database, not a real run. **The highlighted columns in this picture are not our real slots.** For the screenshot our slots were set to columns 2, 4, 6 and 8, to show the page follows `vending.slots`. Our real slots are the ones `vending/slots.py` lists.*
 
 ## What it shows
 
@@ -124,23 +124,17 @@ Times on the page show in your browser's time zone. On Windows, the cutoff date 
 
 ## Where it could go next
 
-Mockups with made-up numbers, for the team to react to. None of this is built.
+Ideas for the team to react to. None of this is built.
 
 **A. Headline numbers and stock.** Tiles for the halt switch, the cutoff countdown, the balance
 and the week's profit, and a stock bar in each slot. The tiles need the ledger (#35) and token
 spend (#40); the stock bars can use `vending.stock` today.
 
-![Idea A: headline tiles and stock bars](dashboard/idea-a-machine.png)
-
 **B. Plan history.** One card per week: the update, the slots that changed, the notes, what it
 cost. Everything it needs is in `agent_runs` once #39 writes it.
-
-![Idea B: plan history, week by week](dashboard/idea-b-history.png)
 
 **C. A live run.** Each tool call as it happens, the draft plans as they change, and the run's
 budget. The tool calls are already in `action_log`, and every `preview_desired_state` call logs
 the draft plan it checked, so "plan v1 to v2" can be read from it. It needs a run id on
 `action_log` rows to group them, and the budget needs #40. The model's reasoning between calls
 isn't recorded anywhere yet.
-
-![Idea C: a live run](dashboard/idea-c-live-run.png)

@@ -144,6 +144,15 @@ def next_cutoff(now: datetime) -> datetime | None:
     return cutoff if cutoff > local else cutoff + timedelta(days=7)
 
 
+def _eastern(value: datetime) -> datetime:
+    """`value` in Eastern, the machine's zone; unchanged without the IANA database."""
+    try:
+        from zoneinfo import ZoneInfo
+        return value.astimezone(ZoneInfo("America/New_York"))
+    except Exception:   # Windows without the tzdata package
+        return value
+
+
 def _status(conn: psycopg.Connection, now: datetime) -> dict:
     flag = _optional(conn, "select value, updated_at, updated_by from config where key = 'halted'")
     # Fails closed like `vending.config.is_halted`: anything but JSON false is halted.
@@ -186,8 +195,20 @@ def _plan(conn: psycopg.Connection) -> dict | None:
             "update": latest["team_update"], "notes": latest["notes"], "slots": slots}
 
 
-def _runs(conn: psycopg.Connection, now: datetime) -> list[dict]:
-    """The last runs, newest first, each with the slots its plan changed from the plan before it."""
+def _tags(conn: psycopg.Connection, now: datetime) -> dict:
+    """The price on each slot's tag now, from the latest poll; empty when there is none."""
+    try:
+        return {slot: s["price"] for slot, s in _sales(conn, now)["slots"].items()}
+    except Exception:   # the Sales panel reports its own failure
+        return {}
+
+
+def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None) -> list[dict]:
+    """The last runs, newest first, each with the slots its plan changed from the plan before it.
+
+    The newest run with a plan compares a "keep" against `tags`, the prices on the tags now, as
+    the Plan panel does; older runs have no record of their tag prices.
+    """
     rows = _rows(conn, """
         select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, r.detail, r.cost_usd,
                r.request_id, r.team_update, r.notes, r.plan,
@@ -195,22 +216,26 @@ def _runs(conn: psycopg.Connection, now: datetime) -> list[dict]:
                  where p.mode = r.mode and p.plan is not null and (p.started_at, p.id) < (r.started_at, r.id)
                  order by p.started_at desc, p.id desc limit 1) as previous_plan
           from agent_runs r order by r.started_at desc, r.id desc limit %s""", (RUN_ROWS,))
+    newest = True
     for r in rows:
         plan, previous = r.pop("plan"), r.pop("previous_plan")
         r["has_plan"] = plan is not None
         r["compared"] = plan is not None and previous is not None
-        r["changes"] = _plan_changes(plan, previous) if r["compared"] else []
+        r["changes"] = _plan_changes(plan, previous, tags if newest else None) if r["compared"] else []
+        newest = newest and plan is None
         r["stale"] = r["status"] == "running" and now - r["started_at"] > STALE_RUN
     return rows
 
 
-def _plan_changes(plan: Any, previous: Any) -> list[dict]:
+def _plan_changes(plan: Any, previous: Any, tags: dict | None = None) -> list[dict]:
     """Each slot whose ask moved between two plans, with short labels for how."""
+    tags = tags or {}
     now_slots, before = _by_slot(plan), _by_slot(previous)
     out = []
     for slot in sorted(now_slots.keys() | before.keys(), key=_slot_order):
         if _what(now_slots.get(slot)) != _what(before.get(slot)):
-            labels = _changes(now_slots.get(slot), before.get(slot)) if slot in now_slots else ["dropped"]
+            labels = (_changes(now_slots.get(slot), before.get(slot), tags.get(slot)) if slot in now_slots
+                      else ["dropped"])
             out.append({"slot": slot, "labels": labels})
     return out
 
@@ -230,7 +255,14 @@ def _what(entry: dict | None) -> tuple:
     """What a slot entry asks for, without its reason, so a reworded reason isn't a change."""
     if entry is None:
         return ()
-    return tuple(sorted((k, json.dumps(v, sort_keys=True, default=str)) for k, v in entry.items() if k != "reason"))
+    def norm(k: str, v: Any) -> str:
+        if k == "sale_price" and v is not None:     # "2.5" and "2.50" are the same price
+            try:
+                return str(Decimal(str(v)).normalize())
+            except ArithmeticError:
+                pass
+        return json.dumps(v, sort_keys=True, default=str)
+    return tuple(sorted((k, norm(k, v)) for k, v in entry.items() if k != "reason"))
 
 
 def _sales(conn: psycopg.Connection, now: datetime) -> dict:
@@ -247,7 +279,8 @@ def _stock(conn: psycopg.Connection) -> dict:
     """What each slot and the closet hold, from fulfilled receipts and polls (`vending.stock`)."""
     found = _guarded(conn, lambda: stock_mod.stock(conn))
     return {"slots": {s.slot: {"product": s.product, "on_hand": s.units, "loaded": s.loaded, "sold": s.sold,
-                               "lost": s.lost, "since": s.since, "unit_cost": _dollars(s.unit_cost)}
+                               "lost": s.lost, "since": s.since, "last_moved": s.last_moved,
+                               "unit_cost": _dollars(s.unit_cost)}
                       for s in found.slots},
             "closet": [{"product": c.product, "units": c.units, "unit_cost": _dollars(c.unit_cost)}
                        for c in found.closet],
@@ -310,7 +343,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         "as_of": now,
         "status": _status(conn, now),
         "plan": _panel(lambda: _plan(conn)),
-        "runs": _panel(lambda: _runs(conn, now)),
+        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now))),
         "activity": _panel(lambda: _rows(
             conn, "select id, at, kind, tool, outcome, detail, arguments from action_log"
                   " order by at desc, id desc limit %s", (ACTIVITY_ROWS,))),
@@ -631,8 +664,10 @@ def machine_view(snap: dict) -> dict:
                "price": (prices.get(slot) or {}).get("price"), "source": "receipt" if h else None,
                "counted_at": None}
         c = counted.get(slot)
-        # A person's count fills in what receipts don't know, and replaces them when it is newer.
-        if c is not None and (not h or h.get("since") is None or c["counted_at"] > h["since"]):
+        # A person's count fills in what receipts don't know, and replaces them when it is newer
+        # than the slot's latest receipt movement (a same-product refill after the count wins).
+        moved = h.get("last_moved") or h.get("since")
+        if c is not None and (not h or moved is None or c["counted_at"] > moved):
             now.update(product=c["product"], units=c["on_hand"], source=c["source"], counted_at=c["counted_at"])
             if now["price"] is None:
                 now["price"] = c["price_on_tag"]
@@ -685,7 +720,7 @@ def _ours(slot: str, v: dict, linked: bool) -> str:
              "price unknown" if now["price"] is None else f"${now['price']} on the tag",
              "units unknown" if now["units"] is None else f"{now['units']} on hand"]
     if now["source"] in ("photo", "door"):
-        title.append(f"counted from a {now['source']} on {now['counted_at']:%d %b}, less sales since")
+        title.append(f"counted from a {now['source']} on {_eastern(now['counted_at']):%d %b}, less sales since")
     parts = [f'<span class="num">{_e(slot)}</span>']
     if change:
         parts.append(f'<span class="chg {change["kind"]}"></span>')

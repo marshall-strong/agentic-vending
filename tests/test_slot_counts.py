@@ -75,10 +75,12 @@ def test_no_poll_before_the_count_still_counts_sales_after_it(conn):
 
 def test_a_counter_reset_starts_from_its_new_value(conn):
     store_poll(conn, "b", "2026-11-09T17:00:00+00:00", {"25": (400, 100)})
-    store_poll(conn, "c", "2026-11-10T15:00:00+00:00", {"25": (400, 1)})     # board swapped, then 1 sold
+    store_poll(conn, "c", "2026-11-10T15:00:00+00:00", {"25": (400, 1)})     # board swapped
     store_poll(conn, "d", "2026-11-11T15:00:00+00:00", {"25": (400, 2)})
     slot_counts.record(conn, parse(count()), "kevin")
-    assert slot_counts.latest(conn)["25"]["sold_since"] == 2
+    # `vending.counters.rises`, like the ledger: one low poll could be a misread, so the restart
+    # is confirmed by the next poll and counted from there. 1 to 2 is one sale.
+    assert slot_counts.latest(conn)["25"]["sold_since"] == 1
 
 
 def test_no_poll_since_the_count_keeps_the_counted_units(conn):
@@ -122,3 +124,17 @@ def test_dry_run_writes_nothing(tmp_path, capsys):
     path.write_text(json.dumps(count()), encoding="utf-8")
     assert slot_counts.main(["record", str(path), "--by", "kevin", "--dry-run"]) == 0
     assert "nothing written" in capsys.readouterr().out
+
+
+def _at(hour):
+    from datetime import datetime, timezone
+    return datetime(2026, 11, 10, hour, tzinfo=timezone.utc)
+
+
+def test_sales_since_a_count_use_the_same_counter_rule_as_the_ledger():
+    # Review on #47: one misread poll, then a board swap. `vending.counters.rises` says 250 and 4.
+    misread = [(_at(1), 100000), (_at(2), 500), (_at(3), 100250)]
+    assert slot_counts._sold_since(misread, _at(1)) == 250
+    swap = [(_at(1), 1000), (_at(2), 5), (_at(3), 7), (_at(4), 9)]
+    assert slot_counts._sold_since(swap, _at(1)) == 4
+    assert slot_counts._sold_since(swap, _at(5)) is None
