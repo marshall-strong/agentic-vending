@@ -289,3 +289,17 @@ def test_an_unforeseen_error_still_gets_an_answer(server, monkeypatch, schema_ur
     monkeypatch.setattr(dx, "render", lambda conn, request: 1 / 0)
     code, body = _get(server, f"/?schema={schema}&table=config")
     assert code == 500 and "ZeroDivisionError" not in body
+
+
+def test_edge_times_render_in_any_session_time_zone(conn, explorer):
+    conn.execute("create table edge_times (id int primary key, at timestamptz, clock time, zoned timetz)")
+    conn.execute("insert into edge_times values"
+                 " (1, '9999-12-31 23:30:00-05', '24:00:00', '24:00:00+00'),"
+                 " (2, '0001-01-01 04:00:00+09', '12:00:00', '12:00:00+00')")
+    ro, schema = explorer
+    for zone in ("America/New_York", "Asia/Tokyo", "UTC"):
+        ro.execute("select set_config('timezone', %s, false)", (zone,))
+        code, html = dx.render(ro, Request(schema, "edge_times", 0))
+        assert code == 200, zone
+        # Both rows render; at the edges Postgres may write the year as 10000 or BC, which is fine.
+        assert "24:00:00" in html and "Rows 1–2 of 2" in html

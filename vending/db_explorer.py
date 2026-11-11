@@ -134,7 +134,8 @@ def columns(conn: psycopg.Connection, table: Table) -> tuple[Column, ...]:
 # never crosses the wire.
 NATIVE_TYPES = ("boolean", "smallint", "integer", "bigint", "real", "double precision", "uuid", "date",
                 "interval")
-NATIVE_PREFIXES = ("numeric", "timestamp", "time ")
+# `time` isn't here: Postgres allows 24:00:00, which Python's `time` can't hold, and text shows it fine.
+NATIVE_PREFIXES = ("numeric", "timestamp")
 ALIAS = "t"   # the table's alias in the row query, so ORDER BY means its columns, not ours
 
 
@@ -225,11 +226,11 @@ def _link(**params: Any) -> str:
 def _time(value: datetime) -> str:
     if value.tzinfo is None:
         return _e(value.isoformat(sep=" "))
-    utc = value.astimezone(timezone.utc)
     try:
+        utc = value.astimezone(timezone.utc)
         shown = utc.astimezone(EASTERN) if EASTERN else utc
-    except OverflowError:   # near year 1 or 9999, Eastern falls outside what Python can hold
-        shown = utc
+    except OverflowError:   # near year 1 or 9999, a conversion falls outside what Python can hold
+        return _e(value.isoformat(sep=" "))
     return (f'<span title="{_e(utc.isoformat(sep=" "))}">'
             f'{_e(shown.strftime("%Y-%m-%d %H:%M:%S %Z"))}</span>')
 
