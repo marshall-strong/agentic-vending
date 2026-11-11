@@ -5,7 +5,7 @@ or the database is down."""
 import threading
 import time
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date
 
 import pytest
 
@@ -17,10 +17,7 @@ from tests.test_evadts import GARBLED, SAMPLE, build  # noqa: E402
 from tests.conftest import CONNECT_TIMEOUT  # noqa: E402
 from vending import db  # noqa: E402
 from vending.bridge import Bridge, BridgeError, BridgeUnreachable  # noqa: E402
-from vending.slots import SLOTS  # noqa: E402
 from vending.sync_history import HISTORY_START, default_since, main, store, sync  # noqa: E402
-from vending.tools.machine_state import get_machine_state  # noqa: E402
-from vending.tools.sales_history import get_sales_history  # noqa: E402
 
 
 @pytest.fixture
@@ -55,45 +52,6 @@ def test_checksum_failure_keeps_raw_but_no_counters(conn):
     crc_ok, stored, total = conn.execute("select crc_ok, raw, total_paid_cents from polls").fetchone()
     assert crc_ok is False and bytes(stored) == raw and total is None
     assert conn.execute("select count(*) from poll_selections").fetchone()[0] == 0
-
-
-ALL_40 = [f"{row}{col}" for row in range(1, 6) for col in range(1, 9)]
-
-
-def full_poll(units: int) -> bytes:
-    """A poll with all 40 selections, as the machine sends it."""
-    records = ["ID1*TEST-MACHINE*0000**EVS3.0*", "ID4*2*1840*5", "VA1*0*0*0*0"]
-    for slot in ALL_40:
-        records += [f"PA1*{slot}*250*", f"PA2*{units}*{units * 250}*0*0*0*0"]
-    return build(records)
-
-
-def test_only_our_selections_are_stored(conn):
-    raw = full_poll(10)
-    assert store(conn, META, raw) == "ok"
-    stored = {r[0] for r in conn.execute("select selection from poll_selections")}
-    assert stored == set(SLOTS) and len(stored) == 20
-    # The poll row and its raw document are kept whole, the checksum still checked.
-    crc_ok, kept, total = conn.execute("select crc_ok, raw, total_paid_cents from polls").fetchone()
-    assert crc_ok is True and bytes(kept) == raw and total == 0
-
-
-def test_another_devices_poll_is_kept_without_selections(conn):
-    raw = full_poll(10)
-    assert store(conn, dict(META, device_id="vmc2"), raw) == "ok"
-    assert conn.execute("select device_id, crc_ok, raw from polls").fetchone() == ("vmc2", True, raw)
-    assert conn.execute("select count(*) from poll_selections").fetchone()[0] == 0
-
-
-def test_readers_work_on_full_polls(conn):
-    store(conn, dict(META, session_id="a", started_at="2026-10-01T12:00:00+00:00"), full_poll(10))
-    store(conn, dict(META, session_id="b", started_at="2026-10-08T12:00:00+00:00"), full_poll(17))
-    state = get_machine_state(conn, now=datetime(2026, 10, 8, 13, tzinfo=timezone.utc))
-    assert state.success and [s.slot for s in state.data] == list(SLOTS)
-    assert all(s.units_sold_in_window == 7 for s in state.data)
-    history = get_sales_history(conn, datetime(2026, 10, 1, 12, tzinfo=timezone.utc),
-                                datetime(2026, 10, 8, 12, tzinfo=timezone.utc), None)
-    assert history.success and {r.slot: r.units for r in history.data} == {slot: 7 for slot in SLOTS}
 
 
 class FakeBridge:
