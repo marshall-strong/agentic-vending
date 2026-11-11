@@ -118,6 +118,16 @@ def test_the_tool_is_logged_like_other_reads(db):
     assert db.execute("select kind, tool, outcome from action_log order by id").fetchall() == [
         ("read", "get_project_rules", "failed"), ("read", "get_project_rules", "done")]
 
+def test_a_nul_character_in_an_argument_is_still_logged(db):
+    # Postgres text and jsonb refuse NUL, so the log row must escape it.
+    result = call("get_project_rules", {"topic": "pricing\x00"})
+    assert result.isError is False and result.structuredContent["success"] is False
+    result = call("get_catalog", {"search": "a\x00"})
+    assert result.isError is False
+    assert db.execute("select tool, arguments from action_log order by id").fetchall() == [
+        ("get_project_rules", {"topic": "pricing\\x00"}), ("get_catalog", {"search": "a\\x00"})]
+
+
 def test_reads_are_logged_with_their_arguments_and_result(db):
     store_poll(db, "a", "2026-10-29T12:00:00+00:00", {"15": (250, 100)})
     call("get_machine_state")

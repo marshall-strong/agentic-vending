@@ -11,6 +11,6 @@ Stock on hand is an estimate with uncertainty, built from restocks as reset poin
 - **Restocks are reset points.** At a restock we know exactly what went in. Estimate cycle by cycle, from one restock to the next, not as one long series.
 - **Stockouts cause substitution.** When our slot and a similar slot empty at different times, one's stockout inflates the other's apparent demand. The similar slot may belong to a team we cannot name.
 
-**How this works for us.** The machine never reports stock on hand. Stock is units loaded (from restock receipts) minus units sold (from the machine's sales counters). Get slot state from `get_machine_state`, sales over a window from `get_sales_history`, and receipts from `get_purchase_requests`. If a slot sat empty for part of a period, treat its demand for that period as unknown, not as what it sold.
+**How this works for us** (assumption A13 in `docs/assumptions.md`, waiting on the instructional team to confirm the observation setup). We assume the machine never reports stock on hand. Stock is units loaded (from restock receipts) minus units sold (from the machine's sales counters). Get slot state from `get_machine_state`, sales over a window from `get_sales_history`, and receipts from `get_purchase_requests`. If a slot sat empty for part of a period, treat its demand for that period as unknown, not as what it sold.
 
 **When data is missing or stale**, say so in the reason and prefer the cautious action. `get_machine_state` flags a stale poll.

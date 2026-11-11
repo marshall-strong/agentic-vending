@@ -72,6 +72,18 @@ def log(conn: psycopg.Connection, kind: str, tool: str, arguments: dict[str, Any
     conn.execute(
         "insert into action_log (kind, tool, arguments, outcome, detail, result)"
         " values (%s, %s, %s, %s, %s, %s)",
-        (kind, tool, Jsonb(arguments), outcome, detail,
-         None if result is None else Jsonb(result.model_dump(mode="json"))),
+        (kind, tool, Jsonb(_no_nul(arguments)), outcome, _no_nul(detail),
+         None if result is None else Jsonb(_no_nul(result.model_dump(mode="json")))),
     )
+
+
+def _no_nul(value: Any) -> Any:
+    """Write a NUL character as the text `\\x00`. Postgres text and jsonb refuse NUL,
+    and an argument the agent sends must not stop its own log row."""
+    if isinstance(value, str):
+        return value.replace("\x00", "\\x00")
+    if isinstance(value, dict):
+        return {_no_nul(k): _no_nul(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_no_nul(v) for v in value]
+    return value
