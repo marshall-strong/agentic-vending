@@ -92,6 +92,13 @@ class CheckPrice(unittest.TestCase):
     def test_below_floor(self):
         self.assertEqual(self.codes(65), ["below_floor"])
 
+    def test_below_floor_does_not_suggest_lowering_the_max(self):
+        # Lowering the max pack price below what the pack costs clears the
+        # refusal but leaves the worker unable to buy, so the slot goes empty.
+        (refusal,) = check_price(65, 70, 600)
+        self.assertNotIn("lower the max", refusal.message)
+        self.assertIn("cheaper store or pack", refusal.message)
+
     def test_above_ceiling(self):
         self.assertEqual(self.codes(605), ["above_ceiling"])
 

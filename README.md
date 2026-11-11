@@ -57,7 +57,8 @@ from day one.
   refuse an order, so every order carries a backup choice.
 - **Friday's visit is free. Any midweek visit costs $25**, whether it is a restock, a
   product swap, or a price change. Prices are physical tags, so they only change when
-  someone visits.
+  someone visits. **There are no remote price changes:** the worker changes them by hand,
+  on the free Friday visit or a $25 midweek one, so the agent sets prices in its order.
 
 ## Planning documents
 
@@ -171,13 +172,21 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 docker compose up -d db
+python -m vending.db migrate
 python -m vending.sync_history --since 2026-08-28
 ```
 
-The last command creates the tables and copies every stored poll since 28 August into
-`polls` and `poll_selections` (about 830 polls on 22 October, two minutes). Run it again
-any time to pick up new polls; it only fetches what it doesn't have. It never touches the
-machine itself: it reads the bridge's stored history. Run the tests with `pytest`.
+`migrate` creates or updates the tables. The sync then copies every stored poll since
+28 August into `polls` and `poll_selections` (about 830 polls on 22 October, two minutes).
+Run it again any time to pick up new polls; it only fetches what it doesn't have. It never
+touches the machine itself: it reads the bridge's stored history. Neither the sync nor the
+server migrates on its own: on a database that is behind, each refuses to run and names
+`migrate`, so nothing started from a branch can change the shared Azure database's schema.
+Run the tests with `pytest`.
+
+Before the live run starts, a person records the opening capital once with
+`python -m vending.ledger open --amount 600.00 --by NAME`; until then `get_account_balance`
+refuses and names that command. See "the ledger" in `docs/mcp-server.md`.
 
 `python -m vending.sync_requests` does the same for our purchase requests: it reads back
 every request still pending, and every one fulfilled in the last 30 days, and stores the

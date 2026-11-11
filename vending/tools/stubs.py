@@ -8,34 +8,13 @@ its registration in `vending.server` at it. Write tools return an action that
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date
 
 import psycopg
 
-from vending.tools import NotBuilt, Reply, WriteReply
+from vending.tools import Dropped, NotBuilt, Reply, WriteReply
 from vending.tools.desired_state import DesiredState
 
 Action = Callable[[psycopg.Connection], WriteReply]
-
-
-def get_catalog(conn: psycopg.Connection, search: str | None) -> Reply:
-    raise NotBuilt("get_catalog", "needs the catalog sync from /products and our sourcing table")
-
-
-def get_account_balance(conn: psycopg.Connection) -> Reply:
-    raise NotBuilt("get_account_balance", "needs the ledger")
-
-
-def preview_desired_state(conn: psycopg.Connection, desired: DesiredState) -> Reply:
-    raise NotBuilt("preview_desired_state", "needs the restock planner, plan_restock")
-
-
-def get_purchase_requests(conn: psycopg.Connection, pending_only: bool) -> Reply:
-    raise NotBuilt("get_purchase_requests", "needs the purchase-request sync")
-
-
-def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> Reply:
-    raise NotBuilt("get_pnl", "needs the ledger")
 
 
 def submit_desired_state(desired: DesiredState) -> Action:
@@ -46,6 +25,6 @@ def submit_desired_state(desired: DesiredState) -> Action:
 
 def set_price(slot: str, sale_price: str) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
-        raise NotBuilt("set_price", "no price-change route; waiting on the Cantaloupe check")
+        raise Dropped("set_price", "prices can't change remotely. Set sale_price on that slot in submit_desired_state; the worker changes the tag at the Friday visit (free), or at a midweek visit if you set off_cycle: true ($25)")
     return action
 

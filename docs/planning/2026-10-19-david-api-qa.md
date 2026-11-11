@@ -14,7 +14,7 @@ around them.
  - **The purchase request is becoming a "desired state" for our slots.** David wants each request to describe what our slots should look like after the next restock: per slot, no change, restock, reposition a product, or a new price. He's still thinking it through. It folds price changes and product moves into one request, and the worker sees one combined display for both teams.
  - **Each purchase line will carry the store, a max price per pack and the sale price.** Store is an enum (Walmart, Amazon, BJ's; Costco was also mentioned), plus a product link for Amazon. The max price is set per pack for the primary and for the alternate. The worker buys if the price is at or under the max, and won't wait for the agent to re-price after buying.
  - **Catalog products become single items, not packs.** A product is, for example, "Coca-Cola, default flavor, 20 oz"; the pack size (6, 12, 24) is chosen on the purchase line. The catalog has no prices.
- - **Price changes may become free and remote.** David thinks the bridge can set machine prices with a DEX statement, which would mean no worker visit and no $25. He'd probably limit it to about once a day and remove the black price tags (the display shows the price). This depends on the Cantaloupe card reader reading prices live rather than only at power-up, which is unverified.
+ - **Price changes may become free and remote.** David thinks the bridge can set machine prices with a DEX statement, which would mean no worker visit and no $25. He'd probably limit it to about once a day and remove the black price tags (the display shows the price). This depends on the Cantaloupe card reader reading prices live rather than only at power-up, which is unverified. **Settled 9 Nov: no remote price changes; every change is made by hand at a visit. See tool-list.md #8.**
  - **There is no shared log database for us to write to.** The instructors keep their own database, mirroring every request and worker entry, as the source of truth, and will build a story of the competition at the end. We keep our own database. A soft-check endpoint is coming that says whether our numbers are accurate, "wildly off", or in between, never the exact figures.
  - **Graham and David cover our Azure hosting.** We host our own database there: Postgres 17.
 
@@ -57,7 +57,7 @@ Numbers match the question list in the team's plan doc.
  - [ ] **Shared log deliverable:** the brief (section 3.5 and the deliverables checklist) says writing to an institute shared log is mandatory and graded; David says there isn't one for us. Confirm the checklist item is dropped or what replaces it.
  - [ ] **Ordering cutoff:** still open. The only definite is that restocks happen Friday afternoon. David floated Friday noon for in-store purchasing, the 21 Sep meeting said Thursday midnight, and Amazon orders are due Wednesday for two-day shipping.
  - [ ] **Store list:** three enums (Walmart, Amazon, BJ's), or four with Costco?
- - [ ] **DEX price changes:** whether the Cantaloupe reader picks up price changes without a power cycle.
+ - [x] **DEX price changes:** whether the Cantaloupe reader picks up price changes without a power cycle. **Settled 9 Nov: no remote price changes; every change is made by hand at a visit.**
  - [ ] **Unsold inventory:** valued at cost (David verifying).
  - [ ] **Catalog:** shared with group A or separate?
  - [ ] **Empty slots:** can the desired state leave a slot empty?

@@ -28,7 +28,7 @@ there; this file is a point-in-time copy so the plan sits next to the code.
 
 **Still not in the API:**
 
-- A price change without a load. Every line loads at least one pack or unit, so `set_price` (#8) is still blocked.
+- A price change without a load. Every line loads at least one pack or unit, so a midweek visit that only changes a price can't be sent yet. (`set_price` is dropped; see #8.)
 - Leaving a slot empty.
 - A route that lists our requests. We still save every ID.
 - How many requests may be open before `429 too_many_open_requests`.
@@ -68,7 +68,7 @@ What matters for the tools:
 
 ## Proposed tools
 
-Ten tools: seven read data and three change something (#9 is folded into #6). **Every check on a write tool runs in code and in the same statement as the write,** so the model can't get around it. None of the three write tools can be built against the live spec yet: David is reshaping the purchase request and adding the price and catalog routes. Items still waiting on him are flagged below and listed under the open questions.
+Nine tools: seven read data and two change something (#9 is folded into #6; #8 is dropped). **Every check on a write tool runs in code and in the same statement as the write,** so the model can't get around it. None of the write tools could be built against the live spec yet: David is reshaping the purchase request and adding the catalog routes. Items still waiting on him are flagged below and listed under the open questions.
 
 | # | Tool | R/W | What it returns or does | Checks before it runs | Backed by |
 | --- | --- | --- | --- | --- | --- |
@@ -79,7 +79,7 @@ Ten tools: seven read data and three change something (#9 is folded into #6). **
 | 5 | `preview_desired_state` | R | **Replaces `preview_purchase_request`.** Runs the restock planner on a desired state without submitting: the request lines, the worker's directive, cost at expected and at max prices, the floor for each slot, and every refusal at once | Same as #6 | Restock planner (our code) |
 | 6 | `submit_desired_state` | W | **Replaces `submit_purchase_request`.** Same input as #5. Re-runs the planner on current data, submits the lines it produces, and saves the request ID with the plan. Covers restocks, product moves, pulls and price changes at a visit. `visit: "midweek"` also asks for a $25 visit. | Not halted; before the cutoff for each store; no request pending; all 20 slots listed once; products active in the catalog; stock covers every move that doesn't buy; balance covers the **max** cost (+ $25 if midweek); every sale price passes the pricing gate | `POST /purchase-requests`, **new schema not published yet** |
 | 7 | `get_purchase_requests` | R | Our requests with status, `decision_note`, the plan we sent, and per-line receipts: actual unit price, units loaded versus sent to the closet, spoilage (planned) | — | Our database, filled by the sync job |
-| 8 | `set_price` | W | **Only if DEX price changes work.** Changes one slot's price remotely between visits, at no cost. If they don't work, this tool is dropped and prices change only through #6. | Not halted; at most one change per slot per day (to confirm); passes the pricing gate, using the actual cost of the stock on hand | **No route yet; waits on the Cantaloupe check** |
+| 8 | ~~`set_price`~~ | W | **Dropped (9 Nov).** There are no remote price changes. Every price change is made by hand by the student worker, on the free Friday visit or a $25 midweek visit, so prices go through #6. | — | **Dropped** |
 | 9 | `request_service_visit` | — | **Folded into #6** as `visit: "midweek"`, so a $25 visit always carries a full desired state | — | — |
 | 10 | `get_pnl` | R | Ex-tax revenue, cost of goods (actual cost from receipts, spread over the units left after spoilage), visit fees, token spend, sales tax set aside, and inventory at cost (machine + closet) | — | Our ledger |
 | 11 | `request_catalog_product` | W | Asks the instructors to add a single-item product (brand, flavor, size; no pack). The sync job checks it until it is approved, with the new product code, or denied. | Not halted; a drink; no alcohol or THC; not already in the catalog or already requested | Catalog-request routes (coming: submit and status) |
@@ -94,7 +94,7 @@ Ten tools: seven read data and three change something (#9 is folded into #6). **
 | --- | --- | --- |
 | `submit_purchase_request` | Becomes `submit_desired_state` (#6) | David's request describes the machine after the restock, not a list of lines. The planner writes the lines. |
 | `preview_purchase_request` | Becomes `preview_desired_state` (#5): same planner, nothing submitted | The agent sees every refusal before it writes anything. A bad plan costs one tool call, not a rejected request. |
-| `set_price` | Visit-time price changes move into the desired state. The tool survives only for remote DEX changes between visits (#8). | Each purchase line carries the sale price. Remote changes depend on the Cantaloupe reader picking up prices without a power cycle. |
+| `set_price` | Dropped. Every price change goes into the desired state and is made at a visit (#8). | Each purchase line carries the sale price. There are no remote changes. |
 | `request_service_visit` | Folded into #6 as `visit: "midweek"` | A $25 visit always carries a full desired state, so it can't be spent on a single change by accident. A midweek plan that changes nothing is refused. |
 | `request_catalog_product` | Kept (#11), reshaped for single-item products | Submit and status routes are coming. Pack size moves to the purchase line. |
 
@@ -307,7 +307,7 @@ Each unit carries its `unit_cost_paid`, so the closet's value and our cost of go
 | How long items sit in the machine, over a set time period | #1 and #2 | Days since loaded, units per day, days of stock left; a time window on sales history |
 | Get account balance, start with $600 | `get_account_balance` (#4) | |
 | Get sales history | `get_sales_history` (#2) | |
-| Pricing: set price and change | `submit_desired_state` (#6); `set_price` (#8) only if DEX price changes work | Prices ride on the desired state and change at the visit. Remote changes between visits only if the card reader picks them up. |
+| Pricing: set price and change | `submit_desired_state` (#6) | Prices ride on the desired state and change only at a visit: free on Friday, $25 midweek. |
 | Pricing: pull prices from stores, comparison | Our sourcing table, read through `get_catalog` (#3); how it's filled is not yet decided | Fills the "catalog has no prices" gap. Use a narrow `get_store_price(sku)` against one retailer, or a price table the team fills in. **No general web-browsing tool.** |
 | Request service visit ($25): switch inventory, change pricing, restock | `submit_desired_state` (#6) with `visit: "midweek"` | A $25 visit always carries a full desired state, so the three jobs ride together |
 | Keep track of token usage | Harness, not a tool | Shows up in #4 and #10 |
@@ -321,12 +321,12 @@ Each unit carries its `unit_cost_paid`, so the closet's value and our cost of go
 
 **The three write tools (#6, #8, #11) can't be built until David ships the routes behind the first four questions (prices, midweek visits, catalog requests).** Tick each one off as it's answered and note the answer beside it.
 
-**19 Oct: David answered most of these in person, and his answers outrank the current API spec.** Full notes: [`2026-10-19-david-api-qa.md`](2026-10-19-david-api-qa.md). The tool table above predates them: the purchase request is becoming a desired state for all our slots, with store, max price per pack and sale price on every line, so `submit_purchase_request`, `set_price` and `request_service_visit` have been redesigned; see "What changed on 19 October" and the sections after it. The items still waiting on David are added at the end of this list.
+**19 Oct: David answered most of these in person, and his answers outrank the current API spec.** Full notes: [`2026-10-19-david-api-qa.md`](2026-10-19-david-api-qa.md). The tool table above predates them: the purchase request is becoming a desired state for all our slots, with store, max price per pack and sale price on every line, so `submit_purchase_request`, `set_price` and `request_service_visit` have been redesigned (`set_price` was later dropped, 9 Nov); see "What changed on 19 October" and the sections after it. The items still waiting on David are added at the end of this list.
 
 ### Ask David
 
 - [x] How does a price change reach the worker? A purchase request has no price field. Is the 500-character `note` the intended channel? David (19 Oct): no. Each purchase line will carry the sale price, and a slot price-change route is planned.
-- [ ] Can we change a price without restocking anything? If a purchase request needs at least one line, a price-only change may have no way through. David (19 Oct): possibly free and remote through DEX, limited to about once a day, if the Cantaloupe card reader picks up price changes without a power cycle. Being verified.
+- [x] Can we change a price without restocking anything? **9 Nov: no remote changes. Every price change is manual, by the student worker, on the Friday visit or a $25 midweek one.** A midweek visit for a price change alone still has no way through the API, because every line loads something. Earlier note: If a purchase request needs at least one line, a price-only change may have no way through. David (19 Oct): possibly free and remote through DEX, limited to about once a day, if the Cantaloupe card reader picks up price changes without a power cycle. Being verified.
 - [x] How do we ask for a $25 midweek visit? David (19 Oct): no endpoint yet; there will be one.
 - [x] How do we ask for a product to be added to the catalog, and how long does it take? David (19 Oct): two endpoints are coming, one to submit a product request and one to check it (pending, denied, or approved with the new product code). Quick turnaround.
 - [ ] Is the catalog shared with group A, or does each team have its own? (`/products` is described as "What your team can order".)

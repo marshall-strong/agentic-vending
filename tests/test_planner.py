@@ -510,6 +510,16 @@ class Refusals(unittest.TestCase):
             p = plan(DesiredSlot("17", product=SPRITE, sale_price="2.00"), sourcing=[given])
             self.assertEqual(codes(p), ["bad_sourcing"], url)
 
+    def test_amazon_short_links_count(self):
+        # The share button gives amzn.to and a.co links; the worker opens them like any other.
+        for url in ("https://amzn.to/3abc", "https://a.co/d/xyz", "https://www.amazon.com/dp/x",
+                    "https://smile.amazon.com/dp/x"):
+            given = Sourcing(SPRITE, PurchaseOption("Amazon", 12, "6.00", url=url))
+            self.assertTrue(plan(restock_15(), sourcing=[given]).ok, url)
+        for url in ("https://amzn.to.evil.example/x", "https://a.co.uk/x", "https://notamzn.to/x"):
+            given = Sourcing(SPRITE, PurchaseOption("Amazon", 12, "6.00", url=url))
+            self.assertEqual(codes(plan(restock_15(), sourcing=[given])), ["bad_sourcing"], url)
+
     def test_refused_plan_has_no_request_body(self):
         with self.assertRaises(ValueError):
             plan(restock_15(price="2.53")).request()
@@ -568,6 +578,13 @@ class PlanHash(unittest.TestCase):
     def test_different_plan_different_hash(self):
         self.assertNotEqual(plan(restock_15()).plan_hash, plan(restock_15(price="2.55")).plan_hash)
         self.assertNotEqual(plan(restock_15()).plan_hash, plan(restock_15(), off_cycle=True).plan_hash)
+
+    def test_the_same_plan_next_week_is_a_new_hash(self):
+        # The week turns over on Saturday, so a restock asked for again after
+        # the Friday visit is a new request, not a duplicate of this week's.
+        this_week = plan(restock_15(), now=TUESDAY).plan_hash
+        self.assertNotEqual(this_week, plan(restock_15(), now=SATURDAY).plan_hash)
+        self.assertEqual(this_week, plan(restock_15(), now=THURSDAY_LAST_MINUTE).plan_hash)
 
 
 class Directive(unittest.TestCase):

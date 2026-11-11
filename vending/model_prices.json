@@ -1,0 +1,18 @@
+{
+  "about": "Anthropic API list prices in US dollars per million tokens, for vending.harness. Edit a line here when a price changes, and update `checked`. A model missing from this file can't be called.",
+  "checked": "2026-11-09",
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "us_only_multiplier": "1.1",
+  "models": {
+    "claude-opus-5-5": [
+      {"prompt_up_to": null, "input": "4", "cache_write_5m": "5", "cache_write_1h": "8", "cache_read": "0.20", "output": "20"}
+    ],
+    "claude-sonnet-5-5": [
+      {"prompt_up_to": null, "input": "2", "cache_write_5m": "2.50", "cache_write_1h": "4", "cache_read": "0.10", "output": "10"}
+    ],
+    "claude-haiku-5-5": [
+      {"prompt_up_to": 100000, "input": "0.10", "cache_write_5m": "0.125", "cache_write_1h": "0.20", "cache_read": "0.01", "output": "0.50"},
+      {"prompt_up_to": null, "input": "0.50", "cache_write_5m": "0.625", "cache_write_1h": "1", "cache_read": "0.05", "output": "2.50"}
+    ]
+  }
+}

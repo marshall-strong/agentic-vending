@@ -1,6 +1,6 @@
 """Settings from the environment, falling back to `.env` at the repository root.
 
-Real environment variables win, so the Azure VM can set them without a file.
+Real environment variables win, so the Azure Container App can set them without a file.
 """
 
 from __future__ import annotations

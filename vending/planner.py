@@ -42,7 +42,7 @@ import json
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, time, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 from decimal import Decimal
 from fractions import Fraction
 from urllib.parse import urlparse
@@ -58,10 +58,11 @@ from vending.pricing import (
     slot_floor_cents,
     to_cents,
 )
+from vending.slots import SLOTS
 
-# Columns 5-8 of every row on vmc1 (GET /api/v1/slots).
-OUR_SLOTS: tuple[str, ...] = tuple(
-    f"{row}{col}" for row in range(1, 6) for col in range(5, 9))
+# Our 20 selections, from `vending.slots`, the one place that lists them. Kept
+# under this name because `Config.slots` and the tests use it.
+OUR_SLOTS: tuple[str, ...] = SLOTS
 
 # Spelled exactly as the API wants them.
 AMAZON = "Amazon"
@@ -370,8 +371,9 @@ class SlotFloor:
 class Plan:
     """The planner's answer. Submittable only when `refusals` is empty.
 
-    `plan_hash` is set only then. It hashes the request body, so #6 can tell
-    the same plan submitted twice whenever it was computed.
+    `plan_hash` is set only then. It hashes the request body and the week the
+    visit falls in, so #6 can tell the same plan submitted twice in one week,
+    while the same restock asked for again next week is a new plan.
     """
     lines: tuple[Line, ...]
     directive: str
@@ -622,7 +624,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 tuple(warnings), tuple(refusals), None, desired.off_cycle)
     if refusals:
         return plan
-    body = json.dumps(plan.request(), sort_keys=True)
+    week = _week_of(now.astimezone(_tz(config.timezone)), config.week_starts)
+    body = json.dumps({"week": week.isoformat(), "request": plan.request()}, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
                 hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle)
 
@@ -707,13 +710,17 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
                  need=max(0, fill_to - staying), changes_product=not same)
 
 
+# Hosts an Amazon product link may use: the store itself and its short links.
+AMAZON_HOSTS = frozenset({"amazon.com", "amzn.com", "amzn.to", "a.co"})
+
+
 def _is_amazon_url(url: str) -> bool:
-    """True only for amazon.com and its subdomains. A URL too malformed to parse is not one."""
+    """True only for an Amazon host or one of its subdomains. A URL too malformed to parse is not one."""
     try:
         host = urlparse(url).hostname or ""
     except ValueError:
         return False
-    return host == "amazon.com" or host.endswith(".amazon.com")
+    return any(host == h or host.endswith("." + h) for h in AMAZON_HOSTS)
 
 
 class _Sources:
@@ -897,6 +904,11 @@ def _past_cutoff(now_local: datetime, cutoff: Cutoff, week_starts: int) -> bool:
         return ((weekday - week_starts) % 7, hour, minute)
     return (position(now_local.weekday(), now_local.hour, now_local.minute)
             > position(cutoff.weekday, cutoff.at.hour, cutoff.at.minute))
+
+
+def _week_of(now_local: datetime, week_starts: int) -> date:
+    """The day this week began: the latest `week_starts` weekday on or before now."""
+    return now_local.date() - timedelta(days=(now_local.weekday() - week_starts) % 7)
 
 
 def _stores_used(slots: list[_Slot]) -> dict[str, list[str]]:
