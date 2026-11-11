@@ -57,7 +57,8 @@ from day one.
   refuse an order, so every order carries a backup choice.
 - **Friday's visit is free. Any midweek visit costs $25**, whether it is a restock, a
   product swap, or a price change. Prices are physical tags, so they only change when
-  someone visits.
+  someone visits. **There are no remote price changes:** the worker changes them by hand,
+  on the free Friday visit or a $25 midweek one, so the agent sets prices in its order.
 
 ## Planning documents
 

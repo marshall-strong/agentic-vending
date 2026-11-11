@@ -67,11 +67,11 @@ def test_every_write_tool_refuses_when_halted(db, tool):
     assert db.execute("select tool, outcome from action_log").fetchall() == [(tool, "refused")]
 
 
-@pytest.mark.parametrize("tool", ["set_price", "submit_desired_state"])
-def test_unbuilt_write_tools_still_log_when_running(db, tool):
+@pytest.mark.parametrize(("tool", "says"), [("set_price", "is dropped"), ("submit_desired_state", "not built yet")])
+def test_unbuilt_write_tools_still_log_when_running(db, tool, says):
     set_halted(db, False, "test")
     result = call(tool, WRITE_ARGS[tool])
-    assert result.isError and "not built yet" in result.content[0].text
+    assert result.isError and says in result.content[0].text
     assert db.execute("select outcome from action_log where tool = %s", (tool,)).fetchall() == [("failed",)]
 
 
