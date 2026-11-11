@@ -40,8 +40,8 @@ root points here.
 ## Rows stored before this rule
 
 Polls synced before this change still have rows for all 40 selections in
-`poll_selections`. No reader uses the other selections: every query filters to `SLOTS`.
-Nothing deletes them automatically.
+`poll_selections`. No reader uses the other selections: every query filters to `SLOTS`
+on `DEVICE_ID`. Nothing deletes them automatically.
 
 **Needs the team's decision before anyone runs it.** This deletes those rows from the
 shared database for good:

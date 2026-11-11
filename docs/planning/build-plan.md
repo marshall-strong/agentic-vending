@@ -141,8 +141,8 @@ Ten tools, against 17 last time.
   seen our code must be able to act on it without asking.
 - **Logging is not a tool.** Every write adds its `action_log` row inside the same
   statement.
-- **Competitor prices** are part of `get_machine_state` while they're visible, and the
-  tool is written so it still works when they're not.
+- **No competitor prices.** `get_machine_state` reports our 20 slots only. The other
+  team's prices are never an input (docs/integrity.md).
 
 ## How the machine gets changed: service visits
 
