@@ -36,7 +36,9 @@ Under the weeks are the totals for the range, then the balance **now**, the sale
 the spendable balance. Those three don't depend on the range. The notes from the ledger come last.
 
 **The page computes nothing.** Each week comes from `ledger.pnl_by_week`, the totals from
-`get_pnl`, and the balance from `get_account_balance`. The weeks add up to the totals.
+`get_pnl`, and the balance from `get_account_balance`. The exact weeks add up to the exact totals.
+Each figure on the page is rounded on its own, so a column can differ from its total by a cent.
+The page says so under the table.
 
 **Money is exact.** Figures stay as exact fractions of a cent until they are shown, then round
 half up to the cent.
@@ -50,6 +52,9 @@ leaves the unknown cost out; the page doesn't show that figure as profit.
 
 Choose a start and an end day, both Eastern and both included. Leave them empty for the whole
 run: the opening entry to today. **Whole run** clears them. The form doesn't print.
+
+Dates must fall between 2000-01-01 and 2099-12-31, and one page shows at most 157 weeks (three
+years). A longer range is refused with a message.
 
 ## Safety
 

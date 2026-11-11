@@ -50,6 +50,12 @@ def test_the_range_defaults_to_the_whole_run_and_refuses_a_bad_date():
         pr.parse("/favicon.ico")
 
 
+def test_a_date_far_outside_the_run_is_refused():
+    for path in ("/?start=0001-01-01", "/?end=9999-12-31", "/?start=0001-01-08&end=2026-11-09"):
+        with pytest.raises(pr.BadRequest):
+            pr.parse(path)
+
+
 def test_money_is_exact_to_the_cent_and_unknown_is_not_zero():
     assert pr.amount(Fraction(6185, 11)) == "5.62"           # 562.27 cents, rounded only when shown
     assert pr.amount(-2500) == "-25.00"
@@ -127,6 +133,13 @@ def test_the_weeks_match_get_pnl_and_add_up_to_its_totals(conn):
         assert f'<td class="num">{figure}</td>' in body
     assert report.balance is not None and report.balance.tax_owed in body
     assert 'class="unknown"' not in body
+    assert "rounded to the cent on its own" in body       # so a column can miss its total by a cent
+
+
+def test_a_range_longer_than_the_page_shows_is_refused(conn):
+    seed(conn)
+    code, body = pr.render(pr.load(conn, date(2020, 1, 1), END))
+    assert code == 400 and f"at most {pr.MAX_WEEKS} weeks" in body
 
 
 def test_an_unknown_cost_renders_as_unknown(conn):

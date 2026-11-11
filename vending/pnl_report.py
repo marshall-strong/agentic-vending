@@ -52,6 +52,12 @@ OPTIONS = f"-c default_transaction_read_only=on -c statement_timeout={STATEMENT_
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 EASTERN = ZoneInfo(ledger.TIMEZONE)
 UNKNOWN = "unknown"
+# Dates the form accepts, so a mistyped year can't overflow the date arithmetic.
+FIRST_DAY, LAST_DAY = date(2000, 1, 1), date(2099, 12, 31)
+# The longest range one page shows: three years of weeks.
+MAX_WEEKS = 157
+ROUNDING_NOTE = ("Each figure is rounded to the cent on its own, so a column can differ from its total "
+                 "by a cent. The exact figures add up.")
 
 
 def _connect() -> psycopg.Connection:
@@ -93,9 +99,12 @@ def _day(query: dict[str, list[str]], name: str) -> date | None:
     if not value:
         return None
     try:
-        return date.fromisoformat(value)
+        day = date.fromisoformat(value)
     except ValueError:
         raise BadRequest(f"{name} must be a date as YYYY-MM-DD, not {value!r}") from None
+    if not FIRST_DAY <= day <= LAST_DAY:
+        raise BadRequest(f"{name} must be between {FIRST_DAY} and {LAST_DAY}, not {value!r}")
+    return day
 
 
 def load(conn: psycopg.Connection, start: date | None, end: date | None) -> Report:
@@ -106,6 +115,9 @@ def load(conn: psycopg.Connection, start: date | None, end: date | None) -> Repo
         totals = get_pnl(conn, start, end)
         if not totals.success:
             return Report(start, end, printed_at, totals)
+        if totals.end - totals.start > timedelta(weeks=MAX_WEEKS):
+            refused = Pnl(success=False, message=f"Choose a range of at most {MAX_WEEKS} weeks.")
+            return Report(start, end, printed_at, refused)
         weeks = ledger.pnl_by_week(conn, totals.start, totals.end)
         return Report(start, end, printed_at, totals, weeks, get_account_balance(conn))
 
@@ -193,7 +205,8 @@ def render(report: Report) -> tuple[int, str]:
     head = "".join(f'<th scope="col">{_e(h)}</th>' for h in HEADERS)
     rows = "".join(week_row(w, first, last) for w in report.weeks)
     table = (f'<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody>'
-             f'<tfoot>{totals_row(t, report.weeks)}</tfoot></table>')
+             f'<tfoot>{totals_row(t, report.weeks)}</tfoot></table>'
+             f'<p class="meta">{_e(ROUNDING_NOTE)}</p>')
     body = (f'{form}<p class="meta">{_e(f"{first:%a %Y-%m-%d} to {last:%a %Y-%m-%d} (Eastern days)")}'
             f' &middot; {_e(printed)}</p>{table}{_balance(report.balance)}{_notes(t, report.balance)}')
     return 200, page(body)
