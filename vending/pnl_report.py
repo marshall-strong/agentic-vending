@@ -210,8 +210,8 @@ def render(report: Report) -> tuple[int, str]:
     first, last = t.start.astimezone(EASTERN).date(), t.end.astimezone(EASTERN).date()
     head = "".join(f'<th scope="col">{_e(h)}</th>' for h in HEADERS)
     rows = "".join(week_row(w, first, last) for w in report.weeks)
-    table = (f'<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody>'
-             f'<tfoot>{totals_row(t, report.weeks)}</tfoot></table>'
+    table = (f'<div class="scroll"><table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody>'
+             f'<tfoot>{totals_row(t, report.weeks)}</tfoot></table></div>'
              f'<p class="meta">{_e(ROUNDING_NOTE)}</p>')
     body = (f'{form}<p class="meta">{_e(f"{first:%a %Y-%m-%d} to {last:%a %Y-%m-%d} (Eastern days)")}'
             f' &middot; {_e(printed)}</p>{table}{_balance(report.balance, report.balance_at)}'
@@ -300,7 +300,7 @@ def page(body: str) -> str:
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>Weekly P&amp;L</title><style>{STYLE}</style></head>'
-            f'<body><h1>Weekly P&amp;L</h1><div class="scroll">{body}</div></body></html>')
+            f'<body><h1>Weekly P&amp;L</h1>{body}</body></html>')
 
 
 # --- Serving ------------------------------------------------------------------------------------
