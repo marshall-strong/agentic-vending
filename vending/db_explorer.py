@@ -5,7 +5,7 @@
 
 When the page opens it lists every schema and table. Choose a table to see its
 columns (type, whether it can be null, default, primary key) and its rows, 100
-at a time, newest first when the table has a primary key.
+at a time, highest primary key first (for a numeric id, the newest).
 
 It knows nothing about vending: no pricing, stock, ledger or planner code, only
 what Postgres says is there. It reads the database DATABASE_URL points at and
@@ -23,6 +23,7 @@ import argparse
 import json
 import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -113,8 +114,10 @@ def columns(conn: psycopg.Connection, table: Table) -> tuple[Column, ...]:
     found = conn.execute(
         "select a.attname, format_type(a.atttypid, a.atttypmod), not a.attnotnull,"
         # `indkey` is an int2vector, numbered from 0; `with ordinality` numbers the key from 1.
+        # Past `indnkeyatts` come INCLUDE columns, which are stored in the index but aren't the key.
         " pg_get_expr(d.adbin, d.adrelid),"
-        " (select k.n from unnest(i.indkey) with ordinality k(att, n) where k.att = a.attnum)"
+        " (select k.n from unnest(i.indkey) with ordinality k(att, n)"
+        "  where k.att = a.attnum and k.n <= i.indnkeyatts)"
         " from pg_attribute a"
         " join pg_class c on c.oid = a.attrelid"
         " join pg_namespace n on n.oid = c.relnamespace"
@@ -127,27 +130,79 @@ def columns(conn: psycopg.Connection, table: Table) -> tuple[Column, ...]:
     return tuple(Column(name, kind, nullable, default, pk) for name, kind, nullable, default, pk in found)
 
 
+# Types fetched as Python values. Everything else comes as text, cut in Postgres, so a 1 GB value
+# never crosses the wire.
+NATIVE_TYPES = ("boolean", "smallint", "integer", "bigint", "real", "double precision", "uuid", "date",
+                "interval")
+NATIVE_PREFIXES = ("numeric", "timestamp", "time ")
+ALIAS = "t"   # the table's alias in the row query, so ORDER BY means its columns, not ours
+
+
+def _native(column: Column) -> bool:
+    return column.type in NATIVE_TYPES or column.type.startswith(NATIVE_PREFIXES)
+
+
 def _pick(column: Column) -> sql.Composable:
-    name = sql.Identifier(column.name)
+    name = sql.Identifier(ALIAS, column.name)
     if column.type == "bytea":
         # A bytea value can be megabytes and means nothing on a page: fetch only its size.
         return sql.SQL("octet_length({})").format(name)
-    if column.type in ("json", "jsonb"):
-        # As Postgres writes it, so a price stored as 2.50 shows as 2.50, never a Python float.
-        return sql.SQL("{}::text").format(name)
-    return name
+    if _native(column):
+        return name
+    # Text as Postgres writes it (so a JSON price stored as 2.50 stays 2.50), and at most one
+    # character past what the page shows, so the page can say it was cut.
+    return sql.SQL("left({}::text, {})").format(name, sql.Literal(SHOW_AT_MOST + 1))
+
+
+class _Lenient:
+    """A date/time loader that falls back to Postgres's own text for values Python can't hold:
+    'infinity', years past 9999, intervals over `timedelta`'s range."""
+
+    def load(self, data: Any) -> Any:
+        try:
+            return super().load(data)   # type: ignore[misc]
+        except (psycopg.DataError, ValueError, OverflowError):
+            return bytes(data).decode("utf-8", "replace")
+
+
+def _lenient_dates(conn: psycopg.Connection) -> None:
+    from psycopg.types import datetime as dt
+
+    for name, base in (("date", dt.DateLoader), ("timestamp", dt.TimestampLoader),
+                       ("timestamptz", dt.TimestamptzLoader), ("interval", dt.IntervalLoader)):
+        conn.adapters.register_loader(name, type(f"Lenient{base.__name__}", (_Lenient, base), {}))
+
+
+def _snapshot(conn: psycopg.Connection):
+    """One repeatable-read, read-only transaction, unless the caller already opened one."""
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        return nullcontext()
+    return _ReadOnlyTransaction(conn)
+
+
+class _ReadOnlyTransaction:
+    def __init__(self, conn: psycopg.Connection):
+        self.tx = conn.transaction()
+        self.conn = conn
+
+    def __enter__(self):
+        self.tx.__enter__()
+        self.conn.execute("set transaction isolation level repeatable read, read only")
+        return self
+
+    def __exit__(self, *exc):
+        return self.tx.__exit__(*exc)
 
 
 def rows(conn: psycopg.Connection, table: Table, offset: int = 0) -> Rows:
-    """One page of rows, newest first by primary key when there is one, from one consistent moment."""
-    cols = columns(conn, table)
-    key = sorted((c for c in cols if c.primary_key), key=lambda c: c.primary_key)
-    target = sql.Identifier(table.schema, table.name)
-    picked = sql.SQL(", ").join(_pick(c) for c in cols) if cols else sql.SQL("null")
-    order = (sql.SQL(" order by ") + sql.SQL(", ").join(
-        sql.SQL("{} desc").format(sql.Identifier(c.name)) for c in key)) if key else sql.SQL("")
-    with conn.transaction():
-        conn.execute("set transaction isolation level repeatable read, read only")
+    """One page of rows, in descending primary-key order when there is a key, from one moment."""
+    with _snapshot(conn):
+        cols = columns(conn, table)
+        key = sorted((c for c in cols if c.primary_key), key=lambda c: c.primary_key)
+        target = sql.SQL("{} as {}").format(sql.Identifier(table.schema, table.name), sql.Identifier(ALIAS))
+        picked = sql.SQL(", ").join(_pick(c) for c in cols) if cols else sql.SQL("null")
+        order = (sql.SQL(" order by ") + sql.SQL(", ").join(
+            sql.SQL("{} desc").format(sql.Identifier(ALIAS, c.name)) for c in key)) if key else sql.SQL("")
         total = conn.execute(
             sql.SQL("select count(*) from (select 1 from {} limit %s) s").format(target), (COUNT_CAP + 1,)
         ).fetchone()[0]
@@ -171,7 +226,10 @@ def _time(value: datetime) -> str:
     if value.tzinfo is None:
         return _e(value.isoformat(sep=" "))
     utc = value.astimezone(timezone.utc)
-    shown = utc.astimezone(EASTERN) if EASTERN else utc
+    try:
+        shown = utc.astimezone(EASTERN) if EASTERN else utc
+    except OverflowError:   # near year 1 or 9999, Eastern falls outside what Python can hold
+        shown = utc
     return (f'<span title="{_e(utc.isoformat(sep=" "))}">'
             f'{_e(shown.strftime("%Y-%m-%d %H:%M:%S %Z"))}</span>')
 
@@ -180,8 +238,8 @@ def _text(text: str) -> str:
     """Up to CUT characters inline, the rest one click away, never more than SHOW_AT_MOST."""
     if len(text) <= CUT and "\n" not in text:
         return _e(text)
-    left_out = len(text) - SHOW_AT_MOST
-    full = text[:SHOW_AT_MOST] + (f"\n… {left_out:,} more characters not shown" if left_out > 0 else "")
+    cut = len(text) > SHOW_AT_MOST
+    full = text[:SHOW_AT_MOST] + (f"\n… cut at {SHOW_AT_MOST:,} characters" if cut else "")
     head = text[:CUT].split("\n", 1)[0]
     return f'<details><summary>{_e(head)}…</summary><pre>{_e(full)}</pre></details>'
 
@@ -243,13 +301,15 @@ def _rows_html(table: Table, page: Rows) -> str:
     body = "".join("<tr>" + "".join(f"<td>{cell(v, c)}</td>" for v, c in zip(r, page.columns)) + "</tr>"
                    for r in page.rows)
     first, last = page.offset + 1, page.offset + len(page.rows)
-    order = (f"newest first by {', '.join(page.ordered_by)}" if page.ordered_by
+    order = (f"sorted by {', '.join(page.ordered_by)}, highest first" if page.ordered_by
              else "in no particular order (no primary key)")
     pager = []
     if page.offset > 0:
         pager.append(f'<a href="{_e(_link(schema=table.schema, table=table.name, offset=max(0, page.offset - PAGE_ROWS) or None))}">'
                      "← Previous</a>")
-    if last < page.total and page.offset + PAGE_ROWS <= MAX_OFFSET:
+    # Past the count cap the total isn't known, so a full page means there may be more.
+    more = last < page.total or (page.total > COUNT_CAP and len(page.rows) == PAGE_ROWS)
+    if more and page.offset + PAGE_ROWS <= MAX_OFFSET:
         pager.append(f'<a href="{_e(_link(schema=table.schema, table=table.name, offset=page.offset + PAGE_ROWS))}">'
                      "Next →</a>")
     return (f'<p class="meta">Rows {first:,}–{last:,} of {_total(page)}, {_e(order)}.</p>'
@@ -351,24 +411,28 @@ def parse(target: str) -> Request:
 
 def render(conn: psycopg.Connection, request: Request) -> tuple[int, str]:
     """(status, HTML) for a request. Nothing from the URL reaches SQL unless Postgres lists that
-    table: an unlisted name is a 404, never a query."""
-    found = tables(conn)
-    if request.table is None:
-        return 200, page(found, None, WELCOME)
-    chosen = next((t for t in found if t.schema == request.schema and t.name == request.table), None)
-    if chosen is None:
-        return 404, page(found, None, f'<p class="error">No table {_e(request.schema)}.{_e(request.table)}.</p>')
+    table: an unlisted name is a 404, never a query. The whole page is one read-only transaction."""
+    _lenient_dates(conn)
+    found: list[Table] = []
+    chosen: Table | None = None
     try:
-        page_rows = rows(conn, chosen, request.offset)
+        with _snapshot(conn):
+            found = tables(conn)
+            if request.table is None:
+                return 200, page(found, None, WELCOME)
+            chosen = next((t for t in found if t.schema == request.schema and t.name == request.table), None)
+            if chosen is None:
+                missing = f'<p class="error">No table {_e(request.schema)}.{_e(request.table)}.</p>'
+                return 404, page(found, None, missing)
+            page_rows = rows(conn, chosen, request.offset)
     except psycopg.errors.QueryCanceled:
-        body = (f'<h2>{_e(chosen.schema)}.{_e(chosen.name)}</h2><p class="error">Reading this table took longer than '
-                f"{STATEMENT_TIMEOUT_MS // 1000} seconds, so it was stopped.</p>")
-        return 503, page(found, chosen, body)
+        why, code = f"Reading this table took longer than {STATEMENT_TIMEOUT_MS // 1000} seconds, so it was stopped.", 503
     except psycopg.errors.InsufficientPrivilege:
-        body = (f'<h2>{_e(chosen.schema)}.{_e(chosen.name)}</h2>'
-                '<p class="error">This database user may not read this table.</p>')
-        return 403, page(found, chosen, body)
-    return 200, page(found, chosen, table_body(chosen, page_rows))
+        why, code = "This database user may not read this table.", 403
+    else:
+        return 200, page(found, chosen, table_body(chosen, page_rows))
+    heading = f"<h2>{_e(chosen.schema)}.{_e(chosen.name)}</h2>" if chosen else ""
+    return code, page(found, chosen, f'{heading}<p class="error">{_e(why)}</p>')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -390,6 +454,11 @@ class Handler(BaseHTTPRequestHandler):
         except (psycopg.Error, settings.SettingsError) as error:
             message = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
             return self._send(503, "text/html; charset=utf-8", page([], None, f'<p class="error">{_e(message)}</p>'))
+        except Exception as error:  # a value we didn't foresee: answer, and keep the details in the log
+            print(f"db_explorer: {self.path}: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
+            body = page([], None, '<p class="error">This page hit an error the explorer doesn\'t handle yet. '
+                                  "The details are in the explorer's terminal.</p>")
+            return self._send(500, "text/html; charset=utf-8", body)
         self._send(code, "text/html; charset=utf-8", body)
 
     def _send(self, code: int, content_type: str, body: str) -> None:

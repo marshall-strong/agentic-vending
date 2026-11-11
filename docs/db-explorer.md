@@ -2,7 +2,7 @@
 
 A web page for looking at what is in our database, without psql, VS Code, or asking Claude to run SQL. When the page opens, it lists every schema and table. Choose a table to see:
 - its **columns**: type, whether the column can be null, its default, and whether it is part of the primary key;
-- its **rows**, 100 at a time, newest first when the table has a primary key.
+- its **rows**, 100 at a time, highest primary key first. For tables keyed by a numeric `id`, that is the newest rows first.
 
 It changes nothing. It also knows nothing about vending: it shows only what Postgres says is there.
 
@@ -25,7 +25,7 @@ Press Ctrl+C to stop it.
 | Value | Shown as |
 |---|---|
 | Null | *NULL*, in grey (an empty string shows as *(empty)*) |
-| Long text or JSON | The first 200 characters. Click to see the rest, up to 20,000 characters. |
+| Long text or JSON | The first 200 characters. Click to see the rest, up to 20,000 characters. Postgres cuts anything longer before it is sent. |
 | `bytea` | Its size only, for example *1,234 bytes* |
 | `timestamptz` | Eastern time. Hover to see the stored UTC value. |
 | Money and `numeric` | Exactly as stored, never rounded |

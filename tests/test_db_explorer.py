@@ -46,7 +46,7 @@ def test_long_text_is_cut_with_the_rest_one_click_away():
 def test_a_huge_value_says_how_much_was_left_out():
     huge = "b" * (dx.SHOW_AT_MOST + 10)
     shown = dx.cell(huge, TEXT)
-    assert "10 more characters not shown" in shown
+    assert f"cut at {dx.SHOW_AT_MOST:,} characters" in shown
     assert "b" * (dx.SHOW_AT_MOST + 1) not in shown
 
 
@@ -155,14 +155,15 @@ def test_odd_values_render(conn, explorer):
     conn.execute("create table oddities (id serial primary key, blob bytea, doc jsonb, note text,"
                  " plain timestamp, amount numeric)")
     conn.execute("insert into oddities (blob, doc, note, plain, amount)"
-                 " values ('\\x010203', '{\"price\": 2.50}', '<b>hi</b>', '2026-11-11 09:00', 2.50),"
+                 " values ('\\x010203', '{\"price\": 2.50}', '<b>hi</b>', '2026-11-11 09:00', 3.10),"
                  " (null, null, '', null, null)")
     ro, schema = explorer
     code, html = dx.render(ro, Request(schema, "oddities", 0))
     assert code == 200
     assert "3 bytes" in html and "NULL" in html and "(empty)" in html
     assert "&lt;b&gt;hi&lt;/b&gt;" in html and "<b>hi</b>" not in html
-    assert "2.50" in html   # json numbers stay exact, not 2.5
+    assert "price&quot;: 2.50" in html   # json numbers stay exact, not 2.5
+    assert "3.10" in html
 
 
 def test_a_view_and_a_table_without_a_key(conn, explorer):
@@ -220,3 +221,71 @@ def test_handler_refuses_other_hosts_bad_requests_and_other_paths(server):
     assert _get(server, "/", host="evil.example")[0] == 403
     assert _get(server, "/?schema=x&table=y&offset=abc")[0] == 400
     assert _get(server, "/nope")[0] == 404
+
+
+# --- Regressions from the blind review ----------------------------------------------------------
+
+def test_the_explorer_connects_read_only_with_the_timeout(monkeypatch):
+    assert "default_transaction_read_only=on" in dx.OPTIONS and "statement_timeout=5000" in dx.OPTIONS
+    seen = {}
+    monkeypatch.setattr(dx.settings, "require", lambda *a, **k: "postgresql://x@127.0.0.1/x")
+    monkeypatch.setattr(dx.psycopg, "connect", lambda url, **kw: seen.update(kw) or "conn")
+    assert dx._connect() == "conn" and seen["options"] == dx.OPTIONS
+
+
+def test_paging_goes_on_past_the_count_cap():
+    log = Table("public", "big", "table")
+    full = dx.Rows((TEXT,), tuple(("x",) for _ in range(dx.PAGE_ROWS)), dx.COUNT_CAP, dx.COUNT_CAP + 1, ("id",))
+    assert "Next →" in dx._rows_html(log, full)
+    last = dx.Rows((TEXT,), (("x",),), dx.COUNT_CAP, dx.COUNT_CAP + 1, ("id",))
+    assert "Next →" not in dx._rows_html(log, last)
+
+
+def test_dates_python_cannot_hold_still_render(conn, explorer):
+    conn.execute("set timezone = 'UTC'")
+    conn.execute("create table odd_times (id int primary key, at timestamptz, plain timestamp, day date, span interval)")
+    conn.execute("insert into odd_times values"
+                 " (1, '0001-01-01 00:00:00+00', 'infinity', '-infinity', '100000000 years'),"
+                 " (2, 'infinity', '2026-11-11 09:00', '2026-11-11', '1 day')")
+    ro, schema = explorer
+    code, html = dx.render(ro, Request(schema, "odd_times", 0))
+    assert code == 200
+    assert "infinity" in html and "-infinity" in html and "100000000 years" in html
+    assert "0001-01-01" in html
+
+
+def test_include_columns_are_not_part_of_the_key(conn, explorer):
+    conn.execute("create table covered (id int, p point, note text, primary key (id) include (p, note))")
+    conn.execute("insert into covered values (1, '(1,2)', 'a'), (2, '(3,4)', 'b')")
+    ro, schema = explorer
+    cols = {c.name: c for c in dx.columns(ro, Table(schema, "covered", "table"))}
+    assert cols["id"].primary_key == 1 and cols["p"].primary_key is None and cols["note"].primary_key is None
+    page_rows = dx.rows(ro, Table(schema, "covered", "table"))
+    assert page_rows.ordered_by == ("id",) and [r[0] for r in page_rows.rows] == [2, 1]
+
+
+def test_order_is_by_the_table_columns_not_the_shown_text(conn, explorer):
+    conn.execute("create table json_keyed (doc jsonb primary key)")
+    conn.execute("insert into json_keyed values ('2'), ('3'), ('10')")
+    conn.execute("create table awkward (octet_length int primary key, data bytea)")
+    conn.execute("insert into awkward values (1, decode('00', 'hex')), (2, decode('0000', 'hex'))")
+    ro, schema = explorer
+    assert [r[0] for r in dx.rows(ro, Table(schema, "json_keyed", "table")).rows] == ["10", "3", "2"]
+    assert dx.rows(ro, Table(schema, "awkward", "table")).rows == ((2, 2), (1, 1))
+
+
+def test_huge_text_is_cut_in_postgres(conn, explorer):
+    conn.execute("create table wordy (id int primary key, note text, tags text[])")
+    conn.execute("insert into wordy values (1, repeat('w', %s), array['a', 'b'])", (dx.SHOW_AT_MOST + 5000,))
+    ro, schema = explorer
+    page_rows = dx.rows(ro, Table(schema, "wordy", "table"))
+    assert len(page_rows.rows[0][1]) == dx.SHOW_AT_MOST + 1
+    assert page_rows.rows[0][2] == "{a,b}"
+    assert "cut at" in dx.render(ro, Request(schema, "wordy", 0))[1]
+
+
+def test_an_unforeseen_error_still_gets_an_answer(server, monkeypatch, schema_url):
+    _, schema = schema_url
+    monkeypatch.setattr(dx, "render", lambda conn, request: 1 / 0)
+    code, body = _get(server, f"/?schema={schema}&table=config")
+    assert code == 500 and "ZeroDivisionError" not in body
