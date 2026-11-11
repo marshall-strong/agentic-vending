@@ -12,7 +12,7 @@ The project brief (Revised, section 3.2) says "the other row's price is an input
 pricing logic". David's rule points the other way. **For now, our pricing ignores the
 other team's prices** (Kevin, 11 Nov). It keeps us inside David's rule, and we shouldn't
 need that information to win. The team can revisit this. If we do, change this page and
-assumption A10 first. Explain the choice in Summative 2.
+assumption A15 first. Explain the choice in Summative 2.
 
 Which selections are ours is not settled yet: the inventory server assigns them (brief,
 section 1). The machine is split evenly between the two teams.
