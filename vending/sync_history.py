@@ -17,6 +17,11 @@ answers. Re-run with `--since` to retry them; that pass also fetches again any
 poll stored as unparseable, in case the bridge sent a cut-off document. Only an
 unreachable bridge or a rejected key stops the run.
 
+Each poll carries all 40 selections, but we store counters only for our 20
+(`vending.slots.SLOTS`) and only from our machine (`DEVICE_ID`). The poll row and
+its raw document are kept whole. This is the team integrity rule: we don't base
+decisions on the other team's slots. See docs/integrity.md.
+
 It never migrates. On a database that is behind it refuses to run (exit 2) and
 names `python -m vending.db migrate`, like the server and the halt switch, so a
 sync started from a branch can't change the shared database's schema.
@@ -34,6 +39,7 @@ import psycopg
 from vending import db
 from vending.bridge import Bridge, BridgeError, BridgeUnreachable
 from vending.evadts import ParseError, parse
+from vending.slots import DEVICE_ID, SLOTS
 
 # The bridge's history starts here.
 HISTORY_START = date(2026, 8, 28)
@@ -55,6 +61,9 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
 
     A poll already stored is left alone, except one stored as unparseable
     (`crc_ok` null, so no selections): a document that can now be read replaces it.
+
+    Selections are stored only for our slots, and only for polls of our machine
+    (docs/integrity.md).
     """
     try:
         poll = parse(raw)
@@ -83,13 +92,15 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
                 poll.total_paid_cents if ok else None, poll.total_paid_units if ok else None,
             ),
         ).rowcount
-        if inserted and ok:
+        ours = ([s for s in poll.selections if s.selection in SLOTS]
+                if ok and meta.get("device_id") == DEVICE_ID else [])
+        if inserted and ours:
             with conn.cursor() as cur:
                 cur.executemany(
                     "insert into poll_selections (session_id, selection, price_cents,"
                     " lifetime_units, lifetime_sales_cents) values (%s, %s, %s, %s, %s)",
                     [(meta["session_id"], s.selection, s.price_cents, s.lifetime_units,
-                      s.lifetime_sales_cents) for s in poll.selections],
+                      s.lifetime_sales_cents) for s in ours],
                 )
     if poll is None:
         return "bad"

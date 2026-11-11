@@ -82,8 +82,9 @@ reused almost unchanged.
    rather than 17, with precise but tight descriptions and prompt caching.
 6. **Rival visibility ends next quarter.** This quarter we can see every selection.
    During the live run we probably won't see the other team's prices. **Pricing must not
-   depend on rival prices.** Treat them as a bonus signal when available, never a
-   required input.
+   depend on rival prices.** David has since said teams act with integrity: we don't
+   change our strategy based on the other team's slots, pricing or strategy, even while
+   we can see them. See [`docs/integrity.md`](../integrity.md).
 7. **Reconsider "not n8n".** It's on the syllabus, we already know it, and routing
    through Postgres removes the one real obstacle.
 
