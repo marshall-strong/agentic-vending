@@ -38,8 +38,8 @@ repo root points here.
 - **The agent has no web-fetch tool.** It can't browse to another team's dashboard.
   `tests/test_server.py::test_tool_list_is_pinned` pins the MCP server's tool names, so
   adding a tool (a web fetcher, say) is a deliberate change that shows up in review.
-- **Our stock count reads only our machine's counters.** `vending/stock.py` filters poll
-  counters to `DEVICE_ID` and our `SLOTS`.
+- **Our stock count reads only our machine's counters.** `vending/stock.py` reads poll
+  counters only from `DEVICE_ID`, and only for the slots our own receipts name.
 
 We still store every selection from each poll. The polls are the machine's own record, and
 which selections are ours may change when the inventory server assigns them.
