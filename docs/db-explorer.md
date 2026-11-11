@@ -30,7 +30,7 @@ Press Ctrl+C to stop it.
 | `timestamptz` | Eastern time. Hover to see the stored UTC value. |
 | Money and `numeric` | Exactly as stored, never rounded |
 
-Each table shows its row count. If a table has more than 100,000 rows, the page says "more than 100,000" so it doesn't count them all.
+Each table shows its row count. If a table has more than 100,000 rows, the page says "more than 100,000" so it doesn't count them all. Paging stops after row 1,000,000: Postgres reads every row it skips, so a deeper page would load the database for nothing. Nothing in our database is that big.
 
 ## Why it is safe to leave open
 
