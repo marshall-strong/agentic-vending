@@ -142,6 +142,17 @@ def test_a_range_longer_than_the_page_shows_is_refused(conn):
     assert code == 400 and f"at most {pr.MAX_WEEKS} weeks" in body
 
 
+def test_the_week_limit_counts_rows_not_days(conn):
+    """A range that starts midweek has a part week at each end, so the limit counts the Sat-to-Fri rows."""
+    seed(conn)
+    first = date(2026, 11, 11)                                            # a Wednesday, in the week of Sat 7 Nov
+    last = date(2026, 11, 7) + timedelta(weeks=pr.MAX_WEEKS - 1, days=6)  # the Friday that ends row MAX_WEEKS
+    report = pr.load(conn, first, last)
+    assert report.totals.success and len(report.weeks) == pr.MAX_WEEKS
+    code, body = pr.render(pr.load(conn, first, last + timedelta(days=1)))   # one day into the next week
+    assert code == 400 and f"at most {pr.MAX_WEEKS} weeks" in body
+
+
 def test_an_unknown_cost_renders_as_unknown(conn):
     open_ledger(conn)
     sell(conn, units=5, price=250)                           # sales, but no receipts at all
@@ -234,6 +245,22 @@ def test_the_balance_is_as_of_the_end_of_the_range(conn):
         assert current.balance.balance == "706.50", end
         _, body = pr.render(current)
         assert "Balance now" in body and '<td class="num">706.50</td>' in body
+
+
+def test_a_range_with_no_end_shows_the_balance_now_whatever_the_clocks_say(conn, monkeypatch):
+    """With no end date the balance is now, even when the app's clock is behind the database's."""
+    import vending.tools.pnl as tool
+
+    class Behind(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(days=1)
+
+    open_ledger(conn)
+    monkeypatch.setattr(tool, "datetime", Behind)
+    report = pr.load(conn, None, None)
+    assert report.balance_at is None
+    assert "Balance now" in pr.render(report)[1]
 
 
 def test_a_range_that_ends_before_the_opening_shows_no_balance(conn):

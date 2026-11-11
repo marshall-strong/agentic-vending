@@ -59,7 +59,8 @@ Choose a start and an end day, both Eastern and both included. Leave them empty 
 run: the opening entry to today. **Whole run** clears them. The form doesn't print.
 
 Dates must fall between 2000-01-01 and 2099-12-31, and one page shows at most 157 weeks (three
-years). A longer range is refused with a message.
+years): 157 Saturday-to-Friday rows, where a part week at either end counts as a row. A longer
+range is refused with a message.
 
 ## Safety
 

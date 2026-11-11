@@ -114,18 +114,27 @@ def load(conn: psycopg.Connection, start: date | None, end: date | None) -> Repo
     """Every figure on the page, from one read-only snapshot."""
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
-        printed_at = conn.execute("select now()").fetchone()[0].astimezone(EASTERN)
+        # The app's clock, the one get_pnl and ledger.balance use for "today" and "now".
+        printed_at = datetime.now(EASTERN)
         totals = get_pnl(conn, start, end)
         if not totals.success:
             return Report(start, end, printed_at, totals)
-        if totals.end - totals.start > timedelta(weeks=MAX_WEEKS):
+        first_day, last_day = (t.astimezone(EASTERN).date() for t in (totals.start, totals.end))
+        # Count the Sat-to-Fri rows the table would show: a midweek start or end is a part week, but still a row.
+        rows = (_week_of(last_day) - _week_of(first_day)).days // 7 + 1
+        if rows > MAX_WEEKS:
             refused = Pnl(success=False, message=f"Choose a range of at most {MAX_WEEKS} weeks.")
             return Report(start, end, printed_at, refused)
         weeks = ledger.pnl_by_week(conn, totals.start, totals.end)
-        # The balance at the end of the last day shown, where the table stops; now when that day is today or later.
-        last_day = totals.end.astimezone(EASTERN).date()
-        balance_at = None if last_day >= printed_at.date() else totals.end
+        # The balance at the end of the last day shown, where the table stops; now when there is no end
+        # date, or the end is today or later.
+        balance_at = None if end is None or last_day >= printed_at.date() else totals.end
         return Report(start, end, printed_at, totals, weeks, get_account_balance(conn, balance_at), balance_at)
+
+
+def _week_of(day: date) -> date:
+    """The Saturday that begins the ledger week holding `day`."""
+    return ledger.week_of(datetime.combine(day, datetime.min.time()))
 
 
 # --- Rendering ----------------------------------------------------------------------------------
