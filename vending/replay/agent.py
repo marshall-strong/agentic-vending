@@ -15,9 +15,10 @@ The tools are #14's `get_machine_state` and `get_sales_history`, with the same
 names and replies, cut off at the replay date. The rest are still stubs on #14,
 so Claude is told they aren't built, as the live agent would be.
 
-Every request goes through the exam's `Budget`: $1 for a week's whole
-conversation, $4 a day across everything, the worst case worked out and
-reserved before each request, every request logged. A week that runs out of
+Every request goes through the exam's `Budget`, so through the harness as a
+`test` call: $1 for a week's whole conversation, the team's daily test cap
+across everything, the worst case reserved before each request, and every
+request a row in `model_calls`. A week that runs out of
 budget part-way ends with no plan, which fails "valid plan", and the replay stops.
 """
 
@@ -32,6 +33,7 @@ from pathlib import Path
 
 import psycopg
 
+from vending import settings
 from vending.replay import model
 from vending.replay.model import Budget, BudgetError
 from vending.replay.scoring import Score, score
@@ -40,6 +42,7 @@ from vending.slots import SLOTS
 from vending.tools import machine_state as ms
 from vending.tools.sales_history import get_sales_history
 
+RESULTS_DIR = settings.REPO_ROOT / "replay-results" / "agent-runs"   # gitignored, wherever the command runs
 MAX_TURNS = 10   # tool rounds per week; on the last one it must answer
 
 SYSTEM = f"""\
@@ -157,8 +160,8 @@ class Week:
 class AgentReplay:
     def __init__(self, model_id: str = model.DEFAULT_MODEL, effort: str = model.DEFAULT_EFFORT,
                  key_env: str = model.DEFAULT_KEY_ENV, base_url: str | None = None,
-                 week_cap: Decimal = model.RUN_CAP, daily_cap: Decimal = model.DAILY_CAP):
-        self.budget = Budget(model_id, effort, key_env, base_url, week_cap, daily_cap)
+                 week_cap: Decimal = model.RUN_CAP, daily_cap: Decimal | None = None, connect=None):
+        self.budget = Budget(model_id, effort, key_env, base_url, week_cap, daily_cap, connect)
         self.name = f"agent:{model_id}@{effort}"
         self.cap_unit = "week"   # the run cap covers one week's whole conversation
 
@@ -234,7 +237,7 @@ class AgentReplay:
                 # Everything sent for this week, failed requests at what they were booked at.
                 sent = [r for r in self.budget.runs if r.get("week_run") == label["week_run"]]
                 week.turns = len(sent)
-                week.cost_usd = sum((Decimal(r["cost_usd"]) for r in sent), Decimal(0))
+                week.cost_usd = sum((r["cost"] for r in sent), Decimal(0))   # exact, not the display string
             # Append the whole content, thinking blocks included: the history only ever grows.
             messages.append({"role": "assistant", "content": response.content})
             if response.stop_reason == "tool_use":
@@ -259,7 +262,7 @@ class AgentReplay:
 
 def save_updates(weeks: list[Week], name: str, folder: Path | None = None) -> Path:
     """The weekly updates and notes, as one Markdown file for people to grade."""
-    folder = folder or model.spend_log().parent / "agent-runs"
+    folder = folder or RESULTS_DIR
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(EASTERN).strftime("%Y-%m-%d-%H%M%S")
     path = folder / f"{stamp}-{name.replace(':', '-').replace('@', '-')}-{uuid.uuid4().hex[:6]}.md"

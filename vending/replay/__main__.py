@@ -24,7 +24,7 @@ from vending.pricing import to_cents
 from vending.replay.cases import all_cases
 from vending.replay.agent import AgentReplay, save_updates
 from vending.replay.deciders import Baseline, Decider, get_decider
-from vending.replay.model import DEFAULT_EFFORT, DEFAULT_KEY_ENV, DEFAULT_MODEL, ModelDecider, spend_log
+from vending.replay.model import DEFAULT_EFFORT, DEFAULT_KEY_ENV, DEFAULT_MODEL, ModelDecider
 from vending.replay.scoring import DEMAND_ASSUMPTIONS, PASS, SKIP, Score, score
 from vending.replay.state import EASTERN, NoData, WeekState, replay_week
 
@@ -183,15 +183,19 @@ def spend(decider: Decider) -> list[str]:
     runs = getattr(decider, "runs", None)
     if runs is None:
         return []
-    total = sum((Decimal(r["cost_usd"]) for r in runs), Decimal(0))
+    total = sum((r.get("cost", Decimal(r["cost_usd"])) for r in runs), Decimal(0))
+    daily = getattr(decider, "daily_cap", None)
+    daily = f"${daily} a day" if daily is not None else "the team's daily test cap"
     lines = [f"\nModel cost: ${total:.4f} for {len(runs)} request{'' if len(runs) == 1 else 's'} "
              f"({decider.key_env} paid; caps ${decider.run_cap} a {getattr(decider, 'cap_unit', 'run')}, "
-             f"${decider.daily_cap} a day; "
-             f"logged in {spend_log()}). A failed request counts at its worst case unless the API rejected it."]
+             f"{daily}; "
+             f"each one a row in model_calls: python -m vending.usage). A failed request counts at its worst case "
+             "unless the API rejected it."]
     for r in runs:
         tokens = (f", {r['input_tokens']} tokens in, {r['output_tokens']} out"
                   if "input_tokens" in r else "")
-        lines.append(f"  {r['run_id'][:8]}: ${Decimal(r['cost_usd']):.4f}{tokens}, {r['status']}")
+        which = f"call {r['call_id']}" if r.get("call_id") else r["run_id"][:8]   # the id vending.usage shows
+        lines.append(f"  {which}: ${Decimal(r['cost_usd']):.4f}{tokens}, {r['status']}")
     return lines
 
 

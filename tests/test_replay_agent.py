@@ -16,6 +16,12 @@ from vending.replay.state import replay_week
 AS_OF = datetime(2026, 10, 9, 4, tzinfo=timezone.utc)   # the end of the week of 2 Oct, midnight Eastern
 
 
+@pytest.fixture(autouse=True)
+def results_in_tmp(monkeypatch, tmp_path):
+    """Weekly updates the CLI saves go to a temporary folder, never the repo."""
+    monkeypatch.setattr(agent, "RESULTS_DIR", tmp_path / "agent-runs")
+
+
 def answer(conn, day, notes="watch slot 15", update="Restocked to last week's sales."):
     return json.dumps({"plan": baseline_json(replay_week(conn, day)), "update": update, "notes": notes})
 
@@ -61,6 +67,10 @@ def test_two_weeks_with_tools_notes_and_updates(conn, api, tmp_path):
     assert "every unit costs $0.80" in api.posts[0]["messages"][0]["content"]
     assert api.posts[0]["tool_choice"] == {"type": "auto"} and len(api.posts[0]["tools"]) == 2
     assert first.cost_usd == Decimal("0.104") and second.cost_usd == Decimal("0.052")   # 2 requests, then 1
+    # Every request is a test call in model_calls: one run per week, labelled by week and turn.
+    rows = conn.execute("select run_id, label, purpose from model_calls order by id").fetchall()
+    assert [r[1] for r in rows] == ["agent-week 2026-10-02 1", "agent-week 2026-10-02 2", "agent-week 2026-10-09 1"]
+    assert rows[0][0] == rows[1][0] != rows[2][0] and {r[2] for r in rows} == {"test"}
     path = agent.save_updates(weeks, replay.name, tmp_path)
     text = path.read_text(encoding="utf-8")
     assert "Restocked to last week's sales." in text and "15 slowed" in text and "Cost: $0.1040" in text
@@ -70,8 +80,8 @@ def test_a_week_that_runs_out_of_budget_stops_the_replay(conn, api):
     fill_week(conn)
     api.turns = [(200, "tool_use", tool_call("get_machine_state", {})),
                  (200, "end_turn", answer(conn, WEEK))]
-    # $0.10 a week: the first request fits ($0.052 spent), the second can't.
-    weeks = AgentReplay(week_cap=Decimal("0.10")).run(conn, WEEK, 2)
+    # $0.12 a week: the first request fits (max_tokens lowered to 4,754; $0.052 spent), the second can't.
+    weeks = AgentReplay(week_cap=Decimal("0.12")).run(conn, WEEK, 2)
     assert len(weeks) == 1 and "Not sent" in weeks[0].error and weeks[0].turns == 1
     assert weeks[0].result.checks[0].status == "fail" and weeks[0].cost_usd == Decimal("0.052")
     assert len(api.posts) == 1

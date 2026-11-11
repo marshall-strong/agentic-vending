@@ -150,6 +150,20 @@ when it asks. It's read as a prompt, so the key doesn't end up in your command h
 On macOS or Linux, add `export VENDING_ANTHROPIC_API_KEY='<the key>'` to `~/.zshrc` or
 `~/.bashrc`. In production it's a secret on our Azure Container App.
 
+**Every use of the key is recorded.** All our model calls go through `vending/harness.py`, which
+writes each one to the `model_calls` table before it is sent: what asked for it, the model and
+effort, which key paid, tokens, cost and time. Live calls also go in the ledger, because their
+cost comes out of the $600; test runs, replays and sweeps don't, but they're in `model_calls` all
+the same. See it all with:
+
+```
+python -m vending.usage
+```
+
+Test calls stop at a daily cap shared by the whole team (`model_test_daily_cap_cents`, $20 by
+default); live calls have their own (`model_daily_cap_cents`). Anthropic's own record is the
+Claude Console's Usage and Cost pages for the key's workspace.
+
 ### 4. Check that you can reach the machine
 
 ```
