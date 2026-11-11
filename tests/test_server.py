@@ -40,9 +40,9 @@ def db(schema_url, monkeypatch):
         server._conn.close()
 
 
-def test_lists_all_ten_tools():
+def test_lists_all_eleven_tools():
     tools = {t.name: t for t in call(None).tools}
-    assert len(tools) == 10
+    assert len(tools) == 11
     assert server.WRITE_TOOLS <= tools.keys()
     assert set(WRITE_ARGS) == server.WRITE_TOOLS
     assert tools["get_machine_state"].outputSchema is not None
@@ -110,6 +110,14 @@ def test_purchase_requests_end_to_end(db):
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_purchase_requests", "done")]
 
 
+def test_the_tool_is_logged_like_other_reads(db):
+    result = call("get_project_rules", {"topic": "../money"})
+    assert result.structuredContent["success"] is False
+    result = call("get_project_rules", {"topic": "money"})
+    assert result.structuredContent["text"].startswith("# Money")
+    assert db.execute("select kind, tool, outcome from action_log order by id").fetchall() == [
+        ("read", "get_project_rules", "failed"), ("read", "get_project_rules", "done")]
+
 def test_reads_are_logged_with_their_arguments_and_result(db):
     store_poll(db, "a", "2026-10-29T12:00:00+00:00", {"15": (250, 100)})
     call("get_machine_state")
@@ -142,11 +150,12 @@ def test_built_only_hides_the_stubs(monkeypatch):
         importlib.reload(server)
         assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history", "get_catalog",
                                                       "get_account_balance", "preview_desired_state",
-                                                      "get_purchase_requests", "get_pnl", "request_catalog_product"]
+                                                      "get_purchase_requests", "get_pnl", "get_project_rules",
+                                                      "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)
-    assert len(call(None).tools) == 10
+    assert len(call(None).tools) == 11
 
 
 def test_parallel_calls_do_not_collide(db):
