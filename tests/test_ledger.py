@@ -310,6 +310,31 @@ def test_purchases_and_the_stock_they_bring_go_by_the_same_clock(conn):
 
 # --- Through the MCP client -------------------------------------------------------------
 
+def test_pnl_by_week_books_each_line_to_its_week_and_adds_up_to_pnl(conn):
+    open_ledger(conn)                                     # Saturday 31 Oct, 20:00 Eastern
+    ledger.record(conn, "adjustment", -350, "bottle deposit", "marshall", OPENED + timedelta(days=1))
+    deliver(conn, "r1")
+    deliver(conn, "r2", off_cycle=True)
+    store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100), "16": (300, 48)})
+    store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (250, 105), "16": (300, 50)})   # 2 from 16 uncosted
+    ledger.record_tokens(conn, "0.40", "m", 10, 5, "msg_02", at=NOW - timedelta(days=1))
+    end = NOW + timedelta(days=7)                         # a quiet third week
+    weeks = ledger.pnl_by_week(conn, OPENED, end)
+    assert [w.week for w in weeks] == [date(2026, 10, 31), date(2026, 11, 7), date(2026, 11, 14)]
+    quiet_start, busy, quiet_end = weeks
+    assert (quiet_start.adjustments_cents, quiet_start.units_sold, quiet_start.net_cents) == (-350, 0, -350)
+    assert (busy.units_sold, busy.units_costed, busy.cost_of_sales_complete) == (7, 5, False)
+    assert (busy.takings_cents, busy.tax_cents, busy.visits, busy.visit_fees_cents) == (1850, 137, 1, 2500)
+    assert busy.cost_of_sales_cents == 5 * UNIT_COST and busy.token_spend_cents == 40
+    assert quiet_end.net_cents == 0 and quiet_end.cost_of_sales_complete
+    p = ledger.pnl(conn, OPENED, end)
+    assert sum(w.takings_cents for w in weeks) == p.takings.cents
+    assert sum(w.tax_cents for w in weeks) == p.takings.tax_cents
+    for name in ("units_sold", "units_costed", "cost_of_sales_cents", "shrinkage_cents", "visit_fees_cents",
+                 "visits", "token_spend_cents", "adjustments_cents", "net_cents"):
+        assert sum(getattr(w, name) for w in weeks) == getattr(p, name), name
+
+
 def test_get_account_balance_asks_for_an_opening_entry_first(db):  # noqa: F811
     result = call("get_account_balance")
     assert not result.isError
