@@ -85,3 +85,48 @@ def test_spend_recorded_outside_model_calls_is_shown_not_hidden(conn, capsys):
     ledger.record_tokens(conn, "0.42", "claude-opus-5-5", 1, 1, "live from an older branch")
     assert main([], conn=conn, now=NOW) == 0
     assert "Also 1 token entries in the ledger, $0.4200, with no model_calls row" in capsys.readouterr().out
+
+
+def test_before_the_opening_every_call_is_development(conn, capsys):
+    add(conn, TODAY, purpose="live", cost="0.40", label="agent run 2 (a live test)")
+    add(conn, THIS_WEEK, cost="0.05")
+    assert main(["--json"], conn=conn, now=NOW) == 0
+    rep = json.loads(capsys.readouterr().out)
+    assert rep["competition_start"] is None and rep["split"]["competition"] is None
+    dev = rep["split"]["development"]
+    assert (dev["calls"], dev["cost_usd"], dev["live_usd"]) == (2, 0.45, 0.4)
+    assert main([], conn=conn, now=NOW) == 0
+    assert "No ledger opening yet, so every call so far is development spend" in capsys.readouterr().out
+
+
+def test_the_opening_splits_development_from_the_competition(conn, capsys):
+    from vending import ledger
+    opened = datetime(2026, 11, 11, 17, 0, tzinfo=timezone.utc)          # noon Eastern
+    ledger.record(conn, "opening", 60000, "the $600", by="test", at=opened)
+    add(conn, THIS_WEEK, purpose="live", cost="0.40", label="agent run 2 (a live test)")   # before: development
+    add(conn, LONG_AGO, cost="2.43")                                                         # the sweep: development
+    add(conn, TODAY, purpose="live", cost="0.30")                                            # 9 am: still before
+    add(conn, datetime(2026, 11, 11, 18, 0, tzinfo=timezone.utc), purpose="live", cost="0.50")  # after: competition
+    assert main(["--json"], conn=conn, now=NOW) == 0
+    rep = json.loads(capsys.readouterr().out)
+    assert rep["competition_start"].startswith("2026-11-11T12:00")
+    dev = rep["split"]["development"]
+    comp = rep["split"]["competition"]
+    assert (dev["calls"], dev["cost_usd"], dev["live_usd"]) == (3, 3.13, 0.7)
+    assert (comp["calls"], comp["cost_usd"], comp["live_usd"]) == (1, 0.5, 0.5)
+    assert main([], conn=conn, now=NOW) == 0
+    text = capsys.readouterr().out
+    assert "The competition starts at the ledger's opening" in text and "Development, before it" in text
+
+
+def test_a_call_at_the_opening_instant_is_competition_and_the_ledger_calls_earlier_tokens_development(conn, capsys):
+    from vending import ledger
+    opened = datetime(2026, 11, 11, 17, 0, tzinfo=timezone.utc)
+    ledger.record(conn, "opening", 60000, "the $600", by="test", at=opened)
+    ledger.record_tokens(conn, "0.40", "claude-opus-5-5", 1000, 100, "live run 2", at=THIS_WEEK)
+    add(conn, opened, purpose="live", cost="0.25")
+    assert main(["--json"], conn=conn, now=NOW) == 0
+    rep = json.loads(capsys.readouterr().out)
+    assert rep["split"]["competition"]["calls"] == 1 and rep["split"]["development"]["calls"] == 0
+    notes = " ".join(ledger.balance(conn, NOW).notes)
+    assert "development spend, not in the balance" in notes and "re-date" not in notes
