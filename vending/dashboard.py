@@ -1336,6 +1336,7 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
 .steps .said { white-space:pre-wrap; overflow-wrap:anywhere } .steps li.thinking .said { font-style:italic }
 .steps code { overflow-wrap:anywhere; white-space:pre-wrap } .steps pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:4px 0 0 }
 .steps li.error { background:var(--bad-soft) }
+.timeline .steps li { padding:5px 0 } .timeline .steps li::before { content:none }
 .head { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center }
 .head .money { margin-left:auto; font-weight:600 }
 .meta { color:var(--muted); font-size:12px; overflow-wrap:anywhere }
