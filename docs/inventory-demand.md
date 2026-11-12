@@ -42,7 +42,7 @@ So for each slot, **on hand = loaded − sold − lost**, since the last product
 - A count older than 7 days (`COUNT_STALE_DAYS`) is called weak evidence.
 - A slot with no receipts shows null, not 0: unknown, not empty.
 
-**Day one.** Before 3 Dec, staff empty the machine. Our day-one order fills all 20 slots to capacity (David, 12 Nov; PR #106, issue #107). Its receipts are the first reset point for every slot. The test stock in the machine now doesn't count against us (#102, still to confirm). Capacity per column comes from the loading chart: 7 to 11 units, depending on the package (`vending/capacity.py`).
+**Day one.** Before 3 Dec, staff empty the machine. Our day-one order fills all 20 slots to capacity (David, 12 Nov; PR #106, issue #107). Its receipts are the first reset point for every slot. The test stock in the machine now doesn't count against us, and the day-one fill comes out of the $600; David is checking the second part (#106 row 3). Capacity per column comes from the loading chart: 7 to 11 units, depending on the package (`vending/capacity.py`).
 
 ## How weekly demand is estimated
 
@@ -76,7 +76,7 @@ The fall data says our fast slots will often sell out before Friday. The "fast s
 
 Packages not on the chart (for example a 16 oz can) have no capacity in code until a person counts one into `config.capacity_overrides` (`vending/capacity.py`). Count any such day-one product before 27 Nov.
 
-A Friday-afternoon fill faces 5 class days (Mon to Fri) before the next one. So a fast slot in bottles or 12 oz cans runs out before then. Its sales that week are a floor, not demand. These are rates for staff's products; per-slot rates don't transfer to ours (gap 5).
+A Friday-afternoon fill faces 5 class days before the next one: Monday to Thursday plus the next Friday's morning, because the visit lands after Friday's morning rush (restock policy R2, #91). So a fast slot in bottles or 12 oz cans runs out before then. Its sales that week are a floor, not demand. These are rates for staff's products; per-slot rates don't transfer to ours (gap 5).
 
 Across our 20 slots, the restocked scenario is about 23.3 units per class day (REPORT.md, "Next 4 weeks"). × 5 class days = 116.5, or about 117 units a week. That is a rough figure: the REPORT's weekly restocked figures vary by weekday (52 for 2 class days, 44.9 for 2, 64.6 for 3). Our 20 slots hold 20 × 7 = 140 to 20 × 11 = 220 units. So a week's demand is about 116.5 ÷ 220 = 53% to 116.5 ÷ 140 = 83% of what our slots hold, and it is not spread evenly across slots.
 
@@ -122,8 +122,10 @@ Reasons, from the evidence above:
 
 1. **In-stock rate** = units sold ÷ in-stock class days since the slot's product last changed. In-stock means `stock_on_hand` > 0 by the receipts, or a newer count says so. Skip break days and closed days.
 2. **Expected demand next week** = in-stock rate × class days before the next Friday (from the calendar).
-3. **Compare with capacity.** If expected demand is at or above capacity, fill to capacity and note that the slot was censored. If it is well below, it is a candidate for the slow-seller rule (PR #100) or a price test (PR #99).
-4. **Until a slot has a full stocked week of its own**, say so. Use its category's fall share (REPORT.md, finding 14) to rank new slots only, not as a rate. A share of units is not units per slot per class day. One way to turn it into a rate is restocked scenario × category share ÷ our slots in that category: for energy, 23.3 × 0.45 ÷ 9 slots (15-18, 25-28, 38) = 1.165. The team hasn't chosen whether to use a number or a ranking (open).
+3. **Compare with capacity.** If expected demand is at or above capacity, fill to capacity and note that the slot was censored. If it is well below, it is a candidate for the slow-seller rule (PR #100) or a price test (PR #99). Kevin's swap-first proposal (Proposed, 12 Nov; not agreed) would allow at most one price step down at a flag, then a swap, with pulled units going to the closet at cost (`docs/restock-policy.md`, #91, rule 3).
+4. **Until a slot has 5 in-stock class days of its own**, say so. This is the restock policy's "when a rate counts" rule (Proposed, #91). Until then, the number used to decide a purchase is the fall segment rate for the product's price band: 1.701 (fast), 1.354 (mid, premium-priced), 0.767 or 0.722 (slow) units per in-stock class day (REPORT.md, "Our slots"; restock policy R3, Proposed). Use the category's fall share (REPORT.md, finding 14) to rank new slots only, not as a rate. A share of units is not units per slot per class day. Another way to turn it into a rate is restocked scenario × category share ÷ our slots in that category: for energy, 23.3 × 0.45 ÷ 9 slots (15-18, 25-28, 38) = 1.165. That is close to the mid segment's 1.354 but is not used unless the team picks it (open).
+
+A new product, a swapped slot and the wildcard slot all start at step 4: none has a rate of its own yet.
 
 The analysis keeps its job: it is the evidence for counting class days, for treating breaks as zero, for reading sold-out weeks as censored, and for the slow-seller rule.
 
@@ -147,9 +149,12 @@ To number in `docs/assumptions.md` (open PRs use A16 to A19: #69 A16, #99 A17-A1
 - **Should a door count post a correction to the books** (shrinkage or a found-stock adjustment)? Not decided.
 - **Cost method.** Weighted average or FIFO. `vending/stock.py` uses weighted average; the team hasn't chosen.
 - **Restocks on Fri 25 Dec and Fri 1 Jan**, both Institute closures. Not yet asked in #102.
-- **New-slot prior: a number or a ranking?** Step 4 of the simple rule. Not decided.
+- **New-slot prior.** Proposed in the restock policy (#91, R3) and used in step 4: the fall segment rate for the product's price band, with category shares for ranking only. Not agreed.
+- **When a slot's own rate counts.** Proposed in the restock policy (#91): after 5 in-stock class days. Not agreed.
+- **The wildcard slot** (Kevin's proposal on #100; not agreed). The agent picks one of our 20 slots, names it in its plan with a reason, and moves it only at a Friday visit. Its ceiling is about $8.00, against $6.50 for every other slot; its floor is the same as every slot's (cost × 1.08, rounded up to 5 cents, `vending/pricing.py`), which breaks even after tax. Kevin's aim that every sale makes a profit needs a higher floor (open). Ideas: a premium drink, a high-price test, a rotating feature, a seasonal bet, or an anchor. For demand, a price far above the fall's would have no fall segment to borrow a rate from: the dearest segment averaged $4.33 (REPORT.md, "Our slots"). The capital plan (#90) holds its money.
+- **Swap first at a slow-seller flag** (Kevin's proposal, 12 Nov; not agreed). At most one price step down, then swap; pulled units to the closet at cost. It depends on end stock being valued at cost (A5; #102, P2). The restock policy (#91, rule 3) has the reasoning.
 - **Does the door counter stay in the polls after 3 Dec?** Asked in #102.
-- **Day-one deadline time** (about Fri 27 Nov, Thanksgiving observance). Still being asked (#102).
+- **Day-one deadline** (about Fri 27 Nov, which falls in the Institute's 26 to 29 Nov closure). The exact day and time are still being asked (#102).
 
 ## Sources
 
@@ -157,7 +162,8 @@ To number in `docs/assumptions.md` (open PRs use A16 to A19: #69 A16, #99 A17-A1
 - PR #68 (merged): `analysis/REPORT.md`, `analysis/sales_analysis.py`, `analysis/golisano_calendar_2026_27.json`. Data 27 Aug to 11 Nov 2026.
 - PR #83 (merged): sales analysis labs, `analysis/lab_data.json`, slot segments.
 - PR #80 (merged): `vending/slot_counts.py`, person's counts in `get_machine_state`.
-- PR #99 (open): pricing method and price history. PR #100 (open): $6.50 ceiling and the slow-seller rule. PR #105 (open): `docs/cutover.md`, dark-period measurements. PR #106 (open): David's 12 Nov answers.
+- PR #99 (open): pricing method and price history. PR #100 (open): $6.50 ceiling and the slow-seller rule. PR #105 (open): `docs/cutover.md`, dark-period measurements. PR #106 (merged 12 Nov): David's 12 Nov answers, `docs/planning/2026-11-12-david-answers.md`.
+- Sibling Summative 2 docs: `docs/opening-capital-plan.md` (#90) owns the money numbers; `docs/restock-policy.md` (#91) owns the restock thresholds, the "when a rate counts" rule and the new-slot prior.
 - Code on main: `vending/stock.py`, `vending/counters.py`, `vending/tools/machine_state.py`, `vending/tools/sales_history.py`, `vending/capacity.py`, `vending/slots.py`.
 - Analysis code: `analysis/export_sales.py` (door counter).
 - Agent docs: `docs/agent/inventory-belief.md`, `docs/agent/restocking.md`, `docs/agent/pricing.md`, `docs/agent/goal-and-scoring.md`. Assumption A13: `docs/assumptions.md`.
