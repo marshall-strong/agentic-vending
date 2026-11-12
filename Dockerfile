@@ -40,6 +40,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY vending/ vending/
 COPY db/ db/
+# get_project_rules reads these notes at run time (vending/tools/project_rules.py).
+COPY docs/agent/ docs/agent/
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && useradd --system --uid 10001 --no-create-home vending
 
