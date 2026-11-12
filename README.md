@@ -65,6 +65,7 @@ from day one.
 | File | What it is |
 |---|---|
 | [`docs/planning/tool-list.md`](docs/planning/tool-list.md) | **Start here.** The agent's proposed tools, what the bridge API actually offers, and the open questions. A snapshot of the [live Claude doc](https://claude.ai/code/artifact/82ae22ab-53a2-48c0-b4d5-c636efcc877d), where edits and comments go |
+| [`docs/artifacts.md`](docs/artifacts.md) | **The team's main live project pages in one place:** the roadmap, the team summary, the sales and data labs, and the agent walkthroughs |
 | [`docs/planning/build-plan.md`](docs/planning/build-plan.md) | The 21 September build plan: architecture, guardrails, order of work |
 | [`docs/planning/2026-10-19-david-api-qa.md`](docs/planning/2026-10-19-david-api-qa.md) | What David answered on 19 October about the API he is still building. These answers outrank the live spec |
 | [`docs/planning/2026-09-21-design-brief-meeting.md`](docs/planning/2026-09-21-design-brief-meeting.md) | What Graham and David answered in the Design Brief meeting, and what they still owe us |
@@ -72,9 +73,11 @@ from day one.
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
 | [`docs/db-explorer.md`](docs/db-explorer.md) | The DB explorer: a read-only page that lists every table and shows its columns and rows, so you don't need psql |
+| [`docs/process-map.md`](docs/process-map.md) | The process map and state model: the weekly cycle from sales to the next order, and every state a purchase request can be in |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
 | [`docs/benchmark.md`](docs/benchmark.md) | The standing benchmark: rerun the test cases after every prompt, rule, case or model change, judged blind, every run kept in the database |
 | [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
+| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live run, with its reasons and a check against our own directive rules |
 | [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
 | [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |

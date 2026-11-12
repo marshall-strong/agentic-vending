@@ -8,6 +8,9 @@ ends, whatever happened:
     agent_runs.finish(conn, run_id, "skipped", plan=plan, update=update,
                       notes=notes, detail="nothing sold out", cost_usd=Decimal("0.42"))
 
+While it runs, the loop also calls `step` once for each thing the model did: its reasoning,
+any text, each tool call and each tool result (`db/migrations/014_agent_steps.sql`).
+
 These are bookkeeping, like `action_log`: they don't go through the write
 gate, so a halted run can still record that it was halted.
 """
@@ -31,6 +34,9 @@ def _dumps(value: object) -> str:
 
 MODES = ("live", "dry-run", "replay")
 ENDINGS = ("submitted", "skipped", "halted", "failed")
+STEP_KINDS = ("thinking", "text", "tool_call", "tool_result")
+# Characters of one step kept. A tool reply can be tens of kilobytes; the start says what it was.
+MAX_STEP_TEXT = 4000
 
 
 def start(conn: psycopg.Connection, *, mode: str, model: str | None = None) -> int:
@@ -61,3 +67,17 @@ def finish(conn: psycopg.Connection, run_id: int, status: str, *, plan: dict | N
         ).fetchone()
     if row is None:
         raise ValueError(f"agent run {run_id} doesn't exist or has already finished")
+
+
+def step(conn: psycopg.Connection, run_id: int, turn: int, kind: str, content: str, *,
+         tool: str | None = None, is_error: bool = False) -> None:
+    """Record one step of a run. A tool call or result names its tool; reasoning and text don't."""
+    if kind not in STEP_KINDS:
+        raise ValueError(f"kind must be one of {', '.join(STEP_KINDS)}, not {kind!r}")
+    if (tool is None) != (kind in ("thinking", "text")):
+        raise ValueError(f"a {kind} step {'names no' if kind in ('thinking', 'text') else 'needs a'} tool")
+    if len(content) > MAX_STEP_TEXT:
+        content = content[:MAX_STEP_TEXT] + f"\n... cut: {len(content):,} characters in all"
+    with conn.transaction():
+        conn.execute("insert into agent_steps (run_id, turn, kind, tool, content, is_error)"
+                     " values (%s, %s, %s, %s, %s, %s)", (run_id, turn, kind, tool, content, is_error))

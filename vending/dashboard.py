@@ -22,7 +22,8 @@ The page, top to bottom:
  - The plan: what changed since the plan before, then one line per slot that
    opens to the agent's reason, what it was, and what the slot holds and sold.
    Then the agent's weekly update and its notes to itself.
- - Runs: each run, how it ended, what it cost, and which slots its plan changed.
+ - Runs: each run, how it ended, what it cost, and which slots its plan changed, with the steps
+   it took (`agent_steps`): its reasoning, each tool call and what came back.
  - Tool calls: the last calls from `action_log`, filterable to writes or problems.
  - Requests and back stock: purchase and catalog requests, and what is in the closet.
 """
@@ -216,8 +217,10 @@ def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None) -> 
                  where p.mode = r.mode and p.plan is not null and (p.started_at, p.id) < (r.started_at, r.id)
                  order by p.started_at desc, p.id desc limit 1) as previous_plan
           from agent_runs r order by r.started_at desc, r.id desc limit %s""", (RUN_ROWS,))
+    steps = _steps(conn, [r["id"] for r in rows])
     newest = True
     for r in rows:
+        r["steps"] = steps.get(r["id"], [])
         plan, previous = r.pop("plan"), r.pop("previous_plan")
         r["has_plan"] = plan is not None
         r["compared"] = plan is not None and previous is not None
@@ -225,6 +228,21 @@ def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None) -> 
         newest = newest and plan is None
         r["stale"] = r["status"] == "running" and now - r["started_at"] > STALE_RUN
     return rows
+
+
+def _steps(conn: psycopg.Connection, run_ids: list[int]) -> dict[int, list[dict]]:
+    """Each run's recorded steps, oldest first. None before migration 014 adds `agent_steps`."""
+    if not run_ids:
+        return {}
+    try:
+        found = _rows(conn, "select run_id, turn, kind, tool, content, is_error from agent_steps"
+                            " where run_id = any(%s) order by run_id, id", (run_ids,))
+    except Missing:
+        return {}
+    out: dict[int, list[dict]] = {}
+    for s in found:
+        out.setdefault(s.pop("run_id"), []).append(s)
+    return out
 
 
 def _plan_changes(plan: Any, previous: Any, tags: dict | None = None) -> list[dict]:
@@ -1032,10 +1050,44 @@ def _runs_html(panel: dict, now: datetime) -> str:
             body += f'<div class="text clamp">{_e(r["team_update"])}</div>'
         if r["notes"]:
             body += f'<div class="note"><b>Notes:</b> {_e(r["notes"])}</div>'
+        if r.get("steps"):
+            body += _steps_html(r["id"], r["steps"])
         items.append(f'<li class="run{" replay" if r["mode"] == "replay" else ""}">'
                      f'<div class="head"><b>#{r["id"]}</b> {_time(r["started_at"])} {_run_pill(r)}</div>'
                      f'<div class="meta">{" &middot; ".join(meta)}</div>{body}</li>')
     return f'<ol class="timeline">{"".join(items)}</ol>'
+
+
+# Characters of a tool call or reply shown before "more"; reasoning is shown whole.
+STEP_SHOWN = 280
+_STEP_LABEL = {"thinking": "Thought", "text": "Wrote"}
+
+
+def _cut(text: str) -> str:
+    """Short text as is; long text cut, with the whole of it one click away."""
+    if len(text) <= STEP_SHOWN:
+        return f'<code>{_e(text)}</code>'
+    return f'<details><summary><code>{_e(text[:STEP_SHOWN])}...</code></summary><pre>{_e(text)}</pre></details>'
+
+
+def _steps_html(run_id: int, steps: list[dict]) -> str:
+    """A run's steps, in order, folded away under one line: what it thought, called and was told."""
+    calls = sum(1 for s in steps if s["kind"] == "tool_call")
+    turns = max(s["turn"] for s in steps)
+    items = []
+    for s in steps:
+        kind = s["kind"]
+        if kind in ("thinking", "text"):
+            what, body = _STEP_LABEL[kind], f'<div class="said">{_e(s["content"])}</div>'
+        elif kind == "tool_call":
+            what, body = f'Called <b>{_e(s["tool"])}</b>', _cut(s["content"])
+        else:
+            what = f'{_e(s["tool"])} {"failed" if s["is_error"] else "replied"}'
+            body = _cut(s["content"])
+        items.append(f'<li class="{kind}{" error" if s["is_error"] else ""}">'
+                     f'<span class="t">{int(s["turn"])}</span><div><span class="what">{what}</span>{body}</div></li>')
+    return (f'<details class="steps" data-key="steps-{int(run_id)}"><summary>How it decided: '
+            f'{_plural(turns, "turn")}, {_plural(calls, "tool call")}</summary><ol>{"".join(items)}</ol></details>')
 
 
 def _activity_html(panel: dict, recent: dict) -> str:
@@ -1277,6 +1329,14 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
   background:var(--surface); border:2px solid var(--muted) }
 .timeline li:first-child::before { background:var(--accent); border-color:var(--accent) }
 .timeline li.replay { opacity:.7 }
+.steps { margin-top:6px } .steps ol { list-style:none; margin:6px 0 0; padding:0 }
+.steps li { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:8px; padding:5px 0; border-top:1px dashed var(--line); font-size:13px }
+.steps .t { font-size:11px; color:var(--muted); min-width:14px; text-align:right; padding-top:2px }
+.steps .what { display:block; font-size:12px; color:var(--muted) }
+.steps .said { white-space:pre-wrap; overflow-wrap:anywhere } .steps li.thinking .said { font-style:italic }
+.steps code { overflow-wrap:anywhere; white-space:pre-wrap } .steps pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:4px 0 0 }
+.steps li.error { background:var(--bad-soft) }
+.timeline .steps li { padding:5px 0 } .timeline .steps li::before { content:none }
 .head { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center }
 .head .money { margin-left:auto; font-weight:600 }
 .meta { color:var(--muted); font-size:12px; overflow-wrap:anywhere }
