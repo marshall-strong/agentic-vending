@@ -4,7 +4,7 @@ through the MCP client."""
 
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -15,7 +15,7 @@ psycopg = pytest.importorskip("psycopg")
 from tests.conftest import store_poll  # noqa: E402
 from tests.test_ledger import UNIT_COST, deliver, open_ledger  # noqa: E402
 from tests.test_server import call, db  # noqa: E402,F401  (db is a fixture)
-from vending import planning, server  # noqa: E402
+from vending import ledger, planning, server  # noqa: E402
 from vending.bridge import Bridge  # noqa: E402
 from vending.config import set_halted, set_value  # noqa: E402
 from vending.planner import OUR_SLOTS  # noqa: E402
@@ -40,7 +40,10 @@ class FakeBridge:
         self.posts: list[dict] = []
         self.catalog_status = 200
         self.catalog_body = None     # set to serve something other than {"products": CATALOG}
+        self.cut = False             # answer the POST (with `answer`'s status) with a body shorter than its Content-Length
         self.answer = (201, {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
+        self.received = threading.Event()  # set once a POST has arrived
+        self.hold: threading.Event | None = None  # if set, a POST isn't answered until this is
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -63,6 +66,19 @@ class FakeBridge:
             def do_POST(self):
                 assert self.path == "/api/v1/purchase-requests" and self.headers["X-API-Key"] == "test-key"
                 fake.posts.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                fake.received.set()
+                if fake.hold is not None:
+                    fake.hold.wait(30)
+                if fake.cut:
+                    data = b'{"id": "pr-1", "status": "pen'
+                    self.send_response(fake.answer[0])
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data) + 40))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    self.wfile.flush()
+                    self.close_connection = True
+                    return
                 self._reply(*fake.answer)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -83,9 +99,9 @@ def fake(db, monkeypatch):  # noqa: F811
 
 
 def ready(conn, capacity=10):
-    """A ledger opened at $600, a rail that holds `capacity`, and the halt switch off."""
+    """A ledger opened at $600, both products counted at `capacity` a column, and the halt switch off."""
     open_ledger(conn)
-    set_value(conn, "slot_capacity", capacity, "test")
+    set_value(conn, "capacity_overrides", {"COKE20": capacity, "PICKLE": capacity}, "test")
     set_halted(conn, False, "test")
 
 
@@ -117,15 +133,7 @@ def codes(reply) -> list[str]:
 
 # --- Not ready ---------------------------------------------------------------------------
 
-def test_without_slot_capacity_it_says_how_to_set_it(db, fake):  # noqa: F811
-    open_ledger(db)
-    reply = preview_desired_state(db, desired(restock_15()), fake.client(), NOW)
-    assert not reply.success and "python -m vending.config set slot_capacity" in reply.message
-    assert fake.gets == 1
-
-
 def test_without_an_opening_entry_it_says_how_to_open_the_ledger(db, fake):  # noqa: F811
-    set_value(db, "slot_capacity", 10, "test")
     reply = preview_desired_state(db, desired(restock_15()), fake.client(), NOW)
     assert not reply.success and "python -m vending.ledger open" in reply.message
 
@@ -164,16 +172,40 @@ def test_an_old_poll_is_flagged_as_stale(db, fake):  # noqa: F811
     assert not any(n.startswith("STALE") for n in fresh.notes)
 
 
+def test_the_planner_counts_a_cost_recorded_just_now_when_the_host_clock_is_behind(db, monkeypatch):  # noqa: F811
+    # The planner's spending check must see the same balance as get_account_balance,
+    # including the model call recorded a moment ago by the database clock.
+    class HostBehind(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(hours=1)
+
+    monkeypatch.setattr(planning, "datetime", HostBehind)
+    ready(db)
+    ledger.record_tokens(db, "250.00", "m", 1, 1, "dev")
+    assert planning.gather(db, []).current.balance_cents == 35000
+
+
 # --- Plans -----------------------------------------------------------------------------------
 
+def test_with_nothing_counted_the_catalog_size_sets_the_capacity(db, fake):  # noqa: F811
+    open_ledger(db)
+    set_halted(db, False, "test")
+    # Slot 15 is empty, and COKE20 is a "20 oz bottle", 7 a column on the loading chart.
+    reply = preview_desired_state(db, desired(restock_15(fill_to=10), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert codes(reply) == ["over_capacity"] and "0-7" in reply.refusals[0].message
+    reply = preview_desired_state(db, desired(restock_15(fill_to=None), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.ok and reply.lines[0].fill_to == 7
+
+
 def test_a_restock_plans_one_purchase_line_priced_against_its_floor(db, fake):  # noqa: F811
-    ready(db, capacity=20)
+    ready(db, capacity=15)
     stocked(db)
-    # 8 on hand, 3 in the closet: filling to 20 needs 12, more than the closet holds, so it buys a pack.
-    reply = preview_desired_state(db, desired(restock_15(fill_to=20), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    # 8 on hand, 3 in the closet: filling to 15 needs 7, more than the closet holds, so it buys a pack.
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]), fake.client(), NOW)
     assert reply.success and reply.ok and reply.plan_hash and reply.refusals == []
     [line] = reply.lines
-    assert (line.slot, line.action, line.source, line.units_staying, line.units_to_load) == ("15", "restock", "purchase", 8, 12)
+    assert (line.slot, line.action, line.source, line.units_staying, line.units_to_load) == ("15", "restock", "purchase", 8, 7)
     assert any("3 COKE20 in the closet go unused" in w for w in reply.warnings)
     assert line.api["primary"] == {"sku": "COKE20", "store": "Costco", "packs": 1, "units_per_pack": 12,
                                    "max_price_per_pack": "13.00", "sale_price": "2.50", "change_product": False}
@@ -241,9 +273,9 @@ def test_a_back_stock_load_costs_nothing(db, fake):  # noqa: F811
 
 
 def test_a_midweek_visit_adds_the_fee(db, fake):  # noqa: F811
-    ready(db, capacity=20)
+    ready(db, capacity=15)
     stocked(db)
-    wanted = desired(restock_15(fill_to=20), off_cycle=True, sourcing=[coke_sourcing()])
+    wanted = desired(restock_15(fill_to=15), off_cycle=True, sourcing=[coke_sourcing()])
     reply = preview_desired_state(db, wanted, fake.client(), NOW)
     assert reply.success and (reply.cost.visit_fee, reply.cost.max) == ("25.00", "38.00")
     set_value(db, "midweek_fee_cents", 3000, "test")
@@ -297,17 +329,35 @@ def test_config_cli_sets_and_shows(schema_url, monkeypatch, capsys):
     from tests.conftest import open_in
     from vending import config, db as db_module
     monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
-    assert config.main(["set", "slot_capacity", "10", "--by", "marshall"]) == 0
+    assert config.main(["set", "capacity_overrides", '{"COKE20": 8}', "--by", "marshall"]) == 0
     assert config.main(["set", "midweek_fee_cents", "3000", "--by", "marshall"]) == 0
     assert config.main(["set", "note", "free text", "--by", "marshall"]) == 1       # unknown key
     assert "unknown setting 'note'" in capsys.readouterr().err
     assert config.main(["set", "halted", "false", "--by", "marshall"]) == 1
+    with open_in(*schema_url) as conn:      # left over from before the loading chart
+        conn.execute("insert into config (key, value, updated_by) values ('slot_capacity', '10', 'marshall')")
     assert config.main(["show"]) == 0
     out = capsys.readouterr().out
-    assert "slot_capacity = 10" in out and "midweek_fee_cents = 3000" in out and "note" not in out and "halted = true" in out
+    assert 'capacity_overrides = {"COKE20": 8}' in out and "midweek_fee_cents = 3000" in out and "note" not in out and "halted = true" in out
+    [old] = [line for line in out.splitlines() if line.startswith("slot_capacity")]
+    assert old.endswith("[no longer used]") and "[no longer used]" not in out.replace(old, "")
     with open_in(*schema_url) as conn:
-        assert planning.planner_config(conn).slot_capacity == 10
+        assert planning.planner_config(conn).capacity_overrides == {"COKE20": 8}
         assert conn.execute("select count(*) from action_log where tool = 'config.set'").fetchone() == (2,)
+
+
+def test_config_cli_names_counts_a_new_override_object_drops(schema_url, monkeypatch, capsys):
+    from tests.conftest import open_in
+    from vending import config, db as db_module
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    assert config.main(["set", "capacity_overrides", '{"COKE20": 8, "PICKLE": 6}', "--by", "marshall"]) == 0
+    capsys.readouterr()
+    # Someone sets one SKU, forgetting `set` replaces the whole object: PICKLE's count is lost.
+    assert config.main(["set", "capacity_overrides", '{"COKE20": 9}', "--by", "kevin"]) == 0
+    err = capsys.readouterr().err
+    assert 'Removed counts that were in the old value: {"PICKLE": 6}' in err
+    assert config.main(["set", "capacity_overrides", '{"COKE20": 9, "PICKLE": 6}', "--by", "kevin"]) == 0
+    assert "Removed" not in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("key, value, problem", [
@@ -316,8 +366,13 @@ def test_config_cli_sets_and_shows(schema_url, monkeypatch, capsys):
     ("midweek_fee_cents", "2500", "whole number of cents"),
     ("price_ceiling_cents", 1200, "over 1000 cents"),         # the API's $10.00 limit
     ("price_ceiling_cents", 603, "multiple of 5"),
-    ("slot_capacity", 0, "between 1 and 100"),
-    ("slot_capacity", True, "whole number of units"),
+    ("capacity_overrides", 10, "JSON object of SKU to units"),
+    ("capacity_overrides", {"COKE20": 0}, "between 1 and 15"),
+    ("capacity_overrides", {"COKE20": 18}, "between 1 and 15"),       # 18 typed for an 8-can column
+    ("capacity_overrides", {"COKE20": True}, "whole number of units"),
+    ("capacity_overrides", {" ": 8}, "blank SKU"),
+    ("capacity_overrides", {"COKE20 ": 8}, "has a space"),            # would never match the catalog
+    ("capacity_overrides", {"COKE 20": 8}, "has a space"),
     ("tax_percent", 108, "between 0 and 100"),
     ("midweek_fee", 2500, "unknown setting"),
 ])
