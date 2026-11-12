@@ -207,7 +207,7 @@ def test_record_never_migrates(schema_url, monkeypatch, capsys):
     from vending import db
 
     with open_in(*schema_url) as conn:
-        conn.execute("delete from schema_migrations where version = '012_slot_assignment.sql'")
+        conn.execute("delete from schema_migrations where version = '013_slot_assignment.sql'")
     monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
     monkeypatch.setattr(db, "migrate", lambda conn: pytest.fail("record must never migrate"))
     assert slots.main(["record"]) == 2

@@ -9,7 +9,7 @@
 -- read that differs is refused and changes nothing: the brief says the
 -- assignment doesn't change, so a different answer needs a person to look.
 --
--- Numbered 012 because 008-011 are taken on open branches; the migrator applies
+-- Numbered 013 because 008-012 are taken on open branches; the migrator applies
 -- any file not yet applied, so the order they merge in doesn't matter.
 
 create table slot_assignment (
