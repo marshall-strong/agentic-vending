@@ -34,6 +34,15 @@ We don't depend on a set restock time. A student worker won't always be on time,
 5. **When only the product changed** (same price), the counters can't say which product sold. Keep those units in takings, but leave them out of per-product demand and the slow-seller clock. Across the history that's about 8% of units on average; for one swapped slot, it's every unit that slot sold inside the window.
 6. **Flag what doesn't line up**: a fulfilled request with no door rise, or a price change with no visit.
 
+## What David said (12 Nov)
+
+- **Restocks will be standard on Fridays around 3 PM**, possibly slipping toward 4 when the student worker comes after class. That's in our quietest stretch.
+- **`fulfilled_at` is the end of the visit**, set when the worker submits the receipt after loading. There's no push notification; we poll the request.
+- **Door-open and door-closed times on the receipt** are likely, not built yet.
+- **Polling about every 10 minutes is allowed.** That shrinks the one gap door times don't close: a sale between the last poll and the door opening. David named that case himself.
+
+So the plan above gets a usual time to expect, and still handles a visit at any other time. Full notes: `docs/planning/2026-11-12-david-answers.md` (#106).
+
 ## What we've checked, and what we're asking David
 
 Asked in #102, with the evidence:
