@@ -14,8 +14,12 @@ so the container joins it with Tailscale in userspace mode.
 is `python -m vending.worker`: every hour it runs `python -m vending.sync_history`,
 `python -m vending.sync_requests` and `python -m vending.sync_catalog`, each with a 30-minute
 limit (`JOB_TIMEOUT_MINUTES`), and it answers `GET /health` on port 8080 with the last round's
-outcome per job (a `503` means the last round failed). `/health` is public, so it shows exit codes
-and outcomes only; the error text is in the log. `docker/entrypoint.sh` joins the tailnet first and
+outcome per job (a `503` means the last round failed). Its root, `GET /`, is the same status as a
+page for people: whether the last round passed, each job's outcome, when the last and next rounds
+run (Eastern time), and links to the docs. It reloads itself every minute and works on a phone.
+Both are public, so they show exit codes and outcomes only, never error text (a database error
+names the host and user); the errors are in the log. The page is built from the same data as
+`/health`, so it can't show more. `docker/entrypoint.sh` joins the tailnet first and
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
 
@@ -120,6 +124,7 @@ Later deploys that change only code:
 Then check:
 
 ```
+https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/
 https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/health
 az containerapp logs show --name ai-group-2-vend --resource-group data_systems_resource_group --follow
 ```
