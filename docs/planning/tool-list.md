@@ -72,7 +72,7 @@ Nine tools: seven read data and two change something (#9 is folded into #6; #8 i
 
 | # | Tool | R/W | What it returns or does | Checks before it runs | Backed by |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `get_machine_state` | R | For each of our slots: product, current price (`PA1-02`), units sold since the last load, stock on hand (loaded − sold), days since loaded, units per day, days of stock left. Closet units and their value at cost for each product. Rival prices while they are visible (optional field). | — | History sync + receipts |
+| 1 | `get_machine_state` | R | For each of our slots: product, current price (`PA1-02`), units sold since the last load, stock on hand (loaded − sold), days since loaded, units per day, days of stock left. Closet units and their value at cost for each product. No rival prices (docs/integrity.md). | — | History sync + receipts |
 | 2 | `get_sales_history` | R | Units and ex-tax revenue per slot over a time window | — | History sync |
 | 3 | `get_catalog` | R | Approved products as **single items** (for example Coca-Cola, default flavor, 20 oz): no pack sizes, no prices. For each: our last actual unit cost from receipts (`null` if never bought), our sourcing rows (store, Amazon link, pack size, last seen pack price), and any pending catalog request. Searchable. | — | `/products` + receipts + our sourcing table |
 | 4 | `get_account_balance` | R | Balance from the ledger: $600 start, plus sales revenue, minus receipts, $25 visit fees and token spend. Also the sales tax set aside (weekly takings × 0.08 ÷ 1.08, rounded arithmetically) and the spendable balance after it. | — | Our ledger |

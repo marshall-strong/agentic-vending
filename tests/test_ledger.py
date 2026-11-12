@@ -112,6 +112,7 @@ from tests.test_server import call, db  # noqa: E402,F401  (db is a fixture)
 from tests.test_sync_requests import BODY, fulfilled, later, receipt  # noqa: E402
 from vending import ledger  # noqa: E402
 from vending.purchase_requests import record as record_request, store  # noqa: E402
+from vending.tools.account_balance import get_account_balance  # noqa: E402
 
 OPENED = datetime(2026, 11, 1, 0, 0, tzinfo=timezone.utc)
 NOW = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
@@ -216,6 +217,39 @@ def test_entries_outside_the_window_do_not_count(conn):
     ledger.record(conn, "adjustment", 1000, "late", "marshall", NOW + timedelta(days=1))
     assert ledger.balance(conn, NOW).adjustments_cents == 0
     assert ledger.balance(conn, NOW + timedelta(days=2)).adjustments_cents == 1000
+
+
+def test_an_entry_made_just_now_counts_when_the_host_clock_is_behind_the_database(conn, monkeypatch):
+    # An entry with no time is stamped by the database clock. "The balance now" must
+    # use that clock too, or an entry made a moment ago drops out whenever the host
+    # runs behind the database (seen at 0.7 s on a laptop with Postgres in Docker).
+    class HostBehind(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(hours=1)
+
+    monkeypatch.setattr(ledger, "datetime", HostBehind)
+    open_ledger(conn)
+    ledger.record(conn, "capital", 10000, "top-up", "marshall")
+    assert ledger.balance(conn).capital_cents == 10000
+
+
+def test_the_balance_inside_a_transaction_counts_an_entry_committed_since_it_began(conn, schema_url):
+    # `now()` would stay at the start of this transaction and miss the other connection's entry.
+    open_ledger(conn)
+    with conn.transaction():
+        conn.execute("select 1")
+        with open_in(*schema_url) as other:
+            ledger.record(other, "capital", 10000, "top-up", "marshall")
+        assert ledger.balance(conn).capital_cents == 10000
+
+
+def test_the_balance_time_is_utc_whatever_the_session_time_zone(conn):
+    conn.execute("set timezone = 'America/New_York'")
+    open_ledger(conn)
+    as_of = ledger.balance(conn).as_of
+    assert as_of.utcoffset() == timedelta(0)
+    assert f"as of {as_of:%Y-%m-%d %H:%M} UTC" in get_account_balance(conn).message
 
 
 def test_entries_dated_before_the_opening_are_outside_the_balance_and_said_so(conn):
