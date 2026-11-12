@@ -113,8 +113,10 @@ def machine_state_as_of(conn: psycopg.Connection, as_of: datetime) -> ms.Machine
     baseline = ms._poll(conn, "started_at <= %s", latest[1] - ms.WINDOW) or ms._first_poll(conn)
     if baseline and baseline[0] == latest[0]:
         baseline = None
-    states = ms.build(latest[1], ms._counters(conn, latest[0]), baseline[1] if baseline else None,
-                      ms._counters(conn, baseline[0]) if baseline else {})
+    start = baseline[1] if baseline else None
+    # The same window count as the live tool, on readings that end at the replay's latest poll.
+    window_sold = ms.sold_in_window(ms._readings(conn, start, latest[1]), start) if start else {}
+    states = ms.build(latest[1], ms._counters(conn, latest[0]), start, window_sold)
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
     return ms.MachineState(
         success=True, count=len(states), as_of=latest[1], window_start=baseline[1] if baseline else None,
