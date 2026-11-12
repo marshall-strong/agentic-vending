@@ -1,8 +1,14 @@
-# How to stop our agent (for instructors and operations)
+# How to stop our agent (our halt card; instructors may use it too)
 
-The project brief requires that an authorized instructor or operations staff member can pause or stop
-our system immediately, "with no dependency on your agent's cooperation" (Project Brief (Revised),
-section 4). Any one of these three works without us. Use the first one unless you need more.
+**Who this is for.** On 12 Nov David told us (issue #106) that the instructors don't need a halt
+switch from us: a person reviews every purchase request, so the agent can't spend on its own, and if
+something goes badly wrong (for example, polling the bridge every 15 seconds) he deactivates our
+container. **We will use the halt switch ourselves**, and this card stays as our own runbook. It also
+answers the project brief's requirement that an authorized person can pause or stop our system
+immediately, "with no dependency on your agent's cooperation" (Project Brief (Revised), section 4),
+so instructors and operations are welcome to use it as well.
+
+Any one of these three works without the agent's cooperation. Use the first one unless you need more.
 
 ## 1. Turn on the halt switch (recommended)
 

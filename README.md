@@ -76,8 +76,8 @@ from day one.
 | [`docs/process-map.md`](docs/process-map.md) | The process map and state model: the weekly cycle from sales to the next order, and every state a purchase request can be in |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
 | [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
-| [`docs/guardrail-evidence.md`](docs/guardrail-evidence.md) | Each guardrail tried against the real system on 12 Nov: over-budget and out-of-bounds plans refused, and a running agent halted by the instructors' SQL |
-| [`docs/halt-for-instructors.md`](docs/halt-for-instructors.md) | **For instructors and operations:** three ways to stop our agent without us |
+| [`docs/guardrail-evidence.md`](docs/guardrail-evidence.md) | Each guardrail tried against the real system on 12 Nov: over-budget and out-of-bounds plans refused, and a running agent halted by one line of SQL |
+| [`docs/halt-for-instructors.md`](docs/halt-for-instructors.md) | Our halt card: three ways to stop our agent without its help. Instructors don't need a halt switch (David, 12 Nov), but may use it |
 | [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live run, with its reasons and a check against our own directive rules |
 | [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
