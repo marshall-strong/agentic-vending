@@ -2,7 +2,7 @@
 
 import pytest
 
-from vending.settings import _clean_value, _load_env_file
+from vending.settings import _clean_value, read_env_file
 
 
 @pytest.mark.parametrize(
@@ -26,7 +26,7 @@ def test_clean_value(raw, expected):
     assert _clean_value(raw) == expected
 
 
-def test_load_env_file(tmp_path):
+def test_read_env_file(tmp_path):
     path = tmp_path / "settings"
     path.write_text(
         "# a comment line\n"
@@ -36,7 +36,7 @@ def test_load_env_file(tmp_path):
         "not a setting\n",
         encoding="utf-8",
     )
-    assert _load_env_file(path) == {
+    assert read_env_file(path) == {
         "DATABASE_URL": "postgresql://user:pa55'@localhost/db",
         "VENDING_DB_PASSWORD": "made up",
     }
