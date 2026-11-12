@@ -14,9 +14,13 @@ update config set value = 'true', updated_at = now(), updated_by = 'your name' w
 ```
 
 - **What it does:** every tool that writes refuses with `halted`, and the agent stops before its next
-  model request. Read-only tools and the hourly data sync keep working, so the dashboard stays current.
-- **How fast:** at once. A write already in progress finishes first, because it holds a lock on this
-  row, then nothing else gets through.
+  model request. Read-only tools and the hourly data sync keep working, so the dashboard stays
+  current. The one exception is `preview_desired_state`: it refuses with `halted` too, because the
+  agent has nothing left to plan.
+- **How fast:** nothing new starts once your update lands, but your update waits behind any write
+  already in progress, because that write holds a lock on this row. A purchase submission can make two
+  bridge calls of up to 20 seconds each, so the wait can be about 40 seconds. Your statement will sit
+  until it finishes; don't cancel it. Then nothing else gets through.
 - **It fails safe.** If the row is missing, or holds anything other than `false`, we count as halted.
   So `delete from config where key = 'halted';` also stops us.
 - **Check it:** `select value, updated_by, updated_at from config where key = 'halted';` shows `true`.

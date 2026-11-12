@@ -8,8 +8,8 @@ bridge, and the real agent. It backs the "controls" part of Summative 2.
 **Setup.**
 
 - The planner and tools ran from `main` at `ba14a6d`.
-- The agent loop ran from PR #58 (`add_agent_loop`, merged into the test branch `development` at
-  `b1812e5`), since it isn't on `main` yet.
+- The agent loop ran from PR #58 (`add_agent_loop`), which was then on the test branch `development`
+  at `b1812e5`. It has since merged into `main`.
 - The Azure database holds test data that will be reset before the live run: the ledger is open at
   $600.00 less $0.40 of model spend, and test request `pr_v8hB_h3gQatc` is pending.
 - Nothing in these tests sent anything to the bridge's purchase route.
@@ -73,7 +73,7 @@ exactly that line:
 
 1. Halt off. We started a dry run of the agent (`python -m vending.agent`, `claude-opus-5-5` at
    `medium`, run 4).
-2. As soon as the run's first tool results were stored (16 s in), we ran:
+2. As soon as the run's first tool results were stored (about 15 s in), we ran:
 
    ```sql
    update config set value = 'true', updated_at = now(), updated_by = 'david' where key = 'halted';
