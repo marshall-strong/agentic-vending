@@ -50,7 +50,7 @@ $Port = 8080
 # file anywhere else can't reach the image, so it doesn't block a deploy.
 $ImagePaths = @("requirements.txt", "vending", "db", "docker")
 # .env setting -> Container App secret name.
-$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey"; "ANTHROPIC_API_KEY" = "anthropic-api-key" }
+$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey"; "VENDING_ANTHROPIC_API_KEY" = "anthropic-api-key" }
 
 # Whenever the tag comes from HEAD (a build, or -SkipBuild without -Tag), HEAD must be
 # origin/main exactly, so the tag names a commit everyone can see on main.

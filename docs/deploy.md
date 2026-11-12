@@ -66,10 +66,15 @@ From the repository root, on a machine with Docker running:
 ```
 
 That builds the image tagged with the current commit, pushes it, loads `DATABASE_URL`,
-`DEX_API_KEY`, `TS_AUTHKEY` and `ANTHROPIC_API_KEY` from your `.env` into Container App secrets,
+`DEX_API_KEY`, `TS_AUTHKEY` and `VENDING_ANTHROPIC_API_KEY` from your `.env` into Container App secrets,
 sets `DEX_BASE_URL`, points ingress at port 8080, and rolls the app to the image with one replica
 always on (`minReplicas` 1, the 29 Oct decision: it stays 0 only while the hello-world image is
 deployed). If the roll fails, it points ingress back at the port it had.
+
+The model key reaches the container as `VENDING_ANTHROPIC_API_KEY`, the name the agent's code
+reads (never `ANTHROPIC_API_KEY`: see the README). If an earlier deploy set
+`ANTHROPIC_API_KEY` on the app, remove it once:
+`az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --remove-env-vars ANTHROPIC_API_KEY`.
 
 It builds only from a clean checkout of `main` that matches `origin/main` (it fetches to check),
 because the tag names the commit; `-SkipBuild` without `-Tag` checks the same, since the tag is
