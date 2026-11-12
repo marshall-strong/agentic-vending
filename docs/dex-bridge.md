@@ -131,6 +131,8 @@ actually bought, `total_paid` (exact, authoritative), `unit_cost_paid` (to four 
 coil or the closet, are added to the line's `later_losses`. Re-read recent requests to keep
 our stock count right. There is still no route that lists our requests, so save every ID.
 
+**Prices change only at a visit.** There are no remote price changes: the student worker changes the tags by hand, on the free Friday visit or a $25 midweek visit, from the sale price on each line.
+
 **What the API still can't do:** change a price without loading anything (every line loads
 at least one pack or unit), leave a slot empty, or list our requests.
 
