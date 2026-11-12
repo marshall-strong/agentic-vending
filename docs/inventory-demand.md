@@ -7,7 +7,7 @@ The project brief asks for a "separately documented inventory and demand estimat
 The component answers two questions for the agent before each Friday restock:
 
 1. **What is in each slot now?** Code answers this (`vending/stock.py`, `vending/slot_counts.py`, `vending/tools/machine_state.py`).
-2. **How much would each slot sell in a week if it never ran out?** No code answers this yet. The agent reads recent sales and judges. The fall sales analysis (`analysis/`, PR #68) tested forecasts on the history, but nothing connects it to the agent.
+2. **How much would each slot sell in a week if it never ran out?** No code answers this yet. The agent reads recent sales and judges. The fall sales analysis (`analysis/`, PR #68) tested forecasts on the history, and PR #83 added the labs (`analysis/lab_data.json`, slot segments). Both are merged. Nothing connects them to the agent.
 
 The agent reads the principles in `docs/agent/inventory-belief.md`. This document explains the method, how sure we are, and what is missing.
 
@@ -15,12 +15,12 @@ The agent reads the principles in `docs/agent/inventory-belief.md`. This documen
 
 | Input | What it gives | Exact? | Source |
 |---|---|---|---|
-| Polls (DEX) | Lifetime units and cents per selection, the price now, the door-open count (`EA2*DO`). Hourly from course staff since 21 Sep. | Counters yes; timing only to the poll interval | `vending/counters.py`, `analysis/REPORT.md` |
+| Polls (DEX) | Lifetime units and cents per selection, the price now, the door-open count (`EA2*DO`). Hourly from course staff since 21 Sep. | Counters yes; timing only to the poll interval | Sales: `vending/counters.py`. Door count: `analysis/export_sales.py` only (no agent tool reads it). `analysis/REPORT.md` |
 | Restock receipts | Per line: units loaded, units to the closet, units lost, units pulled, total paid, `resolved_at`. Later losses on their own rows. | As exact as the worker's entry | `vending/stock.py` |
 | Person's counts | Product and units seen per selection. `door` counts are exact; `photo` counts are estimates. | Door yes, photo no | `vending/slot_counts.py` (PR #80) |
 | Academic calendar | Class days, breaks, closures | Official, "subject to change" | `analysis/golisano_calendar_2026_27.json` |
 
-The machine never reports stock on hand. There is no camera (assumption A13, `docs/assumptions.md`).
+The machine never reports stock on hand. There is no camera (assumption A13, `docs/assumptions.md`). A13 also still says "no manual counts". PR #80 added them, so A13 needs an update. That is a follow-up, not done here, because `docs/assumptions.md` numbering collides across open PRs.
 
 ## How stock on hand is estimated
 
@@ -62,7 +62,7 @@ So for each slot, **on hand = loaded − sold − lost**, since the last product
 - **The window ends at a door visit**, never at the slot's own next sale. Door visits come from the door counter.
 - **Rates per in-stock class day.** Units ÷ class days the slot was not suspected empty. The "restocked scenario" adds these rates over our 20 slots.
 
-**3. The recent fall in sales is supply, not demand.** Our weekly units went 61 → 41 → 22 over the last three full weeks, and slots selling fell from 20 to 10. Adding the count of empty slots to the regression cut the weekly trend from −1.76 to −0.33 units/day (model B vs B0). If each slot were kept stocked, their in-stock rates add up to about 23 units per class day (recent rates) or 22 (whole era). Observed sales in the last 4 weeks were 8.7 per weekday.
+**3. The recent fall in sales is supply, not demand.** Our units went 61 → 41 → 22 over the last three full weeks. Slots selling fell from 20 (best full week, from Sat 26 Sep) to 10 (last full week). Adding the count of empty slots to the regression cut the week-of-term slope from −1.76 to −0.33 units/day per week (model B vs B0). If each slot were kept stocked, their in-stock rates add up to about 23 units per class day (recent rates) or 22 (whole era). Observed sales in the last 4 weeks were 8.7 per weekday.
 
 ### Censoring will be common during the run
 
@@ -74,9 +74,11 @@ The fall data says our fast slots will often sell out before Friday. The "fast s
 | 12 oz can | 8 | 8 ÷ 1.701 = 4.7 |
 | 240/250 ml can | 11 | 11 ÷ 1.701 = 6.5 |
 
-A Friday-afternoon fill faces 5 class days (Mon to Fri) before the next one. So a fast slot in bottles or 12 oz cans runs out before then. Its sales that week are a floor, not demand.
+Packages not on the chart (for example a 16 oz can) have no capacity in code until a person counts one into `config.capacity_overrides` (`vending/capacity.py`). Count any such day-one product before 27 Nov.
 
-The whole-machine picture is similar. The restocked scenario of about 23.3 units per class day × 5 class days = 116.5 units a week. A full machine holds 20 × 7 = 140 to 20 × 11 = 220 units. Demand is a large share of capacity, and it is not spread evenly across slots.
+A Friday-afternoon fill faces 5 class days (Mon to Fri) before the next one. So a fast slot in bottles or 12 oz cans runs out before then. Its sales that week are a floor, not demand. These are rates for staff's products; per-slot rates don't transfer to ours (gap 5).
+
+Across our 20 slots, the restocked scenario is about 23.3 units per class day (REPORT.md, "Next 4 weeks"). × 5 class days = 116.5, or about 117 units a week. That is a rough figure: the REPORT's weekly restocked figures vary by weekday (52 for 2 class days, 44.9 for 2, 64.6 for 3). Our 20 slots hold 20 × 7 = 140 to 20 × 11 = 220 units. So a week's demand is about 116.5 ÷ 220 = 53% to 116.5 ÷ 140 = 83% of what our slots hold, and it is not spread evenly across slots.
 
 ### Censoring is easier with receipts
 
@@ -87,21 +89,22 @@ The analysis had to infer stock-outs from silence. During the run, receipts make
 | Claim | Evidence | Source |
 |---|---|---|
 | Our sales totals are right | Daily, weekly and per-slot totals reconcile with the counters, slot by slot (562 units, 188,150 cents). All checks OK. | REPORT.md, "Checks" |
-| Inferred stock-outs match what a person saw | Nov 9 photo vs the stock-out clock: 16 of 20 rails agree. 2 rails (28, 47) were called empty but held product: slow sellers, not stock-outs. 0 empty rails were missed. | REPORT.md, finding 13 |
+| Inferred stock-outs match what a person saw | Nov 9 photo vs the stock-out clock: 16 of 20 rails agree: 13 empty rails flagged empty and 3 stocked rails selling. 2 (28, 47) were called empty but held product. 2 (56, 57) had sold out within the week and were not yet flagged. None looked empty while quiet and unflagged. (28 is in the fast segment over the fall but was quiet by 9 Nov.) | REPORT.md, finding 13 |
 | Holt-Winters is the best forecast | A near tie. Walk-forward, 7 Saturday plan dates, 7 days ahead, machine-wide daily totals: Holt-Winters MAE 5.78 units/day (WAPE 52%) vs same weekday last week 5.89 (53%). Both ran high (bias −2.87 and −2.73). | REPORT.md, "Forecast backtest" |
 | A weekly forecast can be chosen | No. 5 test weeks: "Too few weeks to choose on." | REPORT.md, "Forecast backtest" |
-| Weekday effects | Every Tue-Fri vs Monday 95% CI crosses zero. | REPORT.md, finding 6 |
+| Weekday effects | Every Tue-Fri vs Monday 95% CI crosses zero, machine-wide (model A) and for our 20 slots (model B). | REPORT.md, "Calendar regression", models A and B |
 | Receipt arithmetic (`vending/stock.py`) is right on real data | Untested on real data: unit tests only (`tests/test_stock.py`, `tests/test_counters.py`). We haven't seen a filled request yet. | `docs/cutover.md` (PR #105) |
 
 ## Known gaps
 
-1. **Sales at a visit can land on the wrong product (#97).** A poll shows sales since the last poll at today's price. It doesn't say when the product changed. `vending/stock.py` times a sale at the later poll and a load at `resolved_at`. Reading the code, an old-product sale between the last poll and the door opening is subtracted from the new product instead. The old product's count is then too high at the change, and the extra unit is written off as shrinkage. Units still balance, but shrinkage is overstated and the new product's on hand is understated by the same number. Historically 37 of 450 of our units (8%) sold inside a visit window (`docs/cutover.md`, PR #105). #105 plans the fix: split at the door times and `fulfilled_at`, and solve price changes from the counters.
+1. **Sales at a visit can land on the wrong product (#97).** A poll shows sales since the last poll at today's price. It doesn't say when the product changed. `vending/stock.py` times a sale at the later poll and a load at `resolved_at`. Reading the code, an old-product sale between the last poll and the door opening is subtracted from the new product instead. The old product's count is then too high at the change, and the extra unit is written off as shrinkage. Units still balance, but shrinkage is overstated and the new product's on hand is understated by the same number. Of the 450 units our slots sold 21 Sep to 11 Nov, 37 (8%) sold inside a visit window (`docs/cutover.md`, PR #105). #105 plans the fix: split at the door times and `fulfilled_at`, and solve price changes from the counters.
 2. **Hidden product further back on a rail.** A photo sees the front of a rail. Product further back can be hidden, so "looks empty" is not proof (REPORT.md, finding 13). Only a `door` count is exact.
 3. **Counts don't correct the books.** A count overrides the receipt arithmetic in `get_machine_state`, but it doesn't feed `vending/stock.py` or the ledger. A gap between a count and the receipts is not booked as shrinkage.
 4. **The agent's rate ignores censoring and the calendar.** `units_per_day` is units ÷ calendar days over the last 7 days. A slot that sold out on Tuesday shows a low rate. A week inside a break shows almost 0, so `days_of_stock_left` comes out huge. No agent tool reads the calendar.
 5. **No history for our own products.** The fall history is staff's products at staff's prices. Day one changes every slot. Per-slot fall rates don't transfer. Category results do, loosely: energy drinks were 45% of our units and caffeinated drinks 65% (REPORT.md, finding 14).
 6. **Machine-wide data ends.** The forecasts were fit on machine-wide totals. After 3 Dec the polls may carry only our 20 selections (#102), and whole-machine totals stop before the start (#84).
-7. **Holiday Fridays.** Fri 25 Dec and Fri 1 Jan are Institute closures (calendar file). The Friday restock on those days is not settled.
+7. **Winter Holiday Break, 22 Dec to 1 Jan.** No classes for two weeks. The Institute is closed Fri 25 Dec, Mon 28 Dec and Fri 1 Jan (calendar file). The Friday restock on 25 Dec and 1 Jan is not settled. A fill on Fri 18 Dec faces 1 class day (Mon 21 Dec) before classes resume Mon 4 Jan, so a naive rate or fill is most wrong here. Presidents Day, Mon 15 Feb, is also a closure.
+8. **No agent tool reads the door counter.** The stock-out window and the cutover both depend on door times, but `EA2*DO` is parsed only in `analysis/export_sales.py` and `analysis/sales_analysis.py`. #105 plans visit detection from it, and #102 asks whether it stays in the polls after 3 Dec.
 
 ## Recommendation: should #68's forecast feed the agent?
 
@@ -112,15 +115,15 @@ Reasons, from the evidence above:
 - **It barely beats the simple bar.** 5.78 vs 5.89 units/day is a 0.11 difference on 7 plan dates, with a WAPE above 50% for both.
 - **It forecasts the wrong thing.** It follows the level of a machine that was emptying. The report itself says to read demand from the restocked scenario instead.
 - **It is fit on data we won't have.** It forecasts machine-wide totals. During the run we may see only our slots, and our products will be new.
-- **Capacity decides most slots anyway.** At the fall rates, a fast slot empties in 4 to 5 class days. For those slots the answer is "fill to capacity" whatever the forecast says. A better forecast changes the decision only for slow slots and for the $25 midweek visit.
-- **A simple rule is easier to check.** The agent has to show its working (`docs/agent/restocking.md`). One rate per slot is easy to show and easy for a grader to follow.
+- **Capacity binds for the fast slots.** At fall rates, that is 4 of 20 slots (REPORT.md, "Our slots"). In bottles or 12 oz cans they empty in 4.1 to 4.7 class days (6.5 in 240/250 ml cans). Mid sellers come close: 7 ÷ 1.354 = 5.2 to 8 ÷ 1.354 = 5.9. Slow slots don't: 7 ÷ 0.767 = 9.1 and 7 ÷ 0.722 = 9.7. For fast slots the answer is "fill to capacity" whatever the forecast says. These are rates for staff's products, which don't transfer per slot (gap 5). A forecast matters most for the mid and slow slots and for the $25 midweek visit, and Holt-Winters forecasts machine-wide totals, not slots.
+- **A simple rule is easier to check.** Prices must be explainable (`docs/agent/pricing.md`), and the agent should use arithmetic where arithmetic will do (`docs/agent/goal-and-scoring.md`). One rate per slot is easy to show and easy for a grader to follow.
 
 **The simpler rule.** For each slot:
 
 1. **In-stock rate** = units sold ÷ in-stock class days since the slot's product last changed. In-stock means `stock_on_hand` > 0 by the receipts, or a newer count says so. Skip break days and closed days.
 2. **Expected demand next week** = in-stock rate × class days before the next Friday (from the calendar).
 3. **Compare with capacity.** If expected demand is at or above capacity, fill to capacity and note that the slot was censored. If it is well below, it is a candidate for the slow-seller rule (PR #100) or a price test (PR #99).
-4. **Until a slot has a full stocked week of its own**, say so and use its category's fall share as a weak prior only.
+4. **Until a slot has a full stocked week of its own**, say so. Use its category's fall share (REPORT.md, finding 14) to rank new slots only, not as a rate. A share of units is not units per slot per class day. One way to turn it into a rate is restocked scenario × category share ÷ our slots in that category: for energy, 23.3 × 0.45 ÷ 9 slots (15-18, 25-28, 38) = 1.165. The team hasn't chosen whether to use a number or a ranking (open).
 
 The analysis keeps its job: it is the evidence for counting class days, for treating breaks as zero, for reading sold-out weeks as censored, and for the slow-seller rule.
 
@@ -128,7 +131,7 @@ The analysis keeps its job: it is the evidence for counting class days, for trea
 
 ## Assumptions
 
-To number in `docs/assumptions.md` (open PRs use A16 to A18).
+To number in `docs/assumptions.md` (open PRs use A16 to A19: #69 A16, #99 A17-A18, #100 A19).
 
 - **Receipts are accurate.** `units_loaded`, losses and `total_paid` are what the worker entered. They are the reset points.
 - **One counter rise is one sale.** Every vend is a sale. There are no test vends or free vends during the run.
@@ -144,13 +147,17 @@ To number in `docs/assumptions.md` (open PRs use A16 to A18).
 - **Should a door count post a correction to the books** (shrinkage or a found-stock adjustment)? Not decided.
 - **Cost method.** Weighted average or FIFO. `vending/stock.py` uses weighted average; the team hasn't chosen.
 - **Restocks on Fri 25 Dec and Fri 1 Jan**, both Institute closures. Not yet asked in #102.
+- **New-slot prior: a number or a ranking?** Step 4 of the simple rule. Not decided.
+- **Does the door counter stay in the polls after 3 Dec?** Asked in #102.
 - **Day-one deadline time** (about Fri 27 Nov, Thanksgiving observance). Still being asked (#102).
 
 ## Sources
 
 - Issue #93: this deliverable. Issue #97: cutover. Issue #102: open questions for David. Issue #107: actions from David's 12 Nov answers.
 - PR #68 (merged): `analysis/REPORT.md`, `analysis/sales_analysis.py`, `analysis/golisano_calendar_2026_27.json`. Data 27 Aug to 11 Nov 2026.
+- PR #83 (merged): sales analysis labs, `analysis/lab_data.json`, slot segments.
 - PR #80 (merged): `vending/slot_counts.py`, person's counts in `get_machine_state`.
 - PR #99 (open): pricing method and price history. PR #100 (open): $6.50 ceiling and the slow-seller rule. PR #105 (open): `docs/cutover.md`, dark-period measurements. PR #106 (open): David's 12 Nov answers.
 - Code on main: `vending/stock.py`, `vending/counters.py`, `vending/tools/machine_state.py`, `vending/tools/sales_history.py`, `vending/capacity.py`, `vending/slots.py`.
-- Agent docs: `docs/agent/inventory-belief.md`, `docs/agent/restocking.md`. Assumption A13: `docs/assumptions.md`.
+- Analysis code: `analysis/export_sales.py` (door counter).
+- Agent docs: `docs/agent/inventory-belief.md`, `docs/agent/restocking.md`, `docs/agent/pricing.md`, `docs/agent/goal-and-scoring.md`. Assumption A13: `docs/assumptions.md`.
