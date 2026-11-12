@@ -18,7 +18,7 @@ When you publish a new page about the project, add a row here in the same PR or 
 
 | Page | What it shows |
 |---|---|
-| [Machine Sales Map](https://claude.ai/artifact/TEcYXfQpAomczgF58wZFUU) | Sales by position in the machine, from the synced history |
+| [Machine Sales Map](https://claude.ai/artifact/TEcYXfQpAomczgF58wZFUU) | Our 20 slots on a picture of the machine front, colored by drinks sold, takings or price, with each slot's weekly sales and price history; the other 20 are hatched with no values. Also whole-machine sales by week and by day and hour |
 | [Vending Forecast Lab](https://claude.ai/artifact/WGfwq36gf8Yd11HszSmyyy) | Sales forecasting (PR #68) |
 | [Campus Rhythm Lab](https://claude.ai/artifact/6KzxRRJrdJZV6PR7Ez81Yd) | Sales against the campus calendar, plus the slow-seller rule test and the draft guideline for the agent (PR #68) |
 | [Slot and Price Lab](https://claude.ai/artifact/2aR4tSYARzmrqeRcvdQDph) | Slots and prices (PR #68) |
