@@ -157,6 +157,8 @@ def test_the_control_passing_a_case_that_isnt_a_trap_is_fine():
     assert not judging.control_failed("catalog-request", grades)
     assert judging.control_failed("low-balance", grades)
     assert judging.TRAP_CASES == {"slow-seller", "midweek-visit", "tuesday-sellout", "low-balance", "price-below-floor"}
+    # A renamed case would silently switch off the control check, so every trap must still exist.
+    assert judging.TRAP_CASES <= {c.name for c in all_cases()}
 
 
 @pytest.mark.parametrize("reply", [
