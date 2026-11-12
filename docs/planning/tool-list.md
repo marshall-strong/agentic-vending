@@ -207,7 +207,7 @@ The planner reduces each slot to one of David's cases:
 | `insufficient_stock` | A slot needs more than the closet holds, the closet has some of the product, and there's no sourcing to buy it | Add sourcing, or lower `fill_to` to what the closet holds |
 | `price_off_step` | A price is missing, unreadable, or not a multiple of 5 cents | Pick a legal price; it is not rounded for you |
 | `below_floor` | A price is under the slot's floor, or is $0.00 | Raise the price, lower the max pack price (no lower than the pack costs), or pick a cheaper store or pack; the refusal shows the floor |
-| `above_ceiling` | A price is over `config.price_ceiling` (at most $10.00, the API's limit) | Lower it |
+| `above_ceiling` | A price is over `config.price_ceiling_cents` ($6.50; at most $10.00, the API's limit) | Lower it |
 | `insufficient_balance` | Max cost, plus $25 if `off_cycle`, exceeds the spendable balance | Buy less or cheaper |
 | `empty_slot` | `product: null`, or a switch with `fill_to: 0`; the API can't leave a slot empty | Load at least one unit, or keep the slot |
 | `midweek_no_op` | An `off_cycle` plan loads nothing | Don't spend the $25 |
