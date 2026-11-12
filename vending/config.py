@@ -1,7 +1,7 @@
 """The `config` table: settings the code reads at run time, starting with the halt flag.
 
     python -m vending.config show
-    python -m vending.config set slot_capacity 10 --by marshall
+    python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 8}' --by marshall
     python -m vending.config set price_ceiling_cents 600 --by marshall
 
 The halt flag fails closed: a missing row, or anything that isn't JSON
@@ -62,9 +62,30 @@ def _ceiling(value: Any) -> str | None:
     return None
 
 
+# The loading chart's largest figure is 11 a column; a count far above that is almost always a
+# typo (18 for an 8-can column), and every restock without `fill_to` would buy to it.
+MAX_OVERRIDE_UNITS = 15
+
+
+def _overrides(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return f'must be a JSON object of SKU to units, like {{"MONSTER-WHITE-16CAN": 8}}, not {json.dumps(value)}'
+    for sku, units in value.items():
+        if not sku.strip():
+            return "has a blank SKU"
+        if any(c.isspace() for c in sku):
+            # SKUs have no spaces, and the lookup is exact, so this count would never be used.
+            return f"SKU {json.dumps(sku)} has a space in it; SKUs have none, so it would never match"
+        problem = _whole(units, 1, MAX_OVERRIDE_UNITS, "units")
+        if problem:
+            return (f"{sku} {problem} (the loading chart's largest figure is 11 a column, "
+                    "so check the count)")
+    return None
+
+
 KNOWN: dict[str, Setting] = {
-    "slot_capacity": Setting("units one rail holds; no default, a person measures it",
-                             lambda v: _whole(v, 1, 100, "units")),
+    "capacity_overrides": Setting("units per column for products a person counted; replaces the whole "
+                                  "object, wins over the loading chart (default none)", _overrides),
     "price_ceiling_cents": Setting("highest sale price the planner allows (default 600)", _ceiling),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
@@ -172,15 +193,23 @@ def main(argv: list[str] | None = None) -> int:
                 value = json.loads(args.value)
             except json.JSONDecodeError:
                 value = args.value
+            before = get_value(conn, args.key, None)
             try:
                 set_value(conn, args.key, value, args.by)
             except ValueError as error:
                 print(error, file=sys.stderr)
                 return 1
             print(f"{args.key} = {json.dumps(value)}")
+            if args.key == "capacity_overrides" and isinstance(before, dict):
+                # `set` replaces the whole object, so name any count it just threw away.
+                dropped = {sku: units for sku, units in before.items() if sku not in value}
+                if dropped:
+                    print(f"Removed counts that were in the old value: {json.dumps(dropped)}. "
+                          "To keep them, set the object again with them included.", file=sys.stderr)
             return 0
         for key, value, at, by in conn.execute("select key, value, updated_at, updated_by from config order by key"):
-            print(f"{key} = {json.dumps(value)}  ({at:%Y-%m-%d %H:%M}, {by})")
+            unused = "" if key in KNOWN or key == "halted" else "  [no longer used]"
+            print(f"{key} = {json.dumps(value)}  ({at:%Y-%m-%d %H:%M}, {by}){unused}")
     return 0
 
 

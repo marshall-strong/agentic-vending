@@ -38,6 +38,7 @@ from fractions import Fraction
 from typing import TYPE_CHECKING
 
 from vending import counters
+from vending.slots import DEVICE_ID
 
 if TYPE_CHECKING:  # the replay itself needs no database, so its tests run without psycopg
     import psycopg
@@ -87,6 +88,7 @@ class SlotCount:
     sold: int
     lost: int
     since: datetime
+    last_moved: datetime | None = None   # the slot's latest purchase, load, pull or loss
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,7 @@ class _Slot:
     lost: int = 0
     oversold: int = 0
     last_unit_cost: Fraction | None = None
+    last_moved: datetime | None = None
 
 
 def weighted_average(movements: list[Movement]) -> Stock:
@@ -259,6 +262,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
             if taken < m.units:
                 warnings.append(f"{m.ref}: {m.units} units pulled from slot {m.slot} but we counted only {taken}")
             shelf(m.sku).add(m.units, None if each is None else each * m.units)
+            slot.last_moved = m.at
         elif m.kind in ("purchase", "load"):
             changed = slot is not None and slot.product != m.sku
             if changed != m.reassigned and slot is not None:
@@ -290,6 +294,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
                     cost = None
                 slot.pool.add(m.to_slot, cost)
             slot.loaded += m.to_slot
+            slot.last_moved = m.at
         elif m.kind == "loss":
             if m.location == "back_stock":
                 gone, cost = shelf(m.sku).lose(m.units)
@@ -297,6 +302,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
             elif slot is not None and slot.product == m.sku:
                 gone, cost = slot.pool.lose(m.units)
                 slot.lost += gone
+                slot.last_moved = m.at
                 where = f"slot {m.slot}"
             else:
                 warnings.append(f"{m.ref}: {m.units} units of {m.sku} lost in slot {m.slot}, "
@@ -321,7 +327,8 @@ def weighted_average(movements: list[Movement]) -> Stock:
     return Stock(
         closet=tuple(ClosetCount(sku, pool.units, pool.unit_cost())
                      for sku, pool in sorted(closet.items()) if pool.units),
-        slots=tuple(SlotCount(name, s.product, s.pool.units, s.pool.unit_cost(), s.loaded, s.sold, s.lost, s.since)
+        slots=tuple(SlotCount(name, s.product, s.pool.units, s.pool.unit_cost(), s.loaded, s.sold, s.lost, s.since,
+                              s.last_moved)
                     for name, s in sorted(slots.items())),
         warnings=tuple(warnings),
         sales=tuple(sales),
@@ -338,12 +345,14 @@ def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
+    # Every slot our fulfilled receipts name: those are the slots we stocked.
     slots = sorted({line["slot"] for line in lines})
-    # poll_selections only has rows for polls whose checksum passed.
+    # poll_selections only has rows for polls whose checksum passed. The sync
+    # stores every device's polls, so read only our machine's counters.
     counters = conn.execute(
         "select s.selection, p.started_at, s.lifetime_units from poll_selections s"
-        " join polls p using (session_id) where s.selection = any(%s)",
-        (slots,),
+        " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)",
+        (DEVICE_ID, slots),
     ).fetchall()
     movements = movements_from_receipts(lines, losses) + sales_from_counters(counters)
     if until is not None:

@@ -29,7 +29,7 @@ Numbers match the question list in the team's plan doc.
 | 3 | Can we change a price without a restock? | Possibly, via a DEX statement from the bridge: free, likely limited to about once a day. Depends on whether the Cantaloupe card reader reads prices live. If it only reads at power-up, price changes have to happen at a restock (when the machine is power-cycled). | Open, being verified |
 | 4 | How do we request a $25 midweek visit? | No endpoint yet; there will be one. | Not built |
 | 5 | Will the catalog be filled, and is it shared with group A? | Being restructured: products are single items, packs chosen on the purchase line. Whether it's shared wasn't answered directly; the worker's display combines both teams. | Partly answered |
-| 6 | Sales-tax method? | 8%, arithmetic rounding, shelf prices **include** tax, calculated once a week on that week's takings and set aside. David said "multiply by 1.08". **Team decision (19 Oct): set aside takings × 0.08 ÷ 1.08 each week, rounded arithmetically; revisit if David says otherwise.** | Decided |
+| 6 | Sales-tax method? | 8%, arithmetic rounding, shelf prices **include** tax, calculated once a week on that week's takings and set aside. David said "multiply by 1.08". **Team decision (19 Oct): set aside takings × 0.08 ÷ 1.08 each week, rounded arithmetically; revisit if David says otherwise.** **Purchases are not taxed** (10:28-10:29, answering Kevin): the Institute is a nonprofit, so it pays no sales tax when it buys stock, only when it sells. So the max price per pack is the shelf price, with no tax on top. (Added 11 Nov from the meeting transcript; this summary had left it out.) | Decided |
 | 7 | Is Postgres provided? | We host our own in Azure; Graham and David cover the hosting cost. Postgres 17. | Answered |
 | 8 | How do we request a catalog product? | Two endpoints coming: submit a product request, and check it (pending, denied, or approved with the new product code). Or just watch the catalog for it to appear. Quick turnaround; they check it's "nothing outlandish." | Answered, not built |
 | 9 | Can a catalog request be refused? | Yes, but rarely expected. A purchase request for a product not in the catalog (or inactive) is denied with a message naming the product. | Answered |
@@ -44,7 +44,7 @@ Numbers match the question list in the team's plan doc.
 
 ## What it means for our design
 
- - **Set the sale price against the max buy price, not the expected price.** The worker won't come back for a new price after buying, so each purchase line's sale price must still make money if the purchase hits its max. The price floor becomes max price per unit + tax, rounded up to the next 5 cents.
+ - **Set the sale price against the max buy price, not the expected price.** The worker won't come back for a new price after buying, so each purchase line's sale price must still make money if the purchase hits its max. The price floor becomes max price per unit + tax, rounded up to the next 5 cents. That tax is the 8% sales tax inside the shelf price; purchases themselves aren't taxed.
  - **Replace "submit lines" with "submit a desired state."** The agent decides what each of our 20 slots should hold and charge; deterministic code diffs that against the current state and the closet stock, produces the request lines, and refuses impossible plans before they're sent. This is the brief's restock and pricing directive in one artifact. See the restock planner in [`tool-list.md`](tool-list.md).
  - **Amazon is the low-risk default channel.** Fixed price, wide variety (unusual drinks like Pickle Potion), and no driving for the worker. Orders are due Wednesday for two-day shipping before the Friday restock. Bulk staples are probably cheaper at Costco or BJ's. A late Amazon delivery means a $25 midweek restock or waiting a week.
  - **If DEX price changes work, pricing experiments become cheap.** Daily price changes at no cost would make it practical to vary prices deliberately to learn demand, which the brief raises as the "identification problem."
@@ -54,6 +54,7 @@ Numbers match the question list in the team's plan doc.
 ## Open items to confirm with David
 
  - [x] **Sales-tax formula:** team decision 19 Oct: weekly set-aside = takings × 0.08 ÷ 1.08, arithmetic rounding. Revisit if David says otherwise.
+ - [x] **Purchase tax:** none. The Institute is tax-exempt as a nonprofit (David, 10:28-10:29). As of 11 Nov the live bridge spec says the same: `max_price_per_pack` is the shelf price.
  - [ ] **Shared log deliverable:** the brief (section 3.5 and the deliverables checklist) says writing to an institute shared log is mandatory and graded; David says there isn't one for us. Confirm the checklist item is dropped or what replaces it.
  - [ ] **Ordering cutoff:** still open. The only definite is that restocks happen Friday afternoon. David floated Friday noon for in-store purchasing, the 21 Sep meeting said Thursday midnight, and Amazon orders are due Wednesday for two-day shipping.
  - [ ] **Store list:** three enums (Walmart, Amazon, BJ's), or four with Costco?

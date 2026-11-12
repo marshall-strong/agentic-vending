@@ -40,12 +40,26 @@ def db(schema_url, monkeypatch):
         server._conn.close()
 
 
-def test_lists_all_ten_tools():
+def test_lists_all_eleven_tools():
     tools = {t.name: t for t in call(None).tools}
-    assert len(tools) == 10
+    assert len(tools) == 11
     assert server.WRITE_TOOLS <= tools.keys()
     assert set(WRITE_ARGS) == server.WRITE_TOOLS
     assert tools["get_machine_state"].outputSchema is not None
+
+
+# Every tool the agent can call. Adding one (a web fetcher, say) changes what the
+# agent can see and do, so it must be a deliberate, reviewed change to this list.
+# See docs/integrity.md.
+TOOL_NAMES = {
+    "get_machine_state", "get_sales_history", "get_catalog", "get_account_balance",
+    "preview_desired_state", "submit_desired_state", "get_purchase_requests", "set_price",
+    "get_pnl", "request_catalog_product", "get_project_rules",
+}
+
+
+def test_tool_list_is_pinned():
+    assert {t.name for t in call(None).tools} == TOOL_NAMES
 
 
 def test_machine_state_end_to_end(db):
@@ -67,7 +81,7 @@ def test_every_write_tool_refuses_when_halted(db, tool):
     assert db.execute("select tool, outcome from action_log").fetchall() == [(tool, "refused")]
 
 
-@pytest.mark.parametrize(("tool", "says"), [("set_price", "is dropped"), ("submit_desired_state", "not built yet")])
+@pytest.mark.parametrize(("tool", "says"), [("set_price", "is dropped")])
 def test_unbuilt_write_tools_still_log_when_running(db, tool, says):
     set_halted(db, False, "test")
     result = call(tool, WRITE_ARGS[tool])
@@ -110,6 +124,24 @@ def test_purchase_requests_end_to_end(db):
     assert db.execute("select tool, outcome from action_log").fetchall() == [("get_purchase_requests", "done")]
 
 
+def test_the_tool_is_logged_like_other_reads(db):
+    result = call("get_project_rules", {"topic": "../money"})
+    assert result.structuredContent["success"] is False
+    result = call("get_project_rules", {"topic": "money"})
+    assert result.structuredContent["text"].startswith("# Money")
+    assert db.execute("select kind, tool, outcome from action_log order by id").fetchall() == [
+        ("read", "get_project_rules", "failed"), ("read", "get_project_rules", "done")]
+
+def test_a_nul_character_in_an_argument_is_still_logged(db):
+    # Postgres text and jsonb refuse NUL, so the log row must escape it.
+    result = call("get_project_rules", {"topic": "pricing\x00"})
+    assert result.isError is False and result.structuredContent["success"] is False
+    result = call("get_catalog", {"search": "a\x00"})
+    assert result.isError is False
+    assert db.execute("select tool, arguments from action_log order by id").fetchall() == [
+        ("get_project_rules", {"topic": "pricing\\x00"}), ("get_catalog", {"search": "a\\x00"})]
+
+
 def test_reads_are_logged_with_their_arguments_and_result(db):
     store_poll(db, "a", "2026-10-29T12:00:00+00:00", {"15": (250, 100)})
     call("get_machine_state")
@@ -142,11 +174,12 @@ def test_built_only_hides_the_stubs(monkeypatch):
         importlib.reload(server)
         assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history", "get_catalog",
                                                       "get_account_balance", "preview_desired_state",
-                                                      "get_purchase_requests", "get_pnl", "request_catalog_product"]
+                                                      "submit_desired_state", "get_purchase_requests",
+                                                      "get_pnl", "get_project_rules", "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)
-    assert len(call(None).tools) == 10
+    assert len(call(None).tools) == 11
 
 
 def test_parallel_calls_do_not_collide(db):

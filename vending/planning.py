@@ -11,9 +11,10 @@ our database and the bridge:
 - the catalog, read live from the bridge (`GET /api/v1/products`), until the
   catalog sync lands and it can come from our own table;
 - the spendable balance, from the ledger;
-- the planner's settings, from the `config` table. `slot_capacity` has no
-  default, because nobody has measured a rail: a person sets it once with
-  `python -m vending.config set slot_capacity 10 --by NAME`.
+- the planner's settings, from the `config` table. None is required. How many
+  of a product fit in a column comes from its catalog size and the loading
+  chart (`vending.capacity`), or from `capacity_overrides` where a person
+  counted; a product with neither is refused by the planner, not here.
 
 Anything missing raises `NotReady` with the command that fixes it, so the tool
 can say exactly what a person has to do before the agent can plan.
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 import psycopg
 
@@ -33,8 +34,6 @@ from vending.slots import DEVICE_ID, SLOTS
 from vending.tools import desired_state as schema
 from vending.tools.machine_state import STALE_AFTER
 
-SLOT_CAPACITY_HINT = ("config has no slot_capacity. Count how many units fit on one rail, then set it once with: "
-                      "python -m vending.config set slot_capacity 10 --by NAME")
 HALTED_HINT = ("the halt switch is on, so nothing can be planned or submitted until a person runs: "
                "python -m vending.halt off")
 
@@ -54,12 +53,15 @@ class Gathered:
 
 
 def planner_config(conn: psycopg.Connection) -> planner.Config:
-    """The planner's settings from `config`. Only `slot_capacity` is required."""
-    capacity = config.get_value(conn, "slot_capacity")
-    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
-        raise NotReady(SLOT_CAPACITY_HINT)
+    """The planner's settings from `config`, each with its default when unset."""
+    overrides = config.get_value(conn, "capacity_overrides", {})
+    problem = config.KNOWN["capacity_overrides"].check(overrides)
+    if problem:
+        # Only a hand edit of the table gets here; `config set` checks first.
+        raise NotReady(f"config capacity_overrides {problem}; set it again with "
+                       "python -m vending.config set capacity_overrides '{\"SKU\": 8}' --by NAME")
     return planner.Config(
-        slot_capacity=capacity,
+        capacity_overrides=overrides,
         price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 600),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
@@ -68,8 +70,9 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
 
 
 def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
-    """The current state from our database. `catalog` is the bridge's product list."""
-    now = now or datetime.now(timezone.utc)
+    """The current state from our database. `catalog` is the bridge's product list.
+    "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`)."""
+    now = now or ledger.db_now(conn)
     settings = planner_config(conn)
     notes: list[str] = []
 
@@ -107,7 +110,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     closet = tuple(planner.ClosetStock(c.product, c.units, c.unit_cost) for c in counted.closet)
     pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
-    products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))))
+    products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))
                      for p in catalog if p.get("sku"))
     current = planner.CurrentState(slots, closet, pending, products, (), spendable)
     return Gathered(current, settings, now, poll_at, tuple(notes))

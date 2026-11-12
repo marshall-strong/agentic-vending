@@ -71,9 +71,13 @@ from day one.
 | [`docs/dex-api-quickstart.md`](docs/dex-api-quickstart.md) | **New to the API?** From Tailscale and a key to your first calls, plus troubleshooting |
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
+| [`docs/db-explorer.md`](docs/db-explorer.md) | The DB explorer: a read-only page that lists every table and shows its columns and rows, so you don't need psql |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
 | [`docs/benchmark.md`](docs/benchmark.md) | The standing benchmark: rerun the test cases after every prompt, rule, case or model change, judged blind, every run kept in the database |
+| [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
+| [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
+| [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |
 
 ## Getting set up
 
@@ -204,7 +208,7 @@ Azure database; locally it runs in Docker. Set `VENDING_DB_PASSWORD` (any passwo
 ```
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate
 python -m vending.sync_history --since 2026-08-28
@@ -225,6 +229,12 @@ refuses and names that command. See "the ledger" in `docs/mcp-server.md`.
 `python -m vending.sync_requests` does the same for our purchase requests: it reads back
 every request still pending, and every one fulfilled in the last 30 days, and stores the
 receipts the stock counts come from. It only reads; it never submits a request.
+
+## Deploying
+
+The agent runs in an Azure Container App; `docs/deploy.md` has the one-time setup, the deploy
+script (`scripts/deploy_container_app.ps1`), how to check `/health` and the logs, and how to roll
+back. Nothing in the image migrates the database: a person runs `python -m vending.db migrate`.
 
 ## Working on this repo
 
