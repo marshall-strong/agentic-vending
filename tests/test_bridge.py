@@ -146,10 +146,27 @@ def test_a_busy_or_failing_bridge_is_retried_with_a_growing_wait(bridge, sleeps,
 
 
 def test_retries_run_out_as_an_error_for_this_poll_alone(bridge, sleeps):
-    client = bridge({RAW: Answer(status=503, body=b"busy")})
+    client = bridge({RAW: Answer(status=503, body=b"busy"), **HEALTHY})
     refuses_with_plain_error(lambda: client.raw("s1"), match="503.*busy")
-    assert client.server.requests == [RAW] * (RETRIES + 1)
+    assert client.server.requests == [RAW] * (RETRIES + 1) + ["/health"]
     assert sleeps == [2.0, 4.0, 8.0, 16.0]
+
+
+def test_a_502_on_one_route_with_a_healthy_bridge_is_an_error_for_that_day_alone(bridge):
+    client = bridge({HISTORY: Answer(status=502, body=b"bad gateway"), **HEALTHY})
+    refuses_with_plain_error(lambda: client.history(DAY), match="502.*bad gateway")
+    assert client.server.requests == [HISTORY] * (RETRIES + 1) + ["/health"]
+
+
+@pytest.mark.parametrize("call", [lambda c: c.history(DAY), lambda c: c.raw("s1"),
+                                  lambda c: c.purchase_request("pr1")])
+def test_a_502_from_everything_is_an_outage(bridge, call):
+    # What Tailscale's proxy can answer to every request before the node joins.
+    bad = Answer(status=502, body=b"bad gateway")
+    client = bridge({HISTORY: bad, RAW: bad, "/api/v1/purchase-requests/pr1": bad, "/health": bad})
+    with pytest.raises(BridgeUnreachable, match="502.*Tailscale"):
+        call(client)
+    assert client.server.requests[RETRIES + 1:] == ["/health"] * (RETRIES + 1)
 
 
 def test_not_found_is_not_retried(bridge, sleeps):

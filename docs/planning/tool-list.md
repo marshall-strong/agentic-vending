@@ -37,7 +37,7 @@ there; this file is a point-in-time copy so the plan sits next to the code.
 
 ## Purpose
 
-The group-b vending agent should get **10 MCP tools**: 7 that read and 3 that write. Every write is checked in code before it runs. This is the working list for the team. It reconciles the 21 September build plan, the bridge's live API spec (`http://aihub-pi:8000/docs`, version `0.1.0`), the whiteboard from the 8 October team meeting, and David's answers of 19 October, which outrank the spec.
+The group-b vending agent should get **10 MCP tools**: 7 that read and 3 that write. Every write is checked in code before it runs. (Since 11 Nov there is an eleventh, read-only `get_project_rules`, #12 below.) This is the working list for the team. It reconciles the 21 September build plan, the bridge's live API spec (`http://aihub-pi:8000/docs`, version `0.1.0`), the whiteboard from the 8 October team meeting, and David's answers of 19 October, which outrank the spec.
 
 Edit it inline or leave comments. Questions we still need the instructors to answer are collected at the end.
 
@@ -72,7 +72,7 @@ Nine tools: seven read data and two change something (#9 is folded into #6; #8 i
 
 | # | Tool | R/W | What it returns or does | Checks before it runs | Backed by |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `get_machine_state` | R | For each of our slots: product, current price (`PA1-02`), units sold since the last load, stock on hand (loaded − sold), days since loaded, units per day, days of stock left. Closet units and their value at cost for each product. Rival prices while they are visible (optional field). | — | History sync + receipts |
+| 1 | `get_machine_state` | R | For each of our slots: product, current price (`PA1-02`), units sold since the last load, stock on hand (loaded − sold), days since loaded, units per day, days of stock left. Closet units and their value at cost for each product. No rival prices (docs/integrity.md). | — | History sync + receipts |
 | 2 | `get_sales_history` | R | Units and ex-tax revenue per slot over a time window | — | History sync |
 | 3 | `get_catalog` | R | Approved products as **single items** (for example Coca-Cola, default flavor, 20 oz): no pack sizes, no prices. For each: our last actual unit cost from receipts (`null` if never bought), our sourcing rows (store, Amazon link, pack size, last seen pack price), and any pending catalog request. Searchable. | — | `/products` + receipts + our sourcing table |
 | 4 | `get_account_balance` | R | Balance from the ledger: $600 start, plus sales revenue, minus receipts, $25 visit fees and token spend. Also the sales tax set aside (weekly takings × 0.08 ÷ 1.08, rounded arithmetically) and the spendable balance after it. | — | Our ledger |
@@ -83,6 +83,7 @@ Nine tools: seven read data and two change something (#9 is folded into #6; #8 i
 | 9 | `request_service_visit` | — | **Folded into #6** as `visit: "midweek"`, so a $25 visit always carries a full desired state | — | — |
 | 10 | `get_pnl` | R | Ex-tax revenue, cost of goods (actual cost from receipts, spread over the units left after spoilage), visit fees, token spend, sales tax set aside, and inventory at cost (machine + closet) | — | Our ledger |
 | 11 | `request_catalog_product` | W | Asks the instructors to add a single-item product (brand, flavor, size; no pack). The sync job checks it until it is approved, with the new product code, or denied. | Not halted; a drink; no alcohol or THC; not already in the catalog or already requested | Catalog-request routes (coming: submit and status) |
+| 12 | `get_project_rules` | R | **Added 11 Nov (repo only).** Our condensed notes on the project brief, one topic per file in `docs/agent/`. No topic: the topics and their summaries. A topic: its text. The short always-on rules card goes in the agent's prompt; details are looked up here. | Topic must be a name in `docs/agent/README.md`; no paths | `docs/agent/` |
 
 `check_books` waits until the instructors' balance-check endpoint exists. It would compare our figures with theirs and report a match or the difference.
 

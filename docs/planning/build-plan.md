@@ -82,8 +82,9 @@ reused almost unchanged.
    rather than 17, with precise but tight descriptions and prompt caching.
 6. **Rival visibility ends next quarter.** This quarter we can see every selection.
    During the live run we probably won't see the other team's prices. **Pricing must not
-   depend on rival prices.** Treat them as a bonus signal when available, never a
-   required input.
+   depend on rival prices.** David has since said teams act with integrity: we don't
+   change our strategy based on the other team's slots, pricing or strategy. For now our
+   pricing ignores their prices (team may revisit). See [`docs/integrity.md`](../integrity.md).
 7. **Reconsider "not n8n".** It's on the syllabus, we already know it, and routing
    through Postgres removes the one real obstacle.
 
@@ -140,8 +141,8 @@ Ten tools, against 17 last time.
   seen our code must be able to act on it without asking.
 - **Logging is not a tool.** Every write adds its `action_log` row inside the same
   statement.
-- **Competitor prices** are part of `get_machine_state` while they're visible, and the
-  tool is written so it still works when they're not.
+- **No competitor prices.** `get_machine_state` reports our 20 slots only. The other
+  team's prices are never an input (docs/integrity.md).
 
 ## How the machine gets changed: service visits
 

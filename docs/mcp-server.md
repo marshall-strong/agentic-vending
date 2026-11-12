@@ -1,8 +1,8 @@
 # The MCP server
 
-The agent's 10 tools, served over stdio by `python -m vending.server`. It's plain Python on the
+The agent's 11 tools, served over stdio by `python -m vending.server`. It's plain Python on the
 official MCP SDK, in the same package as the history sync, so the tools import the parser, the
-pricing gate and the database layer directly. The read tools only read our database; the one
+pricing gate and the database layer directly. The read tools only read our database, except `get_project_rules`, which reads our notes in `docs/agent/`; the one
 built write tool, `request_catalog_product`, also calls the DEX bridge. Nothing here polls the
 machine.
 
@@ -15,8 +15,9 @@ machine.
 | `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, or the catalog can't be read. |
 | `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
 | `get_catalog` | **Works, version 1.** The single-item products the bridge lists (sku, name, line, flavor, size), searchable by text, with when the catalog was last synced. Says so when that was over 36 hours ago. Our last unit cost, sourcing rows and pending catalog requests are not in it yet. |
+| `get_project_rules` | **Works.** Our own notes on the project brief, from [`agent/`](agent/README.md). With no topic, the list of topics and their one-line summaries; with a topic, that file's text. A topic is a plain name from the list: paths, `..` and unknown names are refused with the list. Logged like any read. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
-| `submit_desired_state` | Write stub, already behind the write gate: refused while halted, logged either way |
+| `submit_desired_state` | **Works.** Plans the desired state again on live data inside the write gate, refuses with every problem at once, otherwise POSTs it once and records the request. Saves what it is about to send before sending, so a lost answer leaves a row a person settles with `python -m vending.submissions resolve`. |
 | `set_price` | **Dropped.** Prices change only at a worker visit (free Friday, $25 midweek), through `submit_desired_state`. The stub stays so a call gets that answer. |
 
 ## Run it
@@ -25,7 +26,7 @@ You need the local database from the history sync first ([`README.md`](../README
 `DATABASE_URL` in your `.env`):
 
 ```
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate            # creates or updates the tables
 python -m vending.sync_history          # needs the class tailnet; loads real polls
@@ -38,7 +39,7 @@ Container App, it's the shared Azure database), then run `python -m vending.db m
 
 **For the live run, set `VENDING_TOOLS=built` in the real environment** (it is not read from `.env`). Then only working tools are registered, so the
 agent doesn't pay tokens on every request to describe stubs. The default, `all`, registers all
-10 so the team can see the whole contract in a client.
+11 so the team can see the whole contract in a client.
 
 **The sync needs the class tailnet; the tests don't.** On a laptop also on a personal tailnet,
 sign in to the class account once with `tailscale login`, then move between tailnets with
@@ -250,6 +251,61 @@ agent fixes the whole plan in one turn. In `cost`, `spendable` and `spendable_le
 ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. There is no
 sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
 purchase without it is refused `no_sourcing`.
+
+### `submit_desired_state`: the only way to buy
+
+Same input as `preview_desired_state`, plus an optional `expected_plan_hash`: the `plan_hash` the
+preview returned. The agent previews, fixes every refusal, then submits the same desired state with
+that hash. Inside the write gate (halt lock held) it runs the planner **again** on live data, so the
+plan that is sent is the plan that was checked; if the lines it would send, their worst-case cost
+or the visit fee changed since the preview (stock, prices, the catalog or the config moved), the
+hash differs and it refuses `plan_changed`. A balance that moved but still covers the worst case
+doesn't count; the balance gate checks it either way. Without the hash nothing is
+compared, and whatever the planner produces now is sent. Every refusal comes at once: the planner's,
+`plan_changed`, and `submission_unresolved` (below), which the preview reports too. Then, on one
+side connection opened before anything is sent:
+
+1. It commits a `sending` row in `purchase_submissions` (migration 008), with the exact body, the
+   directive and the quoted visit fee, **before** the POST. A crash after the POST can't lose the
+   fact that we sent something, which matters because the bridge has no route that lists our
+   requests.
+2. It POSTs `/api/v1/purchase-requests` once, never retried: a retry after a lost answer could order
+   twice.
+3. It settles the row on that same connection: `accepted` (and the request goes into
+   `purchase_requests` in the same transaction, so `python -m vending.sync_requests` reads it back
+   from then on), `refused` (a `4xx`; the reply carries the bridge's reason, such as `422
+   invalid_lines`), `not_filed` (it never left), or `unknown` (sent, but a timeout, a `5xx` whose
+   body is kept in `detail`, or a cut-off answer).
+
+If the bridge accepted the request but storing that fails anyway (the database dropped between the
+POST and the settle), the answer is written to the server's stderr as a `LOST ANSWER` line and the
+error the agent sees names the request ID and the `resolve` command, so the ID is never only in
+memory. The row stays `sending`.
+
+While any row is `sending` or `unknown`, the request may or may not exist on the bridge, so both
+tools refuse (`submission_unresolved`) until a person settles it. With the request ID (from the
+`LOST ANSWER` line or the row's `response`), the bridge's Swagger page has
+`GET /api/v1/purchase-requests/{id}`. **Without it, ask the instructors first**: a resend of a
+request that was filed would order twice. Then run one of:
+
+```
+python -m vending.submissions list
+python -m vending.submissions resolve 7 --request-id pr_abc123 --by kevin   # it was filed
+python -m vending.submissions resolve 7 --not-filed --by kevin              # it never was
+```
+
+Resolving with a request ID also records it in `purchase_requests`. Both paths carry the midweek
+visit fee the plan quoted for an off-cycle request (`visit_fee_cents`, saved on the `sending` row
+before the POST), so the ledger charges what was agreed then even if `config.midweek_fee_cents`
+changes later. Every change is logged with the `--by` name.
+
+`resolve` takes the same lock as every write, so while a submit is in flight it waits (and says
+so) until that submit has settled its row; a person's answer and the bridge's can't overwrite each
+other. The settle itself only ever changes a row that is still `sending`.
+
+The reply to an accepted submit carries the request ID, the plan hash, the number of lines, the max
+cost and the directive the worker will read, plus the plan's `warnings` and `notes`, the same as
+the preview's.
 
 ## Adding a tool's logic
 

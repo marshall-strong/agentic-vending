@@ -1,15 +1,18 @@
-"""Read-only client for the DEX Bridge, for code that runs unattended.
+"""Client for the DEX Bridge, for code that runs unattended.
 
 `scripts/bridge.py` is the command-line tool for people; this is the library the
-sync jobs use. It never polls the machine live and cannot submit a purchase
-request: it only reads stored history and our purchase requests, and `/health`
-to tell a bad poll from an outage.
+sync jobs and the write tools use. It never polls the machine live. The sync
+jobs read stored history and our purchase requests through it, with retries;
+`submit_desired_state` and `request_catalog_product` send their one POST through
+`post`, never retried, and `/health` tells a bad poll from an outage.
 
 Read failures are retried, then end in one of two ways. `BridgeUnreachable`
 means every later call would fail too, so the caller should stop: the bridge is
 down or rejected our key. Plain `BridgeError` means only this day or poll
 failed: an error status, a response cut off or unreadable, or a connection that
-keeps failing on one poll while `/health` still answers.
+keeps failing on one poll while `/health` still answers. A 5xx that outlasts
+the retries is checked against `/health` the same way, because Tailscale's
+proxy can answer `502` to every request until the node has joined the tailnet.
 """
 
 from __future__ import annotations
@@ -98,7 +101,8 @@ class Bridge:
             with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
                 data = response.read()
         except urllib.error.HTTPError as error:
-            raise BridgeAnswered(error.code, error.read()[:300].decode(errors="replace")) from None
+            # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
+            raise BridgeAnswered(error.code, _start_of_body(error, 300).decode(errors="replace")) from None
         except urllib.error.URLError as error:
             # urllib raises URLError only while connecting or sending.
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
@@ -131,7 +135,12 @@ class Bridge:
                     raise BridgeRateLimited(f"429 from {path}: still rate limited after {RETRIES} retries") from None
                 if error.code in (401, 403):
                     raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
-                raise BridgeError(f"{error.code} from {path}: {_start_of_body(error)!r}") from None
+                detail = f"{error.code} from {path}: {_start_of_body(error)!r}"
+                # A 5xx from everything, `/health` included, is an outage (or
+                # the Tailscale proxy before the node joins), not this request.
+                if error.code >= 500 and path != "/health" and not self._is_up():
+                    raise BridgeUnreachable(f"{detail}, and /health doesn't answer. Is Tailscale connected?") from None
+                raise BridgeError(detail) from None
             except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
                 if attempt < RETRIES:
                     time.sleep(delay)
@@ -193,7 +202,7 @@ class Bridge:
         `{id, status: "pending", created_at}` until the worker has dealt with
         every line, `{..., status: "rejected", decision_note}` if it was turned
         down, and the full listing with a receipt per line once fulfilled.
-        A GET only: submitting is `submit_desired_state`'s job, never this client's.
+        A GET only: `submit_desired_state` files requests, through `post`.
         """
         return json.loads(self._get(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}"))
 
@@ -206,10 +215,10 @@ def _is_listing(body: object) -> bool:
     )
 
 
-def _start_of_body(error: urllib.error.HTTPError) -> bytes:
+def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
     """The start of an error response, for the message. It can be cut off too."""
     try:
-        return error.read(200)
+        return error.read(size)
     except (OSError, http.client.HTTPException):
         return b""
 
