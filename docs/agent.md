@@ -41,7 +41,7 @@ A run reads the database `DATABASE_URL` points at, so each of these is per datab
  - [ ] `VENDING_ANTHROPIC_API_KEY` set in your environment, as the README describes.
  - [ ] The class tailnet, since the read tools reach the bridge.
 
-**No run has been made against a real model yet.** The first dry run will show what a cycle costs. At the placeholder $1 run cap, a `claude-opus-5-5` run is likely to be squeezed in its later turns: each turn reserves its worst case (the whole conversation at the cache-write price plus 16,000 output tokens) before it is sent.
+**The first runs against the real model were made on 11 and 12 Nov**, with `claude-opus-5-5` at `medium` and the run cap raised to $5 for testing: a dry run that cost $0.80 over 8 model calls, a live run that cost $0.40, and a dry run that cost $0.08. None was cut off. The caps below are still placeholders, so set them from what these runs cost (`python -m vending.usage` shows each run). At the placeholder $1 run cap, a run like the first would likely be squeezed in its later turns: each turn reserves its worst case (the whole conversation at the cache-write price plus 16,000 output tokens) before it is sent.
 
 ## Still to decide
 
