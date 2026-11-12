@@ -92,10 +92,17 @@ if (-not $SkipBuild) {
 if (-not $SkipPullCheck) {
     $anonymous = Join-Path ([IO.Path]::GetTempPath()) "agentic-vending-docker-$([guid]::NewGuid())"
     New-Item -ItemType Directory -Path $anonymous | Out-Null
+    # Windows PowerShell 5.1 turns each line a native command writes to a redirected stderr into
+    # an error record, which "Stop" makes terminating: the private-package answer ("unauthorized",
+    # "manifest unknown") would end the script with a bare docker error instead of the message
+    # below. So the exit code alone decides here, as it does in PowerShell 7.
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     try {
         docker --config $anonymous manifest inspect $full *> $null
         $public = $LASTEXITCODE -eq 0
     } finally {
+        $ErrorActionPreference = $saved
         Remove-Item -Recurse -Force $anonymous
     }
     if (-not $public) {
