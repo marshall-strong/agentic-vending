@@ -15,12 +15,15 @@ One run:
    without it fails before any model request) followed by `SYSTEM`. Nothing in it changes between
    requests, so it is read from cache. The model gets the time, the week's rhythm and its own
    notes from the last run in the first message, after the system prompt. It calls tools until it answers with a decision (submit or skip), a weekly update for the team and notes for
-   next week. Every request goes through `vending.harness`, so its cost is in the ledger before it
-   is sent and the run and daily caps hold.
+   next week. Every request goes through `vending.harness`, so it is in `model_calls` before it is
+   sent and the run and daily caps hold. A live run's spend also goes in the ledger; a dry run is
+   test spend, under the test cap, and stays out of the ledger. The client is built from the key
+   in `VENDING_ANTHROPIC_API_KEY` and nothing else; a run without it fails before any request.
 4. The run is recorded in `agent_runs`: `submitted` once a `submit_desired_state` call
    succeeded (its request id is stored straight away, and the run stays `submitted` whatever
    stops it later), `skipped` when it decided not to (or it was a dry run), `failed` when it hit a cap,
-   ran out of turns or broke.
+   ran out of turns or broke. The stored plan is the desired state it previewed or sent, plus what
+   the dashboard shows beside it: the visit kind, the run's reason and each changed slot's reason.
 
 The model, effort and caps are placeholders until the team decides them (see #39 and #51).
 """
@@ -42,15 +45,18 @@ import anyio
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending import agent_runs, db
+from vending import agent_runs, db, settings
 from vending.config import is_halted
-from vending.harness import EASTERN, Harness, HarnessError
+from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError
 from vending.tools.project_rules import RULES_DIR
 
 DEFAULT_MODEL = "claude-opus-5-5"   # pending a team decision
 DEFAULT_EFFORT = "medium"
 MAX_TOKENS = 16_000
 MAX_TURNS = 15                      # tool rounds; on the last one the model must answer
+REQUEST_TIMEOUT = 300.0             # seconds for one model request; the SDK's default is 10 minutes
+# Never passed on to the server: the key the agent pays with, and what the SDK would pick up by itself.
+MODEL_KEY_VARS = frozenset({DEFAULT_KEY_ENV, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
 
 # The same set as `vending.server.WRITE_TOOLS` (a test checks): a dry run never offers these.
 WRITE_TOOLS = frozenset({"submit_desired_state", "set_price", "request_catalog_product"})
@@ -80,7 +86,9 @@ When you're done, answer with:
 - reason: one sentence on why.
 - update: a short weekly update for the team, under 150 words: what happened, what you're \
 changing and why. Plain language; operations should act on it without asking.
-- notes: what you want to remember next week, under 200 words."""
+- notes: what you want to remember next week, under 200 words.
+- slot_reasons: for each slot your plan changes, the slot and one sentence on why. Leave out \
+slots you keep as they are; an empty list when you change nothing."""
 
 ANSWER_SCHEMA = {
     "type": "object",
@@ -89,8 +97,14 @@ ANSWER_SCHEMA = {
         "reason": {"type": "string"},
         "update": {"type": "string"},
         "notes": {"type": "string"},
+        "slot_reasons": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"slot": {"type": "string"}, "reason": {"type": "string"}},
+            "required": ["slot", "reason"],
+            "additionalProperties": False,
+        }},
     },
-    "required": ["decision", "reason", "update", "notes"],
+    "required": ["decision", "reason", "update", "notes", "slot_reasons"],
     "additionalProperties": False,
 }
 
@@ -130,6 +144,26 @@ def system_prompt(card_path: Path | None = None) -> str:
     return f"{card}\n\n{SYSTEM}"
 
 
+class NoModelKey(RuntimeError):
+    """`VENDING_ANTHROPIC_API_KEY` isn't set: nothing can pay for a model request."""
+
+
+def model_client() -> Any:
+    """An Anthropic client that pays with the team's key, read from `VENDING_ANTHROPIC_API_KEY` only.
+
+    Never a bare `anthropic.Anthropic()`: that reads `ANTHROPIC_API_KEY`, then a bearer token or a
+    login profile, so a run could bill whoever is signed in on that machine. The harness checks
+    the client again (`harness.check_client`) before the first request.
+    """
+    import anthropic
+
+    key = (settings.get(DEFAULT_KEY_ENV) or "").strip()
+    if not key:
+        raise NoModelKey(f"{DEFAULT_KEY_ENV} isn't set, so no model request was made. The README says "
+                         "where the team's key lives and how to set it.")
+    return anthropic.Anthropic(api_key=key, max_retries=0, timeout=REQUEST_TIMEOUT)
+
+
 def tool_definitions(listed: list[Any], *, live: bool) -> list[dict]:
     """The server's tools as Anthropic tool definitions; a dry run drops every write tool."""
     tools = []
@@ -158,6 +192,29 @@ def _same_plan(a: Any, b: Any) -> bool:
         return DesiredState.model_validate(a).model_dump() == DesiredState.model_validate(b).model_dump()
     except Exception:
         return False
+
+
+def recorded_plan(plan: dict | None, answer: dict | None) -> dict | None:
+    """The plan as `agent_runs` stores it: the desired state, plus what the dashboard shows beside it.
+
+    The dashboard reads the replayer's plan shape: a `visit`, a `reason` for the whole plan and a
+    `reason` on each slot. The desired state carries none of those, so they are added here from
+    the model's final answer. A run that never answered still stores its plan, without reasons.
+    """
+    if plan is None:
+        return None
+    answer = answer or {}
+    given = answer.get("slot_reasons")
+    reasons = {str(r["slot"]): r["reason"] for r in (given if isinstance(given, list) else [])
+               if isinstance(r, dict) and r.get("slot") is not None and r.get("reason")}
+    slots = plan.get("slots")
+    if isinstance(slots, list):
+        slots = [{**s, "reason": reasons[str(s["slot"])]} if isinstance(s, dict) and str(s.get("slot")) in reasons
+                 else s for s in slots]
+    recorded = {**plan, "slots": slots, "visit": "midweek" if plan.get("off_cycle") else "scheduled"}
+    if answer.get("reason"):
+        recorded["reason"] = answer["reason"]
+    return recorded
 
 
 def last_notes(conn: psycopg.Connection, *, live: bool) -> str:
@@ -223,6 +280,14 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
         if response.stop_reason == "refusal":
             category = getattr(getattr(response, "stop_details", None), "category", None)
             out.status, out.detail = "failed", f"The model declined to answer (refusal, category {category})."
+            return
+        if response.stop_reason == "max_tokens":
+            # The harness lowers max_tokens to fit what's left of the caps, so this is usually a cap.
+            out.status = "failed"
+            out.detail = (f"The answer on turn {turn + 1} was cut off at its token limit, so it can't be read. "
+                          "The run or daily cap probably left too few output tokens for this turn "
+                          "(`python -m vending.usage` shows each request); raise the cap, or use a "
+                          "cheaper model or a lower effort.")
             return
         text = "".join(b.text for b in response.content if b.type == "text")
         try:
@@ -299,8 +364,8 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
 
 
 def server_env() -> dict[str, str]:
-    """The server's environment: ours without the model key, which it never needs."""
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    """The server's environment: ours without any model key, which it never needs."""
+    env = {k: v for k, v in os.environ.items() if k.upper() not in MODEL_KEY_VARS}
     return {**env, "VENDING_TOOLS": "built"}
 
 
@@ -343,9 +408,9 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
         with connect() as conn:
             notes = last_notes(conn, live=live)
         if client is None:
-            import anthropic
-            client = anthropic.Anthropic()
-        harness = Harness(client, connect, purpose="live", by="agent")
+            client = model_client()
+        # Only a live run spends the competition's money; a dry run is test spend, under the test cap.
+        harness = Harness(client, connect, purpose="live" if live else "test", by="agent")
         async with (open_tools or _open_server)() as (listed, call_tool):
             if live and SUBMIT not in {t.name for t in listed}:
                 out.detail = "submit_desired_state isn't built on this server, so a live run can't submit. Use a dry run."
@@ -364,7 +429,8 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
         _settle(out)
         answer = out.answer or {}
         with connect() as conn:
-            agent_runs.finish(conn, run_id, out.status, plan=out.plan, update=answer.get("update"),
+            agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer),
+                              update=answer.get("update"),
                               notes=answer.get("notes"), detail=out.detail,
                               cost_usd=harness.spent if harness is not None else Decimal(0),
                               request_id=out.request_id)

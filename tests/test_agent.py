@@ -29,9 +29,11 @@ def tool_turn(*blocks):
     return SimpleNamespace(content=list(blocks), stop_reason="tool_use")
 
 
-def answer(decision="skip", reason="nothing sold out", update="Quiet week.", notes="Watch slot 15."):
-    text = json.dumps({"decision": decision, "reason": reason, "update": update, "notes": notes})
-    return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason="end_turn")
+def answer(decision="skip", reason="nothing sold out", update="Quiet week.", notes="Watch slot 15.",
+           slot_reasons=None, stop_reason="end_turn", cut_at=None):
+    text = json.dumps({"decision": decision, "reason": reason, "update": update, "notes": notes,
+                       "slot_reasons": slot_reasons or []})
+    return SimpleNamespace(content=[SimpleNamespace(type="text", text=text[:cut_at])], stop_reason=stop_reason)
 
 
 class Script:
@@ -116,8 +118,14 @@ def stored(conn, run_id):
 
 
 def tokens(conn):
+    """(entries, cents) of token spend in the ledger: the competition's books, so live runs only."""
     return conn.execute("select count(*), coalesce(sum(-amount_cents), 0) from ledger_entries"
                         " where kind = 'tokens'").fetchone()
+
+
+def calls(conn):
+    """Every model request recorded, as {purpose: count}: live and test alike."""
+    return dict(conn.execute("select purpose, count(*) from model_calls group by purpose").fetchall())
 
 
 # --- No database --------------------------------------------------------------------
@@ -150,7 +158,8 @@ def test_a_halted_machine_records_the_run_and_calls_nothing(connect, conn):
 def test_a_dry_run_previews_and_records_what_it_would_submit(connect, conn):
     client = Script(tool_turn(use("get_machine_state")),
                     tool_turn(use("preview_desired_state", {"desired": PLAN}, id="t2")),
-                    answer("submit", reason="slot 15 sold out", notes="Raise 15 next week?"))
+                    answer("submit", reason="slot 15 sold out", notes="Raise 15 next week?",
+                           slot_reasons=[{"slot": "15", "reason": "Sold out by Tuesday."}]))
     tools = Tools(replies={"preview_desired_state": {"success": True, "message": "ok", "ok": True,
                                                      "plan_hash": "abc"}})
     run_id, out = go(connect, client, tools)
@@ -158,9 +167,13 @@ def test_a_dry_run_previews_and_records_what_it_would_submit(connect, conn):
     mode, status, plan, update, notes, detail, cost, request_id = stored(conn, run_id)
     assert (mode, status, request_id) == ("dry-run", "skipped", None)
     assert detail.startswith("Dry run: would have submitted the previewed plan.")
-    assert plan == {**PLAN, "plan_hash": "abc"} and notes == "Raise 15 next week?"
-    # Three requests, each 1000 in x $4 + 500 out x $20 per million = 1.4 cents.
-    assert tokens(conn) == (3, Decimal("4.2")) and cost == Decimal("0.042")
+    # The previewed plan, plus what the dashboard shows beside it: the visit and the reasons.
+    assert plan == {"slots": [{**PLAN["slots"][0], "reason": "Sold out by Tuesday."}], "off_cycle": False,
+                    "plan_hash": "abc", "visit": "scheduled", "reason": "slot 15 sold out"}
+    assert notes == "Raise 15 next week?"
+    # Three requests, each 1000 in x $4 + 500 out x $20 per million = 1.4 cents. A dry run is test
+    # spend: recorded in model_calls and on the run, never in the ledger.
+    assert cost == Decimal("0.042") and calls(conn) == {"test": 3} and tokens(conn) == (0, 0)
     # No write tool was offered, and every request asked for the answer's JSON.
     first = client.sent[0]
     assert "request_catalog_product" not in {t["name"] for t in first["tools"]}
@@ -205,7 +218,10 @@ def test_a_live_run_submits_once_and_records_the_request_id(connect, conn):
     assert "already submitted" in client.sent[2]["messages"][-1]["content"][1]["content"]
     assert "already submitted" in client.sent[3]["messages"][-1]["content"][0]["content"]
     mode, status, plan, *_, request_id = stored(conn, run_id)
-    assert (mode, status, request_id, plan) == ("live", "submitted", "req_9", {**PLAN, "plan_hash": "abc"})
+    assert (mode, status, request_id) == ("live", "submitted", "req_9")
+    assert plan == {**PLAN, "plan_hash": "abc", "visit": "scheduled", "reason": "restock 15"}
+    # A live run spends the competition's money: every request is in the ledger as well.
+    assert calls(conn) == {"live": 4} and tokens(conn)[0] == 4
 
 
 def test_a_refused_submit_is_a_failed_run_not_a_submitted_one(connect, conn):
@@ -246,7 +262,7 @@ def test_a_server_that_breaks_still_records_the_run(connect, conn):
 
     run_id, out = go(connect, Script(tool_turn(use("get_pnl"))), Broken())
     assert out.status == "failed" and "server died" in out.detail
-    assert stored(conn, run_id)[1] == "failed" and tokens(conn)[0] == 1
+    assert stored(conn, run_id)[1] == "failed" and calls(conn) == {"test": 1}
 
 
 def test_a_dry_run_against_the_real_server_process(schema_url, conn, monkeypatch):
@@ -318,7 +334,8 @@ def test_a_tool_that_breaks_after_the_submit_keeps_the_request_id(connect, conn)
     tools = BreaksLater(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED, "submit_desired_state": SENT})
     run_id, out = go(connect, client, tools, live=True)
     mode, status, plan, update, notes, detail, cost, request_id = stored(conn, run_id)
-    assert (status, request_id, plan) == ("submitted", "req_9", {**PLAN, "plan_hash": "abc"})
+    # It never answered, so the plan is stored without reasons.
+    assert (status, request_id, plan) == ("submitted", "req_9", {**PLAN, "plan_hash": "abc", "visit": "scheduled"})
     assert "server died" in detail
 
 
@@ -365,9 +382,75 @@ def test_a_live_run_reads_only_live_notes(connect, conn):
 
 
 def test_the_server_never_gets_the_model_key(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
+    for name in ("ANTHROPIC_API_KEY", "VENDING_ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        monkeypatch.setenv(name, "not-a-real-key")
     env = agent.server_env()
-    assert "ANTHROPIC_API_KEY" not in env and env["VENDING_TOOLS"] == "built"
+    assert "not-a-real-key" not in env.values() and env["VENDING_TOOLS"] == "built"
+
+
+# --- The model key ------------------------------------------------------------------
+
+def test_the_client_pays_with_the_team_key_and_nothing_else(monkeypatch):
+    from vending import harness
+
+    monkeypatch.setenv("VENDING_ANTHROPIC_API_KEY", " team-key-for-tests ")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "someone-elses-key")     # what a bare Anthropic() would read
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_CUSTOM_HEADERS", raising=False)
+    client = agent.model_client()
+    assert client.api_key == "team-key-for-tests" and client.max_retries == 0
+    harness.check_client(client, "VENDING_ANTHROPIC_API_KEY")       # the harness accepts it as built
+
+
+def test_a_run_without_the_team_key_fails_before_the_server_starts(connect, conn, monkeypatch):
+    opened = []
+
+    class Watched(Tools):
+        def opener(self):
+            opened.append(True)
+            return super().opener()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "someone-elses-key")     # never a stand-in for ours
+    monkeypatch.setattr(agent.settings, "get", lambda name, default=None: default)
+    tools = Watched()
+    run_id, out = anyio.run(lambda: agent.run(live=False, connect=connect, now=lambda: NOW, open_tools=tools.opener))
+    assert out.status == "failed" and "NoModelKey" in out.detail and "VENDING_ANTHROPIC_API_KEY" in out.detail
+    assert opened == [] and tools.calls == [] and calls(conn) == {}
+    assert stored(conn, run_id)[:2] == ("dry-run", "failed")
+
+
+# --- Answers that can't be read ------------------------------------------------------
+
+def test_an_answer_cut_off_at_its_token_limit_says_so(connect, conn):
+    client = Script(tool_turn(use("get_pnl")), answer(stop_reason="max_tokens", cut_at=40))
+    run_id, out = go(connect, client, Tools())
+    assert out.status == "failed" and "cut off at its token limit" in out.detail and "turn 2" in out.detail
+    assert out.answer is None and stored(conn, run_id)[1] == "failed"
+
+
+# --- The plan the dashboard reads ----------------------------------------------------
+
+def test_the_recorded_plan_carries_the_visit_and_each_slots_reason():
+    plan = {"slots": [{"slot": "15", "fill_to": 7}, {"slot": "16", "keep": True}], "off_cycle": True, "plan_hash": "abc"}
+    said = {"reason": "15 sold out", "slot_reasons": [{"slot": "15", "reason": "Sold out by Tuesday."},
+                                                      {"slot": "99", "reason": "not in the plan"}, "junk"]}
+    assert agent.recorded_plan(plan, said) == {
+        "slots": [{"slot": "15", "fill_to": 7, "reason": "Sold out by Tuesday."}, {"slot": "16", "keep": True}],
+        "off_cycle": True, "plan_hash": "abc", "visit": "midweek", "reason": "15 sold out"}
+    assert plan["slots"][0] == {"slot": "15", "fill_to": 7}                # the plan it compares submits with is untouched
+    assert agent.recorded_plan(plan, {"slot_reasons": "junk"})["visit"] == "midweek"
+    assert agent.recorded_plan(None, said) is None
+
+
+def test_the_dashboard_shows_the_recorded_reasons(connect, conn):
+    from vending import dashboard
+
+    said = [{"slot": "15", "reason": "Sold out by Tuesday."}]
+    tools = Tools(replies={"preview_desired_state": PREVIEWED})
+    go(connect, Script(preview(), answer("submit", reason="restock 15", slot_reasons=said)), tools)
+    shown = dashboard._plan(conn)
+    assert (shown["visit"], shown["reason"]) == ("scheduled", "restock 15")
+    assert {s["slot"]: s["now"] for s in shown["slots"]}["15"]["reason"] == "Sold out by Tuesday."
 
 
 def test_a_submit_in_the_same_response_as_its_preview_is_not_sent(connect, conn):
