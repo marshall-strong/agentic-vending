@@ -42,6 +42,6 @@ Each table shows its row count. If a table has more than 100,000 rows, the page 
 
 ## On the container
 
-The Container App serves the same page to anyone at `/db` (#53), next to the agent dashboard at `/dashboard`. There it connects as a login that can only read, shares a few connections with the dashboard, and leaves out the error text of failed tool calls and failed runs. [`deploy.md`](deploy.md#the-public-pages) has the rules and the setup.
+The Container App serves the same page to anyone at `/db` (#53), next to the agent dashboard at `/dashboard`. There it connects as a login that can only read, shares a few connections with the dashboard, and leaves out the error text of failed tool calls and failed runs, the other team's selections (`poll_selections` and `slot_counts` show only ours) and the hostnames in `model_calls`. [`deploy.md`](deploy.md#the-public-pages) has the rules and the setup.
 
 Every link on the page is relative (`?schema=...&table=...`), so the page works under any path.

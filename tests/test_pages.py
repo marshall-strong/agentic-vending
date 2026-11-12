@@ -13,6 +13,7 @@ from psycopg.conninfo import make_conninfo
 
 from tests.conftest import CONNECT_TIMEOUT, open_in
 from vending import agent_runs, dashboard, db_explorer, pages, settings, worker
+from vending.slots import SLOTS
 from vending.write_gate import log
 
 SECRET = 'connection to server at "db.example.net", port 5432 failed: password authentication failed for user "g2_admin"'
@@ -357,3 +358,75 @@ def test_check_says_whether_the_login_is_fit_for_a_public_page(schema_url, reade
     monkeypatch.setattr(pages, "connect", lambda: open_in(url, schema))
     assert pages.main(["check"]) == 1
     assert "NOT read-only" in capsys.readouterr().out
+
+
+# --- The other team's selections ----------------------------------------------------------------
+
+RIVAL = "RIVAL-SNACK"
+
+
+def _rivals(conn):
+    """A machine where selections 11 and 25 are held by someone else's counts and polls, one more
+    machine's poll names our selection 25, and ours (15) is counted and polled too."""
+    from tests.conftest import store_poll
+    from vending import slot_counts
+    store_poll(conn, "ours", "2026-11-10T15:00:00+00:00", {"15": (150, 31), "11": (1234, 987654)})
+    store_poll(conn, "elsewhere", "2026-11-10T15:00:00+00:00", {"15": (999, 424242)}, device_id="vmc2")
+    slot_counts.record(conn, slot_counts.parse({
+        "count_id": "p1", "counted_at": "2026-11-09T11:30:00-05:00", "source": "photo", "device_id": "vmc1",
+        "selections": [{"selection": "15", "product": "Our Chips", "units": 4, "price_on_tag": "1.50"},
+                       {"selection": "11", "product": RIVAL, "units": 9, "price_on_tag": "7.77"}]}), "kevin")
+
+
+def test_the_public_json_has_only_our_selections_in_its_counts(site, schema_url, conn):
+    _rivals(conn)
+    status, _, body = _get(site, "/dashboard/state.json")
+    counts = json.loads(body)["counts"]["data"]
+    assert status == 200 and list(counts) == ["15"] and counts["15"]["product"] == "Our Chips"
+    assert RIVAL not in body and "7.77" not in body
+    sales, stock = json.loads(body)["sales"]["data"]["slots"], json.loads(body)["stock"]["data"]["slots"]
+    assert "11" not in sales and "11" not in stock and set(sales) | set(stock) <= set(SLOTS)
+    # The local snapshot, for the team, still has the whole count.
+    with open_in(*schema_url) as local:
+        assert sorted(dashboard.snapshot(local)["counts"]["data"]) == ["11", "15"]
+
+
+def test_the_public_explorer_shows_only_our_rows_of_the_selection_tables(site, schema_url, conn):
+    _, schema = schema_url
+    _rivals(conn)
+    counts = _get(site, f"/db?schema={schema}&table=slot_counts")[2]
+    assert "Our Chips" in counts and RIVAL not in counts and "7.77" not in counts
+    polls = _get(site, f"/db?schema={schema}&table=poll_selections")[2]
+    # Our selection 15 on our machine, with its price and sales; not selection 11, not another machine.
+    assert "31" in polls and "987654" not in polls and "1234" not in polls and "424242" not in polls
+    # The page says how many rows it holds: only the ones it may show.
+    with open_in(*schema_url) as local:
+        for name, shown in (("slot_counts", 1), ("poll_selections", 1)):
+            table = db_explorer.Table(schema, name, "table")
+            assert db_explorer.rows(local, table, only=pages.ONLY[name]).total == shown
+            assert db_explorer.rows(local, table).total == 2 + (name == "poll_selections")
+    # The explorer run locally still shows everything.
+    with open_in(*schema_url) as local:
+        assert RIVAL in db_explorer.render(local, db_explorer.Request(schema, "slot_counts", 0))[1]
+
+
+def test_a_table_without_the_columns_a_row_filter_reads_shows_no_rows(schema_url, conn):
+    _, schema = schema_url
+    _rivals(conn)
+    conn.execute("create table slot_counts_copy as select count_id, selection, product from slot_counts")
+    table = db_explorer.Table(schema, "slot_counts_copy", "table")
+    only = pages.ONLY["slot_counts"]   # reads device_id too, which the copy lacks
+    with open_in(*schema_url) as local:
+        assert db_explorer.rows(local, table).total == 2
+        shown = db_explorer.rows(local, table, only=only)
+    assert shown.total == 0 and shown.rows == ()
+
+
+def test_the_public_explorer_hides_the_hostnames_of_the_dev_machines(site, schema_url, conn):
+    _, schema = schema_url
+    conn.execute("insert into model_calls (purpose, run_id, model, key_env, max_tokens, worst_case_usd, cost_usd,"
+                 " recorded_by, host) values ('test', 'r1', 'm', 'K', 1, 0, 0, 'kevin', 'KEVINS-LAPTOP')")
+    page = _get(site, f"/db?schema={schema}&table=model_calls")[2]
+    assert "KEVINS-LAPTOP" not in page and "(hidden)" in page and "kevin" in page
+    with open_in(*schema_url) as local:
+        assert "KEVINS-LAPTOP" in db_explorer.render(local, db_explorer.Request(schema, "model_calls", 0))[1]

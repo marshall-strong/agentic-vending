@@ -97,7 +97,7 @@ visible description.
 - **On the container it is public, on purpose (#53).** `/dashboard` on the Container App shows
   this page to anyone with the link, with `/dashboard/state.json` beside it. There it connects as a
   login that can only read, and the error text of failed tool calls and failed runs is left out,
-  on the page and in the JSON. [`deploy.md`](deploy.md#the-public-pages) has the rules.
+  on the page and in the JSON. So are the other team's selections: the JSON's counts hold only ours. [`deploy.md`](deploy.md#the-public-pages) has the rules.
 - **Run locally, it listens on 127.0.0.1 only, and has no login.** It answers only requests addressed to
   `127.0.0.1` or `localhost`, so another website can't point its own name at your machine and
   read the page. A local copy still shows the error text the public page leaves out, so don't

@@ -330,7 +330,8 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
     """Everything the page shows, from one consistent moment. Reads only.
 
     JSON numbers come back as Decimal, so a price stored as a number stays exact.
-    `public` is for a page anyone can open: the error text of failures is left out.
+    `public` is for a page anyone can open: the error text of failures and the other team's
+    selections are left out.
     """
     now = now or datetime.now(timezone.utc)
     set_json_loads(partial(json.loads, parse_float=Decimal), context=conn)
@@ -339,6 +340,7 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
         snap = _snapshot(conn, now)
     if public:
         hide_errors(snap)
+        only_ours(snap)
     snap["attention"] = attention(snap)
     return snap
 
@@ -362,6 +364,16 @@ def hide_errors(snap: dict) -> None:
             for row in snap[panel]["data"]:
                 if row.get(column) == failed and row.get("detail"):
                     row["detail"] = HIDDEN
+
+
+def only_ours(snap: dict) -> None:
+    """Drop every selection that isn't one of `SLOTS` from the counts, in place.
+
+    `slot_counts.latest` returns every selection counted, the other team's too (a photo count
+    covers the whole machine), and the page only draws ours. The JSON would still carry the rest.
+    """
+    if snap["counts"]["ok"]:
+        snap["counts"]["data"] = {s: c for s, c in snap["counts"]["data"].items() if s in SLOTS}
 
 
 def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:

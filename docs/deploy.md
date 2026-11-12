@@ -103,7 +103,9 @@ statement is cancelled after 5 seconds. The role's own `connection limit` (below
 on the server.
 
 **What is public:** every table, including the plans, the purchase requests and the ledger. No
-table holds a password or a key. **Left out:** the error text of failed tool calls and failed
+table holds a password or a key. **Left out:** the other team's selections (the machine stores
+every selection, and `/db` shows only ours in `poll_selections` and `slot_counts`; the dashboard's
+JSON counts likewise), the dev machines' hostnames in `model_calls.host`, and the error text of failed tool calls and failed
 runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed), because a
 database error names the host and the user. Refusals keep their text. The pages' own errors show
 one plain sentence; the detail is in the container's log.

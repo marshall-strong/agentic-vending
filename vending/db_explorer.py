@@ -108,6 +108,19 @@ class Hide:
 
 
 @dataclass(frozen=True)
+class Only:
+    """Rows of one table that a page shows; every other row is left out, and not counted.
+
+    For a page anyone can open: `poll_selections` and `slot_counts` hold the other team's
+    selections too, and only ours may be shown. `where` is built for a table (so it can name a
+    table beside it in the same schema) and reads the row as alias `t`. `columns` are the ones
+    it reads: a copy of the table without them shows no rows at all, never every row.
+    """
+    columns: tuple[str, ...]
+    where: Callable[["Table"], sql.Composable]
+
+
+@dataclass(frozen=True)
 class Rows:
     columns: tuple[Column, ...]
     rows: tuple[tuple, ...]
@@ -221,9 +234,10 @@ class _ReadOnlyTransaction:
         return self.tx.__exit__(*exc)
 
 
-def rows(conn: psycopg.Connection, table: Table, offset: int = 0, hide: Hide | None = None) -> Rows:
+def rows(conn: psycopg.Connection, table: Table, offset: int = 0, hide: Hide | None = None,
+         only: Only | None = None) -> Rows:
     """One page of rows, in descending primary-key order when there is a key, from one moment.
-    `hide` leaves some values out; see `Hide`."""
+    `hide` leaves some values out and `only` some rows; see `Hide` and `Only`."""
     with _snapshot(conn):
         cols = columns(conn, table)
         key = sorted((c for c in cols if c.primary_key), key=lambda c: c.primary_key)
@@ -232,11 +246,17 @@ def rows(conn: psycopg.Connection, table: Table, offset: int = 0, hide: Hide | N
         picked = sql.SQL(", ").join(_pick(c, hide, present) for c in cols) if cols else sql.SQL("null")
         order = (sql.SQL(" order by ") + sql.SQL(", ").join(
             sql.SQL("{} desc").format(sql.Identifier(ALIAS, c.name)) for c in key)) if key else sql.SQL("")
+        if only is None:
+            where = sql.SQL("")
+        elif all(name in present for name in only.columns):
+            where = sql.SQL(" where ") + only.where(table)
+        else:
+            where = sql.SQL(" where false")
         total = conn.execute(
-            sql.SQL("select count(*) from (select 1 from {} limit %s) s").format(target), (COUNT_CAP + 1,)
+            sql.SQL("select count(*) from (select 1 from {}{} limit %s) s").format(target, where), (COUNT_CAP + 1,)
         ).fetchone()[0]
         found = conn.execute(
-            sql.SQL("select {} from {}{} limit %s offset %s").format(picked, target, order), (PAGE_ROWS, offset)
+            sql.SQL("select {} from {}{}{} limit %s offset %s").format(picked, target, where, order), (PAGE_ROWS, offset)
         ).fetchall()
     return Rows(cols, tuple(tuple(r) for r in found), offset, total, tuple(c.name for c in key))
 
@@ -443,12 +463,12 @@ def parse(target: str) -> Request:
 
 
 def render(conn: psycopg.Connection, request: Request, hide: Mapping[str, Hide] | None = None,
-           nav: tuple[tuple[str, str], ...] = ()) -> tuple[int, str]:
+           nav: tuple[tuple[str, str], ...] = (), only: Mapping[str, Only] | None = None) -> tuple[int, str]:
     """(status, HTML) for a request. Nothing from the URL reaches SQL unless Postgres lists that
     table: an unlisted name is a 404, never a query. The whole page is one read-only transaction.
 
     `hide` maps a table's name to the values the page leaves out (in any schema, so a copy of the
-    table is covered too), and `nav` goes to `page`."""
+    table is covered too), `only` maps a table's name to the rows it shows, and `nav` goes to `page`."""
     _lenient_dates(conn)
     found: list[Table] = []
     chosen: Table | None = None
@@ -461,7 +481,8 @@ def render(conn: psycopg.Connection, request: Request, hide: Mapping[str, Hide] 
             if chosen is None:
                 missing = f'<p class="error">No table {_e(request.schema)}.{_e(request.table)}.</p>'
                 return 404, page(found, None, missing, nav)
-            page_rows = rows(conn, chosen, request.offset, (hide or {}).get(chosen.name))
+            page_rows = rows(conn, chosen, request.offset, (hide or {}).get(chosen.name),
+                             (only or {}).get(chosen.name))
     except psycopg.errors.QueryCanceled:
         why, code = f"Reading this table took longer than {STATEMENT_TIMEOUT_MS // 1000} seconds, so it was stopped.", 503
     except psycopg.errors.InsufficientPrivilege:
