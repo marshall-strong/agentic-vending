@@ -93,18 +93,24 @@ def test_run_refuses_a_manifest_with_a_slot_that_is_not_ours():
 
 def test_run_refuses_a_manifest_that_claims_the_server_before_the_code_can_read_it(monkeypatch):
     monkeypatch.setattr(slots_config, "server_assignment_supported", lambda: False)
-    whole = [f"{r}{c}" for r in "12345" for c in "12345678"]
-    with pytest.raises(SystemExit, match="not one of our slots"):
-        slots_config.resolve_run(None, manifest(whole, slots_config.SOURCE_SERVER), "slots.json", NOW)
+    with pytest.raises(SystemExit, match="can't read one yet"):
+        slots_config.resolve_run(None, manifest(OURS, slots_config.SOURCE_SERVER), "slots.json", NOW)
 
 
-def test_run_trusts_a_server_manifest_once_the_code_can_read_the_server(monkeypatch, capsys):
+def test_a_server_manifest_never_reaches_beyond_our_slots(monkeypatch):
     monkeypatch.setattr(slots_config, "server_assignment_supported", lambda: True)
     got = slots_config.resolve_run(None, manifest(("15", "16"), slots_config.SOURCE_SERVER), "slots.json", NOW)
     assert got[1:3] == (("15", "16"), slots_config.SOURCE_SERVER)
-    assert "differs from vending.slots.SLOTS" in capsys.readouterr().out
+    for bad in (("11", "12", "15"), [f"{r}{c}" for r in "12345" for c in "12345678"]):
+        with pytest.raises(SystemExit, match="not one of our slots"):
+            slots_config.resolve_run(None, manifest(bad, slots_config.SOURCE_SERVER), "slots.json", NOW)
     with pytest.raises(SystemExit, match="not one of our slots"):
-        slots_config.resolve_run("17", manifest(("15", "16"), slots_config.SOURCE_SERVER), "slots.json", NOW)
+        slots_config.resolve_run("11", manifest(("15", "16"), slots_config.SOURCE_SERVER), "slots.json", NOW)
+
+
+def test_run_refuses_an_unknown_source():
+    with pytest.raises(SystemExit, match="unknown source"):
+        slots_config.resolve_run(None, manifest(source="Default list"), "slots.json", NOW)
 
 
 def test_run_refuses_a_manifest_for_another_device():
@@ -134,3 +140,13 @@ def test_labs_refuse_a_scope_with_a_slot_that_is_not_ours():
         labkit.scope_of(lab_data([*OURS, "14"]))
     with pytest.raises(SystemExit, match="recorded for device"):
         labkit.scope_of(lab_data(device="vmc2"))
+    with pytest.raises(SystemExit, match="unknown source"):
+        labkit.scope_of(lab_data(source="somewhere"))
+
+
+def test_labs_refuse_a_server_scope_beyond_our_slots(monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "analysis" / "labs"))
+    import labkit
+    monkeypatch.setattr(slots_config, "server_assignment_supported", lambda: True)
+    with pytest.raises(SystemExit, match="not one of our slots"):
+        labkit.scope_of(lab_data(("11", "12", "15"), slots_config.SOURCE_SERVER))

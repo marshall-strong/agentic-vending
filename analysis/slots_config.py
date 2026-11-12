@@ -107,18 +107,18 @@ def server_assignment_supported():
 
 
 def ours_for(source, slots):
-    """The list a recorded scope (data/slots.json, lab_data.json) may cover.
+    """The list a recorded scope (data/slots.json, lab_data.json) may cover: always vending.slots.SLOTS.
 
-    A list recorded as the server's answer can't be confirmed without the database, so it is accepted
-    beyond vending.slots.SLOTS only once the code can read the server's assignment at all, and then with a
-    warning when it differs. Every other recorded list must stay within vending.slots.SLOTS.
+    A recorded list can't be checked against the server without the database, so it may only ever be
+    vending.slots.SLOTS or part of it, whatever source it names. Only the export, which reads the server's
+    stored answer itself, can use a list beyond SLOTS (resolve_slots). Unknown sources are refused, and so is
+    a list recorded as the server's answer while this code can't read one (#69).
     """
-    if source == SOURCE_SERVER and server_assignment_supported():
-        recorded = check(slots, "recorded server assignment", slots)
-        if set(recorded) != set(SLOTS):
-            print(f"WARNING: the recorded server assignment ({ranges(recorded)}) differs from "
-                  f"vending.slots.SLOTS ({ranges(tuple(sorted(SLOTS)))}); it is trusted as exported")
-        return recorded
+    if not (source in (SOURCE_CLI, SOURCE_SERVER) or is_default(source)):
+        raise SystemExit(f"slot list recorded with an unknown source {source!r}: re-export (python analysis/rebuild.py)")
+    if source == SOURCE_SERVER and not server_assignment_supported():
+        raise SystemExit("slot list recorded as the inventory server's answer, but this code can't read one yet (#69): "
+                         "re-export (python analysis/rebuild.py)")
     return SLOTS
 
 
