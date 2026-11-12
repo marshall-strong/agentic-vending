@@ -78,13 +78,9 @@ from day one.
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
 | [`docs/benchmark.md`](docs/benchmark.md) | The standing benchmark: rerun the test cases after every prompt, rule, case or model change, judged blind, every run kept in the database |
 | [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
-<<<<<<< HEAD
-| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live test run, with its reasons and a check against our own directive rules |
-=======
 | [`docs/guardrail-evidence.md`](docs/guardrail-evidence.md) | Each guardrail tried against the real system on 12 Nov: over-budget and out-of-bounds plans refused, and a running agent halted by one line of SQL |
 | [`docs/halt-for-instructors.md`](docs/halt-for-instructors.md) | Our halt card: three ways to stop our agent without its help. Instructors don't need a halt switch (David, 12 Nov), but may use it |
-| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live run, with its reasons and a check against our own directive rules |
->>>>>>> origin/main
+| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live test run, with its reasons and a check against our own directive rules |
 | [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
 | [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |
