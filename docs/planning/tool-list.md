@@ -37,7 +37,7 @@ there; this file is a point-in-time copy so the plan sits next to the code.
 
 ## Purpose
 
-The group-b vending agent should get **10 MCP tools**: 7 that read and 3 that write. Every write is checked in code before it runs. This is the working list for the team. It reconciles the 21 September build plan, the bridge's live API spec (`http://aihub-pi:8000/docs`, version `0.1.0`), the whiteboard from the 8 October team meeting, and David's answers of 19 October, which outrank the spec.
+The group-b vending agent should get **10 MCP tools**: 7 that read and 3 that write. Every write is checked in code before it runs. (Since 11 Nov there is an eleventh, read-only `get_project_rules`, #12 below.) This is the working list for the team. It reconciles the 21 September build plan, the bridge's live API spec (`http://aihub-pi:8000/docs`, version `0.1.0`), the whiteboard from the 8 October team meeting, and David's answers of 19 October, which outrank the spec.
 
 Edit it inline or leave comments. Questions we still need the instructors to answer are collected at the end.
 
@@ -83,6 +83,7 @@ Nine tools: seven read data and two change something (#9 is folded into #6; #8 i
 | 9 | `request_service_visit` | — | **Folded into #6** as `visit: "midweek"`, so a $25 visit always carries a full desired state | — | — |
 | 10 | `get_pnl` | R | Ex-tax revenue, cost of goods (actual cost from receipts, spread over the units left after spoilage), visit fees, token spend, sales tax set aside, and inventory at cost (machine + closet) | — | Our ledger |
 | 11 | `request_catalog_product` | W | Asks the instructors to add a single-item product (brand, flavor, size; no pack). The sync job checks it until it is approved, with the new product code, or denied. | Not halted; a drink; no alcohol or THC; not already in the catalog or already requested | Catalog-request routes (coming: submit and status) |
+| 12 | `get_project_rules` | R | **Added 11 Nov (repo only).** Our condensed notes on the project brief, one topic per file in `docs/agent/`. No topic: the topics and their summaries. A topic: its text. The short always-on rules card goes in the agent's prompt; details are looked up here. | Topic must be a name in `docs/agent/README.md`; no paths | `docs/agent/` |
 
 `check_books` waits until the instructors' balance-check endpoint exists. It would compare our figures with theirs and report a match or the difference.
 

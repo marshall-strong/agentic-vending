@@ -10,7 +10,9 @@ Read failures are retried, then end in one of two ways. `BridgeUnreachable`
 means every later call would fail too, so the caller should stop: the bridge is
 down or rejected our key. Plain `BridgeError` means only this day or poll
 failed: an error status, a response cut off or unreadable, or a connection that
-keeps failing on one poll while `/health` still answers.
+keeps failing on one poll while `/health` still answers. A 5xx that outlasts
+the retries is checked against `/health` the same way, because Tailscale's
+proxy can answer `502` to every request until the node has joined the tailnet.
 """
 
 from __future__ import annotations
@@ -133,7 +135,12 @@ class Bridge:
                     raise BridgeRateLimited(f"429 from {path}: still rate limited after {RETRIES} retries") from None
                 if error.code in (401, 403):
                     raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
-                raise BridgeError(f"{error.code} from {path}: {_start_of_body(error)!r}") from None
+                detail = f"{error.code} from {path}: {_start_of_body(error)!r}"
+                # A 5xx from everything, `/health` included, is an outage (or
+                # the Tailscale proxy before the node joins), not this request.
+                if error.code >= 500 and path != "/health" and not self._is_up():
+                    raise BridgeUnreachable(f"{detail}, and /health doesn't answer. Is Tailscale connected?") from None
+                raise BridgeError(detail) from None
             except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
                 if attempt < RETRIES:
                     time.sleep(delay)
