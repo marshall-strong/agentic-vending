@@ -137,7 +137,8 @@ def load(conn: psycopg.Connection, start: date | None, end: date | None, view: s
     """Every figure on the page, from one read-only snapshot."""
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
-        # The app's clock, the one get_pnl and ledger.balance use for "today" and "now".
+        # The app's clock, as get_pnl uses for "today" (ledger.balance takes "now" from
+        # the database clock, ledger.db_now).
         printed_at = datetime.now(EASTERN)
         totals = get_pnl(conn, start, end)
         if not totals.success:
