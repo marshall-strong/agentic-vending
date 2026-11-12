@@ -4,7 +4,7 @@ Data: 2026-08-27 22:36 to 2026-11-11 18:00 ET. Our slots 15-18, 25-28, 35-38, 45
 
 **Scope.** Machine-wide data is used only as totals over the whole machine, for the calendar and day-off effects, the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits: that history is from before the competition, when course staff stocked every slot, so it reflects no rival strategy. Everything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller flags, experiments) uses only our 20 slots, and no slot is judged by another slot's state.
 
-**Slots.** 20 on vmc1: 15-18, 25-28, 35-38, 45-48, 55-58. Source: default list in vending/slots.py (matches the server's answer of 12 Nov 2026, see #69).
+**Slots.** 20 on vmc1: 15-18, 25-28, 35-38, 45-48, 55-58. Source: default list in vending/slots.py.
 
 **Weeks.** Weeks run Saturday to Friday, as in the ledger and the P&L page (`vending/ledger.py`, `WEEK_STARTS = 5`).
 

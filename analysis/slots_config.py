@@ -97,6 +97,66 @@ def resolve_slots(cli_value, conn=None):
     return DEVICE_ID, check(SLOTS, "vending.slots.SLOTS"), SOURCE_DEFAULT
 
 
+def server_assignment_supported():
+    """True once vending.slots can read the stored server assignment (#69). Before that, no run read one."""
+    try:
+        from vending.slots import our_slots  # noqa: F401
+    except (ImportError, AttributeError):
+        return False
+    return True
+
+
+def ours_for(source, slots):
+    """The list a recorded scope (data/slots.json, lab_data.json) may cover.
+
+    A list recorded as the server's answer can't be confirmed without the database, so it is accepted
+    beyond vending.slots.SLOTS only once the code can read the server's assignment at all, and then with a
+    warning when it differs. Every other recorded list must stay within vending.slots.SLOTS.
+    """
+    if source == SOURCE_SERVER and server_assignment_supported():
+        recorded = check(slots, "recorded server assignment", slots)
+        if set(recorded) != set(SLOTS):
+            print(f"WARNING: the recorded server assignment ({ranges(recorded)}) differs from "
+                  f"vending.slots.SLOTS ({ranges(tuple(sorted(SLOTS)))}); it is trusted as exported")
+        return recorded
+    return SLOTS
+
+
+def check_scope(device, slots, source, where):
+    """Refuse a recorded scope for another machine or with a slot that isn't ours. Returns the slots in shelf order."""
+    if device != DEVICE_ID:
+        raise SystemExit(f"{where}: recorded for device {device!r}, but ours is {DEVICE_ID!r}")
+    return check(slots, where, ours_for(source, slots))
+
+
+def resolve_run(cli_value, exported, where, now):
+    """(device, slots, source, resolved_at) for the analysis, given --slots and the export's data/slots.json.
+
+    `exported` is that file's contents, or None. The CSVs must have been exported for the same list this run
+    uses; otherwise it stops and says to re-export.
+    """
+    recorded = None
+    if exported:
+        recorded = check_scope(exported["device"], exported["slots"], exported["source"], where)
+        if is_default(exported["source"]):
+            exported = {**exported, "source": SOURCE_DEFAULT}       # older files carry a longer wording
+    ours = ours_for(exported["source"], recorded) if exported else SLOTS
+    if cli_value is not None:
+        device, slots, source, at = DEVICE_ID, parse_slots(cli_value, ours), SOURCE_CLI, now
+        if recorded and set(recorded) == set(slots):
+            source, at = exported["source"], exported.get("resolved_at")   # same list as exported: keep where it came from
+    elif exported:
+        device, slots, source, at = DEVICE_ID, recorded, exported["source"], exported.get("resolved_at")
+    else:
+        device, slots, source, at = DEVICE_ID, check(SLOTS, "vending.slots.SLOTS"), SOURCE_DEFAULT, None
+    if recorded and set(recorded) != set(slots):
+        raise SystemExit(
+            f"SLOTS: the CSVs were exported for {len(recorded)} slots on {DEVICE_ID} ({ranges(recorded)}), "
+            f"but this run asks for {len(slots)} ({ranges(slots)}). Re-export first: "
+            f"python analysis/export_sales.py --slots {','.join(slots)}  (or python analysis/rebuild.py --slots ...)")
+    return device, slots, source, at
+
+
 def ranges(slots):
     """'15-18, 25-28' style text for slot codes in shelf order."""
     out, run = [], []

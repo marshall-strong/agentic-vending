@@ -81,7 +81,7 @@ from statsmodels.tsa.seasonal import STL
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from slots_config import SOURCE_CLI, SOURCE_DEFAULT, SOURCE_SERVER, check, is_default, parse_slots  # noqa: E402
+from slots_config import SOURCE_CLI, SOURCE_DEFAULT, is_default, resolve_run  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
 from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (defaults; configure() sets the ones this run uses)
 
@@ -162,25 +162,12 @@ def source_line():
 
 
 def resolve(args):
-    """The slot list for this run, checked against the list the CSVs were exported for (data/slots.json)."""
+    """The slot list for this run, checked against the list the CSVs were exported for (data/slots.json).
+    The rules are in slots_config.resolve_run, where they are tested."""
     manifest = Path(args.slots_file)
     exported = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else None
-    # Every list must be within ours: the server assignment the export stored, else vending.slots.SLOTS.
-    ours = tuple(exported["slots"]) if exported and exported.get("source") == SOURCE_SERVER else SLOTS
-    if args.slots is not None:
-        device, slots, source = DEVICE_ID, parse_slots(args.slots, ours), SOURCE_CLI
-        at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-        if exported and set(exported["slots"]) == set(slots) and exported["device"] == device:
-            source, at = exported["source"], exported.get("resolved_at")   # same list as exported: keep where it came from
-    elif exported:
-        device, slots, source, at = exported["device"], check(exported["slots"], str(manifest), ours), exported["source"], exported.get("resolved_at")
-    else:
-        device, slots, source, at = DEVICE_ID, check(SLOTS, "vending.slots.SLOTS"), SOURCE_DEFAULT, None
-    if exported and (set(exported["slots"]) != set(slots) or exported["device"] != device):
-        raise SystemExit(
-            f"SLOTS: the CSVs in {manifest.parent} were exported for {len(exported['slots'])} slots on {exported['device']} "
-            f"({slot_ranges(check(exported['slots'], str(manifest), ours))}), but this run asks for {len(slots)} on {device} ({slot_ranges(slots)}). "
-            f"Re-export first: python analysis/export_sales.py --slots {','.join(slots)}  (or python analysis/rebuild.py --slots ...)")
+    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    device, slots, source, at = resolve_run(args.slots, exported, str(manifest), now)
     if exported is None:
         print(f"WARNING: no {manifest.name} next to the CSVs, so it can't be checked which slots they were exported for; "
               "the per-slot rows are still checked against the slot list below")

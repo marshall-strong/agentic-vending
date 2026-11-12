@@ -12,10 +12,13 @@ Two forms are written next to each other:
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent          # analysis/labs
 ANALYSIS = HERE.parent                          # analysis
+sys.path.insert(0, str(ANALYSIS))
+from slots_config import check_scope  # noqa: E402  (refuses a scope with a slot that isn't ours)
 LAB_DATA = ANALYSIS / "out" / "lab_data.json"
 DATA = ANALYSIS / "data"
 OUT = ANALYSIS / "out" / "labs"
@@ -48,6 +51,7 @@ def scope_of(d):
     for k in ("device", "our_slots", "source", "source_line", "machine"):
         if k not in sc:
             raise SystemExit(f"lab_data.json has no scope.{k}: rerun analysis/sales_analysis.py")
+    check_scope(sc["device"], sc["our_slots"], sc["source"], "lab_data.json scope")
     stray = set((d.get("photo_check") or {}).get("photo_stocked") or []) - set(sc["our_slots"])
     if stray:
         raise SystemExit(f"lab_data.json: photo_check.photo_stocked has slots that are not ours: {sorted(stray)}")

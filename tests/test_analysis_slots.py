@@ -62,3 +62,75 @@ def test_the_default_source_claims_no_server_check():
     assert slots_config.is_default(source)
     assert slots_config.is_default(source + " (matches the server's answer of 12 Nov 2026, see #69)")
     assert not slots_config.is_default(slots_config.SOURCE_CLI)
+
+
+# --- the analysis's run list (resolve_run) and the labs' scope check (labkit.scope_of) ---
+
+NOW = "2026-11-12T13:00:00+00:00"
+OURS = tuple(sorted(SLOTS))
+
+
+def manifest(slots=OURS, source=None, device=slots_config.DEVICE_ID):
+    return {"device": device, "slots": list(slots), "source": source or slots_config.SOURCE_DEFAULT,
+            "resolved_at": "2026-11-12T12:00:00+00:00"}
+
+
+def test_run_with_no_manifest_uses_the_default_list():
+    assert slots_config.resolve_run(None, None, "slots.json", NOW) == (
+        slots_config.DEVICE_ID, OURS, slots_config.SOURCE_DEFAULT, None)
+
+
+def test_run_follows_the_manifest_and_drops_the_old_server_wording():
+    old = slots_config.SOURCE_DEFAULT + " (matches the server's answer of 12 Nov 2026, see #69)"
+    _, slots, source, at = slots_config.resolve_run(None, manifest(source=old), "slots.json", NOW)
+    assert (slots, source, at) == (OURS, slots_config.SOURCE_DEFAULT, "2026-11-12T12:00:00+00:00")
+
+
+def test_run_refuses_a_manifest_with_a_slot_that_is_not_ours():
+    with pytest.raises(SystemExit, match="not one of our slots"):
+        slots_config.resolve_run(None, manifest([*OURS, "11"]), "slots.json", NOW)
+
+
+def test_run_refuses_a_manifest_that_claims_the_server_before_the_code_can_read_it(monkeypatch):
+    monkeypatch.setattr(slots_config, "server_assignment_supported", lambda: False)
+    whole = [f"{r}{c}" for r in "12345" for c in "12345678"]
+    with pytest.raises(SystemExit, match="not one of our slots"):
+        slots_config.resolve_run(None, manifest(whole, slots_config.SOURCE_SERVER), "slots.json", NOW)
+
+
+def test_run_trusts_a_server_manifest_once_the_code_can_read_the_server(monkeypatch, capsys):
+    monkeypatch.setattr(slots_config, "server_assignment_supported", lambda: True)
+    got = slots_config.resolve_run(None, manifest(("15", "16"), slots_config.SOURCE_SERVER), "slots.json", NOW)
+    assert got[1:3] == (("15", "16"), slots_config.SOURCE_SERVER)
+    assert "differs from vending.slots.SLOTS" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="not one of our slots"):
+        slots_config.resolve_run("17", manifest(("15", "16"), slots_config.SOURCE_SERVER), "slots.json", NOW)
+
+
+def test_run_refuses_a_manifest_for_another_device():
+    with pytest.raises(SystemExit, match="recorded for device"):
+        slots_config.resolve_run(None, manifest(device="vmc2"), "slots.json", NOW)
+
+
+def test_run_command_line_must_match_the_export():
+    with pytest.raises(SystemExit, match="Re-export first"):
+        slots_config.resolve_run("15,16", manifest(), "slots.json", NOW)
+    _, slots, source, at = slots_config.resolve_run(",".join(OURS), manifest(), "slots.json", NOW)
+    assert (slots, source, at) == (OURS, slots_config.SOURCE_DEFAULT, "2026-11-12T12:00:00+00:00")
+    _, slots, source, at = slots_config.resolve_run("16,15", None, "slots.json", NOW)
+    assert (slots, source, at) == (("15", "16"), slots_config.SOURCE_CLI, NOW)
+
+
+def lab_data(slots=OURS, source=slots_config.SOURCE_CLI, device=slots_config.DEVICE_ID):
+    return {"scope": {"device": device, "our_slots": list(slots), "source": source,
+                      "source_line": "Slots: ...", "machine": {"shelves": 5, "columns": 8}}}
+
+
+def test_labs_refuse_a_scope_with_a_slot_that_is_not_ours():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "analysis" / "labs"))
+    import labkit
+    assert labkit.scope_of(lab_data(("15", "16")))["our_slots"] == ["15", "16"]
+    with pytest.raises(SystemExit, match="not one of our slots"):
+        labkit.scope_of(lab_data([*OURS, "14"]))
+    with pytest.raises(SystemExit, match="recorded for device"):
+        labkit.scope_of(lab_data(device="vmc2"))
