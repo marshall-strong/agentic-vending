@@ -521,3 +521,80 @@ def test_get_project_rules_is_offered_when_the_server_lists_it(connect, conn):
     client = Script(answer())
     go(connect, client, Tools(SERVER_TOOLS + ["get_project_rules"]))
     assert "get_project_rules" in {t["name"] for t in client.sent[0]["tools"]}
+
+
+# --- The run's steps (agent_steps) ----------------------------------------------------
+
+def thought(text):
+    return SimpleNamespace(type="thinking", thinking=text, signature="sig")
+
+
+def steps(conn, run_id):
+    return conn.execute("select turn, kind, tool, content, is_error from agent_steps where run_id = %s order by id",
+                        (run_id,)).fetchall()
+
+
+def test_every_step_is_recorded_in_order_with_the_reasoning(connect, conn):
+    first = tool_turn(thought("Check the machine first."), use("get_machine_state"))
+    second = tool_turn(use("preview_desired_state", {"desired": PLAN}, id="t2"))
+    final = answer("skip", reason="quiet week")
+    final.content.insert(0, thought("Nothing sold out, so skip."))
+    client = Script(first, second, final)
+    tools = Tools(replies={"preview_desired_state": {"success": False, "message": "Plan refused: halted"}})
+    run_id, out = go(connect, client, tools)
+    got = steps(conn, run_id)
+    assert [(t, k, tool) for t, k, tool, _, _ in got] == [
+        (1, "thinking", None), (1, "tool_call", "get_machine_state"), (1, "tool_result", "get_machine_state"),
+        (2, "tool_call", "preview_desired_state"), (2, "tool_result", "preview_desired_state"),
+        (3, "thinking", None), (3, "text", None)]
+    assert got[0][3] == "Check the machine first."
+    assert json.loads(got[3][3]) == {"desired": PLAN}
+    assert got[4][4] is True and "Plan refused" in got[4][3]          # the failed reply is marked
+    assert json.loads(got[6][3])["decision"] == "skip"
+    # Every request asks for readable reasoning.
+    assert all(sent["thinking"] == {"type": "adaptive", "display": "summarized"} for sent in client.sent)
+
+
+def test_a_step_that_cant_be_stored_never_stops_the_run(connect, conn, monkeypatch, capsys):
+    def broken(*a, **k):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(agent.agent_runs, "step", broken)
+    run_id, out = go(connect, Script(tool_turn(use("get_machine_state")), answer()), Tools())
+    assert out.status == "skipped" and stored(conn, run_id)[1] == "skipped"
+    assert capsys.readouterr().err.count("couldn't be stored") == 1      # said once, not per step
+
+
+def test_a_step_is_checked_and_a_long_one_is_cut(conn):
+    from vending import agent_runs
+    run_id = agent_runs.start(conn, mode="dry-run")
+    with pytest.raises(ValueError, match="kind"):
+        agent_runs.step(conn, run_id, 1, "musing", "x")
+    with pytest.raises(ValueError, match="needs a tool"):
+        agent_runs.step(conn, run_id, 1, "tool_call", "{}")
+    with pytest.raises(ValueError, match="names no tool"):
+        agent_runs.step(conn, run_id, 1, "thinking", "x", tool="get_pnl")
+    agent_runs.step(conn, run_id, 1, "tool_result", "y" * 10_000, tool="get_pnl")
+    (content,) = conn.execute("select content from agent_steps").fetchone()
+    assert content.startswith("y" * agent_runs.MAX_STEP_TEXT) and content.endswith("10,000 characters in all")
+
+
+def test_the_dashboard_shows_how_each_run_decided(connect, conn):
+    from vending import dashboard
+
+    first = tool_turn(thought("Look at <the> machine & sales."), use("get_machine_state"))
+    go(connect, Script(first, answer()), Tools())
+    snap = dashboard.snapshot(conn)
+    run = snap["runs"]["data"][0]
+    assert [s["kind"] for s in run["steps"]] == ["thinking", "tool_call", "tool_result", "text"]
+    page = dashboard.render(snap)
+    assert "How it decided: 2 turns, 1 tool call" in page
+    assert "Look at &lt;the&gt; machine &amp; sales." in page and "Called <b>get_machine_state</b>" in page
+
+
+def test_the_dashboard_works_before_the_steps_table_exists(connect, conn):
+    from vending import dashboard
+
+    go(connect, Script(answer()), Tools())
+    conn.execute("drop table agent_steps")
+    snap = dashboard.snapshot(conn)
+    assert snap["runs"]["ok"] and snap["runs"]["data"][0]["steps"] == []

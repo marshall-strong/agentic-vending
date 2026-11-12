@@ -27,6 +27,8 @@ Each run is one row in `agent_runs`, which the dashboard reads:
 | `halted` | the halt switch was on |
 | `failed` | the model key is missing, a cap was reached, the answer was cut off, it ran out of turns, a submit was refused, it said "submit" on a live run without submitting, or something broke. A detail that starts with **SUBMISSION UNRESOLVED** means the bridge may have accepted a request: check `python -m vending.submissions list` before anyone submits again |
 
+**Every step is recorded too**, in `agent_steps` (migration 014), as it happens: the model's reasoning, any text it wrote, each tool call and each tool result (cut to 4,000 characters). The reasoning is the summary the API returns when asked with `thinking: {display: "summarized"}`; the raw chain of thought is never available. The dashboard shows them under each run as **How it decided**. A step that can't be stored is reported on stderr and the run goes on.
+
 `plan` is the last plan that previewed OK (with its `plan_hash`), or the plan that was submitted. **It also carries what the dashboard shows beside the plan:** `visit` (`scheduled` or `midweek`), the run's `reason`, and a `reason` on each slot the model said it changed (its final answer lists them as `slot_reasons`). A run that stopped before answering stores the plan without reasons. `team_update` and `notes` come from the model's final answer. `cost_usd` is what the harness spent, estimates included.
 
 ## Before the first run
