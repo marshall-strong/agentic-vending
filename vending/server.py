@@ -1,4 +1,4 @@
-"""The MCP server: the agent's 10 tools, over stdio.
+"""The MCP server: the agent's 11 tools, over stdio.
 
     python -m vending.server
 
@@ -39,7 +39,8 @@ from pydantic_core import to_jsonable_python
 from vending import db
 from vending.bridge import Bridge
 from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, catalog, catalog_request,
-                           machine_state, pnl, preview, purchase_requests, sales_history, stubs)
+                           machine_state, pnl, preview, project_rules, purchase_requests, sales_history,
+                           stubs)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -206,6 +207,16 @@ async def set_price(slot: str, sale_price: str) -> WriteReply:
 async def get_pnl(start: date | None = None, end: date | None = None) -> pnl.Pnl:
     """Profit and loss over inclusive Eastern calendar days (default: opening to today): revenue ex tax, cost of sales, shrinkage, fees, token spend, net, purchases, inventory at cost."""
     return await _read("get_pnl", pnl.get_pnl, start=start, end=end)
+
+
+@_tool(built=True)
+async def get_project_rules(topic: str | None = None) -> project_rules.ProjectRules:
+    """Our notes on the project brief. Omit topic for the list of topics with summaries; give one for its text."""
+    return await _read("get_project_rules", _project_rules, topic=topic)
+
+
+def _project_rules(conn: psycopg.Connection, topic: str | None) -> project_rules.ProjectRules:
+    return project_rules.get_project_rules(topic)
 
 
 @_tool(built=True)
