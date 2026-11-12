@@ -453,6 +453,17 @@ def test_cli_opens_shows_and_lists(schema_url, monkeypatch, capsys):
     assert capsys.readouterr().out.count("\n") == 5
 
 
+
+def test_cli_show_says_to_record_the_slots_when_none_are_stored(schema_url, monkeypatch, capsys):
+    from vending import db as db_module
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    with open_in(*schema_url) as conn:
+        open_ledger(conn)
+        conn.execute("delete from slot_assignment")
+    assert ledger.main(["show"]) == 1
+    assert "python -m vending.slots record" in capsys.readouterr().err
+
+
 def test_cli_refuses_a_schema_missing_migrations(database_url, monkeypatch, capsys):
     import uuid
     from vending import db as db_module

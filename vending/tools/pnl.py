@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 
 from vending import ledger
+from vending.slots import SlotsNotRecorded
 from vending.tools import Reply
 
 EASTERN = ZoneInfo(ledger.TIMEZONE)
@@ -70,7 +71,10 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
     if last_day < first.astimezone(EASTERN).date():
         return Pnl(success=False, message=f"end ({last_day}) is before start ({first.astimezone(EASTERN).date()}).")
     last = datetime.combine(last_day + timedelta(days=1), time.min, EASTERN) - timedelta(microseconds=1)
-    p = ledger.pnl(conn, first, last)
+    try:
+        p = ledger.pnl(conn, first, last)
+    except SlotsNotRecorded as error:
+        return Pnl(success=False, message=str(error))
     net = ledger.money(p.net_cents)
     caveat = "" if p.cost_of_sales_complete else f" ({p.units_sold - p.units_costed} of {p.units_sold} units sold not costed)"
     return Pnl(

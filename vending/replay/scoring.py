@@ -18,7 +18,6 @@ from fractions import Fraction
 from vending.pricing import PRICE_STEP_CENTS, _dollars, check_price, floor_cents
 from vending.replay.deciders import Plan, SlotPlan, check_plan
 from vending.replay.state import SlotWeek, WeekState
-from vending.slots import SLOTS
 from vending.tools.sales_history import tax_cents
 
 # The team's proposed ceiling ("Decide as a team" in tool-list.md), used here as agreed.
@@ -91,9 +90,11 @@ def score(state: WeekState, answer: object, next_week: WeekState | None,
     `writes` is how many write tool calls were logged while the decider ran
     (None if not measured).
     """
-    plan, refusals = check_plan(answer)
+    ours = tuple(s.slot for s in state.slots)
+    plan, refusals = check_plan(answer, ours)
     valid = Check("valid plan", FAIL if refusals else PASS,
-                  "; ".join(_refusal(r) for r in refusals) or "All 20 slots once, every field well formed.")
+                  "; ".join(_refusal(r) for r in refusals)
+                  or f"All {len(ours)} slots once, every field well formed.")
     writes_check = _no_writes(writes)
     if plan is None:
         skipped = tuple(Check(name, SKIP, "No valid plan to check.") for name, _ in CHECKS)
@@ -102,7 +103,7 @@ def score(state: WeekState, answer: object, next_week: WeekState | None,
     if next_week is None:
         return Score(checks=checks, plan=plan,
                      notes=("No polls for the following week, so the outcome can't be scored.",))
-    outcomes = tuple(_outcome(state, plan, plan.slot(slot), next_week.slot(slot)) for slot in SLOTS)
+    outcomes = tuple(_outcome(state, plan, plan.slot(slot), next_week.slot(slot)) for slot in ours)
     return Score(checks=checks, plan=plan, slots=outcomes, totals=_totals(plan, outcomes))
 
 

@@ -61,8 +61,9 @@ from vending.pricing import (
 )
 from vending.slots import SLOTS
 
-# Our 20 selections, from `vending.slots`, the one place that lists them. Kept
-# under this name because `Config.slots` and the tests use it.
+# The default for `Config.slots`, for code and tests with no database. Live
+# planning (`vending.planning.planner_config`) passes the stored assignment from
+# `vending.slots.our_slots` instead. Kept under this name because the tests use it.
 OUR_SLOTS: tuple[str, ...] = SLOTS
 
 # Spelled exactly as the API wants them.

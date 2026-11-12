@@ -58,7 +58,7 @@ from psycopg.types.json import Jsonb
 
 from vending import config, counters, db, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools.sales_history import tax_cents
 
 KINDS = ("opening", "capital", "tokens", "adjustment", "tax_remitted")
@@ -392,11 +392,13 @@ def takings_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, 
 
 def _counter_rows(conn: psycopg.Connection, column: str, until: datetime) -> list[tuple[datetime, str, int]]:
     assert column in ("lifetime_sales_cents", "lifetime_units")
+    # Our slots from the stored assignment: raises SlotsNotRecorded rather than count the wrong selections.
+    slots = our_slots(conn)
     return conn.execute(
         f"select p.started_at, s.selection, s.{column} from poll_selections s"
         " join polls p using (session_id)"
         " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and p.started_at <= %s",
-        (DEVICE_ID, list(SLOTS), until),
+        (DEVICE_ID, list(slots), until),
     ).fetchall()
 
 
@@ -405,7 +407,7 @@ def takings(conn: psycopg.Connection, since: datetime, until: datetime) -> Takin
 
 
 def units_sold(conn: psycopg.Connection, since: datetime, until: datetime) -> int:
-    """Units sold from all 20 slots in the window, from the unit counters: the figure every cost must account for."""
+    """Units sold from all our slots in the window, from the unit counters: the figure every cost must account for."""
     _, _, rises, _ = rises_between(_counter_rows(conn, "lifetime_units", until), since, until)
     return sum(r.amount for r in rises)
 
@@ -695,7 +697,9 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"{e.id:>4}  {e.at:%Y-%m-%d %H:%M}  {e.kind:12}  {money(e.amount_cents):>10}  {e.detail}"
                           + (f"  [{e.reference}]" if e.reference else "") + f"  by {e.recorded_by}")
                 return 0
-        except LedgerError as error:
+        except (LedgerError, SlotsNotRecorded) as error:
+            # SlotsNotRecorded: the balance counts our slots' sales, so `show` needs the assignment
+            # (python -m vending.slots record), which Azure lacks between `migrate` and `record`.
             print(error, file=sys.stderr)
             return 1
         if args.action != "open":
