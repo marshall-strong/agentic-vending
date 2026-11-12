@@ -3,7 +3,7 @@
 A tool is one thing the agent can ask our code to do: read the machine's state, plan a restock,
 place an order. Each tool is deterministic Python, served to the agent over stdio by an MCP server
 (`python -m vending.server`, see [`mcp-server.md`](mcp-server.md)). The tools never call a
-language model: the model is called only by the agent loop (PR #58, open, not yet on `main`), so
+language model: the model is called only by the agent loop (PR #58, merged), so
 every figure below is worked out by code, not by the model. Every tool that changes anything
 outside our database (a write tool) passes the write gate: the halt switch is checked first, and
 every attempt is logged.
@@ -77,9 +77,11 @@ should do next.
   - A slot that isn't ours: `success: false`, listing ours.
   - `start` not before `end`: `success: false`.
   - Fewer than two polls in the window: `success: false`, suggesting a wider window or the sync.
-  - No poll before `start`: it starts at the first poll and the message says so.
-  - A slot whose counter went down between the two polls (a replaced board) gets `null` and is
-    left out of the totals, rather than showing negative sales.
+  - No poll at or before `start`: it starts at the first poll after `start` and the message says
+    so.
+  - A slot whose counter went down between the two polls (a replaced board), or that is missing
+    from either poll, gets `null` and is left out of the totals, rather than showing negative
+    sales.
   - It does not flag an old latest poll; the message names the poll times instead.
 - **Owner**: Kevin Sykes built it (PR #14). Issue #16 has no assignee.
 
@@ -134,7 +136,7 @@ should do next.
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
   (`inventory_machine`, `inventory_closet`, `inventory`, `inventory_complete`); per-week revenue
   in `weeks`; and `notes`.
-- **Preconditions**: the ledger is open, unless both dates are given.
+- **Preconditions**: the ledger is open, unless `start` is given (`end` then defaults to today).
 - **Side effects**: one `action_log` row.
 - **Cost**: database queries only.
 - **Failure behavior**:
