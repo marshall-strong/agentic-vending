@@ -16,7 +16,7 @@ from datetime import datetime
 import psycopg
 from pydantic import BaseModel
 
-from vending import planner, planning
+from vending import planner, planning, submissions
 from vending.bridge import Bridge
 from vending.ledger import money
 from vending.tools import RefusalOut, Reply
@@ -79,10 +79,11 @@ class PlanReply(Reply):
     notes: list[str] = []
 
 
-def describe(plan: planner.Plan, gathered: planning.Gathered) -> PlanReply:
-    """A `Plan` as the agent sees it. Pure: no database."""
-    refusals = [RefusalOut(code=r.code, message=r.message, slot=r.slot) for r in plan.refusals]
-    if plan.ok:
+def describe(plan: planner.Plan, gathered: planning.Gathered, more: list = ()) -> PlanReply:
+    """A `Plan` as the agent sees it, with any refusals found outside the planner (`more`). Pure: no database."""
+    refusals = [RefusalOut(code=r.code, message=r.message, slot=r.slot) for r in (*plan.refusals, *more)]
+    ok = plan.ok and not more
+    if ok:
         message = (f"Plan OK: {len(plan.lines)} lines, max cost {money(plan.cost.max_cents)}, leaving "
                    f"{money(plan.cost.balance_left_at_max_cents)} of the spendable balance. "
                    "Submit it unchanged with submit_desired_state.")
@@ -90,10 +91,10 @@ def describe(plan: planner.Plan, gathered: planning.Gathered) -> PlanReply:
         message = (f"Plan refused: {len(refusals)} problem{'s' if len(refusals) != 1 else ''} "
                    f"({', '.join(sorted({r.code for r in refusals}))}). Fix them all and preview again.")
     return PlanReply(
-        success=plan.ok,
+        success=ok,
         message=message,
         count=len(plan.lines),
-        ok=plan.ok,
+        ok=ok,
         plan_hash=plan.plan_hash,
         off_cycle=plan.off_cycle,
         as_of=gathered.now,
@@ -117,7 +118,9 @@ def preview_desired_state(conn: psycopg.Connection, desired: DesiredState, bridg
         plan, gathered = planning.plan(conn, desired, bridge, now)
     except planning.NotReady as blocked:
         return PlanReply(success=False, message=f"Can't plan yet: {blocked}")
-    return describe(plan, gathered)
+    # Submit will refuse while a submission is unsettled, so say so here rather than let a clean preview mislead.
+    unresolved = submissions.unresolved(conn)
+    return describe(plan, gathered, [unresolved] if unresolved else [])
 
 
 def _line(ln: planner.Line) -> PlannedLine:

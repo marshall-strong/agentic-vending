@@ -109,7 +109,6 @@ def test_every_tool_that_reads_slots_refuses_without_an_assignment(empty):
     for reply in replies:
         assert not reply.success and "python -m vending.slots record" in reply.message
     from vending import config
-    config.set_value(empty, "slot_capacity", 10, "test")
     with pytest.raises(NotReady, match="python -m vending.slots record"):
         planner_config(empty)
 
@@ -134,7 +133,6 @@ def test_the_tools_use_the_stored_slots_not_the_list_in_the_code(conn):
     refused = get_sales_history(conn, NOW - timedelta(days=8), NOW, ["15"])
     assert not refused.success and "Not our slots: 15. Ours are 11, 12" in refused.message
 
-    config.set_value(conn, "slot_capacity", 10, "test")
     assert planner_config(conn).slots == ("11", "12")
 
 

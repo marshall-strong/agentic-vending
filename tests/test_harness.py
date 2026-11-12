@@ -161,7 +161,7 @@ def connect(schema_url):
 
 def harness(connect, client, **kw):
     kw.setdefault("now", lambda: NOW)
-    return Harness(client, connect, purpose=kw.pop("purpose", "test"), **kw)
+    return Harness(client, connect, purpose=kw.pop("purpose", "live"), **kw)
 
 
 def tokens_entries(conn):
@@ -179,7 +179,7 @@ def test_a_call_writes_one_debit_with_its_cost_and_turns_retries_off(connect, co
     assert client.messages.sent[0]["service_tier"] == "standard_only"
     # 1000 in x $4 + 500 out x $20, per million = $0.014 = 1.4 cents
     assert tokens_entries(conn) == [(Decimal("-1.4"), "claude-opus-5-5: 1000 tokens in, 500 out",
-                                     "test week 3 msg_1", "harness")]
+                                     "live week 3 msg_1", "harness")]
     assert h.spent == Decimal("0.014") and h.calls[0].recorded
 
 
@@ -267,7 +267,7 @@ def test_if_the_correction_fails_the_response_comes_back_and_the_estimate_stays(
     assert detailed.response.id == "msg_1" and not detailed.recorded
     assert "estimate stays" in caplog.text
     (amount, _, reference, _), = tokens_entries(conn)
-    assert amount < Decimal("-1.4") and reference == "test pending"     # over, never under
+    assert amount < Decimal("-1.4") and reference == "live pending"     # over, never under
 
 
 def test_if_the_estimate_cant_be_written_nothing_is_sent(connect, conn):
@@ -282,7 +282,7 @@ def test_a_crash_after_sending_leaves_the_estimate(connect, conn):
     with pytest.raises(RuntimeError):
         harness(connect, client).call(REQUEST)
     (amount, _, reference, _), = tokens_entries(conn)
-    assert amount < 0 and reference == "test pending"
+    assert amount < 0 and reference == "live pending"
 
 
 def test_a_fallback_answer_is_priced_at_the_model_that_answered(connect, conn):
@@ -315,3 +315,100 @@ def test_standard_capacity_is_forced_and_max_tokens_kept_sendable(connect, conn)
 def test_purpose_must_be_live_or_test(connect):
     with pytest.raises(HarnessError, match="purpose"):
         Harness(FakeClient(), connect, purpose="demo")
+
+
+# --- model_calls: every call, live or test --------------------------------------------
+
+def model_calls(conn):
+    return conn.execute("select purpose, label, run_id, model, answered_by, effort, key_env, status, stop_reason,"
+                        " input_tokens, output_tokens, cost_usd, worst_case_usd, ledger_entry, seconds, host"
+                        " from model_calls order by id").fetchall()
+
+
+def writes_logged(conn):
+    return conn.execute("select count(*) from action_log where kind = 'write'").fetchone()[0]
+
+
+def test_a_live_call_is_one_model_call_row_tied_to_its_ledger_entry(connect, conn):
+    answer = SimpleNamespace(id="msg_9", model="claude-opus-5-5", usage=usage(i=1000, o=500), stop_reason="end_turn")
+    h = harness(connect, FakeClient(answer=answer))
+    call = h.call_detailed({**REQUEST, "output_config": {"effort": "high"}}, label="week 3")
+    (row,) = model_calls(conn)
+    purpose, label, run_id, model, answered_by, effort, key_env, status, stop, i, o, cost, worst, entry, secs, host = row
+    assert (purpose, label, run_id, model, answered_by, effort) == ("live", "week 3", h.run_id, "claude-opus-5-5",
+                                                                     "claude-opus-5-5", "high")
+    assert (key_env, status, stop, i, o) == ("VENDING_ANTHROPIC_API_KEY", "ok", "end_turn", 1000, 500)
+    assert cost == Decimal("0.014") and worst > cost and secs is not None and host
+    ledger_id = conn.execute("select id from ledger_entries where kind = 'tokens'").fetchone()[0]
+    assert entry == ledger_id == call.entry and call.call_id is not None
+
+
+def test_a_test_call_is_recorded_but_never_reaches_the_books(connect, conn):
+    h = harness(connect, FakeClient(), purpose="test", key_env="VENDING_PERSONAL_ANTHROPIC_KEY")
+    h.call(REQUEST, label="sweep haiku@low slow-seller")
+    assert tokens_entries(conn) == [] and writes_logged(conn) == 0    # not the $600; not an agent write
+    (row,) = model_calls(conn)
+    assert row[0] == "test" and row[6] == "VENDING_PERSONAL_ANTHROPIC_KEY" and row[7] == "ok"
+    assert row[11] == Decimal("0.014") and row[13] is None
+
+
+def test_each_purpose_has_its_own_daily_cap(connect, conn):
+    # $3.99 of test spend today leaves the test cap nearly full, but doesn't touch the live one.
+    harness(connect, FakeClient(input_tokens=1000), purpose="test", run_cap_usd=Decimal(10),
+            daily_cap_usd=Decimal(10)).call(REQUEST)
+    conn.execute("update model_calls set cost_usd = 3.99")
+    client = FakeClient()
+    with pytest.raises(CapReached, match="test cap"):
+        harness(connect, client, purpose="test", daily_cap_usd=Decimal("4.00")).call(REQUEST)
+    harness(connect, client, purpose="live", daily_cap_usd=Decimal("4.00")).call(REQUEST)
+    assert len(client.messages.sent) == 1
+
+
+def test_the_test_daily_cap_comes_from_its_own_setting(connect, conn):
+    config.set_value(conn, "model_test_daily_cap_cents", 2500, "test")
+    config.set_value(conn, "model_daily_cap_cents", 400, "test")
+    assert harness(connect, FakeClient(), purpose="test").daily_cap == Decimal(25)
+    assert harness(connect, FakeClient(), purpose="live").daily_cap == Decimal(4)
+
+
+def test_the_test_daily_cap_defaults_to_twenty_dollars(connect, conn):
+    assert harness(connect, FakeClient(), purpose="test").daily_cap == Decimal(20)
+
+
+def test_a_refused_call_stays_visible_at_no_cost(connect, conn):
+    client = FakeClient(error=_http_error(anthropic.BadRequestError, 400))
+    with pytest.raises(HarnessError, match="not billed"):
+        harness(connect, client).call(REQUEST)
+    (row,) = model_calls(conn)
+    assert row[7] == "refused" and row[11] == 0 and row[13] is None and tokens_entries(conn) == []
+
+
+def test_a_call_that_may_have_run_is_an_error_row_at_its_worst_case(connect, conn):
+    client = FakeClient(error=_http_error(anthropic.InternalServerError, 500))
+    with pytest.raises(HarnessError, match="worst case"):
+        harness(connect, client, purpose="test").call(REQUEST)
+    (row,) = model_calls(conn)
+    assert row[7] == "error" and row[11] == row[12] == Decimal("0.35772")
+
+
+def test_the_row_is_pending_at_its_worst_case_while_the_call_runs(connect, conn):
+    seen = []
+    client = FakeClient(during=lambda: seen.append(conn.execute(
+        "select status, cost_usd from model_calls").fetchall()))
+    harness(connect, client, purpose="test").call(REQUEST)
+    assert seen == [[("pending", worst_case_usd("claude-opus-5-5", 1000, 16000, PRICES, caches=None))]]
+
+
+def test_one_harness_is_one_run(connect, conn):
+    h = harness(connect, FakeClient(), purpose="test", run_cap_usd=Decimal(2))
+    h.call(REQUEST)
+    h.call(REQUEST)
+    other = harness(connect, FakeClient(), purpose="test")
+    other.call(REQUEST)
+    runs = [r[2] for r in model_calls(conn)]
+    assert runs[0] == runs[1] == h.run_id and runs[2] == other.run_id != h.run_id
+
+
+def test_a_key_named_like_claude_codes_is_refused(connect):
+    with pytest.raises(HarnessError, match="ANTHROPIC_API_KEY"):
+        Harness(FakeClient(), connect, purpose="test", key_env="ANTHROPIC_API_KEY")

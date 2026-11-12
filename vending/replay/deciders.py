@@ -39,7 +39,9 @@ VISITS = ("scheduled", "midweek")
 # The baseline never plans an empty rail: leaving a slot empty waits on David.
 MIN_FILL = 1
 # Placeholder sanity limit, not a capacity: rails hold "as many as physically fit"
-# (build-plan.md), and config.slot_capacity doesn't exist yet. It stops a plan like
+# (build-plan.md). The planner now takes capacity from each product's package
+# (`vending.capacity`, 7 to 11 a column), but the replay cases carry no package
+# sizes, so this stays a sanity limit. It stops a plan like
 # fill_to: 10**30 from being scored as if it made sense.
 MAX_FILL = 50
 
@@ -132,6 +134,9 @@ def check_plan(answer: object) -> tuple[Plan | None, list[Refusal]]:
         plan, refusals = answer, []
     elif isinstance(answer, Mapping):
         plan, refusals = _parse(answer)
+    elif isinstance(answer, str):
+        start = " ".join(answer.split())[:160] or "(empty)"
+        return None, [Refusal("not_a_plan", f"Expected a JSON plan, got text: {start}")]
     else:
         return None, [Refusal("not_a_plan", f"Expected a plan or a JSON object, got {type(answer).__name__}.")]
     if plan is None:

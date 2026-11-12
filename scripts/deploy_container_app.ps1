@@ -39,18 +39,27 @@ param(
     [switch]$SetSecrets,
     [switch]$Force,
     [switch]$SkipPullCheck,
-    [string]$EnvFile = (Join-Path $PSScriptRoot "..\.env")
+    [string]$EnvFile
 )
 
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+# Not a default in param(): Windows PowerShell 5.1 leaves $PSScriptRoot empty there when a
+# [CmdletBinding()] script is started with powershell -File, and the script would fail to start.
+if (-not $EnvFile) { $EnvFile = Join-Path $root ".env" }
 # The image runs as a normal user, which can't listen below 1024.
 $Port = 8080
 # What the Dockerfile copies into the image; keep in step with its COPY lines. An untracked
 # file anywhere else can't reach the image, so it doesn't block a deploy.
 $ImagePaths = @("requirements.txt", "vending", "db", "docker")
-# .env setting -> Container App secret name.
-$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey"; "ANTHROPIC_API_KEY" = "anthropic-api-key" }
+# .env setting -> Container App secret name. No Anthropic key: nothing in the image calls the model
+# yet, so a key would only sit in a running container. The change that runs the agent loop here
+# adds it, under the name the agent reads.
+$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey" }
+# Env vars an earlier deploy set that this one doesn't. --set-env-vars only adds, so the update
+# removes these by name, and only when the app has them: az warns on stderr about a name the app
+# doesn't have, which Windows PowerShell 5.1 can turn into an error.
+$Retired = @("ANTHROPIC_API_KEY")
 
 # Whenever the tag comes from HEAD (a build, or -SkipBuild without -Tag), HEAD must be
 # origin/main exactly, so the tag names a commit everyone can see on main.
@@ -92,10 +101,17 @@ if (-not $SkipBuild) {
 if (-not $SkipPullCheck) {
     $anonymous = Join-Path ([IO.Path]::GetTempPath()) "agentic-vending-docker-$([guid]::NewGuid())"
     New-Item -ItemType Directory -Path $anonymous | Out-Null
+    # Windows PowerShell 5.1 turns each line a native command writes to a redirected stderr into
+    # an error record, which "Stop" makes terminating: the private-package answer ("unauthorized",
+    # "manifest unknown") would end the script with a bare docker error instead of the message
+    # below. So the exit code alone decides here, as it does in PowerShell 7.
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     try {
         docker --config $anonymous manifest inspect $full *> $null
         $public = $LASTEXITCODE -eq 0
     } finally {
+        $ErrorActionPreference = $saved
         Remove-Item -Recurse -Force $anonymous
     }
     if (-not $public) {
@@ -136,6 +152,9 @@ if ($SetSecrets) {
 
 $before = az containerapp show --name $App --resource-group $ResourceGroup --query "properties.latestRevisionName" --output tsv
 if ($LASTEXITCODE -ne 0) { throw "az containerapp show failed" }
+$present = @(az containerapp show --name $App --resource-group $ResourceGroup --query "properties.template.containers[0].env[].name" --output tsv)
+if ($LASTEXITCODE -ne 0) { throw "az containerapp show failed" }
+$remove = @($Retired | Where-Object { $present -contains $_ })
 
 # Before the image changes, so the new revision's health probes go to the port it listens on.
 # Moved back below if the update fails, so the running revision keeps the port it listens on.
@@ -150,7 +169,12 @@ if ($targetPort -ne "$Port") {
 Write-Host "Rolling $App to $full with $MinReplicas-$MaxReplicas replicas..."
 $envVars = @($Secrets.GetEnumerator() | ForEach-Object { "$($_.Key)=secretref:$($_.Value)" }) + @("VENDING_TOOLS=built", "TS_HOSTNAME=agentic-vending-azure", "PORT=$Port")
 if ($dexBase) { $envVars += "DEX_BASE_URL=$dexBase" }
-az containerapp update --name $App --resource-group $ResourceGroup --image $full --min-replicas $MinReplicas --max-replicas $MaxReplicas --set-env-vars @envVars --output none
+$removeArgs = @()
+if ($remove) {
+    Write-Host "Removing $($remove -join ', '), which an earlier deploy set..."
+    $removeArgs = @("--remove-env-vars") + $remove
+}
+az containerapp update --name $App --resource-group $ResourceGroup --image $full --min-replicas $MinReplicas --max-replicas $MaxReplicas --set-env-vars @envVars @removeArgs --output none
 if ($LASTEXITCODE -ne 0) {
     if ($targetPort -ne "$Port") {
         Write-Host "Pointing ingress back at port $targetPort..."

@@ -186,6 +186,41 @@ class Pnl:
         return (self.inventory_machine_cents or 0) + (self.inventory_closet_cents or 0)
 
 
+@dataclass(frozen=True)
+class WeekPnl:
+    """One week of a P&L window, Saturday to Friday in Eastern time, cut to the window.
+
+    The same lines as `Pnl`, each booked to the week it happened in. The weeks
+    of a window add up to `pnl()` over the same window.
+    """
+    week: date                              # the Saturday the week began, Eastern time
+    takings_cents: int
+    tax_cents: int
+    units_sold: int
+    units_costed: int
+    cost_of_sales_cents: Fraction           # of the costed units
+    shrinkage_units: int
+    shrinkage_cents: Fraction               # of the shrinkage whose cost is known
+    shrinkage_complete: bool
+    visit_fees_cents: int
+    visits: int
+    token_spend_cents: Fraction
+    adjustments_cents: Fraction
+
+    @property
+    def cost_of_sales_complete(self) -> bool:
+        return self.units_costed == self.units_sold
+
+    @property
+    def revenue_ex_tax_cents(self) -> int:
+        return self.takings_cents - self.tax_cents
+
+    @property
+    def net_cents(self) -> Fraction:
+        return (self.revenue_ex_tax_cents - self.cost_of_sales_cents - self.shrinkage_cents - self.visit_fees_cents
+                - self.token_spend_cents + self.adjustments_cents)
+
+
 # --- Money ----------------------------------------------------------------------
 
 def money(cents: Fraction | int | None) -> str | None:
@@ -458,6 +493,62 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
                machine, closet, inventory_complete, tuple(notes))
 
 
+def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> list[WeekPnl]:
+    """`pnl()` split into weeks: one row for every week the window touches, quiet weeks included.
+
+    Each line is booked to the week of the moment it happened, read the same
+    way `pnl()` reads it, so each column of the weeks sums to `pnl()`'s figure.
+    """
+    tz = ZoneInfo(TIMEZONE)
+
+    def week(moment: datetime) -> date:
+        return week_of(moment.astimezone(tz))
+
+    sold = {w.week: w for w in takings(conn, start, end).by_week}
+    units: dict[date, int] = defaultdict(int)
+    for r in rises_between(_counter_rows(conn, "lifetime_units", end), start, end)[2]:
+        units[week(r.at)] += r.amount
+    counted = stock.stock(conn, until=end)
+    costed: dict[date, int] = defaultdict(int)
+    cost: dict[date, Fraction] = defaultdict(Fraction)
+    for s in counted.sales:
+        if start < s.at <= end and s.cost_cents is not None:
+            costed[week(s.at)] += s.costed_units
+            cost[week(s.at)] += s.cost_cents
+    lost_units: dict[date, int] = defaultdict(int)
+    lost_cost: dict[date, Fraction] = defaultdict(Fraction)
+    lost_unknown: set[date] = set()
+    for s in counted.shrinkage:
+        if start < s.at <= end:
+            lost_units[week(s.at)] += s.units
+            if s.cost_cents is None:
+                lost_unknown.add(week(s.at))
+            else:
+                lost_cost[week(s.at)] += s.cost_cents
+    visits: dict[date, int] = defaultdict(int)
+    fees: dict[date, int] = defaultdict(int)
+    for at, fee in _visit_rows(conn, start, end):
+        visits[week(at)] += 1
+        fees[week(at)] += fee
+    tokens: dict[date, Fraction] = defaultdict(Fraction)
+    adjustments: dict[date, Fraction] = defaultdict(Fraction)
+    for e in entries(conn, start, end):
+        if e.kind == "tokens":
+            tokens[week(e.at)] -= e.amount_cents
+        elif e.kind == "adjustment":
+            adjustments[week(e.at)] += e.amount_cents
+
+    out = []
+    day, last = week(start), week(end)
+    while day <= last:
+        w = sold.get(day)
+        out.append(WeekPnl(day, w.takings_cents if w else 0, w.tax_cents if w else 0, units[day], costed[day],
+                           cost[day], lost_units[day], lost_cost[day], day not in lost_unknown, fees[day],
+                           visits[day], tokens[day], adjustments[day]))
+        day += timedelta(days=7)
+    return out
+
+
 def _receipts(conn: psycopg.Connection, start: datetime, end: datetime) -> tuple[Fraction, int, int]:
     """(total paid in cents, lines counted, lines with no total) for receipt lines resolved in the window.
 
@@ -474,7 +565,13 @@ def _receipts(conn: psycopg.Connection, start: datetime, end: datetime) -> tuple
 
 
 def _visits(conn: psycopg.Connection, start: datetime, end: datetime) -> tuple[int, int]:
-    """(fulfilled off-cycle requests in the window, their fees in total).
+    """(fulfilled off-cycle requests in the window, their fees in total)."""
+    found = _visit_rows(conn, start, end)
+    return len(found), sum(fee for _, fee in found)
+
+
+def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> list[tuple[datetime, int]]:
+    """(when, fee) for each fulfilled off-cycle request in the window.
 
     Each request is charged the fee stored on it at submission; requests from
     before that column existed fall back to `config.midweek_fee_cents`. A visit
@@ -483,14 +580,15 @@ def _visits(conn: psycopg.Connection, start: datetime, end: datetime) -> tuple[i
     fee = config.get_value(conn, "midweek_fee_cents", DEFAULT_MIDWEEK_FEE_CENTS)
     if not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
         fee = DEFAULT_MIDWEEK_FEE_CENTS
-    visits, fees = conn.execute(
-        "select count(*), coalesce(sum(coalesce(r.visit_fee_cents, %s)), 0) from purchase_requests r"
-        " where r.off_cycle and r.status = 'fulfilled'"
-        " and coalesce((select min(l.resolved_at) from purchase_lines l where l.request_id = r.request_id),"
-        "              r.fulfilled_at) between %s and %s",
+    rows = conn.execute(
+        "select v.at, v.fee from ("
+        " select coalesce((select min(l.resolved_at) from purchase_lines l where l.request_id = r.request_id),"
+        "                 r.fulfilled_at) as at, coalesce(r.visit_fee_cents, %s) as fee"
+        " from purchase_requests r where r.off_cycle and r.status = 'fulfilled') v"
+        " where v.at between %s and %s order by v.at",
         (fee, start, end),
-    ).fetchone()
-    return visits, int(fees)
+    ).fetchall()
+    return [(at, int(cents)) for at, cents in rows]
 
 
 def _inventory(counted: stock.Stock) -> tuple[Fraction | None, Fraction | None, bool]:

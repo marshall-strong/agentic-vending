@@ -38,9 +38,10 @@ class AccountBalance(Reply):
     notes: list[str] = []
 
 
-def get_account_balance(conn: psycopg.Connection) -> AccountBalance:
+def get_account_balance(conn: psycopg.Connection, as_of: datetime | None = None) -> AccountBalance:
+    """The balance now, or at `as_of` when given."""
     try:
-        b = ledger.balance(conn)
+        b = ledger.balance(conn, as_of)
     except SlotsNotRecorded as error:
         return AccountBalance(success=False, message=str(error))
     if b is None:

@@ -2,9 +2,10 @@
 
 Built from our database only; it never reads the machine.
 
-- Price and sales come from the history sync's stored polls. Lifetime counters
-  never reset, so sales over the window are the latest poll minus the last poll
-  at or before the window's start.
+- Price and sales come from the history sync's stored polls. Sales over the
+  window are the counters' rises from the last poll at or before the window's
+  start to the latest poll, read through `vending.counters`, so a misread poll
+  or a board swap counts the same here as in `vending.stock` and the ledger.
 - Product and stock come from the purchase-request receipts, through
   `vending.stock`, which replays every receipt and every poll. `stock_on_hand`
   counts from when the slot's current product went in (loaded − sold − lost),
@@ -27,7 +28,7 @@ from fractions import Fraction
 import psycopg
 from pydantic import BaseModel
 
-from vending import stock
+from vending import counters, stock
 from vending.slots import DEVICE_ID, SLOTS, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
@@ -71,22 +72,20 @@ class MachineState(Reply):
 Counters = dict[str, tuple[int | None, int]]
 
 
-def build(as_of: datetime, latest: Counters, start: datetime | None, baseline: Counters,
+def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold: dict[str, int],
           counts: dict[str, stock.SlotCount] | None = None, last_loaded: dict[str, datetime] | None = None,
           sold_since_load: dict[str, int] | None = None, now: datetime | None = None,
           slots: tuple[str, ...] = SLOTS) -> list[SlotState]:
-    """Per-slot state for `slots` from two polls' counters and the receipts. Pure: no database, no clock."""
+    """Per-slot state for `slots` from the latest poll, the window's sales and the receipts. Pure: no database, no clock."""
     counts, last_loaded, sold_since_load = counts or {}, last_loaded or {}, sold_since_load or {}
     days = Decimal((as_of - start).total_seconds()) / 86400 if start else Decimal(0)
     states = []
     for slot in slots:
         price, units = latest.get(slot, (None, None))
         sold = per_day = None
-        if units is not None and slot in baseline and days > 0:
-            diff = units - baseline[slot][1]
-            if diff >= 0:  # a lower count means a replaced board, not negative sales
-                sold = diff
-                per_day = (diff / days).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        if units is not None and slot in window_sold and days > 0:
+            sold = window_sold[slot]
+            per_day = (sold / days).quantize(Decimal("0.01"), ROUND_HALF_UP)
         count = counts.get(slot)
         loaded_at = last_loaded.get(slot)
         states.append(SlotState(
@@ -102,6 +101,21 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, baseline: C
             days_of_stock_left=_days_left(count.units, per_day) if count else None,
         ))
     return states
+
+
+def sold_in_window(rows: list[tuple[str, datetime, int]], start: datetime) -> dict[str, int]:
+    """Units sold per slot after `start`, from `(selection, polled_at, lifetime_units)` rows. Pure.
+
+    The rows should begin a poll before `start`, so a misread at the baseline
+    poll itself is caught. Only slots read at or before `start` get a number,
+    so a slot missing from the baseline poll stays unknown rather than counting
+    from a later reading.
+    """
+    readings: dict[str, list[tuple[datetime, int]]] = {}
+    for selection, at, units in rows:
+        readings.setdefault(selection, []).append((at, units))
+    return {slot: sum(rise for at, rise in counters.rises(r) if at > start)
+            for slot, r in readings.items() if min(r)[0] <= start}
 
 
 def _days_left(on_hand: int, per_day: Decimal | None) -> str | None:
@@ -145,15 +159,14 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     baseline = _poll(conn, "started_at <= %s", as_of - WINDOW) or _first_poll(conn)
     if baseline and baseline[0] == latest[0]:
         baseline = None
-    latest_counters = _counters(conn, latest[0], slots)
+    start = baseline[1] if baseline else None
+    window_sold = sold_in_window(_readings(conn, start, as_of, slots), start) if start else {}
 
-    counted = stock.stock(conn)
+    counted = stock.stock(conn, until=now)
     counts = {c.slot: c for c in counted.slots if c.slot in slots}
     last_loaded = _last_loaded(conn)
-    sold_since_load = _sold_since_load(conn, latest_counters, last_loaded)
-    states = build(as_of, latest_counters,
-                   baseline[1] if baseline else None,
-                   _counters(conn, baseline[0], slots) if baseline else {},
+    sold_since_load = _sold_since_load(counted.sales, last_loaded)
+    states = build(as_of, _counters(conn, latest[0], slots), start, window_sold,
                    counts, last_loaded, sold_since_load, now, slots)
     closet, closet_value = closet_items(counted.closet)
 
@@ -201,22 +214,17 @@ def _last_loaded(conn: psycopg.Connection) -> dict[str, datetime]:
     return dict(rows)
 
 
-def _sold_since_load(conn: psycopg.Connection, latest: Counters, last_loaded: dict[str, datetime]) -> dict[str, int]:
-    """Latest lifetime units minus the count at the last good poll at or before the load.
+def _sold_since_load(sales: tuple[stock.SaleCost, ...], last_loaded: dict[str, datetime]) -> dict[str, int]:
+    """Units sold in each slot since its last load: the replay's sales after it. Pure.
 
-    Missing when no poll predates the load, or the counter went down since (a
-    replaced board), rather than a wrong number.
+    The replay reads the counters through `vending.counters.rises`, so a misread
+    poll or a board swap counts the same here as in `stock_on_hand` and the ledger.
     """
-    sold = {}
-    for slot, loaded_at in last_loaded.items():
-        if slot not in latest:
-            continue
-        before = conn.execute(
-            "select s.lifetime_units from poll_selections s join polls p using (session_id)"
-            " where p.device_id = %s and p.crc_ok and s.selection = %s and p.started_at <= %s"
-            " order by p.started_at desc limit 1", (DEVICE_ID, slot, loaded_at)).fetchone()
-        if before is not None and latest[slot][1] >= before[0]:
-            sold[slot] = latest[slot][1] - before[0]
+    sold = dict.fromkeys(last_loaded, 0)
+    for sale in sales:
+        loaded_at = last_loaded.get(sale.slot)
+        if loaded_at is not None and sale.at > loaded_at:
+            sold[sale.slot] += sale.units
     return sold
 
 
@@ -230,6 +238,17 @@ def _first_poll(conn: psycopg.Connection) -> tuple[str, datetime] | None:
     return conn.execute(
         "select session_id, started_at from polls where device_id = %s and crc_ok"
         " order by started_at limit 1", (DEVICE_ID,)).fetchone()
+
+
+def _readings(conn: psycopg.Connection, start: datetime, end: datetime,
+              slots: tuple[str, ...] = SLOTS) -> list[tuple[str, datetime, int]]:
+    """Every good poll's lifetime units for `slots` from the poll before `start` to `end`, inclusive."""
+    return conn.execute(
+        "select s.selection, p.started_at, s.lifetime_units from poll_selections s join polls p using (session_id)"
+        " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and p.started_at <= %s"
+        " and p.started_at >= coalesce((select max(started_at) from polls"
+        "   where device_id = %s and crc_ok and started_at < %s), %s)",
+        (DEVICE_ID, list(slots), end, DEVICE_ID, start, start)).fetchall()
 
 
 def _counters(conn: psycopg.Connection, session_id: str, slots: tuple[str, ...] = SLOTS) -> Counters:
