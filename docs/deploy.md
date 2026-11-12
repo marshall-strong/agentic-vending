@@ -118,8 +118,8 @@ create role vending_reader login password '<a long random password>' connection 
 grant connect on database "ai-vend-2" to vending_reader;
 ```
 
-Then one of us, with `DATABASE_URL` pointing at Azure, lets it read our tables, including tables
-later migrations add:
+Then one of us, with `DATABASE_URL` pointing at Azure, lets it look inside our schema (`usage`) and
+read our tables, including tables later migrations add:
 
 ```
 python -m vending.pages grant vending_reader --by NAME
@@ -133,6 +133,9 @@ python -m vending.pages check
 ```
 
 `check` connects the way the pages do and must say **read-only** and **can read every table**.
+It also names a schema the login may not look inside, for example `schema public (no usage)`: if
+`grant` printed a "no privileges were granted" warning for the schema, our login doesn't own it,
+and the administrator runs `grant usage on schema public to vending_reader;`.
 Then deploy with `-SetSecrets`, which loads the secret and gives the container the variable. The
 deploy script treats this one secret as optional: without it in `.env` a deploy still works, and
 says the pages aren't set up.

@@ -12,7 +12,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from tests.conftest import CONNECT_TIMEOUT, open_in
-from vending import agent_runs, dashboard, db_explorer, pages, worker
+from vending import agent_runs, dashboard, db_explorer, pages, settings, worker
 from vending.write_gate import log
 
 SECRET = 'connection to server at "db.example.net", port 5432 failed: password authentication failed for user "g2_admin"'
@@ -20,22 +20,26 @@ SECRET = 'connection to server at "db.example.net", port 5432 failed: password a
 
 @pytest.fixture(autouse=True)
 def fresh(monkeypatch):
-    """Each test starts with no passed read-only check and nothing logged yet."""
+    """Each test starts with no passed read-only check, nothing logged yet, and no pages login,
+    not even one in the developer's `.env` (which `settings.get` falls back to)."""
     monkeypatch.setattr(pages, "_read_only_until", 0.0)
     monkeypatch.setattr(pages, "_logged", {})
     monkeypatch.delenv(pages.READER, raising=False)
+    monkeypatch.delitem(settings._FILE, pages.READER, raising=False)
 
 
-def _role(admin, schema, usage=True):
-    """A new login with nothing but the right to look inside the test schema. Skips when the
-    test database's user may not create roles."""
+def test_a_pages_login_in_the_env_file_is_ignored_by_the_tests():
+    assert not pages.configured() and settings.get(pages.READER) is None
+
+
+def _role(admin):
+    """A new login that may not even look inside the test schema; `grant` has to give it that.
+    Skips when the test database's user may not create roles."""
     name = f"reader_{uuid.uuid4().hex[:8]}"
     try:
         admin.execute(sql.SQL("create role {} login password 'reader'").format(sql.Identifier(name)))
     except psycopg.errors.InsufficientPrivilege:
         pytest.skip("the test database's user can't create roles")
-    if usage:
-        admin.execute(sql.SQL("grant usage on schema {} to {}").format(sql.Identifier(schema), sql.Identifier(name)))
     return name
 
 
@@ -54,7 +58,7 @@ def reader(schema_url, conn):
     """The name of a role that can read the test schema and nothing more, as `grant` sets one up."""
     url, schema = schema_url
     with psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) as admin:
-        name = _role(admin, schema)
+        name = _role(admin)
         pages.grant(conn, name, "test")
         yield name
         _drop(admin, name)
@@ -297,6 +301,16 @@ def test_the_pages_connect_read_only_with_the_timeout_and_their_own_setting(monk
     monkeypatch.setattr(pages.psycopg, "connect", lambda url, **kw: seen.update(kw, url=url) or "conn")
     assert pages._connect() == "conn" and seen["url"] == "postgresql://reader@127.0.0.1/x"
     assert "default_transaction_read_only=on" in seen["options"] and "statement_timeout=5000" in seen["options"]
+    # A connection that goes quiet fails within seconds instead of holding a page slot.
+    assert seen["keepalives"] == 1 and seen["keepalives_idle"] <= 10
+    assert seen["tcp_user_timeout"] == pages.STATEMENT_TIMEOUT_MS + 5_000
+
+
+def test_the_keepalive_settings_are_ones_libpq_accepts():
+    """A typo in a parameter name would only show up when the container first connected."""
+    from psycopg.conninfo import conninfo_to_dict
+    params = conninfo_to_dict(make_conninfo("postgresql://reader@127.0.0.1/x", **pages.KEEPALIVES))
+    assert {k: int(v) for k, v in params.items() if k in pages.KEEPALIVES} == pages.KEEPALIVES
 
 
 # --- The commands -------------------------------------------------------------------------------
@@ -304,12 +318,17 @@ def test_the_pages_connect_read_only_with_the_timeout_and_their_own_setting(monk
 def test_grant_lets_a_role_read_every_table_now_and_later(schema_url, conn, capsys):
     url, schema = schema_url
     with psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) as admin:
-        name = _role(admin, schema)
+        name = _role(admin)
         try:
+            # Without usage on the schema the tables are invisible, so the schema itself is reported.
+            with _as(url, schema, name) as looking:
+                assert pages.unreadable(looking) == [f"schema {schema} (no usage)"]
+            admin.execute(sql.SQL("grant usage on schema {} to {}").format(sql.Identifier(schema), sql.Identifier(name)))
             with _as(url, schema, name) as looking:
                 assert f"{schema}.config" in pages.unreadable(looking)
+            admin.execute(sql.SQL("revoke usage on schema {} from {}").format(sql.Identifier(schema), sql.Identifier(name)))
             done = pages.grant(conn, name, "marshall")
-            assert name in done and "marshall" in done
+            assert name in done and "marshall" in done and f"usage on schema {schema}" in done
             assert conn.execute("select tool, outcome, detail from action_log order by id desc limit 1").fetchone() == (
                 "pages.grant", "done", done)
             # A table a later migration adds is readable too, and still not writable.

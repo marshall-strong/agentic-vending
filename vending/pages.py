@@ -61,6 +61,11 @@ MAX_CONNECTIONS = 2
 WAIT_SECONDS = 5
 STATEMENT_TIMEOUT_MS = 5_000
 OPTIONS = f"-c default_transaction_read_only=on -c statement_timeout={STATEMENT_TIMEOUT_MS}"
+# The statement timeout runs on the server, so it can't free a request whose connection has gone
+# quiet (a failover, a half-open socket). These client-side limits make a dead connection fail
+# within seconds instead of holding one of the page connections for 15 minutes or more.
+KEEPALIVES = {"keepalives": 1, "keepalives_idle": 5, "keepalives_interval": 2, "keepalives_count": 3,
+              "tcp_user_timeout": STATEMENT_TIMEOUT_MS + 5_000}
 # Seconds a passed "this login can't write" check is trusted before it is made again.
 RECHECK_SECONDS = 600
 # Seconds between two log lines about the same kind of problem, so a stuck page can't flood the log.
@@ -108,7 +113,7 @@ def configured() -> bool:
 
 def _connect() -> psycopg.Connection:
     url = settings.require(READER, "It is the read-only login's URL; see docs/deploy.md.")
-    return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT, options=OPTIONS)
+    return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT, options=OPTIONS, **KEEPALIVES)
 
 
 # Tests swap this to point at a throwaway schema.
@@ -133,6 +138,11 @@ _UNREADABLE = f"""
       from pg_class c join pg_namespace n on n.oid = c.relnamespace
      where c.relkind in ('r', 'p', 'v', 'm', 'f') and {_OURS}
        and has_schema_privilege(n.oid, 'USAGE') and not has_table_privilege(c.oid, 'SELECT')
+    union all
+    select 'schema ' || n.nspname || ' (no usage)'
+      from unnest(string_to_array(current_setting('search_path'), ',')) as p(entry)
+      join pg_namespace n on n.nspname = replace(trim(both ' "' from p.entry), '$user', current_user)
+     where {_OURS} and not has_schema_privilege(n.oid, 'USAGE')
      order by 1"""
 
 
@@ -142,7 +152,8 @@ def writable(conn: psycopg.Connection) -> list[str]:
 
 
 def unreadable(conn: psycopg.Connection) -> list[str]:
-    """Tables this login can see but not read; a page that needs one would fail."""
+    """Tables this login can see but not read, and schemas on its search path it may not look
+    inside (whose tables it can't even see); a page that needs one would fail."""
     return [row[0] for row in conn.execute(_UNREADABLE)]
 
 
@@ -258,8 +269,10 @@ def check() -> int:
 def grant(conn: psycopg.Connection, role: str, by: str) -> str:
     """Let `role` read every table in our schema, now and after later migrations. Returns what was done.
 
-    Run as the tables' owner (the `DATABASE_URL` login). It only grants `select`. Creating the
-    role is for whoever administers the server; see docs/deploy.md.
+    Run as the tables' owner (the `DATABASE_URL` login). It only grants `usage` on the schema and
+    `select` on its tables. Creating the role is for whoever administers the server; see
+    docs/deploy.md. If this login may not grant `usage` on the schema, Postgres only warns, so
+    `check` is what proves the role can read.
     """
     schema, me = conn.execute("select current_schema(), current_user").fetchone()
     if role == me:
@@ -268,8 +281,12 @@ def grant(conn: psycopg.Connection, role: str, by: str) -> str:
         raise LookupError(f"no role {role} on this server. Ask the server's administrator to create it; "
                           "docs/deploy.md has the two statements")
     target, where = sql.Identifier(role), sql.Identifier(schema)
-    done = f"select on every table in schema {schema} granted to {role} by {by}, for later tables too"
+    done = (f"usage on schema {schema} and select on every table in it granted to {role} by {by}, "
+            "for later tables too")
     with conn.transaction():
+        # Without usage the role can't see the tables at all. Stock Postgres gives it to everyone on
+        # `public`, but a hardened server or another schema may not.
+        conn.execute(sql.SQL("grant usage on schema {} to {}").format(where, target))
         conn.execute(sql.SQL("grant select on all tables in schema {} to {}").format(where, target))
         # Tables this login creates later, which is what a migration does.
         conn.execute(sql.SQL("alter default privileges in schema {} grant select on tables to {}").format(where, target))
