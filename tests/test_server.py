@@ -48,6 +48,20 @@ def test_lists_all_ten_tools():
     assert tools["get_machine_state"].outputSchema is not None
 
 
+# Every tool the agent can call. Adding one (a web fetcher, say) changes what the
+# agent can see and do, so it must be a deliberate, reviewed change to this list.
+# See docs/integrity.md.
+TOOL_NAMES = {
+    "get_machine_state", "get_sales_history", "get_catalog", "get_account_balance",
+    "preview_desired_state", "submit_desired_state", "get_purchase_requests", "set_price",
+    "get_pnl", "request_catalog_product",
+}
+
+
+def test_tool_list_is_pinned():
+    assert {t.name for t in call(None).tools} == TOOL_NAMES
+
+
 def test_machine_state_end_to_end(db):
     store_poll(db, "a", "2026-10-22T12:00:00+00:00", {"15": (250, 100)})
     store_poll(db, "b", "2026-10-29T12:00:00+00:00", {"15": (250, 121)})
@@ -67,11 +81,11 @@ def test_every_write_tool_refuses_when_halted(db, tool):
     assert db.execute("select tool, outcome from action_log").fetchall() == [(tool, "refused")]
 
 
-@pytest.mark.parametrize("tool", ["set_price"])
-def test_unbuilt_write_tools_still_log_when_running(db, tool):
+@pytest.mark.parametrize(("tool", "says"), [("set_price", "is dropped")])
+def test_unbuilt_write_tools_still_log_when_running(db, tool, says):
     set_halted(db, False, "test")
     result = call(tool, WRITE_ARGS[tool])
-    assert result.isError and "not built yet" in result.content[0].text
+    assert result.isError and says in result.content[0].text
     assert db.execute("select outcome from action_log where tool = %s", (tool,)).fetchall() == [("failed",)]
 
 

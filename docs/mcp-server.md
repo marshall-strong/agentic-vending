@@ -17,7 +17,7 @@ machine.
 | `get_catalog` | **Works, version 1.** The single-item products the bridge lists (sku, name, line, flavor, size), searchable by text, with when the catalog was last synced. Says so when that was over 36 hours ago. Our last unit cost, sourcing rows and pending catalog requests are not in it yet. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state` | **Works.** Plans the desired state again on live data inside the write gate, refuses with every problem at once, otherwise POSTs it once and records the request. Saves what it is about to send before sending, so a lost answer leaves a row a person settles with `python -m vending.submissions resolve`. |
-| `set_price` | Write stub, already behind the write gate: refused while halted, logged either way |
+| `set_price` | **Dropped.** Prices change only at a worker visit (free Friday, $25 midweek), through `submit_desired_state`. The stub stays so a call gets that answer. |
 
 ## Run it
 
@@ -305,9 +305,15 @@ python -m vending.submissions resolve 7 --not-filed --by kevin              # it
 Resolving with a request ID also records it in `purchase_requests`. Both paths carry the midweek
 visit fee the plan quoted for an off-cycle request (`visit_fee_cents`, saved on the `sending` row
 before the POST), so the ledger charges what was agreed then even if `config.midweek_fee_cents`
-changes later. Every change is logged with the `--by` name. The reply to an accepted submit carries
-the request ID, the plan hash, the number of lines, the max cost and the directive the worker will
-read.
+changes later. Every change is logged with the `--by` name.
+
+`resolve` takes the same lock as every write, so while a submit is in flight it waits (and says
+so) until that submit has settled its row; a person's answer and the bridge's can't overwrite each
+other. The settle itself only ever changes a row that is still `sending`.
+
+The reply to an accepted submit carries the request ID, the plan hash, the number of lines, the max
+cost and the directive the worker will read, plus the plan's `warnings` and `notes`, the same as
+the preview's.
 
 ## Adding a tool's logic
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 import psycopg
 
@@ -70,8 +70,9 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
 
 
 def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
-    """The current state from our database. `catalog` is the bridge's product list."""
-    now = now or datetime.now(timezone.utc)
+    """The current state from our database. `catalog` is the bridge's product list.
+    "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`)."""
+    now = now or ledger.db_now(conn)
     settings = planner_config(conn)
     notes: list[str] = []
 
