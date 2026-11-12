@@ -22,7 +22,6 @@ from zoneinfo import ZoneInfo
 import psycopg
 
 from vending.pricing import to_cents
-from vending.slots import SLOTS
 from vending.tools import machine_state
 from vending.tools.sales_history import get_sales_history
 
@@ -80,7 +79,8 @@ def replay_week(conn: psycopg.Connection, day: date) -> WeekState:
     sales = get_sales_history(conn, start, end, None)
     if not sales.success:
         raise NoData(f"Week of {day:%Y-%m-%d}: {sales.message}")
-    first, last = _prices(conn, sales.start), _prices(conn, sales.end)
+    ours = tuple(row.slot for row in sales.data)   # the stored assignment, via get_sales_history
+    first, last = _prices(conn, sales.start, ours), _prices(conn, sales.end, ours)
     days = Decimal((sales.end - sales.start).total_seconds()) / 86400
     slots = []
     for row in sales.data:
@@ -110,10 +110,9 @@ def replay_week(conn: psycopg.Connection, day: date) -> WeekState:
                      notes=tuple(notes))
 
 
-def _prices(conn: psycopg.Connection, moment: datetime) -> dict[str, int | None]:
-    """Each of our slots' price at the last valid poll at or before `moment`."""
+def _prices(conn: psycopg.Connection, moment: datetime, slots: tuple[str, ...]) -> dict[str, int | None]:
+    """Each of `slots`' price at the last valid poll at or before `moment`."""
     poll = machine_state._poll(conn, "started_at <= %s", moment)
     if poll is None:
         return {}
-    return {slot: price for slot, (price, _units) in machine_state._counters(conn, poll[0]).items()
-            if slot in SLOTS}
+    return {slot: price for slot, (price, _units) in machine_state._counters(conn, poll[0], slots).items()}
