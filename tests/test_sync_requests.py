@@ -192,6 +192,21 @@ def test_stock_reads_receipts_and_poll_counters(conn):
     assert result.warnings == ()
 
 
+def test_stock_ignores_counters_from_another_device(conn):
+    # The sync stores every device's polls, with the same selection names.
+    submit(conn, "r1")
+    sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(total_paid="12.00"))}), NOW, log=quiet)
+    for session_id, device, started_at, lifetime in (
+            ("p1", "vmc1", "2026-11-07T15:00:00Z", 40), ("p2", "vmc1", "2026-11-08T15:00:00Z", 43),
+            ("x1", "vmc2", "2026-11-07T15:30:00Z", 100), ("x2", "vmc2", "2026-11-08T15:30:00Z", 106)):
+        conn.execute("insert into polls (session_id, device_id, started_at, raw, byte_count, crc_ok)"
+                     " values (%s, %s, %s, '', 0, true)", (session_id, device, started_at))
+        conn.execute("insert into poll_selections (session_id, selection, price_cents, lifetime_units,"
+                     " lifetime_sales_cents) values (%s, '15', 250, %s, 0)", (session_id, lifetime))
+    [slot] = stock(conn).slots
+    assert (slot.units, slot.sold) == (5, 3)
+
+
 def test_record_twice_keeps_what_the_sync_learned(conn):
     submit(conn, "r1")
     sync(conn, FakeBridge({"r1": fulfilled("r1", receipt())}), NOW, log=quiet)
@@ -238,3 +253,21 @@ def test_main_runs_on_a_migrated_schema(schema_url, monkeypatch, capsys):
     monkeypatch.setattr(sync_requests, "Bridge", lambda: object())
     assert sync_requests.main([]) == 0
     assert "0 read" in capsys.readouterr().out
+
+
+def test_stock_counts_sales_for_a_receipt_slot_outside_the_slot_list(conn, monkeypatch):
+    # Which slots are ours is not settled (vending/slots.py is a placeholder), so the
+    # stock count follows our receipts, not the slot list.
+    from vending import slots
+    fewer = tuple(s for s in slots.SLOTS if s != "15")
+    monkeypatch.setattr(slots, "SLOTS", fewer)
+    monkeypatch.setattr("vending.stock.SLOTS", fewer, raising=False)   # in case stock imports it by name
+    submit(conn, "r1")
+    sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(total_paid="12.00"))}), NOW, log=quiet)
+    for session_id, started_at, lifetime in (("p1", "2026-11-07T15:00:00Z", 40), ("p2", "2026-11-08T15:00:00Z", 43)):
+        conn.execute("insert into polls (session_id, device_id, started_at, raw, byte_count, crc_ok)"
+                     " values (%s, 'vmc1', %s, '', 0, true)", (session_id, started_at))
+        conn.execute("insert into poll_selections (session_id, selection, price_cents, lifetime_units,"
+                     " lifetime_sales_cents) values (%s, '15', 250, %s, 0)", (session_id, lifetime))
+    [slot] = stock(conn).slots
+    assert (slot.units, slot.sold) == (5, 3)
