@@ -69,3 +69,18 @@ def test_the_dockerfile_copies_the_rules_notes_next_to_the_code():
     lines = [line.split() for line in (ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()]
     assert ["COPY", "vending/", "vending/"] in lines
     assert ["COPY", "docs/agent/", "docs/agent/"] in lines
+
+
+def test_the_deploy_scripts_dirty_check_covers_every_copied_path():
+    # The deploy script refuses to build with an untracked file under $ImagePaths, so an
+    # untracked file can't reach the image unseen. A COPY source outside them could.
+    script = (ROOT / "scripts" / "deploy_container_app.ps1").read_text(encoding="utf-8")
+    image_paths = re.findall(r'"([^"]+)"', re.search(r"^\$ImagePaths = @\((.*)\)$", script, re.M).group(1))
+    sources = [
+        line.split()[1].rstrip("/")
+        for line in (ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if line.startswith("COPY ") and not line.startswith("COPY --")
+    ]
+    assert "docs/agent" in sources
+    uncovered = [s for s in sources if not any(s == p or s.startswith(p + "/") for p in image_paths)]
+    assert uncovered == []

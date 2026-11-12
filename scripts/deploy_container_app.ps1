@@ -51,7 +51,7 @@ if (-not $EnvFile) { $EnvFile = Join-Path $root ".env" }
 $Port = 8080
 # What the Dockerfile copies into the image; keep in step with its COPY lines. An untracked
 # file anywhere else can't reach the image, so it doesn't block a deploy.
-$ImagePaths = @("requirements.txt", "vending", "db", "docker")
+$ImagePaths = @("requirements.txt", "vending", "db", "docs/agent", "docker")
 # .env setting -> Container App secret name. No Anthropic key: nothing in the image calls the model
 # yet, so a key would only sit in a running container. The change that runs the agent loop here
 # adds it, under the name the agent reads.
