@@ -7,12 +7,14 @@ repo" (Project Brief (Revised), section 5). There are two diagrams here, both dr
 1. **The weekly cycle:** who does what, from the machine's sales to the next week's order.
 2. **The life of one purchase request:** every state a request can be in, and what moves it on.
 
-Each diagram is written in Mermaid below, which GitHub draws, and exported as an SVG in
-`docs/process-map/`. **If you change a diagram, change the Mermaid source and export it again.**
+Each diagram is exported as an SVG in `docs/process-map/`, with its Mermaid source folded below it. **If you change a diagram, change the Mermaid source and export it again.**
 
 ## 1. The weekly cycle
 
 ![The weekly cycle](process-map/weekly-cycle.svg)
+
+<details>
+<summary>Mermaid source (GitHub draws it here too)</summary>
 
 ```mermaid
 flowchart TD
@@ -58,6 +60,8 @@ flowchart TD
     O5 -. "through the bridge; read by the next sync" .-> M
 ```
 
+</details>
+
 How to read it:
 
 - **The model is called only in the agent run**, and only to decide. Reading data, checking rules and
@@ -82,6 +86,9 @@ How to read it:
 ## 2. The life of one purchase request
 
 ![The life of one purchase request](process-map/request-states.svg)
+
+<details>
+<summary>Mermaid source (GitHub draws it here too)</summary>
 
 ```mermaid
 stateDiagram-v2
@@ -110,6 +117,8 @@ stateDiagram-v2
     Rejected --> [*]
     Fulfilled --> [*]: ledger and stock updated
 ```
+
+</details>
 
 | State | Where it lives | What blocks while it lasts |
 |---|---|---|
