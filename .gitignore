@@ -100,3 +100,5 @@ client_secret*.json
 # Model sweep results (python -m vending.replay.sweep)
 sweep-results/
 replay-results/
+# Bench answers (python -m vending.bench run); the database holds the record
+bench-results/

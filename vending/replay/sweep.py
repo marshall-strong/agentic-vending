@@ -3,8 +3,10 @@
     python -m vending.replay.sweep --dry-run
     python -m vending.replay.sweep --budget 15
     python -m vending.replay.sweep --models haiku,sonnet --efforts low,medium --repeats 3 --budget 5
+    python -m vending.replay.sweep --configs haiku@medium,sonnet@high,opus@low --budget 5
 
-Each (model, effort, repeat) is a "config". Each config answers every test case
+Each (model, effort, repeat) is a "config": every model with every effort, or
+just the pairs given with `--configs`. Each config answers every test case
 once through the exam's `ModelDecider`, so every request goes through the
 harness as a `test` call: counted first, worst case reserved, $1 a request,
 the team's daily test cap (`model_test_daily_cap_cents`), and **a row in
@@ -76,18 +78,50 @@ class Config:
     repeat: int
 
     @property
-    def label(self) -> str:
+    def name(self) -> str:
+        """The model and effort, without the repeat: what a benchmark compares across runs."""
         short = next((k for k, v in ALIASES.items() if v == self.model), self.model)
-        return f"{short}@{self.effort}" + (f"#{self.repeat}" if self.repeat > 1 else "")
+        return f"{short}@{self.effort}"
+
+    @property
+    def label(self) -> str:
+        return self.name + (f"#{self.repeat}" if self.repeat > 1 else "")
+
+
+def _cheapest_first(out: list[Config]) -> list[Config]:
+    """Cheapest model first, so a budget that runs out cuts the dearest."""
+    order = {e: i for i, e in enumerate(model.EFFORTS)}
+    return sorted(out, key=lambda c: (worst_case(c.model), order.get(c.effort, 99), c.repeat))
 
 
 def configs(models: list[str], efforts: list[str], repeats: int) -> list[Config]:
-    """Every combination, cheapest model first, so a budget that runs out cuts the dearest."""
+    """Every combination, cheapest model first."""
     models = list(dict.fromkeys(model_id(m) for m in models))   # a name twice would overwrite its own plans
     efforts = list(dict.fromkeys(efforts))
-    out = [Config(m, e, r) for m in models for e in efforts for r in range(1, repeats + 1)]
-    order = {e: i for i, e in enumerate(model.EFFORTS)}
-    return sorted(out, key=lambda c: (worst_case(c.model), order.get(c.effort, 99), c.repeat))
+    return _cheapest_first([Config(m, e, r) for m in models for e in efforts for r in range(1, repeats + 1)])
+
+
+def parse_pair(text: str) -> tuple[str, str]:
+    """Read "opus@low" as ("claude-opus-5-5", "low"). Raises ValueError on an unknown model or effort."""
+    name, at, effort = text.strip().partition("@")
+    if not at or not name or not effort:
+        raise ValueError(f"A config is MODEL@EFFORT, such as haiku@medium, not {text.strip()!r}.")
+    if effort not in model.EFFORTS:
+        raise ValueError(f"effort must be one of {', '.join(model.EFFORTS)}, not {effort!r}.")
+    model.check_settings(model_id(name), effort, model.DEFAULT_KEY_ENV)   # an unpriced model fails here
+    return model_id(name), effort
+
+
+def pair_configs(spec: str, repeats: int) -> list[Config]:
+    """Just these (model, effort) pairs, such as "haiku@medium,sonnet@high,opus@low", cheapest first.
+
+    A benchmark compares a few chosen configs run after run; the full cross product
+    would cost three times as much to say the same thing.
+    """
+    pairs = list(dict.fromkeys(parse_pair(p) for p in spec.split(",") if p.strip()))
+    if not pairs:
+        raise ValueError("Give at least one config, such as haiku@medium.")
+    return _cheapest_first([Config(m, e, r) for m, e in pairs for r in range(1, repeats + 1)])
 
 
 class Purse:
@@ -153,12 +187,20 @@ def baseline_rows(cases: list[Case]) -> list[Row]:
     return rows
 
 
+def plan_file(config_label: str, case: str) -> str:
+    """Where a config's plan for a case is saved under plans/: "haiku@low#2" -> "haiku_low_r2__case.json"."""
+    return f"{config_label.replace('@', '_').replace('#', '_r')}__{case}.json"
+
+
 class Sweep:
+    """Answers every case with every config. `kind` starts each model_calls label: "sweep" or "bench"."""
+
     def __init__(self, configs: list[Config], cases: list[Case], budget: Decimal, out: Path,
-                 workers: int = 4, key_env: str = model.DEFAULT_KEY_ENV, sweep_id: str = "", connect=None):
+                 workers: int = 4, key_env: str = model.DEFAULT_KEY_ENV, sweep_id: str = "", connect=None,
+                 kind: str = "sweep"):
         self.configs, self.cases, self.out, self.workers = configs, cases, out, workers
         self.purse = Purse(budget)
-        self.key_env, self.sweep_id, self.connect = key_env, sweep_id or out.name, connect
+        self.key_env, self.sweep_id, self.connect, self.kind = key_env, sweep_id or out.name, connect, kind
         self.rows: list[Row] = []
         self._write = threading.Lock()
 
@@ -191,8 +233,8 @@ class Sweep:
             row.detail = f"not sent: the sweep budget couldn't hold its worst case (${reserve:.4f})"
             self._record(row, None)
             return row
-        decider.tag = {"kind": f"sweep {self.sweep_id}", "config": cfg.label, "case": c.name,
-                       "run_id": f"sweep-{self.sweep_id}-{cfg.label}"}
+        decider.tag = {"kind": f"{self.kind} {self.sweep_id}", "config": cfg.label, "case": c.name,
+                       "run_id": f"{self.kind}-{self.sweep_id}-{cfg.label}"}
         # The harness may spend no more than the purse holds for this request: with a longer prompt it
         # shortens the answer, or sends nothing, instead of overrunning the sweep's budget.
         decider.budget.run_cap = reserve
@@ -232,7 +274,7 @@ class Sweep:
             with (self.out / "results.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row.__dict__) + "\n")
             if answer is not None:
-                name = f"{row.config.replace('@', '_').replace('#', '_r')}__{row.case}.json"
+                name = plan_file(row.config, row.case)
                 body = answer if isinstance(answer, (dict, list)) else {"not_json": str(answer)}
                 (self.out / "plans" / name).write_text(json.dumps(body, indent=1), encoding="utf-8")
 
@@ -354,6 +396,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vending.replay.sweep", description=__doc__.split("\n")[0])
     parser.add_argument("--models", default=",".join(DEFAULT_MODELS), help="haiku, sonnet, opus or full ids")
     parser.add_argument("--efforts", default=",".join(DEFAULT_EFFORTS), help=f"from {', '.join(model.EFFORTS)}")
+    parser.add_argument("--configs", help="just these MODEL@EFFORT pairs, such as haiku@medium,opus@low "
+                                          "(instead of every model with every effort)")
     parser.add_argument("--cases", help="only these cases, comma separated (default: all ten)")
     parser.add_argument("--repeats", type=int, default=1, help="answers per case per model and effort (1-5)")
     parser.add_argument("--budget", type=Decimal, default=DEFAULT_BUDGET, help="dollars for the whole sweep")
@@ -369,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
         for e in efforts:
             if e not in model.EFFORTS:
                 raise ValueError(f"effort must be one of {', '.join(model.EFFORTS)}, not {e!r}.")
+        pairs = pair_configs(args.configs, args.repeats) if args.configs else None
         if not 1 <= args.repeats <= 5 or not 1 <= args.workers <= 8:
             raise ValueError("--repeats takes 1 to 5 and --workers 1 to 8.")
         if not Decimal(0) < args.budget <= MAX_BUDGET:
@@ -383,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, ArithmeticError) as error:
         print(error, file=sys.stderr)
         return 2
-    cfgs = configs(models, efforts, args.repeats)
+    cfgs = pairs or configs(models, efforts, args.repeats)
     worst = plan_estimate(cfgs, len(cases))
     print(f"{len(cfgs)} configs x {len(cases)} cases = {len(cfgs) * len(cases)} requests. "
           f"Worst case if every answer ran to {model.MAX_TOKENS} tokens: ${worst:.2f}; "

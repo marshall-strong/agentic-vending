@@ -72,6 +72,7 @@ from day one.
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
+| [`docs/benchmark.md`](docs/benchmark.md) | The standing benchmark: rerun the test cases after every prompt, rule, case or model change, judged blind, every run kept in the database |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
 
 ## Getting set up
@@ -149,6 +150,25 @@ when it asks. It's read as a prompt, so the key doesn't end up in your command h
 
 On macOS or Linux, add `export VENDING_ANTHROPIC_API_KEY='<the key>'` to `~/.zshrc` or
 `~/.bashrc`. In production it's a secret on our Azure Container App.
+
+**Or keep it in a file only your Windows account can read**, `~\.vending\anthropic-key`. That is
+the team's convention for per-user secrets: one folder in your profile, outside every copy of the
+repository, closed to other accounts. With the file instead of the user variable, the programs
+you start don't get the key in their environment: a script that needs it loads it into its own
+process, for as long as it runs.
+`scripts\run_bench.ps1` ([the benchmark](docs/benchmark.md)) uses this file first, and the user
+variable only when there is no file. To make it, run this in PowerShell and paste the key when it
+asks:
+
+```
+$dir = Join-Path $HOME '.vending'
+New-Item -ItemType Directory -Force $dir | Out-Null
+icacls $dir /inheritance:r /grant:r "$env:USERDOMAIN\${env:USERNAME}:(OI)(CI)F" | Out-Null
+Set-Content -NoNewline -Encoding ascii (Join-Path $dir 'anthropic-key') (Read-Host 'Key')
+```
+
+`icacls` removes every other account's access to the folder, and the file inherits that. Check it
+with `icacls $HOME\.vending\anthropic-key`: it should list your account alone.
 
 **Every use of the key is recorded.** All our model calls go through `vending/harness.py`, which
 writes each one to the `model_calls` table before it is sent: what asked for it, the model and
