@@ -3,6 +3,7 @@ psycopg[binary]==3.2.*
 mcp==1.*
 # zoneinfo has no time-zone data of its own on Windows; the ledger and get_pnl use America/New_York.
 tzdata>=2025.1
+anthropic==2.*
 
 # Development
 pytest==8.*

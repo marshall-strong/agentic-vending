@@ -71,8 +71,10 @@ from day one.
 | [`docs/dex-api-quickstart.md`](docs/dex-api-quickstart.md) | **New to the API?** From Tailscale and a key to your first calls, plus troubleshooting |
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
+| [`docs/db-explorer.md`](docs/db-explorer.md) | The DB explorer: a read-only page that lists every table and shows its columns and rows, so you don't need psql |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
 | [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
+| [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
 
 ## Getting set up
