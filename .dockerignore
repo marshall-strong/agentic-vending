@@ -28,4 +28,7 @@ tests/
 docs/
 scripts/
 *.md
+# ...except the agent's rule notes, which get_project_rules reads at run time
+!docs/agent/
+!docs/agent/*.md
 compose.yaml
