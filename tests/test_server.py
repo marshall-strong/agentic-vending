@@ -48,6 +48,20 @@ def test_lists_all_ten_tools():
     assert tools["get_machine_state"].outputSchema is not None
 
 
+# Every tool the agent can call. Adding one (a web fetcher, say) changes what the
+# agent can see and do, so it must be a deliberate, reviewed change to this list.
+# See docs/integrity.md.
+TOOL_NAMES = {
+    "get_machine_state", "get_sales_history", "get_catalog", "get_account_balance",
+    "preview_desired_state", "submit_desired_state", "get_purchase_requests", "set_price",
+    "get_pnl", "request_catalog_product",
+}
+
+
+def test_tool_list_is_pinned():
+    assert {t.name for t in call(None).tools} == TOOL_NAMES
+
+
 def test_machine_state_end_to_end(db):
     store_poll(db, "a", "2026-10-22T12:00:00+00:00", {"15": (250, 100)})
     store_poll(db, "b", "2026-10-29T12:00:00+00:00", {"15": (250, 121)})

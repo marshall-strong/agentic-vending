@@ -4,7 +4,7 @@ through the MCP client."""
 
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -15,7 +15,7 @@ psycopg = pytest.importorskip("psycopg")
 from tests.conftest import store_poll  # noqa: E402
 from tests.test_ledger import UNIT_COST, deliver, open_ledger  # noqa: E402
 from tests.test_server import call, db  # noqa: E402,F401  (db is a fixture)
-from vending import planning, server  # noqa: E402
+from vending import ledger, planning, server  # noqa: E402
 from vending.bridge import Bridge  # noqa: E402
 from vending.config import set_halted, set_value  # noqa: E402
 from vending.planner import OUR_SLOTS  # noqa: E402
@@ -178,6 +178,20 @@ def test_an_old_poll_is_flagged_as_stale(db, fake):  # noqa: F811
     fresh = preview_desired_state(db, desired(restock_15(), sourcing=[coke_sourcing()]), fake.client(),
                                   datetime(2026, 11, 8, 18, 0, tzinfo=timezone.utc))
     assert not any(n.startswith("STALE") for n in fresh.notes)
+
+
+def test_the_planner_counts_a_cost_recorded_just_now_when_the_host_clock_is_behind(db, monkeypatch):  # noqa: F811
+    # The planner's spending check must see the same balance as get_account_balance,
+    # including the model call recorded a moment ago by the database clock.
+    class HostBehind(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(hours=1)
+
+    monkeypatch.setattr(planning, "datetime", HostBehind)
+    ready(db)
+    ledger.record_tokens(db, "250.00", "m", 1, 1, "dev")
+    assert planning.gather(db, []).current.balance_cents == 35000
 
 
 # --- Plans -----------------------------------------------------------------------------------
