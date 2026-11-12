@@ -26,7 +26,18 @@ Azure uses its default TCP probes on port 8080, which pass whenever the worker i
 Watch `/health` yourself, or alert on it, instead.
 
 The image runs as a normal user (`vending`, uid 10001), with pinned base images and no test
-packages (`pytest` is in `requirements-dev.txt`).
+packages (`pytest` is in `requirements-dev.txt`). It runs **Python 3.14**, the newest version any
+of us develops on, so code that passes on a laptop also runs in Azure; bump the `FROM` line when
+the team's venvs move.
+
+To run the tests inside the image, with the image's own Python, before a deploy that changes it:
+
+```
+docker build -t agentic-vending:dev .
+docker run --rm --user root --entrypoint sh -v "${PWD}/tests:/app/tests:ro" -v "${PWD}/scripts:/app/scripts:ro" -v "${PWD}/requirements-dev.txt:/app/requirements-dev.txt:ro" agentic-vending:dev -c "pip install -q -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider tests"
+```
+
+The database tests skip there (no `DATABASE_URL`); the rest run.
 
 **The Tailscale node is ephemeral.** It keeps no state, so every start, restart or new revision
 joins again with `TS_AUTHKEY`, and Tailscale removes the node once it goes offline. That needs a
