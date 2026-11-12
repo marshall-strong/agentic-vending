@@ -8,7 +8,7 @@ machine.
 
 | Tool | State |
 | --- | --- |
-| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
+| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls; and from the receipts (`vending.stock`), the product, stock on hand (since the product went in), units sold and days since the last load, and days of stock left. The closet per product with its value at cost, and any stock warnings. A slot with no receipts has those fields `null` and is named in the message. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
 | `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. |
@@ -25,7 +25,7 @@ You need the local database from the history sync first ([`README.md`](../README
 `DATABASE_URL` in your `.env`):
 
 ```
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate            # creates or updates the tables
 python -m vending.slots record          # needs the class tailnet; stores which slots are ours

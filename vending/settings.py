@@ -16,7 +16,9 @@ class SettingsError(RuntimeError):
     """A required setting is missing."""
 
 
-def _load_env_file(path: Path) -> dict[str, str]:
+def read_env_file(path: Path) -> dict[str, str]:
+    """The settings in a `.env` file. The deploy script's secrets go through this too,
+    so Azure gets exactly the values the code reads locally."""
     values: dict[str, str] = {}
     if not path.exists():
         return values
@@ -44,7 +46,7 @@ def _clean_value(value: str) -> str:
     return re.split(r"\s#", value, maxsplit=1)[0].rstrip()
 
 
-_FILE = _load_env_file(REPO_ROOT / ".env")
+_FILE = read_env_file(REPO_ROOT / ".env")
 
 
 def get(name: str, default: str | None = None) -> str | None:
