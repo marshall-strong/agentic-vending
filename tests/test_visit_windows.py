@@ -20,8 +20,12 @@ def polls(hours):
 
 
 def door(rises):
-    """rises: {hour: rise} on an hourly poll grid from 0 to 12."""
-    return [{"at_eastern": at(h), "rise": str(rises.get(h, 0))} for h in range(0, 13)]
+    """rises: {hour: rise} on an hourly poll grid from 0 to 12, as export_sales.py writes them (lifetime and rise)."""
+    rows, life = [], 1000
+    for h in range(0, 13):
+        life += rises.get(h, 0)
+        rows.append({"at_eastern": at(h), "door_open_lifetime": str(life), "rise": str(rises.get(h, 0))})
+    return rows
 
 
 def sale(h, units=1, slot="15"):
@@ -91,3 +95,21 @@ def test_hours_follow_the_hour_a_poll_closes_whether_it_lands_at_59_or_00():
     r = vw.analyse(door({}), polls(range(13)), sales)
     by = {p["hour"]: p["units_per_day"] for p in r["hour_profile"]}
     assert by[13] == 3 and by[14] == 0
+
+
+def test_a_misread_door_reading_is_not_a_visit():
+    # (1000, 5, 1000): one low reading between good polls. The old exporter wrote a rise of 995 at the poll after
+    # the misread, so the `rise` column of such an export is wrong; the visit finder reads the lifetime count instead.
+    lifetimes = {5: 5}
+    rows = [{"at_eastern": at(h), "door_open_lifetime": str(lifetimes.get(h, 1000)), "rise": "995" if h == 6 else "0"}
+            for h in range(0, 13)]
+    r = vw.analyse(rows, polls(range(13)), [])
+    assert r["visits"] == []
+
+
+def test_a_door_opening_after_a_misread_counts_from_the_old_high():
+    lifetimes = {5: 5, 6: 1002}
+    rows = [{"at_eastern": at(h), "door_open_lifetime": str(lifetimes.get(h, 1000 if h < 6 else 1002)), "rise": "0"}
+            for h in range(0, 13)]
+    (v,) = vw.analyse(rows, polls(range(13)), [])["visits"]
+    assert v["openings"] == 2 and v["to"].startswith("2026-10-05T13:00")

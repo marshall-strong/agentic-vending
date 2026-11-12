@@ -19,7 +19,8 @@ Writes:
     machine_hourly.csv  every poll: units and cents the WHOLE machine sold since the previous poll (sum over all
                         selections, each slot's rise found with vending.counters.rises). Aggregates only.
     door_events.csv     every poll's EVA-DTS door-open counter (EA2*DO*<since reset>*<lifetime>) and its rise
-                        since the previous poll: a rise means the door was opened (a visit) in between
+                        since the previous poll (door_events.door_rows: vending.counters.rises, misread-safe): a rise
+                        means the door was opened (a visit) in between
     slots.json          which slots the CSVs cover: {device, slots, source, resolved_at}. sales_analysis.py
                         reads it, and stops if it is asked about a different slot list.
 """
@@ -27,7 +28,6 @@ import argparse
 import csv
 import datetime as dt
 import json
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vending import db  # noqa: E402
 from vending.counters import rises  # noqa: E402
+from door_events import door_counter, door_rows  # noqa: E402
 from slots_config import resolve_slots  # noqa: E402
 
 EASTERN = ZoneInfo("America/New_York")
@@ -66,19 +67,6 @@ with db.connect() as c:
         "select started_at from polls where device_id = %s and crc_ok order by started_at", (DEVICE_ID,)).fetchall()
     raws = c.execute(
         "select started_at, raw from polls where device_id = %s and crc_ok order by started_at", (DEVICE_ID,)).fetchall()
-
-
-def door_counter(raw):
-    """(since_reset, lifetime) from the EA2*DO record of one raw EVA-DTS poll, or None if absent.
-    EA2 = event counters; event DO = door open. Segments end in CR/LF, fields split on '*'."""
-    for seg in re.split(r"[\r\n]+", bytes(raw).decode("latin-1")):
-        f = seg.split("*")
-        if len(f) >= 4 and f[0] == "EA2" and f[1] == "DO":
-            try:
-                return int(f[2]), int(f[3])
-            except ValueError:
-                return None
-    return None
 
 
 ours = set(SLOTS)
@@ -132,15 +120,9 @@ with open(out / "polls.csv", "w", newline="") as f:
 with open(out / "door_events.csv", "w", newline="") as f:
     w = csv.writer(f)
     w.writerow(["at_eastern", "door_open_lifetime", "door_open_since_reset", "rise"])
-    prev = None
-    for at, raw in raws:
-        dc = door_counter(raw) if raw is not None else None
-        if dc is None:
-            continue
-        since, life = dc
-        rise = life - prev if prev is not None and life >= prev else 0
+    counts = ((at, door_counter(raw)) for at, raw in raws if raw is not None)
+    for at, life, since, rise in door_rows((at, *dc) for at, dc in counts if dc is not None):
         w.writerow([at.astimezone(EASTERN).isoformat(), life, since, rise])
-        prev = life
 
 (out / "slots.json").write_text(json.dumps(dict(
     device=DEVICE_ID, slots=list(SLOTS), source=SOURCE,

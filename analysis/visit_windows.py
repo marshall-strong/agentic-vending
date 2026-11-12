@@ -2,15 +2,16 @@
 """Dark periods: when the machine's door opened, how long we couldn't see, and what that means for sales.
 
 Reads the CSVs that analysis/export_sales.py writes (and, if present, the visit grades in
-analysis/out/lab_data.json from analysis/sales_analysis.py). Standard library only, so the tests run in
-the project's own environment.
+analysis/out/lab_data.json from analysis/sales_analysis.py). Standard library only (plus vending.counters,
+which is too), so the tests run in the project's own environment.
 
     python analysis/visit_windows.py [--data analysis/data] [--lab-data analysis/out/lab_data.json]
                                      [--out analysis/out/visit_windows.json]
 
 What it measures (hourly-polling era only, from 21 Sep 2026, when polls came every hour):
     visits        door-counter rises (EA2*DO) between two polls, merged when within 3 hours, as
-                  analysis/sales_analysis.py does. The window is the time we can't see into: from the last
+                  analysis/sales_analysis.py does. Rises come from the lifetime count with vending.counters.rises,
+                  so a misread door reading isn't a visit. The window is the time we can't see into: from the last
                   poll before the first opening to the poll that saw the last one.
     grades        the analysis's refill grade for each visit (proven, likely, possible top-up, no sign).
     poll gaps     how often a gap between polls is longer than an hour: a longer gap widens any window.
@@ -29,9 +30,13 @@ import argparse
 import csv
 import json
 import statistics
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from vending.counters import rises  # noqa: E402  (standard library only)
 
 MERGE_H = 3                                        # rises within 3 h are one visit (sales_analysis.VISIT_MERGE_H)
 HOURLY_FROM = datetime.fromisoformat("2026-09-21T01:00:00-04:00")
@@ -62,8 +67,14 @@ def when(text: str) -> datetime:
 
 def find_visits(door_rows: list[dict]) -> list[dict]:
     """Door-counter rises merged into visits. Each visit: from (poll before), first and last rise polls,
-    openings, and the rise polls themselves."""
-    rows = sorted(({"t": when(r["at_eastern"]), "rise": int(r["rise"])} for r in door_rows), key=lambda r: r["t"])
+    openings, and the rise polls themselves.
+
+    The rises are recomputed from `door_open_lifetime` with vending.counters.rises, not read from the `rise`
+    column: exports written before export_sales.py used that rule turned a single misread (1000, 5, 1000) into a
+    rise of 995 at the next poll."""
+    readings = sorted(((when(r["at_eastern"]), int(r["door_open_lifetime"])) for r in door_rows), key=lambda r: r[0])
+    up = dict(rises(readings))
+    rows = [{"t": t, "rise": up.get(t, 0)} for t, _ in readings]
     visits: list[dict] = []
     for prev, r in zip(rows, rows[1:]):
         if r["rise"] <= 0:
