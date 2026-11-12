@@ -99,8 +99,10 @@ def our_slots(conn: psycopg.Connection) -> tuple[str, ...]:
 def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, by: str = "vending.slots") -> str:
     """Store the bridge's answer as our assignment, or check it against the one stored.
 
-    Returns "recorded" or "unchanged". Raises `BadAssignment` for an answer that
-    can't be used or that differs from what is stored; nothing changes then.
+    Returns "recorded", "unchanged" or "team renamed". Raises `BadAssignment` for
+    an answer that can't be used or whose device or slots differ from what is
+    stored; nothing changes then. Only the device and the slots are the
+    assignment: nothing reads `team`, so a new label alone is stored, not refused.
     """
     from psycopg.types.json import Jsonb
 
@@ -115,17 +117,23 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
             outcome = "recorded"
         else:
             before = Assignment(old[0], old[1], tuple(old[2]))
-            if (before.device_id, set(before.slots), before.team) != (new.device_id, set(new.slots), new.team):
+            if (before.device_id, set(before.slots)) != (new.device_id, set(new.slots)):
                 raise BadAssignment(
                     "the inventory server now gives a different assignment, and the brief says it doesn't "
                     f"change. Stored: team {before.team}, {before.device_id} {', '.join(before.slots)}. "
                     f"Now: team {new.team}, {new.device_id} {', '.join(new.slots)}. Nothing was changed; "
                     "ask the instructors which is right before anyone acts on it")
-            conn.execute("update slot_assignment set last_checked_at = coalesce(%s, now()) where id = 1", (now,))
-            outcome = "unchanged"
+            if before.team == new.team:
+                conn.execute("update slot_assignment set last_checked_at = coalesce(%s, now()) where id = 1", (now,))
+                outcome = "unchanged"
+            else:
+                conn.execute("update slot_assignment set team = %s, response = %s, last_checked_at = coalesce(%s, now())"
+                             " where id = 1", (new.team, Jsonb(answer), now))
+                outcome = "team renamed"
         conn.execute("insert into action_log (kind, tool, arguments, outcome, detail) values ('write', %s, %s, 'done', %s)",
                      ("slots.record", Jsonb({"by": by}),
-                      f"slot assignment {outcome}: {new.device_id} {', '.join(new.slots)}"))
+                      f"slot assignment {outcome}: {new.device_id} {', '.join(new.slots)}"
+                      + (f" (team {before.team} -> {new.team})" if outcome == "team renamed" else "")))
     return outcome
 
 

@@ -70,7 +70,7 @@ def test_the_same_answer_again_only_moves_last_checked(empty):
 @pytest.mark.parametrize("changed", [
     {**ANSWER, "slots": ["11", "12", "13", "14"]},
     {**ANSWER, "slots": list(slots.SLOTS[:-1])},
-    {**ANSWER, "team": "group-a"},
+    {**ANSWER, "device_id": "vmc1", "team": "group-a", "slots": ["11", "12"]},
 ])
 def test_a_different_answer_is_refused_and_changes_nothing(empty, changed):
     slots.record(empty, ANSWER, NOW)
@@ -78,6 +78,19 @@ def test_a_different_answer_is_refused_and_changes_nothing(empty, changed):
         slots.record(empty, changed, NOW + timedelta(days=1))
     assert slots.our_slots(empty) == slots.SLOTS
     assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (NOW,)
+
+
+def test_a_new_team_label_alone_is_stored_not_refused(empty):
+    """Nothing reads `team`, so a renamed team with the same slots mustn't fail the hourly `record`."""
+    slots.record(empty, ANSWER, NOW)
+    later = NOW + timedelta(days=1)
+    renamed = {**ANSWER, "team": "Group B"}
+    assert slots.record(empty, renamed, later) == "team renamed"
+    row = empty.execute("select team, first_read_at, last_checked_at, response from slot_assignment").fetchone()
+    assert row == ("Group B", NOW, later, renamed)
+    assert slots.our_slots(empty) == slots.SLOTS
+    [detail] = empty.execute("select detail from action_log order by id desc limit 1").fetchone()
+    assert detail.endswith("(team group-b -> Group B)")
 
 
 def test_a_bad_answer_stores_nothing(empty):
