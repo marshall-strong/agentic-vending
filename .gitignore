@@ -102,3 +102,7 @@ sweep-results/
 replay-results/
 # Bench answers (python -m vending.bench run); the database holds the record
 bench-results/
+
+# Sales analysis: exported data and generated outputs stay local
+analysis/data/
+analysis/out/

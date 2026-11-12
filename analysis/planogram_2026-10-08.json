@@ -1,0 +1,289 @@
+{
+ "about": "What was in machine vmc1 (drinks) and in the snack machine beside it, read from a team member's photos taken Thu 2026-10-08 ~09:27 ET. Slot 'rc' = shelf r (1 = top), position c (1 = left). 'stock_seen' is what the photo shows at the front of the rail: product behind the front unit is hidden, so 'empty' means no unit visible. Names marked uncertain were not fully legible. Prices are the shelf tags in the photo (tax included). The machine reports sales by slot only, never product names, so this is the only product mapping we have for the pre-competition history.",
+ "photo_taken": "2026-10-08T09:27:00-04:00",
+ "machine": "vmc1 (Royal Vision Vender, 5 shelves x 8 selections)",
+ "slots": [
+  {
+   "slot": "11",
+   "ours": false
+  },
+  {
+   "slot": "12",
+   "ours": false
+  },
+  {
+   "slot": "13",
+   "ours": false
+  },
+  {
+   "slot": "14",
+   "ours": false
+  },
+  {
+   "slot": "15",
+   "product": "Gorgie energy drink (red)",
+   "category": "energy",
+   "caffeine": true,
+   "package": "12oz can",
+   "price": 4.5,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "16",
+   "product": "Gorgie energy drink (orange)",
+   "category": "energy",
+   "caffeine": true,
+   "package": "12oz can",
+   "price": 4.5,
+   "stock_seen": "stocked",
+   "uncertain": true
+  },
+  {
+   "slot": "17",
+   "product": "Gorgie energy drink, sparkling tropical punch",
+   "category": "energy",
+   "caffeine": true,
+   "package": "12oz can",
+   "price": 4.5,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "18",
+   "product": "Ghost Energy",
+   "category": "energy",
+   "caffeine": true,
+   "package": "16oz can",
+   "price": 5.0,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "21",
+   "ours": false
+  },
+  {
+   "slot": "22",
+   "ours": false
+  },
+  {
+   "slot": "23",
+   "ours": false
+  },
+  {
+   "slot": "24",
+   "ours": false
+  },
+  {
+   "slot": "25",
+   "product": "Pickle-juice sports shot (bottle, 'helps prevent muscle cramps')",
+   "category": "sports",
+   "caffeine": false,
+   "package": "small bottle",
+   "price": 4.0,
+   "stock_seen": "stocked",
+   "uncertain": true
+  },
+  {
+   "slot": "26",
+   "product": null,
+   "category": null,
+   "price": 4.0,
+   "stock_seen": "empty"
+  },
+  {
+   "slot": "27",
+   "product": "Red Bull Pink Edition, sugar-free",
+   "category": "energy",
+   "caffeine": true,
+   "package": "12oz can",
+   "price": 3.0,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "28",
+   "product": null,
+   "category": null,
+   "price": 3.0,
+   "stock_seen": "empty"
+  },
+  {
+   "slot": "31",
+   "ours": false
+  },
+  {
+   "slot": "32",
+   "ours": false
+  },
+  {
+   "slot": "33",
+   "ours": false
+  },
+  {
+   "slot": "34",
+   "ours": false
+  },
+  {
+   "slot": "35",
+   "product": "Pure Leaf iced tea, sweet tea",
+   "category": "tea",
+   "caffeine": true,
+   "package": "18.5oz PET",
+   "price": 2.0,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "36",
+   "product": "Lemonade-style bottled drink, checkered label (brand not legible)",
+   "category": "juice/lemonade",
+   "caffeine": null,
+   "package": "bottle",
+   "price": 2.0,
+   "stock_seen": "stocked",
+   "uncertain": true
+  },
+  {
+   "slot": "37",
+   "product": null,
+   "category": null,
+   "price": 2.0,
+   "stock_seen": "empty"
+  },
+  {
+   "slot": "38",
+   "product": null,
+   "category": null,
+   "price": 3.0,
+   "stock_seen": "empty"
+  },
+  {
+   "slot": "41",
+   "ours": false
+  },
+  {
+   "slot": "42",
+   "ours": false
+  },
+  {
+   "slot": "43",
+   "ours": false
+  },
+  {
+   "slot": "44",
+   "ours": false
+  },
+  {
+   "slot": "45",
+   "product": "Diet Coke",
+   "category": "soda",
+   "caffeine": true,
+   "package": "20oz PET",
+   "price": 2.0,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "46",
+   "product": null,
+   "category": null,
+   "price": 2.0,
+   "stock_seen": "empty"
+  },
+  {
+   "slot": "47",
+   "product": "Snapple Fruit Punch",
+   "category": "juice",
+   "caffeine": false,
+   "package": "16oz PET",
+   "price": 3.5,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "48",
+   "product": "Snapple Mango Madness",
+   "category": "juice",
+   "caffeine": false,
+   "package": "16oz PET",
+   "price": 4.0,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "51",
+   "ours": false
+  },
+  {
+   "slot": "52",
+   "ours": false
+  },
+  {
+   "slot": "53",
+   "ours": false
+  },
+  {
+   "slot": "54",
+   "ours": false
+  },
+  {
+   "slot": "55",
+   "product": "bubly sparkling water, blackberry",
+   "category": "sparkling water",
+   "caffeine": false,
+   "package": "12oz can",
+   "price": 1.0,
+   "stock_seen": "stocked",
+   "note": "price tag hidden behind the delivery bin"
+  },
+  {
+   "slot": "56",
+   "product": "bubly sparkling water, mango",
+   "category": "sparkling water",
+   "caffeine": false,
+   "package": "12oz can",
+   "price": 1.0,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "57",
+   "product": "bubly sparkling water, lime",
+   "category": "sparkling water",
+   "caffeine": false,
+   "package": "12oz can",
+   "price": 1.0,
+   "stock_seen": "stocked"
+  },
+  {
+   "slot": "58",
+   "product": "Pepsi Real Sugar",
+   "category": "soda",
+   "caffeine": true,
+   "package": "12oz can",
+   "price": 1.5,
+   "stock_seen": "stocked"
+  }
+ ],
+ "snack_machine": {
+  "about": "The separate snack machine beside vmc1, same photo session. It is not ours and does not report to us; it is context for what shoppers can pair with a drink and what they pay for a snack. Approximate: several labels were partly hidden.",
+  "price_bands": {
+   "row 1 (101-111)": 3.0,
+   "row 2 (201-211)": 3.0,
+   "row 3 (301-311)": 2.5,
+   "row 4 (401-411)": 2.5,
+   "row 5 (501-512)": 2.25,
+   "row 6 (601-611)": 2.25,
+   "row 7 (701-711)": 2.0
+  },
+  "seen": [
+   "Sensible Portions Garden Veggie Straws (sea salt; cheddar)",
+   "Cheez-It (original, extra cheesy, Grooves)",
+   "Jack Link's beef jerky, original",
+   "Pretzel crisps",
+   "Sun Chips (harvest cheddar, garden salsa, French onion)",
+   "PopCorners (kettle corn, cinnamon, white cheddar, spicy)",
+   "Trail/party mixes",
+   "Sour Punch Bites, Sour Patch Kids, Skittles, M&M's",
+   "gimme roasted seaweed",
+   "Pirate's Booty",
+   "Snack pretzels",
+   "a protein/granola bar"
+  ],
+  "stock_seen": "about half the coils empty on Oct 8, the same run-down pattern as the drink machine"
+ },
+ "scope": "Trimmed to our 20 slots (15-18, 25-28, 35-38, 45-48, 55-58). Other slots are listed as {\"slot\": ..., \"ours\": false} with no values, and evidence lines that cited other slots were removed or rewritten. Dating windows were re-checked against our slots and the door counter only; none changed."
+}

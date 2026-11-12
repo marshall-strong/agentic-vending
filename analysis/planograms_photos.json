@@ -1,0 +1,3250 @@
+{
+ "about": "Ten undated team photos of machine vmc1 (Royal Vision Vender, 5 shelves x 8 selections), each read slot by slot and dated against the machine's poll history, plus the two dated reference photos, in chronological order. Photo ids keep the order in which the photos were received; chronological_rank gives the time order. Slot 'rc' = shelf r (1 = top), position c (1 = left). 'stock_seen' is the front of the rail only; 'visible_units' counts units visible down the rail where they could be counted (null = not countable). Products marked 'not legible', 'likely' or 'possibly' are uncertain. Prices are shelf tags as read (price_legible false = a guess or a blurred read); most tags below shelf 1 are unreadable at the 600x800 photo resolution. A rail holds at most 7-11 units (20oz PET 7, 16oz glass 7, 16oz PET 8, 12oz can 8, 240/250ml can 11).",
+ "method": "Each photo was read at full size and in zoomed crops of each shelf and tag ledge. Dating used the machine's poll history (per-slot sales, per-slot DEX prices, door-open counter): (1) legible tags against the price schedule, which changed once on 2026-09-30 15:59 ET and not again through Nov 11; (2) rails shown empty must not sell between the photo and the next door visit, and rails shown stocked should still sell or still be stocked later; (3) layout continuity between photos and the Oct 8 / Nov 9 references; (4) door-counter rises as candidate visit times. A scoring script ranked candidate times and an independent skeptic tried to refute each date. Photos 6 and 7 were refuted; they were re-examined and kept at Sep 25 on shelf-1 layout continuity (see their evidence). Phone-gallery timestamps found later for photos 9, 3 and 2 (and the Oct 8 reference) were held out as a blind check: all three fall inside the poll-history windows, and those photos' best_guess uses the gallery time. Times are US Eastern.",
+ "machine": "vmc1 (Royal Vision Vender, 5 shelves x 8 selections)",
+ "price_schedule_note": "Our slots. Before 2026-09-30 15:59 ET (average realized prices from sales): 15-18 $4.50, 25-28 $3.50, 35-36 $3.00, 37/38 $3.50, 45-48 and 55-58 $3.00. After: 15-17 $4.50, 18 $5.00, 25-26 $4.00, 27-28 $3.00, 35-37 $2.00, 38 $3.00, 45-46 $2.00, 47 $3.50, 48 $4.00, 55-57 $1.00, 58 $1.50.",
+ "photos": [
+  {
+   "id": "photo-10",
+   "chronological_rank": 1,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "before 2026-08-27T22:46-04:00 (telemetry start)",
+    "latest": "2026-09-11T16:02-04:00",
+    "best_guess": "2026-09-04T11:20-04:00"
+   },
+   "confidence": "low",
+   "evidence": [
+    "Shelf-1 tags on our rails 15-18 read $4.50: the pre-Sep-30 price schedule, not the Sep 30 15:59 reprice (18 to $5.00).",
+    "Celsius fills 25-28.",
+    "38 is the only empty rail. It records no sale until the Sep 11 16:02 reading, which bounds the photo at Sep 11 16:02. A rail with no sales does not prove it was empty, so the bound is loose.",
+    "Shelf 5 fits a full, pre-run-down machine around Sep 4: 55 and 56 both sell at the Sep 4 09:16 reading.",
+    "Its layout differs most from every other photo (vitaminwater 46-48, Diet Coke 55, Gatorade 56-57), so it is the earliest photo.",
+    "The best guess is the Sep 4 11:20 door visit (first door opening after the Aug 27 counter reset). Polling was sparse before mid-September, so late August cannot be ruled out.",
+    "Skeptic check: not refuted; the end of the window was widened from Sep 4 13:14 to Sep 11 16:02."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "yellow energy can (brand not legible, vertical text, possibly Gorgie)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "16",
+     "product": "Monster Energy Ultra, lavender/purple can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "17",
+     "product": "Monster Energy Ultra, pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "18",
+     "product": "Monster Energy Ultra, red/pink can (flavor not legible, possibly Ultra Watermelon/Rosa)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Celsius, strawberry flavor (likely strawberry lemonade)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "26",
+     "product": "Celsius, red/orange fruit (likely watermelon or grapefruit)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "27",
+     "product": "Celsius, yellow/mango fruit (likely Tropical Vibe / mango passionfruit)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "28",
+     "product": "Celsius, orange/peach fruit (likely Peach Vibe)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea, lemon (yellow band)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "36",
+     "product": "Pure Leaf iced tea, peach (peach band)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "37",
+     "product": "white-cap bottle with silver/brown label (brand not legible)",
+     "category": "other",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "38",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Coca-Cola 20oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "vitaminwater, yellow (flavor not legible)",
+     "category": "water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "vitaminwater, dark purple/black label (likely XXX)",
+     "category": "water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "high"
+    },
+    {
+     "slot": "48",
+     "product": "vitaminwater, pink (flavor not legible)",
+     "category": "water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "high"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "Diet Coke 20oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "56",
+     "product": "Gatorade, blue (likely Cool Blue)",
+     "category": "sports",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "57",
+     "product": "Gatorade, red (likely Fruit Punch)",
+     "category": "sports",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "58",
+     "product": "pink/red bottled drink, red cap (brand not legible)",
+     "category": "juice",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "photo-09",
+   "chronological_rank": 2,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-09-21T09:07-04:00",
+    "latest": "2026-09-21T15:37-04:00",
+    "best_guess": "2026-09-21T09:36-04:00"
+   },
+   "confidence": "high",
+   "evidence": [
+    "Tags: $4.50 on 15-18, about $3.50 on 25-28: pre-Sep-30 prices.",
+    "15 is empty: its last sale before a refill was logged at the 09:37 poll on Sep 21 (sold in 09:07-09:37), and it sells again only after the Sep 21 15:37 and Sep 22 08:46 visits. 17 is empty: last sale Sep 20 ~17:00, next after the 15:37 refill.",
+    "48 is empty (sold Sep 18, then nothing until Sep 25). 16 (Red Bull) and 18 are stocked and each sold on Sep 21 morning.",
+    "No door visit between Sep 18 15:20 and Sep 21 15:37, so the window is Sep 21 09:07-15:37.",
+    "Shelves 3-5 match photo 8 (Gatorade 55, vitaminwater 57-58, Coke 45-46, Diet Coke 47) but shelf 1 differs, so this is an earlier visit.",
+    "Blind check: the phone gallery timestamp, read later and held out from the dating, is 2026-09-21 09:36 ET, inside the window. The best guess uses that timestamp; the poll-only best guess was ~14:00."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "16",
+     "product": "Red Bull Energy Drink (original, blue/silver)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "17",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "18",
+     "product": "Monster Energy Ultra, purple (likely Zero Ultra Violet)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Celsius, yellow band (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "26",
+     "product": "Celsius, yellow band (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "27",
+     "product": "Celsius, blue/teal/yellow can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "28",
+     "product": "Celsius Peach Vibe",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea, yellow band (likely lemon)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "36",
+     "product": "Pure Leaf iced tea, orange band (likely peach)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "37",
+     "product": "bottle with portrait label, likely AriZona Arnold Palmer (not fully legible)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "38",
+     "product": "Starbucks Frappuccino glass bottle (flavor not legible)",
+     "category": "coffee",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Coca-Cola 20oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola 20oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "Diet Coke 20oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "48",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "Gatorade, blue (likely Cool Blue)",
+     "category": "sports",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "56",
+     "product": "Gatorade, red (likely Fruit Punch)",
+     "category": "sports",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "57",
+     "product": "vitaminwater, dark red (flavor not legible)",
+     "category": "water",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "58",
+     "product": "vitaminwater, pink (flavor not legible)",
+     "category": "water",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    }
+   ]
+  },
+  {
+   "id": "photo-08",
+   "chronological_rank": 3,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-09-23T09:00-04:00",
+    "latest": "2026-09-24T14:00-04:00",
+    "best_guess": "2026-09-24T10:00-04:00"
+   },
+   "confidence": "medium",
+   "evidence": [
+    "All four shelf-1 tags on our rails (15-18) read $4.50 (pre-Sep-30). Our shelf-3 and 45/46 tags read as $2.00 are illegible at 600x800, not a contradiction.",
+    "48 and 56 are empty: 48 first sells again Sep 25 10:59 after the Sep 24 14:00 visit; 56 sold Sep 21 12:00 and next Sep 25 10:59.",
+    "15 is stocked and sold on Sep 24 morning.",
+    "Same shelf 3-5 layout as photo 9; shelf 1 differs from photos 4-7, which come after the Sep 24 14:00 visit.",
+    "Skeptic check: not refuted."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "Monster Energy Ultra, purple can (likely Ultra Violet)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "16",
+     "product": "Monster Energy Ultra, red/pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "17",
+     "product": "Monster Energy Ultra, peach/orange can (likely Peachy Keen)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "18",
+     "product": "Monster Energy Ultra, pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Celsius, back facing (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "26",
+     "product": "Celsius, orange-script flavor (possibly Peach Vibe)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "27",
+     "product": "Celsius-style iridescent teal/rainbow can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "28",
+     "product": "Celsius with palm-tree graphic (likely Tropical Vibe)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea, yellow band (likely lemon)",
+     "category": "tea",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "36",
+     "product": "Pure Leaf iced tea, orange band (likely peach)",
+     "category": "tea",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "37",
+     "product": "bottle with white label showing a figure, red/yellow lower label (brand not legible)",
+     "category": "other",
+     "caffeine": null,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "low"
+    },
+    {
+     "slot": "38",
+     "product": "orange/yellow juice in glass jar-style bottle (brand not legible)",
+     "category": "juice",
+     "caffeine": false,
+     "price": 3.0,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "low"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Coca-Cola 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "Diet Coke 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "48",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "Gatorade, blue (likely Cool Blue)",
+     "category": "sports",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "56",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "57",
+     "product": "vitaminwater, dark red/purple (flavor not legible)",
+     "category": "water",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "58",
+     "product": "pink/magenta bottled drink, likely vitaminwater (flavor not legible)",
+     "category": "water",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    }
+   ]
+  },
+  {
+   "id": "photo-06",
+   "chronological_rank": 4,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-09-25T12:00-04:00",
+    "latest": "2026-09-28T10:00-04:00",
+    "best_guess": "2026-09-25T13:00-04:00"
+   },
+   "confidence": "low",
+   "evidence": [
+    "Every shelf-1 tag on our rails reads $4.50 (including 18, which became $5.00 at the Sep 30 15:59 reprice) and shelf-2 tags read $3.50: before Sep 30 16:00.",
+    "48 and 56 empty: 48 sold at the 10:59 and 12:00 readings on Sep 25, 56 at 10:59. Neither sells again until after the Sep 28 restock.",
+    "The skeptic proposed Sep 21 12:00 to Sep 22 08:46 instead. Rejected on shelf-1 continuity: photo 9 (gallery-confirmed Sep 21 09:36) has 15 and 17 empty and photo 8 (Sep 23-24) a different shelf 1, while photos 6/7 and 4/5 have a Monster run at 15-18. Placing 6 on Sep 21 needs shelf 1 to flip 9 -> 6 -> 8 -> 4/5.",
+    "The Sep 24 11:00-12:59 alternative is ruled out by the same shelf-1 continuity: photo 8 falls in the same no-visit interval (Sep 22 08:46 to Sep 24 14:00) and shows a different shelf 1.",
+    "Confidence stays low: the alternative windows are ruled out only by the shelf-1 continuity argument above. The window itself rests on our rails 48 and 56 and the door counter (visits Sep 25 13:59 and Sep 28 09:36-10:00).",
+    "This photo is before the Sep 25 13:59 visit and before photos 4/5 (a small refill happened at that visit; see photo 4).",
+    "Skeptic check: refuted (better window Sep 21); re-examined and kept at Sep 25 for the reasons above."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "Monster Energy Zero Ultra (white)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "16",
+     "product": "Monster Energy, pink/red can (flavor not legible, possibly Juice Pipeline Punch)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "17",
+     "product": "Monster Ultra, peach/orange can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "18",
+     "product": "Monster Ultra, pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Celsius, orange/yellow fruit graphic (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "26",
+     "product": "Celsius, coconut/lime graphic",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "medium"
+    },
+    {
+     "slot": "27",
+     "product": "Celsius (label facing back, flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "28",
+     "product": "Premier Protein shake, chocolate",
+     "category": "protein",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea, yellow band (likely lemon)",
+     "category": "tea",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "36",
+     "product": "Pure Leaf iced tea, orange band (likely peach)",
+     "category": "tea",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "37",
+     "product": "AriZona Arnold Palmer half & half",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "38",
+     "product": "Starbucks Frappuccino bottled coffee (flavor not legible)",
+     "category": "coffee",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "medium"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Coca-Cola 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "Diet Coke 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "48",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "Snapple, orange (flavor not legible)",
+     "category": "juice",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "56",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "57",
+     "product": "dark bottle, vertical white text (likely vitaminwater, flavor not legible)",
+     "category": "water",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "58",
+     "product": "orange can (brand not legible)",
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "photo-07",
+   "chronological_rank": 5,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-09-25T12:00-04:00",
+    "latest": "2026-09-28T10:00-04:00",
+    "best_guess": "2026-09-25T13:00-04:00"
+   },
+   "confidence": "low",
+   "evidence": [
+    "Same layout and same empty rails (48 and 56 among ours) as photo 6: same session.",
+    "Shelf-1 tags on our rails read $4.50 and shelf 2 about $3.50: before the Sep 30 15:59 reprice.",
+    "The skeptic proposed three windows (Sep 21 12:00-Sep 22 08:11, Sep 24 11:00-12:59, Sep 25 12:00-Sep 28 10:00) with best guess Sep 24. The Sep 21 and Sep 24 windows are rejected by the shelf-1 continuity argument given for photo 6 (photo 8, between them in time, has a different shelf 1, and no visit separates photo 8 from Sep 24 11:00-12:59).",
+    "Confidence stays low for the same reason as photo 6.",
+    "Skeptic check: refuted; re-examined and kept at Sep 25."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "Monster Energy Zero Ultra (white)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "16",
+     "product": "Monster Energy Ultra, red/pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "17",
+     "product": "Monster Energy Ultra, peach/orange can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "18",
+     "product": "Monster Energy Ultra, pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Celsius, white can with colorful (tropical) graphic",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "26",
+     "product": "Celsius, coconut/lime-type white can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 5,
+     "confidence": "medium"
+    },
+    {
+     "slot": "27",
+     "product": "Celsius (can turned to back side, pink band; flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "28",
+     "product": "Premier Protein shake carton (purple; flavor not legible)",
+     "category": "protein",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "high"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea, yellow band (likely lemon)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "high"
+    },
+    {
+     "slot": "36",
+     "product": "Pure Leaf iced tea, orange band (likely peach)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "high"
+    },
+    {
+     "slot": "37",
+     "product": "AriZona Arnold Palmer half & half-style bottle (portrait label, teal cap)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "38",
+     "product": "Starbucks Frappuccino glass bottle (flavor not legible)",
+     "category": "coffee",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "high"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Coca-Cola 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "Diet Coke 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "48",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "Snapple-style bottle, orange/yellow label, blue cap (flavor not legible)",
+     "category": "juice",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "low"
+    },
+    {
+     "slot": "56",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "57",
+     "product": "dark red/purple bottle with '...water' label (possibly vitaminwater; brand not fully legible)",
+     "category": "water",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "low"
+    },
+    {
+     "slot": "58",
+     "product": "slim orange can (brand not legible)",
+     "category": "other",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "photo-04",
+   "chronological_rank": 6,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-09-25T12:00-04:00",
+    "latest": "2026-09-28T11:00-04:00",
+    "best_guess": "2026-09-25T14:00-04:00"
+   },
+   "confidence": "medium",
+   "evidence": [
+    "Tags on 15-18 all read $4.50: before the Sep 30 15:59 reprice (18 went to $5.00).",
+    "48 and 56 still empty: 48 last sold at the Sep 25 12:00 reading, 56 at 10:59; both sell again only after the Sep 28 restock (14 door openings by the 11:00 reading).",
+    "Against photos 6/7 this shows a small refill at the Sep 25 13:59 visit (3 openings) between the two pairs.",
+    "Alternative: the Sep 28 visit between 09:36 and 10:00, before the big restock.",
+    "Skeptic check: not refuted; end widened to Sep 28 11:00."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "Monster Energy Zero Ultra (white)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "16",
+     "product": "Monster Energy Ultra, coral-pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "17",
+     "product": "Monster Energy Ultra, coral-pink can (flavor not legible; same as 16)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "18",
+     "product": "Monster Energy Ultra, light pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Celsius energy drink, rainbow/multicolor can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "26",
+     "product": "Celsius energy drink, green/pink dragonfruit-style can",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "medium"
+    },
+    {
+     "slot": "27",
+     "product": "Celsius energy drink, pink band (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "28",
+     "product": "Premier Protein shake, chocolate-style carton",
+     "category": "protein",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea, yellow band (likely lemon)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "36",
+     "product": "Pure Leaf iced tea, orange band (likely peach)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "37",
+     "product": "AriZona Arnold Palmer (portrait label)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "38",
+     "product": "Starbucks Frappuccino bottled coffee (glass)",
+     "category": "coffee",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "medium"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Coca-Cola 20oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola 20oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "Diet Coke 20oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "48",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "medium"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "red-orange fruit drink bottle, blue cap (brand not legible)",
+     "category": "juice",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "low"
+    },
+    {
+     "slot": "56",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "medium"
+    },
+    {
+     "slot": "57",
+     "product": "vitaminwater, dark-colored (flavor not legible)",
+     "category": "water",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "58",
+     "product": "orange slim can (brand not legible)",
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "photo-05",
+   "chronological_rank": 7,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-09-25T12:00-04:00",
+    "latest": "2026-09-28T11:00-04:00",
+    "best_guess": "2026-09-25T14:00-04:00"
+   },
+   "confidence": "medium",
+   "evidence": [
+    "Same contents as photo 4 (48 and 56 empty among ours): same session.",
+    "Shelf-2 tags read $3.50 and 15-18 $4.50 (pre-Sep-30).",
+    "Skeptic check: not refuted; end widened to Sep 28 11:00. Alternative: Sep 28 ~09:40-10:00."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "Monster Energy Zero Ultra (white)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "16",
+     "product": "Monster Energy Ultra, red/pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "17",
+     "product": "Monster Energy Ultra, pink/red can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "18",
+     "product": "Monster Energy Ultra, light pink can (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Celsius, rainbow/multicolor label (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "26",
+     "product": "Celsius dragonfruit lime",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "27",
+     "product": "Celsius can, back facing, pink stripe (flavor not legible)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "28",
+     "product": "Premier Protein shake (purple carton, likely chocolate)",
+     "category": "protein",
+     "caffeine": false,
+     "price": 3.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea, yellow band (likely lemon)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "36",
+     "product": "Pure Leaf iced tea, orange band (likely peach)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "37",
+     "product": "AriZona Arnold Palmer-style half and half bottle (white label with portrait)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "38",
+     "product": "Starbucks Frappuccino glass bottle (flavor not legible)",
+     "category": "coffee",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Coca-Cola 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "Diet Coke 20oz",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "48",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "Snapple-style bottle, orange label (likely Mango Madness)",
+     "category": "juice",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "56",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "57",
+     "product": "vitaminwater, black label (flavor not legible)",
+     "category": "water",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "58",
+     "product": "orange can (brand not legible)",
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "photo-03",
+   "chronological_rank": 8,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-09-30T09:30-04:00",
+    "latest": "2026-10-02T11:00-04:00",
+    "best_guess": "2026-10-01T09:39-04:00"
+   },
+   "confidence": "high",
+   "evidence": [
+    "No tags legible. On our rails the layout is almost identical to the Oct 8 reference: pickle 25, Pure Leaf 35, checkered bottle 36, Snapple 47-48, bubly 55-57, Pepsi 58. Celsius is gone.",
+    "Upper bound: 28 (stocked here) last sold 3 at the Oct 2 08:00 reading, then nothing until Oct 16; 46 (stocked) last sold Oct 2 11:00. Both were empty on Oct 8 and the Oct 5 visits did not refill them.",
+    "37 and 46 stocked and silent across Sep 28-30 point to the Sep 28-30 restocks.",
+    "Blind check: the phone gallery timestamp, held out from the dating, is 2026-10-01 09:39 ET, inside the window and at the Oct 1 09:00-hour door visit.",
+    "Skeptic check: not refuted; start loosened from Sep 30 13:00 to 09:30."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "Gorgie energy drink (blue can)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "16",
+     "product": "Gorgie energy drink (orange can)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "17",
+     "product": "Gorgie energy drink (red can)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "18",
+     "product": "iridescent pastel energy can (brand not legible; possibly Ghost)",
+     "category": "energy",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "green bottle with red cap, pickle-juice sports shot style (brand not legible)",
+     "category": "sports",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "26",
+     "product": "orange-label bottle/jar (brand not legible)",
+     "category": "other",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "27",
+     "product": "silver/white can (brand not legible; possibly Red Bull)",
+     "category": "energy",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "28",
+     "product": "silver/white can with pink-red accents (brand not legible)",
+     "category": "other",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea (blue label, likely sweet tea)",
+     "category": "tea",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "36",
+     "product": "checkered teal/pink label bottle, lemonade-style (brand not legible)",
+     "category": "juice",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "37",
+     "product": "clear bottled water, white cap (brand not legible)",
+     "category": "water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "low"
+    },
+    {
+     "slot": "38",
+     "product": "small glass bottle, beige/tan drink, possibly coffee (brand not legible)",
+     "category": "coffee",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Diet Coke (20oz bottle)",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "black-label cola bottle, likely Coke Zero Sugar",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "47",
+     "product": "Snapple-style bottle, blue cap, red/yellow label (likely Snapple Fruit Punch)",
+     "category": "juice",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "48",
+     "product": "Snapple-style bottle, blue cap, orange label (likely Snapple Mango Madness)",
+     "category": "juice",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "bubly sparkling water (purple can, likely blackberry)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "56",
+     "product": "bubly sparkling water (yellow can, flavor not legible)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "57",
+     "product": "bubly sparkling water (green can, likely lime)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "58",
+     "product": "Pepsi (can)",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "high"
+    }
+   ]
+  },
+  {
+   "id": "reference-2026-10-08",
+   "source": "dated reference photo",
+   "file": "planogram_2026-10-08.json",
+   "taken": "2026-10-08T09:27:00-04:00",
+   "note": "Full slot read in that file. The phone gallery shows 09:26.",
+   "chronological_rank": 9
+  },
+  {
+   "id": "photo-02",
+   "chronological_rank": 10,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-10-13T13:00-04:00",
+    "latest": "2026-10-15T09:00-04:00",
+    "best_guess": "2026-10-13T15:32-04:00"
+   },
+   "confidence": "high",
+   "evidence": [
+    "Legible tags on our rails match the post-Sep-30 prices exactly (15-17 $4.50, 18 $5, 25-26 $4, 27-28 $3, 35-36 $2, 45-46 $2, bubly $1); every pre-Sep-30 time fails.",
+    "Rearranged after Oct 8 (protein into 25 in place of the pickle drink, Red Bull Pink 27 -> 38, Red Bull in 26): Red Bull Pink last sold from 27 on Oct 8 11-12 and first from 38 on Oct 9 16:00, so after the Oct 9 visit.",
+    "16, 36 and 48 all sold on Oct 13 (last sales 09-14), so the photo is after ~13:00 that day. 16 next sells Oct 20, 36 Oct 28; 48 never again.",
+    "28 is empty and first sells Oct 16 (loaded at the Oct 15 visit); 26 (Red Bull) is stocked and sold 8 units Oct 13 to Oct 15 08:00, then nothing until Nov 4: before the Oct 15 visit.",
+    "Blind check: the phone gallery timestamp, held out from the dating, is 2026-10-13 15:32 ET, inside the window.",
+    "Skeptic check: not refuted."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "Gorgie energy drink (red)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "16",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "17",
+     "product": "Gorgie energy drink (yellow)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "18",
+     "product": "Ghost Energy (pink can)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 5.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Premier Protein shake, chocolate",
+     "category": "protein",
+     "caffeine": false,
+     "price": 4.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "26",
+     "product": "Red Bull Energy Drink (original blue/silver)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "high"
+    },
+    {
+     "slot": "27",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 3.0,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "28",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 3.0,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Pure Leaf iced tea (blue band, likely sweet tea)",
+     "category": "tea",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "36",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "37",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 3.0,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "medium"
+    },
+    {
+     "slot": "38",
+     "product": "pink energy can with blue top band (likely Red Bull Pink Edition)",
+     "category": "energy",
+     "caffeine": true,
+     "price": 3.0,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Diet Coke",
+     "category": "soda",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola",
+     "category": "soda",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "Snapple (orange/yellow label, flavor not legible; likely Mango Madness or Fruit Punch)",
+     "category": "juice",
+     "caffeine": false,
+     "price": 3.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "48",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 4.0,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "medium"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "bubly sparkling water, purple (likely blackberry)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": 1.0,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "medium"
+    },
+    {
+     "slot": "56",
+     "product": "bubly sparkling water, yellow (likely mango/lemon)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": 1.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "57",
+     "product": "bubly sparkling water, green (lime)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": 1.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "58",
+     "product": "Pepsi can (likely Pepsi Real Sugar)",
+     "category": "soda",
+     "caffeine": true,
+     "price": 1.5,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    }
+   ]
+  },
+  {
+   "id": "photo-01",
+   "chronological_rank": 11,
+   "source": "team photo, undated, dated from the poll history",
+   "window": {
+    "earliest": "2026-10-23T17:00-04:00",
+    "latest": "2026-10-27T09:00-04:00",
+    "best_guess": "2026-10-27T07:30-04:00"
+   },
+   "confidence": "medium",
+   "evidence": [
+    "Shelf-1 tags on our rails read 4.50 x3 and 5.00: the post-Sep-30 schedule, unchanged through Nov 11.",
+    "18 empty ($5.00 tag): sold 7 at the Oct 23 09:00 reading, then nothing until the Nov 11 refill. 35 empty: last sale Oct 23 ~17:00. No door visit between Oct 22 14:00 and Oct 27 08:00.",
+    "17 stocked: it made its last sale in the hour logged Oct 27 09:00 and was empty in the Nov 9 reference, so the photo is before ~Oct 27 09:00.",
+    "Shares products with Nov 9 on our rails (protein 25, Vita Coco 28, Something & Nothing cans 36/47) but has more stock.",
+    "The dark room behind the photographer fits an early-morning photo at the Oct 27 07:00-08:00 door visit. Minor alternative: Oct 22 13:00-14:00, just before that visit's restock.",
+    "Skeptic check: not refuted; end tightened from Oct 28 08:00 to Oct 27 09:00."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "yellow can, back panel facing out (brand not legible)",
+     "category": "energy",
+     "caffeine": null,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "16",
+     "product": "coral/red can, back panel facing out (brand not legible)",
+     "category": "energy",
+     "caffeine": null,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "17",
+     "product": "pink/yellow patterned can (brand not legible; resembles Gorgie tropical punch)",
+     "category": "energy",
+     "caffeine": null,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "low"
+    },
+    {
+     "slot": "18",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 5.0,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Premier Protein shake, chocolate",
+     "category": "protein",
+     "caffeine": false,
+     "price": 4.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "26",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 4.0,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "27",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 3.0,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "medium"
+    },
+    {
+     "slot": "28",
+     "product": "Vita Coco coconut water (carton)",
+     "category": "water",
+     "caffeine": false,
+     "price": 3.0,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 6,
+     "confidence": "high"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "36",
+     "product": "white/green lime sparkling can (brand partly legible; Nov 9 photo shows this is a Something & Nothing can)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 5,
+     "confidence": "medium"
+    },
+    {
+     "slot": "37",
+     "product": "vitaminwater (flavor not legible, dark red liquid)",
+     "category": "other",
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "38",
+     "product": "Snapple (flavor not legible, fruit picture on label)",
+     "category": "juice",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "medium"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Diet Coke",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "white can with teal/green panel (brand not legible; Nov 9 photo shows a Something & Nothing coconut can here)",
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "low"
+    },
+    {
+     "slot": "48",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "bubly sparkling water, purple can (likely blackberry)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "56",
+     "product": "bubly sparkling water, yellow can (flavor not legible)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "57",
+     "product": "bubly sparkling water, green can (likely lime)",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 1,
+     "confidence": "medium"
+    },
+    {
+     "slot": "58",
+     "product": "silver/white can (brand not legible)",
+     "category": null,
+     "caffeine": null,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "reference-2026-11-09",
+   "source": "dated reference photo",
+   "file": null,
+   "taken": "2026-11-09T09:30:00-05:00",
+   "note": "Team photo taken at the Nov 9 door visit (logged 09:31). Not saved as a planogram file; summary read from the photo.",
+   "stocked": {
+    "25": "Premier Protein chocolate",
+    "27": "Snapple (yellow label, banana flavor; uncertain)",
+    "28": "Vita Coco coconut water",
+    "36": "Something & Nothing sparkling can (green), several deep",
+    "47": "Something & Nothing coconut can, several deep"
+   },
+   "empty": "all our other rails (15, 16, 17, 18, 26, 35, 37, 38, 45, 46, 48, 55, 56, 57, 58)",
+   "tags": "15-17 $4.50, 18 $5.00, 25-26 $4.00, 27-28 $3.00, 35-37 $2.00, 38 $3.00, 45-46 $2.00, 47 $3.50, 48 $4.00, 55-57 $1.00, 58 $1.50 (the Sep 30 schedule)",
+   "chronological_rank": 12
+  }
+ ],
+ "references": [
+  {
+   "file": "planogram_2026-10-08.json",
+   "taken": "2026-10-08T09:27:00-04:00"
+  },
+  {
+   "file": null,
+   "taken": "2026-11-09T09:30:00-05:00",
+   "note": "Nov 9 reference photo; summarized in 'photos' as reference-2026-11-09"
+  }
+ ],
+ "scope": "Trimmed to our 20 slots (15-18, 25-28, 35-38, 45-48, 55-58). Other slots are listed as {\"slot\": ..., \"ours\": false} with no values, and evidence lines that cited other slots were removed or rewritten. Dating windows were re-checked against our slots and the door counter only; none changed."
+}

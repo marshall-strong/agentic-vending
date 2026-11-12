@@ -1,0 +1,1729 @@
+{
+ "institution": "Golisano Institute for Business & Entrepreneurship (Rochester, NY; golisanoinstitute.org) -- standalone non-profit, quarter system",
+ "generated": "2026-11-11",
+ "sources": [
+  "https://golisanoinstitute.org/academic-calendar/ (official; fetched 2026-11-11 and re-checked 2026-11-11 22:23 ET: every term date, break, holiday and closure from Aug 2026 to Mar 2027 matches, including the Nov 18 - Dec 2 quarter break and the Nov 26-27 Thanksgiving closure; footer still says 'All dates are subject to change. Revised on 8/07/2025.')",
+  "https://golisanoinstitute.org/ (institution name, Rochester campus 150 Sawgrass Drive, Rochester NY 14620; Buffalo campus 125 Washington Street)",
+  "Class times: weekday mornings (team observation; not from the official calendar)"
+ ],
+ "terms": [
+  {
+   "name": "Summer Quarter 2026",
+   "start": "2026-06-03",
+   "end": "2026-08-14",
+   "source": "official"
+  },
+  {
+   "name": "Fall Quarter 2026",
+   "start": "2026-09-09",
+   "end": "2026-11-17",
+   "source": "official"
+  },
+  {
+   "name": "Winter Quarter 2026-2027",
+   "start": "2026-12-03",
+   "end": "2027-02-19",
+   "source": "official"
+  },
+  {
+   "name": "Spring Quarter 2027",
+   "start": "2027-03-08",
+   "end": "2027-05-14",
+   "source": "official"
+  }
+ ],
+ "events": [
+  {
+   "start": "2026-08-14",
+   "end": "2026-08-14",
+   "label": "Summer Quarter classes end / graduation ceremony",
+   "type": "term_end",
+   "classes": "reduced",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-08-17",
+   "end": "2026-09-08",
+   "label": "Quarter break (summer -> fall)",
+   "type": "break",
+   "classes": "none",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-09-01",
+   "end": "2026-09-03",
+   "label": "New Student Orientation (new cohort on site, no regular classes)",
+   "type": "other",
+   "classes": "none",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-09-07",
+   "end": "2026-09-07",
+   "label": "Labor Day - Institute closed",
+   "type": "holiday",
+   "classes": "none",
+   "institute": "closed",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-09-09",
+   "end": "2026-09-09",
+   "label": "Fall Quarter classes start",
+   "type": "term_start",
+   "classes": "normal",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-10-09",
+   "end": "2026-10-09",
+   "label": "Mid-quarter break - Institute open, no classes",
+   "type": "no_classes",
+   "classes": "none",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-10-12",
+   "end": "2026-10-12",
+   "label": "Indigenous Peoples' Day - Institute closed",
+   "type": "holiday",
+   "classes": "none",
+   "institute": "closed",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-11-17",
+   "end": "2026-11-17",
+   "label": "Fall Quarter classes end",
+   "type": "term_end",
+   "classes": "normal",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-11-18",
+   "end": "2026-12-02",
+   "label": "Quarter break (fall -> winter)",
+   "type": "break",
+   "classes": "none",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-11-26",
+   "end": "2026-11-26",
+   "label": "Thanksgiving Day - Institute closed",
+   "type": "holiday",
+   "classes": "none",
+   "institute": "closed",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-11-27",
+   "end": "2026-11-27",
+   "label": "Thanksgiving observance - Institute closed",
+   "type": "holiday",
+   "classes": "none",
+   "institute": "closed",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-12-03",
+   "end": "2026-12-03",
+   "label": "Winter Quarter classes start",
+   "type": "term_start",
+   "classes": "normal",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-12-22",
+   "end": "2027-01-01",
+   "label": "Winter Holiday Break",
+   "type": "break",
+   "classes": "none",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-12-22",
+   "end": "2026-12-24",
+   "label": "Institute open, no classes",
+   "type": "no_classes",
+   "classes": "none",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-12-25",
+   "end": "2026-12-25",
+   "label": "Christmas - Institute closed",
+   "type": "holiday",
+   "classes": "none",
+   "institute": "closed",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-12-28",
+   "end": "2026-12-28",
+   "label": "Kwanzaa - Institute closed",
+   "type": "holiday",
+   "classes": "none",
+   "institute": "closed",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-12-29",
+   "end": "2026-12-30",
+   "label": "Institute open, no classes",
+   "type": "no_classes",
+   "classes": "none",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2026-12-31",
+   "end": "2027-01-01",
+   "label": "New Year's - Institute closed",
+   "type": "holiday",
+   "classes": "none",
+   "institute": "closed",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2027-01-04",
+   "end": "2027-01-04",
+   "label": "Classes resume",
+   "type": "other",
+   "classes": "normal",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2027-01-18",
+   "end": "2027-01-18",
+   "label": "Martin Luther King Day - Institute open, classes in session",
+   "type": "holiday",
+   "classes": "normal",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2027-01-20",
+   "end": "2027-01-20",
+   "label": "Martin Luther King Day celebration",
+   "type": "other",
+   "classes": "normal",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2027-02-15",
+   "end": "2027-02-15",
+   "label": "Presidents Day - Institute closed",
+   "type": "holiday",
+   "classes": "none",
+   "institute": "closed",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2027-02-19",
+   "end": "2027-02-19",
+   "label": "Winter Quarter classes end / graduation celebration",
+   "type": "term_end",
+   "classes": "reduced",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  },
+  {
+   "start": "2027-02-22",
+   "end": "2027-03-05",
+   "label": "Quarter break (winter -> spring)",
+   "type": "break",
+   "classes": "none",
+   "institute": "open",
+   "status": "confirmed (official calendar)"
+  }
+ ],
+ "class_weekdays": [
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri"
+ ],
+ "class_hours_note": "Class times: weekday mornings (team observation; not from the official calendar).",
+ "assumptions": [
+  "CONFIRMED: The institution is Golisano Institute for Business & Entrepreneurship (golisanoinstitute.org), a standalone 501(c)(3) non-profit provider of alternative post-secondary credentials with its own academic calendar (not part of RIT or another university). It runs on QUARTERS, not semesters.",
+  "CONFIRMED: All term start/end dates, breaks, holidays and closures come from the official Academic Calendar page. That page's footer reads 'Revised on 8/07/2025' and 'All dates are subject to change' -- revisions after that date would not be reflected.",
+  "INFERRED: The vending machine is at the Rochester campus (150 Sawgrass Drive). The institute also has a Buffalo campus; the calendar is shared, so this does not change the dates.",
+  "INFERRED: class_weekdays Mon-Fri, and class times are weekday mornings (team observation; not from the official calendar). Fridays are class days.",
+  "INFERRED: No separate final-exam week exists; the official calendar lists only 'Classes end'.",
+  "INFERRED: Quarter-break days are coded classes='none' and in_term=false even though the institute is open (staff, possibly some students/orientation on site). Orientation days Sep 1-3 are classes='none' but new students were on site, so some traffic is plausible.",
+  "INFERRED: The Summer and Winter quarter last days (graduation days) are coded classes='reduced'.",
+  "INFERRED: Weekends are classes='none' (the calendar lists no weekend sessions).",
+  "CONTEXT: The sales data starts 2026-08-27, inside the summer->fall quarter break (Aug 17 - Sep 8), so the first ~2 weeks of data are break-time, not normal demand. Fall classes end Tue 2026-11-17 and the quarter break plus Thanksgiving run Nov 18 - Dec 2, so expect very low sales from Nov 18 until Winter Quarter starts Thu Dec 3. Winter Holiday Break (no classes) is Dec 22 - Jan 1; classes resume Mon Jan 4, 2027.",
+  "Weeks run Saturday to Friday, as in vending/ledger.py (WEEK_STARTS = 5, the week turns over on Saturday, after the Friday visit). The Fri Oct 9 mid-quarter break (no classes) ends the week of Sat Oct 3."
+ ],
+ "days": [
+  {
+   "date": "2026-08-24",
+   "weekday": "Mon",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-08-25",
+   "weekday": "Tue",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-08-26",
+   "weekday": "Wed",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-08-27",
+   "weekday": "Thu",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-08-28",
+   "weekday": "Fri",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-08-29",
+   "weekday": "Sat",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-08-30",
+   "weekday": "Sun",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-08-31",
+   "weekday": "Mon",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-09-01",
+   "weekday": "Tue",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall); New Student Orientation (new cohort on site, no regular classes)"
+  },
+  {
+   "date": "2026-09-02",
+   "weekday": "Wed",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall); New Student Orientation (new cohort on site, no regular classes)"
+  },
+  {
+   "date": "2026-09-03",
+   "weekday": "Thu",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall); New Student Orientation (new cohort on site, no regular classes)"
+  },
+  {
+   "date": "2026-09-04",
+   "weekday": "Fri",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-09-05",
+   "weekday": "Sat",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-09-06",
+   "weekday": "Sun",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-09-07",
+   "weekday": "Mon",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (summer -> fall); Labor Day - Institute closed"
+  },
+  {
+   "date": "2026-09-08",
+   "weekday": "Tue",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (summer -> fall)"
+  },
+  {
+   "date": "2026-09-09",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": "Fall Quarter classes start"
+  },
+  {
+   "date": "2026-09-10",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-11",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-12",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-09-13",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-09-14",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-15",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-16",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-17",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-18",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-19",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-09-20",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-09-21",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-22",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-23",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-24",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-25",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-26",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-09-27",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-09-28",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-29",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-09-30",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-01",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-02",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-03",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-10-04",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-10-05",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-06",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-07",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-08",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-09",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "open",
+   "label": "Mid-quarter break - Institute open, no classes"
+  },
+  {
+   "date": "2026-10-10",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-10-11",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-10-12",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Indigenous Peoples' Day - Institute closed"
+  },
+  {
+   "date": "2026-10-13",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-14",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-15",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-16",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-17",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-10-18",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-10-19",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-20",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-21",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-22",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-23",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-24",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-10-25",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-10-26",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-27",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-28",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-29",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-30",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-10-31",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-11-01",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-11-02",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-03",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-04",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-05",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-06",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-07",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-11-08",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-11-09",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-10",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-11",
+   "weekday": "Wed",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-12",
+   "weekday": "Thu",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-13",
+   "weekday": "Fri",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-14",
+   "weekday": "Sat",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-11-15",
+   "weekday": "Sun",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-11-16",
+   "weekday": "Mon",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-11-17",
+   "weekday": "Tue",
+   "term": "Fall Quarter 2026",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": "Fall Quarter classes end"
+  },
+  {
+   "date": "2026-11-18",
+   "weekday": "Wed",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-19",
+   "weekday": "Thu",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-20",
+   "weekday": "Fri",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-21",
+   "weekday": "Sat",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-22",
+   "weekday": "Sun",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-23",
+   "weekday": "Mon",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-24",
+   "weekday": "Tue",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-25",
+   "weekday": "Wed",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-26",
+   "weekday": "Thu",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (fall -> winter); Thanksgiving Day - Institute closed"
+  },
+  {
+   "date": "2026-11-27",
+   "weekday": "Fri",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (fall -> winter); Thanksgiving observance - Institute closed"
+  },
+  {
+   "date": "2026-11-28",
+   "weekday": "Sat",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-29",
+   "weekday": "Sun",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-11-30",
+   "weekday": "Mon",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-12-01",
+   "weekday": "Tue",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-12-02",
+   "weekday": "Wed",
+   "term": null,
+   "in_term": false,
+   "classes": "none",
+   "institute": "open",
+   "label": "Quarter break (fall -> winter)"
+  },
+  {
+   "date": "2026-12-03",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": "Winter Quarter classes start"
+  },
+  {
+   "date": "2026-12-04",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-05",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-12-06",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-12-07",
+   "weekday": "Mon",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-08",
+   "weekday": "Tue",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-09",
+   "weekday": "Wed",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-10",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-11",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-12",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-12-13",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-12-14",
+   "weekday": "Mon",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-15",
+   "weekday": "Tue",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-16",
+   "weekday": "Wed",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-17",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-18",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-19",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-12-20",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2026-12-21",
+   "weekday": "Mon",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2026-12-22",
+   "weekday": "Tue",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "open",
+   "label": "Winter Holiday Break; Institute open, no classes"
+  },
+  {
+   "date": "2026-12-23",
+   "weekday": "Wed",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "open",
+   "label": "Winter Holiday Break; Institute open, no classes"
+  },
+  {
+   "date": "2026-12-24",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "open",
+   "label": "Winter Holiday Break; Institute open, no classes"
+  },
+  {
+   "date": "2026-12-25",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Winter Holiday Break; Christmas - Institute closed"
+  },
+  {
+   "date": "2026-12-26",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Winter Holiday Break"
+  },
+  {
+   "date": "2026-12-27",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Winter Holiday Break"
+  },
+  {
+   "date": "2026-12-28",
+   "weekday": "Mon",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Winter Holiday Break; Kwanzaa - Institute closed"
+  },
+  {
+   "date": "2026-12-29",
+   "weekday": "Tue",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "open",
+   "label": "Winter Holiday Break; Institute open, no classes"
+  },
+  {
+   "date": "2026-12-30",
+   "weekday": "Wed",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "open",
+   "label": "Winter Holiday Break; Institute open, no classes"
+  },
+  {
+   "date": "2026-12-31",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Winter Holiday Break; New Year's - Institute closed"
+  },
+  {
+   "date": "2027-01-01",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": "Winter Holiday Break; New Year's - Institute closed"
+  },
+  {
+   "date": "2027-01-02",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-03",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-04",
+   "weekday": "Mon",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": "Classes resume"
+  },
+  {
+   "date": "2027-01-05",
+   "weekday": "Tue",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-06",
+   "weekday": "Wed",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-07",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-08",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-09",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-10",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-11",
+   "weekday": "Mon",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-12",
+   "weekday": "Tue",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-13",
+   "weekday": "Wed",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-14",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-15",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-16",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-17",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-18",
+   "weekday": "Mon",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": "Martin Luther King Day - Institute open, classes in session"
+  },
+  {
+   "date": "2027-01-19",
+   "weekday": "Tue",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-20",
+   "weekday": "Wed",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": "Martin Luther King Day celebration"
+  },
+  {
+   "date": "2027-01-21",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-22",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-23",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-24",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-25",
+   "weekday": "Mon",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-26",
+   "weekday": "Tue",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-27",
+   "weekday": "Wed",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-28",
+   "weekday": "Thu",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-29",
+   "weekday": "Fri",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "normal",
+   "institute": "open",
+   "label": ""
+  },
+  {
+   "date": "2027-01-30",
+   "weekday": "Sat",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  },
+  {
+   "date": "2027-01-31",
+   "weekday": "Sun",
+   "term": "Winter Quarter 2026-2027",
+   "in_term": true,
+   "classes": "none",
+   "institute": "closed",
+   "label": ""
+  }
+ ],
+ "checked": {
+  "date": "2026-11-11",
+  "url": "https://golisanoinstitute.org/academic-calendar/",
+  "result": "unchanged: Fall classes end Tue Nov 17; quarter break Wed Nov 18 - Wed Dec 2; Institute closed Thu Nov 26 and Fri Nov 27; Winter classes start Thu Dec 3; page revision date 8/07/2025"
+ }
+}
