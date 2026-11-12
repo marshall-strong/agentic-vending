@@ -180,6 +180,10 @@ def test_a_week_short_by_less_than_half_a_cent_is_not_a_loss():
     assert "loss" not in row.lower()
     svg = pr.chart([tiny], date(2026, 11, 1), date(2026, 11, 30))
     assert 'class="bar neg"' not in svg and "(loss)" not in svg
+    zero = float(re.search(r'class="zero"[^>]*y1="([\d.]+)"', svg).group(1))
+    y, h = map(float, re.search(r'class="bar pos" x="[\d.]+" y="(-?[\d.]+)" width="[\d.]+" height="([\d.]+)"',
+                                svg).groups())
+    assert h <= 0.5 and y + h == pytest.approx(zero, abs=0.1)   # drawn as $0.00: a hairline on the zero line
 
 
 def test_a_week_label_wraps_between_its_days_not_inside_a_date():

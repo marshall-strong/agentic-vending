@@ -38,6 +38,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from fractions import Fraction
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -303,6 +304,11 @@ def _lost(text: str | None, known: bool) -> bool:
     return known and text is not None and text.startswith("-")
 
 
+def _as_shown(cents: Fraction) -> Fraction:
+    """Cents rounded as the table shows them, so a bar matches its figure: $0.00 sits on the zero line."""
+    return Fraction(Decimal(ledger.money(cents))) * 100
+
+
 def chart(weeks: list[ledger.WeekPnl], first: date, last: date) -> str:
     """Weekly profit as bars above and below a zero line, in inline SVG (no script). A week whose
     profit is unknown gets a "?" at the zero line instead of a bar. Each bar's <title> gives its figure;
@@ -311,7 +317,7 @@ def chart(weeks: list[ledger.WeekPnl], first: date, last: date) -> str:
         return ""
     width, height, top, bottom, left = 720, 170, 12, 22, 100
     plot = height - top - bottom
-    known = [w.net_cents for w in weeks if _known(w)]
+    known = [_as_shown(w.net_cents) for w in weeks if _known(w)]
     high, low = max([Fraction(0), *known]), min([Fraction(0), *known])
     span = (high - low) or Fraction(1)
     zero = top + plot * high / span
@@ -331,11 +337,11 @@ def chart(weeks: list[ledger.WeekPnl], first: date, last: date) -> str:
         if _known(w):
             kind = "neg" if _lost(ledger.money(w.net_cents), True) else "pos"   # as the table shows it
             losing += kind == "neg"
-            size = plot * abs(w.net_cents) / span
+            size = max(plot * abs(_as_shown(w.net_cents)) / span, Fraction(1, 2))   # at least a hairline
             y = zero if kind == "neg" else zero - size
             tip = f"{label}: {dollars(ledger.money(w.net_cents))}" + (" (loss)" if kind == "neg" else "")
             bars.append(f'<rect class="bar {kind}" x="{px(x)}" y="{px(y)}" width="{px(slot * 8 / 10)}" '
-                        f'height="{px(max(size, Fraction(1, 2)))}"><title>{_e(tip)}</title></rect>')
+                        f'height="{px(size)}"><title>{_e(tip)}</title></rect>')
         else:
             bars.append(f'<text class="bar unknown" x="{px(x + slot * 4 / 10)}" y="{px(zero - 3)}" '
                         f'text-anchor="middle"><title>{_e(f"{label}: profit unknown")}</title>?</text>')
