@@ -19,7 +19,7 @@ Measured with `analysis/visit_windows.py` from the door counter (`EA2*DO`) in ev
 | Poll gaps | 99.5% within 65 min; 7 longer, the longest three 3 hours each |
 | Our sales by hour on class days | busiest 8 to 9 AM (3.8 a day), then 10 to 11 AM (2.6); after 1 PM under 0.7 an hour, and 0.2 to 0.4 from 2 to 4 PM |
 
-So a visit after 1 PM puts few of our sales in doubt, and an early-morning one (7:30 to 9:30, which has happened) lands on our busiest hour. That's worth asking for (#102).
+So a visit after 1 PM puts few of our sales in doubt, and an early-morning one (7:30 to 9:30, which has happened) lands on our busiest hour. We asked for afternoon visits (#102); David's answer below makes Friday afternoon the usual time.
 
 A door opening isn't always a refill. Before the competition, course staff stocked every slot, and David mentioned openings that weren't our class.
 
@@ -27,7 +27,7 @@ A door opening isn't always a refill. Before the competition, course staff stock
 
 We don't depend on a set restock time. A student worker won't always be on time, and the history shows visits on every weekday.
 
-1. **Find the visit in the data.** A door-count rise between two polls marks it. When David adds them, a fulfilled request's time and the worker's door times narrow it. A change in a slot's price field at a poll shows the new setup is in place.
+1. **Find the visit in the data.** A door-count rise between two polls marks it. A fulfilled request's `fulfilled_at` marks the end of the visit, and the worker's door times will narrow it further when David adds them. A change in a slot's price field at a poll shows the new setup is in place.
 2. **Mark the uncertain window**: from the last poll before the first opening to the first poll after the last one. Before it is the old setup; after it is the new one.
 3. **Only our changed slots need care.** A slot whose product and price didn't change counts as usual.
 4. **When the price changed, solve with the counters.** With `u` units and `c` cents inside the window, an old price `a` and a new price `b`, the number sold at the new price is `(c - u*a) / (b - a)`. A whole number from 0 to `u` settles it. Anything else means a misread or a third price: flag it for a person.
@@ -36,22 +36,22 @@ We don't depend on a set restock time. A student worker won't always be on time,
 
 ## What David said (12 Nov)
 
-- **Restocks will be standard on Friday afternoons**, with 3 PM as the target. The student worker gets out of class at 1 and may have to drive to the stores first, so the load may well come at 3 to 5 PM or later. Our sales are lowest then (about 0.2 an hour after 3 PM), so a later visit puts even fewer sales in doubt. Poll about every 10 minutes from about 2 to 6 PM on Fridays.
+- **Restocks will be standard on Friday afternoons**, with 3 PM as the target. The student worker gets out of class at 1 and may have to drive to the stores first, so the load may well come at 3 to 5 PM or later. Our sales are lowest then (about 0.2 an hour after 3 PM), so a later visit puts even fewer sales in doubt. Poll about every 10 minutes from about 2 to 6 PM on Fridays. That isn't happening yet: our container only copies the bridge's hourly polls today. Our own Friday polling is #107.
 - **`fulfilled_at` is the end of the visit**, set when the worker submits the receipt after loading. There's no push notification; we poll the request.
 - **Door-open and door-closed times on the receipt** are likely, not built yet.
 - **Polling about every 10 minutes is allowed.** That shrinks the one gap door times don't close: a sale between the last poll and the door opening. David named that case himself.
 
 So the plan above gets a usual time to expect, and still handles a visit at any other time. Full notes: `docs/planning/2026-11-12-david-answers.md` (#106).
 
-## What we've checked, and what we're asking David
+## What we checked, and what David answered
 
-Asked in #102, with the evidence:
+Asked in #102, with the evidence. David's answers (12 Nov) are in the section above.
 
-- `fulfilled_at` is already in the purchase-request response and we store it (`vending/purchase_requests.py`). We haven't seen a filled request yet, so we don't know whether it marks the end of the visit or when the receipts were entered.
-- In all 1,325 CRC-checked polls stored for `vmc1` (read from the raw DEX text in our database), `EA2*DO` carries only its two counts (since reset and lifetime), never a "door open now" flag. We may simply never have polled during a visit.
+- `fulfilled_at` is already in the purchase-request response and we store it (`vending/purchase_requests.py`). We haven't seen a filled request yet. David says it marks the end of the visit: it's set when the worker submits the receipt, after loading.
+- In all 1,325 CRC-checked polls stored for `vmc1` (read from the raw DEX text in our database), `EA2*DO` carries only its two counts (since reset and lifetime), never a "door open now" flag. We may simply never have polled during a visit. Not discussed on 12 Nov, so still open.
 - `EA7` (power outages) changed only 3 times since 27 Aug, so a restock doesn't power-cycle the machine. It isn't a visit signal.
-- `POST /api/v1/poll` reads the machine live (about 8.5 s). `docs/dex-bridge.md` asks us to use it rarely, so we're asking before polling every 10 minutes while a request of ours is out.
-- Visits after 1 PM: our sales are lowest then, so a visit puts the fewest units in doubt.
+- `POST /api/v1/poll` reads the machine live (about 8.5 s). `docs/dex-bridge.md` asks us to use it rarely, so we asked before polling every 10 minutes around a visit. David allowed it; our own polling isn't built yet (#107).
+- Visits after 1 PM: our sales are lowest then, so a visit puts the fewest units in doubt. David's target is 3 PM on Fridays.
 
 The interactive version, with the dark-period charts and a calculator for step 4, is the [Cutover Clock](https://claude.ai/artifact/BSgBkggAC5PYBpdPqRHp1H) (Golisano sign-in).
 
@@ -62,4 +62,4 @@ analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scri
 .venv\Scripts\python.exe analysis\visit_windows.py
 ```
 
-The first command writes `analysis/data/*.csv` and `analysis/out/lab_data.json` (for the refill grades); the second writes `analysis/out/visit_windows.json` and prints the summary. `rebuild.py` comes with #83; on main without it, run `analysis/export_sales.py` and `analysis/sales_analysis.py` instead.
+The first command writes `analysis/data/*.csv` and `analysis/out/lab_data.json` (for the refill grades); the second writes `analysis/out/visit_windows.json` and prints the summary.
