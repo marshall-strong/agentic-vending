@@ -2,7 +2,7 @@
 
 Every page the team has published about the vending project, in one place. These are live pages on claude.ai: each link always shows the latest version, so there is nothing to download or keep in sync.
 
-If a link asks you to sign in or says you don't have access, tell Kevin. He owns the pages and controls sharing.
+The pages are shared with the Golisano Claude organization, so open them while signed in to claude.ai with your Golisano account. A personal Claude account won't have access. If a link still says you don't have access, tell Kevin. He owns the pages and controls sharing.
 
 When you publish a new page about the project, add a row here in the same PR or a follow-up.
 
