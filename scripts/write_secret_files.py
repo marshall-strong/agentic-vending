@@ -1,6 +1,6 @@
 """Write chosen `.env` settings to one file each, for `az` to read with `name=@file`.
 
-    python scripts/write_secret_files.py <.env> <directory> NAME[=file-name] ...
+    python scripts/write_secret_files.py <.env> <directory> [?]NAME[=file-name] ...
 
 Used by `scripts/deploy_container_app.ps1`, so that secret values are parsed
 exactly as `vending.settings` parses them (quotes, ` # comments`) and never
@@ -9,7 +9,9 @@ expands `database-url=@<path>` itself, so its own argv and command log hold only
 the path.
 
 Prints nothing about the values. Exits 1 naming every setting that is missing or
-empty, before writing anything.
+empty, before writing anything. A name that starts with `?` is optional: when it
+is missing or empty, its file is simply not written, and the caller can tell by
+looking for the file.
 """
 
 from __future__ import annotations
@@ -31,12 +33,14 @@ def main(argv: list[str]) -> int:
         print(f"{env_file} does not exist; copy .env.example and fill it in", file=sys.stderr)
         return 1
     values = read_env_file(Path(env_file))
-    wanted = [spec.partition("=") for spec in specs]
-    missing = [name for name, _, _ in wanted if not values.get(name)]
+    wanted = [spec.lstrip("?").partition("=") + (spec.startswith("?"),) for spec in specs]
+    missing = [name for name, _, _, optional in wanted if not optional and not values.get(name)]
     if missing:
         print(f"empty or missing in {env_file}: {', '.join(missing)}", file=sys.stderr)
         return 1
-    for name, _, file_name in wanted:
+    for name, _, file_name, _ in wanted:
+        if not values.get(name):
+            continue
         # Bytes, so no newline is added and no platform encoding gets a say.
         (Path(directory) / (file_name or name)).write_bytes(values[name].encode("utf-8"))
     return 0

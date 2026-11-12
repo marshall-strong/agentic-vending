@@ -13,8 +13,12 @@ never writes: the session is read-only, so Postgres refuses any write, every
 page is one read-only transaction, and a slow query is cancelled after
 STATEMENT_TIMEOUT_MS. It never migrates.
 
-It listens on 127.0.0.1 and answers only a Host of 127.0.0.1 or localhost, the
-same rule as the agent dashboard, so another site can't rebind its name to us.
+Run this way it listens on 127.0.0.1 and answers only a Host of 127.0.0.1 or
+localhost, the same rule as the agent dashboard, so another site can't rebind
+its name to us. The Container App serves the same page to anyone at `/db`,
+through `vending.pages`, which connects as a login that can only read and passes
+`render` the columns to leave out (`Hide`). Every link on the page is relative
+(`?schema=...`), so it works under any path.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -90,6 +94,33 @@ class Column:
 
 
 @dataclass(frozen=True)
+class Hide:
+    """Columns of one table that a page leaves out, in the rows where column `when` holds `equals`.
+
+    For a page anyone can open: `action_log.detail` of a failed call is a raw error, and a
+    database error names the host and the user. The value never leaves Postgres; `shown` comes
+    back in its place. A table without the `when` column hides those columns in every row.
+    """
+    when: str
+    equals: str
+    columns: tuple[str, ...]
+    shown: str
+
+
+@dataclass(frozen=True)
+class Only:
+    """Rows of one table that a page shows; every other row is left out, and not counted.
+
+    For a page anyone can open: `poll_selections` and `slot_counts` hold the other team's
+    selections too, and only ours may be shown. `where` is built for a table (so it can name a
+    table beside it in the same schema) and reads the row as alias `t`. `columns` are the ones
+    it reads: a copy of the table without them shows no rows at all, never every row.
+    """
+    columns: tuple[str, ...]
+    where: Callable[["Table"], sql.Composable]
+
+
+@dataclass(frozen=True)
 class Rows:
     columns: tuple[Column, ...]
     rows: tuple[tuple, ...]
@@ -143,8 +174,16 @@ def _native(column: Column) -> bool:
     return column.type in NATIVE_TYPES or column.type.startswith(NATIVE_PREFIXES)
 
 
-def _pick(column: Column) -> sql.Composable:
+def _pick(column: Column, hide: Hide | None = None, present: frozenset[str] = frozenset()) -> sql.Composable:
     name = sql.Identifier(ALIAS, column.name)
+    if hide is not None and column.name in hide.columns:
+        # Decided in Postgres, so a hidden value is never fetched. As text, so the note and the
+        # value are one type. NULL stays NULL: there was nothing to hide.
+        shown = sql.SQL("left({}::text, {})").format(name, sql.Literal(SHOW_AT_MOST + 1))
+        if hide.when not in present:
+            return sql.SQL("case when {} is null then null else {}::text end").format(name, sql.Literal(hide.shown))
+        return sql.SQL("case when {}::text = {} and {} is not null then {}::text else {} end").format(
+            sql.Identifier(ALIAS, hide.when), sql.Literal(hide.equals), name, sql.Literal(hide.shown), shown)
     if column.type == "bytea":
         # A bytea value can be megabytes and means nothing on a page: fetch only its size.
         return sql.SQL("octet_length({})").format(name)
@@ -195,20 +234,29 @@ class _ReadOnlyTransaction:
         return self.tx.__exit__(*exc)
 
 
-def rows(conn: psycopg.Connection, table: Table, offset: int = 0) -> Rows:
-    """One page of rows, in descending primary-key order when there is a key, from one moment."""
+def rows(conn: psycopg.Connection, table: Table, offset: int = 0, hide: Hide | None = None,
+         only: Only | None = None) -> Rows:
+    """One page of rows, in descending primary-key order when there is a key, from one moment.
+    `hide` leaves some values out and `only` some rows; see `Hide` and `Only`."""
     with _snapshot(conn):
         cols = columns(conn, table)
         key = sorted((c for c in cols if c.primary_key), key=lambda c: c.primary_key)
         target = sql.SQL("{} as {}").format(sql.Identifier(table.schema, table.name), sql.Identifier(ALIAS))
-        picked = sql.SQL(", ").join(_pick(c) for c in cols) if cols else sql.SQL("null")
+        present = frozenset(c.name for c in cols)
+        picked = sql.SQL(", ").join(_pick(c, hide, present) for c in cols) if cols else sql.SQL("null")
         order = (sql.SQL(" order by ") + sql.SQL(", ").join(
             sql.SQL("{} desc").format(sql.Identifier(ALIAS, c.name)) for c in key)) if key else sql.SQL("")
+        if only is None:
+            where = sql.SQL("")
+        elif all(name in present for name in only.columns):
+            where = sql.SQL(" where ") + only.where(table)
+        else:
+            where = sql.SQL(" where false")
         total = conn.execute(
-            sql.SQL("select count(*) from (select 1 from {} limit %s) s").format(target), (COUNT_CAP + 1,)
+            sql.SQL("select count(*) from (select 1 from {}{} limit %s) s").format(target, where), (COUNT_CAP + 1,)
         ).fetchone()[0]
         found = conn.execute(
-            sql.SQL("select {} from {}{} limit %s offset %s").format(picked, target, order), (PAGE_ROWS, offset)
+            sql.SQL("select {} from {}{}{} limit %s offset %s").format(picked, target, where, order), (PAGE_ROWS, offset)
         ).fetchall()
     return Rows(cols, tuple(tuple(r) for r in found), offset, total, tuple(c.name for c in key))
 
@@ -220,7 +268,8 @@ def _e(value: Any) -> str:
 
 
 def _link(**params: Any) -> str:
-    return "/?" + urlencode({k: v for k, v in params.items() if v is not None})
+    """A link to another page of the explorer. Relative, so it works under whatever path serves it."""
+    return "?" + urlencode({k: v for k, v in params.items() if v is not None})
 
 
 def _time(value: datetime) -> str:
@@ -249,7 +298,7 @@ def cell(value: Any, column: Column) -> str:
     """One value as HTML. Escaped, whatever it holds."""
     if value is None:
         return '<span class="null">NULL</span>'
-    if column.type == "bytea":
+    if column.type == "bytea" and isinstance(value, int):
         return f'<span class="meta">{value:,} bytes</span>'
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -354,12 +403,15 @@ pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; max-width:
 """
 
 
-def page(found: list[Table], chosen: Table | None, body: str) -> str:
+def page(found: list[Table], chosen: Table | None, body: str, nav: tuple[tuple[str, str], ...] = ()) -> str:
+    """The whole page. `nav` is (label, href) links to sibling pages, for a server that mounts
+    the explorer under a path beside others."""
     title = f"{chosen.schema}.{chosen.name} · DB explorer" if chosen else "DB explorer"
+    links = "".join(f' · <a href="{_e(href)}">{_e(label)}</a>' for label, href in nav)
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>{_e(title)}</title><style>{STYLE}</style></head><body>"
-            "<header><h1>DB explorer</h1><p>Read-only. What is in the database, table by table.</p></header>"
+            f"<header><h1>DB explorer</h1><p>Read-only. What is in the database, table by table.{links}</p></header>"
             f'<div class="layout"><aside>{_index(found, chosen)}</aside><main>{body}</main></div>'
             "</body></html>")
 
@@ -410,9 +462,13 @@ def parse(target: str) -> Request:
     return Request(schema, table, int(raw))
 
 
-def render(conn: psycopg.Connection, request: Request) -> tuple[int, str]:
+def render(conn: psycopg.Connection, request: Request, hide: Mapping[str, Hide] | None = None,
+           nav: tuple[tuple[str, str], ...] = (), only: Mapping[str, Only] | None = None) -> tuple[int, str]:
     """(status, HTML) for a request. Nothing from the URL reaches SQL unless Postgres lists that
-    table: an unlisted name is a 404, never a query. The whole page is one read-only transaction."""
+    table: an unlisted name is a 404, never a query. The whole page is one read-only transaction.
+
+    `hide` maps a table's name to the values the page leaves out (in any schema, so a copy of the
+    table is covered too), `only` maps a table's name to the rows it shows, and `nav` goes to `page`."""
     _lenient_dates(conn)
     found: list[Table] = []
     chosen: Table | None = None
@@ -420,20 +476,21 @@ def render(conn: psycopg.Connection, request: Request) -> tuple[int, str]:
         with _snapshot(conn):
             found = tables(conn)
             if request.table is None:
-                return 200, page(found, None, WELCOME)
+                return 200, page(found, None, WELCOME, nav)
             chosen = next((t for t in found if t.schema == request.schema and t.name == request.table), None)
             if chosen is None:
                 missing = f'<p class="error">No table {_e(request.schema)}.{_e(request.table)}.</p>'
-                return 404, page(found, None, missing)
-            page_rows = rows(conn, chosen, request.offset)
+                return 404, page(found, None, missing, nav)
+            page_rows = rows(conn, chosen, request.offset, (hide or {}).get(chosen.name),
+                             (only or {}).get(chosen.name))
     except psycopg.errors.QueryCanceled:
         why, code = f"Reading this table took longer than {STATEMENT_TIMEOUT_MS // 1000} seconds, so it was stopped.", 503
     except psycopg.errors.InsufficientPrivilege:
         why, code = "This database user may not read this table.", 403
     else:
-        return 200, page(found, chosen, table_body(chosen, page_rows))
+        return 200, page(found, chosen, table_body(chosen, page_rows), nav)
     heading = f"<h2>{_e(chosen.schema)}.{_e(chosen.name)}</h2>" if chosen else ""
-    return code, page(found, chosen, f'{heading}<p class="error">{_e(why)}</p>')
+    return code, page(found, chosen, f'{heading}<p class="error">{_e(why)}</p>', nav)
 
 
 class Handler(BaseHTTPRequestHandler):
