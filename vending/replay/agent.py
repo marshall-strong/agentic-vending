@@ -119,7 +119,7 @@ def machine_state_as_of(conn: psycopg.Connection, as_of: datetime) -> ms.Machine
     return ms.MachineState(
         success=True, count=len(states), as_of=latest[1], window_start=baseline[1] if baseline else None,
         message=f"{len(states)} slots as of the poll at {latest[1]:%Y-%m-%d %H:%M} UTC; sales window {window}. "
-                f"{ms.NEEDS_RECEIPTS}.",
+                f"The replay reads polls only, so {ms.RECEIPT_FIELDS} are null.",
         data=states)
 
 
