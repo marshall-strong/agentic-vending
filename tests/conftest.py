@@ -71,7 +71,7 @@ def schema_url(database_url):
     """(url, schema) for a fresh, migrated schema, dropped after the test."""
     import psycopg
 
-    from vending import db
+    from vending import db, slots
 
     url = database_url
     admin = psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
@@ -79,6 +79,10 @@ def schema_url(database_url):
     admin.execute(f"create schema {schema}")
     with open_in(url, schema) as conn:
         db.migrate(conn)
+        # Our slot assignment as the inventory server gives it, so tools that read it work as they
+        # will live. tests/test_slots.py deletes it to test the refusals.
+        conn.execute("insert into slot_assignment (team, device_id, slots, response) values (%s, %s, %s, '{}')",
+                     ("group-b", slots.DEVICE_ID, list(slots.SLOTS)))
     yield url, schema
     admin.execute(f"drop schema {schema} cascade")
     admin.close()

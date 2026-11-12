@@ -15,6 +15,7 @@ from datetime import datetime
 import psycopg
 
 from vending import ledger
+from vending.slots import SlotsNotRecorded
 from vending.tools import Reply
 
 
@@ -38,7 +39,10 @@ class AccountBalance(Reply):
 
 
 def get_account_balance(conn: psycopg.Connection) -> AccountBalance:
-    b = ledger.balance(conn)
+    try:
+        b = ledger.balance(conn)
+    except SlotsNotRecorded as error:
+        return AccountBalance(success=False, message=str(error))
     if b is None:
         return AccountBalance(success=False, message=ledger.OPEN_HINT)
     return AccountBalance(

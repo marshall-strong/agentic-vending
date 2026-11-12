@@ -12,7 +12,7 @@ machine.
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
 | `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. |
-| `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, or the catalog can't be read. |
+| `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, our slots haven't been recorded, or the catalog can't be read. |
 | `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
 | `get_catalog` | **Works, version 1.** The single-item products the bridge lists (sku, name, line, flavor, size), searchable by text, with when the catalog was last synced. Says so when that was over 36 hours ago. Our last unit cost, sourcing rows and pending catalog requests are not in it yet. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
@@ -28,6 +28,7 @@ You need the local database from the history sync first ([`README.md`](../README
 pip install -r requirements.txt
 docker compose up -d db
 python -m vending.db migrate            # creates or updates the tables
+python -m vending.slots record          # needs the class tailnet; stores which slots are ours
 python -m vending.sync_history          # needs the class tailnet; loads real polls
 python -m vending.server                # waits silently on stdin: that's correct
 ```
@@ -75,6 +76,10 @@ paths, then restart Claude Desktop:
 ```
 
 The server reads `DATABASE_URL` from the repository's `.env`, so the config needs no secrets.
+
+Every tool that reads our slots (`get_machine_state`, `get_sales_history`, `get_account_balance`,
+`get_pnl`, `preview_desired_state`) takes them from the assignment `python -m vending.slots record`
+stored. Until it has run, each one answers `success: false` and names that command.
 
 ## The halt switch
 

@@ -32,9 +32,9 @@ repo root points here.
 
 ## Guardrails in code
 
-- **Agent tools answer for our slots only.** The read tools filter to `SLOTS` on
-  `DEVICE_ID` (`vending/slots.py`). `get_sales_history` refuses any other slot ("Not our
-  slots: ...").
+- **Agent tools answer for our slots only.** The read tools filter to the assignment the
+  inventory server gave us, stored by `python -m vending.slots record`, on `DEVICE_ID`
+  (`vending/slots.py`). `get_sales_history` refuses any other slot ("Not our slots: ...").
 - **The agent has no web-fetch tool.** It can't browse to another team's dashboard.
   `tests/test_server.py::test_tool_list_is_pinned` pins the MCP server's tool names, so
   adding a tool (a web fetcher, say) is a deliberate change that shows up in review.

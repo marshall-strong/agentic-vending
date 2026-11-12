@@ -29,7 +29,7 @@ import psycopg
 
 from vending import config, ledger, planner, stock
 from vending.bridge import Bridge, BridgeError
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import desired_state as schema
 from vending.tools.machine_state import STALE_AFTER
 
@@ -58,8 +58,13 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
     capacity = config.get_value(conn, "slot_capacity")
     if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
         raise NotReady(SLOT_CAPACITY_HINT)
+    try:
+        slots = our_slots(conn)
+    except SlotsNotRecorded as error:
+        raise NotReady(str(error)) from None
     return planner.Config(
         slot_capacity=capacity,
+        slots=slots,
         price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 600),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
@@ -83,7 +88,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     counted = stock.stock(conn, until=now)
     notes.extend(counted.warnings)
     by_slot = {s.slot: s for s in counted.slots}
-    prices, poll_at = _latest_prices(conn)
+    prices, poll_at = _latest_prices(conn, settings.slots)
     if poll_at is None:
         notes.append("no good poll is stored, so current prices are unknown; every slot's price change "
                      "will look like a change")
@@ -99,9 +104,9 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
             units=by_slot[slot].units if slot in by_slot else 0,
             unit_cost=by_slot[slot].unit_cost if slot in by_slot else None,
         )
-        for slot in SLOTS
+        for slot in settings.slots
     )
-    without_receipts = [s for s in SLOTS if s not in by_slot]
+    without_receipts = [s for s in settings.slots if s not in by_slot]
     if without_receipts:
         notes.append(f"no receipts yet for slots {', '.join(without_receipts)}, so their product and stock "
                      "are unknown and counted as empty")
@@ -176,7 +181,7 @@ def _int_setting(conn: psycopg.Connection, key: str, default: int) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
-def _latest_prices(conn: psycopg.Connection) -> tuple[dict[str, int | None], datetime | None]:
+def _latest_prices(conn: psycopg.Connection, slots: tuple[str, ...]) -> tuple[dict[str, int | None], datetime | None]:
     latest = conn.execute(
         "select session_id, started_at from polls where device_id = %s and crc_ok"
         " order by started_at desc limit 1", (DEVICE_ID,)).fetchone()
@@ -184,5 +189,5 @@ def _latest_prices(conn: psycopg.Connection) -> tuple[dict[str, int | None], dat
         return {}, None
     rows = conn.execute(
         "select selection, price_cents from poll_selections where session_id = %s and selection = any(%s)",
-        (latest[0], list(SLOTS)))
+        (latest[0], list(slots)))
     return {selection: price for selection, price in rows}, latest[1]

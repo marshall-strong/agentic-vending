@@ -18,7 +18,7 @@ from decimal import ROUND_HALF_UP, Decimal
 import psycopg
 from pydantic import BaseModel
 
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SLOTS, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
 WINDOW = timedelta(days=7)
@@ -51,11 +51,12 @@ class MachineState(Reply):
 Counters = dict[str, tuple[int | None, int]]
 
 
-def build(as_of: datetime, latest: Counters, start: datetime | None, baseline: Counters) -> list[SlotState]:
-    """Per-slot state from two polls' counters. Pure: no database, no clock."""
+def build(as_of: datetime, latest: Counters, start: datetime | None, baseline: Counters,
+          slots: tuple[str, ...] = SLOTS) -> list[SlotState]:
+    """Per-slot state from two polls' counters, for `slots`. Pure: no database, no clock."""
     days = Decimal((as_of - start).total_seconds()) / 86400 if start else Decimal(0)
     states = []
-    for slot in SLOTS:
+    for slot in slots:
         price, units = latest.get(slot, (None, None))
         sold = per_day = None
         if units is not None and slot in baseline and days > 0:
@@ -74,6 +75,10 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, baseline: C
 
 
 def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> MachineState:
+    try:
+        slots = our_slots(conn)
+    except SlotsNotRecorded as error:
+        return MachineState(success=False, message=str(error))
     latest = _poll(conn, "true")
     if latest is None:
         return MachineState(success=False, message=(
@@ -83,9 +88,9 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     baseline = _poll(conn, "started_at <= %s", as_of - WINDOW) or _first_poll(conn)
     if baseline and baseline[0] == latest[0]:
         baseline = None
-    states = build(as_of, _counters(conn, latest[0]),
+    states = build(as_of, _counters(conn, latest[0], slots),
                    baseline[1] if baseline else None,
-                   _counters(conn, baseline[0]) if baseline else {})
+                   _counters(conn, baseline[0], slots) if baseline else {}, slots)
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
     age = (now or datetime.now(timezone.utc)) - as_of
     stale = age > STALE_AFTER
@@ -114,8 +119,8 @@ def _first_poll(conn: psycopg.Connection) -> tuple[str, datetime] | None:
         " order by started_at limit 1", (DEVICE_ID,)).fetchone()
 
 
-def _counters(conn: psycopg.Connection, session_id: str) -> Counters:
+def _counters(conn: psycopg.Connection, session_id: str, slots: tuple[str, ...] = SLOTS) -> Counters:
     rows = conn.execute(
         "select selection, price_cents, lifetime_units from poll_selections"
-        " where session_id = %s and selection = any(%s)", (session_id, list(SLOTS)))
+        " where session_id = %s and selection = any(%s)", (session_id, list(slots)))
     return {selection: (price, units) for selection, price, units in rows}

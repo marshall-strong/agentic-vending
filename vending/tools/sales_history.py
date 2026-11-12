@@ -19,7 +19,7 @@ import psycopg
 from pydantic import BaseModel
 
 from vending.pricing import DEFAULT_TAX_PERCENT
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
 
@@ -69,11 +69,15 @@ def build(first: Counters, last: Counters, slots: list[str]) -> tuple[list[SlotS
 def get_sales_history(conn: psycopg.Connection, start: datetime, end: datetime,
                       slots: list[str] | None) -> SalesHistory:
     start, end = _utc(start), _utc(end)
-    wanted = list(SLOTS) if not slots else list(dict.fromkeys(slots))
-    unknown = sorted(set(wanted) - set(SLOTS))
+    try:
+        ours = our_slots(conn)
+    except SlotsNotRecorded as error:
+        return SalesHistory(success=False, message=str(error))
+    wanted = list(ours) if not slots else list(dict.fromkeys(slots))
+    unknown = sorted(set(wanted) - set(ours))
     if unknown:
         return SalesHistory(success=False, message=(
-            f"Not our slots: {', '.join(unknown)}. Ours are {', '.join(SLOTS)}; omit slots for all 20."))
+            f"Not our slots: {', '.join(unknown)}. Ours are {', '.join(ours)}; omit slots for all {len(ours)}."))
     if start >= end:
         return SalesHistory(success=False, message="start must be before end.")
     last = _poll(conn, "started_at <= %s order by started_at desc", end)
@@ -83,7 +87,7 @@ def get_sales_history(conn: psycopg.Connection, start: datetime, end: datetime,
         return SalesHistory(success=False, message=(
             "Fewer than two valid polls fall in that window, so there are no sales to measure. "
             "Widen the window, or run the history sync: python -m vending.sync_history"))
-    rows, total = build(_counters(conn, first[0]), _counters(conn, last[0]), wanted)
+    rows, total = build(_counters(conn, first[0], wanted), _counters(conn, last[0], wanted), wanted)
     note = "" if first[1] <= start else f" No poll before {start:%Y-%m-%d %H:%M}, so it starts at the first one."
     return SalesHistory(
         success=True,
@@ -108,8 +112,8 @@ def _poll(conn: psycopg.Connection, where: str, moment: datetime) -> tuple[str, 
         (DEVICE_ID, moment)).fetchone()
 
 
-def _counters(conn: psycopg.Connection, session_id: str) -> Counters:
+def _counters(conn: psycopg.Connection, session_id: str, slots: list[str]) -> Counters:
     rows = conn.execute(
         "select selection, lifetime_units, lifetime_sales_cents from poll_selections"
-        " where session_id = %s and selection = any(%s)", (session_id, list(SLOTS)))
+        " where session_id = %s and selection = any(%s)", (session_id, list(slots)))
     return {selection: (units, cents) for selection, units, cents in rows}
