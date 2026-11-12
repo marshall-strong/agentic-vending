@@ -44,7 +44,10 @@ The database tests skip there (no `DATABASE_URL`); the rest run.
 joins again with `TS_AUTHKEY`, and Tailscale removes the node once it goes offline. That needs a
 **reusable** key (ephemeral and tagged is best); a single-use key works for one start only. If
 joining fails, the worker runs anyway, `/health` reports the bridge as unreachable, and the
-entrypoint keeps retrying every minute in the background.
+entrypoint keeps retrying every minute in the background. `tailscaled`'s own log is
+`/tmp/tailscaled.log` inside the container (the entrypoint prints its last 20 lines when a join
+fails); it is cut to its last 500 lines whenever it passes 1 MB, so an always-on replica's log
+can't fill the disk.
 
 **The agent loop does not run yet.** When the harness exists it starts `python -m vending.server`
 over stdio from the same image, with `VENDING_TOOLS=built` so only working tools are offered.
@@ -160,6 +163,9 @@ above, or write a separate file of bare `KEY=value` lines for `--env-file`.
 - Tailscale's default key expiry is 90 days, and the key's expiry is unknown; if the node drops
   off the tailnet, ask David for a new key, put it in `.env` and run the deploy with
   `-SetSecrets`, which restarts the revision so it joins with the new key.
+- `tailscaled`'s log is not in the Container App log. To read it, open a shell with
+  `az containerapp exec --name ai-group-2-vend --resource-group data_systems_resource_group --command sh`
+  and run `tail -n 100 /tmp/tailscaled.log`.
 - One replica, so a deploy restarts the worker; a sync round in flight is cut off and simply
   runs again next hour.
 - A job that passes its time limit can't be stopped, only left to finish in the background;

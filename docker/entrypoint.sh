@@ -41,10 +41,23 @@ if [ -n "${TS_AUTHKEY:-}" ]; then
     case "${DEX_BASE_URL:-}" in
         https://*) echo "warning: DEX_BASE_URL is https, which bypasses Tailscale, so the bridge is unreachable" >&2 ;;
     esac
+    # Appended (>>), so after the trim below tailscaled's next line lands at the new end of the
+    # file instead of past a hole at its old offset.
     tailscaled --tun=userspace-networking --state=mem: --socket="$TS_SOCKET" \
         --socks5-server=localhost:1055 \
         --outbound-http-proxy-listen=localhost:1055 \
-        >"$TS_LOG" 2>&1 &
+        >>"$TS_LOG" 2>&1 &
+    # tailscaled logs for as long as the replica runs and nothing rotates the file, so every
+    # 10 minutes cut it to its last 500 lines once it passes 1 MB. Started as a grandchild
+    # ( ( ... ) & ), so it belongs to tini, not to the command exec'd below.
+    ( (
+        while sleep 600; do
+            if [ "$(wc -c <"$TS_LOG")" -gt 1048576 ]; then
+                tail -n 500 "$TS_LOG" >"$TS_LOG.tmp" && cat "$TS_LOG.tmp" >"$TS_LOG"
+                rm -f "$TS_LOG.tmp"
+            fi
+        done
+    ) & )
     # Keep trying for 30 s (the daemon's socket may not be up yet), so at most
     # about 45 s before the command starts. The key is pre-authorized and
     # tagged, so no approval step.
