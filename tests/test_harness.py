@@ -225,11 +225,11 @@ def test_without_a_clock_the_day_and_the_stamp_come_from_the_database(connect, c
                          at=datetime(2026, 11, 9, 20, 0, tzinfo=timezone.utc))
     client = FakeClient()
     with pytest.raises(CapReached):
-        Harness(client, connect, purpose="test", daily_cap_usd=Decimal("4.00")).call(REQUEST)
+        Harness(client, connect, purpose="live", daily_cap_usd=Decimal("4.00")).call(REQUEST)
     assert client.messages.sent == []
 
-    Harness(client, connect, purpose="test", daily_cap_usd=Decimal("10")).call(REQUEST)
-    stamped, = conn.execute("select at from ledger_entries where reference like 'test msg_%'").fetchone()
+    Harness(client, connect, purpose="live", daily_cap_usd=Decimal("10")).call(REQUEST)
+    stamped, = conn.execute("select at from ledger_entries where reference like 'live msg_%'").fetchone()
     assert stamped == db_time
 
 
