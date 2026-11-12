@@ -210,3 +210,96 @@ def test_a_misread_poll_moves_no_sales(conn):
     assert (s.units_sold_in_window, s.units_per_day) == (14, "2.00")
     assert (s.stock_on_hand, s.units_sold_since_load) == (6, 14)   # not 1009 sold since the load
     assert s.days_of_stock_left == "3.0"
+
+
+# --- A person's count (counted_*) -------------------------------------------------
+
+def seen(slot="47", product="Something & Nothing, can", on_hand=5, at=NOW - timedelta(days=3), source="photo"):
+    return {slot: {"count_id": "c1", "counted_at": at, "source": source, "product": product, "units_counted": on_hand,
+                   "exact": source == "door", "price_on_tag": None, "note": None, "sold_since": 0, "on_hand": on_hand}}
+
+
+def test_build_fills_counted_fields_where_receipts_dont_know_the_slot():
+    states = by_slot(build(NOW, {"47": (350, 10)}, None, {}, seen=seen(), now=NOW))
+    s = states["47"]
+    assert (s.counted_product, s.counted_on_hand, s.count_source) == ("Something & Nothing, can", 5, "photo")
+    assert s.counted_at == NOW - timedelta(days=3)
+    assert s.product is None and s.stock_on_hand is None     # receipt fields stay unknown
+    assert states["15"].counted_at is None                     # nobody counted 15
+
+
+def test_build_a_count_seen_empty_is_zero_not_unknown():
+    s = by_slot(build(NOW, {}, None, {}, seen=seen(slot="35", product=None, on_hand=0), now=NOW))["35"]
+    assert s.counted_on_hand == 0 and s.counted_product is None and s.counted_at is not None
+
+
+def test_build_receipts_newer_than_the_count_win():
+    after = count(slot="47", since=NOW - timedelta(days=1))           # loaded after the count
+    s = by_slot(build(NOW, {"47": (350, 10)}, None, {}, counts={"47": after}, seen=seen(), now=NOW))["47"]
+    assert s.product == "COKE20" and s.counted_at is None
+    before = count(slot="47", since=NOW - timedelta(days=5))          # the count came after the load
+    s = by_slot(build(NOW, {"47": (350, 10)}, None, {}, counts={"47": before}, seen=seen(), now=NOW))["47"]
+    assert s.product == "COKE20" and s.counted_on_hand == 5
+
+
+def test_reads_the_latest_count_less_sales_since(conn):
+    from vending import slot_counts
+    store_poll(conn, "a", "2026-10-27T12:00:00+00:00", {"47": (350, 100), "35": (200, 40)})
+    slot_counts.record(conn, slot_counts.parse({
+        "count_id": "photo-1", "counted_at": "2026-10-27T13:00:00+00:00", "source": "photo", "device_id": "vmc1",
+        "selections": [{"selection": "47", "product": "Something & Nothing, can", "units": 5, "price_on_tag": "3.50"},
+                       {"selection": "35", "product": None, "units": 0, "price_on_tag": "2.00"}]}), "test")
+    store_poll(conn, "b", "2026-10-28T12:00:00+00:00", {"47": (350, 100), "35": (200, 40)})
+    store_poll(conn, "c", "2026-10-29T12:00:00+00:00", {"47": (350, 102), "35": (200, 40)})
+    reply = get_machine_state(conn, now=NOW)
+    states = by_slot(reply.data)
+    assert (states["47"].counted_product, states["47"].counted_on_hand) == ("Something & Nothing, can", 3)
+    assert states["35"].counted_on_hand == 0 and states["35"].counted_product is None
+    assert states["15"].counted_at is None
+    assert "A person's count (2026-10-27; 2 from a photo, so units are estimates)" in reply.message
+    assert states["47"].counted_days_ago == 1 and "weak evidence" not in reply.message
+    assert "Slots it saw holding stock: 47." in reply.message
+
+
+def test_no_count_table_is_no_count(conn):
+    store_poll(conn, "a", "2026-10-29T12:00:00+00:00", {"15": (250, 100)})
+    conn.execute("drop table slot_counts")
+    reply = get_machine_state(conn, now=NOW)
+    assert reply.success and all(s.counted_at is None for s in reply.data) and "person's count" not in reply.message
+
+
+def test_build_counted_days_ago_is_the_age_of_the_count():
+    states = by_slot(build(NOW, {}, None, {}, seen=seen(at=NOW - timedelta(days=3, hours=5)), now=NOW))
+    assert states["47"].counted_days_ago == 3
+    assert states["15"].counted_days_ago is None
+
+
+def test_build_an_old_count_is_still_shown_and_the_message_calls_it_weak():
+    from vending.tools.machine_state import _count_note
+    states = build(NOW, {}, None, {}, seen=seen(at=NOW - timedelta(days=20)), now=NOW)
+    s = by_slot(states)["47"]
+    assert (s.counted_on_hand, s.counted_days_ago) == (5, 20)     # shown, not hidden: the agent decides
+    assert "weak evidence" in _count_note(states) and "47 (20 days)" in _count_note(states)
+    fresh = build(NOW, {}, None, {}, seen=seen(at=NOW - timedelta(days=7)), now=NOW)
+    assert "weak evidence" not in _count_note(fresh)               # a week is not yet old
+
+
+def test_count_note_gives_the_range_of_dates_and_each_slot_source():
+    from vending.tools.machine_state import _count_note
+    both = {**seen(slot="47", at=NOW - timedelta(days=3), source="photo"),
+            **seen(slot="35", product=None, on_hand=0, at=NOW - timedelta(days=1), source="door")}
+    note = _count_note(build(NOW, {}, None, {}, seen=both, now=NOW))
+    assert "(2026-10-26 to 2026-10-28; 1 from a photo, so units are estimates, 1 from the door open)" in note
+    doors = _count_note(build(NOW, {}, None, {}, seen=seen(source="door"), now=NOW))
+    assert "(2026-10-26; 1 from the door open)" in doors and "photo" not in doors
+
+
+def test_count_note_says_which_to_trust_when_receipts_and_count_both_show():
+    from vending.tools.machine_state import _count_note
+    before = count(slot="47", since=NOW - timedelta(days=5))          # the count came after the load
+    states = build(NOW, {"47": (350, 10)}, None, {}, counts={"47": before}, seen=seen(), now=NOW)
+    s = by_slot(states)["47"]
+    assert s.stock_on_hand is not None and s.counted_on_hand == 5
+    assert "Slots 47 have both stock_on_hand and counted_on_hand: the count is newer, so trust it." in _count_note(states)
+    only = build(NOW, {"47": (350, 10)}, None, {}, seen=seen(), now=NOW)
+    assert "both stock_on_hand" not in _count_note(only)
