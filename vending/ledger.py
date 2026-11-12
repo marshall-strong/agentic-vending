@@ -445,8 +445,13 @@ def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance 
     visits, fees = _visits(conn, start.at, as_of)
     recorded = entries(conn, start.at, as_of)
     early = [e for e in entries(conn, None, start.at) if e.at < start.at]
-    if early:
-        notes.append(f"{len(early)} entries totalling {money(sum(e.amount_cents for e in early))} are dated before "
+    dev = [e for e in early if e.kind == "tokens"]
+    other = [e for e in early if e.kind != "tokens"]
+    if dev:
+        notes.append(f"{len(dev)} model-call entries totalling {money(-sum(e.amount_cents for e in dev))} are from "
+                     f"before the opening on {start.at:%Y-%m-%d}: development spend, not in the balance")
+    if other:
+        notes.append(f"{len(other)} entries totalling {money(sum(e.amount_cents for e in other))} are dated before "
                      f"the opening on {start.at:%Y-%m-%d} and are not in the balance; "
                      "re-date them or record them as a capital entry or adjustment if they belong in it")
     return Balance(as_of, start.at, start.amount_cents, _sum(recorded, "capital"), sold, receipts, lines, fees, visits,

@@ -39,7 +39,9 @@ def baseline_json(state):
 
 class FakeAnthropic:
     """Records requests. `tokens` is what count_tokens reports; `count_status` fails the count;
-    `reply` is (status, stop_reason, text); `turns` (if set) is a list of replies served in order."""
+    `reply` is (status, stop_reason, text); `turns` (if set) is a list of replies served in order;
+    `respond` (if set) is a function of the request body that returns the reply, for requests in
+    flight together that must each get their own answer."""
 
     def __init__(self):
         self.counts, self.posts, self.keys = [], [], []
@@ -47,6 +49,7 @@ class FakeAnthropic:
         self.usage = (3000, 2000)
         self.reply = (200, "end_turn", "{}")
         self.turns = None
+        self.respond = None
         self.delay = 0.0   # seconds before answering a message, to keep requests in flight
         fake = self
 
@@ -77,7 +80,10 @@ class FakeAnthropic:
                 assert self.path.startswith("/v1/messages")
                 fake.posts.append(body)
                 time.sleep(fake.delay)
-                status, stop, content = fake.turns.pop(0) if fake.turns else fake.reply
+                if fake.respond is not None:
+                    status, stop, content = fake.respond(body)
+                else:
+                    status, stop, content = fake.turns.pop(0) if fake.turns else fake.reply
                 if status != 200:
                     return self._error(status)
                 if isinstance(content, str):
