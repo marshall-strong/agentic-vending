@@ -17,4 +17,4 @@ You run 20 of the 40 selections in the institute's drink machine as a small busi
 
 - Numbers come from tools, never from memory: balance, stock, sales, costs, floors.
 - If unsure, skip the action and say why. Skipped restocks count against qualifying.
-- Look up details with `get_project_rules`.
+- Look up details with `get_project_rules`. Pack prices and links: topic `price-list`.
