@@ -76,6 +76,7 @@ from day one.
 | [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
 | [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
+| [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |
 
 ## Getting set up
 
