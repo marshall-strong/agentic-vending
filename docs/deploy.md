@@ -72,6 +72,80 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 python -m vending.db migrate
 ```
 
+## The public pages
+
+The same port serves two pages for anyone with the link (#53), so the team and the instructors
+can look without SQL:
+
+```
+https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/dashboard
+https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/db
+```
+
+`/dashboard` is the agent dashboard ([`dashboard.md`](dashboard.md)), with the same data as JSON
+at `/dashboard/state.json`. `/db` is the DB explorer ([`db-explorer.md`](db-explorer.md)). The
+home page links to both once they are set up. There is no sign-in, and they are
+`vending/pages.py`.
+
+**Nobody can change anything through them, in three layers:**
+
+1. **A login that can only read.** The pages connect with their own secret,
+   `READONLY_DATABASE_URL`, never with the syncs' `DATABASE_URL`. Before serving, they ask
+   Postgres what that login may do. **If it can write to any table or create one, the pages
+   switch themselves off** and say why in the log, so putting the syncs' login in that secret
+   doesn't work. Without the secret they answer "not set up yet", and everything else runs.
+2. **A read-only session**, and each page is one `repeatable read, read only` transaction.
+3. **Nothing to send:** GET only, no form, no SQL box.
+
+**Load limits.** The database server allows 50 connections for both teams. The pages use at most
+2 at once, a request that waits more than 5 seconds for one is told the page is busy, and every
+statement is cancelled after 5 seconds. The role's own `connection limit` (below) caps it again
+on the server.
+
+**What is public:** every table, including the plans, the purchase requests and the ledger. No
+table holds a password or a key. **Left out:** the other team's selections (the machine stores
+every selection, and `/db` shows only ours in `poll_selections` and `slot_counts`; the dashboard's
+JSON counts likewise), the dev machines' hostnames in `model_calls.host`, and the error text of failed tool calls and failed
+runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed), because a
+database error names the host and the user. Refusals keep their text. The pages' own errors show
+one plain sentence; the detail is in the container's log.
+
+### Setting up the read-only login (once)
+
+`g2_admin` can't create roles, and the database lets only named logins connect, so the first two
+statements are for whoever administers the server (David or Graham):
+
+```sql
+create role vending_reader login password '<a long random password>' connection limit 4;
+grant connect on database "ai-vend-2" to vending_reader;
+```
+
+Then one of us, with `DATABASE_URL` pointing at Azure, lets it look inside our schema (`usage`) and
+read our tables, including tables later migrations add:
+
+```
+python -m vending.pages grant vending_reader --by NAME
+```
+
+Put the new login in your `.env`, under its own name, and check it:
+
+```
+READONLY_DATABASE_URL=postgresql://vending_reader:<password>@<host>:5432/ai-vend-2?sslmode=require
+python -m vending.pages check
+```
+
+`check` connects the way the pages do and must say **read-only** and **can read every table**.
+It also names a schema the login may not look inside, for example `schema public (no usage)`: if
+`grant` printed a "no privileges were granted" warning for the schema, our login doesn't own it,
+and the administrator runs `grant usage on schema public to vending_reader;`.
+Then deploy with `-SetSecrets`, which loads the secret and gives the container the variable. The
+deploy script treats this one secret as optional: without it in `.env` a deploy still works, and
+says the pages aren't set up.
+
+**To change the password:** the administrator runs
+`alter role vending_reader password '<new>';`, you update `READONLY_DATABASE_URL` in `.env`, and
+`.\scripts\deploy_container_app.ps1 -SetSecrets` restarts the revision with it.
+
 ## One-time setup, per person
 
 1. `az login --tenant golisanoinstitute.org` (your institute account; the Cognivue account sees nothing).
@@ -93,7 +167,7 @@ From the repository root, on a machine with Docker running:
 ```
 
 That builds the image tagged with the current commit, pushes it, loads `DATABASE_URL`,
-`DEX_API_KEY` and `TS_AUTHKEY` from your `.env` into Container App secrets,
+`DEX_API_KEY` and `TS_AUTHKEY` (and `READONLY_DATABASE_URL`, when it is there) from your `.env` into Container App secrets,
 sets `DEX_BASE_URL`, points ingress at port 8080, and rolls the app to the image with one replica
 always on (`minReplicas` 1, the 29 Oct decision: it stays 0 only while the hello-world image is
 deployed). If the roll fails, it points ingress back at the port it had.
@@ -131,6 +205,8 @@ Then check:
 ```
 https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/
 https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/health
+https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/dashboard
+https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/db
 az containerapp logs show --name ai-group-2-vend --resource-group data_systems_resource_group --follow
 ```
 

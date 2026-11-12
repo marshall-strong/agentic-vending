@@ -1,4 +1,4 @@
-"""The long-running process in the Container App: the scheduled syncs, a health check and a home page.
+"""The long-running process in the Container App: the scheduled syncs, a health check and the public pages.
 
     python -m vending.worker            # every SYNC_EVERY_MINUTES (60), forever
     python -m vending.worker --once     # one round, then exit with the worst exit code
@@ -24,6 +24,13 @@ when the next round runs, and links to the docs. It reloads itself every
 minute. Neither ever shows error text, because both are public and a database
 error names the host and user; the errors are in the log. The page is built
 only from `State.public()`, the same dict as `/health`, so it can't show more.
+
+`GET /dashboard` (with `/dashboard/state.json`) and `GET /db` are the agent
+dashboard and the DB explorer, for anyone with the link. They are
+`vending.pages`: a database login of their own that can only read, a few
+connections at most, and no error text. Until that login is set
+(`READONLY_DATABASE_URL`) they answer "not set up yet" and the home page says
+so. The syncs never use that login, and the pages never use the syncs'.
 
 SIGTERM, which Azure sends before stopping a replica, ends the loop like
 Ctrl+C: the health check closes and the process exits 0, and a job in flight
@@ -141,6 +148,9 @@ def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: floa
 
 EASTERN = ZoneInfo("America/New_York")
 REPO = "https://github.com/marshall-strong/agentic-vending"
+# The setting `vending.pages` connects with. Named here too, so the home page can say whether the
+# pages are set up without importing them (and the database driver) to draw itself.
+PAGES_SETTING = "READONLY_DATABASE_URL"
 OUTCOMES = ("finished", "crashed", "timed out", "still running")
 JOB_NAMES = {"sync_history": "Machine readings (sales history)", "sync_requests": "Purchase requests and receipts",
              "sync_catalog": "Product catalog"}
@@ -157,8 +167,23 @@ def _eastern(moment: str | None) -> str:
     return f"{local:%a %d %b}, {local.hour % 12 or 12}:{local:%M %p} ET"
 
 
-def home_page(public: dict) -> str:
-    """The page at /, built only from what /health shows, so no error text can reach it."""
+def pages_ready() -> bool:
+    from vending import settings
+
+    return bool(settings.get(PAGES_SETTING))
+
+
+def home_page(public: dict, pages: bool = False) -> str:
+    """The page at /, built only from what /health shows, so no error text can reach it.
+    `pages` is whether the dashboard and the DB explorer are set up, so it links to them."""
+    if pages:
+        look = ("""<ul>
+      <li><a href="/dashboard">Agent dashboard</a>: is the agent OK, what is in our slots, what it plans for Friday and why</li>
+      <li><a href="/db">Database explorer</a>: every table we keep, its columns and its rows</li>
+    </ul>
+    <p class="muted">Both only read. Nothing on them can change the machine, an order or our records.</p>""")
+    else:
+        look = ("""<p class="muted">The agent dashboard and the database explorer aren't set up at this address yet. They wait for a database login that can only read (issue #53).</p>""")
     results = public.get("results") or []
     if not public.get("rounds"):
         verdict, tone = "Starting up: the first sync round hasn't finished yet.", "wait"
@@ -249,12 +274,15 @@ def home_page(public: dict) -> str:
     <p class="muted">Each round copies the machine's readings, our purchase requests and the product catalog into our database. It reads the bridge's stored history and never polls the machine.</p>
   </section>
   <section>
+    <h2>See what the agent is doing</h2>
+    {look}
+  </section>
+  <section>
     <h2>Learn more</h2>
     <ul>
       <li><a href="{REPO}#readme">What we are building</a> (the README on GitHub)</li>
       <li><a href="{REPO}/blob/main/docs/deploy.md">How this container runs</a></li>
       <li><a href="/health">The same status as JSON</a> (<code>/health</code>)</li>
-      <li class="muted">The database explorer and the agent dashboard will be linked here once this address serves them (issue #53).</li>
     </ul>
   </section>
   <footer class="muted">Running since {escape(_eastern(public.get("started_at")))}. This page reloads every minute. Error details stay in the container's log and are never shown here.</footer>
@@ -279,25 +307,38 @@ class _Health(BaseHTTPRequestHandler):
             body = json.dumps(self.state.public(), indent=2).encode()
             self._send(200 if self.state.healthy else 503, "application/json", body)
         elif path == "":
-            self._send(200, "text/html; charset=utf-8", home_page(self.state.public()).encode())
-        else:
-            self.send_response(404)
-            self.end_headers()
+            self._send(200, "text/html; charset=utf-8", home_page(self.state.public(), pages_ready()).encode())
+        elif path.startswith(("/dashboard", "/db")):
+            # Imported here, so the syncs and /health never depend on the pages' code.
+            from vending import pages
 
-    def _send(self, status: int, content_type: str, body: bytes) -> None:
+            reply = pages.respond(self.path)
+            if reply is None:
+                return self._not_found()
+            self._send(reply.status, reply.content_type, reply.body.encode(), reply.csp)
+        else:
+            self._not_found()
+
+    def _not_found(self) -> None:
+        self.send_response(404)
+        self.end_headers()
+
+    def _send(self, status: int, content_type: str, body: bytes,
+              csp: str = "default-src 'none'; style-src 'unsafe-inline'") -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        # The page has no scripts and loads nothing from anywhere else.
-        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+        # The home page has no scripts and loads nothing from anywhere else; a page from
+        # `vending.pages` brings its own policy.
+        self.send_header("Content-Security-Policy", csp)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
 
 def serve_health(state: State, port: int) -> ThreadingHTTPServer:
-    """Answer / and /health in a daemon thread. Returns the server, for tests to shut down."""
+    """Answer /, /health and the public pages in a daemon thread. Returns the server, for tests to shut down."""
     handler = type("Health", (_Health,), {"state": state})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -321,7 +362,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("JOB_TIMEOUT_MINUTES") or 30),
                         help="minutes each job may run (default JOB_TIMEOUT_MINUTES or 30)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8080),
-                        help="port for / and /health (default PORT or 8080); 0 serves nothing")
+                        help="port for /, /health and the public pages (default PORT or 8080); 0 serves nothing")
     args = parser.parse_args(argv)
     if args.every <= 0:
         parser.error("--every must be above zero")

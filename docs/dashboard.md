@@ -28,7 +28,7 @@ what changed and why.
 | Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours. **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot |
 | In the machine | The machine's face, upright: 5 shelves of 8 selections (row r, column c is selection "rc"), with our selections lit and the rest striped. Which selections are ours comes only from `vending.slots.SLOTS`. Each of ours shows its number, a bottle filled to the units on hand with the count on it, the product under it and the price tag. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next Friday** is the latest plan: its product, price (the tag now struck through when it changes) and fill; slots the plan changed are outlined, with a dot for the kind (blue swap or fill, amber price, red pull). Beside it, each change with the agent's reason. Click a selection to open it in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs` |
 | The plan | "N of 20 slots changed since run #X", a chip per change that jumps to the slot and opens its reason, a "Show changed slots only" switch, then one line per slot (product, price, fill, change tags) that opens to the reason, what it was, and what the slot holds and sold this week. Under it, the weekly update for the team and the notes to itself | `agent_runs`, `vending.stock`, `get_machine_state` |
-| Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it | `agent_runs` |
+| Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it. Under each, **How it decided** opens the run's steps in order: the model's reasoning (a summary the API returns, never the raw chain of thought), anything it wrote, each tool call and what came back, with failed replies in red. A run in progress shows the steps so far | `agent_runs`, `agent_steps` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates) and catalog requests | `purchase_requests`, `purchase_lines`, `product_requests` |
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
@@ -94,10 +94,14 @@ visible description.
 
 - **It can't write.** Its connection sets `default_transaction_read_only`, so Postgres refuses
   any write, and it never migrates. A table that doesn't exist yet blanks only its own panel.
-- **It listens on 127.0.0.1 only, and has no login.** It answers only requests addressed to
+- **On the container it is public, on purpose (#53).** `/dashboard` on the Container App shows
+  this page to anyone with the link, with `/dashboard/state.json` beside it. There it connects as a
+  login that can only read, and the error text of failed tool calls and failed runs is left out,
+  on the page and in the JSON. So are the other team's selections: the JSON's counts hold only ours. [`deploy.md`](deploy.md#the-public-pages) has the rules.
+- **Run locally, it listens on 127.0.0.1 only, and has no login.** It answers only requests addressed to
   `127.0.0.1` or `localhost`, so another website can't point its own name at your machine and
-  read the page. To watch the Azure container from a laptop, use an SSH tunnel or run it locally
-  against the Azure database; don't expose it.
+  read the page. A local copy still shows the error text the public page leaves out, so don't
+  put a local copy on a public address.
 - **It costs nothing to run.** No model calls, no new services, no new packages.
 
 ## The run record
@@ -134,7 +138,5 @@ spend (#40); the stock bars can use `vending.stock` today.
 cost. Everything it needs is in `agent_runs` once #39 writes it.
 
 **C. A live run.** Each tool call as it happens, the draft plans as they change, and the run's
-budget. The tool calls are already in `action_log`, and every `preview_desired_state` call logs
-the draft plan it checked, so "plan v1 to v2" can be read from it. It needs a run id on
-`action_log` rows to group them, and the budget needs #40. The model's reasoning between calls
-isn't recorded anywhere yet.
+budget. Each run's steps, its reasoning included, are now in `agent_steps` and show under
+How it decided, so what is left is a page that follows one run live and the run's budget.

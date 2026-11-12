@@ -13,6 +13,13 @@ Only calls made through `vending/harness.py` from this version on are in
 writes only the ledger; the report counts that spend separately, and it never
 counts toward the test cap.
 
+The competition starts at the ledger's opening entry (`python -m vending.ledger
+open --amount 600`), the same moment the balance counts from. Once it exists, the
+report splits every call into development (before it) and the competition (from
+it on), whatever the call's purpose. A "live" call made before the opening, such
+as a test of the agent loop, is development and never counts against the $600.
+Until the opening is recorded, every call is development.
+
 Costs are what the harness priced from each answer's `usage` at list prices
 (`vending/model_prices.json`). A row still `pending` or `error` counts at its
 worst case, so these figures can overstate spend but never understate it.
@@ -30,7 +37,7 @@ from decimal import Decimal
 
 import psycopg
 
-from vending import db
+from vending import db, ledger
 from vending.harness import EASTERN, day_start
 
 GROUPS = {
@@ -45,7 +52,7 @@ def _since(day: date) -> datetime:
     return datetime.combine(day, time(0), EASTERN).astimezone(timezone.utc)
 
 
-def totals(conn: psycopg.Connection, since: datetime | None) -> dict:
+def totals(conn: psycopg.Connection, since: datetime | None, until: datetime | None = None) -> dict:
     row = conn.execute(
         "select count(*), coalesce(sum(cost_usd), 0),"
         " count(*) filter (where status = 'ok'), count(*) filter (where status = 'pending'),"
@@ -54,7 +61,8 @@ def totals(conn: psycopg.Connection, since: datetime | None) -> dict:
         " coalesce(sum(cost_usd) filter (where purpose = 'test'), 0),"
         " coalesce(sum(coalesce(input_tokens, 0) + coalesce(cache_write_tokens, 0) + coalesce(cache_read_tokens, 0)), 0),"
         " coalesce(sum(output_tokens), 0)"
-        " from model_calls where (%s::timestamptz is null or at >= %s)", (since, since)).fetchone()
+        " from model_calls where (%s::timestamptz is null or at >= %s) and (%s::timestamptz is null or at < %s)",
+        (since, since, until, until)).fetchone()
     keys = ("calls", "cost_usd", "ok", "pending", "error", "refused", "live_usd", "test_usd", "tokens_in", "tokens_out")
     return dict(zip(keys, row))
 
@@ -89,9 +97,14 @@ def report(conn: psycopg.Connection, now: datetime, since: date | None = None, r
     windows = ({"from " + since.isoformat(): _since(since)} if since else
                {"today": day_start(now), "last 7 days": _since(week_ago), "all time": None})
     window = list(windows.values())[-1]
+    opened = ledger.opening(conn) if conn.execute("select to_regclass('ledger_entries')").fetchone()[0] else None
+    start = opened.at if opened else None
+    split = {"development": totals(conn, None, start), "competition": totals(conn, start) if start else None}
     return {
         "as_of": now.astimezone(EASTERN).isoformat(timespec="seconds"),
-        "windows": {name: totals(conn, start) for name, start in windows.items()},
+        "competition_start": start.astimezone(EASTERN).isoformat() if start else None,
+        "split": split,
+        "windows": {name: totals(conn, w) for name, w in windows.items()},
         "by": {by: grouped(conn, by, window) for by in GROUPS},
         "recent": recent(conn, recent_n),
         "outside": outside(conn),
@@ -126,6 +139,16 @@ def render(rep: dict) -> str:
                     _num(t["tokens_in"]), _num(t["tokens_out"]),
                     f"{t['pending']} pending, {t['error']} error" if t["pending"] or t["error"] else "")
                    for name, t in rep["windows"].items()])
+    if rep["competition_start"]:
+        dev, comp = rep["split"]["development"], rep["split"]["competition"]
+        out += ["", f"The competition starts at the ledger's opening, {rep['competition_start'][:16].replace('T', ' ')} "
+                "(Eastern). All time, whatever --since says. Only live calls from the opening on come out of the $600."]
+        out += _table(("", "Calls", "Spend", "Live", "Test"),
+                      [(name, t["calls"], _money(t["cost_usd"]), _money(t["live_usd"]), _money(t["test_usd"]))
+                       for name, t in (("Development, before it", dev), ("The competition, from it", comp))])
+    else:
+        out += ["", "No ledger opening yet, so every call so far is development spend, none of it from the $600. "
+                "The competition starts at `python -m vending.ledger open --amount 600`."]
     titles = {"purpose": "By purpose", "model": "By model and effort", "key": "By key (the variable it came from)",
               "machine": "By machine"}
     for by, title in titles.items():

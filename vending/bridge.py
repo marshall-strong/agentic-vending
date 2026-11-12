@@ -76,7 +76,7 @@ class Bridge:
         """The catalog our team can order from (`GET /api/v1/products`).
 
         Always a list. A reply of another shape comes back as an empty list, so
-        `vending.planning.read_catalog` can refuse it instead of crashing on it.
+        `vending.planning` and the catalog sync can refuse it instead of crashing on it.
         """
         body = json.loads(self._once("GET", "/api/v1/products"))
         products = body.get("products") if isinstance(body, dict) else body

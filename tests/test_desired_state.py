@@ -20,6 +20,7 @@ from vending.bridge import Bridge  # noqa: E402
 from vending.config import set_halted, set_value  # noqa: E402
 from vending.planner import OUR_SLOTS  # noqa: E402
 from vending.purchase_requests import record as record_request  # noqa: E402
+from vending.sync_catalog import sync as catalog_sync  # noqa: E402
 from vending.tools import desired_state as schema  # noqa: E402
 from vending.tools.preview import preview_desired_state  # noqa: E402
 
@@ -160,6 +161,65 @@ def test_halted_with_the_bridge_down_says_to_stop_not_to_check_tailscale(db, fak
     fake.catalog_status = 503
     reply = preview_desired_state(db, desired(restock_15()), fake.client(), NOW)
     assert not reply.success and "halt switch is on" in reply.message and "vending.halt off" in reply.message
+
+
+# --- Where the catalog comes from ------------------------------------------------------------
+
+def synced(conn, fake, at=NOW):
+    """Our copy of the catalog, synced from the fake bridge `at` that time."""
+    catalog_sync(conn, fake.client(), now=at, log=lambda _: None)
+
+
+def test_with_no_synced_copy_the_catalog_is_read_from_the_bridge_and_says_so(db, fake):  # noqa: F811
+    ready(db)
+    stocked(db)
+    reply = preview_desired_state(db, desired(restock_15(), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.success and fake.gets == 1
+    assert any("read live from the bridge" in n and "vending.sync_catalog" in n for n in reply.notes)
+
+
+def test_a_synced_copy_is_used_and_the_bridge_is_not_called(db, fake):  # noqa: F811
+    ready(db)
+    stocked(db)
+    synced(db, fake)
+    fake.gets = 0
+    fake.catalog_status = 503                       # a bridge outage no longer stops planning
+    reply = preview_desired_state(db, desired(restock_15(), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.success and fake.gets == 0
+    assert not any("catalog" in n for n in reply.notes)
+
+
+def test_the_synced_copy_keeps_inactive_and_delisted_products_out(db, fake):  # noqa: F811
+    ready(db)
+    synced(db, fake, NOW - timedelta(hours=2))
+    fake.catalog_body = {"products": [p for p in CATALOG if p["sku"] != "PICKLE"]}
+    synced(db, fake)                                # PICKLE is now delisted
+    fake.catalog_status = 503
+    bad = desired({"slot": "15", "product": "OLD", "sale_price": "2.50", "fill_to": 10},
+                  {"slot": "16", "product": "PICKLE", "sale_price": "2.50", "fill_to": 10})
+    reply = preview_desired_state(db, bad, fake.client(), NOW)
+    unknown = {r.slot for r in reply.refusals if r.code == "product_unknown"}
+    assert unknown == {"15", "16"}
+
+
+def test_an_old_synced_copy_is_used_but_flagged_as_stale(db, fake):  # noqa: F811
+    ready(db)
+    stocked(db)
+    synced(db, fake, NOW - timedelta(hours=40))
+    fake.gets = 0
+    reply = preview_desired_state(db, desired(restock_15(), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.success and fake.gets == 0
+    assert any(n.startswith("STALE: the catalog was last synced 40.0 hours ago") for n in reply.notes)
+
+
+def test_a_copy_with_every_product_delisted_falls_back_to_the_bridge(db, fake):  # noqa: F811
+    ready(db)
+    synced(db, fake)
+    db.execute("update catalog_products set delisted_at = %s", (NOW,))
+    fake.gets = 0
+    fake.catalog_status = 503
+    reply = preview_desired_state(db, desired(restock_15()), fake.client(), NOW)
+    assert fake.gets == 1 and not reply.success and "couldn't read the catalog" in reply.message
 
 
 def test_an_old_poll_is_flagged_as_stale(db, fake):  # noqa: F811

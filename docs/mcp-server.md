@@ -8,7 +8,7 @@ machine.
 
 | Tool | State |
 | --- | --- |
-| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls; and from the receipts (`vending.stock`), the product, stock on hand (since the product went in), units sold and days since the last load, and days of stock left. The closet per product with its value at cost, and any stock warnings. A slot with no receipts has those fields `null` and is named in the message. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
+| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls; and from the receipts (`vending.stock`), the product, stock on hand (since the product went in), units sold and days since the last load, and days of stock left. The closet per product with its value at cost, and any stock warnings. A slot with no receipts has those fields `null` and is named in the message. Where receipts don't know a slot, or a person's count is newer than its last receipt, `counted_product` and `counted_on_hand` say what the latest count in `slot_counts` saw (units less sales since; an estimate for a photo), with `counted_at`, `counted_days_ago` and `count_source`; a count over 7 days old is weak evidence and the message says so, and where `stock_on_hand` and `counted_on_hand` both appear the count is the newer. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
 | `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. |
@@ -227,9 +227,9 @@ every unit. It is its own line, taken out of net, so a lost unit's cost never si
 `vending/planning.py` gathers what `plan_restock` needs and `vending/tools/preview.py` turns the
 plan into the reply. Slots come from the receipts (`vending.stock`: product, units, unit cost) and
 the latest good poll (price); the closet from the receipts; pending requests from
-`purchase_requests`; the catalog live from the bridge (`GET /api/v1/products`, until the catalog
-sync lands and it can come from our table); the spendable balance from the ledger; and the
-planner's settings from `config`.
+`purchase_requests`; the catalog from our copy in `catalog_products`, the same rows
+`get_catalog` reads, so a bridge outage doesn't stop planning; the spendable balance from the
+ledger; and the planner's settings from `config`.
 
 **How many units fit in a column depends on the package**, not the slot: each column is a row of
 packages in front of a pusher. `vending/capacity.py` matches each product's catalog `size` against
@@ -261,9 +261,14 @@ The other keys the planner reads are `price_ceiling_cents` (650), `tax_percent` 
 type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
 refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
 is refused rather than saved silently. Until the ledger is open, the
-tool answers `success: false` with the command to run; so does an empty or reshaped catalog reply
-(it would otherwise read as "every product unapproved"), and the halt switch is checked before the
-bridge is read, so halted with the bridge down says to stop, not to check Tailscale. A poll older
+tool answers `success: false` with the command to run. Delisted products count as not in the
+catalog, and so do products the bridge marks inactive. A copy last synced over 36 hours ago (the
+same limit as `get_catalog`) is still used, with a `STALE` note saying to run
+`python -m vending.sync_catalog`. Only when we hold no listed product (the sync has never run) is
+the catalog read live from the bridge (`GET /api/v1/products`), with a note saying so. In that
+case an empty or reshaped reply also answers `success: false` (it would otherwise read as "every
+product unapproved"), and the halt switch is checked before the bridge is read, so halted with the
+bridge down says to stop, not to check Tailscale. A poll older
 than 3 hours adds a `STALE` note, since stock on the rails is overstated by whatever sold since.
 A refused plan comes back with every refusal and everything that could still be worked out, so the
 agent fixes the whole plan in one turn. In `cost`, `spendable` and `spendable_left_at_max` are the

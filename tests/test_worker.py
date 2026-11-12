@@ -251,7 +251,7 @@ def test_health_is_still_json_and_the_root_is_not():
         assert _get(server, "/health")[1] == "application/json"
         assert _get(server, "/health/")[1] == "application/json"
         assert _get(server, "/")[1].startswith("text/html") and _get(server, "/?from=qr")[1].startswith("text/html")
-        assert _get(server, "/db")[0] == 404
+        assert _get(server, "/nope")[0] == 404 and _get(server, "/healthy")[0] == 404
     finally:
         server.shutdown()
         server.server_close()
