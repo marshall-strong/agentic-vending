@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 
-from vending.stock import movements_from_receipts, sales_from_counters, weighted_average
+from vending.stock import movements_from_receipts, replay, sales_from_counters, weighted_average
 
 T0 = datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
 
@@ -209,8 +209,9 @@ def swap(sku="REDBULL", total_paid="15.00", at=3):
 def test_sales_across_a_product_change_are_split_by_the_cents_counter():
     stock = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
     # One Arizona, sold before the swap at its own cost; one Red Bull after it at its own.
-    assert [(s.at, s.product, s.units, s.cost_cents) for s in stock.sales] == [
-        (hours(3), "ARIZONA", 1, 50), (hours(5), "REDBULL", 1, 150)]
+    # Both are booked to the hour-5 poll that measured them; the Arizona left its count at the swap.
+    assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales] == [
+        (hours(5), hours(3), "ARIZONA", 1, 50), (hours(5), None, "REDBULL", 1, 150)]
     [slot] = stock.slots
     assert (slot.product, slot.units, slot.sold) == ("REDBULL", 9, 1)
     # The 9 pulled are all that was left, so nothing is written off.
@@ -233,3 +234,53 @@ def test_sales_across_a_change_the_counters_cannot_split_are_booked_with_no_cost
 def test_sales_in_a_window_with_no_change_are_not_split():
     stock = book(swap(), counters=[("15", hours(4), 100, 20000, 400), ("15", hours(5), 102, 20800, 400)])
     assert [(s.product, s.units, s.cost_cents) for s in stock.sales] == [("REDBULL", 2, 300)]
+
+
+def test_stock_as_of_a_moment_between_the_swap_and_the_next_poll_splits_before_it_cuts():
+    # The ledger asks for stock as of a period's end. If that end falls between the swap
+    # (hour 3) and the poll that measures the window (hour 5), the old product's share
+    # still comes out of its count at the swap instead of being written off as shrinkage.
+    moves = movements_from_receipts(swap(), []) + sales_from_counters(
+        [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    cut = replay(moves, until=hours(4))
+    assert cut.shrinkage == () and cut.warnings == ()
+    [slot] = cut.slots
+    assert (slot.product, slot.units) == ("REDBULL", 10)
+    # Both shares are booked to the poll that measured them, like the takings, so no sale
+    # is booked before hour 5, and the replay to hour 5 books both.
+    assert cut.sales == ()
+    full = replay(moves)
+    assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in full.sales] == [
+        (hours(5), hours(3), "ARIZONA", 1, 50), (hours(5), None, "REDBULL", 1, 150)]
+
+
+def test_a_cents_counter_that_did_not_rise_with_the_units_cannot_split_them():
+    # The cents counter misread low at hour 5, so there is no cents rise to split with.
+    # At an old price of $0 a missing rise read as 0 cents would book both units old.
+    stock = book(swap(), counters=[("15", hours(1), 100, 20000, 0), ("15", hours(5), 102, 100, 400)])
+    [sale] = stock.sales
+    assert (sale.product, sale.units, sale.cost_cents) == ("REDBULL", 2, None)
+    assert any("can't split" in w for w in stock.warnings)
+
+
+def test_a_window_the_counters_cannot_split_says_the_write_off_may_be_those_sales():
+    stock = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20500, 400)])
+    # 10 Arizona counted, 9 pulled: the 1 written off may be one of the 2 sold in the window.
+    assert [(x.product, x.units) for x in stock.shrinkage] == [("ARIZONA", 1)]
+    assert any("can't split" in w and "1 units of ARIZONA" in w and "may be" in w for w in stock.warnings)
+
+
+def test_a_split_that_finds_more_old_units_sold_than_counted_is_warned_about():
+    # 1 Arizona loaded and sold by hour 2; the counters then split 1 more Arizona to before the swap.
+    lines = [line(sku="ARIZONA", units_loaded=1, total_paid="0.50"),
+             line(sku="REDBULL", units_loaded=10, total_paid="15.00", slot_reassigned=True, at=3, request_id="r2")]
+    stock = book(lines, counters=[("15", hours(1), 100, 20000, 200), ("15", hours(2), 101, 20200, 200),
+                                  ("15", hours(5), 103, 20800, 400)])
+    assert any("1 units of ARIZONA" in w and "counted only 0" in w for w in stock.warnings)
+
+
+def test_a_window_across_two_changes_says_so():
+    lines = swap() + [line(sku="PEPSI20", units_loaded=10, total_paid="8.00", units_pulled=10, pulled_sku="REDBULL",
+                           slot_reassigned=True, at=4, request_id="r3")]
+    stock = book(lines, counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 250)])
+    assert any("can't split" in w and "2 product changes" in w for w in stock.warnings)
