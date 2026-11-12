@@ -25,10 +25,18 @@ Kevin went through the questions in #102 with David in an 18-minute talk on 12 N
 | 17 | **Promotions** | No bundles. | Answered |
 | 18 | **Catalog shared?** | **Shared with the other team.** Everyone sees every product that could go in the machine, and which product requests were made and approved, but not the other team's plan or prices. A team's poll messages only ever carry its own slots. | Answered |
 
+## Checked against the calendar and our code
+
+- **27 Nov is the Thanksgiving observance; the Institute is closed 26 to 29 Nov.** "The 27th" needs confirming (#102), along with when staff will shop and fill (30 Nov to 2 Dec are open days).
+- **3 Dec is a Thursday.** If there's a regular Friday restock on 4 Dec, our first weekly request is due the night we go live. #102 asks.
+- **The planner already matches the cutoffs:** in-store at Thursday 23:59, and Amazon as a warning only (Wednesday 23:59).
+- **The decision log already exists:** `agent_runs` and `agent_steps` (#58) store each run's reasoning summary, text, tool calls and results.
+- **Not built yet:** our own Friday polling (the container copies David's hourly polls), with a hard limit on how often it calls the bridge. Tracked in #107.
+
 ## What changes for us
 
 - **Day-one order (urgent).** Our first real request fills all 20 slots to capacity, comes out of the $600, and is due about **27 Nov** for a **3 Dec** start. That moves the capital plan (#90), the restock policy (#91) and the first-products decision up front.
-- **Competition start = 3 Dec.** That's when the ledger's opening should be recorded (#104), and the cutoff for whole-machine totals in the sales analysis (#84).
+- **Competition start = 3 Dec.** Record the ledger's opening **before the day-one fill is fulfilled**, not on 3 Dec: the fill's receipts will be dated about 30 Nov to 2 Dec, and the balance counts only what comes after the opening (#104). Whole-machine totals in the sales analysis stop when the machine is switched off during the break, and at 3 Dec at the latest (#84).
 - **Cutover (#97, #105):** plan for a Friday-afternoon visit, most likely 3 to 5 PM or later (the worker shops after a 1 PM class), and poll about every 10 minutes from about 2 to 6 PM on Fridays. `fulfilled_at` marks the end of the visit, and the door times will narrow it when they're added. Our plan still handles a visit at any time. Polling about every 10 minutes around a visit is allowed.
 - **Halt switch (#82):** keep it for our own use. The instructors' backstop is the human review of every request, plus deactivating our container.
 - **Shared log:** our `action_log` and agent run records are the log. Make sure the agent's reasons are stored.
