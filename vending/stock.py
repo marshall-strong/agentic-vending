@@ -20,6 +20,10 @@ turns receipts into stock movements and replays them in time order:
 - sales come from the polls' lifetime counters, one movement per rise between
   two polls, timed at the later poll (`vending.counters` decides what a
   reading that goes down means).
+- a poll can't tell when a worker swapped a slot's product (#97), so a window
+  between two polls that spans the swap holds units of both. The cents
+  counter and the price at each end split them; units it can't split are
+  booked with no cost and a warning, never at the new product's cost.
 
 A slot's count starts again whenever its product changes, so `loaded` and
 `sold` are since the last change, and on hand is loaded - sold - lost.
@@ -31,7 +35,7 @@ one function to change it. Money is exact cents (`Fraction`), never a float.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
 from fractions import Fraction
@@ -44,8 +48,10 @@ if TYPE_CHECKING:  # the replay itself needs no database, so its tests run witho
     import psycopg
 
 # Within one moment: pulls happen before loads (the old product comes out
-# first), and losses and sales are only ever recorded after both.
-_ORDER = {"pull": 0, "purchase": 1, "load": 1, "loss": 2, "sale": 3}
+# first), and losses and sales are only ever recorded after both. The old
+# product's share of a window split at a product change sold before the door
+# opened, so it goes first.
+_ORDER = {"sale_before_change": -1, "pull": 0, "purchase": 1, "load": 1, "loss": 2, "sale": 3}
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,10 @@ class Movement:
     location: str | None = None  # loss: coil | back_stock
     reassigned: bool = False     # purchase, load: the receipt's slot_reassigned
     ref: str = ""                # request and line, for warnings
+    since: datetime | None = None        # sale: the poll the rise is measured from
+    cents: int | None = None             # sale: the cents counter's rise over the same window
+    price_before: int | None = None      # sale: the slot's price at `since`, in cents
+    price_after: int | None = None       # sale: the slot's price at `at`, in cents
 
 
 @dataclass(frozen=True)
@@ -97,7 +107,8 @@ class SaleCost:
 
     `cost_cents` is None when their cost was unknown; `costed_units` is how
     many of them we had counted in the slot (sales past the count are oversold).
-    The ledger's cost of sales is the sum of these.
+    The ledger's cost of sales is the sum of these. The old product's share
+    of a window split at a product change is timed at the change.
     """
     at: datetime
     slot: str
@@ -158,21 +169,86 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
     return moves
 
 
-def sales_from_counters(rows: list[tuple[str, datetime, int]]) -> list[Movement]:
-    """Sales from `(selection, polled_at, lifetime_units)` rows.
+def sales_from_counters(rows: list[tuple]) -> list[Movement]:
+    """Sales from `(selection, polled_at, lifetime_units, lifetime_sales_cents, price_cents)` rows.
 
     Lifetime counters never reset, so units sold between two polls are the
     difference. A counter that goes down (a board swap, a misread) starts a new
     baseline instead of producing negative sales.
+
+    Each sale carries its window, the cents rise over it and the price at both
+    ends, so `weighted_average` can split a window that spans a product change.
+    Rows of just `(selection, polled_at, lifetime_units)` still work; a window
+    that spans a change then can't be split, and its sales get no cost.
     """
     by_selection: dict[str, list[tuple[datetime, int]]] = {}
-    for selection, at, lifetime in rows:
+    cents_by_selection: dict[str, list[tuple[datetime, int]]] = {}
+    prices: dict[tuple[str, datetime], int | None] = {}
+    for selection, at, lifetime, *rest in rows:
         by_selection.setdefault(selection, []).append((at, lifetime))
+        if rest:
+            sales_cents, prices[selection, at] = rest
+            cents_by_selection.setdefault(selection, []).append((at, sales_cents))
     moves = []
     for selection in sorted(by_selection):
-        moves += [Movement(at, "sale", selection, None, units=units)
-                  for at, units in counters.rises(by_selection[selection])]
+        cents_rose = {at: (start, rise) for start, at, rise in counters.windows(cents_by_selection.get(selection, ()))}
+        for start, at, units in counters.windows(by_selection[selection]):
+            # Only a cents rise over the same window can split these units.
+            cents_start, rise = cents_rose.get(at, (start, 0))
+            known = selection in cents_by_selection and cents_start == start
+            moves.append(Movement(at, "sale", selection, None, units=units, since=start,
+                                  cents=rise if known else None, price_before=prices.get((selection, start)),
+                                  price_after=prices.get((selection, at))))
     return moves
+
+
+def _old_units(m: Movement) -> int | None:
+    """How many of a window's units sold at the old price, or None when the counters can't say.
+
+    With `n` units and `c` cents in the window, old price `a` and new price
+    `b`: `a*old + b*(n - old) = c`, so `old = (b*n - c) / (b - a)`. Only a whole
+    number from 0 to `n` fits; anything else is a misread or a third price.
+    The same price on both sides can't be split at all (docs/cutover.md, #105).
+    """
+    a, b = m.price_before, m.price_after
+    if a is None or b is None or m.cents is None or a == b:
+        return None
+    old, rest = divmod(b * m.units - m.cents, b - a)
+    return old if not rest and 0 <= old <= m.units else None
+
+
+def _split_at_changes(movements: list[Movement]) -> list[Movement]:
+    """Split each sale whose window spans a product change into the old product's and the new one's.
+
+    The old product's units are replayed at the change, just before the pull,
+    so they come out of the old count instead of being written off as
+    shrinkage. A window the counters can't split, or one with two changes in
+    it, is left whole, and `weighted_average` books it with no cost.
+    """
+    changes: dict[str, list[datetime]] = {}
+    holds: dict[str, str] = {}
+    for m in sorted(movements, key=_replay_order):
+        if m.kind in ("purchase", "load"):
+            if holds.get(m.slot, m.sku) != m.sku:
+                changes.setdefault(m.slot, []).append(m.at)
+            holds[m.slot] = m.sku
+    out = []
+    for m in movements:
+        inside = [t for t in changes.get(m.slot, ())
+                  if m.kind == "sale" and m.since is not None and m.since < t <= m.at]
+        old = _old_units(m) if len(inside) == 1 else None
+        if old is None:
+            out.append(m)
+            continue
+        if old:
+            out.append(replace(m, at=inside[0], kind="sale_before_change", units=old))
+        if old < m.units:
+            out.append(replace(m, since=inside[0], units=m.units - old))
+    return out
+
+
+def _replay_order(m: Movement) -> tuple[datetime, int]:
+    return m.at, _ORDER[m.kind]
 
 
 def cents(amount: Decimal | str | None) -> Fraction | None:
@@ -231,6 +307,7 @@ class _Slot:
     oversold: int = 0
     last_unit_cost: Fraction | None = None
     last_moved: datetime | None = None
+    replaced: str | None = None   # the product this one replaced, if the slot changed
 
 
 def weighted_average(movements: list[Movement]) -> Stock:
@@ -248,7 +325,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
     def shelf(sku: str) -> _Pool:
         return closet.setdefault(sku, _Pool())
 
-    for m in sorted(movements, key=lambda m: (m.at, _ORDER[m.kind])):
+    for m in sorted(_split_at_changes(movements), key=_replay_order):
         slot = slots.get(m.slot) if m.slot else None
         if m.kind == "pull":
             if slot is None or slot.product != m.sku:
@@ -273,7 +350,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
                                 f"{m.slot} when it changed to {m.sku}; written off as shrinkage")
                 shrinkage.append(Shrinkage(m.at, f"slot {m.slot}", slot.product, slot.pool.units, slot.pool.cost))
             if slot is None or changed:
-                slot = slots[m.slot] = _Slot(product=m.sku, since=m.at)
+                slot = slots[m.slot] = _Slot(product=m.sku, since=m.at, replaced=slot.product if changed else None)
             if m.kind == "purchase":
                 survivors = m.to_slot + m.to_closet
                 each = None if m.paid_cents is None or not survivors else m.paid_cents / survivors
@@ -312,10 +389,17 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 shrinkage.append(Shrinkage(m.at, where, m.sku, gone, cost))
             if gone < m.units:
                 warnings.append(f"{m.ref}: {m.units} units of {m.sku} lost in {where} but we counted only {gone}")
-        elif m.kind == "sale" and slot is not None:
+        elif m.kind in ("sale", "sale_before_change") and slot is not None:
             taken, cost = slot.pool.take(m.units)
             slot.sold += m.units
             slot.oversold += m.units - taken
+            if m.kind == "sale" and slot.replaced and m.since is not None and m.since < slot.since:
+                # Still taken from the new count, so on hand errs low, but their
+                # cost could be either product's, so it is left out (#97).
+                warnings.append(f"slot {m.slot}: {m.units} units sold between the polls at {m.since.isoformat()} "
+                                f"and {m.at.isoformat()}, across the change from {slot.replaced} to {slot.product}; "
+                                "the counters can't split them, so they are booked with no cost")
+                cost = None
             sales.append(SaleCost(m.at, m.slot, slot.product, m.units, taken, cost))
         if slot is not None and slot.pool.units:
             slot.last_unit_cost = slot.pool.unit_cost()
@@ -349,8 +433,10 @@ def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
     slots = sorted({line["slot"] for line in lines})
     # poll_selections only has rows for polls whose checksum passed. The sync
     # stores every device's polls, so read only our machine's counters.
+    # Cents and price too, to split a window that spans a product change (#97).
     counters = conn.execute(
-        "select s.selection, p.started_at, s.lifetime_units from poll_selections s"
+        "select s.selection, p.started_at, s.lifetime_units, s.lifetime_sales_cents, s.price_cents"
+        " from poll_selections s"
         " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)",
         (DEVICE_ID, slots),
     ).fetchall()
