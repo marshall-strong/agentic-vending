@@ -24,6 +24,10 @@ One run:
    stops it later), `skipped` when it decided not to (or it was a dry run), `failed` when it hit a cap,
    ran out of turns or broke. The stored plan is the desired state it previewed or sent, plus what
    the dashboard shows beside it: the visit kind, the run's reason and each changed slot's reason.
+5. Each step is recorded in `agent_steps` as it happens: the model's reasoning (a readable summary,
+   asked for with `thinking: {display: "summarized"}`; the API never returns the raw chain of
+   thought), any text, each tool call and each tool result. A step that can't be stored is reported
+   once on stderr and the run goes on: the record must never stop a run.
 
 The model, effort and caps are placeholders until the team decides them (see #39 and #51).
 """
@@ -243,12 +247,16 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
                    model: str, effort: str, system: str, opening: str, live: bool,
                    halted: Callable[[], bool] = lambda: False,
                    on_submit: Callable[[Outcome], None] = lambda out: None, max_turns: int = MAX_TURNS,
-                   label: str = "") -> None:
+                   label: str = "", on_step: Callable[..., None] = lambda *a, **k: None) -> None:
     """The tool loop, filling in `out` as it goes so nothing it learned is lost if it stops early.
 
     `call_tool(name, arguments)` is awaited and returns an MCP `CallToolResult`. `halted()` is
     checked before every model request. `on_submit(out)` runs straight after a submit succeeds.
+    `on_step(turn, kind, content, tool=None, is_error=False)` is called for every step, in order.
     """
+    async def note(turn: int, kind: str, content: str, **extra: Any) -> None:
+        await anyio.to_thread.run_sync(lambda: on_step(turn, kind, content, **extra))
+
     messages: list[dict] = [{"role": "user", "content": opening}]
     schemas = {t["name"]: t["input_schema"] for t in tools}
     for turn in range(max_turns + 1):
@@ -258,6 +266,9 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
         request = {"model": model, "max_tokens": MAX_TOKENS, "system": system, "messages": messages,
                    "tools": tools, "tool_choice": {"type": "auto" if turn < max_turns else "none"},
                    "cache_control": {"type": "ephemeral"},     # each turn re-sends the history: read it from cache
+                   # Adaptive is the default on our models; "summarized" returns readable reasoning for
+                   # the run record instead of empty thinking blocks. It changes what we see, not the bill.
+                   "thinking": {"type": "adaptive", "display": "summarized"},
                    "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": ANSWER_SCHEMA}}}
         try:
             response = await anyio.to_thread.run_sync(
@@ -267,6 +278,14 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
             return
         messages.append({"role": "assistant", "content": response.content})
         out.turn = turn
+        for block in response.content:
+            if block.type == "thinking" and getattr(block, "thinking", ""):
+                await note(turn + 1, "thinking", block.thinking)
+            elif block.type == "text" and block.text:
+                await note(turn + 1, "text", block.text)
+            elif block.type == "tool_use":
+                await note(turn + 1, "tool_call", json.dumps(block.input or {}, sort_keys=True, default=str),
+                           tool=block.name)
         if response.stop_reason == "tool_use":
             results = []
             for block in response.content:
@@ -275,6 +294,7 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
                     text, failed = await _use(block, call_tool, schemas, out, live=live, on_submit=on_submit)
                     results.append({"type": "tool_result", "tool_use_id": block.id, "content": text,
                                     "is_error": failed})
+                    await note(turn + 1, "tool_result", text, tool=block.name, is_error=failed)
             messages.append({"role": "user", "content": results})
             continue
         if response.stop_reason == "refusal":
@@ -395,6 +415,17 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
         run_id = agent_runs.start(conn, mode="live" if live else "dry-run", model=model)
     harness = None
     out = Outcome("failed", "")
+    warned = []
+
+    def record_step(turn: int, kind: str, content: str, **extra: Any) -> None:
+        try:
+            with connect() as c:
+                agent_runs.step(c, run_id, turn, kind, content, **extra)
+        except Exception as error:     # the record must never stop the run
+            if not warned:
+                warned.append(error)
+                print(f"agent run {run_id}: a step couldn't be stored ({type(error).__name__}: {error}); "
+                      "the run goes on, but its steps are incomplete", file=sys.stderr, flush=True)
 
     def halted() -> bool:
         with connect() as c:
@@ -419,7 +450,7 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
                                effort=effort, system=system, opening=brief(now(), notes, live=live), live=live,
                                halted=halted,
                                on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
-                               label=f"agent run {run_id}")
+                               label=f"agent run {run_id}", on_step=record_step)
     except Exception as error:   # record the run whatever broke; the ledger already holds what was spent
         out.status, out.detail = "failed", f"{type(error).__name__}: {error}"[:1000]
     except BaseException as error:   # Ctrl-C or cancellation: record it, then let it through
