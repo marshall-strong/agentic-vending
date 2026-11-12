@@ -8,8 +8,10 @@ in a read-only transaction, and it never migrates. A panel whose table doesn't
 exist yet says so instead of failing the page. `/state.json` returns the same
 data as JSON, for a script or another agent.
 
-It listens on 127.0.0.1 only, and has no login: open it on the machine that
-runs it, or reach it through an SSH tunnel. Don't put it on a public address.
+Run this way it listens on 127.0.0.1 only, and has no login: open it on the
+machine that runs it. The Container App serves the same page to anyone at
+`/dashboard`, through `vending.pages`, which connects as a login that can only
+read and hides the error text of failures (`snapshot(conn, public=True)`).
 
 The page, top to bottom:
  - Verdict and tiles: OK / check / problem, the halt switch, the latest run,
@@ -324,18 +326,42 @@ def _recent_calls(conn: psycopg.Connection, now: datetime) -> dict:
     return counts
 
 
-def snapshot(conn: psycopg.Connection, now: datetime | None = None) -> dict:
+def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool = False) -> dict:
     """Everything the page shows, from one consistent moment. Reads only.
 
     JSON numbers come back as Decimal, so a price stored as a number stays exact.
+    `public` is for a page anyone can open: the error text of failures is left out.
     """
     now = now or datetime.now(timezone.utc)
     set_json_loads(partial(json.loads, parse_float=Decimal), context=conn)
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
         snap = _snapshot(conn, now)
+    if public:
+        hide_errors(snap)
     snap["attention"] = attention(snap)
     return snap
+
+
+# Shown in place of a failure's text on a public page.
+HIDDEN = "(error text isn't shown on this public page; it is in the database and the container's log)"
+
+
+def hide_errors(snap: dict) -> None:
+    """Replace the free text of every failure with `HIDDEN`, in place.
+
+    A failed tool call or run stores the raw error, and a database error names the host and the
+    user. A refusal keeps its text: we wrote it, and it says what to do next. Done on the
+    snapshot, before Needs attention is built, so the page and `/state.json` both get it.
+    """
+    run = snap["status"].get("latest_run")
+    if run and run.get("status") == "failed" and run.get("detail"):
+        run["detail"] = HIDDEN
+    for panel, column, failed in (("runs", "status", "failed"), ("activity", "outcome", "failed")):
+        if snap[panel]["ok"]:
+            for row in snap[panel]["data"]:
+                if row.get(column) == failed and row.get("detail"):
+                    row["detail"] = HIDDEN
 
 
 def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
@@ -1423,8 +1449,12 @@ SCRIPT = """(function () {
 _VERDICT_TEXT = {"ok": "OK", "check": "Check", "problem": "Problem"}
 
 
-def render(snap: dict, refresh: int = REFRESH_SECONDS) -> str:
+def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.json",
+           nav: tuple[tuple[str, str], ...] = ()) -> str:
+    """The page. `json_href` is where its JSON twin lives, and `nav` is (label, href) links to
+    sibling pages, for a server that mounts this page under a path beside others."""
     now = snap["as_of"]
+    links = "".join(f' &middot; <a href="{_e(href)}">{_e(label)}</a>' for label, href in nav)
     items = snap.get("attention")
     if items is None:
         items = attention(snap)
@@ -1435,7 +1465,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS) -> str:
     head =(f'<header class="top"><h1>Agent dashboard</h1>'
             f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
             f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
-            f'refreshes every {int(refresh)} s</span> &middot; <a href="state.json">JSON</a></span></header>')
+            f'refreshes every {int(refresh)} s</span> &middot; <a href="{_e(json_href)}">JSON</a>{links}</span></header>')
     body = (head + _tiles(snap) + _attention_html(items) + _cabinet_html(snap)
             + f'<section id="plan"><h2>The plan <span class="hint">{plan_hint}</span></h2>'
             + _plan_html(snap) + _words_html(snap["plan"]) + "</section>"

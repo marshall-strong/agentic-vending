@@ -94,10 +94,14 @@ visible description.
 
 - **It can't write.** Its connection sets `default_transaction_read_only`, so Postgres refuses
   any write, and it never migrates. A table that doesn't exist yet blanks only its own panel.
-- **It listens on 127.0.0.1 only, and has no login.** It answers only requests addressed to
+- **On the container it is public, on purpose (#53).** `/dashboard` on the Container App shows
+  this page to anyone with the link, with `/dashboard/state.json` beside it. There it connects as a
+  login that can only read, and the error text of failed tool calls and failed runs is left out,
+  on the page and in the JSON. [`deploy.md`](deploy.md#the-public-pages) has the rules.
+- **Run locally, it listens on 127.0.0.1 only, and has no login.** It answers only requests addressed to
   `127.0.0.1` or `localhost`, so another website can't point its own name at your machine and
-  read the page. To watch the Azure container from a laptop, use an SSH tunnel or run it locally
-  against the Azure database; don't expose it.
+  read the page. A local copy still shows the error text the public page leaves out, so don't
+  put a local copy on a public address.
 - **It costs nothing to run.** No model calls, no new services, no new packages.
 
 ## The run record

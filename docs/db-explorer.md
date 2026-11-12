@@ -38,8 +38,10 @@ Each table shows its row count. If a table has more than 100,000 rows, the page 
 - **It can't hang the database.** A query that runs longer than 5 seconds is cancelled, and the page says so.
 - **The URL can't run SQL.** A table name from the URL is used only if Postgres lists that table. Any other name gets a 404 and never reaches a query. There is no SQL box.
 - **It never migrates.** If a table is missing, run `python -m vending.db migrate` yourself.
-- **It answers only `127.0.0.1` or `localhost`**, so another website can't read it through your browser. It uses the same rule as the agent dashboard.
+- **Run this way, it answers only `127.0.0.1` or `localhost`**, so another website can't read it through your browser. It uses the same rule as the agent dashboard.
 
-## Not yet
+## On the container
 
-Serving this page from the container's public address is #53.
+The Container App serves the same page to anyone at `/db` (#53), next to the agent dashboard at `/dashboard`. There it connects as a login that can only read, shares a few connections with the dashboard, and leaves out the error text of failed tool calls and failed runs. [`deploy.md`](deploy.md#the-public-pages) has the rules and the setup.
+
+Every link on the page is relative (`?schema=...&table=...`), so the page works under any path.

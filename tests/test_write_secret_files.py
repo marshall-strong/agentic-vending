@@ -22,6 +22,21 @@ def test_values_match_what_the_app_reads(tmp_path):
     assert sorted(p.name for p in out.iterdir()) == ["DEX_API_KEY", "database-url"]
 
 
+def test_an_optional_setting_is_skipped_when_missing_and_written_when_there(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("DATABASE_URL=postgresql://h/db\nREADONLY_DATABASE_URL=\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    specs = ["DATABASE_URL=database-url", "?READONLY_DATABASE_URL=readonly-database-url", "?NOT_THERE"]
+    assert write_secret_files.main([str(env), str(out), *specs]) == 0
+    assert sorted(p.name for p in out.iterdir()) == ["database-url"]
+    env.write_text("DATABASE_URL=postgresql://h/db\nREADONLY_DATABASE_URL=postgresql://reader@h/db\n", encoding="utf-8")
+    assert write_secret_files.main([str(env), str(out), *specs]) == 0
+    assert (out / "readonly-database-url").read_bytes() == b"postgresql://reader@h/db"
+    # Optional never excuses a required one.
+    assert write_secret_files.main([str(env), str(out), "?READONLY_DATABASE_URL", "DEX_API_KEY"]) == 1
+
+
 def test_a_missing_setting_writes_nothing(tmp_path, capsys):
     env = tmp_path / ".env"
     env.write_text("DATABASE_URL=postgresql://h/db\nTS_AUTHKEY=\n", encoding="utf-8")
