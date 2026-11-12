@@ -539,7 +539,11 @@ class Refusals(unittest.TestCase):
         self.assertEqual(codes(plan(restock_15(price="0.00"))), ["below_floor"])
 
     def test_above_ceiling(self):
-        self.assertEqual(codes(plan(restock_15(price="6.05"))), ["above_ceiling"])
+        self.assertEqual(codes(plan(restock_15(price="6.55"))), ["above_ceiling"])
+
+    def test_the_ceiling_itself_is_allowed(self):
+        # $6.50, the team's ceiling since 12 Nov.
+        self.assertEqual(codes(plan(restock_15(price="6.50"))), [])
 
     def test_insufficient_balance(self):
         self.assertEqual(codes(plan(restock_15(), balance=1199)), ["insufficient_balance"])

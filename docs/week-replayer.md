@@ -48,7 +48,7 @@ You need the local database with real polls in it, as in [`mcp-server.md`](mcp-s
 | balance | The plan's purchases, plus $25 for a midweek visit, cost more than the balance | The balance or a unit cost is unknown |
 | no writes | A write tool call was logged in `action_log` while the decider ran. It counts every write, so run replays when nothing else is writing. | The decider can't reach the database (the baseline and file plans) |
 
-**The price ceiling is $6.00**, the team's proposal in "Decide as a team". It lives in
+**The price ceiling is $6.50**, the team's decision on 12 Nov ("Decide as a team"). It lives in
 `PRICE_CEILING_CENTS` in `vending/replay/scoring.py`. The balance check uses actual unit cost;
 the restock planner will check the max pack price once it plugs in.
 
@@ -220,6 +220,11 @@ the same cases, free, as the bar to clear.
 - **The cases' numbers are made up.** A sweep can narrow the choice of model and effort and show
   whether more effort pays; it can't predict real profit. Valid and "checks ok" count hard checks
   only, not whether a plan is a good one.
+- **`--configs haiku@medium,opus@low`** runs just those model and effort pairs instead of every
+  model with every effort.
+
+To rerun a few configs after every change, judged and kept in the database so trends and
+regressions show, use the standing benchmark instead: [benchmark.md](benchmark.md).
 
 ## The agent replay (costs money)
 
@@ -261,7 +266,7 @@ most 12 weeks a run, and `--week` must be a Friday, because Claude is told the r
 ## Tests
 
 ```
-pytest tests/test_replay.py tests/test_replay_model.py tests/test_replay_agent.py tests/test_replay_sweep.py
+pytest tests/test_replay.py tests/test_replay_model.py tests/test_replay_agent.py tests/test_replay_sweep.py tests/test_bench.py
 ```
 
 The replay and CLI tests store fixture polls in a throwaway schema through `store_poll`, the

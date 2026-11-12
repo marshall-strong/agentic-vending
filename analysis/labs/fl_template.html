@@ -1,0 +1,526 @@
+<title>Vending Forecast Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* layout: stepped lab notebook, tab rail of steps, two-column controls|chart that stacks on phones */
+:root {
+  --bg:#F3F5F7; --surface:#FFFFFF; --sunk:#E9EDF1; --ink:#14202C; --muted:#56636F; --line:#D5DCE3;
+  --accent:#1D5FB8; --accent-ink:#FFFFFF; --class:#E3ECF8; --break:#F6E7D6; --good:#1F7A4D; --warn:#A86200; --bad:#B3261E;
+  --font-display:"Barlow Condensed", "Arial Narrow", sans-serif; --font-body:"IBM Plex Sans", system-ui, sans-serif; --font-mono:"IBM Plex Mono", ui-monospace, monospace;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300; --s7:#6250d6; --s8:#e34948;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#0E141A; --surface:#151E27; --sunk:#1B2632; --ink:#E4EAF0; --muted:#97A4B1; --line:#283543;
+    --accent:#6EA2EE; --accent-ink:#0E141A; --class:#16283F; --break:#3A2A17; --good:#5CC48D; --warn:#E3A44A; --bad:#F2867D;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0E141A; --surface:#151E27; --sunk:#1B2632; --ink:#E4EAF0; --muted:#97A4B1; --line:#283543;
+  --accent:#6EA2EE; --accent-ink:#0E141A; --class:#16283F; --break:#3A2A17; --good:#5CC48D; --warn:#E3A44A; --bad:#F2867D;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15.5px;line-height:1.55}
+.page{max-width:1200px;margin:0 auto;padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:0 48px}
+h1,h2,h3{font-family:var(--font-display);font-weight:600;line-height:1.15;margin:0;text-wrap:balance}
+h1{font-size:clamp(2rem,4.4vw,2.9rem);font-weight:700}
+h2{font-size:clamp(1.5rem,3vw,1.95rem)}
+h3{font-size:1.2rem}
+p{margin:0;max-width:72ch}
+.eyebrow{font-family:var(--font-body);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:600}
+.muted{color:var(--muted)}
+.small{font-size:.86rem}
+.num,.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.stack{display:flex;flex-direction:column;gap:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+header.top{padding-block:28px 16px;display:flex;flex-direction:column;gap:8px}
+header.top .sub{color:var(--muted);font-size:1rem}
+nav.steps{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
+nav.steps [role=tablist]{display:flex;gap:2px;margin:0;padding:0}
+nav.steps button{font-family:var(--font-body);font-size:.88rem;font-weight:600;color:var(--muted);background:none;border:0;border-bottom:3px solid transparent;padding:12px 10px 9px;cursor:pointer;white-space:nowrap;display:flex;gap:8px;align-items:center}
+nav.steps button .n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;border:1.5px solid currentColor;font-family:var(--font-mono);font-size:.74rem}
+nav.steps button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.steps button[aria-selected="true"] .n{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+nav.steps button:hover{color:var(--ink)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+section.panel{padding-block:26px 8px}
+section.panel[hidden]{display:none}
+.panel-head{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
+.grid2{display:grid;grid-template-columns:minmax(0,310px) minmax(0,1fr);gap:20px;align-items:start}
+.grid-even{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}
+@media (max-width:880px){.grid2,.grid-even{grid-template-columns:minmax(0,1fr)}}
+.mt{margin-top:20px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:18px;min-width:0}
+.card.sunk{background:var(--sunk)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:10px 12px;min-width:0}
+.kpi .v{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:1.3rem;font-weight:500;line-height:1.25;overflow-wrap:anywhere}
+.kpi .l{font-size:.78rem;color:var(--muted)}
+.kpi.hl{border:2px solid var(--accent)}
+label{font-size:.82rem;font-weight:600;display:flex;flex-direction:column;gap:5px}
+select,input[type=number]{font:inherit;font-size:.92rem;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:7px 9px;min-width:0;max-width:100%}
+input[type=number]{width:110px;font-family:var(--font-mono)}
+input[type=range]{width:100%;accent-color:var(--accent);margin:2px 0}
+fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+legend{font-size:.72rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;padding:0}
+.opt{flex-direction:row;align-items:center;gap:8px;font-weight:400;font-size:.92rem;cursor:pointer}
+.opt input{accent-color:var(--accent);width:16px;height:16px;margin:0;flex:none}
+.opt .key{flex:none}
+.val{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:500;color:var(--ink)}
+.btn{font:inherit;font-weight:600;font-size:.9rem;border-radius:5px;padding:8px 14px;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink)}
+.btn:hover{filter:brightness(1.08)}
+.btn.ghost{background:var(--surface);color:var(--accent)}
+.btn.ghost:hover{background:var(--class);filter:none}
+.btn.small{padding:5px 10px;font-size:.82rem}
+.btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.callout{border-left:4px solid var(--accent);background:var(--surface);padding:12px 16px;border-radius:0 6px 6px 0;font-size:.94rem}
+.try{background:var(--surface);border:1px dashed var(--line);border-radius:8px;padding:12px 14px;font-size:.9rem}
+.try b{color:var(--accent)}
+.try ul{margin:6px 0 0;padding-left:18px}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+td{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+th{background:var(--sunk);font-weight:600;font-family:var(--font-body)}
+th:first-child,td:first-child,td.l,th.l{text-align:left}
+td.l,td.t{font-family:var(--font-body)}
+td.wrap{white-space:normal;min-width:200px}
+tbody tr:last-child td{border-bottom:0}
+td.best{font-weight:600;box-shadow:inset 0 0 0 2px var(--accent)}
+td.sel{background:var(--class)}
+th.pick,td.pick{font-weight:600}
+th.pick{text-decoration:underline;text-underline-offset:3px}
+tr.hl td{background:var(--class)}
+.chartbox{position:relative;min-width:0}
+.chartbox svg{display:block;width:100%;height:auto;overflow:visible;touch-action:pan-y}
+.chartbox svg:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.tip{position:absolute;z-index:4;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.14);border-radius:6px;padding:7px 10px;font-size:.78rem;line-height:1.4;min-width:120px;max-width:260px}
+.tip[hidden]{display:none}
+.tip .tt{font-weight:600;margin-bottom:3px}
+.tip .tn{color:var(--muted);margin-top:3px;white-space:normal}
+.tip .tr{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.tip .tr b{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:500}
+.tip .tr span{color:var(--muted)}
+.k{display:inline-block;width:16px;height:0;border-top:2px solid var(--ink);flex:none}
+.k.dash{border-top-style:dashed}
+.k.box{width:12px;height:12px;border:0;border-radius:3px}
+.k.dot{width:9px;height:9px;border:0;border-radius:50%}
+.k.ring{width:9px;height:9px;border-radius:50%;border:2px solid var(--s1);background:var(--surface)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.8rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+svg .grid{stroke:var(--line);stroke-width:1}
+svg .base{stroke:var(--muted);stroke-width:1;opacity:.6}
+svg .ax{fill:var(--muted);font-family:var(--font-body);font-size:11px}
+svg .ax.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+svg .lab{fill:var(--ink);font-family:var(--font-body);font-size:11px;font-weight:500}
+svg .band-class{fill:var(--class)}
+svg .band-break{fill:var(--break)}
+svg .win{fill:var(--accent)}
+svg .cursor{stroke:var(--ink);stroke-width:1;opacity:0;pointer-events:none}
+svg .vl{stroke:var(--ink);stroke-width:1;opacity:.55}
+svg .bar{transition:opacity .12s}
+svg .bar.dim{opacity:.4}
+svg .bar.on{opacity:.75}
+.subchart h3{font-family:var(--font-body);font-size:.78rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:10px 0 2px}
+.hbars{display:flex;flex-direction:column;gap:4px;position:relative}
+.hbar{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,2fr) 52px;gap:8px;align-items:center;font-size:.8rem;padding:2px 4px;border-radius:4px;cursor:default}
+.hbar:hover,.hbar:focus-visible{background:var(--sunk)}
+.hbar .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hbar .tk{position:relative;height:12px}
+.hbar .tk i{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0;background:var(--accent)}
+.hbar .tk i.other{background:var(--muted);opacity:.55}
+.hbar .tk .ref{position:absolute;top:-3px;bottom:-3px;width:0;border-left:1px solid var(--ink)}
+.hbar .v{font-family:var(--font-mono);font-variant-numeric:tabular-nums;text-align:right}
+.mult{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.mult .card{padding:10px 12px}
+.mult h3{font-family:var(--font-body);font-size:.85rem;font-weight:600}
+.note{white-space:pre-wrap;font-size:.92rem;background:var(--sunk);border:1px solid var(--line);border-radius:6px;padding:14px 16px;line-height:1.6}
+.nextbar{display:flex;justify-content:flex-end;margin-top:22px}
+.status{font-size:.8rem;color:var(--muted);min-height:1.2em}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:.74rem;font-weight:600;padding:2px 9px;border-radius:99px;background:var(--class);color:var(--ink)}
+.pill.br{background:var(--break)}
+details summary{cursor:pointer;font-size:.86rem;font-weight:600;color:var(--accent)}
+details[open] summary{margin-bottom:8px}
+footer{margin-top:36px;border-top:1px solid var(--line);padding-top:14px;font-size:.78rem;color:var(--muted)}
+footer p{max-width:none}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+</style>
+
+<div class="page">
+<header class="top">
+  <div class="eyebrow">Golisano Institute for Business &amp; Entrepreneurship · Agentic vending competition · Machine <span id="devId"></span></div>
+  <h1>Vending forecast lab</h1>
+  <p class="sub">How many drinks will the machine sell next week, on which days, and how sure can we be? Six steps from the raw counters to a note the team and the agent can use.</p>
+</header>
+
+<nav class="steps" aria-label="Lab steps">
+  <div role="tablist" aria-label="Lab steps" id="tabs">
+    <button role="tab" id="tab1" aria-controls="panel1" aria-selected="true" data-step="1"><span class="n">1</span>Question</button>
+    <button role="tab" id="tab2" aria-controls="panel2" aria-selected="false" tabindex="-1" data-step="2"><span class="n">2</span>Parts</button>
+    <button role="tab" id="tab3" aria-controls="panel3" aria-selected="false" tabindex="-1" data-step="3"><span class="n">3</span>Split</button>
+    <button role="tab" id="tab4" aria-controls="panel4" aria-selected="false" tabindex="-1" data-step="4"><span class="n">4</span>Forecast</button>
+    <button role="tab" id="tab5" aria-controls="panel5" aria-selected="false" tabindex="-1" data-step="5"><span class="n">5</span>Backtest</button>
+    <button role="tab" id="tab6" aria-controls="panel6" aria-selected="false" tabindex="-1" data-step="6"><span class="n">6</span>Plan</button>
+  </div>
+</nav>
+
+<!-- STEP 1 -->
+<section class="panel" id="panel1" role="tabpanel" aria-labelledby="tab1" data-panel="1">
+  <div class="panel-head">
+    <span class="eyebrow">Step 1 · Question</span>
+    <h2>How many drinks next week, by day, and how sure are we?</h2>
+    <p class="muted" id="p1Lede"></p>
+  </div>
+  <div class="kpis" id="p1Kpis"></div>
+  <div class="grid-even mt">
+    <div class="card stack">
+      <h3>Headline: the backtest result</h3>
+      <p class="small" id="p1Head"></p>
+      <div class="legend"><span><i class="k box" style="background:var(--accent)"></i>Beats seasonal naive</span><span><i class="k box" style="background:var(--muted);opacity:.55"></i>Does not</span><span><i class="k" style="width:0;height:12px;border-top:0;border-left:1px solid var(--ink)"></i>Seasonal naive, the bar to beat</span></div>
+      <div class="chartbox"><div class="hbars" id="p1Bars" role="list" aria-label="Average miss per day by model"></div><div class="tip" id="p1BarsTip" hidden></div></div>
+      <p class="small muted" id="p1BarsNote"></p>
+    </div>
+    <div class="card stack">
+      <h3>Drinks per week, Saturday to Friday (whole machine)</h3>
+      <div class="legend"><span><i class="k box" style="background:var(--s1)"></i>Full week</span><span><i class="k box" style="background:var(--s1);opacity:.4"></i>Partial week</span><span><i class="k box" style="background:transparent;outline:1.2px dashed var(--ink);outline-offset:-1px"></i>Holds a polling gap (estimate)</span></div>
+      <div class="chartbox"><svg id="p1Week" role="group" aria-label="Units sold per week; each bar can be focused"></svg><div class="tip" hidden></div></div>
+      <p class="small muted" id="p1WeekNote"></p>
+    </div>
+  </div>
+  <div class="grid-even mt">
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Field</th><th class="l">What it means</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">units</td><td class="l wrap">Drinks sold that day, Eastern time. A sale is a rise in a slot's lifetime counter between two polls. Before regular polling began, a gap of a day or more lumped its sales onto the poll that ended it; the lab spreads those lumps back over the gap.</td></tr>
+          <tr><td class="mono">takings</td><td class="l wrap">Dollars taken that day, tax included.</td></tr>
+          <tr><td class="mono">class day</td><td class="l wrap">A Monday to Friday with classes in session, from the academic calendar. Weekends, breaks and holidays are not class days.</td></tr>
+          <tr><td class="mono">suspected empty</td><td class="l wrap">Slots that look sold out that day. The machine reports what it sold, not what it holds, so this is inferred from silences, not seen.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="stack">
+      <div class="callout" id="p1Plan"></div>
+      <div class="callout" id="p1Zero"></div>
+    </div>
+  </div>
+  <div class="nextbar"><button class="btn" data-go="2">Next: take the series apart →</button></div>
+</section>
+
+<!-- STEP 2 -->
+<section class="panel" id="panel2" role="tabpanel" aria-labelledby="tab2" data-panel="2" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 2 · Parts</span>
+    <h2>What is this series made of?</h2>
+    <p class="muted">Every time series is a mix of three parts: a <b>trend</b> (the slow drift), a <b>season</b> (a pattern that repeats on the calendar, here the week) and a <b>remainder</b> (what is left over). Find each part before you forecast anything.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <fieldset>
+        <legend>Measure</legend>
+        <label class="opt"><input type="radio" name="p2measure" id="p2mUnits" value="units" checked> Drinks (units)</label>
+        <label class="opt"><input type="radio" name="p2measure" id="p2mCash" value="cash"> Takings ($)</label>
+        <label class="opt"><input type="checkbox" id="p2Spread" checked> Spread polling-gap lumps over their gaps</label>
+      </fieldset>
+      <fieldset>
+        <legend>Show</legend>
+        <label class="opt"><input type="checkbox" id="p2Trend" checked><i class="k key" style="border-top-color:var(--s2)"></i> Trend line</label>
+        <label class="opt"><input type="checkbox" id="p2Season" checked><i class="k box key" style="background:var(--s3)"></i> Weekly seasonal component</label>
+        <label class="opt"><input type="checkbox" id="p2Rem"><i class="k box key" style="background:var(--s5)"></i> Remainder</label>
+        <label class="opt"><input type="checkbox" id="p2Empty"><i class="k key" style="border-top-color:var(--s7)"></i> Our suspected-empty slots</label>
+        <label class="opt"><input type="checkbox" id="p2Visits" checked><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" class="key" style="overflow:visible"><circle cx="7" cy="7" r="5" style="fill:var(--good)"/></svg> Visits (door openings)</label>
+        <label class="opt"><input type="checkbox" id="p2Cal" checked> Academic-calendar shading</label>
+      </fieldset>
+      <label for="p2Win">Smoothing window for the trend
+        <select id="p2Win">
+          <option value="7" selected>7-day centered average (one week)</option>
+          <option value="21">21-day centered average (three weeks)</option>
+          <option value="35">35-day centered average (five weeks)</option>
+          <option value="stl">STL from the analysis script (drinks only)</option>
+        </select>
+      </label>
+      <p class="small muted">A centered average uses days on both sides, so it can describe the past. It can't forecast, because the days after today don't exist yet. A window of whole weeks keeps the weekday pattern out of the trend.</p>
+      <div class="kpis" id="p2Kpis"></div>
+      <p class="small muted">Hover or tap a chart to read a value. With a chart focused, the arrow keys step through the days.</p>
+    </div>
+    <div class="card stack">
+      <div class="legend" id="p2Legend"></div>
+      <div class="legend" id="p2VisitLegend"></div>
+      <div class="chartbox"><svg id="p2Main" tabindex="0" role="img" aria-label="Daily sales with trend"></svg><div class="tip" hidden></div></div>
+      <div class="subchart" id="p2SeasonBox"><h3>Weekly seasonal component</h3><div class="chartbox"><svg id="p2SeasonC" tabindex="0" role="img" aria-label="Weekly seasonal component"></svg><div class="tip" hidden></div></div></div>
+      <div class="subchart" id="p2RemBox" hidden><h3>Remainder</h3><div class="chartbox"><svg id="p2RemC" tabindex="0" role="img" aria-label="Remainder"></svg><div class="tip" hidden></div></div></div>
+      <div class="subchart" id="p2EmptyBox" hidden><h3>Our slots suspected empty (of {{N_SLOTS}})</h3><div class="chartbox"><svg id="p2EmptyC" tabindex="0" role="img" aria-label="Slots suspected empty"></svg><div class="tip" hidden></div></div></div>
+      <p class="small muted" id="p2Note"></p>
+    </div>
+  </div>
+  <div class="grid-even mt">
+    <div class="card stack">
+      <h3>Day-of-week seasonal index</h3>
+      <p class="small muted" id="p2DowLede"></p>
+      <div class="chartbox"><svg id="p2Dow" role="group" aria-label="Day-of-week index; each bar can be focused"></svg><div class="tip" hidden></div></div>
+      <div class="tablewrap"><table><thead><tr><th>Day</th><th>Index</th><th id="p2DowHead">Mean per class day</th><th>Days in index</th><th>Class days in mean</th></tr></thead><tbody id="p2DowTable"></tbody></table></div>
+    </div>
+    <div class="stack">
+      <div class="try"><b>Try this.</b>
+        <ul>
+          <li>Turn off "Spread polling-gap lumps". Find the one day that made Friday look like the best day.</li>
+          <li>Switch the trend window from 7 to 35 days. Which window still shows the drop in late October?</li>
+          <li>Turn on our suspected-empty slots. Does the trend fall when the empty count rises?</li>
+          <li>With visits on, find the last refill proven at a single visit (the filled triangle). How many drinks a day did the machine sell in the week after it, and in the week after that?</li>
+          <li>Compare the drinks and takings indexes. Does the weekday shape change?</li>
+        </ul>
+      </div>
+      <div class="callout" id="p2Trendcall"></div>
+    </div>
+  </div>
+  <div class="nextbar"><button class="btn" data-go="3">Next: split the data →</button></div>
+</section>
+
+<!-- STEP 3 -->
+<section class="panel" id="panel3" role="tabpanel" aria-labelledby="tab3" data-panel="3" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 3 · Split</span>
+    <h2>Why you can't shuffle time</h2>
+    <p class="muted">With customers or homes, picking test rows at random is fine. Here is what happens when you do that with days. Both splits hold out 7 days and use the same simple "fill-in" model.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label for="p3Model">Fill-in model
+        <select id="p3Model">
+          <option value="7" selected>Same weekday, nearest week on each side</option>
+          <option value="1">Nearest day on each side</option>
+        </select>
+      </label>
+      <p class="small muted" id="p3ModelNote"></p>
+      <label for="p3Seed">Random split seed
+        <input type="number" id="p3Seed" value="1" min="1" max="9999">
+      </label>
+      <div class="row">
+        <button class="btn" id="p3Random">Random split</button>
+        <button class="btn ghost small" id="p3Seeds">Run random seeds 1–50</button>
+      </div>
+      <label for="p3Origin">Time split plan date
+        <select id="p3Origin"></select>
+      </label>
+      <div class="row">
+        <button class="btn ghost" id="p3Time">Time split</button>
+        <button class="btn ghost small" id="p3TimeAll">Time split at every plan date</button>
+      </div>
+      <p class="small muted" id="p3Pool"></p>
+    </div>
+    <div class="card stack">
+      <div class="legend"><span><i class="k" style="border-top-color:var(--ink)"></i>Daily drinks</span><span><i class="k dot" style="background:var(--ink)"></i>Test day (hidden from the model)</span><span><i class="k ring"></i>Model's prediction</span><span><i class="k box" style="background:var(--sunk);outline:1px solid var(--line)"></i>Time-split window</span></div>
+      <div class="chartbox"><svg id="p3Chart" tabindex="0" role="img" aria-label="Split chart"></svg><div class="tip" hidden></div></div>
+      <p class="small" id="p3Explain"></p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Split</th><th>Test days</th><th>MAE</th><th>WAPE</th></tr></thead>
+          <tbody id="p3Table"><tr><td class="l muted" colspan="4">Run a split to fill this table.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="small muted">MAE is the average miss in drinks per day. WAPE (our addition) is the total miss as a share of total sales; it still works on days that sold zero, where MAPE breaks.</p>
+    </div>
+  </div>
+  <div class="try mt"><b>Try this.</b> Run seeds 1–50, then the time split at every plan date. The random split sees the week after each test day; the time split never does. Which score would you trust for next week's plan?</div>
+  <div class="nextbar"><button class="btn" data-go="4">Next: forecast a week →</button></div>
+</section>
+
+<!-- STEP 4 -->
+<section class="panel" id="panel4" role="tabpanel" aria-labelledby="tab4" data-panel="4" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 4 · Forecast</span>
+    <h2>Forecast next week</h2>
+    <p class="muted">Stand at a plan date (a past Saturday, the start of a ledger week and the weekly plan date the backtest uses, or the day after the last poll) and forecast the next 7 days with only what was known that morning. The days after the plan date are hidden from every model and used only to score it.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label for="p4Origin">Plan date
+        <select id="p4Origin"></select>
+      </label>
+      <fieldset id="p4Models">
+        <legend>Models</legend>
+      </fieldset>
+      <label for="p4k"><span>Moving average window k = <span class="val" id="p4kVal">7</span> days</span>
+        <input type="range" id="p4k" min="1" max="28" value="7">
+      </label>
+      <div class="stack" style="gap:6px">
+        <span class="small" style="font-weight:600">Weighted moving average weights (last 4 days)</span>
+        <div class="row" role="group" aria-label="Weight presets">
+          <button class="btn ghost small" id="p4wEqual" data-wma="equal" aria-pressed="false">Equal</button>
+          <button class="btn ghost small" id="p4wLinear" data-wma="linear" aria-pressed="true">Linear 4-3-2-1</button>
+          <button class="btn ghost small" id="p4wHalving" data-wma="halving" aria-pressed="false">Halving 8-4-2-1</button>
+        </div>
+        <p class="small muted" id="p4wFormula"></p>
+      </div>
+      <label for="p4alpha"><span>Smoothing α = <span class="val" id="p4alphaVal">0.30</span></span>
+        <input type="range" id="p4alpha" min="0.05" max="0.95" step="0.05" value="0.3">
+      </label>
+      <label class="opt"><input type="checkbox" id="p4sesFit" checked> Fit α on the past at each plan date</label>
+      <p class="small muted" id="p4sesNote"></p>
+      <label class="opt"><input type="checkbox" id="p4adjust"> Adjust for the academic calendar</label>
+      <p class="small muted">The calendar is known in advance, so a forecast may use it. When on, flat forecasts are scaled by how a class day or a day off sold before the plan date, seasonal forecasts are corrected where a break lines up differently than last week, and Holt-Winters sets weekdays with no classes to the average day off. Calendar regression already uses the calendar.</p>
+      <button class="btn" id="p4Log">Log this run</button>
+      <span class="status" id="p4LogStatus" role="status"></span>
+    </div>
+    <div class="card stack">
+      <div class="legend" id="p4Legend"></div>
+      <div class="chartbox"><svg id="p4Chart" tabindex="0" role="img" aria-label="Forecast against actual"></svg><div class="tip" hidden></div></div>
+      <div class="legend"><span><i class="k box" style="background:var(--class)"></i>Class day</span><span><i class="k box" style="background:var(--break)"></i>Weekday with no classes</span><span>Weekends unshaded</span></div>
+      <p class="small" id="p4Read"></p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>WAPE</th><th>Bias</th><th>7-day total</th></tr></thead>
+          <tbody id="p4Metrics"></tbody>
+        </table>
+      </div>
+      <p class="small muted">Error = actual minus forecast, in drinks per day. Bias is the average error: positive means the forecast ran low, negative means it ran high. The highlighted cell is the lowest MAE.</p>
+      <details id="p4Days">
+        <summary>Day-by-day table</summary>
+        <div class="tablewrap"><table><thead id="p4DayHead"></thead><tbody id="p4DayBody"></tbody></table></div>
+      </details>
+    </div>
+  </div>
+  <div class="card stack mt">
+    <div class="row" style="justify-content:space-between"><h3>Run log</h3><button class="btn ghost small" id="p4Clear">Clear log</button></div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Plan date</th><th class="l">Model and settings</th><th class="l">Calendar</th><th>MAE</th><th>RMSE</th><th>WAPE</th><th>Bias</th><th>7-day forecast</th><th>7-day actual</th></tr></thead>
+        <tbody id="p4LogBody"><tr><td class="l muted" colspan="9">Press "Log this run" to keep a row here for each model you have ticked.</td></tr></tbody>
+      </table>
+    </div>
+    <p class="small muted">The log lives in this page only and clears when you reload.</p>
+  </div>
+  <div class="try mt"><b>Try this.</b> Pick the Oct 9 plan date, which holds a fall-break day and a closure. Log seasonal naive and the moving average with the calendar adjustment off, then on. Then try the latest plan date. Does one plan date tell you which model to use?</div>
+  <div class="nextbar"><button class="btn" data-go="5">Next: test every plan date →</button></div>
+</section>
+
+<!-- STEP 5 -->
+<section class="panel" id="panel5" role="tabpanel" aria-labelledby="tab5" data-panel="5" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 5 · Backtest</span>
+    <h2>One window is one test. Run all of them.</h2>
+    <p class="muted" id="p5Lede"></p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <p class="small" id="p5Settings"></p>
+      <label class="opt"><input type="checkbox" id="p5Skip"> <span id="p5SkipLabel">Leave out plan dates whose week holds a weekday with no classes</span></label>
+      <label class="opt"><input type="checkbox" id="p5Script"> Also show the analysis script's fixed settings</label>
+      <span class="small muted" id="p5ScriptWhy" role="status"></span>
+      <p class="small muted">Live rows rerun in this page with your step 4 settings. Holt-Winters and calendar regression were fit by the analysis script on the days before each plan date; the calendar adjustment, when on, is applied to them here.</p>
+      <div class="callout small" id="p5Check"></div>
+    </div>
+    <div class="card stack">
+      <div class="tablewrap">
+        <table>
+          <thead id="p5Head"></thead>
+          <tbody id="p5Body"></tbody>
+        </table>
+      </div>
+      <p class="small muted">MAE in drinks per day for each 7-day window. The outlined cell is the lowest in its column. Average = mean of the window MAEs. WAPE pools every window. Wins = windows where the model had the lowest MAE.</p>
+    </div>
+  </div>
+  <div class="card stack mt">
+    <h3>Every window, side by side</h3>
+    <div class="legend" id="p5Legend"></div>
+    <div class="mult" id="p5Mult"></div>
+    <p class="small muted">The models drawn are the ones ticked in step 4. Shading follows the academic calendar.</p>
+  </div>
+  <div class="grid-even mt">
+    <div class="card stack">
+      <h3>Can a better k fix the moving average?</h3>
+      <p class="small muted">Average MAE over every plan date for each window size k, with the calendar setting from step 4. The reference lines are seasonal naive and Holt-Winters under the same setting.</p>
+      <div class="legend"><span><i class="k" style="border-top-color:var(--s3)"></i>Moving average, average MAE by k</span><span><i class="k dash" style="border-top-color:var(--s1)"></i>Seasonal naive</span><span><i class="k dash" style="border-top-color:var(--s2)"></i>Holt-Winters</span></div>
+      <div class="chartbox"><svg id="p5K" tabindex="0" role="img" aria-label="MAE by window size"></svg><div class="tip" hidden></div></div>
+      <p class="small" id="p5KNote"></p>
+    </div>
+    <div class="try"><b>Try this.</b>
+      <ul>
+        <li>Turn the calendar adjustment on in step 4, then come back. Which models move up the table, and which do not change?</li>
+        <li>Leave out the break week. Does the winner change?</li>
+        <li>Slide k in step 4 to the best value on the chart. Is that a fair score? The dial was chosen on the test windows, so the test has become a second training set.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="nextbar"><button class="btn" data-go="6">Next: plan the next 4 weeks →</button></div>
+</section>
+
+<!-- STEP 6 -->
+<section class="panel" id="panel6" role="tabpanel" aria-labelledby="tab6" data-panel="6" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 6 · Plan</span>
+    <h2>Next 4 weeks, and a note to the team</h2>
+    <p class="muted" id="p6Lede"></p>
+  </div>
+  <div class="callout" id="p6Headline"></div>
+  <div class="kpis mt" id="p6Kpis" style="margin-bottom:20px"></div>
+  <div class="grid2">
+    <div class="card stack">
+      <fieldset>
+        <legend>Model of the unrefilled machine</legend>
+        <label class="opt"><input type="radio" name="p6model" id="p6mHw" value="hw" checked><i class="k key" style="border-top-color:var(--s2)"></i> Holt-Winters additive</label>
+        <label class="opt"><input type="radio" name="p6model" id="p6mHwd" value="hwd"><i class="k key" style="border-top-color:var(--s7)"></i> Holt-Winters damped</label>
+        <label class="opt"><input type="radio" name="p6model" id="p6mSn" value="snaive"><i class="k key" style="border-top-color:var(--s1)"></i> Seasonal naive</label>
+      </fieldset>
+      <fieldset>
+        <legend>Show</legend>
+        <label class="opt"><input type="checkbox" id="p6Band" checked> 80% range</label>
+        <label class="opt"><input type="checkbox" id="p6Restock" checked><i class="k dash key" style="border-top-color:var(--s6)"></i> Restocked scenario, {{OUR}} (planning reference)</label>
+        <label class="opt"><input type="checkbox" id="p6Cal" checked> Academic-calendar shading</label>
+      </fieldset>
+      <p class="small muted" id="p6Method"></p>
+    </div>
+    <div class="card stack">
+      <div class="legend" id="p6Legend"></div>
+      <div class="chartbox"><svg id="p6Chart" tabindex="0" role="img" aria-label="Four-week forecast"></svg><div class="tip" hidden></div></div>
+      <div class="legend"><span><i class="k box" style="background:var(--class)"></i>Class day</span><span><i class="k box" style="background:var(--break)"></i>Weekday with no classes</span><span>Weekends unshaded</span></div>
+      <div class="tablewrap">
+        <table>
+          <thead id="p6WeeksHead"></thead>
+          <tbody id="p6Weeks"></tbody>
+        </table>
+      </div>
+      <ul class="small" id="p6Events" style="margin:0;padding-left:18px"></ul>
+    </div>
+  </div>
+  <div class="grid-even mt">
+    <div class="card stack">
+      <h3>Draft note</h3>
+      <fieldset>
+        <legend>Write it for</legend>
+        <label class="opt"><input type="radio" name="p6aud" id="p6aTeam" value="team" checked> The team (Monday presentation)</label>
+        <label class="opt"><input type="radio" name="p6aud" id="p6aAgent" value="agent"> The agent's weekly prompt</label>
+      </fieldset>
+      <label class="opt"><input type="checkbox" id="p6Supply" checked> Include the empty-slot detail</label>
+      <label class="opt"><input type="checkbox" id="p6Clock" checked> Include the slow-seller rule</label>
+      <label class="opt"><input type="checkbox" id="p6Live" checked> Include the best run from step 5</label>
+      <div class="row"><button class="btn" id="p6Copy">Copy note</button><span class="status" id="p6CopyStatus" role="status"></span></div>
+    </div>
+    <div class="stack">
+      <div class="note" id="p6Note" aria-live="polite"></div>
+      <p class="small muted">The note updates from your choices on this page. Every number in it comes from the data or from the runs above. Edit it before you share it.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p id="foot"></p>
+  <p id="footSlots">{{SOURCE_LINE}} Ours: {{SLOT_RANGES}} on machine {{DEVICE}}.</p>
+</footer>
+</div>
+
+<script>
+const DATA = /*DATA*/;
+/*CORE*/
+</script>
+<script>
+/*UI*/
+</script>

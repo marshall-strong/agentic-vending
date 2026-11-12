@@ -65,15 +65,22 @@ from day one.
 | File | What it is |
 |---|---|
 | [`docs/planning/tool-list.md`](docs/planning/tool-list.md) | **Start here.** The agent's proposed tools, what the bridge API actually offers, and the open questions. A snapshot of the [live Claude doc](https://claude.ai/code/artifact/82ae22ab-53a2-48c0-b4d5-c636efcc877d), where edits and comments go |
+| [`docs/artifacts.md`](docs/artifacts.md) | **The team's main live project pages in one place:** the roadmap, the team summary, the sales and data labs, and the agent walkthroughs |
 | [`docs/planning/build-plan.md`](docs/planning/build-plan.md) | The 21 September build plan: architecture, guardrails, order of work |
 | [`docs/planning/2026-10-19-david-api-qa.md`](docs/planning/2026-10-19-david-api-qa.md) | What David answered on 19 October about the API he is still building. These answers outrank the live spec |
 | [`docs/planning/2026-09-21-design-brief-meeting.md`](docs/planning/2026-09-21-design-brief-meeting.md) | What Graham and David answered in the Design Brief meeting, and what they still owe us |
 | [`docs/dex-api-quickstart.md`](docs/dex-api-quickstart.md) | **New to the API?** From Tailscale and a key to your first calls, plus troubleshooting |
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
+| [`docs/tool-contracts.md`](docs/tool-contracts.md) | Every tool's contract: inputs, outputs, preconditions, side effects, cost, failure behavior and owner |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
 | [`docs/db-explorer.md`](docs/db-explorer.md) | The DB explorer: a read-only page that lists every table and shows its columns and rows, so you don't need psql |
+| [`docs/process-map.md`](docs/process-map.md) | The process map and state model: the weekly cycle from sales to the next order, and every state a purchase request can be in |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
+| [`docs/benchmark.md`](docs/benchmark.md) | The standing benchmark: rerun the test cases after every prompt, rule, case or model change, judged blind, every run kept in the database |
 | [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
+| [`docs/guardrail-evidence.md`](docs/guardrail-evidence.md) | Each guardrail tried against the real system on 12 Nov: over-budget and out-of-bounds plans refused, and a running agent halted by one line of SQL |
+| [`docs/halt-for-instructors.md`](docs/halt-for-instructors.md) | Our halt card: three ways to stop our agent without its help. Instructors don't need a halt switch (David, 12 Nov), but may use it |
+| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live run, with its reasons and a check against our own directive rules |
 | [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
 | [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |
@@ -153,6 +160,25 @@ when it asks. It's read as a prompt, so the key doesn't end up in your command h
 
 On macOS or Linux, add `export VENDING_ANTHROPIC_API_KEY='<the key>'` to `~/.zshrc` or
 `~/.bashrc`. In production it's a secret on our Azure Container App.
+
+**Or keep it in a file only your Windows account can read**, `~\.vending\anthropic-key`. That is
+the team's convention for per-user secrets: one folder in your profile, outside every copy of the
+repository, closed to other accounts. With the file instead of the user variable, the programs
+you start don't get the key in their environment: a script that needs it loads it into its own
+process, for as long as it runs.
+`scripts\run_bench.ps1` ([the benchmark](docs/benchmark.md)) uses this file first, and the user
+variable only when there is no file. To make it, run this in PowerShell and paste the key when it
+asks:
+
+```
+$dir = Join-Path $HOME '.vending'
+New-Item -ItemType Directory -Force $dir | Out-Null
+icacls $dir /inheritance:r /grant:r "$env:USERDOMAIN\${env:USERNAME}:(OI)(CI)F" | Out-Null
+Set-Content -NoNewline -Encoding ascii (Join-Path $dir 'anthropic-key') (Read-Host 'Key')
+```
+
+`icacls` removes every other account's access to the folder, and the file inherits that. Check it
+with `icacls $HOME\.vending\anthropic-key`: it should list your account alone.
 
 **Every use of the key is recorded.** All our model calls go through `vending/harness.py`, which
 writes each one to the `model_calls` table before it is sent: what asked for it, the model and

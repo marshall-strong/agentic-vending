@@ -53,6 +53,8 @@ Numbers match the question list in the team's plan doc.
 
 ## Open items to confirm with David
 
+**12 Nov:** most of these were answered in a talk with Kevin: see [2026-11-12-david-answers.md](2026-11-12-david-answers.md). The order cutoff, unsold stock and the shared log are covered there. Open questions now live in #102.
+
  - [x] **Sales-tax formula:** team decision 19 Oct: weekly set-aside = takings × 0.08 ÷ 1.08, arithmetic rounding. Revisit if David says otherwise.
  - [x] **Purchase tax:** none. The Institute is tax-exempt as a nonprofit (David, 10:28-10:29). As of 11 Nov the live bridge spec says the same: `max_price_per_pack` is the shelf price.
  - [ ] **Shared log deliverable:** the brief (section 3.5 and the deliverables checklist) says writing to an institute shared log is mandatory and graded; David says there isn't one for us. Confirm the checklist item is dropped or what replaces it.
