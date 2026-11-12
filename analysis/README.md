@@ -24,6 +24,7 @@ Three pages built on this analysis, as step-by-step labs: step tabs, toggles, sl
 |---|---|
 | `export_sales.py` | Reads the database (read-only) and writes `analysis/data/*.csv`: our slots' poll readings and sales events (filtered like `vending.ledger._counter_rows`), every poll time, `machine_hourly.csv` (units and cents the whole machine sold since the previous poll; totals only) and `door_events.csv` (the EVA-DTS `EA2*DO` door-open counter at every poll and its rise). |
 | `sales_analysis.py` | The whole analysis in one script with fixed seeds. It writes `analysis/out/lab_data.json` (the labs' data) and `analysis/out/analysis_report.md`. |
+| `visit_windows.py` | Dark periods: when the door opened, how long each visit window was, how often polls ran late, and how many of our sales fell inside a window. Reads the exported CSVs (and the visit grades in `lab_data.json` if present), standard library only, and writes `analysis/out/visit_windows.json`. See `docs/cutover.md`. |
 | `golisano_calendar_2026_27.json` | The Golisano Institute's 2026-27 academic calendar, one entry per day from Aug 24 2026 to Jan 31 2027, with class days, breaks and closures, its sources, and the date it was last checked against the official page (`checked`). |
 | `planograms_photos.json`, `planogram_2026-10-08.json` | What our slots held in the dated team photos (other slots are listed as `{"slot": ..., "ours": false}` with no values). The Oct 8 file also describes the snack machine next to ours. |
 | `product_history.md` | Our slots' products over time, read from those photos. |
