@@ -13,10 +13,16 @@ Built from our database only; it never reads the machine.
 - `days_since_loaded` and `units_sold_since_load` count from the slot's most
   recent load: the latest fulfilled receipt line that put units in it.
 - The closet (back stock) is listed per product, with its value at cost.
+- What a person saw, from the latest count in `slot_counts` (`vending.slot_counts`),
+  fills `counted_*` for a slot the receipts don't cover, or whose count is newer
+  than its latest receipt movement (the dashboard's rule). `counted_product` is
+  free text as seen, not a SKU; `counted_on_hand` is the units counted less what
+  the polls say sold since, an estimate for a photo count.
 
 A slot with no receipts yet has `null` for every receipt field: null, not
 zero, so the agent can't mistake "unknown" for "empty". The message names
-those slots.
+those slots. A count that saw a slot empty gives `counted_on_hand` 0 and
+`counted_product` null; a slot nobody counted has `counted_at` null.
 """
 
 from __future__ import annotations
@@ -28,7 +34,7 @@ from fractions import Fraction
 import psycopg
 from pydantic import BaseModel
 
-from vending import counters, stock
+from vending import counters, slot_counts, stock
 from vending.slots import DEVICE_ID, SLOTS
 from vending.tools import Reply
 
@@ -49,6 +55,11 @@ class SlotState(BaseModel):
     units_sold_since_load: int | None = None
     days_since_loaded: int | None = None
     days_of_stock_left: str | None = None
+    # From the latest person's count, when receipts don't cover the slot or the count is newer.
+    counted_product: str | None = None   # as seen, free text, not a SKU; null when seen empty
+    counted_on_hand: int | None = None   # counted less sold since; an estimate for a photo count
+    counted_at: datetime | None = None   # null: nobody counted this slot (or receipts are newer)
+    count_source: str | None = None      # "photo" (an estimate) or "door" (counted with the door open)
 
 
 class ClosetItem(BaseModel):
@@ -74,9 +85,11 @@ Counters = dict[str, tuple[int | None, int]]
 
 def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold: dict[str, int],
           counts: dict[str, stock.SlotCount] | None = None, last_loaded: dict[str, datetime] | None = None,
-          sold_since_load: dict[str, int] | None = None, now: datetime | None = None) -> list[SlotState]:
-    """Per-slot state from the latest poll, the window's sales and the receipts. Pure: no database, no clock."""
-    counts, last_loaded, sold_since_load = counts or {}, last_loaded or {}, sold_since_load or {}
+          sold_since_load: dict[str, int] | None = None, now: datetime | None = None,
+          seen: dict[str, dict] | None = None) -> list[SlotState]:
+    """Per-slot state from the latest poll, the window's sales, the receipts and the latest person's
+    count (`seen`, from `vending.slot_counts.latest`). Pure: no database, no clock."""
+    counts, last_loaded, sold_since_load, seen = counts or {}, last_loaded or {}, sold_since_load or {}, seen or {}
     days = Decimal((as_of - start).total_seconds()) / 86400 if start else Decimal(0)
     states = []
     for slot in SLOTS:
@@ -87,6 +100,7 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold
             per_day = (sold / days).quantize(Decimal("0.01"), ROUND_HALF_UP)
         count = counts.get(slot)
         loaded_at = last_loaded.get(slot)
+        looked = _newer_count(seen.get(slot), count)
         states.append(SlotState(
             slot=slot,
             price=None if price is None else f"{price // 100}.{price % 100:02d}",
@@ -98,8 +112,20 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold
             units_sold_since_load=sold_since_load.get(slot) if count else None,
             days_since_loaded=((now or as_of) - loaded_at).days if count and loaded_at else None,
             days_of_stock_left=_days_left(count.units, per_day) if count else None,
+            counted_product=looked["product"] if looked else None,
+            counted_on_hand=looked["on_hand"] if looked else None,
+            counted_at=looked["counted_at"] if looked else None,
+            count_source=looked["source"] if looked else None,
         ))
     return states
+
+
+def _newer_count(looked: dict | None, count: stock.SlotCount | None) -> dict | None:
+    """The person's count, unless the receipts know the slot and moved it since (the dashboard's rule)."""
+    if looked is None:
+        return None
+    moved = (count.last_moved or count.since) if count else None
+    return looked if moved is None or looked["counted_at"] > moved else None
 
 
 def sold_in_window(rows: list[tuple[str, datetime, int]], start: datetime) -> dict[str, int]:
@@ -161,8 +187,9 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     counts = {c.slot: c for c in counted.slots if c.slot in SLOTS}
     last_loaded = _last_loaded(conn)
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
+    seen = _seen(conn)
     states = build(as_of, _counters(conn, latest[0]), start, window_sold,
-                   counts, last_loaded, sold_since_load, now)
+                   counts, last_loaded, sold_since_load, now, seen)
     closet, closet_value = closet_items(counted.closet)
 
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
@@ -174,7 +201,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
         success=True,
         stale=stale,
         message=(f"{warning}{len(states)} slots as of the poll at {as_of:%Y-%m-%d %H:%M} UTC; "
-                 f"sales window {window}. {_receipts_note(counts, closet, counted.warnings)}"),
+                 f"sales window {window}. {_receipts_note(counts, closet, counted.warnings)}{_count_note(states)}"),
         count=len(states),
         as_of=as_of,
         window_start=baseline[1] if baseline else None,
@@ -198,6 +225,30 @@ def _receipts_note(counts: dict, closet: list[ClosetItem], warnings: tuple[str, 
     if warnings:
         note += f" {len(warnings)} stock warning{'s' if len(warnings) != 1 else ''}; see warnings."
     return note
+
+
+def _count_note(states: list[SlotState]) -> str:
+    """One sentence on the person's count, when it fills in any slot."""
+    looked = [s for s in states if s.counted_at is not None]
+    if not looked:
+        return ""
+    latest = max(s.counted_at for s in looked)
+    holding = [s.slot for s in looked if s.counted_on_hand]
+    kind = "a photo, so units are estimates" if any(s.count_source == "photo" for s in looked) else "the door open"
+    return (f" A person's count ({latest:%Y-%m-%d}, from {kind}) shows what is in {len(looked)} slots: see "
+            f"counted_product and counted_on_hand. Slots it saw holding stock: {', '.join(holding) or 'none'}.")
+
+
+def _seen(conn: psycopg.Connection) -> dict[str, dict]:
+    """The latest count per selection, or nothing when `slot_counts` isn't there yet.
+
+    A savepoint keeps the caller's transaction usable if the table is missing.
+    """
+    try:
+        with conn.transaction():
+            return slot_counts.latest(conn, DEVICE_ID)
+    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+        return {}
 
 
 def _last_loaded(conn: psycopg.Connection) -> dict[str, datetime]:
