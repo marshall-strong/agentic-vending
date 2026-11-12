@@ -19,7 +19,7 @@ Kevin went through the questions in #102 with David in an 18-minute talk on 12 N
 | 11 | **Cancel a request** | **No.** Depending on where it is in the process, Amazon may already have been ordered. If one we don't want gets approved, we just don't use it. | Answered |
 | 12 | **Open-request limit** | One open at a time today (a rejected one can be resent). David said he could set it up so we can send as many as we want. | Possible change |
 | 13 | **Instructor halt** | **Not needed by the instructors.** A person reviews every purchase request, so the agent can't spend on its own. If something goes badly wrong (say it starts polling the bridge every 15 seconds), David deactivates our container, and we restart it once it's fixed. | Answered |
-| 14 | **Visit time** | **A standard restock time: Fridays around 3 PM**, which keeps it away from the busy morning and the 1 PM class change. The student worker shops after class, so it may slip toward 4 PM. The receipt will still carry the door times. If a sale slips through, it can be found and fixed by hand. | Answered |
+| 14 | **Visit time** | **A standard restock time: Friday afternoons, around 3 PM as the target**, away from the busy morning and the 1 PM class change. The student worker gets out of class at 1 and may have to drive to the stores first, so the load **may well be later, 3 to 5 PM or after**. The receipt will still carry the door times. If a sale slips through, it can be found and fixed by hand. | Answered: plan for any time on Friday afternoon |
 | 15 | **Unsold stock at the end** | Discussed earlier (19 Oct: at what we paid, David verifying). No new detail in the transcript. | As before |
 | 16 | **Bottle deposit** | Not a concern. | Answered |
 | 17 | **Promotions** | No bundles. | Answered |
@@ -29,7 +29,7 @@ Kevin went through the questions in #102 with David in an 18-minute talk on 12 N
 
 - **Day-one order (urgent).** Our first real request fills all 20 slots to capacity, comes out of the $600, and is due about **27 Nov** for a **3 Dec** start. That moves the capital plan (#90), the restock policy (#91) and the first-products decision up front.
 - **Competition start = 3 Dec.** That's when the ledger's opening should be recorded (#104), and the cutoff for whole-machine totals in the sales analysis (#84).
-- **Cutover (#97, #105):** plan for a standard Friday visit at 3 to 4 PM. `fulfilled_at` marks the end of the visit, and the door times will narrow it when they're added. Our plan still handles a visit at any time. Polling about every 10 minutes around a visit is allowed.
+- **Cutover (#97, #105):** plan for a Friday-afternoon visit, most likely 3 to 5 PM or later (the worker shops after a 1 PM class), and poll about every 10 minutes from about 2 to 6 PM on Fridays. `fulfilled_at` marks the end of the visit, and the door times will narrow it when they're added. Our plan still handles a visit at any time. Polling about every 10 minutes around a visit is allowed.
 - **Halt switch (#82):** keep it for our own use. The instructors' backstop is the human review of every request, plus deactivating our container.
 - **Shared log:** our `action_log` and agent run records are the log. Make sure the agent's reasons are stored.
 - **Integrity:** the shared catalog means we can see the other team's product requests. Per `docs/integrity.md`, we don't use them.
