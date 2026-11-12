@@ -91,8 +91,10 @@ KNOWN: dict[str, Setting] = {
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
     "model_run_cap_cents": Setting("most one agent cycle or replay may spend on model calls (default 100)",
                                    lambda v: _whole(v, 1, 60000, "cents")),
-    "model_daily_cap_cents": Setting("most all model calls may spend in one Eastern day (default 400)",
+    "model_daily_cap_cents": Setting("most live model calls may spend in one Eastern day (default 400)",
                                      lambda v: _whole(v, 1, 60000, "cents")),
+    "model_test_daily_cap_cents": Setting("most test calls (replays, sweeps) may spend in one Eastern day "
+                                          "(default 2000)", lambda v: _whole(v, 1, 60000, "cents")),
 }
 
 

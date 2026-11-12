@@ -149,11 +149,111 @@ The issue's third layer, **a short rubric for people to grade**, is the `good_an
 case plus `--reasons`: is the reasoning sound, and could operations act on the plan without
 asking?
 
+## The model decider (costs money)
+
+```
+python -m vending.replay --case midweek-visit --decider model --reasons
+python -m vending.replay --week 2026-10-02 --decider model --model claude-sonnet-5-5 --effort low
+```
+
+Claude reads the week as JSON and answers with a plan in the decider shape above, forced by a JSON
+schema. The plan is checked and scored like any other. One API call per decision. **The default
+is Opus 5.5 at medium effort, pending a group decision**; `--model` takes `claude-sonnet-5-5` or
+`claude-haiku-5-5`, and `--effort` takes `low` to `max`. A refusal or an answer cut off mid-JSON
+fails "valid plan".
+
+**Every call goes through the harness (`vending/harness.py`) as a `test` call, so every use of the
+key is in the database:**
+
+- **$1.00 a decision.** The input is counted first, which is free. The answer's length limit, which
+  includes the model's thinking, is then set so the most the call can cost fits under the cap. If
+  even a short answer won't fit, the call isn't made.
+- **The team's daily test cap**, `model_test_daily_cap_cents` in `config` ($20 by default; set it
+  with `python -m vending.config set model_test_daily_cap_cents 2000 --by NAME`). It counts every
+  test call made today (Eastern), by anyone, against the same database. Once it's spent, `--cases`
+  marks the remaining cases "not scored". Live calls have their own cap, `model_daily_cap_cents`.
+- **No retries**, so a timeout can't bill twice.
+- **Two runs at once can't both spend the same dollar.** The worst case is reserved under a database
+  lock before each request is sent.
+- **Every request is a row in `model_calls`**: when, which model and effort, which key paid (the
+  variable's name, never the key), tokens in and out, the cost, how long it took, the stop reason,
+  Anthropic's request ID, and what asked for it (`exam 2026-10-02`, `sweep ... opus@high
+  slow-seller`, `agent-week ... 3`). It is written at its worst case before the request is sent and
+  corrected after. A request the API rejected (bad key, rate limit) stays at $0 as `refused`. One
+  that timed out, failed on the server, or crashed stays at its worst case. **Test calls never reach
+  the ledger:** they aren't the competition's $600 (Kevin, 4 Nov), but they are never invisible.
+  `python -m vending.usage` reports them; the dashboard and DB explorer can read the same table.
+- **So the replay needs the database, even for `--cases`.** Spend we can't record isn't spent:
+  with the database down, nothing is sent.
+
+**The key** comes from the `VENDING_ANTHROPIC_API_KEY` environment variable, never from an
+`ANTHROPIC_*` variable in any upper or lower case (Claude Code reads those, and the team key would
+pay for its sessions). `--key-env NAME` uses another variable, such as a personal key, and each
+`model_calls` row records which one paid. Requests go to api.anthropic.com, whatever
+`ANTHROPIC_BASE_URL` says; `VENDING_ANTHROPIC_BASE_URL` overrides it (the tests use it for a local
+stand-in). Prices are in `vending/model_prices.json`, the harness's price table.
+
+## The model sweep (costs money)
+
+```
+python -m vending.replay.sweep --dry-run
+python -m vending.replay.sweep --budget 15
+python -m vending.replay.sweep --models haiku,sonnet --efforts low,medium --repeats 3 --budget 5
+```
+
+Runs the model decider on every test case for each model and effort, to turn "which model, which
+effort" into numbers. Each (model, effort, repeat) answers all ten cases. The baseline is scored on
+the same cases, free, as the bar to clear.
+
+- **One budget for the whole sweep** (`--budget`, at most $50; $15 by default). Before each request
+  it reserves that request's worst case; one that won't fit isn't sent, and the summary lists every
+  dropped request, so a short sweep never reads as a full one. Every request also keeps the
+  decider's own caps above.
+- **The cheapest models run first**, so a budget that runs out cuts the dearest configs.
+- **Results** go to `sweep-results/<time>/` (gitignored): `results.jsonl`, one line per answer as it
+  lands; `plans/`, every plan as the model gave it, for people or a judge to grade against each
+  case's `good_answer`; and `summary.csv`, `summary.json` and `summary.txt`, one line per config:
+  valid plans, plans that pass every hard check, units short and unsold, margin, cost, cost per
+  decision, average output tokens and seconds.
+- **Every request is a `model_calls` row** labelled with the sweep's time, the config and the case,
+  so a sweep can be found and totalled in the database (`python -m vending.usage`).
+- **The cases' numbers are made up.** A sweep can narrow the choice of model and effort and show
+  whether more effort pays; it can't predict real profit. Valid and "checks ok" count hard checks
+  only, not whether a plan is a good one.
+
+## The agent replay (costs money)
+
+```
+python -m vending.replay --week 2026-09-25 --agent 4 --unit-cost 0.80 --balance 600
+```
+
+Closer to the live agent than the one-question exam above. Claude runs the weeks in order. Each
+week it's the end of the week, before the Friday restock:
+
+1. **It looks things up with the agent's own read tools,** `get_machine_state` and
+   `get_sales_history` from the MCP server (#14), with the same replies. They're cut off at that
+   week, so it can't see the weeks it's tested on: a window that runs past "now" is cut at now,
+   and one that starts after it is refused. The tools #14 hasn't built yet aren't offered, and it
+   is told so.
+2. **It gets the notes it wrote itself last week.**
+3. **It answers with three things:** the plan for every slot; a **weekly update** for the team,
+   under 150 words, on what happened and what it's changing and why; and **notes** for next week.
+
+The plan is checked and scored like any decider's. The table puts each week beside the baseline's
+margin on the same week. The weekly updates and notes go to a Markdown file under
+`replay-results/agent-runs/` (gitignored), for people to grade: is the reasoning sound, and could operations act on
+the update without asking?
+
+**Caps:** the same `Budget` as the exam, so every request is a `test` row in `model_calls`, one run
+per week. A week's whole conversation, every tool round included, gets the $1 run cap; the team's
+daily test cap covers everything. At most 10 tool rounds a week, then it
+must answer. A week that runs out of budget part-way gets no plan, fails "valid plan", and the
+replay stops there. So does any failed request, a rate limit included (retries are off), and any
+other error, such as the database dropping. The weeks already run are still shown and saved. At
+most 12 weeks a run, and `--week` must be a Friday, because Claude is told the restock is that day.
+
 ## Not built yet
 
-- **Model deciders.** A later PR adds them with a dollar cap of $1 or less per run, a low daily cap
-  on all test spending (under $5 a day; the exact number is a placeholder for the team), and the
-  cost logged for every run. The default model is pending a group decision.
 - **The restock planner as a check**, once PR #13 merges.
 - **Stock, product and unit cost from receipts**, once PR #25 merges. Until then, replayed weeks
   can't score stockouts from stock, and margin needs `--unit-cost`.
@@ -161,9 +261,11 @@ asking?
 ## Tests
 
 ```
-pytest tests/test_replay.py
+pytest tests/test_replay.py tests/test_replay_model.py tests/test_replay_agent.py tests/test_replay_sweep.py
 ```
 
 The replay and CLI tests store fixture polls in a throwaway schema through `store_poll`, the
 history sync's own `store`, so they run against a real database. They skip when it's down, like
-the rest. The plan-check, scoring and case tests need no database.
+the rest. The plan-check, scoring and case tests need no database. The model, agent and sweep tests
+answer from a local stand-in for the Anthropic API, so no test spends money, and every `model_calls`
+row they write goes to the throwaway schema, never the real database.

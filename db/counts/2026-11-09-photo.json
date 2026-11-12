@@ -1,0 +1,262 @@
+{
+  "count_id": "2026-11-09-photo",
+  "counted_at": "2026-11-09T11:30:00-05:00",
+  "source": "photo",
+  "device_id": "vmc1",
+  "note": "Read from three photos of the machine front taken by Marshall on 9 Nov; the time of day is approximate. Units are what the photos show along each rail, so they are estimates. Brands that couldn't be read are left as the visible description.",
+  "selections": [
+    {
+      "selection": "11",
+      "product": "Recess sparkling water, can",
+      "units": 1,
+      "price_on_tag": "4.00",
+      "note": "flavor unread"
+    },
+    {
+      "selection": "12",
+      "product": "Recess sparkling water, can",
+      "units": 1,
+      "price_on_tag": "4.00",
+      "note": "flavor unread"
+    },
+    {
+      "selection": "13",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "4.00"
+    },
+    {
+      "selection": "14",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "4.00"
+    },
+    {
+      "selection": "15",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "4.50"
+    },
+    {
+      "selection": "16",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "4.50"
+    },
+    {
+      "selection": "17",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "4.50"
+    },
+    {
+      "selection": "18",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "5.00"
+    },
+    {
+      "selection": "21",
+      "product": null,
+      "units": 0,
+      "price_on_tag": null,
+      "note": "tag unreadable"
+    },
+    {
+      "selection": "22",
+      "product": null,
+      "units": 0,
+      "price_on_tag": null,
+      "note": "tag unreadable"
+    },
+    {
+      "selection": "23",
+      "product": null,
+      "units": 0,
+      "price_on_tag": null,
+      "note": "tag unreadable"
+    },
+    {
+      "selection": "24",
+      "product": null,
+      "units": 0,
+      "price_on_tag": null,
+      "note": "tag unreadable"
+    },
+    {
+      "selection": "25",
+      "product": "Premier Protein shake, Chocolate, 11 fl oz",
+      "units": 1,
+      "price_on_tag": "4.00"
+    },
+    {
+      "selection": "26",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "4.00"
+    },
+    {
+      "selection": "27",
+      "product": "Snapple Go Bananas, bottle",
+      "units": 3,
+      "price_on_tag": "3.00",
+      "note": "a purple-cap bottle behind may be another flavor"
+    },
+    {
+      "selection": "28",
+      "product": "Vita Coco coconut water, carton",
+      "units": 3,
+      "price_on_tag": "3.00"
+    },
+    {
+      "selection": "31",
+      "product": "Pickle-juice sports drink, red cap",
+      "units": 6,
+      "price_on_tag": "4.00",
+      "note": "brand unread"
+    },
+    {
+      "selection": "32",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "33",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "34",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "35",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "36",
+      "product": "Lime sparkling can, silver and green",
+      "units": 4,
+      "price_on_tag": "2.00",
+      "note": "brand unread"
+    },
+    {
+      "selection": "37",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "38",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "3.00",
+      "note": "number label partly hidden"
+    },
+    {
+      "selection": "41",
+      "product": "Pickle-juice sports drink, red cap",
+      "units": 2,
+      "price_on_tag": "4.00",
+      "note": "brand unread"
+    },
+    {
+      "selection": "42",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "4.00"
+    },
+    {
+      "selection": "43",
+      "product": "S.Pellegrino sparkling water, glass bottle",
+      "units": 3,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "44",
+      "product": "S.Pellegrino sparkling water, glass bottle",
+      "units": 3,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "45",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "46",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "47",
+      "product": "Something & Nothing coconut sparkling, can",
+      "units": 5,
+      "price_on_tag": "3.50"
+    },
+    {
+      "selection": "48",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "4.00"
+    },
+    {
+      "selection": "51",
+      "product": null,
+      "units": null,
+      "price_on_tag": null,
+      "note": "hidden behind the pickup bin in the photo"
+    },
+    {
+      "selection": "52",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "1.00"
+    },
+    {
+      "selection": "53",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "1.00"
+    },
+    {
+      "selection": "54",
+      "product": null,
+      "units": 0,
+      "price_on_tag": null,
+      "note": "tag hidden"
+    },
+    {
+      "selection": "55",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "1.00"
+    },
+    {
+      "selection": "56",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "1.00"
+    },
+    {
+      "selection": "57",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "1.00"
+    },
+    {
+      "selection": "58",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "1.50"
+    }
+  ]
+}
