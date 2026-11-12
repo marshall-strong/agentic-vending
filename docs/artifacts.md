@@ -24,6 +24,7 @@ When you publish a new page about the project, add a row here in the same PR or 
 | [Slot and Price Lab](https://claude.ai/artifact/2aR4tSYARzmrqeRcvdQDph) | Slots and prices (PR #68) |
 | [The Doorman's Log](https://claude.ai/artifact/MMfwiYd7BrG15FDjbngV1q) | Every visit to the machine and every refill, dated from the machine's own door counter |
 | [Shelf Through Time](https://claude.ai/artifact/4JTTXx4J89RwaGoDfTMVTg) | Product history, from Sean's photos |
+| [Cutover Clock](https://claude.ai/artifact/BSgBkggAC5PYBpdPqRHp1H) | David's product and price cutover problem from the 12 Nov class meeting (#97): drag two polls around a visit and compare a naive reading with splitting at the door |
 
 ## The agent
 
