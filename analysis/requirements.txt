@@ -1,0 +1,14 @@
+# Exact versions the analysis was last run with (pip freeze of its venv, Python 3.14).
+# Direct dependencies:
+numpy==2.5.4
+pandas==3.1.1
+scipy==1.18.1
+scikit-learn==1.9.1
+statsmodels==0.15.0
+# Their dependencies:
+joblib==1.6.0
+packaging==26.3
+patsy==1.0.3
+python-dateutil==4.0.0
+threadpoolctl==3.8.0
+tzdata==2026.6
