@@ -39,18 +39,23 @@ param(
     [switch]$SetSecrets,
     [switch]$Force,
     [switch]$SkipPullCheck,
-    [string]$EnvFile = (Join-Path $PSScriptRoot "..\.env")
+    [string]$EnvFile
 )
 
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+# Not a default in param(): Windows PowerShell 5.1 leaves $PSScriptRoot empty there when a
+# [CmdletBinding()] script is started with powershell -File, and the script would fail to start.
+if (-not $EnvFile) { $EnvFile = Join-Path $root ".env" }
 # The image runs as a normal user, which can't listen below 1024.
 $Port = 8080
 # What the Dockerfile copies into the image; keep in step with its COPY lines. An untracked
 # file anywhere else can't reach the image, so it doesn't block a deploy.
 $ImagePaths = @("requirements.txt", "vending", "db", "docker")
-# .env setting -> Container App secret name.
-$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey"; "ANTHROPIC_API_KEY" = "anthropic-api-key" }
+# .env setting -> Container App secret name. No Anthropic key: nothing in the image calls the model
+# yet, so a key would only sit in a running container. The change that runs the agent loop here
+# adds it, under the name the agent reads.
+$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey" }
 
 # Whenever the tag comes from HEAD (a build, or -SkipBuild without -Tag), HEAD must be
 # origin/main exactly, so the tag names a commit everyone can see on main.
@@ -92,10 +97,17 @@ if (-not $SkipBuild) {
 if (-not $SkipPullCheck) {
     $anonymous = Join-Path ([IO.Path]::GetTempPath()) "agentic-vending-docker-$([guid]::NewGuid())"
     New-Item -ItemType Directory -Path $anonymous | Out-Null
+    # Windows PowerShell 5.1 turns each line a native command writes to a redirected stderr into
+    # an error record, which "Stop" makes terminating: the private-package answer ("unauthorized",
+    # "manifest unknown") would end the script with a bare docker error instead of the message
+    # below. So the exit code alone decides here, as it does in PowerShell 7.
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     try {
         docker --config $anonymous manifest inspect $full *> $null
         $public = $LASTEXITCODE -eq 0
     } finally {
+        $ErrorActionPreference = $saved
         Remove-Item -Recurse -Force $anonymous
     }
     if (-not $public) {

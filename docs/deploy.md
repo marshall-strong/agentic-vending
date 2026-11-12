@@ -26,16 +26,34 @@ Azure uses its default TCP probes on port 8080, which pass whenever the worker i
 Watch `/health` yourself, or alert on it, instead.
 
 The image runs as a normal user (`vending`, uid 10001), with pinned base images and no test
-packages (`pytest` is in `requirements-dev.txt`).
+packages (`pytest` is in `requirements-dev.txt`). It runs **Python 3.14**, the newest version any
+of us develops on, so code that passes on a laptop also runs in Azure; bump the `FROM` line when
+the team's venvs move. `tini` is PID 1: it passes Azure's `SIGTERM` to the worker and reaps the
+entrypoint's background loops when they end.
+
+To run the tests inside the image, with the image's own Python, before a deploy that changes it:
+
+```
+docker build -t agentic-vending:dev .
+docker run --rm --user root --entrypoint sh -v "${PWD}/tests:/app/tests:ro" -v "${PWD}/scripts:/app/scripts:ro" -v "${PWD}/requirements-dev.txt:/app/requirements-dev.txt:ro" agentic-vending:dev -c "pip install -q -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider tests"
+```
+
+The database tests skip there (no `DATABASE_URL`); the rest run.
 
 **The Tailscale node is ephemeral.** It keeps no state, so every start, restart or new revision
 joins again with `TS_AUTHKEY`, and Tailscale removes the node once it goes offline. That needs a
 **reusable** key (ephemeral and tagged is best); a single-use key works for one start only. If
 joining fails, the worker runs anyway, `/health` reports the bridge as unreachable, and the
-entrypoint keeps retrying every minute in the background.
+entrypoint keeps retrying every minute in the background. `tailscaled`'s own log is
+`/tmp/tailscaled.log` inside the container (the entrypoint prints its last 20 lines when a join
+fails); it is cut to its last 500 lines whenever it passes 1 MB, so an always-on replica's log
+can't fill the disk.
 
 **The agent loop does not run yet.** When the harness exists it starts `python -m vending.server`
 over stdio from the same image, with `VENDING_TOOLS=built` so only working tools are offered.
+Until then the container gets **no Anthropic key**, since nothing in it calls the model; the change
+that runs the agent loop here adds the secret to `$Secrets` in the deploy script, under the name the
+agent reads (`VENDING_ANTHROPIC_API_KEY`, per the README).
 
 **Nothing in the image migrates.** The worker's syncs, the server, the halt switch and the ledger
 CLI all refuse to run on a database that is behind and name the command. After a merge that adds
@@ -66,7 +84,7 @@ From the repository root, on a machine with Docker running:
 ```
 
 That builds the image tagged with the current commit, pushes it, loads `DATABASE_URL`,
-`DEX_API_KEY`, `TS_AUTHKEY` and `ANTHROPIC_API_KEY` from your `.env` into Container App secrets,
+`DEX_API_KEY` and `TS_AUTHKEY` from your `.env` into Container App secrets,
 sets `DEX_BASE_URL`, points ingress at port 8080, and rolls the app to the image with one replica
 always on (`minReplicas` 1, the 29 Oct decision: it stays 0 only while the hello-world image is
 deployed). If the roll fails, it points ingress back at the port it had.
@@ -82,7 +100,7 @@ isn't committed does. The list is `$ImagePaths` in the script; keep it in step w
 
 The secrets are read by `scripts/write_secret_files.py`, which parses `.env` exactly as the app
 does, into temporary files that `az` reads itself (`database-url=@<file>`), so no value is ever on
-a command line. Without `-SetSecrets`, the script stops if any of the four secrets doesn't exist
+a command line. Without `-SetSecrets`, the script stops if any of the three secrets doesn't exist
 yet. **A revision reads its secrets only when it starts, and changing secrets alone makes no new
 revision**, so when `-SetSecrets` leaves the latest revision as it was (same image and settings,
 as when only `TS_AUTHKEY` changed), the script restarts it with `az containerapp revision
@@ -145,6 +163,15 @@ above, or write a separate file of bare `KEY=value` lines for `--env-file`.
 - Tailscale's default key expiry is 90 days, and the key's expiry is unknown; if the node drops
   off the tailnet, ask David for a new key, put it in `.env` and run the deploy with
   `-SetSecrets`, which restarts the revision so it joins with the new key.
+- **Once Tailscale drops the node, the container can't rejoin by itself.** The entrypoint deletes
+  its copy of the key after the first join and the worker never sees `TS_AUTHKEY`, so if the
+  ephemeral node is removed (for example after a long outage on either side), every hourly round
+  reports the bridge unreachable on `/health` until someone restarts the revision, which joins
+  again with the `ts-authkey` secret:
+  `az containerapp revision restart --name ai-group-2-vend --resource-group data_systems_resource_group --revision <latest revision>`.
+- `tailscaled`'s log is not in the Container App log. To read it, open a shell with
+  `az containerapp exec --name ai-group-2-vend --resource-group data_systems_resource_group --command sh`
+  and run `tail -n 100 /tmp/tailscaled.log`.
 - One replica, so a deploy restarts the worker; a sync round in flight is cut off and simply
   runs again next hour.
 - A job that passes its time limit can't be stopped, only left to finish in the background;

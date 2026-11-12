@@ -16,12 +16,22 @@
 # Both base images are pinned by tag and digest, so a rebuild of the same
 # commit gets the same Python and Tailscale. Bump them deliberately: look up a
 # digest with `docker buildx imagetools inspect <image>:<tag>`.
-FROM python:3.12.16-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+#
+# Python is the newest version any of us develops on (3.14), so code that runs
+# on a laptop runs here too: a 3.13+ API that passed locally would otherwise
+# crash the hourly job in Azure. Keep it in step with the team's venvs.
+FROM python:3.14.10-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 # Tailscale's own image carries static binaries. Userspace networking needs no
 # TUN device, iptables or root.
 COPY --from=tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c \
     /usr/local/bin/tailscaled /usr/local/bin/tailscale /usr/local/bin/
+
+# tini runs as PID 1: it passes Azure's SIGTERM on to the worker and reaps the
+# entrypoint's background loops when they end, which Python as PID 1 never does.
+# Container Apps has no `docker run --init`, so it is in the image.
+RUN apt-get update && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 # Runtime packages only; pytest is in requirements-dev.txt.
@@ -40,5 +50,5 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8080
 EXPOSE 8080
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
 CMD ["python", "-m", "vending.worker"]

@@ -2,6 +2,7 @@
 
 import json
 import signal
+import socket
 import threading
 import urllib.request
 from contextlib import nullcontext
@@ -83,6 +84,19 @@ def test_health_reports_the_last_round():
         with pytest.raises(urllib.error.HTTPError) as missing:
             urllib.request.urlopen(f"http://127.0.0.1:{port}/other")
         assert missing.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_health_drops_a_client_that_sends_nothing(monkeypatch):
+    # /health is public, so a connection that never sends a request mustn't hold a thread for ever.
+    assert worker._Health.timeout == 10
+    monkeypatch.setattr(worker._Health, "timeout", 0.2)
+    server = worker.serve_health(worker.State(), 0)
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5) as idle:
+            assert idle.recv(1) == b""  # closed by the server, long before our own 5 s timeout
     finally:
         server.shutdown()
         server.server_close()
