@@ -40,7 +40,7 @@ from vending import db
 from vending.bridge import Bridge
 from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, catalog, catalog_request,
                            machine_state, pnl, preview, project_rules, purchase_requests, sales_history,
-                           stubs)
+                           stubs, submit)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -153,7 +153,7 @@ def _write_sync(tool: str, arguments: dict[str, Any], action: Callable[[psycopg.
 
 @_tool(built=True)
 async def get_machine_state() -> machine_state.MachineState:
-    """Each of our 20 slots: price, units sold and units/day over the last 7 days, and from receipts the product, stock on hand, days since loaded and days of stock left. Plus the closet (back stock) at cost."""
+    """Each of our 20 slots: price, lifetime units, units sold and units/day over the last 7 days, and from receipts the product, stock on hand, days since loaded and days of stock left. Plus the closet (back stock) at cost."""
     return await _read("get_machine_state", machine_state.get_machine_state)
 
 
@@ -185,10 +185,13 @@ def _preview(conn: psycopg.Connection, desired: DesiredState) -> preview.PlanRep
     return preview.preview_desired_state(conn, desired, bridge())
 
 
-@_tool(built=False)
-async def submit_desired_state(desired: DesiredState) -> WriteReply:
-    """Submit a desired state for all 20 slots as a purchase request. Same input as preview_desired_state."""
-    return await _write("submit_desired_state", {"desired": desired}, stubs.submit_desired_state(desired))
+@_tool(built=True)
+async def submit_desired_state(desired: DesiredState, expected_plan_hash: str | None = None) -> submit.SubmitReply:
+    """Submit a desired state for all 20 slots as a purchase request, after planning it again on live data. Same input as preview_desired_state; pass its plan_hash as expected_plan_hash to be refused if anything changed since. Refused with every problem at once; spends real money when accepted."""
+    return await _write("submit_desired_state", {"desired": desired, "expected_plan_hash": expected_plan_hash},
+                        submit.submit_desired_state(desired, lambda: bridge(), lambda: connect(),
+                                                    expected_plan_hash=expected_plan_hash),
+                        submit.SubmitReply)
 
 
 @_tool(built=True)

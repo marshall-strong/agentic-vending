@@ -9,18 +9,18 @@ then logged on its own, so every attempt leaves a row, including refused ones.
 
 `action` refuses by raising `Refused` with every reason at once, so the agent
 can fix a plan in one turn. Anything else it raises is logged as `failed` and
-re-raised.
+re-raised; if that log row can't be written either, the original error still
+reaches the agent.
 
-Not covered here yet: a write that calls the bridge cannot be rolled back, and
-the bridge has no route that lists our requests. When `submit_desired_state` is
-built, it must commit a row saying what it is about to send before the call,
-then update that row with the request ID after it. A transaction around the
-call isn't enough: a crash before the commit loses the ID, and a retry could
-order twice.
+A write that calls the bridge can't be rolled back, and the bridge has no
+route that lists our requests, so a transaction around the call isn't enough.
+`submit_desired_state` commits a `purchase_submissions` row on its own
+connection before it sends, and settles that row after (`vending.submissions`).
 """
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -57,13 +57,26 @@ def run_write(conn: psycopg.Connection, tool: str, arguments: dict[str, Any],
                 None if result.success else result.message, result)
         return result
     except Refused as refusal:
-        with conn.transaction():
-            log(conn, "write", tool, arguments, "refused", str(refusal))
+        _log_after(conn, tool, arguments, "refused", str(refusal))
         raise
     except Exception as error:
-        with conn.transaction():
-            log(conn, "write", tool, arguments, "failed", f"{type(error).__name__}: {error}")
+        _log_after(conn, tool, arguments, "failed", f"{type(error).__name__}: {error}")
         raise
+
+
+def _log_after(conn: psycopg.Connection, tool: str, arguments: dict[str, Any], outcome: str, detail: str) -> None:
+    """Log a write that didn't go through, without hiding why it didn't.
+
+    If the database dropped, logging fails too, and that error must not replace
+    the one the agent needs to see (an accepted request's ID, say). It goes to
+    stderr instead, which the server's log keeps.
+    """
+    try:
+        with conn.transaction():
+            log(conn, "write", tool, arguments, outcome, detail)
+    except psycopg.Error as error:
+        print(f"ACTION LOG LOST {tool} {outcome}: {detail} ({type(error).__name__}: {error})",
+              file=sys.stderr, flush=True)
 
 
 def log(conn: psycopg.Connection, kind: str, tool: str, arguments: dict[str, Any], outcome: str,

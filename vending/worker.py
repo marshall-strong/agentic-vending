@@ -1,4 +1,4 @@
-"""The long-running process in the Container App: the scheduled syncs, and a health check.
+"""The long-running process in the Container App: the scheduled syncs, a health check and a home page.
 
     python -m vending.worker            # every SYNC_EVERY_MINUTES (60), forever
     python -m vending.worker --once     # one round, then exit with the worst exit code
@@ -18,9 +18,12 @@ then shows on /health instead of silently stalling every later round.
 `GET /health` on `PORT` (8080) answers with JSON: each job's outcome and exit
 code in the last round, when it ran, and when the next one is due. The
 Container App's ingress points at that port, so the team can check it from a
-browser, and a 503 there means the last round failed. It never shows error
-text, because the endpoint is public and a database error names the host and
-user; the errors are in the log.
+browser, and a 503 there means the last round failed. `GET /` shows the same
+facts as a page for people: whether the last round passed, each job's outcome,
+when the next round runs, and links to the docs. It reloads itself every
+minute. Neither ever shows error text, because both are public and a database
+error names the host and user; the errors are in the log. The page is built
+only from `State.public()`, the same dict as `/health`, so it can't show more.
 
 SIGTERM, which Azure sends before stopping a replica, ends the loop like
 Ctrl+C: the health check closes and the process exits 0, and a job in flight
@@ -44,7 +47,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from zoneinfo import ZoneInfo
 
 Job = tuple[str, Callable[[], int]]
 
@@ -134,27 +139,165 @@ def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: floa
     return results
 
 
+EASTERN = ZoneInfo("America/New_York")
+REPO = "https://github.com/marshall-strong/agentic-vending"
+OUTCOMES = ("finished", "crashed", "timed out", "still running")
+JOB_NAMES = {"sync_history": "Machine readings (sales history)", "sync_requests": "Purchase requests and receipts",
+             "sync_catalog": "Product catalog"}
+
+
+def _eastern(moment: str | None) -> str:
+    """'Tue 11 Nov, 4:05 PM ET' from an ISO time; 'not yet' for none."""
+    if not moment:
+        return "not yet"
+    try:
+        local = datetime.fromisoformat(moment).astimezone(EASTERN)
+    except (TypeError, ValueError):
+        return "unknown"
+    return f"{local:%a %d %b}, {local.hour % 12 or 12}:{local:%M %p} ET"
+
+
+def home_page(public: dict) -> str:
+    """The page at /, built only from what /health shows, so no error text can reach it."""
+    results = public.get("results") or []
+    if not public.get("rounds"):
+        verdict, tone = "Starting up: the first sync round hasn't finished yet.", "wait"
+    elif public.get("status") == "ok":
+        verdict, tone = "The last sync round passed.", "ok"
+    else:
+        failed = sum(r.get("exit_code") != 0 for r in results)
+        verdict, tone = f"The last sync round had {failed} failed job{'' if failed == 1 else 's'}.", "bad"
+    rows = []
+    for r in results:
+        ok = r.get("exit_code") == 0
+        outcome = r.get("outcome") if r.get("outcome") in OUTCOMES else "unknown"
+        if ok:
+            detail = "passed"
+        elif r.get("exit_code") is not None:
+            detail = f"failed, exit code {int(r['exit_code'])}"
+        else:
+            detail = outcome
+        job = str(r.get("job"))
+        rows.append(
+            "<tr>"
+            f"<td>{escape(JOB_NAMES.get(job, job))}<br><code>{escape(job)}</code></td>"
+            f"<td><span class=\"pill {'ok' if ok else 'bad'}\">{escape(detail)}</span></td>"
+            f"<td>{escape(_eastern(r.get('started_at')))}</td>"
+            f"<td class=\"num\">{float(r.get('seconds') or 0):.1f} s</td>"
+            "</tr>")
+    table = ("<table><thead><tr><th>Job</th><th>Outcome</th><th>Started</th><th class=\"num\">Took</th></tr></thead>"
+             f"<tbody>{''.join(rows)}</tbody></table>") if rows else "<p class=\"muted\">No jobs have run yet.</p>"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="60">
+<title>Agentic Vending</title>
+<style>
+  :root {{ --bg: #f5f6f8; --fg: #1b1f24; --muted: #5a6370; --line: #dce0e5; --panel: #ffffff;
+          --ok: #1d7a46; --bad: #b42318; --wait: #8a6100; color-scheme: light; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ --bg: #111418; --fg: #e8eaed; --muted: #9aa3ae; --line: #2a3038; --panel: #181c21;
+            --ok: #4cc38a; --bad: #f97066; --wait: #e9b949; color-scheme: dark; }}
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }}
+  main {{ max-width: 46rem; margin: 0 auto; display: grid; gap: 1.5rem; padding-block: 2rem 3rem;
+         padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }}
+  h1 {{ margin: 0; font-size: 1.9rem; line-height: 1.2; }}
+  h2 {{ margin: 0 0 .5rem; font-size: 1.05rem; }}
+  p {{ margin: 0; }}
+  .muted {{ color: var(--muted); }}
+  .verdict {{ font-size: 1.15rem; font-weight: 600; padding: .9rem 1rem; border-radius: 10px;
+             border: 1px solid var(--line); background: var(--panel); border-left: 6px solid var(--{tone}); }}
+  .facts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem; }}
+  .fact {{ background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .75rem 1rem; }}
+  .fact b {{ display: block; font-size: .78rem; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }}
+  .wrap {{ overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }}
+  table {{ border-collapse: collapse; width: 100%; min-width: 30rem; font-size: .95rem; }}
+  th, td {{ text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--line); vertical-align: top; }}
+  tr:last-child td {{ border-bottom: 0; }}
+  th {{ color: var(--muted); font-weight: 500; font-size: .85rem; }}
+  .num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  code {{ font-size: .8rem; color: var(--muted); }}
+  .pill {{ display: inline-block; padding: .05rem .55rem; border-radius: 999px; border: 1px solid currentColor; font-size: .85rem; white-space: nowrap; }}
+  .pill.ok {{ color: var(--ok); }}
+  .pill.bad {{ color: var(--bad); }}
+  ul {{ margin: 0; padding-left: 1.2rem; display: grid; gap: .3rem; }}
+  a {{ color: inherit; }}
+  a:focus-visible {{ outline: 2px solid var(--fg); outline-offset: 2px; }}
+  footer {{ font-size: .85rem; }}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Agentic Vending</h1>
+    <p class="muted">Group B, Applied AI, Fall 2026. An AI agent that runs 20 slots of the drink machine as a business.</p>
+  </header>
+  <p class="verdict">{escape(verdict)}</p>
+  <section class="facts" aria-label="Sync rounds">
+    <div class="fact"><b>Last round</b>{escape(_eastern(public.get("last_round_at")))}</div>
+    <div class="fact"><b>Next round</b>{escape(_eastern(public.get("next_round_at")))}</div>
+    <div class="fact"><b>Rounds since start</b>{int(public.get("rounds") or 0)}</div>
+  </section>
+  <section>
+    <h2>Each job in the last round</h2>
+    <div class="wrap">{table}</div>
+    <p class="muted">Each round copies the machine's readings, our purchase requests and the product catalog into our database. It reads the bridge's stored history and never polls the machine.</p>
+  </section>
+  <section>
+    <h2>Learn more</h2>
+    <ul>
+      <li><a href="{REPO}#readme">What we are building</a> (the README on GitHub)</li>
+      <li><a href="{REPO}/blob/main/docs/deploy.md">How this container runs</a></li>
+      <li><a href="/health">The same status as JSON</a> (<code>/health</code>)</li>
+      <li class="muted">The database explorer and the agent dashboard will be linked here once this address serves them (issue #53).</li>
+    </ul>
+  </section>
+  <footer class="muted">Running since {escape(_eastern(public.get("started_at")))}. This page reloads every minute. Error details stay in the container's log and are never shown here.</footer>
+</main>
+</body>
+</html>
+"""
+
+
 class _Health(BaseHTTPRequestHandler):
     state: State
+    # Seconds a client has to send its request. The endpoint is public, and without a limit a
+    # connection that sends nothing holds one of the server's threads for ever.
+    timeout = 10
 
     def log_message(self, *args):
         pass
 
     def do_GET(self):
-        if self.path.rstrip("/") not in ("", "/health"):
+        path = self.path.split("?", 1)[0].rstrip("/")
+        if path == "/health":
+            body = json.dumps(self.state.public(), indent=2).encode()
+            self._send(200 if self.state.healthy else 503, "application/json", body)
+        elif path == "":
+            self._send(200, "text/html; charset=utf-8", home_page(self.state.public()).encode())
+        else:
             self.send_response(404)
             self.end_headers()
-            return
-        body = json.dumps(self.state.public(), indent=2).encode()
-        self.send_response(200 if self.state.healthy else 503)
-        self.send_header("Content-Type", "application/json")
+
+    def _send(self, status: int, content_type: str, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        # The page has no scripts and loads nothing from anywhere else.
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
 
 def serve_health(state: State, port: int) -> ThreadingHTTPServer:
-    """Answer /health in a daemon thread. Returns the server, for tests to shut down."""
+    """Answer / and /health in a daemon thread. Returns the server, for tests to shut down."""
     handler = type("Health", (_Health,), {"state": state})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -178,7 +321,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("JOB_TIMEOUT_MINUTES") or 30),
                         help="minutes each job may run (default JOB_TIMEOUT_MINUTES or 30)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8080),
-                        help="port for /health (default PORT or 8080); 0 serves nothing")
+                        help="port for / and /health (default PORT or 8080); 0 serves nothing")
     args = parser.parse_args(argv)
     if args.every <= 0:
         parser.error("--every must be above zero")

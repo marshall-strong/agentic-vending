@@ -14,8 +14,12 @@ so the container joins it with Tailscale in userspace mode.
 is `python -m vending.worker`: every hour it runs `python -m vending.sync_history`,
 `python -m vending.sync_requests` and `python -m vending.sync_catalog`, each with a 30-minute
 limit (`JOB_TIMEOUT_MINUTES`), and it answers `GET /health` on port 8080 with the last round's
-outcome per job (a `503` means the last round failed). `/health` is public, so it shows exit codes
-and outcomes only; the error text is in the log. `docker/entrypoint.sh` joins the tailnet first and
+outcome per job (a `503` means the last round failed). Its root, `GET /`, is the same status as a
+page for people: whether the last round passed, each job's outcome, when the last and next rounds
+run (Eastern time), and links to the docs. It reloads itself every minute and works on a phone.
+Both are public, so they show exit codes and outcomes only, never error text (a database error
+names the host and user); the errors are in the log. The page is built from the same data as
+`/health`, so it can't show more. `docker/entrypoint.sh` joins the tailnet first and
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
 
@@ -26,16 +30,39 @@ Azure uses its default TCP probes on port 8080, which pass whenever the worker i
 Watch `/health` yourself, or alert on it, instead.
 
 The image runs as a normal user (`vending`, uid 10001), with pinned base images and no test
-packages (`pytest` is in `requirements-dev.txt`).
+packages (`pytest` is in `requirements-dev.txt`). It runs **Python 3.14**, the newest version any
+of us develops on, so code that passes on a laptop also runs in Azure; bump the `FROM` line when
+the team's venvs move. `tini` is PID 1: it passes Azure's `SIGTERM` to the worker and reaps the
+entrypoint's background loops when they end.
+
+To run the tests inside the image, with the image's own Python, before a deploy that changes it:
+
+```
+docker build -t agentic-vending:dev .
+docker run --rm --user root --entrypoint sh -v "${PWD}/tests:/app/tests:ro" -v "${PWD}/scripts:/app/scripts:ro" -v "${PWD}/requirements-dev.txt:/app/requirements-dev.txt:ro" agentic-vending:dev -c "pip install -q -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider tests"
+```
+
+The database tests skip there (no `DATABASE_URL`); the rest run.
 
 **The Tailscale node is ephemeral.** It keeps no state, so every start, restart or new revision
 joins again with `TS_AUTHKEY`, and Tailscale removes the node once it goes offline. That needs a
 **reusable** key (ephemeral and tagged is best); a single-use key works for one start only. If
 joining fails, the worker runs anyway, `/health` reports the bridge as unreachable, and the
-entrypoint keeps retrying every minute in the background.
+entrypoint keeps retrying every minute in the background. `tailscaled`'s own log is
+`/tmp/tailscaled.log` inside the container (the entrypoint prints its last 20 lines when a join
+fails); it is cut to its last 500 lines whenever it passes 1 MB, so an always-on replica's log
+can't fill the disk.
 
 **The agent loop does not run yet.** When the harness exists it starts `python -m vending.server`
 over stdio from the same image, with `VENDING_TOOLS=built` so only working tools are offered.
+Until then the container gets **no Anthropic key**, since nothing in it calls the model; the change
+that runs the agent loop here adds the secret to `$Secrets` in the deploy script, under the name the
+agent reads (`VENDING_ANTHROPIC_API_KEY`, per the README). The deploy of `c1505c2` on 11 Nov, from
+the script before this change, did set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
+adds, so the script now passes `--remove-env-vars` for it when the app still has it (the list is
+`$Retired`). The `anthropic-api-key` secret itself stays in the app, unused by any variable; to
+delete it:
+`az containerapp secret remove --name ai-group-2-vend --resource-group data_systems_resource_group --secret-names anthropic-api-key`.
 
 **Nothing in the image migrates.** The worker's syncs, the server, the halt switch and the ledger
 CLI all refuse to run on a database that is behind and name the command. After a merge that adds
@@ -66,15 +93,10 @@ From the repository root, on a machine with Docker running:
 ```
 
 That builds the image tagged with the current commit, pushes it, loads `DATABASE_URL`,
-`DEX_API_KEY`, `TS_AUTHKEY` and `VENDING_ANTHROPIC_API_KEY` from your `.env` into Container App secrets,
+`DEX_API_KEY` and `TS_AUTHKEY` from your `.env` into Container App secrets,
 sets `DEX_BASE_URL`, points ingress at port 8080, and rolls the app to the image with one replica
 always on (`minReplicas` 1, the 29 Oct decision: it stays 0 only while the hello-world image is
 deployed). If the roll fails, it points ingress back at the port it had.
-
-The model key reaches the container as `VENDING_ANTHROPIC_API_KEY`, the name the agent's code
-reads (never `ANTHROPIC_API_KEY`: see the README). If an earlier deploy set
-`ANTHROPIC_API_KEY` on the app, remove it once:
-`az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --remove-env-vars ANTHROPIC_API_KEY`.
 
 It builds only from a clean checkout of `main` that matches `origin/main` (it fetches to check),
 because the tag names the commit; `-SkipBuild` without `-Tag` checks the same, since the tag is
@@ -87,7 +109,7 @@ isn't committed does. The list is `$ImagePaths` in the script; keep it in step w
 
 The secrets are read by `scripts/write_secret_files.py`, which parses `.env` exactly as the app
 does, into temporary files that `az` reads itself (`database-url=@<file>`), so no value is ever on
-a command line. Without `-SetSecrets`, the script stops if any of the four secrets doesn't exist
+a command line. Without `-SetSecrets`, the script stops if any of the three secrets doesn't exist
 yet. **A revision reads its secrets only when it starts, and changing secrets alone makes no new
 revision**, so when `-SetSecrets` leaves the latest revision as it was (same image and settings,
 as when only `TS_AUTHKEY` changed), the script restarts it with `az containerapp revision
@@ -107,6 +129,7 @@ Later deploys that change only code:
 Then check:
 
 ```
+https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/
 https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/health
 az containerapp logs show --name ai-group-2-vend --resource-group data_systems_resource_group --follow
 ```
@@ -150,6 +173,15 @@ above, or write a separate file of bare `KEY=value` lines for `--env-file`.
 - Tailscale's default key expiry is 90 days, and the key's expiry is unknown; if the node drops
   off the tailnet, ask David for a new key, put it in `.env` and run the deploy with
   `-SetSecrets`, which restarts the revision so it joins with the new key.
+- **Once Tailscale drops the node, the container can't rejoin by itself.** The entrypoint deletes
+  its copy of the key after the first join and the worker never sees `TS_AUTHKEY`, so if the
+  ephemeral node is removed (for example after a long outage on either side), every hourly round
+  reports the bridge unreachable on `/health` until someone restarts the revision, which joins
+  again with the `ts-authkey` secret:
+  `az containerapp revision restart --name ai-group-2-vend --resource-group data_systems_resource_group --revision <latest revision>`.
+- `tailscaled`'s log is not in the Container App log. To read it, open a shell with
+  `az containerapp exec --name ai-group-2-vend --resource-group data_systems_resource_group --command sh`
+  and run `tail -n 100 /tmp/tailscaled.log`.
 - One replica, so a deploy restarts the worker; a sync round in flight is cut off and simply
   runs again next hour.
 - A job that passes its time limit can't be stopped, only left to finish in the background;

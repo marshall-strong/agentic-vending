@@ -96,3 +96,11 @@ client_secret*.json
 .claude/settings.local.json
 .vs/
 *.log
+
+# Model sweep results (python -m vending.replay.sweep)
+sweep-results/
+replay-results/
+
+# Sales analysis: exported data and generated outputs stay local
+analysis/data/
+analysis/out/
