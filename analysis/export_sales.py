@@ -3,7 +3,7 @@
 Run from the repo root with the project's venv and a DATABASE_URL in .env:
     python analysis/export_sales.py                     # writes analysis/data/*.csv
     python analysis/export_sales.py OUT_DIR
-    python analysis/export_sales.py --slots 15,16,...   # a different slot list (see slots_config.py)
+    python analysis/export_sales.py --slots 15,16,...   # only part of our slots (see slots_config.py)
 
 Which slots are ours: --slots, else the assignment stored from the inventory server (vending.slots.our_slots),
 else vending.slots.SLOTS. See analysis/slots_config.py.

@@ -1,7 +1,7 @@
 """Rebuild everything in one go: export, analysis, report, the three labs.
 
     python analysis/rebuild.py                          # normal run: our slots as stored/default
-    python analysis/rebuild.py --slots 15,16,17,18,...  # if our slot list ever changes
+    python analysis/rebuild.py --slots 15,16,17,18,...  # only part of our slots (never another team's)
     python analysis/rebuild.py --no-export              # reuse the CSVs in analysis/data/
 
 Run it with the analysis venv's python (pandas, statsmodels, ...). The export needs the project's
