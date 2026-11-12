@@ -257,7 +257,11 @@ def test_entries_dated_before_the_opening_are_outside_the_balance_and_said_so(co
     ledger.record_tokens(conn, "0.50", "m", 1, 1, "dev", at=OPENED - timedelta(days=10))
     b = ledger.balance(conn, NOW)
     assert b.token_spend_cents == 0
-    assert any("1 entries totalling -0.50 are dated before the opening" in n for n in b.notes)
+    assert any("1 model-call entries totalling 0.50 are from before the opening" in n and "development spend" in n
+               for n in b.notes)
+    assert not any("re-date" in n for n in b.notes)          # development spend isn't a mistake to fix
+    ledger.record(conn, "adjustment", 300, "early fix", by="test", at=OPENED - timedelta(days=2))
+    assert any("re-date" in n for n in ledger.balance(conn, NOW).notes)    # other early entries still are
 
 
 def test_pnl_costs_sales_at_weighted_average_and_values_what_is_left(conn):
