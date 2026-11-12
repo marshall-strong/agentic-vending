@@ -56,6 +56,10 @@ $ImagePaths = @("requirements.txt", "vending", "db", "docs/agent", "docker")
 # yet, so a key would only sit in a running container. The change that runs the agent loop here
 # adds it, under the name the agent reads.
 $Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey" }
+# Settings a deploy works without. -SetSecrets loads each one that .env has, and the container gets
+# the env var only when the app has the secret. READONLY_DATABASE_URL is the public pages' own
+# login (/dashboard, /db); without it they answer "not set up yet" and everything else runs.
+$OptionalSecrets = [ordered]@{ "READONLY_DATABASE_URL" = "readonly-database-url" }
 # Env vars an earlier deploy set that this one doesn't. --set-env-vars only adds, so the update
 # removes these by name, and only when the app has them: az warns on stderr about a name the app
 # doesn't have, which Windows PowerShell 5.1 can turn into an error.
@@ -131,23 +135,29 @@ if ($SetSecrets) {
     New-Item -ItemType Directory -Path $dir | Out-Null
     try {
         $specs = @($Secrets.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) + "DEX_BASE_URL=dex-base-url"
+        # A leading ? marks a setting the script may skip: no file is written when .env lacks it.
+        $specs += @($OptionalSecrets.GetEnumerator() | ForEach-Object { "?$($_.Key)=$($_.Value)" })
         & $python (Join-Path $PSScriptRoot "write_secret_files.py") $EnvFile $dir @specs
         if ($LASTEXITCODE -ne 0) { throw "could not read the secrets from $EnvFile" }
         $dexBase = [IO.File]::ReadAllText((Join-Path $dir "dex-base-url"))
         if (-not $dexBase.StartsWith("http://")) { throw "DEX_BASE_URL must start with http://: only plain-http traffic goes through Tailscale, so an https bridge URL would be unreachable" }
         Write-Host "Setting secrets from $EnvFile (az reads each value from a file; none is on a command line)..."
         $secretArgs = @($Secrets.Values | ForEach-Object { "$_=@" + (Join-Path $dir $_) })
+        $secretArgs += @($OptionalSecrets.Values | Where-Object { Test-Path (Join-Path $dir $_) } | ForEach-Object { "$_=@" + (Join-Path $dir $_) })
         az containerapp secret set --name $App --resource-group $ResourceGroup --secrets @secretArgs --output none
         if ($LASTEXITCODE -ne 0) { throw "az containerapp secret set failed" }
     } finally {
         Remove-Item -Recurse -Force $dir
     }
-} else {
-    # The env vars below point at these secrets, and the update fails if one doesn't exist.
-    $have = @(az containerapp secret list --name $App --resource-group $ResourceGroup --query "[].name" --output tsv)
-    if ($LASTEXITCODE -ne 0) { throw "az containerapp secret list failed" }
-    $missing = @($Secrets.Values | Where-Object { $have -notcontains $_ })
-    if ($missing) { throw "$App has no secret $($missing -join ', '); run once with -SetSecrets" }
+}
+# The env vars below point at these secrets, and the update fails if one doesn't exist.
+$have = @(az containerapp secret list --name $App --resource-group $ResourceGroup --query "[].name" --output tsv)
+if ($LASTEXITCODE -ne 0) { throw "az containerapp secret list failed" }
+$missing = @($Secrets.Values | Where-Object { $have -notcontains $_ })
+if ($missing) { throw "$App has no secret $($missing -join ', '); run once with -SetSecrets" }
+$optional = @($OptionalSecrets.GetEnumerator() | Where-Object { $have -contains $_.Value })
+foreach ($absent in @($OptionalSecrets.GetEnumerator() | Where-Object { $have -notcontains $_.Value })) {
+    Write-Host "Note: $App has no secret $($absent.Value), so the container gets no $($absent.Key). Add it to .env and rerun with -SetSecrets when you have it."
 }
 
 $before = az containerapp show --name $App --resource-group $ResourceGroup --query "properties.latestRevisionName" --output tsv
@@ -168,6 +178,7 @@ if ($targetPort -ne "$Port") {
 
 Write-Host "Rolling $App to $full with $MinReplicas-$MaxReplicas replicas..."
 $envVars = @($Secrets.GetEnumerator() | ForEach-Object { "$($_.Key)=secretref:$($_.Value)" }) + @("VENDING_TOOLS=built", "TS_HOSTNAME=agentic-vending-azure", "PORT=$Port")
+$envVars += @($optional | ForEach-Object { "$($_.Key)=secretref:$($_.Value)" })
 if ($dexBase) { $envVars += "DEX_BASE_URL=$dexBase" }
 $removeArgs = @()
 if ($remove) {
