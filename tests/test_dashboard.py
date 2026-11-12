@@ -465,7 +465,9 @@ EVEN = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
 @pytest.fixture
 def even_columns(monkeypatch, conn):
     """Our slots on every other column, so nothing assumes columns 5 to 8."""
+    from vending import slots
     monkeypatch.setattr(dashboard, "SLOTS", EVEN)
+    monkeypatch.setattr(slots, "SLOTS", EVEN)         # the bound on the stored assignment moves with it
     conn.execute("update slot_assignment set slots = %s", (list(EVEN),))
     return EVEN
 

@@ -99,6 +99,33 @@ def test_a_bad_answer_stores_nothing(empty):
     assert empty.execute("select count(*) from slot_assignment").fetchone() == (0,)
 
 
+@pytest.mark.parametrize("names, why", [
+    (list(slots.SLOTS) + ["11", "12"], "it adds 11, 12"),          # wider: another team's selections
+    (list(slots.SLOTS[:-1]), "it leaves out 58"),                  # narrower
+    (["11", "12", "13", "14"], "it adds 11, 12, 13, 14"),
+])
+def test_a_first_answer_that_isnt_exactly_slots_is_refused(empty, names, why):
+    with pytest.raises(BadAssignment, match=f"doesn't match vending.slots.SLOTS.*{why}.*Nothing was stored"):
+        slots.record(empty, {**ANSWER, "slots": names}, NOW)
+    assert empty.execute("select count(*) from slot_assignment").fetchone() == (0,)
+    with pytest.raises(SlotsNotRecorded, match="python -m vending.slots record"):
+        slots.our_slots(empty)
+
+
+def test_a_stored_row_beyond_slots_is_refused_by_every_tool(conn):
+    from vending.planning import NotReady, planner_config
+    from vending.tools.machine_state import get_machine_state
+    from vending.tools.sales_history import get_sales_history
+
+    conn.execute("update slot_assignment set slots = '{15,16,11}'")     # written by hand, not by record
+    with pytest.raises(SlotsNotRecorded, match="names 11, which aren't in vending.slots.SLOTS"):
+        slots.our_slots(conn)
+    for reply in [get_machine_state(conn, now=NOW), get_sales_history(conn, NOW - timedelta(days=7), NOW, None)]:
+        assert not reply.success and "aren't in vending.slots.SLOTS" in reply.message
+    with pytest.raises(NotReady, match="aren't in vending.slots.SLOTS"):
+        planner_config(conn)
+
+
 def test_only_one_assignment_can_be_stored(conn):
     import psycopg
     with pytest.raises(psycopg.errors.UniqueViolation):
@@ -133,31 +160,32 @@ def test_the_tools_use_the_stored_slots_not_the_list_in_the_code(conn):
     from vending.tools.sales_history import get_sales_history
     from vending import config
 
-    conn.execute("update slot_assignment set slots = '{11,12}'")
-    store_poll(conn, "a", "2026-11-05T12:00:00+00:00", {"11": (200, 10), "12": (250, 5), "15": (300, 50)})
-    store_poll(conn, "b", "2026-11-12T12:00:00+00:00", {"11": (200, 17), "12": (250, 5), "15": (300, 60)})
+    # A stored list narrower than SLOTS (as the sales analysis also allows): the tools follow it.
+    conn.execute("update slot_assignment set slots = '{15,16}'")
+    store_poll(conn, "a", "2026-11-05T12:00:00+00:00", {"15": (200, 10), "16": (250, 5), "17": (300, 50)})
+    store_poll(conn, "b", "2026-11-12T12:00:00+00:00", {"15": (200, 17), "16": (250, 5), "17": (300, 60)})
 
     state = get_machine_state(conn, now=NOW)
-    assert [s.slot for s in state.data] == ["11", "12"]
+    assert [s.slot for s in state.data] == ["15", "16"]
     assert state.data[0].units_sold_in_window == 7
 
     sales = get_sales_history(conn, NOW - timedelta(days=8), NOW, None)
-    assert [r.slot for r in sales.data] == ["11", "12"]
-    refused = get_sales_history(conn, NOW - timedelta(days=8), NOW, ["15"])
-    assert not refused.success and "Not our slots: 15. Ours are 11, 12" in refused.message
+    assert [r.slot for r in sales.data] == ["15", "16"]
+    refused = get_sales_history(conn, NOW - timedelta(days=8), NOW, ["17"])
+    assert not refused.success and "Not our slots: 17. Ours are 15, 16" in refused.message
 
-    assert planner_config(conn).slots == ("11", "12")
+    assert planner_config(conn).slots == ("15", "16")
 
 
 def test_the_ledger_counts_only_the_stored_slots(conn):
     from tests.conftest import store_poll
     from vending import ledger
 
-    conn.execute("update slot_assignment set slots = '{11}'")
-    store_poll(conn, "a", "2026-11-05T12:00:00+00:00", {"11": (200, 10), "15": (300, 50)})
-    store_poll(conn, "b", "2026-11-06T12:00:00+00:00", {"11": (200, 12), "15": (300, 59)})
+    conn.execute("update slot_assignment set slots = '{15}'")
+    store_poll(conn, "a", "2026-11-05T12:00:00+00:00", {"15": (200, 10), "16": (300, 50)})
+    store_poll(conn, "b", "2026-11-06T12:00:00+00:00", {"15": (200, 12), "16": (300, 59)})
     start, end = datetime(2026, 11, 5, tzinfo=timezone.utc), datetime(2026, 11, 7, tzinfo=timezone.utc)
-    assert ledger.units_sold(conn, start, end) == 2           # slot 15's 9 aren't ours
+    assert ledger.units_sold(conn, start, end) == 2           # slot 16's 9 aren't in the stored list
     assert ledger.takings(conn, start, end).cents == 400
 
 
