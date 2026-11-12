@@ -2,7 +2,7 @@
 
     python -m vending.config show
     python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 8}' --by marshall
-    python -m vending.config set price_ceiling_cents 600 --by marshall
+    python -m vending.config set price_ceiling_cents 650 --by marshall
 
 The halt flag fails closed: a missing row, or anything that isn't JSON
 `false`, counts as halted. Every other key is a JSON value the planner reads
@@ -86,7 +86,7 @@ def _overrides(value: Any) -> str | None:
 KNOWN: dict[str, Setting] = {
     "capacity_overrides": Setting("units per column for products a person counted; replaces the whole "
                                   "object, wins over the loading chart (default none)", _overrides),
-    "price_ceiling_cents": Setting("highest sale price the planner allows (default 600)", _ceiling),
+    "price_ceiling_cents": Setting("highest sale price the planner allows (default 650)", _ceiling),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
     "model_run_cap_cents": Setting("most one agent cycle or replay may spend on model calls (default 100)",

@@ -177,7 +177,7 @@ def test_an_invalid_plan_skips_the_other_checks_and_is_not_scored():
 
 def test_off_step_and_over_ceiling_prices_fail():
     c = case("catalog-request")
-    result = score(c.state, plan_json(**{"15": {"sale_price": "2.52"}, "16": {"sale_price": "6.50"}}), c.next_week)
+    result = score(c.state, plan_json(**{"15": {"sale_price": "2.52"}, "16": {"sale_price": "6.55"}}), c.next_week)
     detail = checks(result)["prices"].detail
     assert checks(result)["prices"].status == FAIL and "multiple of 5 cents" in detail and "ceiling" in detail
 

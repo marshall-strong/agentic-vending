@@ -15,4 +15,6 @@ One free restock every Friday; an extra dispatch costs $25 per request (not per 
 
 **How this works for us.** A restock is one desired state for all 20 slots. Check it with `preview_desired_state` first: it returns the request lines, the worker's directive, the cost, the balance left and every refusal. A midweek visit is the same request with the off-cycle flag. Check open requests with `get_purchase_requests` before asking for another, and do not send a second request while one is pending. Prices change only at a visit, so a price change waits for Friday or rides on a paid visit.
 
+**Slow sellers** (team decision, 12 Nov). Flag a slot when it has sold nothing for **5 school days in a row while our records say it held stock** (a receipt or a person's count shows units in it). Days in a break don't count, and a slot that may be empty is not slow, because an empty slot can't sell. At the next Friday visit, act on a flagged slot: try a lower price, or swap the product. Pulled units go to the closet at what we paid, so a pull is not a write-off. Don't flag a slot for selling slowly but steadily; there is no rule for that until we have sales of our own drinks. Say in the slot's reason which rule applied.
+
 **Qualifying.** Restocking keeps us on the leaderboard: four complete locations or thirty units across the quarter (section 6).

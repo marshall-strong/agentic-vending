@@ -241,7 +241,7 @@ class Config:
     from each product's catalog size and the loading chart (`vending.capacity`).
     `capacity_overrides` holds a person's count per product, which wins over
     the chart and is the only capacity for a package the chart doesn't list.
-    The ceiling default is the team's $6.00 proposal; the API refuses any
+    The ceiling default is the team's $6.50, decided 12 Nov; the API refuses any
     sale price over $10.00, so a higher ceiling is an error. Cutoffs are per
     store and in `timezone`; past a cutoff in `soft_cutoff_stores` is a
     warning, not a refusal, because David saw no hard Amazon deadline. The
@@ -253,7 +253,7 @@ class Config:
     which Windows lacks unless the `tzdata` package is installed.
     """
     capacity_overrides: Mapping[str, int] = field(default_factory=dict)
-    price_ceiling_cents: int = 600
+    price_ceiling_cents: int = 650
     tax_percent: int = DEFAULT_TAX_PERCENT
     midweek_fee_cents: int = 2500
     halted: bool = False

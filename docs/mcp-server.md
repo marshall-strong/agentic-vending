@@ -256,7 +256,7 @@ and a SKU with a space in it is refused, since SKUs have none and it would never
 warns about a count for a SKU that isn't in the catalog, and about one more than 1.5 times the
 chart's figure for that package.
 
-The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` (8) and
+The other keys the planner reads are `price_ceiling_cents` (650), `tax_percent` (8) and
 `midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for
 type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
 refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
