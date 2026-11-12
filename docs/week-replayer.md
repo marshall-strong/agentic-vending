@@ -103,8 +103,9 @@ is units on the rail after the visit; `product` left out means whatever is there
 no change. A `sourcing` list is passed through unchecked, for the restock planner. It differs from
 the team's format in three places, all until the data or David settles them:
 
-- **`fill_to` can't be left out** to mean "fill to capacity", because there is no slot capacity
-  yet. It must be 0 to 50, a sanity limit (`MAX_FILL` in `deciders.py`), not a capacity.
+- **`fill_to` can't be left out** to mean "fill to capacity", because the replay cases carry no
+  package sizes, so the loading chart the planner uses (`vending/capacity.py`, 7 to 11 a column)
+  can't apply. It must be 0 to 50, a sanity limit (`MAX_FILL` in `deciders.py`), not a capacity.
 - **`"product": null` is refused**, as the team's format refuses an empty slot until David
   confirms one is allowed.
 - **Naming the product already in a slot** is fine on a test case. On a replayed week we don't
