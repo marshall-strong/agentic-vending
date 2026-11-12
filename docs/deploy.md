@@ -36,6 +36,9 @@ entrypoint keeps retrying every minute in the background.
 
 **The agent loop does not run yet.** When the harness exists it starts `python -m vending.server`
 over stdio from the same image, with `VENDING_TOOLS=built` so only working tools are offered.
+Until then the container gets **no Anthropic key**, since nothing in it calls the model; the change
+that runs the agent loop here adds the secret to `$Secrets` in the deploy script, under the name the
+agent reads (`VENDING_ANTHROPIC_API_KEY`, per the README).
 
 **Nothing in the image migrates.** The worker's syncs, the server, the halt switch and the ledger
 CLI all refuse to run on a database that is behind and name the command. After a merge that adds
@@ -66,7 +69,7 @@ From the repository root, on a machine with Docker running:
 ```
 
 That builds the image tagged with the current commit, pushes it, loads `DATABASE_URL`,
-`DEX_API_KEY`, `TS_AUTHKEY` and `ANTHROPIC_API_KEY` from your `.env` into Container App secrets,
+`DEX_API_KEY` and `TS_AUTHKEY` from your `.env` into Container App secrets,
 sets `DEX_BASE_URL`, points ingress at port 8080, and rolls the app to the image with one replica
 always on (`minReplicas` 1, the 29 Oct decision: it stays 0 only while the hello-world image is
 deployed). If the roll fails, it points ingress back at the port it had.
@@ -82,7 +85,7 @@ isn't committed does. The list is `$ImagePaths` in the script; keep it in step w
 
 The secrets are read by `scripts/write_secret_files.py`, which parses `.env` exactly as the app
 does, into temporary files that `az` reads itself (`database-url=@<file>`), so no value is ever on
-a command line. Without `-SetSecrets`, the script stops if any of the four secrets doesn't exist
+a command line. Without `-SetSecrets`, the script stops if any of the three secrets doesn't exist
 yet. **A revision reads its secrets only when it starts, and changing secrets alone makes no new
 revision**, so when `-SetSecrets` leaves the latest revision as it was (same image and settings,
 as when only `TS_AUTHKEY` changed), the script restarts it with `az containerapp revision

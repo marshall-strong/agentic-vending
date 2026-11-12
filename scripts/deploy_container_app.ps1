@@ -52,8 +52,10 @@ $Port = 8080
 # What the Dockerfile copies into the image; keep in step with its COPY lines. An untracked
 # file anywhere else can't reach the image, so it doesn't block a deploy.
 $ImagePaths = @("requirements.txt", "vending", "db", "docker")
-# .env setting -> Container App secret name.
-$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey"; "ANTHROPIC_API_KEY" = "anthropic-api-key" }
+# .env setting -> Container App secret name. No Anthropic key: nothing in the image calls the model
+# yet, so a key would only sit in a running container. The change that runs the agent loop here
+# adds it, under the name the agent reads.
+$Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey" }
 
 # Whenever the tag comes from HEAD (a build, or -SkipBuild without -Tag), HEAD must be
 # origin/main exactly, so the tag names a commit everyone can see on main.
