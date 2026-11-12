@@ -8,8 +8,10 @@ our database and the bridge:
   current price from the latest good poll;
 - the closet, also from the receipts;
 - pending requests, from `purchase_requests`;
-- the catalog, read live from the bridge (`GET /api/v1/products`), until the
-  catalog sync lands and it can come from our own table;
+- the catalog, from our copy in `catalog_products` that the catalog sync keeps,
+  so a bridge outage doesn't stop planning. Only when we hold no listed product
+  (the sync has never run) is it read live from the bridge
+  (`GET /api/v1/products`), and the reply says so;
 - the spendable balance, from the ledger;
 - the planner's settings, from the `config` table. None is required. How many
   of a product fit in a column comes from its catalog size and the loading
@@ -23,7 +25,7 @@ can say exactly what a person has to do before the agent can plan.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import psycopg
@@ -31,6 +33,7 @@ import psycopg
 from vending import config, ledger, planner, stock
 from vending.bridge import Bridge, BridgeError
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.tools import catalog as catalog_tool
 from vending.tools import desired_state as schema
 from vending.tools.machine_state import STALE_AFTER
 
@@ -75,7 +78,7 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
 
 
 def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
-    """The current state from our database. `catalog` is the bridge's product list.
+    """The current state from our database. `catalog` is the product list from `read_catalog`.
     "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`)."""
     now = now or ledger.db_now(conn)
     settings = planner_config(conn)
@@ -121,7 +124,30 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     return Gathered(current, settings, now, poll_at, tuple(notes))
 
 
-def read_catalog(bridge: Bridge) -> list[dict]:
+def read_catalog(conn: psycopg.Connection, bridge: Bridge, now: datetime) -> tuple[list[dict], list[str]]:
+    """The catalog and any notes about where it came from.
+
+    Our synced copy comes first: each listed product as the bridge last gave it,
+    so fields like `active` read the same as a live answer. A copy older than
+    `get_catalog`'s stale limit is still used, with a note saying to sync. Only
+    when we hold no listed product is the bridge read, which can raise `NotReady`.
+    """
+    synced_at = conn.execute("select max(synced_at) from catalog_syncs").fetchone()[0]
+    stored = [row[0] for row in conn.execute(
+        "select last_response from catalog_products where delisted_at is null order by sku")]
+    if synced_at is not None and stored:
+        notes = []
+        if now - synced_at > catalog_tool.STALE_AFTER:
+            notes.append(f"STALE: the catalog was last synced {(now - synced_at).total_seconds() / 3600:.1f} hours "
+                         "ago, so products added or dropped since then are not seen; run the catalog sync "
+                         f"({catalog_tool.SYNC_COMMAND}) before trusting this plan")
+        return stored, notes
+    products = _bridge_catalog(bridge)
+    return products, [f"our copy of the catalog is empty, so it was read live from the bridge; run the catalog "
+                      f"sync ({catalog_tool.SYNC_COMMAND}) so planning doesn't depend on the bridge being up"]
+
+
+def _bridge_catalog(bridge: Bridge) -> list[dict]:
     """The catalog from the bridge, or `NotReady` saying it couldn't be read or can't be used.
 
     An empty or reshaped reply is refused too: treating it as a catalog would
@@ -159,17 +185,19 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
          now: datetime | None = None) -> tuple[planner.Plan, Gathered]:
     """Run the planner on live data. Raises `NotReady` when a person has to act first.
 
-    The halt switch is checked before the bridge is read, so that halted with
+    The halt switch is checked before the catalog is read, so that halted with
     the bridge down tells the agent to stop, not to check Tailscale.
     """
+    now = now or ledger.db_now(conn)
     halted = config.is_halted(conn)
     try:
-        catalog = read_catalog(bridge)
+        catalog, catalog_notes = read_catalog(conn, bridge, now)
     except NotReady as blocked:
         if halted:
             raise NotReady(f"{HALTED_HINT} (and {blocked})") from None
         raise
     gathered = gather(conn, catalog, now)
+    gathered = replace(gathered, notes=(*catalog_notes, *gathered.notes))
     return planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now), gathered
 
 

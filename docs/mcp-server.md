@@ -232,9 +232,9 @@ every unit. It is its own line, taken out of net, so a lost unit's cost never si
 `vending/planning.py` gathers what `plan_restock` needs and `vending/tools/preview.py` turns the
 plan into the reply. Slots come from the receipts (`vending.stock`: product, units, unit cost) and
 the latest good poll (price); the closet from the receipts; pending requests from
-`purchase_requests`; the catalog live from the bridge (`GET /api/v1/products`, until the catalog
-sync lands and it can come from our table); the spendable balance from the ledger; and the
-planner's settings from `config`.
+`purchase_requests`; the catalog from our copy in `catalog_products`, the same rows
+`get_catalog` reads, so a bridge outage doesn't stop planning; the spendable balance from the
+ledger; and the planner's settings from `config`.
 
 **How many units fit in a column depends on the package**, not the slot: each column is a row of
 packages in front of a pusher. `vending/capacity.py` matches each product's catalog `size` against
@@ -266,9 +266,14 @@ The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` 
 type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
 refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
 is refused rather than saved silently. Until the ledger is open, the
-tool answers `success: false` with the command to run; so does an empty or reshaped catalog reply
-(it would otherwise read as "every product unapproved"), and the halt switch is checked before the
-bridge is read, so halted with the bridge down says to stop, not to check Tailscale. A poll older
+tool answers `success: false` with the command to run. Delisted products count as not in the
+catalog, and so do products the bridge marks inactive. A copy last synced over 36 hours ago (the
+same limit as `get_catalog`) is still used, with a `STALE` note saying to run
+`python -m vending.sync_catalog`. Only when we hold no listed product (the sync has never run) is
+the catalog read live from the bridge (`GET /api/v1/products`), with a note saying so. In that
+case an empty or reshaped reply also answers `success: false` (it would otherwise read as "every
+product unapproved"), and the halt switch is checked before the bridge is read, so halted with the
+bridge down says to stop, not to check Tailscale. A poll older
 than 3 hours adds a `STALE` note, since stock on the rails is overstated by whatever sold since.
 A refused plan comes back with every refusal and everything that could still be worked out, so the
 agent fixes the whole plan in one turn. In `cost`, `spendable` and `spendable_left_at_max` are the

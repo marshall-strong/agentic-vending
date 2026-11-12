@@ -73,6 +73,7 @@ from day one.
 | [`docs/planning/2026-09-21-design-brief-meeting.md`](docs/planning/2026-09-21-design-brief-meeting.md) | What Graham and David answered in the Design Brief meeting, and what they still owe us |
 | [`docs/dex-api-quickstart.md`](docs/dex-api-quickstart.md) | **New to the API?** From Tailscale and a key to your first calls, plus troubleshooting |
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
+| [`docs/tool-contracts.md`](docs/tool-contracts.md) | Every tool's contract: inputs, outputs, preconditions, side effects, cost, failure behavior and owner |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
 | [`docs/db-explorer.md`](docs/db-explorer.md) | The DB explorer: a read-only page that lists every table and shows its columns and rows, so you don't need psql |
 | [`docs/process-map.md`](docs/process-map.md) | The process map and state model: the weekly cycle from sales to the next order, and every state a purchase request can be in |
