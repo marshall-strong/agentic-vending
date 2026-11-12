@@ -131,6 +131,16 @@ This is the team's 12 Nov decision, written up in PR #100 (agreed 12 Nov, not ye
 
 **How it meets rules 1 and 2.** A flagged slot gets no new purchase. Its stock is pulled or repriced at Friday, and the new product starts with no rate (the "no rate yet" case in rule 1). Pricing for the swap follows the pricing method in PR #99 (`docs/agent/price-history.md`) and the $6.50 ceiling in PR #100 (agreed 12 Nov, not yet merged).
 
+**Swap first, not mark down (proposed by Kevin, 12 Nov; the team has not agreed).** The rule above allows either action. We propose the swap as the default:
+
+- What we paid for the units is spent either way. The choice depends only on what the slot earns from here.
+- Marking down earns little per sale. At the floor it earns almost nothing: the floor is cost x 1.08 rounded up to 5 cents, so a sale there keeps the unit's cost and at most 4 cents more (`vending/pricing.py`). And the slot stays tied up.
+- A swap gives the slot to a product that sells, at a normal margin. The pull happens at the Friday visit, which is free. The pulled units stay in the closet at cost (R6, A5). They can come back later: as a wildcard test, or if demand returns.
+
+So at a flag: allow **at most one price step down** (PR #99's step) if the slot has had no price test yet. If the slot is flagged again, swap it. Keep a slow seller only when it is expected to earn more over the weeks left than its replacement, at their prices. With a 9-week run, a product that sells almost nothing rarely passes that test.
+
+This depends on R6. If end-of-run stock is valued at less than cost, closet units lose value, and marking down to the floor to recover cash becomes closer to a swap. The question is P2 on #102.
+
 ## 4. How the balance limits orders
 
 **Rule.** After an order, at its most-we-pay cost, the spendable balance must still hold **$53**. If it would not, cut the order in this order:
@@ -193,7 +203,8 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - **Day-one deadline:** "the 27th" falls on the Thanksgiving closure; the exact time is still being asked (#102).
 - **More than one open request** (#106 row 12). It would remove the clash between a midweek request and the Friday request.
 - **A Friday visit in the Winter Holiday Break** (25 Dec, 1 Jan): whether one happens. Not yet asked.
-- **The wildcard slot** (Kevin's proposal on #100: one slot with a ceiling near $8.00). Not decided. It changes that slot's margin, not these rules.
+- **Swap first at a slow-seller flag** (one price step at most, then swap). Proposed by Kevin, 12 Nov; depends on R6 (#102, P2).
+- **The wildcard slot** (Kevin's proposal on #100: the agent picks one slot with a ceiling near $8.00; the floor is the same as every other slot). Not decided. It changes that slot's margin, not these rules.
 - **A rule for slow-but-steady slots.** None until we have sales of our own drinks (#100).
 
 ## Sources
