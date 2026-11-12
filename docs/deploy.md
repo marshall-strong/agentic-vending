@@ -163,6 +163,12 @@ above, or write a separate file of bare `KEY=value` lines for `--env-file`.
 - Tailscale's default key expiry is 90 days, and the key's expiry is unknown; if the node drops
   off the tailnet, ask David for a new key, put it in `.env` and run the deploy with
   `-SetSecrets`, which restarts the revision so it joins with the new key.
+- **Once Tailscale drops the node, the container can't rejoin by itself.** The entrypoint deletes
+  its copy of the key after the first join and the worker never sees `TS_AUTHKEY`, so if the
+  ephemeral node is removed (for example after a long outage on either side), every hourly round
+  reports the bridge unreachable on `/health` until someone restarts the revision, which joins
+  again with the `ts-authkey` secret:
+  `az containerapp revision restart --name ai-group-2-vend --resource-group data_systems_resource_group --revision <latest revision>`.
 - `tailscaled`'s log is not in the Container App log. To read it, open a shell with
   `az containerapp exec --name ai-group-2-vend --resource-group data_systems_resource_group --command sh`
   and run `tail -n 100 /tmp/tailscaled.log`.
