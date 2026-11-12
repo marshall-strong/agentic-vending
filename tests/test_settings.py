@@ -40,3 +40,10 @@ def test_read_env_file(tmp_path):
         "DATABASE_URL": "postgresql://user:pa55'@localhost/db",
         "VENDING_DB_PASSWORD": "made up",
     }
+
+
+def test_read_env_file_ignores_a_byte_order_mark(tmp_path):
+    # What Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes.
+    path = tmp_path / "settings"
+    path.write_bytes(b"\xef\xbb\xbfDATABASE_URL=postgresql://h/db\nDEX_TIER=student\n")
+    assert read_env_file(path) == {"DATABASE_URL": "postgresql://h/db", "DEX_TIER": "student"}
