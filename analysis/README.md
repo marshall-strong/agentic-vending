@@ -6,11 +6,21 @@ What the machine's sales history says about demand for **our 20 slots** (15-18, 
 
 ## Scope
 
-Anything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller flags, experiments) uses only our slots, read from `vending.slots.SLOTS` on `vending.slots.DEVICE_ID`, and no slot is ever judged by another slot's state (`docs/integrity.md`). Machine-wide data is used only as totals over the whole machine, and only for the calendar and day-off effects, the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. That history is from before the competition, when course staff stocked every slot, so it reflects no rival strategy. The export never writes a per-slot value of another slot, and the analysis stops if its lab data would carry one.
+Anything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller flags, experiments) uses only our slots on `vending.slots.DEVICE_ID` (see [Which slots are ours](#which-slots-are-ours)), and no slot is ever judged by another slot's state (`docs/integrity.md`). Machine-wide data is used only as totals over the whole machine, and only for the calendar and day-off effects, the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. That history is from before the competition, when course staff stocked every slot, so it reflects no rival strategy. The export never writes a per-slot value of another slot, and the analysis stops if its lab data would carry one.
+
+## Which slots are ours
+
+The assignment from the inventory server (`GET /api/v1/slots`) is team group-b on `vmc1`: slots 15-18, 25-28, 35-38, 45-48, 55-58, the same as `vending.slots.SLOTS`. The scripts take the slot list from the first of these that is set:
+
+1. `--slots` on the command line, comma or space separated.
+2. The assignment stored from the inventory server, read with `vending.slots.our_slots(conn)`, once that function exists and a row is stored.
+3. `vending.slots.SLOTS`.
+
+The export writes the list it used to `analysis/data/slots.json`. The analysis reads it, and stops with a re-export message if it is asked for a different list. The labs take the list, the rails that are not ours and the source line in their footer from `lab_data.json`.
 
 ## The interactive labs
 
-Three pages built on this analysis, as step-by-step labs: step tabs, toggles, sliders, a run log and live recalculation. Ask a project maintainer for access. Rails that are not ours are drawn hatched, labelled "Not our turf", with no values.
+Three pages built on this analysis, as step-by-step labs: step tabs, toggles, sliders, a run log and live recalculation. Ask a project maintainer for access. Rails that are not ours are drawn hatched, labelled "Not our turf", with no values. Their sources are in `labs/`; `rebuild.py` builds them into `analysis/out/labs/<lab>/`, as `index.html` (for publishing as an artifact) and `standalone.html` (opens directly in a browser).
 
 | Lab | Question it answers |
 |---|---|
@@ -24,6 +34,9 @@ Three pages built on this analysis, as step-by-step labs: step tabs, toggles, sl
 |---|---|
 | `export_sales.py` | Reads the database (read-only) and writes `analysis/data/*.csv`: our slots' poll readings and sales events (filtered like `vending.ledger._counter_rows`), every poll time, `machine_hourly.csv` (units and cents the whole machine sold since the previous poll; totals only) and `door_events.csv` (the EVA-DTS `EA2*DO` door-open counter at every poll and its rise). |
 | `sales_analysis.py` | The whole analysis in one script with fixed seeds. It writes `analysis/out/lab_data.json` (the labs' data) and `analysis/out/analysis_report.md`. |
+| `slots_config.py` | Decides which slots are ours (see above) and checks the list. |
+| `rebuild.py` | Runs the export, the analysis and the three lab builds in one go, then prints a short summary. |
+| `labs/` | The three labs: one build script each (`forecast_lab.py`, `rhythm_lab.py`, `slot_lab.py`), their templates and scripts, and `labkit.py` (shared paths, the slot text filled into the templates, the two page forms). |
 | `golisano_calendar_2026_27.json` | The Golisano Institute's 2026-27 academic calendar, one entry per day from Aug 24 2026 to Jan 31 2027, with class days, breaks and closures, its sources, and the date it was last checked against the official page (`checked`). |
 | `planograms_photos.json`, `planogram_2026-10-08.json` | What our slots held in the dated team photos (other slots are listed as `{"slot": ..., "ours": false}` with no values). The Oct 8 file also describes the snack machine next to ours. |
 | `product_history.md` | Our slots' products over time, read from those photos. |
@@ -34,6 +47,27 @@ Three pages built on this analysis, as step-by-step labs: step tabs, toggles, sl
 
 ## Rerun it
 
+The analysis has its own venv with pinned versions, so the project's requirements stay small. The pins are from Python 3.14; older Pythons can't install pandas 3.1 and numpy 2.5. Set it up once, from the repo root:
+
+```powershell
+py -3.14 -m venv analysis\.venv
+analysis\.venv\Scripts\python.exe -m pip install -r analysis\requirements.txt
+```
+
+Then one command does it all. Run it from the repo root with the analysis venv; the export runs with the project's venv:
+
+```powershell
+analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe
+```
+
+When every check passes it copies the report to `REPORT.md`. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/`. If our slot list ever changes:
+
+```powershell
+analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe --slots 15,16,17,18,25,26,27,28,35,36,37,38,45,46,47,48,55,56,57,58
+```
+
+The steps by hand:
+
 You need read access to the database: a `.env` file in the repo root with `DATABASE_URL=...` (ask a project maintainer for the value; never commit it). Without it, step 1 fails and you can only rerun step 2 on CSVs someone shares with you in `analysis/data/`.
 
 ```powershell
@@ -41,9 +75,7 @@ You need read access to the database: a `.env` file in the repo root with `DATAB
 # 1. Export (the project's venv; reads DATABASE_URL from .env). Writes analysis\data\*.csv
 .venv\Scripts\python.exe analysis\export_sales.py
 
-# 2. Analyse (its own venv with pinned versions, so the project's requirements stay small)
-py -3 -m venv analysis\.venv
-analysis\.venv\Scripts\python.exe -m pip install -r analysis\requirements.txt
+# 2. Analyse (the analysis venv set up above)
 analysis\.venv\Scripts\python.exe -I analysis\sales_analysis.py
 
 # 3. Keep the report

@@ -1,0 +1,1835 @@
+<title>Slot and Price Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* layout: stepped lab notebook, tab rail of steps, two-column controls|chart that stacks on phones */
+:root{
+  --bg:#F3F5F7; --surface:#FFFFFF; --sunk:#E9EDF1; --ink:#14202C; --muted:#56636F; --line:#D5DCE3;
+  --accent:#1D5FB8; --accent-ink:#FFFFFF; --class:#E3ECF8; --break:#F6E7D6; --good:#1F7A4D; --warn:#A86200; --bad:#B3261E;
+  --font-display:"Barlow Condensed", "Arial Narrow", sans-serif; --font-body:"IBM Plex Sans", system-ui, sans-serif; --font-mono:"IBM Plex Mono", ui-monospace, monospace;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300;
+  --s1-ink:#FFFFFF; --s2-ink:#0b0b0b; --s3-ink:#0b0b0b; --s4-ink:#0b0b0b; --s5-ink:#0b0b0b; --s6-ink:#FFFFFF;
+  --q0:#cde2fb; --q1:#9ec5f4; --q2:#6da7ec; --q3:#3987e5; --q4:#256abf; --q5:#184f95; --q6:#0d366b;
+  --q0-ink:#14202C; --q1-ink:#14202C; --q2-ink:#14202C; --q3-ink:#FFFFFF; --q4-ink:#FFFFFF; --q5-ink:#FFFFFF; --q6-ink:#FFFFFF;
+  --grid:#E6EAEE; --axis:#C3CBD3; --tip-bg:#14202C; --tip-ink:#FFFFFF;
+  --cab:#2A3037; --cab-edge:#14181D; --glass:#3A434D; --ledge:#1B2026; --ledge-ink:#E6EBF0; --tag:#FFFFFF; --tag-ink:#14202C; --cab-light:#F4F8FC; --cab-sel:#FFC233; --cab-focus:#FFFFFF; --rail-none:#6B7580; --rail-none-ink:#FFFFFF; --turf-hatch:rgba(0,0,0,.18);
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E141A; --surface:#151E27; --sunk:#1B2632; --ink:#E4EAF0; --muted:#97A4B1; --line:#283543;
+    --accent:#6EA2EE; --accent-ink:#0E141A; --class:#16283F; --break:#3A2A17; --good:#5CC48D; --warn:#E3A44A; --bad:#F2867D;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+    --s1-ink:#0E141A; --s2-ink:#0E141A; --s3-ink:#0E141A; --s4-ink:#0E141A; --s5-ink:#0E141A; --s6-ink:#FFFFFF;
+    --q0:#0d366b; --q1:#184f95; --q2:#1c5cab; --q3:#2a78d6; --q4:#5598e7; --q5:#86b6ef; --q6:#b7d3f6;
+    --q0-ink:#E4EAF0; --q1-ink:#E4EAF0; --q2-ink:#FFFFFF; --q3-ink:#FFFFFF; --q4-ink:#0E141A; --q5-ink:#0E141A; --q6-ink:#0E141A;
+    --grid:#223040; --axis:#3A4A5B; --tip-bg:#E4EAF0; --tip-ink:#0E141A;
+    --cab:#222C37; --cab-edge:#3B4958; --glass:#10171E; --ledge:#0A0F14; --ledge-ink:#C9D3DC; --tag:#E4EAF0; --tag-ink:#0E141A; --cab-light:#DCE7F2; --cab-sel:#FFC233; --cab-focus:#FFFFFF; --rail-none:#5B6773; --rail-none-ink:#FFFFFF; --turf-hatch:rgba(255,255,255,.14);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E141A; --surface:#151E27; --sunk:#1B2632; --ink:#E4EAF0; --muted:#97A4B1; --line:#283543;
+  --accent:#6EA2EE; --accent-ink:#0E141A; --class:#16283F; --break:#3A2A17; --good:#5CC48D; --warn:#E3A44A; --bad:#F2867D;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+  --s1-ink:#0E141A; --s2-ink:#0E141A; --s3-ink:#0E141A; --s4-ink:#0E141A; --s5-ink:#0E141A; --s6-ink:#FFFFFF;
+  --q0:#0d366b; --q1:#184f95; --q2:#1c5cab; --q3:#2a78d6; --q4:#5598e7; --q5:#86b6ef; --q6:#b7d3f6;
+  --q0-ink:#E4EAF0; --q1-ink:#E4EAF0; --q2-ink:#FFFFFF; --q3-ink:#FFFFFF; --q4-ink:#0E141A; --q5-ink:#0E141A; --q6-ink:#0E141A;
+  --grid:#223040; --axis:#3A4A5B; --tip-bg:#E4EAF0; --tip-ink:#0E141A;
+  --cab:#222C37; --cab-edge:#3B4958; --glass:#10171E; --ledge:#0A0F14; --ledge-ink:#C9D3DC; --tag:#E4EAF0; --tag-ink:#0E141A; --cab-light:#DCE7F2; --cab-sel:#FFC233; --cab-focus:#FFFFFF; --rail-none:#5B6773; --rail-none-ink:#FFFFFF; --turf-hatch:rgba(255,255,255,.14);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.55}
+.page{padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:0 48px}
+.wrap{max-width:1180px;margin:0 auto}
+h1,h2,h3{font-family:var(--font-display);font-weight:700;line-height:1.15;text-wrap:balance;margin:0}
+h1{font-size:clamp(2rem,4.4vw,2.8rem);font-weight:700}
+h2{font-size:clamp(1.5rem,3vw,1.9rem);font-weight:600}
+h3{font-size:1.25rem;font-weight:600}
+p{margin:0;max-width:72ch}
+.eyebrow{font-family:var(--font-display);font-size:.86rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:600}
+.muted{color:var(--muted)}
+.small{font-size:.88rem}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.stack{display:flex;flex-direction:column;gap:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+header.top{padding-block:28px 18px;display:flex;flex-direction:column;gap:8px}
+header.top .sub{color:var(--muted);font-size:1rem}
+header.top .question{border-left:4px solid var(--accent);padding:6px 12px;background:var(--surface);max-width:72ch}
+nav.steps{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:2px solid var(--line);overflow-x:auto}
+nav.steps .rail{list-style:none;margin:0 auto;padding:0;display:flex;gap:2px;max-width:1180px}
+nav.steps button{font-family:var(--font-body);font-size:.9rem;font-weight:600;color:var(--muted);background:none;border:0;border-bottom:3px solid transparent;padding:12px 10px 10px;cursor:pointer;white-space:nowrap;display:flex;gap:8px;align-items:center}
+nav.steps button .n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;border:1.5px solid currentColor;font-size:.75rem;font-family:var(--font-mono)}
+nav.steps button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.steps button[aria-selected="true"] .n{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+section.panel{padding-block:26px}
+.panel-head{display:flex;flex-direction:column;gap:6px;margin-bottom:20px}
+.grid2{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:20px;align-items:start}
+.grid-even{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+@media (max-width:860px){.grid2,.grid-even{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:18px;min-width:0}
+.card.tint{background:var(--class);border-color:var(--class)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.kpi{background:var(--sunk);border:1px solid var(--line);border-radius:6px;padding:10px 12px;min-width:0}
+.kpi .v{font-family:var(--font-body);font-size:1.3rem;font-weight:600;overflow-wrap:anywhere}
+.kpi .l{font-size:.78rem;color:var(--muted)}
+.kpi.hl{border-color:var(--accent);border-width:2px}
+label{font-size:.84rem;font-weight:600;display:flex;flex-direction:column;gap:5px}
+select,input[type=text],input[type=number],textarea{font:inherit;font-size:.95rem;color:var(--ink);background:var(--surface);border:1.5px solid var(--line);border-radius:6px;padding:8px 10px;min-width:0;width:100%}
+textarea{resize:vertical;min-height:120px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+legend{font-size:.84rem;font-weight:600;margin-bottom:6px;padding:0}
+.opt{flex-direction:row;align-items:flex-start;gap:8px;font-weight:400;font-size:.92rem;cursor:pointer}
+.opt input{accent-color:var(--accent);width:16px;height:16px;margin:3px 0 0;flex:none}
+.opt input:disabled+span{color:var(--muted)}
+.btn{font-family:var(--font-body);font-weight:600;font-size:.92rem;border-radius:6px;padding:9px 16px;cursor:pointer;border:1.5px solid var(--accent);background:var(--accent);color:var(--accent-ink)}
+.btn:hover{filter:brightness(1.08)}
+.btn.ghost{background:var(--surface);color:var(--accent)}
+.btn.ghost:hover{background:var(--class);filter:none}
+.btn.small{padding:6px 10px;font-size:.82rem}
+.presets{display:flex;flex-wrap:wrap;gap:6px}
+.callout{border-left:4px solid var(--warn);background:var(--surface);padding:12px 16px;font-size:.95rem;border-radius:0 6px 6px 0}
+.callout b{font-weight:600}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.86rem}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:top}
+td{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:.82rem}
+th{background:var(--sunk);font-weight:600;color:var(--ink);font-size:.8rem}
+th:first-child,td:first-child{text-align:left}
+td.l,th.l{text-align:left;white-space:normal;font-family:var(--font-body);font-size:.85rem}
+td.wrap{white-space:normal;min-width:200px}
+tr.sel td{background:var(--class)}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--sunk)}
+.tag{display:inline-block;font-family:var(--font-body);font-size:.72rem;font-weight:600;padding:1px 7px;border-radius:99px;border:1px solid var(--line);background:var(--sunk);color:var(--ink);margin:1px 3px 1px 0;white-space:nowrap}
+.tag.warn{border-color:var(--warn)}
+.tag.bad{border-color:var(--bad)}
+.chartbox{position:relative;min-width:0}
+.chartbox svg{display:block;width:100%;overflow:visible}
+.chartbox svg text{font-family:var(--font-body);fill:var(--muted);font-size:12px}
+.chartbox svg text.v{font-family:var(--font-mono);fill:var(--ink)}
+.chartbox svg text.ink{fill:var(--ink)}
+.tip{position:absolute;pointer-events:none;background:var(--tip-bg);color:var(--tip-ink);font-size:.8rem;line-height:1.35;padding:7px 10px;border-radius:6px;white-space:normal;max-width:min(260px, calc(100vw - 40px));width:max-content;transform:translate(-50%,-100%);z-index:4;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+.tip .tv{font-family:var(--font-mono);font-weight:500;font-size:.9rem;white-space:nowrap}
+.tip .tt{font-weight:600;margin-bottom:3px}
+.tip .tr{display:flex;align-items:center;gap:6px}
+.tip .tk{display:inline-block;width:14px;height:0;border-top:2px solid currentColor}
+.tip .tl{opacity:.8}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{display:inline-block;width:12px;height:12px;border-radius:2px;background:var(--s1)}
+.sw.line{width:18px;height:0;border-top:2px solid var(--s1);border-radius:0;background:none}
+.sw.class{background:var(--class);border:1px solid var(--line)}
+.sw.break{background:var(--break);border:1px solid var(--line)}
+.sw.warn{background:var(--warn)}
+.q{font-size:.9rem;background:var(--surface);border:1px dashed var(--line);border-radius:8px;padding:12px 14px}
+.q b{color:var(--accent);font-weight:600}
+.nextbar{display:flex;justify-content:flex-end;margin-top:22px}
+footer{margin-top:36px;border-top:1px solid var(--line);padding-top:14px;font-size:.8rem;color:var(--muted)}
+footer p{max-width:none;margin-bottom:6px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* machine front: an upright cabinet, 5 shelves of 8 rails, totals outside on the right and below */
+.gridwrap{overflow-x:auto;padding:6px 2px 2px}
+.mach{--edge-w:62px;--pad:16px;--gap:5px;--ledge-x:6px;display:grid;grid-template-columns:minmax(0,1fr) var(--edge-w);grid-template-rows:auto repeat(5,auto) auto auto auto;column-gap:10px;max-width:480px;min-width:300px;margin:0 auto}
+.mach.noedge{--edge-w:44px}
+.mach .cab{background:var(--cab);border:2px solid var(--cab-edge);border-radius:12px 12px 6px 6px;box-shadow:inset 0 0 0 4px rgba(255,255,255,.04),0 8px 20px rgba(0,0,0,.18)}
+.mach .glass{margin:0 calc(var(--pad) - var(--ledge-x));background-color:var(--glass);background-image:linear-gradient(112deg,rgba(255,255,255,.07) 0 14%,transparent 14% 58%,rgba(255,255,255,.045) 58% 63%,transparent 63%);border-radius:4px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+.mach .lightbar{margin:10px var(--pad) 10px;height:9px;border-radius:3px;background:var(--cab-light);box-shadow:0 0 12px 1px var(--cab-light)}
+.mach .shelf{padding:12px var(--pad) 0;min-width:0}
+.mach .rails,.mach .ledge,.mach .cedges{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:var(--gap)}
+.mach .rails{padding:0 2px}
+.mach .ledge{margin:0 calc(-1 * var(--ledge-x)) 4px;padding:3px calc(var(--ledge-x) + 2px) 4px;background:var(--ledge);border-top:2px solid rgba(255,255,255,.22);border-radius:0 0 2px 2px}
+.mach .lab{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:1px 3px;min-width:0;font-family:var(--font-mono);font-size:.6rem;line-height:1.15;font-variant-numeric:tabular-nums}
+.mach .lab .no{color:var(--ledge-ink)}
+.mach .lab .ptag{background:var(--tag);color:var(--tag-ink);padding:0 2px;border-radius:1px;font-weight:500}
+.slotrail{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:1/2.2;border:0;border-radius:5px 5px 2px 2px;padding:2px 0;cursor:pointer;font:inherit;background:var(--rail-none);color:var(--rail-none-ink);position:relative;box-shadow:inset 0 0 0 1px rgba(0,0,0,.14),inset 3px 0 0 rgba(255,255,255,.18)}
+.slotrail.none,.scale .nonesw{background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.16) 0 4px,transparent 4px 8px)}
+.slotrail.turf{cursor:default;background-color:var(--sunk,#d9dde2);color:var(--muted,#5b6570);background-image:repeating-linear-gradient(45deg,var(--turf-hatch) 0 2px,transparent 2px 7px);opacity:.75}
+.slotrail.turf .cv{font-family:var(--font-body,inherit);font-size:.62rem;font-weight:600;white-space:normal;text-align:center;line-height:1.1;padding:0 2px}
+.slotrail.turf:hover{filter:none}
+.edgev.turf{visibility:hidden}
+.slotrail .cv{font-family:var(--font-mono);font-size:.74rem;font-weight:500;line-height:1;font-variant-numeric:tabular-nums;white-space:nowrap}
+.slotrail:hover{filter:brightness(1.1)}
+.slotrail.sel{outline:3px solid var(--cab-sel);outline-offset:2px;z-index:1}
+.slotrail:focus-visible{outline:3px solid var(--cab-focus);outline-offset:2px;z-index:2}
+.slotrail.sel:focus-visible{box-shadow:inset 0 0 0 3px var(--cab-sel)}
+.mach .bin{padding:12px var(--pad) 14px;display:flex;justify-content:center}
+.mach .bin i{display:block;width:44%;height:30px;background:var(--glass);border:2px solid var(--cab-edge);border-top:4px solid var(--cab-edge);border-radius:3px 3px 5px 5px;box-shadow:inset 0 -6px 0 rgba(0,0,0,.25)}
+.mach .ehead{align-self:end;padding-bottom:6px;font-size:.7rem;font-weight:600;color:var(--muted);text-align:center}
+.mach .redge{display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:3px;padding:12px 0 22px;min-width:0}
+.mach .sh{font-size:.68rem;font-weight:600;color:var(--muted);text-align:center;line-height:1.1}
+.mach .sh .top{display:block;font-weight:400}
+.mach .cedges{padding:8px calc(var(--pad) + 2px) 0}
+.mach .clab{font-size:.68rem;color:var(--muted);text-align:center;padding-top:3px}
+.edgev{font-family:var(--font-mono);font-size:.74rem;font-variant-numeric:tabular-nums;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:5px;min-height:34px;display:flex;align-items:center;justify-content:center;padding:2px;min-width:0;white-space:nowrap}
+.edgev.c{min-height:28px;font-size:.66rem;padding:2px 0}
+.mach .corner{margin-top:8px}
+@media (max-width:520px){
+  .mach{--edge-w:48px;--pad:9px;--gap:3px;--ledge-x:4px;column-gap:6px;min-width:296px}
+  .mach.noedge{--edge-w:38px}
+  .slotrail .cv{writing-mode:vertical-rl;transform:rotate(180deg);font-size:.7rem}
+  .mach .lab{font-size:.56rem}
+  .mach .lab .ptag{padding:0 1px}
+  .edgev{font-size:.66rem}
+  .edgev.c{writing-mode:vertical-rl;transform:rotate(180deg);min-height:44px;font-size:.62rem;padding:0 2px}
+  .mach .sh{font-size:.62rem}
+  .mach.noedge .slotrail .cv,.mach .corner,.slotrail.st .cv{writing-mode:horizontal-tb;transform:none}
+  .slotrail.st .cv{padding:2px;font-size:.72rem}
+  .mach .corner{min-height:28px}
+}
+.q0{background:var(--q0);color:var(--q0-ink)} .q1{background:var(--q1);color:var(--q1-ink)} .q2{background:var(--q2);color:var(--q2-ink)} .q3{background:var(--q3);color:var(--q3-ink)}
+.q4{background:var(--q4);color:var(--q4-ink)} .q5{background:var(--q5);color:var(--q5-ink)} .q6{background:var(--q6);color:var(--q6-ink)}
+.g0{background:var(--s1);color:var(--s1-ink)} .g1{background:var(--s2);color:var(--s2-ink)} .g2{background:var(--s3);color:var(--s3-ink)}
+.g3{background:var(--s4);color:var(--s4-ink)} .g4{background:var(--s5);color:var(--s5-ink)} .g5{background:var(--s6);color:var(--s6-ink)}
+/* stock state overlay: fill pattern + glyph, never color alone */
+.st-sell{background:var(--s3);color:var(--s3-ink)}
+.st-out{background-color:var(--s2);color:var(--s2-ink);background-image:repeating-linear-gradient(135deg,rgba(0,0,0,.3) 0 3px,transparent 3px 7px)}
+.st-empty{background-color:var(--s5);color:var(--s5-ink);background-image:radial-gradient(circle,rgba(0,0,0,.34) 1.5px,transparent 1.8px);background-size:7px 7px}
+.st-never,.ph-empty{background-color:var(--rail-none);color:var(--rail-none-ink);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.16) 0 4px,transparent 4px 8px)}
+.ph-vis{background:var(--s3);color:var(--s3-ink)}
+.slotrail.st .cv{background:var(--surface);color:var(--ink);border-radius:3px;padding:3px 4px;font-size:.8rem;font-family:var(--font-body);font-weight:600}
+.st-phempty{background-color:var(--s4);color:var(--s4-ink);background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.28) 0 2px,transparent 2px 6px)}
+.sw.st-sell,.sw.st-phempty,.sw.st-out,.sw.st-empty,.sw.st-never,.sw.ph-vis,.sw.ph-empty{width:16px;height:16px;border:1px solid var(--line)}
+.glyph{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 3px;border:1px solid var(--line);border-radius:3px;background:var(--surface);color:var(--ink);font-weight:600;font-size:.78rem}
+.statelegend{display:flex;flex-direction:column;gap:6px;font-size:.8rem;color:var(--muted)}
+.statelegend .lrow{display:flex;flex-wrap:wrap;gap:6px 14px}
+.statelegend span{display:inline-flex;align-items:center;gap:6px}
+.vtick{fill:var(--ink)}
+.scale{display:flex;align-items:center;gap:8px;font-size:.76rem;color:var(--muted);flex-wrap:wrap}
+.scale .bar{display:flex;gap:2px}
+.scale .bar i{display:block;width:22px;height:10px;border-radius:2px}
+.scale .nonesw{display:inline-block;width:22px;height:10px;border-radius:2px;background-color:var(--rail-none)}
+.frontlabel{font-size:.74rem;color:var(--muted);text-align:center;letter-spacing:.08em;text-transform:uppercase;font-family:var(--font-display)}
+.exp{border:1px solid var(--line);border-radius:8px;padding:14px;background:var(--surface);display:grid;grid-template-columns:44px minmax(0,1fr);gap:4px 12px}
+.exp .rk{grid-row:span 6;font-family:var(--font-display);font-size:1.8rem;font-weight:700;color:var(--accent);line-height:1}
+.exp h3{font-size:1.15rem}
+.exp .meta{font-size:.84rem;color:var(--muted)}
+.exp p{font-size:.92rem}
+.exp.demoted{border-style:dashed}
+.exp.demoted .rk{color:var(--muted)}
+.draft{white-space:pre-wrap;font-family:var(--font-mono);font-size:.8rem;line-height:1.5;background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:14px;max-height:520px;overflow:auto}
+.featlist{display:flex;flex-direction:column;gap:4px}
+/* products step: caffeine fills (svg bars and legend swatches) and the best-guess share of a bar */
+rect.cf-yes{fill:var(--s2)} rect.cf-no{fill:var(--s3)} rect.cf-unk{fill:var(--rail-none)}
+.sw.cf-yes{background:var(--s2)} .sw.cf-no{background:var(--s3)} .sw.cf-unk{background:var(--rail-none)}
+.sw.guess{background:var(--s1);opacity:.4}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important;scroll-behavior:auto !important}}
+</style>
+
+<div class="page">
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">Golisano Institute for Business &amp; Entrepreneurship · Agentic vending · Machine {{DEVICE}}</div>
+  <h1>Slot and price lab</h1>
+  <p class="sub">Where in the machine, and at what price, do drinks sell? <span id="hdrRange"></span></p>
+  <p class="question small">This lab shows {{OUR}} ({{SLOT_RANGES}}); the other rails are hatched out with no values. Everything per slot here uses only our slots and never judges one slot by another slot's state. The machine reports what it sold, never product names or what is left on the shelf, so a quiet slot may simply be empty; product names come from the team's dated photos (step 2). It does count door openings, which date the restock visits. Every number on this page is computed from the embedded poll data.</p>
+</header>
+</div>
+
+<nav class="steps" aria-label="Lab steps">
+  <div class="rail" role="tablist">
+    <button role="tab" id="tab1" aria-controls="panel1" aria-selected="true" data-step="1"><span class="n">1</span>Machine front</button>
+    <button role="tab" id="tab2" aria-controls="panel2" aria-selected="false" data-step="2" tabindex="-1"><span class="n">2</span>Products</button>
+    <button role="tab" id="tab3" aria-controls="panel3" aria-selected="false" data-step="3" tabindex="-1"><span class="n">3</span>Position</button>
+    <button role="tab" id="tab4" aria-controls="panel4" aria-selected="false" data-step="4" tabindex="-1"><span class="n">4</span>Price changes</button>
+    <button role="tab" id="tab5" aria-controls="panel5" aria-selected="false" data-step="5" tabindex="-1"><span class="n">5</span>Segments</button>
+    <button role="tab" id="tab6" aria-controls="panel6" aria-selected="false" data-step="6" tabindex="-1"><span class="n">6</span>Test next</button>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<!-- STEP 1 -->
+<section class="panel" id="panel1" role="tabpanel" aria-labelledby="tab1" data-panel="1">
+  <div class="panel-head">
+    <span class="eyebrow">Step 1 · Machine front</span>
+    <h2>Which slots sell, once you allow for empty shelves?</h2>
+    <p class="muted">The picture is the front of the machine as you face it: shelf 1 is the top shelf, and each shelf runs from selection 1 on the left to 8 on the right, so slot 36 is shelf 3, sixth from the left. Each tall rail is one slot, colored by the metric you pick, with its number and current price on the ledge below it, as on the real tags. The totals to the right add up our slots on each shelf; the ones below add up each of our columns. Hatched rails are not ours and carry no values. Turn on the stock-out adjustment to see what the slot would look like if it had never run empty.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label for="metric">Metric
+        <select id="metric">
+          <option value="units" selected>Units sold (all polls)</option>
+          <option value="takings">Takings, tax included (all polls)</option>
+          <option value="rate">Units per class day (regular polling)</option>
+          <option value="price">Average listed price on class days</option>
+          <option value="zero">Zero-sales week share</option>
+          <option value="state">State at the last poll (stock)</option>
+        </select>
+      </label>
+      <label class="opt" for="adjStock"><input type="checkbox" id="adjStock"><span>Adjust for stock-outs</span></label>
+      <label class="opt" for="photoCmp"><input type="checkbox" id="photoCmp" disabled><span id="photoCmpLbl">Compare with the photo</span></label>
+      <p class="small muted" id="adjNote"></p>
+      <div class="presets" role="group" aria-label="Quick views">
+        <button class="btn ghost small" id="pre1">Raw units</button>
+        <button class="btn ghost small" id="pre2">In-stock rate</button>
+        <button class="btn ghost small" id="pre3">Silent weeks</button>
+        <button class="btn ghost small" id="pre4">Stock state</button>
+      </div>
+      <p class="small muted">Hover or focus a rail to read it. Click a slot to open its weekly sales, price history and suspected-empty periods.</p>
+    </div>
+    <div class="card stack">
+      <div class="frontlabel">Front of the machine, as you face it</div>
+      <div class="chartbox" id="gridBox"><div class="gridwrap"><div class="mach" id="mgrid" role="group" aria-label="Machine front as you face it: 5 shelves of 8 slots, top shelf first"></div></div><div class="tip" hidden></div></div>
+      <div class="scale" id="scale1"></div>
+      <div class="statelegend" id="stateLegend" hidden></div>
+      <p class="small muted" id="turfNote"></p>
+      <div class="kpis" id="kpi1"></div>
+    </div>
+  </div>
+  <div class="card stack" style="margin-top:20px" id="slotCard">
+    <div class="row" style="justify-content:space-between">
+      <h3 id="slotTitle">Slot</h3>
+      <span class="small muted" id="slotSub"></span>
+    </div>
+    <div class="kpis" id="slotKpis"></div>
+    <div class="grid-even">
+      <div class="stack">
+        <div class="legend"><span><i class="sw"></i>Units sold that week</span><span><i class="sw class"></i>Class day</span><span><i class="sw break"></i>Weekday with no classes</span><span><i class="sw warn"></i>Suspected empty that day</span><span><svg width="12" height="10" aria-hidden="true"><path class="vtick" d="M0 0H12L6 9Z"/></svg>Visit with refill evidence for this slot</span></div>
+        <div class="chartbox" id="sparkBox"><svg id="spark" role="img" aria-label="Weekly units for the selected slot"></svg><div class="tip" hidden></div></div>
+        <p class="small muted" id="sparkNote"></p>
+        <h3 style="font-size:1.05rem">Refill evidence for this slot</h3>
+        <p class="small" id="refillSummary"></p>
+        <div class="tablewrap"><table><thead><tr><th>Visit (door opened)</th><th class="l">Evidence for this slot</th><th class="l">Visit grade</th></tr></thead><tbody id="slotRefills"></tbody></table></div>
+        <p class="small muted" id="refillNote"></p>
+      </div>
+      <div class="stack">
+        <h3 style="font-size:1.05rem">Price history</h3>
+        <div class="tablewrap"><table><thead><tr><th>From</th><th>Price</th></tr></thead><tbody id="slotPrices"></tbody></table></div>
+        <h3 style="font-size:1.05rem">Empty and sold-out periods</h3>
+        <div class="tablewrap"><table><thead><tr><th>Start</th><th>End</th><th class="l">How it ended</th><th>Expected sales</th><th>Confidence</th></tr></thead><tbody id="slotEmpty"></tbody></table></div>
+        <p class="small muted">"Expected sales" is what the slot would normally have sold over that stretch. Zero sales when several were expected is the empty signal. A period ends at the next visit with refill evidence for this slot; one still open at the last poll is "sold out, not refilled" if it began after the last restock, otherwise "silent since before the last restock". It is inferred, not observed.</p>
+      </div>
+    </div>
+  </div>
+  <div class="q" style="margin-top:18px"><b>Look for.</b> Switch between raw units and the in-stock rate. Which slots look weak only because they sat empty? Which stay weak even when stocked?</div>
+  <div class="nextbar"><button class="btn" data-go="2">Next: products →</button></div>
+</section>
+
+<!-- STEP 2 -->
+<section class="panel" id="panel2" role="tabpanel" aria-labelledby="tab2" data-panel="2" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 2 · Products</span>
+    <h2>What did our slots hold, and what sold?</h2>
+    <p class="muted">The machine never reports product names, so this step reads them from the team's dated photos of the machine front. Each sale is credited to the product the slot showed in the photo before it, or in the photo after it when that earlier photo shows the rail empty. Units, takings and prices come from the slot's own counters. {{OUR_CAP}} only.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label for="prGroup">Group sales by
+        <select id="prGroup">
+          <option value="category" selected>Category</option>
+          <option value="caffeine">Caffeine</option>
+          <option value="brand">Product line (brand)</option>
+        </select>
+      </label>
+      <label for="prMeasure">Measure
+        <select id="prMeasure">
+          <option value="units" selected>Units sold</option>
+          <option value="takings">Takings, tax included</option>
+        </select>
+      </label>
+      <div class="kpis" id="kpiP"></div>
+    </div>
+    <div class="card stack">
+      <div class="legend" id="prLegend"></div>
+      <div class="chartbox" id="prBox"><svg id="prChart" role="img" aria-label="Our slots' sales by product group"></svg><div class="tip" hidden></div></div>
+      <p class="small muted" id="prNote"></p>
+    </div>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <div class="row" style="justify-content:space-between;align-items:flex-end">
+      <h3 id="prSlotTitle">What each slot held</h3>
+      <label for="prSlot" style="min-width:130px">Slot<select id="prSlot"></select></label>
+    </div>
+    <div class="legend" id="runLegend"></div>
+    <div class="chartbox" id="runBox"><svg id="runChart" role="img" aria-label="Products the selected slot held over time, and the photos they come from"></svg><div class="tip" hidden></div></div>
+    <p class="small muted">Bars run from the first to the last sale credited to that product. Photo marks sit at the best-guess time; the thin line through each spans the window the photo could have been taken in.</p>
+    <div class="grid-even">
+      <div class="stack">
+        <h3 style="font-size:1.05rem">Photos of this slot</h3>
+        <div class="tablewrap"><table><thead><tr><th>Photo (best guess)</th><th class="l">Seen in the slot</th><th class="l">Category</th><th class="l">Caffeine</th><th class="l">Confidence</th></tr></thead><tbody id="prPhotos"></tbody></table></div>
+      </div>
+      <div class="stack">
+        <h3 style="font-size:1.05rem">Sales credited to each product</h3>
+        <div class="tablewrap"><table><thead><tr><th>First sale</th><th>Last sale</th><th class="l">Product line (category)</th><th>Units</th><th>Takings</th><th>Avg price</th></tr></thead><tbody id="prRuns"></tbody></table></div>
+      </div>
+    </div>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <h3>All our slots</h3>
+    <div class="tablewrap"><table><thead><tr><th>Slot</th><th class="l">Product lines seen, in photo order</th><th class="l">Main category</th><th>Units</th><th>Takings</th><th>Caffeinated</th><th>Photos showing it empty</th></tr></thead><tbody id="prAll"></tbody></table></div>
+    <p class="small muted">"Caffeinated" is the share of the slot's units credited to drinks known to contain caffeine; units of unknown caffeine count against it, so it is a floor. Click a row to open that slot above.</p>
+  </div>
+  <div class="card tint stack" style="margin-top:20px">
+    <h3>Caveats</h3>
+    <ul class="small" id="prCaveats" style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"></ul>
+    <p class="small" id="prBasis"></p>
+  </div>
+  <div class="q" style="margin-top:18px"><b>Look for.</b> Switch to caffeine, then to product lines. Which lines carry our sales, and which slots changed product between photos? Check a slot's price history in step 1 before reading a slowdown as a product effect.</div>
+  <div class="nextbar"><button class="btn" data-go="3">Next: position effects →</button></div>
+</section>
+
+<!-- STEP 3 -->
+<section class="panel" id="panel3" role="tabpanel" aria-labelledby="tab3" data-panel="3" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 3 · Position</span>
+    <h2>Does the shelf or the column matter, once price is held fixed?</h2>
+    <p class="muted">Each dot is how many more (or fewer) units per in-stock class day a slot in that row or column sells than the baseline slot on shelf {{BASE_ROW}} or in column {{BASE_COL}} (our columns are {{OUR_COLS}}). The whisker is the 95% confidence interval. If the whisker crosses zero, the data cannot tell that position from the baseline.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label class="opt" for="ctrlPrice"><input type="checkbox" id="ctrlPrice" checked><span>Control for price (regression on row, column and average price)</span></label>
+      <p class="small muted" id="ctrlNote"></p>
+      <div class="kpis" id="kpi2"></div>
+      <div class="callout"><b>Read this as association, not cause.</b> Product names come only from dated photos (step 2), not from the machine. The products, their prices and their positions were chosen together, so a strong row may just hold the most popular product. Only moving a product (step 6) can separate the two.</div>
+    </div>
+    <div class="card stack">
+      <h3>Row effects ({{BASE_ROW_TEXT}} = 0)</h3>
+      <div class="chartbox" id="rowBox"><svg id="rowChart" role="img" aria-label="Row effects with confidence intervals"></svg><div class="tip" hidden></div></div>
+      <h3>Column effects (column {{BASE_COL}} = 0)</h3>
+      <div class="chartbox" id="colBox"><svg id="colChart" role="img" aria-label="Column effects with confidence intervals"></svg><div class="tip" hidden></div></div>
+      <p class="small muted" id="effN"></p>
+    </div>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <h3>Table view</h3>
+    <div class="tablewrap"><table><thead><tr><th>Position</th><th>Slots</th><th>Mean units per in-stock class day</th><th>Raw difference (95% CI)</th><th>Regression difference (95% CI)</th><th>p (regression)</th></tr></thead><tbody id="effTable"></tbody></table></div>
+  </div>
+  <div class="q" style="margin-top:18px"><b>Look for.</b> Toggle the price control. Which positions keep their gap when price is held fixed? Do any intervals clear zero?</div>
+  <div class="nextbar"><button class="btn" data-go="4">Next: price changes →</button></div>
+</section>
+
+<!-- STEP 4 -->
+<section class="panel" id="panel4" role="tabpanel" aria-labelledby="tab4" data-panel="4" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 4 · Price changes</span>
+    <h2>Did slots sell faster or slower after their price changed?</h2>
+    <p class="muted">Every price change in the poll history, with the slot's units per in-stock class day before and after. A class day is a weekday with classes. Days the slot was suspected empty for most of the daytime are left out of the denominator, so an empty shelf does not look like weak demand.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label class="opt" for="equalWin"><input type="checkbox" id="equalWin" checked><span>Equal-length windows (same number of class days before and after)</span></label>
+      <p class="small muted" id="winNote"></p>
+      <label for="pcFilter">Show
+        <select id="pcFilter"><option value="all" selected>All changes</option><option value="cut">Price cuts</option><option value="raise">Price raises</option></select>
+      </label>
+      <label class="opt" for="vsCtrl"><input type="checkbox" id="vsCtrl" checked><span>Divide by the machine-wide trend (whole-machine units per class day, same days)</span></label>
+      <div class="kpis" id="kpi3"></div>
+    </div>
+    <div class="card stack">
+      <div class="legend" id="slopeLegend"></div>
+      <div class="chartbox" id="slopeBox"><svg id="slope" role="img" aria-label="Before and after rates for each price change"></svg><div class="tip" hidden></div></div>
+      <p class="small muted">One line per price change. Hover a line to read it; click it to open its daily chart below.</p>
+    </div>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <h3>Every price change</h3>
+    <div class="tablewrap"><table><thead><tr><th>Slot</th><th>When</th><th>Price</th><th>Before: units / in-stock days</th><th>After: units / in-stock days</th><th>Rate before → after</th><th>Ratio (95% CI)</th><th>Ratio vs machine-wide trend</th><th class="l">Confounding flags</th></tr></thead><tbody id="pcTable"></tbody></table></div>
+    <p class="small muted">Ratio above 1 means the slot sold faster after the change. The interval assumes Poisson counts. When one side sold nothing, the ratio adds 0.5 to both counts so it can still be shown, and it is marked with an asterisk. No ratio is shown when either side has fewer than 3 in-stock class days. "Ratio vs machine-wide trend" divides by the whole machine's after/before ratio of units per class day over the same days (a total over every slot, not stock-adjusted), which removes the machine-wide trend; its interval also carries the uncertainty of that ratio. No slot is compared with another slot.</p>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <div class="row" style="justify-content:space-between"><h3 id="dayTitle">Daily sales around the change</h3><span class="small muted" id="daySub"></span></div>
+    <div class="legend"><span><i class="sw"></i>Units sold that day</span><span><i class="sw class"></i>Class day</span><span><i class="sw break"></i>Weekday with no classes</span><span><i class="sw warn"></i>Suspected empty</span><span><i class="sw line" style="border-top-color:var(--ink)"></i>Price change</span></div>
+    <div class="chartbox" id="dayBox"><svg id="dayChart" role="img" aria-label="Daily units for the selected slot"></svg><div class="tip" hidden></div></div>
+    <p class="small muted" id="dayNote"></p>
+  </div>
+  <div class="q" style="margin-top:18px"><b>Look for.</b> Turn off equal windows. Which ratios move a lot? Those were driven by the window, not the price. How many changes have no flags at all?</div>
+  <div class="nextbar"><button class="btn" data-go="5">Next: slot segments →</button></div>
+</section>
+
+<!-- STEP 5 -->
+<section class="panel" id="panel5" role="tabpanel" aria-labelledby="tab5" data-panel="5" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 5 · Segments</span>
+    <h2>Which slots behave alike, and how many groups are worth acting on?</h2>
+    <p class="muted">K-means groups {{OUR}} by five sales features, after scaling each feature to z-scores so no single one dominates. You pick k, the number of groups. The elbow chart shows how much of the variation the groups explain. The silhouette shows how cleanly slots sit in their own group (near 1 is tight, near 0 is overlap).</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label for="kSlider"><span>Number of segments k = <span class="num" id="kVal">3</span></span>
+        <input type="range" id="kSlider" min="2" max="6" step="1" value="3">
+      </label>
+      <div class="presets" role="group" aria-label="k presets">
+        <button class="btn ghost small" id="kBest">Best silhouette</button>
+        <button class="btn ghost small" id="kThree">k = 3</button>
+      </div>
+      <fieldset>
+        <legend>Features used</legend>
+        <div class="featlist" id="featList"></div>
+        <p class="small muted">The assignments were computed ahead of time for this set of five features only, so these boxes cannot be changed here. Changing the features means rerunning the analysis script.</p>
+      </fieldset>
+      <div class="kpis" id="kpi4"></div>
+      <button class="btn" id="btnLogK">Log this k</button>
+    </div>
+    <div class="card stack">
+      <div class="frontlabel">Front of the machine, as you face it · colored by segment</div>
+      <div class="chartbox" id="segGridBox"><div class="gridwrap"><div class="mach" id="segGrid" role="group" aria-label="Machine front as you face it, colored by segment: 5 shelves of 8 slots, top shelf first"></div></div><div class="tip" hidden></div></div>
+      <div class="legend" id="segLegend"></div>
+      <div class="grid-even">
+        <div class="stack"><h3 style="font-size:1.05rem">Elbow: variation explained</h3><div class="chartbox" id="elbowBox"><svg id="elbow" role="img" aria-label="Variation explained by k"></svg><div class="tip" hidden></div></div></div>
+        <div class="stack"><h3 style="font-size:1.05rem">Silhouette by k</h3><div class="chartbox" id="silBox"><svg id="sil" role="img" aria-label="Silhouette by k"></svg><div class="tip" hidden></div></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <h3>Segment profiles</h3>
+    <div class="tablewrap"><table><thead><tr><th>Segment</th><th class="l">Name</th><th>Size</th><th class="l">Slots</th><th>Units per in-stock class day</th><th>Avg price</th><th>Friday share</th><th>Zero-week share</th><th>Weekly CV</th><th>Units</th><th class="l">Suggested action</th></tr></thead><tbody id="segTable"></tbody></table></div>
+    <p class="small muted" id="segNote"></p>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <h3>Run log</h3>
+    <div class="tablewrap"><table><thead><tr><th>k</th><th>Silhouette</th><th>Variation explained</th><th>Smallest segment</th><th>Stability</th><th class="l">Segments</th></tr></thead><tbody id="kLog"><tr><td class="l muted" colspan="6">Press "Log this k" to keep a row here.</td></tr></tbody></table></div>
+    <div class="row"><button class="btn ghost small" id="btnClearK">Clear log</button><span class="small muted">Stability is the share of slot pairs that stay together (or apart) across reruns with new random seeds.</span></div>
+  </div>
+  <div class="q" style="margin-top:18px"><b>Look for.</b> Log k = 3, 4 and 5. Where do the elbow and the silhouette agree? Is every segment big enough to act on, and would any two segments get the same action?</div>
+  <div class="nextbar"><button class="btn" data-go="6">Next: what to test →</button></div>
+</section>
+
+<!-- STEP 6 -->
+<section class="panel" id="panel6" role="tabpanel" aria-labelledby="tab6" data-panel="6" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 6 · Test next</span>
+    <h2>What should the next visit restock, and then test?</h2>
+    <p class="muted">Steps 1 to 5 found associations. A test moves one thing on purpose so the next week's sales can answer the question, and that only works on stocked rails: a position or price test on an empty rail measures the missing stock. So the list always starts with the restock. The tests after it are built from the data and ranked by how many drinks a week ride on each one: the in-stock rates of the slots involved, times 5 class days.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <h3>Test log</h3>
+      <label for="tlExp">Experiment
+        <input type="text" id="tlExp" placeholder="Pick a test on the right, or type one">
+      </label>
+      <label for="tlSlots">Slots
+        <input type="text" id="tlSlots" placeholder="e.g. 25, 58">
+      </label>
+      <label for="tlExpect">Expected effect
+        <input type="text" id="tlExpect" placeholder="e.g. +1 unit per class day">
+      </label>
+      <label for="tlMeasure">Measure
+        <select id="tlMeasure">
+          <option selected>Units per in-stock class day</option>
+          <option>Units per class week</option>
+          <option>Takings per class week</option>
+          <option>Days until first sale after restock</option>
+        </select>
+      </label>
+      <label for="tlWeeks">Weeks to run
+        <input type="number" id="tlWeeks" min="1" max="4" value="1">
+      </label>
+      <button class="btn" id="btnLogTest">Add to test log</button>
+    </div>
+    <div class="stack"><div class="callout" id="calNote"></div><div class="stack" id="expList"></div></div>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <div class="tablewrap"><table><thead><tr><th class="l">Experiment</th><th class="l">Slots</th><th class="l">Expected effect</th><th class="l">Measure</th><th>Weeks</th><th></th></tr></thead><tbody id="testLog"><tr><td class="l muted" colspan="6">Add a test to keep a row here.</td></tr></tbody></table></div>
+    <div class="row"><button class="btn ghost small" id="btnClearTests">Clear log</button></div>
+  </div>
+  <div class="grid-even" style="margin-top:20px">
+    <div class="card stack">
+      <h3>Draft takeaway for the team and the agent prompt</h3>
+      <p class="small muted">This text rebuilds from your choices in every step: the price control, the window setting, k, and the tests you logged. Copy it into the team notes or the agent's weekly instructions and edit from there.</p>
+      <div class="draft" id="draft" tabindex="0" aria-label="Draft takeaway"></div>
+      <div class="row"><button class="btn ghost small" id="btnCopy">Copy text</button><span class="small muted" id="copyMsg" aria-live="polite"></span></div>
+    </div>
+    <div class="card tint stack">
+      <h3>Before you trust any test</h3>
+      <p class="small">Log what the restocker loads into each slot at every visit. Without that, an empty slot and an unwanted product look the same in the sales data.</p>
+      <p class="small">Run one change per slot per week, and read each slot against its own history and the machine-wide trend. <span id="breakNote"></span></p>
+      <p class="small" id="ruleNote"></p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p id="footData"></p>
+  <p>Sales are counter rises between polls, assigned to days by the time of the poll (regular polling) or spread across the gap (earlier). Visits are rises in the machine's door-open counter (EA2*DO), merged when they fall within 3 hours; the counter proves the door opened, not what was loaded. "Suspected empty" comes from a heuristic that compares a slot's silence with what it normally sells; it is not an inventory count. The machine does not report product names; the ones in step 2 are read from the team's dated photos. Only {{OUR}} carry values here: hatched rails are not ours and show none.</p>
+  <p>{{SOURCE_LINE}} Ours: {{SLOT_RANGES}} on machine {{DEVICE}}.</p>
+</footer>
+</div>
+</div>
+
+<script>
+const DATA = __DATA__;
+// Lab core: pure functions, shared by the page and the offline check script.
+// The label for rails that are not ours (the team may rename it: change it here only). They are drawn hatched, with no values.
+const TURF = { label: 'Not our turf', tip: 'Rival rails. Eyes front.' };
+const SLOTS = DATA.slots, BY = {};
+SLOTS.forEach(s => { BY[s.slot] = s; });
+const D = DATA.days, ND = D.date.length;
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const ZW_FROM = '2026-09-26';      // first Saturday-week polled hourly throughout; counted in zero-week share (as in the analysis script)
+const MIN_EXPO = 3;                // fewest in-stock class days a side needs before a before/after ratio is shown
+// A slot-day counts as in stock unless it was suspected empty AND sold nothing (a day with a sale had stock).
+const inStock = (sd, i) => !sd.e[i] || sd.u[i] > 0;
+const sum = a => a.reduce((s, v) => s + v, 0);
+const mean = a => a.length ? sum(a) / a.length : null;
+function addDays(ds, k) { const p = ds.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2] + k)).toISOString().slice(0, 10); }
+function fmtDate(ds) { const p = ds.slice(0, 10).split('-').map(Number); return MON[p[1] - 1] + ' ' + p[2]; }
+const DIDX = {}; D.date.forEach((d, i) => { DIDX[d] = i; });
+const REGCLS = []; for (let i = 0; i < ND; i++) if (D.reg[i] && D.cd[i]) REGCLS.push(i);
+function weekKey(i) { return addDays(D.date[i], -((D.dow[i] + 2) % 7)); }   // dow: Mon=0 .. Sun=6; weeks start Saturday (vending/ledger.py)
+const WEEKS = [];
+(function () { let cur = null; for (let i = 0; i < ND; i++) { const k = weekKey(i); if (!cur || cur.key !== k) { cur = { key: k, idx: [] }; WEEKS.push(cur); } cur.idx.push(i); } })();
+WEEKS.forEach(w => { w.full = w.idx.length === 7 && !w.idx.some(i => D.part[i]); });
+
+function slotWeekly(id) {
+  const sd = DATA.sd[id];
+  return WEEKS.map(w => {
+    const cls = w.idx.filter(i => D.cd[i]);
+    return { key: w.key, full: w.full, idx: w.idx, units: sum(w.idx.map(i => sd.u[i])), cls: cls.length,
+             inStockCls: cls.filter(i => inStock(sd, i)).length, emptyDays: w.idx.filter(i => !inStock(sd, i)).length };
+  });
+}
+// Share of full regular-era weeks with zero units. adj: count only weeks with >= 3 class days not suspected empty.
+function zeroWeekShare(id, adj) {
+  const wk = slotWeekly(id).filter(w => w.full && w.key >= ZW_FROM && (!adj || w.inStockCls >= 3));
+  return wk.length ? wk.filter(w => w.units === 0).length / wk.length : null;
+}
+function classDayStats(id) {
+  const sd = DATA.sd[id];
+  const U = sum(REGCLS.map(i => sd.u[i])), N = REGCLS.length, Nin = REGCLS.filter(i => inStock(sd, i)).length;
+  return { U, N, Nin, perDay: U / N, perInStock: Nin ? U / Nin : null };
+}
+// Units the slot would have sold on regular-era class days it spent empty, at its own in-stock rate (analysis values).
+function missedUnits(s) { return s.rate * Math.max(0, s.class_days - s.instock_class_days); }
+function metricValue(s, metric, adj) {
+  if (metric === 'units') return adj ? s.units + missedUnits(s) : s.units;
+  if (metric === 'takings') return adj ? s.cents / 100 + missedUnits(s) * s.avg_price : s.cents / 100;
+  if (metric === 'rate') return adj ? s.rate : classDayStats(s.slot).perDay;
+  if (metric === 'price') return s.avg_price;
+  if (metric === 'zero') return zeroWeekShare(s.slot, adj);
+  return null;
+}
+const METRIC_AGG = { units: 'sum', takings: 'sum', rate: 'sum', price: 'mean', zero: 'mean' };
+
+// 97.5% quantile of Student t (Cornish-Fisher expansion; good to ~0.01 for df >= 3)
+const T975 = [12.7062,4.3027,3.1824,2.7764,2.5706,2.4469,2.3646,2.3060,2.2622,2.2281,2.2010,2.1788,2.1604,2.1448,2.1314,2.1199,2.1098,2.1009,2.0930,2.0860,2.0796,2.0739,2.0687,2.0639,2.0595,2.0555,2.0518,2.0484,2.0452,2.0423];   // exact 97.5% t quantiles, df 1..30
+function tq975(df) {
+  if (df <= 1) return T975[0];
+  if (df <= 30) { const a = Math.floor(df), f = df - a; return a >= 30 ? T975[29] : T975[a - 1] + f * (T975[a] - T975[a - 1]); }
+  const z = 1.959963985, z3 = z * z * z, z5 = z3 * z * z, z7 = z5 * z * z;
+  return z + (z3 + z) / (4 * df) + (5 * z5 + 16 * z3 + 3 * z) / (96 * df * df) + (3 * z7 + 19 * z5 + 17 * z3 - 15 * z) / (384 * df * df * df);
+}
+function variance(a) { const m = mean(a); return sum(a.map(v => (v - m) * (v - m))) / (a.length - 1); }
+// Welch difference in means b - a with 95% CI
+function welch(a, b) {
+  const va = variance(a) / a.length, vb = variance(b) / b.length, se = Math.sqrt(va + vb);
+  const df = (va + vb) * (va + vb) / (va * va / (a.length - 1) + vb * vb / (b.length - 1));
+  const d = mean(b) - mean(a), t = tq975(df);
+  return { d, lo: d - t * se, hi: d + t * se, df, se };
+}
+// Raw position effects: mean in-stock rate of each row/column minus the baseline (the first level of each: our top shelf / our leftmost column)
+const LEVELS = { row: DATA.reg.rows, col: DATA.reg.cols };
+function rawEffects(kind) {
+  const levels = LEVELS[kind], l0 = levels[0];
+  const grp = l => SLOTS.filter(s => s[kind] === l).map(s => s.rate);
+  const base = grp(l0);
+  return levels.map(l => {
+    const g = grp(l);
+    if (l === l0) return { level: l, n: g.length, mean: mean(g), d: 0, lo: null, hi: null, base: true };
+    const w = welch(base, g);
+    return { level: l, n: g.length, mean: mean(g), d: w.d, lo: w.lo, hi: w.hi };
+  });
+}
+function regEffects(kind) {
+  const levels = LEVELS[kind];
+  const co = {}; DATA.reg.full.coefs.forEach(c => { co[c.term] = c; });
+  return levels.map(l => {
+    if (l === levels[0]) return { level: l, d: 0, lo: null, hi: null, base: true };
+    const c = co[kind + ' ' + l];
+    return { level: l, d: c.coef, lo: c.ci_lo, hi: c.ci_hi, p: c.p };
+  });
+}
+
+// Price change events: changes on the same slot and day are merged (old = first old price, new = last new price).
+function priceEvents() {
+  const ev = [];
+  DATA.changes.forEach(c => {
+    const day = c.when.slice(0, 10);
+    const last = ev.find(e => e.slot === c.slot && e.date === day);
+    if (last) { last.newC = c.new; last.steps.push(c.new); last.when = c.when; }
+    else ev.push({ slot: c.slot, date: day, when: c.when, oldC: c.old, newC: c.new, steps: [c.old, c.new] });
+  });
+  ev.forEach(e => {
+    const same = ev.filter(o => o.slot === e.slot).map(o => o.date).sort();
+    const k = same.indexOf(e.date);
+    e.prev = k > 0 ? same[k - 1] : null; e.next = k < same.length - 1 ? same[k + 1] : null;
+    e.dir = e.newC < e.oldC ? 'cut' : e.newC > e.oldC ? 'raise' : 'same';
+  });
+  return ev;
+}
+function windowsFor(date, prev, next, equal) {
+  let b = REGCLS.filter(i => D.date[i] < date && (!prev || D.date[i] > prev));
+  let a = REGCLS.filter(i => D.date[i] > date && (!next || D.date[i] < next));
+  if (equal) { const n = Math.min(b.length, a.length); b = b.slice(b.length - n); a = a.slice(0, n); }
+  return { b, a };
+}
+function rateOver(id, idx) {
+  const sd = DATA.sd[id];
+  const u = sum(idx.map(i => sd.u[i])), inS = idx.filter(i => inStock(sd, i)).length;
+  return { u, inS, empty: idx.length - inS, rate: inS ? u / inS : null };
+}
+function rrCI(ub, ua, rb, ra) {
+  if (!(ub > 0 && ua > 0 && rb > 0 && ra > 0)) return null;
+  const rr = ra / rb, se = Math.sqrt(1 / ub + 1 / ua);
+  return { rr, lo: rr * Math.exp(-1.96 * se), hi: rr * Math.exp(1.96 * se), se };
+}
+// Same ratio with 0.5 added to both counts, for windows where one side sold nothing.
+function rrCIcc(ub, ua, eb, ea) {
+  if (!(eb > 0 && ea > 0)) return null;
+  const b = ub + 0.5, a = ua + 0.5, rr = (a / ea) / (b / eb), se = Math.sqrt(1 / b + 1 / a);
+  return { rr, lo: rr * Math.exp(-1.96 * se), hi: rr * Math.exp(1.96 * se), se, cc: true };
+}
+// Machine-wide trend over the same class-day windows: whole-machine units per class day after / before (a total over every
+// slot, the allowed aggregate trend; no slot is compared with another slot).
+function machineTrend(date, equal) {
+  const w = windowsFor(date, null, null, equal);
+  const ub = sum(w.b.map(i => D.mu[i])), ua = sum(w.a.map(i => D.mu[i])), nb = w.b.length, na = w.a.length;
+  if (!(ub > 0 && ua > 0 && nb && na)) return null;
+  const ratio = (ua / na) / (ub / nb), se = Math.sqrt(1 / ub + 1 / ua);
+  return { ratio, lo: ratio * Math.exp(-1.96 * se), hi: ratio * Math.exp(1.96 * se), se, ub, ua, rb: ub / nb, ra: ua / na, nb, na };
+}
+// Ratio of an event against the machine-wide trend, with both Poisson errors combined.
+function vsTrend(ci, c) {
+  if (!ci || !c) return null;
+  const v = ci.rr / c.ratio, se = Math.sqrt(ci.se * ci.se + c.se * c.se);
+  return { v, lo: v * Math.exp(-1.96 * se), hi: v * Math.exp(1.96 * se) };
+}
+function eventStats(e, equal) {
+  const w = windowsFor(e.date, e.prev, e.next, equal);
+  const B = rateOver(e.slot, w.b), A = rateOver(e.slot, w.a);
+  const out = { nb: w.b.length, na: w.a.length, B, A, ci: null, flags: [], measured: w.b.length > 0 && w.a.length > 0 };
+  if (!out.measured) {
+    out.flags.push({ t: 'Not measured', why: w.b.length === 0 ? 'No regular-polling class days at the old price' : 'No class days yet at the new price', cls: 'bad' });
+    return out;
+  }
+  out.thin = B.inS < MIN_EXPO || A.inS < MIN_EXPO;
+  out.zero = B.u === 0 && A.u === 0 ? 'both' : B.u === 0 ? 'before' : A.u === 0 ? 'after' : null;
+  if (out.thin) out.flags.push({ t: 'Too little exposure', why: 'Fewer than ' + MIN_EXPO + ' in-stock class days on one side (' + B.inS + ' before, ' + A.inS + ' after), so no ratio is shown', cls: 'bad' });
+  else if (out.zero === 'both') out.flags.push({ t: 'No sales', why: 'No units on either side', cls: 'warn' });
+  else out.ci = out.zero ? rrCIcc(B.u, A.u, B.inS, A.inS) : rrCI(B.u, A.u, B.rate, A.rate);
+  if (Math.min(B.u, A.u) < 5) out.flags.push({ t: 'Few units', why: 'Under 5 units on one side; treat as noise', cls: 'warn' });
+  if (out.zero === 'before' || out.zero === 'after') out.flags.push({ t: 'Zero on one side', why: 'No units ' + out.zero + ' the change; ratio uses 0.5 added to both counts', cls: 'warn' });
+  if (B.empty + A.empty > 0) out.flags.push({ t: 'Stock-out', why: 'Suspected empty on ' + (B.empty + A.empty) + ' of ' + (w.b.length + w.a.length) + ' window class days', cls: 'warn' });
+  const all = w.b.concat(w.a), lo = D.date[Math.min(...all)], hi = D.date[Math.max(...all)];
+  const off = []; for (let i = 0; i < ND; i++) if (D.date[i] >= lo && D.date[i] <= hi && D.dow[i] < 5 && !D.cd[i]) off.push(i);
+  if (off.length) out.flags.push({ t: 'Calendar', why: 'No-class weekdays inside the window: ' + off.map(i => fmtDate(D.date[i])).join(', '), cls: 'warn' });
+  return out;
+}
+const sgn2 = v => (v > 0 ? '+' : v < 0 ? '-' : '') + Math.abs(v).toFixed(2);
+// Upcoming academic calendar from the embedded data: the next class day, class days before the next break, the first 5 class days after it.
+function calendarAhead() {
+  const A = DATA.ahead; if (!A || !A.days.length) return null;
+  const brk = A.breaks.find(b => b.type === 'break') || null;
+  const visit = A.days.find(d => d.cd) || null;   // no visit is scheduled in the data: start from the next class day
+  const closed = A.breaks.filter(b => b.type === 'holiday' && b.institute === 'closed' && brk && b.start >= brk.start && b.end <= brk.end);
+  if (!brk || !visit) return { brk, visit, closed };
+  const before = A.days.filter(d => d.cd && d.date >= visit.date && d.date < brk.start);
+  const after = A.days.filter(d => d.cd && d.date > brk.end).slice(0, 5);
+  return { brk, visit, closed, before, after };
+}
+function closedText(cal) {
+  if (!cal.closed.length) return '';
+  const a = cal.closed[0].start, b = cal.closed[cal.closed.length - 1].end;
+  return '; Institute closed ' + fmtDate(a) + (a === b ? '' : '-' + fmtDate(b).split(' ')[1]);
+}
+function median(a) { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+
+// Visits (door-open counter rises) and refill evidence, from the analysis script.
+const VISITS = DATA.visits || [], VIS = {}; VISITS.forEach(v => { VIS[v.id] = v; });
+const REF = DATA.refill, PHOTO = DATA.photo;
+const tms = s => Date.parse(s);
+function fmtVisit(v) { return v.weekday + ' ' + fmtDate(v.end) + ' ' + v.end.slice(11, 16); }
+const LAST_RESTOCK = VIS[REF.last.restock_visit], LAST_PROVEN = VIS[REF.last.proven_visit];
+// Latest visit graded proven or likely refill (may be later than the last single-visit proof).
+const LAST_LIKELY = VISITS.slice().reverse().find(v => v.evidence === 'proven refill' || v.evidence === 'likely refill') || LAST_PROVEN;
+const PHOTO_VISIT = VIS[PHOTO.visit];
+const KIND_TEXT = { 'capacity proof': 'Capacity proof: sold more than ' + REF.capacity + ' units across this visit alone', 'pair proof': 'Capacity proof shared with another visit: a refill at this visit or the other one', resumed: 'Sales resumed after a silence that looked empty' };
+// Visits with refill evidence for one slot, oldest first.
+function slotRefills(id) { return (REF.per_slot[id] || []).filter(x => VIS[x.visit]).map(x => ({ v: VIS[x.visit], kind: x.kind })); }
+// Visits with refill evidence of any grade (not "no sign of refill"), in order.
+const REFILL_VISITS = VISITS.filter(v => v.evidence !== 'no sign of refill');
+const STATE_INFO = {
+  selling: { name: 'Selling', glyph: '●', cls: 'st-sell', long: 'not flagged empty at the last poll' },
+  photo: { name: 'Empty in the ' + fmtDate(PHOTO_VISIT.end) + ' photo, unsold since', glyph: '○', cls: 'st-phempty', long: 'not flagged by the sales model, but the rail looked empty in the photo and has not sold since' },
+  out: { name: 'Sold out, not refilled', glyph: '✕', cls: 'st-out', long: 'went quiet after the last restock and no visit since shows a refill' },
+  empty: { name: 'Suspected empty', glyph: '?', cls: 'st-empty', long: 'silent since before the last restock: skipped then, or no longer selling' },
+  never: { name: 'Never sold', glyph: '–', cls: 'st-never', long: 'no sales recorded' }
+};
+// Photo check groups: fill = what the photo shows, glyph = whether the model agrees.
+function photoGroup(verdict) {
+  if (verdict.startsWith('agree') || verdict.startsWith('stocked but quiet')) return 'agree';
+  if (verdict.startsWith('photo empty, sold recently')) return 'soldout';
+  if (verdict.startsWith('photo empty, model silent')) return 'missed';
+  return 'conflict';
+}
+const PH_INFO = {
+  agree: { glyph: '✓', name: 'Model agrees' },
+  soldout: { glyph: '↓', name: 'Sold out after selling the week before' },
+  missed: { glyph: '!', name: 'Missed stock-out: model never flagged it' },
+  conflict: { glyph: '✕', name: 'Conflict with the model' }
+};
+// Rails that need filling: sold out or suspected empty in the model (unless the photo shows product),
+// or empty in the photo check with no sale since.
+function restockNeed(s) {
+  const ph = PHOTO.slots[s.slot], after = s.last_sale && PHOTO_VISIT && tms(s.last_sale) > tms(PHOTO_VISIT.end);
+  if ((s.state === 'out' || s.state === 'empty') && !(ph && ph.photo === 'stocked')) return 'model';
+  if (s.state === 'selling' && ph && ph.photo === 'looks empty' && !after) return 'photo';
+  return null;
+}
+// Display state: a 'selling' rail that looked empty in the photo and has not sold since is shown apart.
+SLOTS.forEach(s => { s.view = s.state === 'selling' && restockNeed(s) === 'photo' ? 'photo' : s.state; });
+// Was the slot sold out after its last refill evidence?
+function soldOutSince(s) {
+  const refs = slotRefills(s.slot), last = refs.length ? refs[refs.length - 1].v : null;
+  const ph = PHOTO.slots[s.slot], after = s.last_sale && PHOTO_VISIT && tms(s.last_sale) > tms(PHOTO_VISIT.end);
+  if (s.state === 'out') return { v: 'Yes', t: 'Sold out since ' + fmtDate(s.state_since) + ': it sold after the last single-visit proven refill (' + fmtVisit(LAST_RESTOCK) + ') and then went quiet' + (last ? '; its own last refill evidence is ' + fmtVisit(last) : '') + '. No visit since shows a refill.' };
+  if (last && PHOTO_VISIT && tms(last.end) > tms(PHOTO_VISIT.end)) return { v: 'Refilled', t: 'Refill evidence at ' + fmtVisit(last) + ' (' + last.evidence + '), after the ' + fmtDate(PHOTO_VISIT.end) + ' photo' + (ph && ph.photo === 'looks empty' ? ', which showed the rail empty' : '') + '.' };
+  if (s.state === 'empty') return { v: 'Silent', t: 'Silent since ' + fmtDate(s.state_since) + ', before the last single-visit proven refill (' + fmtVisit(LAST_RESTOCK) + '): it was skipped then, or the product stopped selling.' + (ph && ph.photo === 'stocked' ? ' The ' + fmtDate(PHOTO_VISIT.end) + ' photo shows product in it, so read it as a slow seller.' : '') };
+  if (ph && ph.photo === 'looks empty' && !after) return { v: 'Probably', t: 'Not flagged by the model, but the rail looked empty in the ' + fmtDate(PHOTO_VISIT.end) + ' photo and it has not sold since.' };
+  if (ph && ph.photo === 'looks empty' && after) return { v: 'Refilled?', t: 'Looked empty in the ' + fmtDate(PHOTO_VISIT.end) + ' photo but sold afterwards (last sale ' + fmtDate(s.last_sale) + '): a later top-up, product hidden at the back, or a sale to the visitors.' };
+  return { v: 'No sign', t: 'Not flagged empty at the last poll' + (ph && ph.photo === 'stocked' ? ', and the ' + fmtDate(PHOTO_VISIT.end) + ' photo shows product.' : '.') };
+}
+const pctI = v => Math.round(v * 100) + '%';
+
+// Ranked experiments, built from the data. stake = in-stock rates of the slots involved x 5 class days.
+function experiments(k) {
+  const out = [];
+  const r = s => s.rate || 0;
+  const pos = s => 'row ' + s.row + ', column ' + s.col;
+  // 1. restock first: sold-out rails, the high-rate ones named in the title (always ranked first)
+  const restock = restockPlan();
+  const first = restock.high.length ? { type: 'Restock first', slots: restock.high.map(s => s.slot), pinned: true,
+    title: 'Restock first: the ' + restock.high.length + ' empty rails that sold fastest (' + restock.high.map(s => s.slot).join(', ') + ')',
+    what: 'Before filling, count what each rail still holds (product can hide at the back of a rail). Fill these ' + restock.high.length + ' rails, which sold at or above the median in-stock rate (' + restock.med.toFixed(2) + ' units per class day) before they ran out.' + (restock.low.length ? ' Fill the ' + restock.low.length + ' slower empty rails too (' + restock.low.map(s => s.slot).join(', ') + '), so that a silence afterwards means something.' : '') + ' Run the position and price tests below only once these rails are stocked.',
+    why: 'No refill proven at a single visit since ' + fmtVisit(LAST_RESTOCK) + '; the later visits with refill evidence (' + (REF.last.topups.map(id => fmtVisit(VIS[id])).join(', ') || 'none') + ') put product back in only some of our rails. ' +
+      (restock.model.length ? restock.model.map(s => s.slot).join(', ') + (restock.model.length > 1 ? ' are' : ' is') + ' sold out or suspected empty in the model. ' : '') +
+      (restock.photo.length ? restock.photo.map(s => s.slot).join(', ') + (' looked') + ' empty in the ' + fmtDate(PHOTO_VISIT.end) + ' photo and ' + (restock.photo.length > 1 ? 'have' : 'has') + ' not sold since. ' : '') +
+      'In-stock rates: ' + restock.high.map(s => s.slot + ' ' + s.rate.toFixed(2)).join(', ') + ' units per class day. The recent fall in sales (' + restock.wk.map(w => w.u).join(' → ') + ' units in the last ' + restock.wk.length + ' full weeks' + (restock.cur ? ', ' + restock.cur.u + ' so far in the week from ' + fmtDate(restock.cur.key) : '') + ') tracks these empty rails, not fading demand.',
+    measure: 'Units per in-stock class day for each refilled rail over the 5 class days after the restock',
+    expect: 'About ' + (sum(restock.high.map(r)) * 5).toFixed(0) + ' units a class week from these rails if they sell at their old in-stock rates. A rail still near zero after a stocked week has lost its demand, not its stock; only then is it a slow seller.',
+    stake: sum(restock.high.map(r)) * 5 } : null;
+  // 2. position swap between the strongest and weakest row (regression, price held fixed)
+  const rows = regEffects('row'), cols = regEffects('col');
+  const hiR = rows.reduce((a, b) => b.d > a.d ? b : a), loR = rows.reduce((a, b) => b.d < a.d ? b : a);
+  // "Stocked" excludes slots suspected empty now AND slots the 5-class-day rules flag with P(0) < 0.01 (a likely missed sell-out).
+  const suspect = new Set(DATA.rules.flags.filter(f => f.rule === 'c_5cd_notempty' || (f.p0 != null && f.p0 < 0.01)).map(f => f.slot));
+  const stocked = s => !s.empty_now && !suspect.has(s.slot) && !restockNeed(s);
+  const fx = v => (Math.abs(v) < 0.005 ? 0 : v).toFixed(2);
+  const contrast = (kind, a, b) => {   // a - b from the precomputed pairwise contrasts
+    const c = DATA.reg.contrasts[kind].find(x => (x.a === a && x.b === b) || (x.a === b && x.b === a));
+    if (!c) return null;
+    return c.a === a ? c : { a, b, diff: -c.diff, ci_lo: -c.ci_hi, ci_hi: -c.ci_lo, bonf_lo: -c.bonf_hi, bonf_hi: -c.bonf_lo, p: c.p, p_bonf: c.p_bonf };
+  };
+  const pval = p => p < 0.001 ? '<0.001' : p.toFixed(3);
+  // Prefer slots that look stocked; if a row or column has none, fall back to slots not suspected empty now and say so.
+  const pick = (lvl, kind, best) => {
+    const ord = (a, b) => best ? r(b) - r(a) : r(a) - r(b);
+    return SLOTS.filter(s => s[kind] === lvl && stocked(s)).sort(ord)[0] || SLOTS.filter(s => s[kind] === lvl && !s.empty_now).sort(ord)[0];
+  };
+  const confirm = list => { const f = list.filter(s => suspect.has(s.slot) || restockNeed(s)).map(s => s.slot); return f.length ? ' Slot' + (f.length > 1 ? 's ' : ' ') + f.join(' and ') + (f.length > 1 ? ' have' : ' has') + ' been silent long enough to suggest a sell-out, so confirm stock at the visit before swapping.' : ''; };
+  const A = pick(loR.level, 'row', true), B = pick(hiR.level, 'row', false);
+  const cR = contrast('row', hiR.level, loR.level), jR = DATA.reg.joint.row, nPairR = DATA.reg.contrasts.row.length;
+  if (A && B && cR) out.push({ type: 'Position test (shelf)', slots: [A.slot, B.slot],
+    title: 'Swap slot ' + A.slot + ' (row ' + A.row + ') with slot ' + B.slot + ' (row ' + B.row + ')',
+    what: 'Move the product in slot ' + A.slot + ', the best seller on row ' + A.row + ' not suspected empty, to slot ' + B.slot + ' on row ' + B.row + ', and the other way round. Keep both prices the same.' + confirm([A, B]),
+    why: 'Holding price fixed, row ' + hiR.level + ' sells ' + fx(cR.diff) + ' more units per in-stock class day than row ' + loR.level + ' in the regression (95% CI ' + fx(cR.ci_lo) + ' to ' + fx(cR.ci_hi) + ', p = ' + pval(cR.p) + '; rows jointly p = ' + pval(jR.p) + '). This is the largest of the ' + nPairR + ' row gaps, picked after looking at the data, so it likely overstates the true gap; adjusted for all ' + nPairR + ' pairs the interval is ' + fx(cR.bonf_lo) + ' to ' + fx(cR.bonf_hi) + '. Product and shelf are confounded, so only a swap can tell.',
+    measure: 'Units per in-stock class day for both products, 5 class days before and after',
+    expect: 'If the shelf drives sales, the product moving to row ' + B.row + ' gains somewhere between ' + fx(Math.max(0, cR.ci_lo)) + ' and ' + fx(cR.ci_hi) + ' units per class day, likely nearer the low end, and the other loses about the same. If the product drives sales, each keeps its old rate (' + fx(A.rate) + ' and ' + fx(B.rate) + ').',
+    stake: (r(A) + r(B)) * 5 });
+  // 3. column swap
+  const hiC = cols.reduce((a, b) => b.d > a.d ? b : a), loC = cols.reduce((a, b) => b.d < a.d ? b : a);
+  const C = pick(loC.level, 'col', true), E = pick(hiC.level, 'col', false);
+  const cC = contrast('col', hiC.level, loC.level), jC = DATA.reg.joint.col;
+  const colClear = jC.p < 0.05;
+  if (C && E && C.slot !== E.slot && cC) out.push({ type: 'Position test (column)', slots: [C.slot, E.slot], demoted: !colClear,
+    title: (colClear ? '' : 'Low priority: ') + 'Swap slot ' + C.slot + ' (column ' + C.col + ') with slot ' + E.slot + ' (column ' + E.col + ')',
+    what: 'Move the best stocked seller in column ' + C.col + ' to the weakest stocked slot in column ' + E.col + ', and the other way round. Keep prices the same.' + confirm([C, E]),
+    why: (colClear ? 'The regression finds a column effect' : 'The regression finds no clear column effect') + ' (our columns ' + LEVELS.col[0] + ' to ' + LEVELS.col[LEVELS.col.length - 1] + ' jointly p = ' + pval(jC.p) + '). The largest gap, column ' + hiC.level + ' minus column ' + loC.level + ', is ' + fx(cC.diff) + ' (95% CI ' + fx(cC.ci_lo) + ' to ' + fx(cC.ci_hi) + '), picked after looking, so it likely overstates the true gap.',
+    measure: 'Units per in-stock class day for both products, 5 class days before and after',
+    expect: 'Most likely no change. If the column matters, the product moving to column ' + E.col + ' gains up to ' + fx(Math.max(0, cC.ci_hi)) + ' units per class day.',
+    stake: (r(C) + r(E)) * 5 });
+  // 4. price test on the busiest shelf: cut half, hold the other half
+  const rowUnits = [1, 2, 3, 4, 5].map(l => ({ l, u: sum(SLOTS.filter(s => s.row === l).map(s => s.units)) }));
+  const top = rowUnits.reduce((a, b) => b.u > a.u ? b : a);
+  const shelf = SLOTS.filter(s => s.row === top.l);
+  const midC = LEVELS.col[Math.floor(LEVELS.col.length / 2) - 1];   // split our columns in two halves (5-6 vs 7-8)
+  const left = shelf.filter(s => s.col <= midC), right = shelf.filter(s => s.col > midC);
+  const pc = DATA.reg.full.coefs.find(c => c.term === 'avg_price');
+  const test = sum(left.map(r)) >= sum(right.map(r)) ? right : left, hold = test === left ? right : left;
+  // Noise check: with no real change, how wide is the test-vs-held rate-ratio interval after 1, 2, 3 class weeks?
+  const uT = sum(test.map(r)) * 5, uH = sum(hold.map(r)) * 5;
+  const band = w => { const c = rrCI(uH * w, uT * w, 1, 1); return c ? c.lo.toFixed(2) + ' to ' + c.hi.toFixed(2) : 'not computable'; };
+  const minWeeks = [1, 2, 3, 4, 6, 8].find(w => { const c = rrCI(uH * w, uT * w, 1, 1); return c && c.hi < 1.4; });
+  out.push({ type: 'Price test (shelf)', slots: test.map(s => s.slot),
+    title: 'Cut $0.50 on row ' + top.l + ', columns ' + test[0].col + ' to ' + test[test.length - 1].col + '; hold columns ' + hold[0].col + ' to ' + hold[hold.length - 1].col,
+    what: 'Row ' + top.l + ' sold the most units (' + top.u + '). Lower the price by $0.50 on that shelf for one stocked class week, then switch back, and read each slot against its own weeks.',
+    why: 'The regression price coefficient is ' + pc.coef.toFixed(3) + ' units per class day per $1 (95% CI ' + pc.ci_lo.toFixed(2) + ' to ' + pc.ci_hi.toFixed(2) + '): the data cannot tell whether price matters. The ' + fmtDate(DATA.pc.event_date) + ' reprice changed ' + new Set(DATA.changes.filter(c => c.when.slice(0, 10) === DATA.pc.event_date).map(c => c.slot)).size + ' slots at once, so it has no clean comparison.',
+    measure: 'Units and takings per in-stock class day, test half vs held half, as a test-vs-held rate ratio with a 95% interval',
+    expect: 'A lift counts only if the test-vs-held rate ratio’s 95% interval excludes 1. At their in-stock rates the test half sells about ' + uT.toFixed(0) + ' units a class week and the held half about ' + uH.toFixed(0) + '. With no real change, the ratio’s interval would run about ' + band(1) + ' after one class week, ' + band(2) + ' after two and ' + band(3) + ' after three' + (minWeeks ? ', so a 40% lift needs about ' + minWeeks + ' class weeks to show' : '') + '. Plan it for after the break.',
+    stake: sum(test.map(r)) * 5 });
+  // 5. likely real slow sellers -> price cut or swap. Rails the restock covers are left out: their silence is supply.
+  const flaggedAll = DATA.rules.flags.filter(f => f.rule === 'c_5cd_notempty');
+  const flagged = flaggedAll.filter(f => !restockNeed(BY[f.slot]));
+  const dropped = flaggedAll.filter(f => restockNeed(BY[f.slot])).map(f => f.slot);
+  const photoSlow = SLOTS.filter(s => (s.state === 'out' || s.state === 'empty') && PHOTO.slots[s.slot] && PHOTO.slots[s.slot].photo === 'stocked');
+  const slowIds = flagged.map(f => f.slot).concat(photoSlow.map(s => s.slot).filter(id => !flagged.some(f => f.slot === id))).sort();
+  if (slowIds.length) {
+    const fs = slowIds.map(id => BY[id]);
+    out.push({ type: 'Swap or price test', slots: slowIds,
+      title: 'Stocked but quiet, so likely slow sellers: slots ' + slowIds.join(', '),
+      what: 'Confirm each one still holds product at the next visit. If it does, cut its price or swap the product. Remove it only after a full stocked class week with zero sales.',
+      why: (flagged.length ? 'Slot' + (flagged.length > 1 ? 's ' : ' ') + flagged.map(f => f.slot).join(', ') + ': zero sales in the last 5 observed class days, not suspected empty (chance of that silence at their own rates: ' + flagged.map(f => f.slot + ' ' + (f.p0 < 0.001 ? '<0.001' : f.p0.toFixed(3))).join(', ') + '). ' : '') +
+        (photoSlow.length ? 'Slot' + (photoSlow.length > 1 ? 's ' : ' ') + photoSlow.map(s => s.slot).join(', ') + ': the model calls them empty, but the ' + fmtDate(PHOTO_VISIT.end) + ' photo shows product, so they are stocked and not selling. ' : '') +
+        (dropped.length ? 'The 5-class-day rule also flags ' + dropped.join(', ') + ', but those looked empty in the photo or are sold out, so they belong to the restock, not this test.' : ''),
+      measure: 'Any sale in the next 5 class days',
+      expect: 'At their old in-stock rates these slots would sell ' + (sum(fs.map(r)) * 5).toFixed(1) + ' units a class week together.',
+      stake: sum(fs.map(r)) * 5 });
+  }
+  // 6. facing test using the chosen segmentation: copy the best stocked seller into the slowest segment's weakest stocked slot
+  const bk = DATA.clusters.byk[String(k)];
+  if (bk) {
+    const prof = bk.profiles.slice().sort((a, b) => a.centroid.rate - b.centroid.rate)[0];
+    const weak = prof.slots.map(id => BY[id]).filter(stocked).sort((a, b) => r(a) - r(b))[0];
+    const best = SLOTS.filter(stocked).sort((a, b) => r(b) - r(a))[0];
+    if (weak && best && weak.slot !== best.slot) out.push({ type: 'Facing test (segment)', slots: [best.slot, weak.slot],
+      title: 'Load slot ' + weak.slot + ' with the product from slot ' + best.slot,
+      what: 'Slot ' + weak.slot + ' (' + pos(weak) + ') is the weakest stocked slot in the "' + prof.name + '" segment at k = ' + k + '. Put a second facing of slot ' + best.slot + '’s product there for a week.',
+      why: 'Slot ' + best.slot + ' sells ' + best.rate.toFixed(2) + ' units per in-stock class day; slot ' + weak.slot + ' sells ' + weak.rate.toFixed(2) + '. The segment averages ' + prof.centroid.rate.toFixed(2) + '.',
+      measure: 'Combined units per in-stock class day of both slots',
+      expect: 'If slot ' + weak.slot + '’s position is fine and its product was the problem, it should approach ' + best.rate.toFixed(2) + ' without slot ' + best.slot + ' falling much.',
+      stake: (r(best) + r(weak)) * 5 });
+  }
+  out.sort((a, b) => (a.demoted ? 1 : 0) - (b.demoted ? 1 : 0) || b.stake - a.stake);
+  if (first) out.unshift(first);
+  return out;
+}
+// Restock plan: rails that need filling, split at the median in-stock rate of our slots.
+function restockPlan() {
+  const med = median(SLOTS.map(s => s.rate || 0));
+  const need = SLOTS.filter(s => restockNeed(s)).sort((a, b) => (b.rate || 0) - (a.rate || 0));
+  const wu = w => ({ key: w.key, u: sum(SLOTS.map(s => sum(w.idx.map(i => DATA.sd[s.slot].u[i])))) });
+  const full = WEEKS.filter(w => w.full), wk = full.slice(-3).map(wu), lastW = WEEKS[WEEKS.length - 1];
+  const cur = !lastW.full && full.length && lastW.key > full[full.length - 1].key ? wu(lastW) : null;
+  return { med, need, cur, high: need.filter(s => (s.rate || 0) >= med), low: need.filter(s => (s.rate || 0) < med),
+           model: need.filter(s => restockNeed(s) === 'model' && (s.rate || 0) >= med), photo: need.filter(s => restockNeed(s) === 'photo' && (s.rate || 0) >= med), wk };
+}
+
+if (typeof module !== 'undefined') module.exports = { DATA, SLOTS, D, REGCLS, WEEKS, inStock, restockPlan, restockNeed, soldOutSince, slotRefills, photoGroup, REFILL_VISITS, LAST_RESTOCK, vsTrend, rrCIcc, calendarAhead, slotWeekly, zeroWeekShare, classDayStats, missedUnits, metricValue, tq975, welch, rawEffects, regEffects, priceEvents, eventStats, machineTrend, windowsFor, rateOver, rrCI, median, experiments };
+</script>
+<script>
+(function () {
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, kids) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) { if (k === 'text') e.textContent = attrs[k]; else if (k === 'cls') e.className = attrs[k]; else e.setAttribute(k, attrs[k]); }
+  (kids || []).forEach(c => e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
+  return e;
+}
+function sv(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+const money = v => (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2);
+const money0 = v => '$' + Math.round(v).toLocaleString('en-US');
+const pct = v => v == null ? '–' : Math.round(v * 100) + '%';
+const f2 = v => v == null ? '–' : v.toFixed(2);
+const sgn = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2);
+const cents = c => '$' + (c / 100).toFixed(2);
+
+/* ---------- tooltip ---------- */
+function tipShow(box, x, y, title, rows) {
+  const t = box.querySelector('.tip');
+  t.replaceChildren();
+  if (title) t.appendChild(el('div', { cls: 'tt', text: title }));
+  rows.forEach(r => {
+    const line = el('div', { cls: 'tr' });
+    if (r.color) { const k = el('span', { cls: 'tk' }); k.style.color = r.color; line.appendChild(k); }
+    const tv = el('span', { cls: 'tv', text: r.v }); if (!r.l) tv.style.whiteSpace = 'normal';
+    line.appendChild(tv);
+    if (r.l) line.appendChild(el('span', { cls: 'tl', text: r.l }));
+    t.appendChild(line);
+  });
+  t.hidden = false;
+  const w = box.clientWidth, tw = t.offsetWidth;
+  t.style.left = (tw >= w ? w / 2 : Math.max(tw / 2 + 2, Math.min(w - tw / 2 - 2, x))) + 'px';
+  t.style.top = Math.max(t.offsetHeight + 4, y - 8) + 'px';
+}
+function tipHide(box) { box.querySelector('.tip').hidden = true; }
+function boxPoint(box, ev) { const r = box.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
+function markHover(box, node, getTip) {
+  const show = ev => {
+    const t = getTip(); let x, y;
+    if (ev && ev.clientX !== undefined && ev.type !== 'focus') { [x, y] = boxPoint(box, ev); }
+    else { const r = node.getBoundingClientRect(), b = box.getBoundingClientRect(); x = r.left - b.left + r.width / 2; y = r.top - b.top; }
+    tipShow(box, x, y, t.title, t.rows);
+  };
+  node.addEventListener('pointermove', show);
+  node.addEventListener('focus', show);
+  node.addEventListener('pointerleave', () => tipHide(box));
+  node.addEventListener('blur', () => tipHide(box));
+}
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function niceMax(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const m = v / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p; }
+
+/* ---------- steps ---------- */
+const drawn = {};
+function go(n, focusTab) {
+  n = String(n);
+  $$('nav.steps [role=tab]').forEach(b => { const on = b.dataset.step === n; b.setAttribute('aria-selected', on ? 'true' : 'false'); b.tabIndex = on ? 0 : -1; if (on && focusTab) b.focus({ preventScroll: true }); if (on && b.scrollIntoView) b.scrollIntoView({ inline: 'nearest', block: 'nearest' }); });
+  $$('section.panel').forEach(p => { p.hidden = p.dataset.panel !== n; });
+  try { localStorage.setItem('slot-lab-step', n); } catch (e) {}
+  try { if (history.replaceState) history.replaceState(null, '', '#step' + n); } catch (e) {}
+  renderStep(n);
+}
+function renderStep(n) {
+  if (n === '1') drawStep1();
+  if (n === '2') drawProducts();
+  if (n === '3') drawStep2();
+  if (n === '4') drawStep3();
+  if (n === '5') drawStep4();
+  if (n === '6') drawStep5();
+}
+$$('nav.steps [role=tab]').forEach(b => {
+  b.addEventListener('click', () => { go(b.dataset.step); window.scrollTo({ top: 0 }); });
+  b.addEventListener('keydown', ev => {
+    const tabs = $$('nav.steps [role=tab]'), i = tabs.indexOf(b);
+    if (ev.key === 'ArrowRight') { ev.preventDefault(); go(tabs[(i + 1) % tabs.length].dataset.step, true); }
+    if (ev.key === 'ArrowLeft') { ev.preventDefault(); go(tabs[(i - 1 + tabs.length) % tabs.length].dataset.step, true); }
+    if (ev.key === 'Home') { ev.preventDefault(); go(tabs[0].dataset.step, true); }
+    if (ev.key === 'End') { ev.preventDefault(); go(tabs[tabs.length - 1].dataset.step, true); }
+  });
+});
+$$('[data-go]').forEach(b => b.addEventListener('click', () => { window.scrollTo({ top: 0 }); go(b.dataset.go, true); }));
+const current = () => ($$('nav.steps [aria-selected=true]')[0] || {}).dataset.step || '1';
+
+/* ---------- header / footer ---------- */
+const M = DATA.meta;
+$('#turfNote').textContent = 'Shelf and column totals add up our ' + SLOTS.length + ' slots only. Hatched rails ("' + TURF.label + '") are not ours: no values, not counted.';
+$('#effN').textContent = 'Units per in-stock class day. One estimate per slot (n = ' + SLOTS.length + ' of our slots), so each shelf has ' + LEVELS.col.length + ' slots and each column ' + LEVELS.row.length + '.';
+$('#hdrRange').textContent = 'Polls from ' + fmtDate(M.first_poll) + ' to ' + fmtDate(M.last_poll) + ', 2026.';
+$('#footData').textContent = 'Data: ' + M.polls.toLocaleString('en-US') + ' polls of machine {{DEVICE}} from ' + M.first_poll.replace('T', ' ') + ' to ' + M.last_poll.replace('T', ' ') + ' (Eastern). Our ' + SLOTS.length + ' slots sold ' + M.totals.units + ' units for ' + money(M.totals.cents / 100) + ' in takings, tax included. Regular hourly polling from ' + fmtDate(M.regular_from) + '. Regular-era class days used for rates: ' + REGCLS.length + '.';
+
+(function () {
+  const order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], tally = {};
+  REFILL_VISITS.forEach(v => { tally[v.weekday] = (tally[v.weekday] || 0) + 1; });
+  $('#sparkNote').textContent = 'Weeks run Saturday to Friday, as in the ledger and the analysis report. Visits followed no fixed weekday: the ' + REFILL_VISITS.length + ' door-counter visits with any refill evidence fell on ' + order.filter(d => tally[d]).map(d => d + ' ' + tally[d]).join(', ') + '. Before ' + fmtDate(M.regular_from) + ' the machine was polled only now and then, so early sales land in lumps.';
+})();
+$('#dayNote').textContent = 'Bars before ' + fmtDate(M.regular_from) + ' are faded: polling was occasional then, so a day\'s bar can hold several days of sales.';
+const ZW_WEEKS = WEEKS.filter(w => w.full && w.key >= ZW_FROM);
+const ZW_SPAN = ZW_WEEKS.length ? fmtDate(ZW_WEEKS[0].key) + ' to ' + fmtDate(addDays(ZW_WEEKS[ZW_WEEKS.length - 1].key, 6)) : '–';
+
+/* ---------- machine grid (shared by steps 1 and 5) ---------- */
+function buildGrid(root, box, o) {
+  root.replaceChildren();
+  root.classList.toggle('noedge', !o.edges);
+  const put = (n, row, col) => { n.style.gridRow = row; n.style.gridColumn = col; root.appendChild(n); return n; };
+  const deco = cls => el('div', { cls, 'aria-hidden': 'true' });
+  const lbl = o.edges ? o.edgeLabel.toLowerCase() : '';
+  put(deco('cab'), '1 / 8', '1');
+  put(deco('glass'), '2 / 7', '1');
+  put(deco('lightbar'), '1', '1');
+  put(el('div', { cls: 'ehead', 'aria-hidden': 'true', text: o.edges ? o.edgeLabel + ', ours' : '' }), '1', '2');
+  for (let r = 1; r <= 5; r++) {
+    const rails = el('div', { cls: 'rails' }), ledge = el('div', { cls: 'ledge' });
+    for (let c = 1; c <= 8; c++) {
+      const id = '' + r + c, s = BY[id];
+      if (!s) {   // not one of our slots: hatched, labelled, no values
+        const t = el('div', { cls: 'slotrail turf', role: 'img', tabindex: '0', 'aria-label': 'Slot ' + id + ': ' + TURF.label + '. ' + TURF.tip },
+          [el('span', { cls: 'cv', text: TURF.label })]);
+        markHover(box, t, () => ({ title: TURF.label, rows: [{ v: TURF.tip }] }));
+        rails.appendChild(t);
+        ledge.appendChild(el('div', { cls: 'lab' }, [el('span', { cls: 'no', 'aria-hidden': 'true', text: id }), el('span', { cls: 'ptag turf', 'aria-hidden': 'true', text: '' })]));
+        continue;
+      }
+      const k = o.cls(s);
+      const b = el('button', { cls: 'slotrail' + (k ? ' ' + k : ' none') + (o.selected === id ? ' sel' : ''), id: o.prefix + id, type: 'button', 'aria-label': o.aria(s) },
+        [el('span', { cls: 'cv', text: o.text(s) })]);
+      b.addEventListener('click', () => o.onClick && o.onClick(id));
+      markHover(box, b, () => o.tip(s));
+      rails.appendChild(b);
+      const has = s.current_price != null;
+      ledge.appendChild(el('div', { cls: 'lab' }, [
+        el('span', { cls: 'no', 'aria-hidden': 'true', text: id }),
+        el('span', { cls: 'ptag', 'aria-hidden': 'true', text: has ? (s.current_price / 100).toFixed(2) : '–' }),
+        el('span', { cls: 'sr', text: 'Slot ' + id + ' price tag: ' + (has ? cents(s.current_price) : 'no current price') })]));
+    }
+    put(el('div', { cls: 'shelf' }, [el('span', { cls: 'sr', text: 'Shelf ' + r + (r === 1 ? ' (top)' : '') }), rails, ledge]), String(r + 1), '1');
+    const re = el('div', { cls: 'redge' }, [el('span', { cls: 'sh', 'aria-hidden': 'true' }, ['Shelf ' + r].concat(r === 1 ? [el('span', { cls: 'top', text: '(top)' })] : []))]);
+    if (o.edges) re.appendChild(el('div', { cls: 'edgev' }, [el('span', { cls: 'sr', text: 'Shelf ' + r + ' ' + lbl + ', our slots only: ' }), o.rowEdge(r)]));
+    put(re, String(r + 1), '2');
+  }
+  put(el('div', { cls: 'bin', 'aria-hidden': 'true' }, [el('i')]), '7', '1');
+  if (o.edges) {
+    const ce = el('div', { cls: 'cedges' });
+    for (let c = 1; c <= 8; c++) ce.appendChild(SLOTS.some(s => s.col === c)
+      ? el('div', { cls: 'edgev c' }, [el('span', { cls: 'sr', text: 'Column ' + c + ' ' + lbl + ', our slots only: ' }), o.colEdge(c)])
+      : el('div', { cls: 'edgev c turf', 'aria-hidden': 'true' }, ['']));
+    put(ce, '8', '1');
+    put(el('div', { cls: 'edgev c corner' }, [el('span', { cls: 'sr', text: 'All our slots ' + lbl + ': ' }), o.corner]), '8', '2');
+    put(el('div', { cls: 'clab', 'aria-hidden': 'true', text: (o.colLabel || ('Column ' + lbl + 's')) + ' (our slots only)' }), '9', '1');
+    put(el('div', { cls: 'clab', 'aria-hidden': 'true', text: 'All' }), '9', '2');
+  }
+}
+
+/* ---------- STEP 1 ---------- */
+let selSlot = null;
+const METRIC_TEXT = {
+  units: { name: 'Units sold', fmt: v => Math.round(v).toString(), long: v => v.toFixed(1) + ' units' },
+  takings: { name: 'Takings', fmt: v => money0(v), long: v => money(v) },
+  rate: { name: 'Units per class day', fmt: v => v.toFixed(2), long: v => v.toFixed(3) + ' units per day' },
+  price: { name: 'Average price', fmt: v => '$' + v.toFixed(2), long: v => money(v) },
+  zero: { name: 'Zero-sales week share', fmt: v => pct(v), long: v => pct(v) + ' of weeks' }
+};
+function adjText(metric, adj) {
+  const on = adj ? 'On: ' : 'Off: ';
+  if (metric === 'units') return adj ? on + 'adds, for each slot, the units it would have sold on those of the ' + REGCLS.length + ' regular-era class days it spent suspected empty, at its own in-stock rate.' : off('actual units since ' + fmtDate(M.first_poll) + '.');
+  if (metric === 'takings') return adj ? on + 'adds those missed units at the slot’s average class-day price.' : off('actual takings, tax included.');
+  if (metric === 'rate') return adj ? on + 'units per in-stock class day: days the slot was suspected empty are left out of the denominator.' : off('units per class day over all ' + REGCLS.length + ' regular-era class days, empty or not.');
+  if (metric === 'price') return 'Price does not depend on stock, so the adjustment has no effect here.';
+  if (metric === 'zero') return adj ? on + 'counts only weeks with at least 3 class days in stock, so a week spent empty is not called a zero week.' : off('every full Saturday-to-Friday week from ' + ZW_SPAN + ' (' + ZW_WEEKS.length + ' weeks).');
+  function off(t) { return 'Off: ' + t; }
+}
+function selectSlot(id) {
+  const had = document.activeElement && document.activeElement.id === 'cell-' + id;
+  selSlot = id; drawStep1();
+  if (had) { const n = document.getElementById('cell-' + id); if (n) n.focus({ preventScroll: true }); }
+}
+function drawStep1() {
+  const metric = $('#metric').value, adj = $('#adjStock').checked, isState = metric === 'state';
+  $('#adjStock').disabled = metric === 'price' || isState;
+  $('#photoCmp').disabled = !isState;
+  if (!isState) $('#photoCmp').checked = false;
+  $('#scale1').hidden = isState; $('#stateLegend').hidden = !isState;
+  if (isState) { drawState($('#photoCmp').checked); return; }
+  $('#adjNote').textContent = adjText(metric, adj);
+  const vals = {}; SLOTS.forEach(s => { vals[s.slot] = metricValue(s, metric, adj); });
+  const nonNull = Object.values(vals).filter(v => v != null);
+  const vmax = Math.max(...nonNull);
+  const bin = v => v == null || v === 0 ? '' : 'q' + Math.min(6, Math.floor(v / vmax * 7 - 1e-9));
+  const MT = METRIC_TEXT[metric], agg = METRIC_AGG[metric];
+  const aggF = a => { const b = a.filter(v => v != null); return agg === 'sum' ? sum(b) : mean(b); };
+  const rowV = r => aggF(SLOTS.filter(s => s.row === r).map(s => vals[s.slot]));
+  const colV = c => aggF(SLOTS.filter(s => s.col === c).map(s => vals[s.slot]));
+  if (!selSlot) selSlot = SLOTS.slice().sort((a, b) => b.units - a.units)[0].slot;
+  const label = MT.name + (metric === 'rate' && adj ? ' (in stock)' : '') + (adj && metric !== 'rate' && metric !== 'price' ? ' (adjusted)' : '');
+  buildGrid($('#mgrid'), $('#gridBox'), {
+    prefix: 'cell-', edges: true, edgeLabel: agg === 'sum' ? 'Total' : 'Average', selected: selSlot,
+    cls: s => bin(vals[s.slot]), text: s => vals[s.slot] == null ? '–' : MT.fmt(vals[s.slot]),
+    aria: s => 'Slot ' + s.slot + ', row ' + s.row + ' column ' + s.col + ': ' + (vals[s.slot] == null ? 'no data' : MT.long(vals[s.slot])),
+    tip: s => ({ title: 'Slot ' + s.slot + ' · row ' + s.row + ', column ' + s.col, rows: [
+      { v: vals[s.slot] == null ? '–' : MT.long(vals[s.slot]), l: label },
+      { v: s.units + ' units', l: 'sold, ' + money(s.cents / 100) },
+      { v: f2(s.rate), l: 'per in-stock class day' },
+      { v: STATE_INFO[s.view].name, l: 'at the last poll' }] }),
+    rowEdge: r => MT.fmt(rowV(r)), colEdge: c => MT.fmt(colV(c)), corner: MT.fmt(aggF(Object.values(vals))),
+    onClick: selectSlot
+  });
+  // scale legend
+  const sc = $('#scale1'); sc.replaceChildren();
+  sc.appendChild(el('span', { text: label + ':' }));
+  sc.appendChild(el('span', { cls: 'num', text: '0' }));
+  const bar = el('span', { cls: 'bar' });
+  for (let i = 0; i < 7; i++) bar.appendChild(el('i', { cls: 'q' + i, title: MT.fmt(vmax * i / 7) + ' to ' + MT.fmt(vmax * (i + 1) / 7) }));
+  sc.appendChild(bar);
+  sc.appendChild(el('span', { cls: 'num', text: MT.fmt(vmax) }));
+  sc.appendChild(el('span', { cls: 'nonesw', 'aria-hidden': 'true' }));
+  sc.appendChild(el('span', { text: 'Gray striped = zero or no data.' }));
+  // KPIs
+  const ids = SLOTS.map(s => s.slot).filter(id => vals[id] != null);
+  const topId = ids.slice().sort((a, b) => vals[b] - vals[a])[0];
+  const rows = [1, 2, 3, 4, 5].map(r => ({ r, v: rowV(r) })), topRow = rows.reduce((a, b) => b.v > a.v ? b : a);
+  const midC = LEVELS.col[Math.floor(LEVELS.col.length / 2) - 1];
+  const left = aggF(SLOTS.filter(s => s.col <= midC).map(s => vals[s.slot])), right = aggF(SLOTS.filter(s => s.col > midC).map(s => vals[s.slot]));
+  const k = $('#kpi1'); k.replaceChildren();
+  [[MT.fmt(aggF(Object.values(vals))), (agg === 'sum' ? 'Our slots, total' : 'Our slots, average') + ' · ' + label, true],
+   ['Slot ' + topId + ' · ' + MT.fmt(vals[topId]), 'Highest slot'],
+   ['Row ' + topRow.r + ' · ' + MT.fmt(topRow.v), 'Highest row (' + (agg === 'sum' ? 'total' : 'average') + ')'],
+   [MT.fmt(left) + ' vs ' + MT.fmt(right), 'Columns ' + LEVELS.col[0] + '-' + midC + ' vs ' + (midC + 1) + '-' + LEVELS.col[LEVELS.col.length - 1]],
+   [SLOTS.filter(s => s.empty_now).length + ' of ' + SLOTS.length, 'Sold out or suspected empty at the last poll']
+  ].forEach(([v, l, hl]) => k.appendChild(el('div', { cls: 'kpi' + (hl ? ' hl' : '') }, [el('div', { cls: 'v', text: v }), el('div', { cls: 'l', text: l })])));
+  drawSlot(selSlot);
+}
+// Stock state at the last poll, or the photo check. Encoded by fill pattern and a mark, never by color alone.
+function drawState(photo) {
+  if (!selSlot) selSlot = SLOTS.slice().sort((a, b) => b.units - a.units)[0].slot;
+  const PV = PHOTO_VISIT, at = PHOTO.at.slice(11, 16);
+  const ph = s => PHOTO.slots[s.slot];
+  $('#adjNote').textContent = photo
+    ? 'Photo check: the fill shows what the student photo of ' + PV.weekday + ' ' + fmtDate(PV.end) + ' saw (solid = product visible, gray striped = looks empty). The mark says whether the model’s state at ' + at + ' that morning, before the door opened, agrees. Product at the back of a rail can be hidden, so "looks empty" is strong evidence, not proof.'
+    : 'State at the last poll (' + fmtDate(M.last_poll) + ' ' + M.last_poll.slice(11, 16) + '), from the empty and sold-out periods still open then. The last refill proven at a single visit was ' + fmtVisit(LAST_RESTOCK) + '; later visits refilled only some of our rails. The fill pattern and the mark both carry the state.';
+  const okF = photo ? s => ph(s).photo === 'stocked' : s => s.view === 'selling';
+  const cnt = list => String(list.filter(okF).length);
+  buildGrid($('#mgrid'), $('#gridBox'), {
+    prefix: 'cell-', edges: true, edgeLabel: photo ? 'Visible' : 'Selling', colLabel: photo ? 'Rails with product visible, per column' : 'Rails selling, per column', selected: selSlot,
+    cls: s => 'st ' + (photo ? (ph(s).photo === 'stocked' ? 'ph-vis' : 'ph-empty') : STATE_INFO[s.view].cls),
+    text: s => photo ? PH_INFO[photoGroup(ph(s).verdict)].glyph : STATE_INFO[s.view].glyph,
+    aria: s => 'Slot ' + s.slot + ', row ' + s.row + ' column ' + s.col + ': ' + (photo ? 'photo ' + ph(s).photo + '; model ' + ph(s).inferred + '; ' + PH_INFO[photoGroup(ph(s).verdict)].name : STATE_INFO[s.view].name),
+    tip: s => {
+      const refs = slotRefills(s.slot), last = refs.length ? refs[refs.length - 1].v : null;
+      if (photo) { const p = ph(s), g = PH_INFO[photoGroup(p.verdict)]; return { title: 'Slot ' + s.slot + ' · ' + g.glyph + ' ' + g.name, rows: [
+        { v: p.photo === 'stocked' ? 'product visible' : 'looks empty', l: 'in the photo' }, { v: p.inferred, l: 'model at ' + at },
+        { v: String(p.after), l: 'sold after the photo, before the next visit' }, { v: p.verdict }] }; }
+      return { title: 'Slot ' + s.slot + ' · ' + STATE_INFO[s.view].glyph + ' ' + STATE_INFO[s.view].name, rows: [
+        { v: STATE_INFO[s.view].long }, { v: s.last_sale ? fmtDate(s.last_sale) : 'none', l: 'last sale' + (s.last_sale ? ' (' + s.days_since_last_sale + ' days before the last poll)' : '') },
+        { v: last ? fmtVisit(last) : 'none seen', l: 'last refill evidence' }, { v: f2(s.rate), l: 'per in-stock class day' }] };
+    },
+    rowEdge: r => cnt(SLOTS.filter(s => s.row === r)), colEdge: c => cnt(SLOTS.filter(s => s.col === c)), corner: cnt(SLOTS),
+    onClick: selectSlot
+  });
+  const lg = $('#stateLegend'); lg.replaceChildren();
+  const item = (cls, glyph, text) => el('span', {}, (cls ? [el('i', { cls: 'sw ' + cls })] : []).concat(glyph ? [el('span', { cls: 'glyph', 'aria-hidden': 'true', text: glyph })] : []).concat([text]));
+  if (photo) {
+    const tally = g => SLOTS.filter(s => photoGroup(ph(s).verdict) === g).length;
+    lg.appendChild(el('div', { cls: 'lrow' }, [el('span', { text: 'Fill:' }), item('ph-vis', '', 'Product visible (' + SLOTS.filter(s => ph(s).photo === 'stocked').length + ')'), item('ph-empty', '', 'Looks empty (' + SLOTS.filter(s => ph(s).photo !== 'stocked').length + ')')]));
+    lg.appendChild(el('div', { cls: 'lrow' }, [el('span', { text: 'Mark:' })].concat(Object.keys(PH_INFO).map(g => item('', PH_INFO[g].glyph, PH_INFO[g].name + ' (' + tally(g) + ')')))));
+    lg.appendChild(el('div', { cls: 'lrow' }, [el('span', { text: 'Edge totals count rails with product visible.' })]));
+  } else {
+    lg.appendChild(el('div', { cls: 'lrow' }, Object.keys(STATE_INFO).map(k => item(STATE_INFO[k].cls, STATE_INFO[k].glyph, STATE_INFO[k].name + ' (' + SLOTS.filter(s => s.view === k).length + ')'))));
+    lg.appendChild(el('div', { cls: 'lrow' }, [el('span', { text: 'Edge totals count rails still selling.' })]));
+  }
+  const k = $('#kpi1'); k.replaceChildren();
+  const plan = restockPlan(), conf = SLOTS.filter(s => photoGroup(ph(s).verdict) === 'conflict').map(s => s.slot);
+  const rowsK = photo
+    ? [[SLOTS.filter(s => ph(s).verdict.startsWith('agree')).length + ' of ' + SLOTS.length, 'Rails where photo and model agree outright', true],
+       [pctI(PHOTO.no_conflict), 'Rails with no conflict (counting sell-outs since and slow sellers)'],
+       [SLOTS.filter(s => photoGroup(ph(s).verdict) === 'missed').length + '', 'Look empty but never flagged (missed stock-outs)'],
+       [conf.length + '', 'Conflicts: slots ' + conf.join(', ')]]
+    : [[SLOTS.filter(s => s.view === 'selling').length + ' of ' + SLOTS.length, 'Selling at the last poll', true],
+       [SLOTS.filter(s => s.view === 'photo').length + '', 'Empty in photo, unsold since'],
+       [SLOTS.filter(s => s.state === 'out').length + '', 'Sold out, not refilled'],
+       [SLOTS.filter(s => s.state === 'empty').length + '', 'Suspected empty since before the last single-visit proven refill'],
+       [plan.need.length + ' rails', 'To refill (model, or empty in the photo and unsold since)'],
+       [fmtVisit(LAST_RESTOCK).replace(/ \d\d:\d\d$/, ''), 'Last refill proven at a single visit']];
+  rowsK.forEach(([v, l, hl]) => k.appendChild(el('div', { cls: 'kpi' + (hl ? ' hl' : '') }, [el('div', { cls: 'v', text: v }), el('div', { cls: 'l', text: l })])));
+  drawSlot(selSlot);
+}
+['#metric', '#adjStock', '#photoCmp'].forEach(id => $(id).addEventListener('change', drawStep1));
+$('#photoCmpLbl').textContent = 'Compare with the ' + fmtDate(PHOTO_VISIT.end) + ' photo';
+$('#pre4').addEventListener('click', () => { $('#metric').value = 'state'; $('#photoCmp').checked = false; drawStep1(); });
+$('#pre1').addEventListener('click', () => { $('#metric').value = 'units'; $('#adjStock').checked = false; drawStep1(); });
+$('#pre2').addEventListener('click', () => { $('#metric').value = 'rate'; $('#adjStock').checked = true; drawStep1(); });
+$('#pre3').addEventListener('click', () => { $('#metric').value = 'zero'; $('#adjStock').checked = true; drawStep1(); });
+
+function drawSlot(id) {
+  const s = BY[id], cds = classDayStats(id), refs = slotRefills(id), lastRef = refs.length ? refs[refs.length - 1] : null, so = soldOutSince(s), phs = PHOTO.slots[id];
+  $('#slotTitle').textContent = 'Slot ' + id + ' · row ' + s.row + ', column ' + s.col;
+  $('#slotSub').textContent = s.last_sale ? 'Last sale ' + fmtDate(s.last_sale) + ' (' + s.days_since_last_sale + ' days before the last poll)' : 'No sales recorded';
+  const k = $('#slotKpis'); k.replaceChildren();
+  [[s.units + ' units', 'Sold · ' + money(s.cents / 100)],
+   [f2(s.rate), 'Units per in-stock class day'],
+   [cds.Nin + ' of ' + cds.N, 'Regular-era class days not suspected empty'],
+   [cents(s.current_price), 'Current price'],
+   [pct(s.zero_week_share), 'Zero-sales weeks (' + fmtDate(ZW_FROM) + ' on)'],
+   [STATE_INFO[s.view].glyph + ' ' + STATE_INFO[s.view].name, 'State at the last poll'],
+   [lastRef ? fmtVisit(lastRef.v).replace(/ \d\d:\d\d$/, '') : 'None seen', 'Last refill evidence'],
+   [so.v, 'Sold out since its last refill?'],
+   [phs ? (phs.photo === 'stocked' ? 'Product visible' : 'Looks empty') : '–', fmtDate(PHOTO_VISIT.end) + ' photo']
+  ].forEach(([v, l]) => k.appendChild(el('div', { cls: 'kpi' }, [el('div', { cls: 'v', text: v }), el('div', { cls: 'l', text: l })])));
+  // refill evidence
+  $('#refillSummary').textContent = so.t;
+  const rt = $('#slotRefills'); rt.replaceChildren();
+  if (!refs.length) rt.appendChild(el('tr', {}, [el('td', { cls: 'l muted wrap', colspan: '3', text: 'No visit shows refill evidence for this slot. Sales alone prove a refill only when a slot sells more than ' + REF.capacity + ' units in a row, or resumes after a silence that looked empty.' })]));
+  refs.forEach(x => rt.appendChild(el('tr', {}, [el('td', { text: fmtVisit(x.v) }), el('td', { cls: 'l wrap', text: KIND_TEXT[x.kind] || x.kind }),
+    el('td', { cls: 'l', text: x.v.evidence + (x.v.note ? ' (' + x.v.note + ')' : '') })])));
+  $('#refillNote').textContent = 'Visit grades: proven = capacity proof at this visit alone (no rail holds more than ' + REF.capacity + '); likely refill = ' + REF.likely_min + ' or more of our slots that looked empty started selling within ' + REF.resume_days + ' days; possible top-up = ' + (REF.likely_min > 2 ? '1 to ' + (REF.likely_min - 1) : '1') + '. Last single-visit proof: ' + fmtVisit(LAST_PROVEN) + '.' + (LAST_LIKELY !== LAST_PROVEN ? ' Last proven or likely refill: ' + fmtVisit(LAST_LIKELY) + '; the refills after the last proof put product back in only some of our rails.' : '');
+  // price history
+  const ph = $('#slotPrices'); ph.replaceChildren();
+  DATA.hist[id].forEach((h, i) => ph.appendChild(el('tr', {}, [el('td', { text: i === 0 ? 'First poll' : fmtDate(h.from) + ' ' + h.from.slice(11, 16) }), el('td', { text: cents(h.cents) })])));
+  // empty windows
+  const ew = $('#slotEmpty'); ew.replaceChildren();
+  const ws = DATA.windows.filter(w => w.slot === id);
+  if (!ws.length) ew.appendChild(el('tr', {}, [el('td', { cls: 'l muted', colspan: '5', text: 'No suspected-empty periods for this slot.' })]));
+  const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
+  ws.forEach(w => ew.appendChild(el('tr', {}, [el('td', { text: fmtDate(w.start) }), el('td', { text: w.how === 'ongoing' ? 'open at last poll' : fmtDate(w.end) }),
+    el('td', { cls: 'l', text: w.visit && VIS[w.visit] ? 'Refilled ' + fmtVisit(VIS[w.visit]) + ' (' + w.visit_evidence + ')' : cap((w.status || w.how).replace(/ \(.*\)$/, '')) }),
+    el('td', { text: w.expected.toFixed(1) + ' units' }), el('td', { cls: 'l', text: w.confidence })])));
+  drawSpark(id);
+}
+function drawSpark(id) {
+  const box = $('#sparkBox'), svg = $('#spark'), W = Math.max(280, box.clientWidth), H = 198;
+  const L = 34, R = 8, T = 18, B = 40, pw = W - L - R, ph = H - T - B;
+  const refs = slotRefills(id);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.replaceChildren();
+  const wk = slotWeekly(id), n = wk.length, sd = DATA.sd[id];
+  const ymax = niceMax(Math.max(4, ...wk.map(w => w.units)));
+  const X = i => L + i * pw / n, bw = pw / n, Y = v => T + ph - v / ymax * ph;
+  const dayW = bw / 7;
+  wk.forEach((w, i) => {
+    const off = 7 - w.idx.length;   // first week may be short: align its days to the right
+    w.idx.forEach((di, j) => {
+      const x = X(i) + (j + (i === 0 ? off : 0)) * dayW;
+      if (D.dow[di] < 5) svg.appendChild(sv('rect', { x, y: T, width: dayW + 0.3, height: ph, fill: D.cd[di] ? 'var(--class)' : 'var(--break)' }));
+      if (!inStock(sd, di)) svg.appendChild(sv('rect', { x: x + 0.5, y: T + ph + 3, width: Math.max(1, dayW - 1), height: 4, fill: 'var(--warn)' }));
+    });
+  });
+  for (let g = 0; g <= 2; g++) { const v = ymax * g / 2; svg.appendChild(sv('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: 'var(--grid)', 'stroke-width': 1 })); svg.appendChild(sv('text', { x: L - 6, y: Y(v) + 4, 'text-anchor': 'end' }, String(v))); }
+  svg.appendChild(sv('line', { x1: L, x2: W - R, y1: T + ph, y2: T + ph, stroke: 'var(--axis)' }));
+  const barW = Math.min(18, bw - 4);
+  const dayX = di => { const i = wk.findIndex(w => w.idx.includes(di)); if (i < 0) return null; const w = wk[i], off = i === 0 ? 7 - w.idx.length : 0; return X(i) + (w.idx.indexOf(di) + off + 0.5) * dayW; };
+  refs.forEach(x => { const di = DIDX[x.v.end.slice(0, 10)], cx = di == null ? null : dayX(di); if (cx == null) return;
+    svg.appendChild(sv('path', { class: 'vtick', d: 'M' + (cx - 5) + ' ' + (T - 12) + 'H' + (cx + 5) + 'L' + cx + ' ' + (T - 3) + 'Z' })); });
+  wk.forEach((w, i) => {
+    const cx = X(i) + bw / 2;
+    if (w.units > 0) { const y = Y(w.units), h = T + ph - y; svg.appendChild(sv('path', { d: barPath(cx - barW / 2, y, barW, h), fill: 'var(--s1)' })); }
+    if (i % 2 === 0 || n < 8) svg.appendChild(sv('text', { x: cx, y: H - 16, 'text-anchor': 'middle' }, fmtDate(w.key)));
+    const hit = sv('rect', { x: X(i), y: T, width: bw, height: ph + 10, fill: 'transparent', tabindex: 0, role: 'img', 'aria-label': 'Week of ' + fmtDate(w.key) + ': ' + w.units + ' units' });
+    svg.appendChild(hit);
+    const wv = refs.filter(x => w.idx.includes(DIDX[x.v.end.slice(0, 10)]));
+    markHover(box, hit, () => ({ title: 'Week from Sat ' + fmtDate(w.key) + (w.full ? '' : ' (partial)'), rows: [
+      { v: w.units + ' units', l: 'sold', color: 'var(--s1)' }, { v: w.cls + '', l: 'class days' }, { v: w.emptyDays + '', l: 'days suspected empty' }]
+      .concat(wv.map(x => ({ v: '▼ ' + fmtVisit(x.v), l: x.kind }))) }));
+  });
+  svg.appendChild(sv('text', { x: L, y: H - 2 }, 'Week starting (Saturday)'));
+}
+function barPath(x, y, w, h) { const r = Math.min(3, w / 2, h); return 'M' + x + ' ' + (y + h) + 'V' + (y + r) + 'Q' + x + ' ' + y + ' ' + (x + r) + ' ' + y + 'H' + (x + w - r) + 'Q' + (x + w) + ' ' + y + ' ' + (x + w) + ' ' + (y + r) + 'V' + (y + h) + 'Z'; }
+
+/* ---------- STEP 2 · products (from the dated photos; our slots only) ---------- */
+const PR = DATA.products;
+const CAF = { caffeine: { name: 'Caffeine', cls: 'cf-yes', ink: 'var(--s2-ink)' }, 'no caffeine': { name: 'No caffeine', cls: 'cf-no', ink: 'var(--s3-ink)' }, unknown: { name: 'Unknown', cls: 'cf-unk', ink: 'var(--rail-none-ink)' } };
+const cafKey = v => v === true ? 'caffeine' : v === false ? 'no caffeine' : 'unknown';
+const tms = s => Date.parse(s);
+const photoTime = s => s && s.startsWith('before') ? tms(M.first_poll) : tms(s);
+const fmtStamp = s => fmtDate(s) + ' ' + s.slice(11, 16);
+let prSlot = null;
+// Run label: brand plus category, unless the brand is already unknown or carries the category.
+const runName = (r, sep) => /^unidentified|^unknown$/.test(r.brand) ? r.brand : sep ? r.brand + sep + r.category : r.brand + ' (' + r.category + ')';
+(function () {
+  const sel = $('#prSlot');
+  SLOTS.map(s => s.slot).sort().forEach(id => sel.appendChild(el('option', { value: id, text: 'Slot ' + id })));
+  sel.addEventListener('change', () => { prSlot = sel.value; drawProductSlot(); drawProductAll(); });
+  ['#prGroup', '#prMeasure'].forEach(id => $(id).addEventListener('change', drawProductBars));
+  const cv = $('#prCaveats');
+  PR.caveats.forEach(c => cv.appendChild(el('li', { text: c })));
+  const b = PR.basis;
+  $('#prBasis').textContent = 'How well each unit is pinned to a product: ' + (b.bracketed || 0) + ' of ' + PR.total + ' units sit between two photos that show the same product line; ' +
+    (b['photo before'] || 0) + ' are credited to the photo before the sale, ' + (b['photo after'] || 0) + ' to the photo after it (the one before showed the rail empty), and ' +
+    (b.unknown || 0) + ' have no photo to credit. Photos run from ' + fmtDate(PR.photos[0].at) + ' to ' + fmtDate(PR.photos[PR.photos.length - 1].at) + '.';
+})();
+function drawProducts() {
+  if (!prSlot) prSlot = selSlot && PR.runs[selSlot] ? selSlot : SLOTS.slice().sort((a, b) => b.units - a.units)[0].slot;
+  $('#prSlot').value = prSlot;
+  const top = PR.by_category[0], caf = PR.by_caffeine.find(x => x.caffeine === 'caffeine'), lead = PR.by_brand[0];
+  const k = $('#kpiP'); k.replaceChildren();
+  [[pct(top.share) + ' ' + top.category, 'Largest category, share of our ' + PR.total + ' units', true],
+   [caf ? pct(caf.share) : '–', 'Units credited to drinks with caffeine'],
+   [lead.brand + ' · ' + lead.units, 'Top product line, units'],
+   [(PR.basis.bracketed || 0) + ' of ' + PR.total, 'Units between two photos of the same line']
+  ].forEach(([v, l, hl]) => k.appendChild(el('div', { cls: 'kpi' + (hl ? ' hl' : '') }, [el('div', { cls: 'v', text: v }), el('div', { cls: 'l', text: l })])));
+  drawProductBars(); drawProductSlot(); drawProductAll();
+}
+// Our sales by category, caffeine or product line. For units, the darker part is bracketed by two photos of the same line.
+function drawProductBars() {
+  const g = $('#prGroup').value, units = $('#prMeasure').value === 'units';
+  const src = g === 'category' ? PR.by_category : g === 'caffeine' ? PR.by_caffeine : PR.by_brand;
+  const name = x => g === 'caffeine' ? CAF[x.caffeine].name : x[g];
+  const val = x => units ? x.units : x.cents / 100;
+  const items = src.slice().sort((a, b) => val(b) - val(a));
+  const lg = $('#prLegend'); lg.replaceChildren();
+  if (units) {
+    lg.appendChild(el('span', {}, [el('i', { cls: 'sw' }), 'Units between two photos of the same line']));
+    lg.appendChild(el('span', {}, [el('i', { cls: 'sw guess' }), 'Units credited from one photo (best guess)']));
+  } else lg.appendChild(el('span', {}, [el('i', { cls: 'sw' }), 'Takings, tax included']));
+  const box = $('#prBox'), svg = $('#prChart'), W = Math.max(280, box.clientWidth), rowH = 24, T = 4, B = 30;
+  const L = Math.min(178, Math.round(W * 0.42)), R = 64, H = T + B + items.length * rowH, pw = W - L - R;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.replaceChildren();
+  // Pick the tick step that ends the axis closest above the largest bar (fewest ticks on a tie; at most 3 ticks when narrow).
+  const mx = Math.max(...items.map(val));
+  const ax = (pw < 260 ? [2, 3] : [2, 3, 4, 5]).map(k => { const st = niceMax(mx / k); return { st, top: Math.ceil(mx / st) * st }; })
+    .reduce((a, b) => b.top < a.top || (b.top === a.top && b.st > a.st) ? b : a);
+  const step = ax.st, vmax = ax.top, nt = Math.round(vmax / step), X = v => L + v / vmax * pw;
+  for (let i = 0; i <= nt; i++) { const v = vmax * i / nt; svg.appendChild(sv('line', { x1: X(v), x2: X(v), y1: T, y2: H - B, stroke: i ? 'var(--grid)' : 'var(--axis)' })); svg.appendChild(sv('text', { x: X(v), y: H - B + 14, 'text-anchor': i === nt ? 'end' : 'middle' }, units ? String(Math.round(v)) : money0(v))); }
+  svg.appendChild(sv('text', { x: L + pw / 2, y: H - 2, 'text-anchor': 'middle' }, units ? 'Units sold in our slots' : 'Takings in our slots, tax included'));
+  const maxCh = Math.floor((L - 10) / 6.4), clip = s => s.length > maxCh ? s.slice(0, maxCh - 1) + '…' : s;
+  items.forEach((x, i) => {
+    const y = T + i * rowH, bh = rowH - 8, by = y + 4, nm = name(x);
+    svg.appendChild(sv('text', { x: L - 8, y: y + rowH / 2 + 4, 'text-anchor': 'end', class: 'ink' }, clip(nm)));
+    if (units) {
+      const wb = X(x.units_bracketed) - L, wt = X(x.units) - L;
+      if (wt > 0) svg.appendChild(sv('rect', { x: L, y: by, width: wt, height: bh, rx: 2, fill: 'var(--s1)', 'fill-opacity': 0.4 }));
+      if (wb > 0) svg.appendChild(sv('rect', { x: L, y: by, width: wb, height: bh, rx: 2, fill: 'var(--s1)' }));
+    } else svg.appendChild(sv('rect', { x: L, y: by, width: Math.max(0, X(val(x)) - L), height: bh, rx: 2, fill: 'var(--s1)' }));
+    svg.appendChild(sv('text', { x: X(val(x)) + 5, y: y + rowH / 2 + 4, class: 'v' }, units ? x.units + ' · ' + pct(x.share) : money0(val(x))));
+    const hit = sv('rect', { x: 0, y, width: W, height: rowH, fill: 'transparent', tabindex: 0, role: 'img', 'aria-label': nm + ': ' + x.units + ' units, ' + money(x.cents / 100) + ', in slots ' + x.slots.join(', ') });
+    svg.appendChild(hit);
+    markHover(box, hit, () => ({ title: nm + (g === 'brand' ? ' · ' + x.category : ''), rows: [
+      { v: x.units + ' units', l: pct(x.share) + ' of our units', color: 'var(--s1)' },
+      { v: x.units_bracketed + '', l: 'of them between two photos of the same line' },
+      { v: money(x.cents / 100), l: 'takings, tax included' },
+      { v: x.units ? money(x.cents / x.units / 100) : '–', l: 'average price paid' },
+      { v: x.slots.join(', '), l: 'slots' }] }));
+  });
+  $('#prNote').textContent = (g === 'caffeine' ? 'Caffeine is set by brand: energy drinks, coffee, black tea and colas have it. vitaminwater and Snapple vary by flavour, so they take the photo reader’s call or count as unknown. ' : g === 'brand' ? '“unidentified (…)” rails could not be read from the photo; the bracket gives the category the reader guessed. ' : '') +
+    'Shares are of the ' + PR.total + ' units our slots sold. Average price is takings divided by units, tax included.';
+}
+// One slot: product runs (first to last credited sale) and the photos they come from.
+function drawProductSlot() {
+  const id = prSlot, runs = PR.runs[id] || [], ph = PR.timeline[id] || [], s = BY[id];
+  $('#prSlotTitle').textContent = 'What slot ' + id + ' held · ' + s.units + ' units, ' + money(s.cents / 100);
+  const lg = $('#runLegend'); lg.replaceChildren();
+  Object.values(CAF).forEach(c => lg.appendChild(el('span', {}, [el('i', { cls: 'sw ' + c.cls }), c.name])));
+  lg.appendChild(el('span', {}, [sv('svg', { width: 12, height: 12, 'aria-hidden': 'true' }), 'Photo: product seen']));
+  lg.appendChild(el('span', {}, [sv('svg', { width: 12, height: 12, 'aria-hidden': 'true' }), 'Photo: rail looks empty']));
+  const sw = lg.querySelectorAll('svg');
+  sw[0].appendChild(sv('circle', { cx: 6, cy: 6, r: 4.5, fill: 'var(--ink)' }));
+  sw[1].appendChild(sv('circle', { cx: 6, cy: 6, r: 4, fill: 'var(--surface)', stroke: 'var(--ink)', 'stroke-width': 1.5 }));
+  const box = $('#runBox'), svg = $('#runChart'), W = Math.max(280, box.clientWidth), L = 8, R = 8, T = 8, laneP = 22, gap = 14, laneR = 34, B = 36;
+  const H = T + laneP + gap + laneR + B, pw = W - L - R;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.replaceChildren();
+  const t0 = tms(M.first_poll), t1 = tms(M.last_poll), X = t => L + Math.max(0, Math.min(1, (t - t0) / (t1 - t0))) * pw;
+  const yP = T + laneP / 2, yR = T + laneP + gap;
+  // week grid (Saturday starts) and month-day labels
+  const wk = WEEKS.map(w => w.key).filter(k => tms(k + 'T00:00-04:00') >= t0);
+  wk.forEach((k, i) => { const x = X(tms(k + 'T00:00-04:00')); svg.appendChild(sv('line', { x1: x, x2: x, y1: T, y2: yR + laneR, stroke: 'var(--grid)' })); if (W >= 520 || i % 2 === 1) svg.appendChild(sv('text', { x, y: H - B + 14, 'text-anchor': i ? 'middle' : 'start' }, fmtDate(k))); });
+  svg.appendChild(sv('line', { x1: L, x2: W - R, y1: yR + laneR, y2: yR + laneR, stroke: 'var(--axis)' }));
+  svg.appendChild(sv('text', { x: L, y: H - 1 }, 'Week starting (Saturday)'));
+  runs.forEach(r => {
+    const a = X(tms(r.frm)), b = Math.max(a + 4, X(tms(r.to))), c = CAF[r.caffeine] || CAF.unknown;
+    const rect = sv('rect', { x: a, y: yR, width: b - a, height: laneR, rx: 3, class: c.cls });
+    svg.appendChild(rect);
+    const lab = (b - a > (r.brand.length + 6) * 7 ? r.brand + ' · ' : '') + r.units;
+    if (b - a > 16) svg.appendChild(sv('text', { x: (a + b) / 2, y: yR + laneR / 2 + 4, 'text-anchor': 'middle', class: 'v', style: 'fill:' + c.ink }, lab));
+    const hit = sv('rect', { x: a - 2, y: yR, width: b - a + 4, height: laneR, fill: 'transparent', tabindex: 0, role: 'img', 'aria-label': r.brand + ', ' + r.units + ' units from ' + fmtDate(r.frm) + ' to ' + fmtDate(r.to) });
+    svg.appendChild(hit);
+    markHover(box, hit, () => ({ title: runName(r, ' · '), rows: [
+      { v: r.units + ' units', l: money(r.cents / 100) },
+      { v: fmtStamp(r.frm) + ' to ' + fmtStamp(r.to), l: '' },
+      { v: money(r.avg_price), l: 'average price paid' },
+      { v: (CAF[r.caffeine] || CAF.unknown).name, l: '' }] }));
+  });
+  ph.forEach(p => {
+    const x = X(tms(p.at)), xa = X(photoTime(p.earliest)), xb = X(tms(p.latest)), seen = p.stock_seen === 'stocked';
+    if (xb - xa > 1) svg.appendChild(sv('line', { x1: xa, x2: xb, y1: yP, y2: yP, stroke: 'var(--muted)', 'stroke-width': 1.5 }));
+    svg.appendChild(sv('circle', { cx: x, cy: yP, r: 5, fill: seen ? 'var(--ink)' : 'var(--surface)', stroke: 'var(--ink)', 'stroke-width': 1.5 }));
+    const hit = sv('rect', { x: x - 7, y: T, width: 14, height: laneP, fill: 'transparent', tabindex: 0, role: 'img', 'aria-label': 'Photo ' + fmtDate(p.at) + ': ' + (seen ? p.product : 'rail looks empty') });
+    svg.appendChild(hit);
+    markHover(box, hit, () => ({ title: 'Photo, best guess ' + fmtStamp(p.at), rows: [
+      { v: seen ? (p.product || p.brand || 'product seen') : 'Rail looks empty', l: '' },
+      { v: p.earliest.startsWith('before') ? 'before ' + fmtDate(M.first_poll) + ' to ' + fmtStamp(p.latest) : fmtStamp(p.earliest) + ' to ' + fmtStamp(p.latest), l: 'taken within' },
+      { v: p.photo_confidence || '–', l: 'date confidence' }].concat(seen ? [{ v: p.read_confidence || '–', l: 'read confidence' }] : []) }));
+  });
+  if (!runs.length) svg.appendChild(sv('text', { x: L + pw / 2, y: yR + laneR / 2 + 4, 'text-anchor': 'middle' }, 'No sales credited to a product'));
+  // tables
+  const tp = $('#prPhotos'); tp.replaceChildren();
+  ph.forEach(p => {
+    const seen = p.stock_seen === 'stocked';
+    tp.appendChild(el('tr', {}, [el('td', { text: fmtStamp(p.at) }), el('td', { cls: 'l', text: seen ? (p.product || p.brand || 'product seen') : 'Looks empty' }),
+      el('td', { cls: 'l', text: seen ? (p.category || '–') : '–' }), el('td', { cls: 'l', text: seen ? CAF[cafKey(p.caffeine)].name : '–' }),
+      el('td', { cls: 'l', text: (seen ? 'read ' + (p.read_confidence || 'not graded') + '; ' : '') + 'date ' + (p.photo_confidence || '–') })]));
+  });
+  if (!ph.length) tp.appendChild(el('tr', {}, [el('td', { cls: 'l muted', colspan: '5', text: 'No photo shows this slot.' })]));
+  const tr = $('#prRuns'); tr.replaceChildren();
+  runs.forEach(r => tr.appendChild(el('tr', {}, [el('td', { text: fmtStamp(r.frm) }), el('td', { text: fmtStamp(r.to) }), el('td', { cls: 'l', text: runName(r) }),
+    el('td', { text: String(r.units) }), el('td', { text: money(r.cents / 100) }), el('td', { text: money(r.avg_price) })])));
+  if (!runs.length) tr.appendChild(el('tr', {}, [el('td', { cls: 'l muted', colspan: '6', text: 'No sales credited to a product.' })]));
+}
+// Every one of our slots in a row: the lines its photos showed, its main category and its caffeine floor.
+function drawProductAll() {
+  const tb = $('#prAll'); tb.replaceChildren();
+  SLOTS.map(s => s.slot).sort().forEach(id => {
+    const s = BY[id], runs = PR.runs[id] || [], ph = PR.timeline[id] || [];
+    const seen = []; ph.filter(p => p.stock_seen === 'stocked').forEach(p => { const b = p.brand || 'unidentified'; if (seen[seen.length - 1] !== b) seen.push(b); });
+    const cat = {}; runs.forEach(r => { cat[r.category] = (cat[r.category] || 0) + r.units; });
+    const main = Object.keys(cat).sort((a, b) => cat[b] - cat[a])[0];
+    const ru = sum(runs.map(r => r.units)), cu = sum(runs.filter(r => r.caffeine === 'caffeine').map(r => r.units));
+    const row = el('tr', { cls: 'click' + (id === prSlot ? ' sel' : ''), tabindex: '0', 'aria-label': 'Open slot ' + id }, [
+      el('td', { text: id }), el('td', { cls: 'l wrap', text: seen.join(' → ') || '–' }),
+      el('td', { cls: 'l', text: main ? main + ' (' + cat[main] + ')' : '–' }), el('td', { text: String(s.units) }), el('td', { text: money(s.cents / 100) }),
+      el('td', { text: ru ? pct(cu / ru) : '–' }), el('td', { text: String(ph.filter(p => p.stock_seen !== 'stocked').length) + ' of ' + ph.length })]);
+    const open = () => { prSlot = id; $('#prSlot').value = id; drawProductSlot(); drawProductAll(); $('#prSlotTitle').scrollIntoView({ block: 'nearest' }); };
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
+    tb.appendChild(row);
+  });
+}
+
+/* ---------- STEP 3 · position (drawStep2) ---------- */
+function drawStep2() {
+  const ctrl = $('#ctrlPrice').checked, R = DATA.reg.full, red = DATA.reg.reduced;
+  $('#ctrlNote').textContent = ctrl
+    ? 'On: estimates from one regression of each slot’s units per in-stock class day on its row, its column and its average price (n = ' + R.n + ' slots). Each difference holds the other position and price fixed.'
+    : 'Off: plain differences in average units per in-stock class day between the slots in a row (or column) and the baseline, with Welch 95% intervals. Price and the other direction are not held fixed.';
+  const pc = R.coefs.find(c => c.term === 'avg_price'), jc = DATA.reg.joint.col;
+  const k = $('#kpi2'); k.replaceChildren();
+  [[R.r2.toFixed(2) + ' / ' + R.adj_r2.toFixed(2), 'R² / adjusted R² (row + column + price)', true],
+   [sgn(pc.coef) + ' per $1', 'Price coefficient, CI ' + pc.ci_lo.toFixed(2) + ' to ' + pc.ci_hi.toFixed(2)],
+   ['p = ' + (jc.p < 0.001 ? '<0.001' : jc.p.toFixed(3)), 'Columns ' + LEVELS.col.join(', ') + ' jointly (F = ' + jc.F.toFixed(2) + '); shelf-only model adjusted R² ' + red.adj_r2.toFixed(2)]
+  ].forEach(([v, l, hl]) => k.appendChild(el('div', { cls: 'kpi' + (hl ? ' hl' : '') }, [el('div', { cls: 'v', text: v }), el('div', { cls: 'l', text: l })])));
+  const rr = rawEffects('row'), rc = rawEffects('col'), gr = regEffects('row'), gc = regEffects('col');
+  const pick = (raw, reg) => ctrl ? reg : raw;
+  const all = [].concat(rr, rc, gr, gc).filter(e => e.lo != null);
+  const lim = Math.max(...all.map(e => Math.max(Math.abs(e.lo), Math.abs(e.hi))));
+  dotWhisker($('#rowBox'), $('#rowChart'), pick(rr, gr), 'Row', lim, rr);
+  dotWhisker($('#colBox'), $('#colChart'), pick(rc, gc), 'Column', lim, rc);
+  // table view
+  const tb = $('#effTable'); tb.replaceChildren();
+  const ci = e => e.lo == null ? 'baseline' : sgn(e.d) + ' (' + e.lo.toFixed(2) + ' to ' + e.hi.toFixed(2) + ')';
+  [['Row', rr, gr], ['Column', rc, gc]].forEach(([nm, raw, reg]) => raw.forEach((e, i) => {
+    tb.appendChild(el('tr', {}, [el('td', { cls: 'l', text: nm + ' ' + e.level + (nm === 'Row' && e.level === 1 ? ' (top)' : '') }), el('td', { text: String(e.n) }), el('td', { text: e.mean.toFixed(3) }),
+      el('td', { text: ci(e) }), el('td', { text: ci(reg[i]) }), el('td', { text: reg[i].p == null ? '–' : reg[i].p.toFixed(3) })]));
+  }));
+}
+function dotWhisker(box, svg, eff, name, lim, raw) {
+  const W = Math.max(280, box.clientWidth), rowH = 30, T = 8, B = 34, L = 74, R = 14, H = T + B + eff.length * rowH;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.replaceChildren();
+  const ext = niceMax(lim), pw = W - L - R;
+  const X = v => L + (v + ext) / (2 * ext) * pw;
+  const ticks = [-ext, -ext / 2, 0, ext / 2, ext];
+  ticks.forEach(v => { svg.appendChild(sv('line', { x1: X(v), x2: X(v), y1: T, y2: H - B, stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 })); svg.appendChild(sv('text', { x: X(v), y: H - B + 14, 'text-anchor': 'middle' }, (v > 0 ? '+' : '') + (Math.round(v * 100) / 100))); });
+  svg.appendChild(sv('text', { x: L + pw / 2, y: H - 2, 'text-anchor': 'middle' }, 'Difference in units per in-stock class day'));
+  eff.forEach((e, i) => {
+    const y = T + i * rowH + rowH / 2;
+    svg.appendChild(sv('text', { x: L - 8, y: y + 4, 'text-anchor': 'end', class: 'ink' }, name + ' ' + e.level));
+    if (e.lo != null) svg.appendChild(sv('line', { x1: X(e.lo), x2: X(e.hi), y1: y, y2: y, stroke: 'var(--s1)', 'stroke-width': 2, 'stroke-linecap': 'round' }));
+    svg.appendChild(sv('circle', { cx: X(e.d), cy: y, r: 5, fill: e.base ? 'var(--surface)' : 'var(--s1)', stroke: e.base ? 'var(--s1)' : 'var(--surface)', 'stroke-width': 2 }));
+    const hit = sv('rect', { x: L, y: y - rowH / 2, width: pw, height: rowH, fill: 'transparent', tabindex: 0, role: 'img', 'aria-label': name + ' ' + e.level + ': ' + (e.base ? 'baseline' : sgn(e.d)) });
+    svg.appendChild(hit);
+    markHover(box, hit, () => ({ title: name + ' ' + e.level + (e.base ? ' (baseline)' : ''), rows: e.base ? [{ v: raw[i].mean.toFixed(3), l: 'mean units per in-stock class day' }] : [
+      { v: sgn(e.d), l: 'vs ' + name.toLowerCase() + ' ' + eff[0].level, color: 'var(--s1)' }, { v: e.lo.toFixed(2) + ' to ' + e.hi.toFixed(2), l: '95% CI' },
+      { v: raw[i].mean.toFixed(3), l: 'raw mean of ' + raw[i].n + ' slots' }] }));
+  });
+}
+$('#ctrlPrice').addEventListener('change', drawStep2);
+
+/* ---------- STEP 4 · price changes (drawStep3) ---------- */
+const EVENTS = priceEvents();
+let selEvent = null;
+function eventLabel(e) { return 'Slot ' + e.slot + ' · ' + fmtDate(e.date) + ' · ' + e.steps.map(c => cents(c)).join(' → '); }
+function drawStep3() {
+  const equal = $('#equalWin').checked, filt = $('#pcFilter').value, vsC = $('#vsCtrl').checked;
+  const rows = EVENTS.map(e => ({ e, st: eventStats(e, equal) }));
+  const ctrlCache = {};
+  const ctrl = date => (ctrlCache[date] !== undefined ? ctrlCache[date] : (ctrlCache[date] = machineTrend(date, equal)));
+  const shown = rows.filter(r => filt === 'all' || r.e.dir === filt);
+  const measured = shown.filter(r => r.st.ci), inWin = shown.filter(r => r.st.measured);
+  const mainDate = DATA.pc.event_date, cr = ctrl(mainDate), mainTxt = fmtDate(mainDate);
+  $('#winNote').textContent = equal
+    ? 'On: before and after use the same number of class days (the shorter side sets the length). For ' + mainTxt + ' that is ' + (cr ? cr.nb : '–') + ' class days each side.'
+    : 'Off: before uses every regular-era class day at the old price; after uses every class day at the new price up to the next change or the last poll. Longer windows mix in the late decline across our slots, which followed the emptying shelves, and more stock-outs.';
+  if (!selEvent || !shown.some(r => r.e === selEvent)) selEvent = (measured[0] || shown[0] || rows[0]).e;
+  const ratios = measured.map(r => r.st.ci.rr), adjR = measured.filter(r => ctrl(r.e.date)).map(r => r.st.ci.rr / ctrl(r.e.date).ratio);
+  const zA = inWin.filter(r => !r.st.thin && r.st.zero === 'after').length, zB = inWin.filter(r => !r.st.thin && r.st.zero === 'before').length, thin = inWin.filter(r => r.st.thin).length;
+  const clean = shown.filter(r => r.st.measured && r.st.flags.length === 0).length;
+  const k = $('#kpi3'); k.replaceChildren();
+  [[measured.length + ' / ' + inWin.length, 'Changes with a ratio / with class days on both sides (' + shown.length + ' shown)', true],
+   [f2(median(ratios)) + '×', 'Median after/before ratio (' + zA + ' fell to zero after, ' + zB + ' rose from zero, ' + thin + ' too little exposure)'],
+   [cr ? cr.ratio.toFixed(2) + '× (' + cr.lo.toFixed(2) + '–' + cr.hi.toFixed(2) + ')' : '–', 'Machine-wide trend (whole-machine units per class day) after/before, ' + mainTxt + ', 95% CI'],
+   [vsC && adjR.length ? f2(median(adjR)) + '×' : '–', 'Median ratio vs machine-wide trend'],
+   [clean + '', 'Changes with no stock-out, calendar or few-unit flag']
+  ].forEach(([v, l, hl]) => k.appendChild(el('div', { cls: 'kpi' + (hl ? ' hl' : '') }, [el('div', { cls: 'v', text: v }), el('div', { cls: 'l', text: l })])));
+  // table
+  const tb = $('#pcTable'); tb.replaceChildren();
+  rows.filter(r => filt === 'all' || r.e.dir === filt).forEach(r => {
+    const e = r.e, st = r.st, c = ctrl(e.date);
+    const tr = el('tr', { cls: 'click' + (e === selEvent ? ' sel' : ''), tabindex: 0 });
+    const flags = el('td', { cls: 'l wrap' });
+    st.flags.forEach(f => flags.appendChild(el('span', { cls: 'tag ' + f.cls, title: f.why, text: f.t })));
+    if (st.flags.length) flags.appendChild(el('div', { cls: 'small muted', text: st.flags.map(f => f.why).join('. ') + '.' }));
+    tr.append(el('td', { text: e.slot }), el('td', { text: fmtDate(e.when) + ' ' + e.when.slice(11, 16) }), el('td', { text: e.steps.map(x => cents(x)).join(' → ') }),
+      el('td', { text: st.measured ? st.B.u + ' / ' + st.B.inS + ' of ' + st.nb : '–' }), el('td', { text: st.measured ? st.A.u + ' / ' + st.A.inS + ' of ' + st.na : '–' }),
+      el('td', { text: st.measured ? f2(st.B.rate) + ' → ' + f2(st.A.rate) : '–' }),
+      el('td', { text: st.ci ? st.ci.rr.toFixed(2) + (st.ci.cc ? '*' : '') + ' (' + st.ci.lo.toFixed(2) + '–' + st.ci.hi.toFixed(2) + ')' : '–' }),
+      el('td', { text: (() => { const v = vsC ? vsTrend(st.ci, c) : null; return v ? v.v.toFixed(2) + ' (' + v.lo.toFixed(2) + '–' + v.hi.toFixed(2) + ')' : '–'; })() }), flags);
+    const pickIt = () => { selEvent = e; drawStep3(); };
+    tr.addEventListener('click', pickIt);
+    tr.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickIt(); } });
+    tb.appendChild(tr);
+  });
+  drawSlope(measured);
+  drawDays(selEvent, eventStats(selEvent, equal));
+}
+function drawSlope(items) {
+  const box = $('#slopeBox'), svg = $('#slope'), W = Math.max(280, box.clientWidth), H = 320;
+  const L = 44, R = 70, T = 28, B = 34, pw = W - L - R, ph = H - T - B;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.replaceChildren();
+  const vals = items.flatMap(r => [r.st.B.rate, r.st.A.rate]);
+  const ymax = niceMax(Math.max(1, ...vals)), Y = v => T + ph - v / ymax * ph, x0 = L + pw * 0.12, x1 = L + pw * 0.88;
+  for (let g = 0; g <= 4; g++) { const v = ymax * g / 4; svg.appendChild(sv('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: 'var(--grid)' })); svg.appendChild(sv('text', { x: L - 6, y: Y(v) + 4, 'text-anchor': 'end' }, String(Math.round(v * 100) / 100))); }
+  [[x0, 'Before'], [x1, 'After']].forEach(([x, t]) => svg.appendChild(sv('text', { x, y: H - 12, 'text-anchor': 'middle', class: 'ink' }, t)));
+  svg.appendChild(sv('text', { x: 4, y: 12 }, 'Units per in-stock class day'));
+  const col = d => d === 'cut' ? 'var(--s1)' : d === 'raise' ? 'var(--s2)' : 'var(--muted)';
+  const g = sv('g', {}); svg.appendChild(g);
+  items.forEach(r => {
+    const e = r.e, sel = e === selEvent;
+    const ln = sv('line', { x1: x0, y1: Y(r.st.B.rate), x2: x1, y2: Y(r.st.A.rate), stroke: col(e.dir), 'stroke-width': sel ? 3 : 2, 'stroke-linecap': 'round', opacity: sel ? 1 : 0.6 });
+    g.appendChild(ln);
+    [[x0, r.st.B.rate], [x1, r.st.A.rate]].forEach(([x, v]) => g.appendChild(sv('circle', { cx: x, cy: Y(v), r: sel ? 5 : 4, fill: col(e.dir), stroke: 'var(--surface)', 'stroke-width': 2 })));
+    if (sel) { g.appendChild(sv('text', { x: x1 + 10, y: Y(r.st.A.rate) + 4, class: 'ink' }, 'Slot ' + e.slot)); }
+    const hit = sv('line', { x1: x0, y1: Y(r.st.B.rate), x2: x1, y2: Y(r.st.A.rate), stroke: 'transparent', 'stroke-width': 14, tabindex: 0, role: 'img', 'aria-label': eventLabel(e) + ': ' + f2(r.st.B.rate) + ' to ' + f2(r.st.A.rate) });
+    svg.appendChild(hit);
+    hit.style.cursor = 'pointer';
+    markHover(box, hit, () => ({ title: eventLabel(e), rows: [
+      { v: f2(r.st.B.rate) + ' → ' + f2(r.st.A.rate), l: 'units per in-stock class day', color: col(e.dir) },
+      { v: r.st.ci.rr.toFixed(2) + '×', l: 'after / before (CI ' + r.st.ci.lo.toFixed(2) + '–' + r.st.ci.hi.toFixed(2) + ')' + (r.st.ci.cc ? ', 0.5 added to both counts' : '') },
+      { v: r.st.B.u + ' → ' + r.st.A.u, l: 'units in the windows' }] }));
+    hit.addEventListener('click', () => { selEvent = e; drawStep3(); });
+  });
+  const lg = $('#slopeLegend'); lg.replaceChildren();
+  [['var(--s1)', 'Price cut'], ['var(--s2)', 'Price raise']].forEach(([c, t]) => {
+    const s = el('i', { cls: 'sw line' }); s.style.borderTopColor = c; lg.appendChild(el('span', {}, [s, t]));
+  });
+}
+function drawDays(e, st) {
+  const box = $('#dayBox'), svg = $('#dayChart'), W = Math.max(300, box.clientWidth), H = 230;
+  const L = 34, R = 8, T = 26, B = 40, pw = W - L - R, ph = H - T - B;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.replaceChildren();
+  $('#dayTitle').textContent = 'Daily sales: ' + eventLabel(e);
+  $('#daySub').textContent = st.measured ? 'Before ' + st.nb + ' class days, after ' + st.na + ' class days' : 'Not measured: ' + st.flags[0].why.toLowerCase();
+  const i0 = DIDX['2026-09-09'], idx = []; for (let i = i0; i < ND; i++) idx.push(i);
+  const sd = DATA.sd[e.slot], n = idx.length, bw = pw / n;
+  const ymax = niceMax(Math.max(3, ...idx.map(i => sd.u[i])));
+  const X = j => L + j * bw, Y = v => T + ph - v / ymax * ph;
+  const win = windowsFor(e.date, e.prev, e.next, $('#equalWin').checked);
+  const inB = new Set(win.b), inA = new Set(win.a);
+  idx.forEach((di, j) => { if (D.dow[di] < 5) svg.appendChild(sv('rect', { x: X(j), y: T, width: bw + 0.3, height: ph, fill: D.cd[di] ? 'var(--class)' : 'var(--break)' })); });
+  for (let g = 0; g <= 2; g++) { const v = ymax * g / 2; svg.appendChild(sv('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: 'var(--grid)' })); svg.appendChild(sv('text', { x: L - 6, y: Y(v) + 4, 'text-anchor': 'end' }, String(v))); }
+  svg.appendChild(sv('line', { x1: L, x2: W - R, y1: T + ph, y2: T + ph, stroke: 'var(--axis)' }));
+  const barW = Math.max(1.5, Math.min(16, bw - 2));
+  // window brackets
+  [[win.b, 'Before'], [win.a, 'After']].forEach(([w, t]) => {
+    if (!w.length) return; const a = idx.indexOf(w[0]), b = idx.indexOf(w[w.length - 1]);
+    svg.appendChild(sv('line', { x1: X(a) + 1, x2: X(b) + bw - 1, y1: T - 8, y2: T - 8, stroke: 'var(--ink)', 'stroke-width': 2 }));
+    svg.appendChild(sv('text', { x: X(a), y: T - 13, class: 'ink' }, t));
+  });
+  const thinLabels = 7 * bw < 46; let monIdx = 0;
+  idx.forEach((di, j) => {
+    const u = sd.u[di], emp = !inStock(sd, di);
+    if (u > 0) { const y = Y(u); svg.appendChild(sv('path', { d: barPath(X(j) + (bw - barW) / 2, y, barW, T + ph - y), fill: 'var(--s1)', opacity: D.reg[di] ? 1 : 0.45 })); }
+    if (emp) svg.appendChild(sv('rect', { x: X(j) + 0.5, y: T + ph + 3, width: Math.max(1, bw - 1), height: 4, fill: 'var(--warn)' }));
+    if (D.dow[di] === 0) { if (!thinLabels || monIdx % 2 === 0) svg.appendChild(sv('text', { x: X(j), y: H - 16 }, fmtDate(D.date[di]))); monIdx++; }
+    const hit = sv('rect', { x: X(j), y: T, width: bw, height: ph + 8, fill: 'transparent' });
+    if (u > 0 || emp) { hit.setAttribute('tabindex', 0); hit.setAttribute('role', 'img'); hit.setAttribute('aria-label', fmtDate(D.date[di]) + ': ' + u + ' units' + (emp ? ', suspected empty' : '')); }
+    svg.appendChild(hit);
+    markHover(box, hit, () => ({ title: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][(D.dow[di] + 1) % 7] + ' ' + fmtDate(D.date[di]), rows: [
+      { v: u + ' units', l: 'sold', color: 'var(--s1)' }, { v: cents(sd.p[di]), l: 'listed price' },
+      { v: D.cd[di] ? 'class day' : (D.lab[di] || (D.dow[di] >= 5 ? 'weekend' : 'no classes')), l: '' },
+      { v: emp ? 'yes' : 'no', l: 'suspected empty' }].concat(inB.has(di) ? [{ v: 'before window', l: '' }] : inA.has(di) ? [{ v: 'after window', l: '' }] : []).concat(D.reg[di] ? [] : [{ v: 'gap-polled', l: 'sales may be lumped' }]) }));
+  });
+  const ci = DIDX[e.date];
+  if (ci !== undefined) {
+    const j = idx.indexOf(ci), x = X(j) + bw / 2;
+    svg.appendChild(sv('line', { x1: x, x2: x, y1: T, y2: T + ph, stroke: 'var(--ink)', 'stroke-width': 1.5 }));
+    svg.appendChild(sv('text', { x: Math.min(x + 4, W - R - 90), y: T + 12, class: 'ink' }, e.steps.map(c => cents(c)).join(' → ')));
+  }
+}
+['#equalWin', '#pcFilter', '#vsCtrl'].forEach(id => $(id).addEventListener('change', drawStep3));
+
+/* ---------- STEP 5 · segments (drawStep4) ---------- */
+const CL = DATA.clusters, KS = [2, 3, 4, 5, 6];
+const FEAT_NAME = { rate: 'Units per in-stock class day', avg_price: 'Average class-day price', fri_share: 'Friday share of weekday units', zero_week_share: 'Zero-sales week share', cv_weekly: 'Week-to-week variation (CV)' };
+(function () {
+  const fl = $('#featList');
+  CL.features.forEach(f => {
+    const id = 'feat-' + f;
+    fl.appendChild(el('label', { cls: 'opt', for: id }, [el('input', { type: 'checkbox', id, checked: 'checked', disabled: 'disabled' }), el('span', { text: FEAT_NAME[f] + ': ' + CL.notes[f] })]));
+  });
+})();
+const kLog = [];
+function curK() { return +$('#kSlider').value; }
+function drawStep4() {
+  const k = curK(), bk = CL.byk[String(k)];
+  $('#kVal').textContent = k;
+  const segOf = bk.assign, prof = {}; bk.profiles.forEach(p => { prof[p.cluster] = p; });
+  buildGrid($('#segGrid'), $('#segGridBox'), {
+    prefix: 'seg-', edges: false, selected: null,
+    cls: s => 'g' + segOf[s.slot], text: s => 'S' + (segOf[s.slot] + 1),
+    aria: s => 'Slot ' + s.slot + ': segment ' + (segOf[s.slot] + 1) + ', ' + prof[segOf[s.slot]].name,
+    tip: s => { const p = prof[segOf[s.slot]], f = CL.feat[s.slot]; return { title: 'Slot ' + s.slot + ' · S' + (segOf[s.slot] + 1) + ' ' + p.name, rows: [
+      { v: f.rate.toFixed(2), l: 'units per in-stock class day' }, { v: '$' + f.avg_price.toFixed(2), l: 'average price' },
+      { v: pct(f.zero_week_share), l: 'zero-sales weeks' }, { v: pct(f.fri_share), l: 'Friday share' }] }; },
+    onClick: null
+  });
+  const lg = $('#segLegend'); lg.replaceChildren();
+  bk.profiles.forEach(p => { const s = el('i', { cls: 'sw g' + p.cluster }); lg.appendChild(el('span', {}, [s, 'S' + (p.cluster + 1) + ' ' + p.name + ' (' + p.size + ')'])); });
+  const tb = $('#segTable'); tb.replaceChildren();
+  bk.profiles.forEach(p => {
+    const c = p.centroid, sw = el('i', { cls: 'sw g' + p.cluster });
+    tb.appendChild(el('tr', {}, [el('td', {}, [sw, ' S' + (p.cluster + 1)]), el('td', { cls: 'l', text: p.name }), el('td', { text: String(p.size) }), el('td', { cls: 'l', text: p.slots.join(', ') }),
+      el('td', { text: c.rate.toFixed(2) }), el('td', { text: '$' + c.avg_price.toFixed(2) }), el('td', { text: pct(c.fri_share) }), el('td', { text: pct(c.zero_week_share) }), el('td', { text: c.cv_weekly.toFixed(2) }),
+      el('td', { text: String(p.units_total) }), el('td', { cls: 'l wrap', text: p.action })]));
+  });
+  const minSize = Math.min(...bk.profiles.map(p => p.size));
+  const actions = bk.profiles.map(p => p.action), dupAct = actions.length - new Set(actions).size;
+  $('#segNote').textContent = 'Centers are shown in original units. Smallest segment at k = ' + k + ': ' + minSize + ' slots' + (minSize < 4 ? ', too small to act on as a group' : '') + '. ' +
+    (dupAct ? dupAct + ' segment' + (dupAct > 1 ? 's share' : ' shares') + ' an action with another, so those could be one segment. ' : 'Every segment gets its own action. ') + CL.method;
+  const kp = $('#kpi4'); kp.replaceChildren();
+  [[bk.sil.toFixed(3), 'Silhouette' + (k === CL.best ? ' (best of k = 2 to 6)' : ''), true], [pct(bk.pct), 'Variation explained'], [minSize + '', 'Smallest segment (slots)'], [pct(bk.stab), 'Stability across seeds']]
+    .forEach(([v, l, hl]) => kp.appendChild(el('div', { cls: 'kpi' + (hl ? ' hl' : '') }, [el('div', { cls: 'v', text: v }), el('div', { cls: 'l', text: l })])));
+  drawElbow(k); drawSil(k);
+}
+function drawElbow(k) {
+  const box = $('#elbowBox'), svg = $('#elbow'), W = Math.max(240, box.clientWidth), H = 200, L = 38, R = 12, T = 12, B = 34, pw = W - L - R, ph = H - T - B;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.replaceChildren();
+  const pts = [{ k: 1, v: 0 }].concat(KS.map(x => ({ k: x, v: CL.byk[String(x)].pct })));
+  const X = kk => L + (kk - 1) / 5 * pw, Y = v => T + ph - v * ph;
+  [0, 0.25, 0.5, 0.75, 1].forEach(v => { svg.appendChild(sv('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: 'var(--grid)' })); svg.appendChild(sv('text', { x: L - 6, y: Y(v) + 4, 'text-anchor': 'end' }, Math.round(v * 100) + '%')); });
+  pts.forEach(p => svg.appendChild(sv('text', { x: X(p.k), y: H - 16, 'text-anchor': 'middle' }, String(p.k))));
+  svg.appendChild(sv('text', { x: L + pw / 2, y: H - 2, 'text-anchor': 'middle' }, 'k'));
+  svg.appendChild(sv('path', { d: pts.map((p, i) => (i ? 'L' : 'M') + X(p.k) + ' ' + Y(p.v)).join(' '), fill: 'none', stroke: 'var(--s1)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  pts.forEach(p => svg.appendChild(sv('circle', { cx: X(p.k), cy: Y(p.v), r: p.k === k ? 6 : 4, fill: 'var(--s1)', stroke: 'var(--surface)', 'stroke-width': 2 })));
+  const elbowRows = p => [{ v: pct(p.v), l: 'of the k = 1 variation explained', color: 'var(--s1)' }].concat(p.k > 1 ? [{ v: CL.byk[String(p.k)].inertia.toFixed(1), l: 'within-segment sum of squares (k = 1: ' + CL.k1 + ')' }] : []);
+  const cp = pts.find(p => p.k === k); svg.appendChild(sv('text', { x: X(k), y: Y(cp.v) - 10, 'text-anchor': 'middle', class: 'v' }, pct(cp.v)));
+  const cur = sv('line', { x1: 0, x2: 0, y1: T, y2: T + ph, stroke: 'var(--muted)', 'stroke-width': 1, opacity: 0 }); svg.appendChild(cur);
+  const hit = sv('rect', { x: L - 10, y: T, width: pw + 20, height: ph, fill: 'transparent' }); svg.appendChild(hit);
+  hit.addEventListener('pointermove', ev => {
+    const [x] = boxPoint(box, ev), sc = W / box.clientWidth, kk = Math.max(1, Math.min(6, Math.round((x * sc - L) / pw * 5 + 1)));
+    const p = pts.find(q => q.k === kk); cur.setAttribute('x1', X(kk)); cur.setAttribute('x2', X(kk)); cur.setAttribute('opacity', 1);
+    tipShow(box, X(kk) / sc, Y(p.v) / sc, 'k = ' + kk, elbowRows(p));
+  });
+  hit.addEventListener('pointerleave', () => { tipHide(box); cur.setAttribute('opacity', 0); });
+  pts.forEach(p => {
+    const f = sv('circle', { cx: X(p.k), cy: Y(p.v), r: 9, fill: 'transparent', tabindex: 0, role: 'img', 'aria-label': 'k = ' + p.k + ': ' + pct(p.v) + ' explained' });
+    svg.appendChild(f);
+    markHover(box, f, () => ({ title: 'k = ' + p.k, rows: elbowRows(p) }));
+  });
+}
+function drawSil(k) {
+  const box = $('#silBox'), svg = $('#sil'), W = Math.max(240, box.clientWidth), H = 200, L = 38, R = 12, T = 12, B = 34, pw = W - L - R, ph = H - T - B;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.replaceChildren();
+  const ymax = 0.4, Y = v => T + ph - v / ymax * ph, band = pw / KS.length, bw = Math.min(24, band - 2);
+  [0, 0.1, 0.2, 0.3, 0.4].forEach(v => { svg.appendChild(sv('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: 'var(--grid)' })); svg.appendChild(sv('text', { x: L - 6, y: Y(v) + 4, 'text-anchor': 'end' }, v.toFixed(1))); });
+  svg.appendChild(sv('text', { x: L + pw / 2, y: H - 2, 'text-anchor': 'middle' }, 'k'));
+  KS.forEach((kk, i) => {
+    const b = CL.byk[String(kk)], cx = L + band * i + band / 2, y = Y(b.sil);
+    const bar = sv('path', { d: barPath(cx - bw / 2, y, bw, T + ph - y), fill: 'var(--s1)', opacity: kk === k ? 1 : 0.4, tabindex: 0, role: 'img', 'aria-label': 'k = ' + kk + ': silhouette ' + b.sil.toFixed(3) });
+    svg.appendChild(bar);
+    svg.appendChild(sv('text', { x: cx, y: H - 16, 'text-anchor': 'middle' }, String(kk)));
+    if (kk === k) svg.appendChild(sv('text', { x: cx, y: y - 6, 'text-anchor': 'middle', class: 'v' }, b.sil.toFixed(2)));
+    markHover(box, bar, () => ({ title: 'k = ' + kk, rows: [{ v: b.sil.toFixed(3), l: 'average silhouette', color: 'var(--s1)' }, { v: Math.min(...b.profiles.map(p => p.size)) + '', l: 'slots in the smallest segment' }] }));
+    bar.addEventListener('click', () => { $('#kSlider').value = kk; drawStep4(); });
+  });
+}
+$('#kSlider').addEventListener('input', drawStep4);
+$('#kBest').addEventListener('click', () => { $('#kSlider').value = CL.best; drawStep4(); });
+$('#kThree').addEventListener('click', () => { $('#kSlider').value = 3; drawStep4(); });
+function renderKLog() {
+  const tb = $('#kLog'); tb.replaceChildren();
+  if (!kLog.length) { tb.appendChild(el('tr', {}, [el('td', { cls: 'l muted', colspan: '6', text: 'Press "Log this k" to keep a row here.' })])); return; }
+  kLog.forEach(r => tb.appendChild(el('tr', {}, [el('td', { text: String(r.k) }), el('td', { text: r.sil.toFixed(3) }), el('td', { text: pct(r.pct) }), el('td', { text: String(r.min) }), el('td', { text: pct(r.stab) }), el('td', { cls: 'l wrap', text: r.names })])));
+}
+$('#btnLogK').addEventListener('click', () => {
+  const k = curK(), b = CL.byk[String(k)];
+  kLog.unshift({ k, sil: b.sil, pct: b.pct, min: Math.min(...b.profiles.map(p => p.size)), stab: b.stab, names: b.profiles.map(p => p.name + ' (' + p.size + ')').join('; ') });
+  renderKLog();
+});
+$('#btnClearK').addEventListener('click', () => { kLog.length = 0; renderKLog(); });
+
+/* ---------- STEP 6 · test next (drawStep5) ---------- */
+const tests = [];
+const HINDSIGHT = 'The "not suspected empty" check uses later sales, so a real-time agent cannot reproduce it; the restocker\'s check at the visit replaces it.';
+// One rule's backtest outcome: alive = sold again with no refill in between; refilled = sold again only after a refill.
+function ruleOutcome(x) { return x.flags + ' flags; of the ' + x.flags_with_outcome + ' with a known outcome, ' + x.contradicted + ' (' + pctI(x.contradicted_share) + ') sold again with no refill in between and ' + x.sold_after_refill + ' (' + pctI(x.sold_after_refill_share) + ') sold again only after a refill'; }
+function breakSentence(cal) {
+  if (!cal || !cal.brk) return 'Check the academic calendar before starting a test; a test that runs across a break measures the break, not the change.';
+  return 'The break from ' + fmtDate(cal.brk.start) + ' to ' + fmtDate(cal.brk.end) + ' has no classes (' + cal.brk.label.replace(/\s*\(.*\)$/, '').toLowerCase() + closedText(cal) + '); a test that runs across it measures the break, not the change.';
+}
+function calSentence(cal) {
+  if (!cal || !cal.brk || !cal.visit || !cal.after) return 'Each test below measures 5 class days before and after. Check the academic calendar for breaks first.';
+  const n = cal.before.length, a = cal.after;
+  return 'Each test below measures 5 class days. No visit is scheduled in the data, and from ' + fmtDate(cal.visit.date) + ' only ' + n + ' class day' + (n === 1 ? '' : 's') + ' (' + cal.before.map(d => fmtDate(d.date)).join(', ') + ') remain before the break from ' + fmtDate(cal.brk.start) + ' to ' + fmtDate(cal.brk.end) + ', so a restock now mostly shows up after it. ' +
+    (a.length === 5 ? 'The first 5 class days after it run ' + fmtDate(a[0].date) + ' to ' + fmtDate(a[4].date) + ', so run 5-class-day tests then or later, or span the break and count only class days.' : 'Run 5-class-day tests after the break, or span it and count only class days.');
+}
+function drawStep5() {
+  const k = curK(), ex = experiments(k);
+  const list = $('#expList'); list.replaceChildren();
+  ex.forEach((x, i) => {
+    const b = el('button', { cls: 'btn ghost small', type: 'button', text: 'Use in test log' });
+    b.addEventListener('click', () => { $('#tlExp').value = x.title; $('#tlSlots').value = x.slots.join(', '); $('#tlExpect').value = x.expect; $('#tlExp').focus(); });
+    list.appendChild(el('article', { cls: 'exp' + (x.demoted ? ' demoted' : '') }, [
+      el('div', { cls: 'rk', text: String(i + 1) }),
+      el('div', { cls: 'meta', text: x.type + ' · about ' + x.stake.toFixed(1) + ' units a class week involved' }),
+      el('h3', { text: x.title }),
+      el('p', { text: x.what }),
+      el('p', { cls: 'small muted', text: 'Evidence: ' + x.why }),
+      el('p', { cls: 'small', text: 'Measure: ' + x.measure + '. Expected: ' + x.expect }),
+      el('div', {}, [b])]));
+  });
+  const sm = DATA.rules.summary, a7 = sm.find(s => s.rule === 'a_7cal'), c5 = sm.find(s => s.rule === 'c_5cd_notempty'), p5 = sm.find(s => s.rule === 'd_p05_notempty');
+  $('#ruleNote').textContent = 'On the "nothing moved for a week" rule, replayed at the ' + (DATA.rules.decision_note ? 'actual door visits' : 'decision points') + ': zero sales for 7 calendar days raised ' + ruleOutcome(a7) + '. A flag that sells again with no refill in between misjudged a live slow seller; one that sells only after a refill was most likely empty, so most of this rule\'s misses were empty rails, not live ones. Counting 5 observed class days and skipping suspected-empty slots raised ' + ruleOutcome(c5) + '. The Poisson 5% rule with the empty check raised ' + ruleOutcome(p5) + '. The empty-checked rules misjudge live slots more often because they flag exactly the slots the heuristic believes are stocked. Never judge a rail that has not been refilled since it went quiet. ' + HINDSIGHT;
+  const cal = calendarAhead();
+  $('#breakNote').textContent = breakSentence(cal);
+  $('#calNote').textContent = calSentence(cal);
+  renderTests(); buildDraft(ex);
+}
+function renderTests() {
+  const tb = $('#testLog'); tb.replaceChildren();
+  if (!tests.length) { tb.appendChild(el('tr', {}, [el('td', { cls: 'l muted', colspan: '6', text: 'Add a test to keep a row here.' })])); return; }
+  tests.forEach((t, i) => {
+    const rm = el('button', { cls: 'btn ghost small', type: 'button', text: 'Remove', 'aria-label': 'Remove test ' + (i + 1) });
+    rm.addEventListener('click', () => { tests.splice(i, 1); renderTests(); buildDraft(); });
+    tb.appendChild(el('tr', {}, [el('td', { cls: 'l wrap', text: t.exp }), el('td', { cls: 'l', text: t.slots }), el('td', { cls: 'l wrap', text: t.expect }), el('td', { cls: 'l', text: t.measure }), el('td', { text: String(t.weeks) }), el('td', {}, [rm])]));
+  });
+}
+$('#btnLogTest').addEventListener('click', () => {
+  const exp = $('#tlExp').value.trim(); if (!exp) { $('#tlExp').focus(); return; }
+  const w = Math.max(1, Math.min(4, parseInt($('#tlWeeks').value, 10) || 1)); $('#tlWeeks').value = w;
+  tests.push({ exp, slots: $('#tlSlots').value.trim(), expect: $('#tlExpect').value.trim(), measure: $('#tlMeasure').value, weeks: w });
+  renderTests(); buildDraft();
+});
+$('#btnClearTests').addEventListener('click', () => { tests.length = 0; renderTests(); buildDraft(); });
+function buildDraft(ex) {
+  ex = ex || experiments(curK());
+  const ctrl = $('#ctrlPrice').checked, eff = ctrl ? regEffects('row') : rawEffects('row'), effC = ctrl ? regEffects('col') : rawEffects('col');
+  const clear = [].concat(eff.map(e => ['row', e]), effC.map(e => ['column', e])).filter(([, e]) => e.lo != null && (e.lo > 0 || e.hi < 0));
+  const equal = $('#equalWin').checked, cr = machineTrend(DATA.pc.event_date, equal);
+  const all = EVENTS.map(e => ({ e, s: eventStats(e, equal) })), st = all.filter(r => r.s.ci);
+  const cdiv = cr ? cr.ratio : 1;
+  const cuts = st.filter(r => r.e.dir === 'cut').map(r => r.s.ci.rr / cdiv), raises = st.filter(r => r.e.dir === 'raise').map(r => r.s.ci.rr / cdiv);
+  const zTxt = d => { const z = st.filter(r => r.e.dir === d && r.s.ci.cc), a = z.filter(r => r.s.zero === 'after').length, b = z.filter(r => r.s.zero === 'before').length; return a + b ? ', of which ' + a + ' fell to zero after and ' + b + ' rose from zero, with 0.5 added to both counts' : ''; };
+  const nMain = EVENTS.filter(e => e.date === DATA.pc.event_date).length;
+  const cal = calendarAhead();
+  const k = curK(), bk = CL.byk[String(k)];
+  const c5 = DATA.rules.summary.find(s => s.rule === 'c_5cd_notempty'), a7 = DATA.rules.summary.find(s => s.rule === 'a_7cal');
+  const empty = SLOTS.filter(s => s.empty_now).map(s => s.slot), plan = restockPlan();
+  const recent = REFILL_VISITS.slice(-4).map(fmtVisit).join(', ');
+  const L = [];
+  L.push('SLOT AND PRICE FINDINGS (machine {{DEVICE}}, polls to ' + fmtDate(M.last_poll) + ')');
+  L.push('');
+  L.push('Position: ' + (ctrl ? 'holding price fixed (regression, n = ' + DATA.reg.full.n + ' slots, adjusted R² ' + DATA.reg.full.adj_r2.toFixed(2) + ')' : 'raw averages, price not held fixed') + ', ' +
+    (clear.length ? clear.map(([kd, e]) => kd + ' ' + e.level + ' differs from ' + kd + ' 1 by ' + sgn(e.d) + ' units per in-stock class day').join('; ') + '.' : 'no row or column interval clears zero.') +
+    ' Product, price and position are confounded, so treat this as a hint and test it with a swap.');
+  L.push('Price: ' + st.length + ' of ' + all.filter(r => r.s.measured).length + ' changes with class days on both sides have a ratio (' + (equal ? 'equal-length windows' : 'full windows') + '; changes with under ' + MIN_EXPO + ' in-stock class days a side are left out). Over the same days the whole machine (a total over every slot) sold ' + (cr ? cr.ratio.toFixed(2) + 'x (95% CI ' + cr.lo.toFixed(2) + ' to ' + cr.hi.toFixed(2) + ')' : '–') + ' its earlier units per class day' + (cr && cr.hi < 1 ? ', so the machine sold less over those days, whatever the cause; dividing by that machine-wide trend removes it' : '') + '. Against that trend, the median ratio was ' + f2(median(cuts)) + 'x for price cuts (' + cuts.length + zTxt('cut') + ') and ' + f2(median(raises)) + 'x for raises (' + raises.length + zTxt('raise') + '). Counts are small and ' + nMain + ' slots changed on ' + fmtDate(DATA.pc.event_date) + '; this is not a price elasticity.');
+  L.push('Segments (k = ' + k + ', silhouette ' + bk.sil.toFixed(2) + ', ' + pct(bk.pct) + ' of variation explained): ' + bk.profiles.map(p => p.name + ' [' + p.slots.join(' ') + ']: ' + p.action.toLowerCase()).join('; ') + '.');
+  L.push('Stock: no refill proven at a single visit since ' + fmtVisit(LAST_RESTOCK) + ' (the operators stopped refilling ahead of the project); later visits refilled only some of our rails. The recent fall in sales is mostly supply, not fading demand. ' + empty.length + ' slots are sold out or suspected empty at the last poll (' + empty.join(', ') + '); counting rails that looked empty in the ' + fmtDate(PHOTO_VISIT.end) + ' photo and have not sold since, ' + plan.need.length + ' rails need filling (' + plan.need.map(s => s.slot).join(', ') + '). A slot that sold steadily and then stopped needs a refill, not a removal.');
+  L.push('');
+  L.push('RULE FOR THE AGENT');
+  L.push('1. Date visits from the door-open counter (EA2*DO), not an assumed weekday. Recent visits with refill evidence: ' + recent + '.');
+  L.push('2. Never judge a slot that has not been refilled since it went quiet: refill it, then watch one stocked class week.');
+  L.push('3. Count observed class days, not calendar days. Weekends, breaks and polling gaps pause the clock.');
+  L.push('4. If the slot was stocked, flag it only when the silence is surprising at its own in-stock rate (chance of zero sales below 5%).');
+  L.push('5. Act at the next real visit: price test or swap. Remove only after a full stocked class week with zero sales.');
+  L.push('Backtest: the 7-calendar-day rule raised ' + ruleOutcome(a7) + '. 5 class days and not suspected empty: ' + ruleOutcome(c5) + '. ' + HINDSIGHT);
+  L.push('Flagged now under the 5-class-day rule: ' + c5.flagged_now.join(', ') + '. Confirm each is stocked first.');
+  L.push('');
+  L.push('NEXT VISIT: RESTOCK FIRST, THEN TEST');
+  if (tests.length && ex[0] && ex[0].pinned) L.push('0. ' + ex[0].title + ' (before any of the tests below).');
+  if (tests.length) tests.forEach((t, i) => L.push((i + 1) + '. ' + t.exp + (t.slots ? ' [slots ' + t.slots + ']' : '') + '. Expect: ' + (t.expect || 'not stated') + '. Measure: ' + t.measure + ' over ' + t.weeks + ' week' + (t.weeks > 1 ? 's' : '') + '.'));
+  else ex.slice(0, 4).forEach((x, i) => L.push((i + 1) + '. ' + x.title + '. Measure: ' + x.measure + '. (Suggested; log your own tests to replace these.)'));
+  L.push('Ask the restocker to log units loaded per slot at each visit. ' + breakSentence(cal) + (cal && cal.after && cal.after.length === 5 ? ' ' + calSentence(cal).replace(/^Each test below measures 5 class days\. /, '') : ''));
+  $('#draft').textContent = L.join('\n');
+}
+$('#btnCopy').addEventListener('click', () => {
+  const t = $('#draft').textContent;
+  try {
+    navigator.clipboard.writeText(t).then(() => { $('#copyMsg').textContent = 'Copied.'; }, () => { $('#copyMsg').textContent = 'Copy failed. Select the text and copy it by hand.'; });
+  } catch (e) { $('#copyMsg').textContent = 'Copy failed. Select the text and copy it by hand.'; }
+});
+
+/* ---------- start ---------- */
+let rz = null;
+window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => renderStep(current()), 120); });
+let start = '1';
+const hm = (location.hash.match(/step([1-6])/) || [])[1];
+if (hm) start = hm; else { try { const v = localStorage.getItem('slot-lab-step'); if (v && /^[1-6]$/.test(v)) start = v; } catch (e) {} }
+go(start);
+})();
+</script>

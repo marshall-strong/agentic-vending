@@ -1,0 +1,1231 @@
+<title>Campus Rhythm Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* layout: stepped lab notebook, tab rail of steps, two-column controls|chart that stacks on phones */
+:root{
+  --bg:#F3F5F7; --surface:#FFFFFF; --sunk:#E9EDF1; --ink:#14202C; --muted:#56636F; --line:#D5DCE3;
+  --accent:#1D5FB8; --accent-ink:#FFFFFF; --class:#E3ECF8; --break:#F6E7D6; --good:#1F7A4D; --warn:#A86200; --bad:#B3261E;
+  --font-display:"Barlow Condensed", "Arial Narrow", sans-serif; --font-body:"IBM Plex Sans", system-ui, sans-serif; --font-mono:"IBM Plex Mono", ui-monospace, monospace;
+  /* chart series (dataviz reference palette, validated on these surfaces) */
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+  /* sequential blue, low to high */
+  --q1:#cde2fb; --q2:#9ec5f4; --q3:#6da7ec; --q4:#3987e5; --q5:#256abf; --q6:#184f95; --q7:#0d366b;
+  --hatch:#14202C;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E141A; --surface:#151E27; --sunk:#1B2632; --ink:#E4EAF0; --muted:#97A4B1; --line:#283543; --accent:#6EA2EE; --accent-ink:#0E141A; --class:#16283F; --break:#3A2A17; --good:#5CC48D; --warn:#E3A44A; --bad:#F2867D;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+    --q1:#0d366b; --q2:#184f95; --q3:#256abf; --q4:#3987e5; --q5:#6da7ec; --q6:#9ec5f4; --q7:#cde2fb;
+    --hatch:#E4EAF0;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E141A; --surface:#151E27; --sunk:#1B2632; --ink:#E4EAF0; --muted:#97A4B1; --line:#283543; --accent:#6EA2EE; --accent-ink:#0E141A; --class:#16283F; --break:#3A2A17; --good:#5CC48D; --warn:#E3A44A; --bad:#F2867D;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --q1:#0d366b; --q2:#184f95; --q3:#256abf; --q4:#3987e5; --q5:#6da7ec; --q6:#9ec5f4; --q7:#cde2fb;
+  --hatch:#E4EAF0;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.55}
+.page{padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:0 48px}
+.wrap{max-width:1180px;margin:0 auto}
+h1,h2,h3{font-family:var(--font-display);font-weight:700;line-height:1.15;text-wrap:balance;margin:0}
+h1{font-size:clamp(2rem,4.4vw,2.9rem);font-weight:700}
+h2{font-size:1.75rem;font-weight:600}
+h3{font-size:1.25rem;font-weight:600}
+p{margin:0;max-width:72ch}
+.eyebrow{font-family:var(--font-body);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:600}
+.muted{color:var(--muted)}
+.small{font-size:.88rem}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.stack{display:flex;flex-direction:column;gap:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+header.top{padding-block:28px 18px;display:flex;flex-direction:column;gap:8px}
+header.top .sub{color:var(--muted);font-size:1rem}
+.question{border-left:4px solid var(--accent);background:var(--surface);padding:10px 14px;font-size:.95rem;max-width:80ch}
+nav.steps{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);overflow-x:auto}
+nav.steps ol{list-style:none;margin:0 auto;padding:0;display:flex;gap:2px;max-width:1180px}
+nav.steps button{font-family:var(--font-body);font-size:.88rem;font-weight:600;color:var(--muted);background:none;border:0;border-bottom:3px solid transparent;padding:12px 10px 10px;cursor:pointer;white-space:nowrap;display:flex;gap:8px;align-items:center}
+nav.steps button .n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;border:1.5px solid currentColor;font-size:.75rem;font-family:var(--font-mono)}
+nav.steps button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.steps button[aria-selected="true"] .n{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+section.panel{padding-block:28px}
+section.panel[hidden]{display:none}
+.panel-head{display:flex;flex-direction:column;gap:6px;margin-bottom:20px}
+.grid2{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:22px;align-items:start}
+.grid-even{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+@media (max-width:860px){.grid2,.grid-even{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:18px;min-width:0}
+.card.tint{background:var(--class);border-color:var(--class)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.kpi{background:var(--sunk);border:1px solid var(--line);border-radius:6px;padding:10px 12px}
+.kpi .v{font-family:var(--font-mono);font-size:1.25rem;font-weight:500}
+.kpi .l{font-size:.78rem;color:var(--muted);line-height:1.35}
+.kpi.hl{border-color:var(--accent);border-width:2px}
+label{font-size:.82rem;font-weight:600;display:flex;flex-direction:column;gap:5px}
+select,input[type=number],textarea{font:inherit;font-size:.92rem;color:var(--ink);background:var(--surface);border:1.5px solid var(--line);border-radius:5px;padding:7px 9px;min-width:0}
+input[type=range]{width:100%;accent-color:var(--accent)}
+fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+legend{font-size:.82rem;font-weight:600;margin-bottom:6px;padding:0}
+.opt{flex-direction:row;align-items:center;gap:8px;font-weight:400;font-size:.92rem;cursor:pointer}
+.opt input{accent-color:var(--accent);width:16px;height:16px;margin:0;flex:none}
+.btn{font-family:var(--font-body);font-weight:600;font-size:.92rem;border-radius:5px;padding:8px 15px;cursor:pointer;border:1.5px solid var(--accent);background:var(--accent);color:var(--accent-ink)}
+.btn:hover{filter:brightness(1.08)}
+.btn.ghost{background:var(--surface);color:var(--accent)}
+.btn.ghost:hover{background:var(--class)}
+.btn.small{padding:5px 10px;font-size:.82rem}
+.btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.presets{display:flex;flex-wrap:wrap;gap:6px}
+.callout{border-left:4px solid var(--warn);background:var(--surface);padding:12px 16px;font-size:.95rem;border-radius:0 6px 6px 0}
+.callout b{font-weight:600}
+.readout{font-size:.95rem;display:flex;flex-direction:column;gap:6px}
+.readout p{max-width:none}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.85rem}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+td{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:.82rem}
+th{background:var(--sunk);font-weight:600}
+th:first-child,td:first-child{text-align:left}
+td.l,th.l{text-align:left;white-space:normal;font-family:var(--font-body);font-size:.85rem}
+td.best{font-weight:600;background:var(--class)}
+.chartbox{position:relative;min-width:0}
+.chartbox svg{display:block;width:100%;height:auto;overflow:visible}
+.scrollx{overflow-x:auto}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);font-size:.78rem;line-height:1.4;padding:6px 9px;border-radius:5px;max-width:280px;z-index:4;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.tip b{font-family:var(--font-mono);font-weight:500}
+.tip[hidden]{display:none}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.8rem;color:var(--muted);align-items:center}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{display:inline-block;width:14px;height:14px;border-radius:3px;flex:none}
+.sw.line{width:20px;height:0;border-top:2px solid;border-radius:0}
+.sw.ring{background:none;border:2px solid var(--muted)}
+.ramp{display:inline-flex;gap:2px}
+.ramp i{display:inline-block;width:16px;height:12px;border-radius:2px}
+.q{font-size:.88rem;background:var(--surface);border:1px dashed var(--line);border-radius:6px;padding:12px 14px}
+.q b{color:var(--accent)}
+.nextbar{display:flex;justify-content:flex-end;margin-top:22px}
+.events{margin:0;padding-left:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:4px 18px;font-size:.84rem}
+.events li{display:flex;gap:8px}
+.events .en{font-family:var(--font-mono);font-weight:500;min-width:1.6em;color:var(--accent)}
+details{font-size:.88rem}
+details summary{cursor:pointer;font-weight:600;color:var(--accent)}
+details .tablewrap{margin-top:8px;max-height:340px;overflow:auto}
+.prompt{background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:16px 18px;font-size:.95rem;line-height:1.6}
+.prompt p{max-width:none;margin:0 0 8px}
+.prompt ol{margin:0 0 8px;padding-left:22px}
+.prompt li{margin-bottom:4px}
+.pill{display:inline-flex;align-items:center;font-size:.76rem;font-weight:600;padding:2px 9px;border-radius:99px;background:var(--class);color:var(--ink)}
+.pill.warn{background:var(--break)}
+.flaglist{font-family:var(--font-mono);font-size:.85rem}
+footer{margin-top:36px;border-top:1px solid var(--line);padding-top:14px;font-size:.78rem;color:var(--muted)}
+footer p{max-width:none;margin-bottom:6px}
+.disabled{opacity:.45}
+svg text{font-family:var(--font-body)}
+svg .tick{font-family:var(--font-mono);font-size:11px;fill:var(--muted)}
+svg .lab{font-size:12px;fill:var(--ink)}
+svg .labm{font-size:11px;fill:var(--muted)}
+svg .grid{stroke:var(--line);stroke-width:1}
+svg .axis{stroke:var(--muted);stroke-width:1;opacity:.6}
+svg [data-k]{cursor:default}
+svg [data-k]:hover,svg [data-k]:focus{opacity:.82}
+svg [data-k]:focus{outline:none;stroke:var(--ink);stroke-width:2}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto !important;transition:none !important;animation:none !important}}
+</style>
+
+<div class="page">
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">Golisano Institute for Business &amp; Entrepreneurship · Agentic vending · machine {{DEVICE}}</div>
+  <h1>Campus Rhythm Lab</h1>
+  <p class="sub">How the academic calendar and the weekly and daily rhythm drive sales, and when "no sales" really means "nobody wants it".</p>
+  <p class="question"><b>The business question.</b> Our agent will look at each slot at every restock visit and decide whether to keep it, reprice it or swap it. The team's draft rule is "if nothing moved for a full week, change it". Before the agent uses that rule, we need to know which silences come from the calendar, which come from empty slots, and which mean nobody wants the product.</p>
+  <p class="small muted" id="scopeNote"><b>Scope.</b> The calendar, weekday, hour and trend charts use whole-machine totals: that history is from before the competition, when course staff stocked every slot, so it reflects no rival strategy. Everything per slot, including stock-outs, refill evidence and the rule simulator, uses only {{OUR}} ({{SLOT_RANGES}}).</p>
+</header>
+</div>
+
+<nav class="steps" aria-label="Lab steps">
+  <ol role="tablist">
+    <li><button role="tab" id="tab1" aria-controls="panel1" aria-selected="true" data-step="1"><span class="n">1</span>Calendar</button></li>
+    <li><button role="tab" id="tab2" aria-controls="panel2" aria-selected="false" data-step="2" tabindex="-1"><span class="n">2</span>Class days</button></li>
+    <li><button role="tab" id="tab3" aria-controls="panel3" aria-selected="false" data-step="3" tabindex="-1"><span class="n">3</span>Hours</button></li>
+    <li><button role="tab" id="tab4" aria-controls="panel4" aria-selected="false" data-step="4" tabindex="-1"><span class="n">4</span>Term cycle</button></li>
+    <li><button role="tab" id="tab5" aria-controls="panel5" aria-selected="false" data-step="5" tabindex="-1"><span class="n">5</span>Slow-seller rule</button></li>
+    <li><button role="tab" id="tab6" aria-controls="panel6" aria-selected="false" data-step="6" tabindex="-1"><span class="n">6</span>Guideline</button></li>
+  </ol>
+</nav>
+
+<div class="wrap">
+
+<!-- STEP 1 -->
+<section class="panel" id="panel1" role="tabpanel" aria-labelledby="tab1" data-panel="1">
+  <div class="panel-head">
+    <span class="eyebrow">Step 1 · Calendar</span>
+    <h2>When did the machine sell, day by day?</h2>
+    <p class="muted">Each square is one day. Each column is one week, Saturday to Friday (as in the ledger and the P&amp;L page), labelled by its Saturday. Squares are whole-machine totals. The grouping is only a calendar convenience: restock visits followed no fixed weekday (step 4 dates them from the door counter). Darker squares sold more. The numbers above the columns point to calendar events listed under the chart. Squares after Nov 11 have no data yet, but the calendar already shows the break that is coming.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <fieldset>
+        <legend>Color the days by</legend>
+        <label class="opt"><input type="radio" name="calMetric" id="calMetricUnits" value="units" checked> Drinks sold</label>
+        <label class="opt"><input type="radio" name="calMetric" id="calMetricCents" value="cents"> Takings (tax included)</label>
+      </fieldset>
+      <label for="calGap">Sales counted during polling gaps
+        <select id="calGap">
+          <option value="raw" selected>As polled: the lump lands on the day the gap ended</option>
+          <option value="spread">Spread over the gap by the usual hour-of-week shape</option>
+        </select>
+      </label>
+      <fieldset>
+        <legend>Mark on the chart</legend>
+        <label class="opt"><input type="checkbox" id="calNoClass" checked> Class days and no-class days</label>
+        <label class="opt"><input type="checkbox" id="calGaps" checked> Polling gaps (missing data, not zero sales)</label>
+        <label class="opt"><input type="checkbox" id="calEvents" checked> Calendar event numbers</label>
+      </fieldset>
+      <p class="small muted">Hover or tap a square to read the day.</p>
+    </div>
+    <div class="card stack">
+      <div class="legend" id="calLegend"></div>
+      <div class="chartbox" id="calBox"><svg id="calChart" role="img" aria-label="Calendar heatmap of daily sales"></svg><div class="tip" hidden></div></div>
+      <ol class="events" id="calEventsList"></ol>
+      <div class="kpis" id="calKpis"></div>
+      <div class="readout" id="calRead"></div>
+      <details><summary>Table view: every day</summary><div class="tablewrap"><table><thead><tr><th>Date</th><th class="l">Day type</th><th>Drinks (as polled)</th><th>Drinks (spread)</th><th>Takings</th><th>Unobserved hours</th><th>Our slots suspected empty</th></tr></thead><tbody id="calTable"></tbody></table></div></details>
+    </div>
+  </div>
+  <div class="q" style="margin-top:18px"><b>Try this.</b> Switch the gap handling to "spread". Watch the dark square on Friday Sep 18 fade. Most of that day's count was sold over the four days before it.</div>
+  <div class="nextbar"><button class="btn" data-go="2">Next: class days vs no-class days →</button></div>
+</section>
+
+<!-- STEP 2 -->
+<section class="panel" id="panel2" role="tabpanel" aria-labelledby="tab2" data-panel="2" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 2 · Class days</span>
+    <h2>How much does a day without classes cost?</h2>
+    <p class="muted">These days all come from the regular-polling era (Sep 21 to Nov 11), so no day carries a lump from a polling gap. The bars are the average drinks per day for each kind of day, with a 95% confidence interval. The regression on the right separates the class effect from the weekday and the slide over the term.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <fieldset>
+        <legend>Supply check</legend>
+        <label class="opt"><input type="checkbox" id="cdEmpty"> Leave out suspected-empty slot-days</label>
+        <p class="small muted">On: each day's figure becomes drinks per stocked slot, over {{OUR}} only. Slots the stock-out check flags as empty for half the selling day or more are dropped from that day. The check is inferred from sales, not seen.</p>
+      </fieldset>
+      <label for="cdModel">Regression model
+        <select id="cdModel">
+          <option value="A" selected>A (whole machine): weekday + no-class + week of term</option>
+          <option value="B">B ({{OUR}}): A plus number of our suspected-empty slots</option>
+        </select>
+      </label>
+      <p class="small muted">Hover or tap a bar or a row to read it.</p>
+    </div>
+    <div class="card stack">
+      <div class="grid-even" style="gap:14px">
+        <div class="stack" style="gap:6px">
+          <h3 id="cdBarTitle">Average drinks per day</h3>
+          <div class="chartbox" id="cdBarBox"><svg id="cdBar" role="img" aria-label="Average per day by day type with 95% intervals"></svg><div class="tip" hidden></div></div>
+        </div>
+        <div class="stack" style="gap:6px">
+          <h3>Regression effects, drinks per day</h3>
+          <div class="chartbox" id="cdCoefBox"><svg id="cdCoef" role="img" aria-label="Regression coefficients with 95% intervals"></svg><div class="tip" hidden></div></div>
+        </div>
+      </div>
+      <div class="readout" id="cdRead"></div>
+    </div>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <h3>The regression table, in plain words</h3>
+    <p class="small muted" id="cdNote"></p>
+    <div class="tablewrap"><table><thead><tr><th>Term</th><th>Effect</th><th>95% CI</th><th>p</th><th class="l">What it says</th></tr></thead><tbody id="cdTable"></tbody></table></div>
+  </div>
+  <div class="q" style="margin-top:18px"><b>Try this.</b> Turn on the supply check. If the class-day bar still towers over the others, the gap is about people on campus, not about which slots happened to be full.</div>
+  <div class="nextbar"><button class="btn" data-go="3">Next: the hours of the day →</button></div>
+</section>
+
+<!-- STEP 3 -->
+<section class="panel" id="panel3" role="tabpanel" aria-labelledby="tab3" data-panel="3" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 3 · Hours</span>
+    <h2>When in the day do drinks sell?</h2>
+    <p class="muted">Each square is the average number of drinks sold in that hour on that weekday, over the regular-polling era (full days Sep 22 to Nov 10). A sale is timed at the middle of the poll interval it fell in, so it lands within about an hour of when it happened.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label for="hrSet">Which days
+        <select id="hrSet">
+          <option value="all" selected>All days</option>
+          <option value="class_days">Class days only</option>
+          <option value="no_class_days">No-class days only</option>
+        </select>
+      </label>
+      <fieldset>
+        <legend>Hour profile</legend>
+        <label class="opt"><input type="checkbox" id="hrStamp"> Compare with poll-stamp timing (all days)</label>
+        <p class="small muted">Poll-stamp timing files each sale under the hour of the poll that reported it, which is the hour after the sale. That is how the earlier "9 AM peak" was counted.</p>
+      </fieldset>
+      <p class="small muted">Hover or tap a square or the line to read it.</p>
+    </div>
+    <div class="card stack">
+      <div class="legend" id="hrLegend"></div>
+      <div class="chartbox" id="hrBox"><svg id="hrChart" role="img" aria-label="Weekday by hour heatmap"></svg><div class="tip" hidden></div></div>
+      <h3>Share of the day's drinks, by hour</h3>
+      <div class="legend" id="hrLineLegend"></div>
+      <div class="chartbox" id="hrLineBox"><svg id="hrLine" role="img" aria-label="Hour profile"></svg><div class="tip" hidden></div></div>
+      <div class="readout" id="hrRead"></div>
+      <details><summary>Table view: average drinks per day by hour</summary><div class="tablewrap"><table><thead id="hrTHead"></thead><tbody id="hrTable"></tbody></table></div></details>
+    </div>
+  </div>
+  <div class="callout" id="hrFri" style="margin-top:18px"></div>
+  <div class="nextbar"><button class="btn" data-go="4">Next: the term cycle →</button></div>
+</section>
+
+<!-- STEP 4 -->
+<section class="panel" id="panel4" role="tabpanel" aria-labelledby="tab4" data-panel="4" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 4 · Term cycle</span>
+    <h2>Did demand fade, or did the shelves run out?</h2>
+    <p class="muted">Each bar is one week (Saturday to Friday), numbered from the week Fall classes started; bars are whole-machine totals. The middle chart counts {{OUR}} in the same weeks. The strip at the bottom marks every time the machine's door was opened, read from its door counter, and what the sales afterwards say about a refill. Read the three together. A falling bar with a rising empty count and no refills points to supply.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <label for="tcMetric">Bar height
+        <select id="tcMetric">
+          <option value="units" selected>Drinks per week</option>
+          <option value="upcd">Drinks per class day (fair to short weeks)</option>
+        </select>
+      </label>
+      <label for="tcGap">Polling-gap weeks
+        <select id="tcGap">
+          <option value="spread" selected>Spread lumps over the gap</option>
+          <option value="raw">As polled</option>
+        </select>
+      </label>
+      <fieldset>
+        <legend>Trend line</legend>
+        <label class="opt"><input type="checkbox" id="tcTrend" checked> Show a straight-line trend</label>
+        <label for="tcFrom"><span>Fit from term week <span id="tcFromVal" class="num">2</span> to the last full week</span>
+          <input type="range" id="tcFrom" min="0" max="6" value="2">
+        </label>
+      </fieldset>
+      <p class="small muted" id="tcPartialNote">The current week is partial and is drawn faded. It never enters the trend fit.</p>
+    </div>
+    <div class="card stack">
+      <div class="legend" id="tcLegend"></div>
+      <div class="chartbox" id="tcBox"><svg id="tcChart" role="img" aria-label="Drinks by week of term"></svg><div class="tip" hidden></div></div>
+      <h3>Slots selling vs slots suspected empty</h3>
+      <div class="legend" id="tcSlotLegend"></div>
+      <div class="chartbox" id="tcSlotBox"><svg id="tcSlot" role="img" aria-label="Slots selling, suspected empty, and empty and never refilled by week"></svg><div class="tip" hidden></div></div>
+      <h3>Door openings and refill evidence</h3>
+      <div class="legend" id="tcVisLegend"></div>
+      <div class="scrollx" id="tcVisScroll"><div class="chartbox" id="tcVisBox"><svg id="tcVis" role="img" aria-label="Door-open visits by week, colored by refill evidence"></svg><div class="tip" hidden></div></div></div>
+      <div class="kpis" id="tcKpis"></div>
+      <div class="readout" id="tcRead"></div>
+      <details><summary>Table view: every visit</summary><div class="tablewrap"><table><thead><tr><th>Visit</th><th class="l">Door opened (Eastern)</th><th>Openings</th><th class="l">Refill evidence</th><th class="l">Slots proven / resumed</th></tr></thead><tbody id="tcVisTable"></tbody></table></div></details>
+    </div>
+  </div>
+  <div class="q" style="margin-top:18px" id="tcTry"></div>
+  <div class="nextbar"><button class="btn" data-go="5">Next: test a slow-seller rule →</button></div>
+</section>
+
+<!-- STEP 5 -->
+<section class="panel" id="panel5" role="tabpanel" aria-labelledby="tab5" data-panel="5" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 5 · Slow-seller rule</span>
+    <h2>Which rule flags dead slots without crying wolf?</h2>
+    <p class="muted" id="ruleIntro"></p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <fieldset>
+        <legend>Rule type</legend>
+        <label class="opt"><input type="radio" name="ruleType" id="ruleCal" value="cal"> Calendar days: no sales in the last N days</label>
+        <label class="opt"><input type="radio" name="ruleType" id="ruleClass" value="class" checked> Class days: no sales in the last N observed class days</label>
+        <label class="opt"><input type="radio" name="ruleType" id="rulePois" value="poisson"> Poisson surprise: silence this long is unlikely for this slot</label>
+      </fieldset>
+      <label for="ruleN" id="ruleNLabel"><span>N = <span id="ruleNVal" class="num">5</span> <span id="ruleNUnit">observed class days</span></span>
+        <input type="range" id="ruleN" min="3" max="14" value="5">
+      </label>
+      <label for="ruleAlpha" id="ruleAlphaLabel">Surprise level α (flag when P(0 sales) is below it)
+        <select id="ruleAlpha"><option value="0.01">0.01</option><option value="0.05" selected>0.05</option><option value="0.1">0.10</option></select>
+      </label>
+      <label class="opt"><input type="checkbox" id="ruleSkip" checked> Skip slots suspected empty during the silence</label>
+      <div class="presets" aria-label="Presets">
+        <button class="btn ghost small" id="preTeam" type="button">Team draft: 7 calendar days</button>
+        <button class="btn ghost small" id="preWeek" type="button">One school week + empty check</button>
+        <button class="btn ghost small" id="prePois" type="button">Poisson 5% + empty check</button>
+      </div>
+      <p class="small muted" id="ruleExplain"></p>
+      <button class="btn" id="ruleLog" type="button">Log this run</button>
+    </div>
+    <div class="card stack">
+      <div class="kpis" id="ruleKpis"></div>
+      <div class="readout" id="ruleRead"></div>
+    </div>
+  </div>
+  <div class="card stack" style="margin-top:20px">
+    <h3>Which slots each visit would flag</h3>
+    <p class="small muted">Rows are the visits, with their refill evidence (P proven, L likely, T possible top-up), and the next visit (data to the last day) at the bottom. Columns are {{OUR}} by shelf (shelf 1 is the top). The hatched bands stand for the other {{N_OTHER}} slots, which are not ours: they are shown without values. Hover or tap a square for the slot's silence, its next 7 days, any refill in between and, for the Poisson rule, its P(0).</p>
+    <div class="legend" id="ruleLegend"></div>
+    <div class="scrollx"><div class="chartbox" id="ruleBox" style="min-width:760px"><svg id="ruleGrid" role="img" aria-label="Slots flagged at each visit"></svg><div class="tip" hidden></div></div></div>
+  </div>
+  <div class="stack" style="margin-top:20px;gap:20px">
+    <div class="card stack">
+      <h3>Can a better N fix it?</h3>
+      <p class="small muted" id="sweepNote">Alive rate for every N from 3 to 14, for both counting methods, with the empty check set as above.</p>
+      <div class="legend" id="sweepLegend"></div>
+      <div class="chartbox" id="sweepBox"><svg id="sweepChart" role="img" aria-label="Alive rate by N"></svg><div class="tip" hidden></div></div>
+    </div>
+    <div class="card stack">
+      <h3>Run log</h3>
+      <div class="tablewrap"><table><thead><tr><th class="l">Rule</th><th>Flags</th><th>With outcome</th><th>Alive, no refill</th><th>Alive rate</th><th>After a refill</th><th>Silent</th><th>Flagged now</th></tr></thead><tbody id="logTable5"></tbody></table></div>
+      <p class="small muted">Alive: the flagged slot sold again within 7 days with no refill in between, so the flag was wrong. After a refill: it sold again only after a visit that refilled it, so it was probably empty. "With outcome" leaves out flags whose next 7 days have not happened yet.</p>
+      <div class="row"><button class="btn ghost small" id="logClear5" type="button">Clear log</button></div>
+    </div>
+  </div>
+  <div class="q" style="margin-top:18px"><b>Try this.</b> Press "Team draft", log it, then press "One school week + empty check" and log that. Compare the alive rates, how many flags were really empty rails refilled later, and how many slots each rule flags right now.</div>
+  <div class="nextbar"><button class="btn" data-go="6">Next: write the guideline →</button></div>
+</section>
+
+<!-- STEP 6 -->
+<section class="panel" id="panel6" role="tabpanel" aria-labelledby="tab6" data-panel="6" hidden>
+  <div class="panel-head">
+    <span class="eyebrow">Step 6 · Guideline</span>
+    <h2>What should the agent's prompt say?</h2>
+    <p class="muted">This draft rewrites itself from the rule you set in step 5 and the choices below. The evidence line uses the replay numbers for that rule. Paste it into the agent prompt as a starting point and edit it as a team.</p>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <p class="small">Rule from step 5: <b id="gRule"></b></p>
+      <label for="gAction">First action on a flagged slot
+        <select id="gAction">
+          <option value="price" selected>Price test at the next visit</option>
+          <option value="swap">Swap in a different product</option>
+          <option value="remove">Remove the product</option>
+        </select>
+      </label>
+      <fieldset>
+        <legend>Include</legend>
+        <label class="opt"><input type="checkbox" id="gMidweek" checked> The optional $25 midweek refill visit</label>
+        <label class="opt"><input type="checkbox" id="gLog" checked> Detect visits with the door counter and log units loaded per rail</label>
+        <label class="opt"><input type="checkbox" id="gPause" checked> The upcoming dates that pause the clock</label>
+      </fieldset>
+      <button class="btn ghost small" id="gEdit" type="button">Change the rule in step 5</button>
+    </div>
+    <div class="card stack">
+      <h3>Draft guideline for the agent</h3>
+      <div class="prompt" id="gText"></div>
+    </div>
+  </div>
+  <div class="stack" style="margin-top:20px;gap:20px">
+    <div class="card stack">
+      <h3>Run log</h3>
+      <div class="tablewrap"><table><thead><tr><th class="l">Rule</th><th>Flags</th><th>With outcome</th><th>Alive, no refill</th><th>Alive rate</th><th>After a refill</th><th>Silent</th><th>Flagged now</th></tr></thead><tbody id="logTable6"></tbody></table></div>
+      <p class="small muted">Rows logged in step 5. Pick the rule you can defend, not just the lowest rate: a rule that flags almost nothing also has few wrong flags.</p>
+    </div>
+    <div class="card tint stack">
+      <h3>What this data cannot tell you</h3>
+      <p class="small">The machine reports what it sold and when its door opened, not what it holds. Whether a visit refilled a slot is inferred from sales: it is proven only when one of our slots sold more than one rail holds (11), so most top-ups stay "possible". "Suspected empty" is computed as of each visit from earlier sales and door openings only, but it is still a guess: a sales-only signal cannot tell an empty rail from a dead product, so fewer flags with the empty check is not proof of fewer wrong flags. In real time the check is the restocker's loading log. Only about 7 weeks are regular hourly polling, and only 2 weekdays without classes fall in that stretch.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>Data: machine {{DEVICE}} lifetime counters polled <span id="fPolls"></span> times from <span id="fFrom"></span> to <span id="fTo"></span> (Eastern). Sales are counter rises between polls. Takings include tax. Product names are not reported. Per-slot views show only {{OUR}}; whole-machine totals appear only in the calendar, weekday, hour and trend views.</p>
+  <p>Calendar: Golisano Institute official academic calendar; class meeting days are inferred and dates are "subject to change". Stock-outs, polling gaps and the regression come from the team's analysis script (sales_analysis.py).</p>
+  <p>{{SOURCE_LINE}} Ours: {{SLOT_RANGES}} on machine {{DEVICE}}.</p>
+</footer>
+</div>
+</div>
+
+<script>
+const DATA = /*DATA*/;
+// Core: pure functions shared by the page and the offline check script.
+const CORE = (function () {
+  const D = DATA.daily, DATES = D.date, ND = DATES.length;
+  const SLOTS = Object.keys(DATA.slot_daily).sort();
+  const DIDX = {}; DATES.forEach((d, i) => { DIDX[d] = i; });
+  const OBS = DATES.map((_, i) => D.class_day[i] === 1 && D.gap_day[i] === 0);
+  const DEC = DATA.rule.decision_points.map(s => s.slice(0, 10));
+  const RATE_FROM = '2026-09-09';
+  // outcome per (decision, slot), computed in the prep from sales events and visits, exactly as sales_analysis.py:
+  // 0 = next 7 days not in the data yet, 1 = sold again with no refill in between (alive),
+  // 2 = silent the next 7 days, 3 = sold again only after a refill (was probably empty)
+  const OUT = DATA.rule.outcome, OSI = {}; OUT.slots.forEach((s, j) => { OSI[s] = j; });
+
+  function sum(a) { let s = 0; for (const v of a) s += v; return s; }
+  function mean(a) { return a.length ? sum(a) / a.length : NaN; }
+  function sd(a) { if (a.length < 2) return NaN; const m = mean(a); return Math.sqrt(sum(a.map(v => (v - m) * (v - m))) / (a.length - 1)); }
+  const T95 = [NaN, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042];
+  function tcrit(df) { if (df < 1) return NaN; if (df <= 30) return T95[df]; if (df <= 40) return 2.021; if (df <= 60) return 2.000; if (df <= 120) return 1.980; return 1.960; }
+  function ci95(a) { const n = a.length, m = mean(a); if (n < 2) return { n, m, lo: NaN, hi: NaN }; const h = tcrit(n - 1) * sd(a) / Math.sqrt(n); return { n, m, lo: m - h, hi: m + h }; }
+  function ols(x, y) {
+    const n = x.length, mx = mean(x), my = mean(y);
+    let sxx = 0, sxy = 0; for (let i = 0; i < n; i++) { sxx += (x[i] - mx) ** 2; sxy += (x[i] - mx) * (y[i] - my); }
+    const b = sxy / sxx, a = my - b * mx;
+    let sse = 0; for (let i = 0; i < n; i++) sse += (y[i] - a - b * x[i]) ** 2;
+    const se = n > 2 ? Math.sqrt(sse / (n - 2) / sxx) : NaN, t = tcrit(n - 2);
+    return { a, b, se, lo: b - t * se, hi: b + t * se, n };
+  }
+  function addDays(iso, k) { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + k); return d.toISOString().slice(0, 10); }
+  function dowOf(iso) { return (new Date(iso + 'T12:00:00Z').getUTCDay() + 6) % 7; }
+
+  // Slow-seller rule replay. cfg = {type: 'cal'|'class'|'poisson', N, alpha, skipEmpty}
+  function simulate(cfg) {
+    const cells = [], flags = [];
+    DEC.forEach((Dd, di) => {
+      const idx = DATES.filter(d => d < Dd).length;           // whole days known on the decision day
+      const priorObs = []; for (let i = 0; i < idx; i++) if (OBS[i]) priorObs.push(i);
+      const row = [];
+      SLOTS.forEach(s => {
+        // the empty check as of this decision: only sales and door visits up to the moment the door opened
+        const u = DATA.slot_daily[s].u, A = DATA.rule.asof[di][s], e = A.e, eh = A.eh;
+        let lastSale = -1; for (let i = idx - 1; i >= 0; i--) if (u[i] > 0) { lastSale = i; break; }
+        const since = priorObs.filter(i => i > lastSale);
+        let hit = false, p0 = null, lam = null;
+        if (cfg.type === 'cal') {
+          if (idx - cfg.N >= 0) {
+            const w = []; for (let k = 1; k <= cfg.N; k++) w.push(idx - k);
+            hit = w.every(i => u[i] === 0) && (!cfg.skipEmpty || !w.some(i => e[i] === 1));
+          }
+        } else if (cfg.type === 'class') {
+          if (priorObs.length >= cfg.N) {
+            const w = priorObs.slice(-cfg.N);
+            hit = w.every(i => u[i] === 0) && (!cfg.skipEmpty || !w.some(i => e[i] === 1));
+          }
+        } else {
+          const ins = priorObs.filter(i => DATES[i] >= RATE_FROM);
+          let expo = 0, us = 0; ins.forEach(i => { expo += 1 - eh[i] / 9; us += u[i]; });
+          if (expo >= 5) {
+            const rate = us / expo; lam = rate * since.length; p0 = Math.exp(-lam);
+            hit = p0 < cfg.alpha && (!cfg.skipEmpty || (since.length > 0 && !since.some(i => e[i] === 1)));
+          }
+        }
+        const j = OSI[s], code = +OUT.code[di][j];
+        const outcome = hit ? code : null;
+        const cell = { di, idx, slot: s, hit, outcome, emptyAt: idx > 0 ? e[idx - 1] === 1 : false, silent: since.length, lastSale: lastSale >= 0 ? DATES[lastSale] : null, p0, lam, n7: OUT.n7[di][j], refillVisit: OUT.refill_visit[di][j] };
+        row.push(cell); if (hit) flags.push(cell);
+      });
+      cells.push(row);
+    });
+    const withOut = flags.filter(f => f.outcome !== 0);
+    const contra = withOut.filter(f => f.outcome === 1).length, refl = withOut.filter(f => f.outcome === 3).length;
+    // units in the 14 days after each flag with an outcome, each (slot, day) counted once (windows overlap)
+    const seen = new Set(); let next14 = 0;
+    withOut.forEach(f => { const u = DATA.slot_daily[f.slot].u; for (let k = 0; k < 14 && f.idx + k < ND; k++) { const key = f.slot + '|' + (f.idx + k); if (!seen.has(key)) { seen.add(key); next14 += u[f.idx + k]; } } });
+    return {
+      cells, flags,
+      summary: {
+        flags: flags.length, known: withOut.length, contradicted: contra, afterRefill: refl,
+        share: withOut.length ? contra / withOut.length : null,
+        refillShare: withOut.length ? refl / withOut.length : null,
+        silentNext: withOut.length - contra - refl,
+        emptyFlags: flags.filter(f => f.emptyAt).length,
+        next14,
+        past: flags.filter(f => f.di < DEC.length - 1).length,
+        recent: flags.filter(f => f.outcome === 0 && f.di < DEC.length - 1).length,
+        now: flags.filter(f => f.di === DEC.length - 1).map(f => f.slot).sort(),
+        nowEmpty: flags.filter(f => f.di === DEC.length - 1 && f.emptyAt).length
+      }
+    };
+  }
+  // Verdict on the empty check, same test as sales_analysis.py: the rule with the check vs the same rule without it,
+  // on flags with a known outcome. Fewer flags alone is never called an improvement: "more accurate" also needs the
+  // lower live-slot share to pass a one-sided Fisher exact test, flags the check keeps vs flags it drops, p < ACC_P.
+  const MIN_SCORED = 5, ACC_P = 0.05;
+  function lfact(n) { let s = 0; for (let i = 2; i <= n; i++) s += Math.log(i); return s; }
+  // P(X <= a) for the table [[a, b], [c, d]] with fixed margins (scipy fisher_exact, alternative='less')
+  function fisherLess(a, b, c, d) {
+    const n1 = a + b, K = a + c, N = a + b + c + d, lo = Math.max(0, K - (N - n1));
+    const base = lfact(n1) + lfact(N - n1) + lfact(K) + lfact(N - K) - lfact(N);
+    let p = 0; for (let x = lo; x <= a; x++) p += Math.exp(base - lfact(x) - lfact(n1 - x) - lfact(K - x) - lfact(N - n1 - K + x));
+    return Math.min(1, p);
+  }
+  function emptyVerdict(cfg) {
+    const bs = simulate(Object.assign({}, cfg, { skipEmpty: false })), fs = simulate(Object.assign({}, cfg, { skipEmpty: true }));
+    const b = bs.summary, f = fs.summary;
+    const nb = b.known, nf = f.known;
+    const kept = fs.flags.filter(x => x.outcome !== 0), keptK = new Set(kept.map(x => x.di + '|' + x.slot));
+    const dropped = bs.flags.filter(x => x.outcome !== 0 && !keptK.has(x.di + '|' + x.slot));
+    const lk = kept.filter(x => x.outcome === 1).length, ld = dropped.filter(x => x.outcome === 1).length;
+    const p = kept.length && dropped.length ? fisherLess(lk, kept.length - lk, ld, dropped.length - ld) : null;
+    const pTxt = p !== null ? `Fisher p = ${p.toFixed(2)}, kept ${kept.length} vs dropped ${dropped.length}` : 'no test possible';
+    let v;
+    if (!nb || !nf) v = `only quieter: ${b.flags} -> ${f.flags} flags, and none left with an outcome, so no gain in accuracy can be shown`;
+    else {
+      const cb = b.contradicted / nb, cf = f.contradicted / nf, sb = (b.contradicted + b.afterRefill) / nb, sf = (f.contradicted + f.afterRefill) / nf;
+      if (nf < MIN_SCORED) v = `only quieter, as far as the data can show: ${nf} flag${nf !== 1 ? 's' : ''} left with an outcome (${f.contradicted} of them a live slot), too few to show a gain in accuracy`;
+      else if (cf < cb && sf <= sb && p !== null && p < ACC_P) v = `more accurate: a lower share of its flags were live slots, no more of them sold again, and the drop passes a test (${pTxt})`;
+      else if (cf < cb && sf <= sb) v = `only quieter: no detectable difference in accuracy (a lower live-slot share, but ${pTxt}; needs p < ${ACC_P})`;
+      else if (cf <= cb + 1e-9 && sf <= sb + 1e-9) v = 'only quieter: fewer flags, the same shares';
+      else if (cf > cb) v = 'quieter but less accurate: a higher share of the flags it keeps were live slots';
+      else v = 'quieter, mixed: fewer live slots misjudged, but more of its flags sold again after a refill';
+    }
+    return { base: b, filt: f, verdict: v, p };
+  }
+  function scriptRuleId(cfg) {
+    if (cfg.type === 'cal') return (cfg.N === 7 && !cfg.skipEmpty) ? 'a_7cal' : null;
+    if (cfg.type === 'class') return [3, 5, 7, 10].includes(cfg.N) ? (cfg.skipEmpty ? `c_${cfg.N}cd_notempty` : `b_${cfg.N}cd`) : null;
+    const a = Math.round(cfg.alpha * 100); return `d_p${String(a).padStart(2, '0')}` + (cfg.skipEmpty ? '_notempty' : '');
+  }
+  // Hour profile: share of a day-set's drinks in each hour, weighting weekdays by their day counts.
+  function hourShares(set) {
+    const M = set.mean_units_per_day, n = set.n_days, tot = new Array(24).fill(0);
+    M.forEach((r, d) => r.forEach((v, h) => { if (v !== null) tot[h] += v * n[d]; }));
+    const s = sum(tot); return tot.map(v => s ? v / s : 0);
+  }
+  return { SLOTS, DATES, DEC, OBS, sum, mean, sd, tcrit, ci95, ols, addDays, dowOf, simulate, scriptRuleId, emptyVerdict, hourShares };
+})();
+if (typeof module !== 'undefined') module.exports = { DATA, CORE };
+</script>
+
+<script>
+(function () {
+  if (typeof document === 'undefined') return;
+  const C = CORE, D = DATA.daily;
+  const TURF = { label: 'Not our turf', tip: 'Rival rails. Eyes front.' };
+  const $ = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const md = iso => { const [y, m, d] = iso.split('-').map(Number); return MON[m - 1] + ' ' + d; };
+  const wmd = iso => DOW[C.dowOf(iso)] + ' ' + md(iso);
+  const usd = c => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const usd0 = c => '$' + Math.round(c / 100).toLocaleString('en-US');
+  const f1 = v => (Math.round(v * 10) / 10).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const f2 = v => v.toFixed(2);
+  const sgn = (v, f) => (v < 0 ? '−' : '+') + f(Math.abs(v));
+  const pct = v => Math.round(v * 100) + '%';
+  const DI = {}; D.date.forEach((d, i) => { DI[d] = i; });
+  const LAST = D.date[D.date.length - 1];
+  // visits from the door counter (EA2*DO rises merged within 3 h) and their refill evidence
+  const VIS = DATA.visits, VBY = {}; VIS.forEach(v => { VBY[v.id] = v; });
+  const LR = DATA.last_refill, RESTOCK = LR.last_restock;
+  const hm = iso => iso.slice(11, 16);
+  const vday = v => v.first_rise.slice(0, 10);
+  const vlab = v => `${v.weekday} ${md(vday(v))}`;
+  const EVID = {
+    'proven refill': { k: 'P', name: 'Proven refill', fill: 'var(--q6)', stroke: 'var(--q6)', note: 'one of our slots sold more than one rail holds across this visit and no other' },
+    'likely refill': { k: 'L', name: 'Likely refill', fill: 'var(--q4)', stroke: 'var(--q4)', note: '2 or more of our slots that looked empty started selling again within 4 days' },
+    'possible top-up': { k: 'T', name: 'Possible top-up', fill: 'var(--q2)', stroke: 'var(--q4)', note: 'one of our slots that looked empty started selling again' },
+    'no sign of refill': { k: '', name: 'No sign of refill', fill: 'var(--surface)', stroke: 'var(--muted)', note: 'none of our slots shows a refill' }
+  };
+  const evOf = v => EVID[v.evidence] || EVID['no sign of refill'];
+
+  /* ---------- tooltips ---------- */
+  function tipAt(box, html, x, y) {
+    const t = box.querySelector('.tip'); t.innerHTML = html; t.hidden = false;
+    const bw = box.clientWidth, tw = t.offsetWidth, th = t.offsetHeight;
+    let left = Math.max(4, Math.min(bw - tw - 4, x - tw / 2));
+    let top = y - th - 12; if (top < -8) top = y + 16;
+    t.style.left = left + 'px'; t.style.top = top + 'px';
+  }
+  function tipHide(box) { const t = box.querySelector('.tip'); if (t) t.hidden = true; }
+  // Per-mark hover: marks carry data-k; lookup(k) returns tooltip html.
+  function bindMarks(box, svg, lookup) {
+    const show = (el) => {
+      const k = el.getAttribute('data-k'); const html = lookup(k); if (!html) { tipHide(box); return; }
+      const r = el.getBoundingClientRect(), b = box.getBoundingClientRect();
+      tipAt(box, html, r.left - b.left + r.width / 2, r.top - b.top);
+    };
+    svg.onpointermove = ev => { const el = ev.target.closest && ev.target.closest('[data-k]'); if (el) show(el); else tipHide(box); };
+    svg.onpointerleave = () => tipHide(box);
+    svg.onfocusin = ev => { const el = ev.target.closest('[data-k]'); if (el) show(el); };
+    svg.onfocusout = () => tipHide(box);
+  }
+  // Crosshair hover for line charts.
+  function bindCross(box, svg, g, n, X, html) {
+    const cur = svg.querySelector('.cross');
+    const at = (clientX) => {
+      const r = svg.getBoundingClientRect(); const sx = (clientX - r.left) * g.W / r.width;
+      let best = 0, bd = 1e9; for (let i = 0; i < n; i++) { const d = Math.abs(X(i) - sx); if (d < bd) { bd = d; best = i; } }
+      cur.setAttribute('x1', X(best)); cur.setAttribute('x2', X(best)); cur.setAttribute('opacity', '1');
+      tipAt(box, html(best), X(best) * r.width / g.W, g.T * r.height / g.H + 10);
+    };
+    svg.onpointermove = ev => at(ev.clientX);
+    svg.onpointerleave = () => { tipHide(box); cur.setAttribute('opacity', '0'); };
+  }
+  const widthOf = box => Math.max(300, Math.round(box.clientWidth || 640));
+  function niceMax(v, steps) { const raw = v / steps; const p = Math.pow(10, Math.floor(Math.log10(raw || 1))); const m = [1, 2, 2.5, 5, 10].find(k => k * p >= raw); return m * p * steps; }
+
+  /* ---------- color bins ---------- */
+  const BINS = { units: [1, 3, 6, 11, 21, 36, 61], cents: [1, 1000, 2000, 4000, 7000, 12000, 20000] };
+  function binOf(v, edges) { if (!(v > 0)) return 0; let b = 1; for (let k = 1; k < edges.length; k++) if (v >= edges[k]) b = k + 1; return b; }
+  const QF = b => b === 0 ? 'var(--sunk)' : `var(--q${b})`;
+  function rampLegend(edges, fmt) {
+    return `<span><i class="sw" style="background:var(--sunk)"></i>0</span><span class="ramp">${edges.map((_, k) => `<i style="background:var(--q${k + 1})"></i>`).join('')}</span><span>low ${fmt(edges[0])}, high ${fmt(edges[edges.length - 1])}+</span>`;
+  }
+
+  /* ---------- step navigation ---------- */
+  let step = 1;
+  const draw = { 1: drawCal, 2: drawCD, 3: drawHr, 4: drawTC, 5: drawRule, 6: drawGuide };
+  function go(n, focusTab) {
+    step = +n;
+    $$('nav.steps button').forEach(b => { const on = b.dataset.step == n; b.setAttribute('aria-selected', on ? 'true' : 'false'); b.tabIndex = on ? 0 : -1; if (on && focusTab) b.focus(); });
+    $$('section.panel').forEach(p => { p.hidden = p.dataset.panel != n; });
+    try { localStorage.setItem('rhythm-lab-step', String(n)); } catch (e) { }
+    try { if (history.replaceState) history.replaceState(null, '', '#step' + n); } catch (e) { }
+    draw[n]();
+  }
+  $$('nav.steps button').forEach(b => {
+    b.addEventListener('click', () => go(b.dataset.step));
+    b.addEventListener('keydown', ev => {
+      if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+      const n = ((step - 1 + (ev.key === 'ArrowRight' ? 1 : 5)) % 6) + 1; go(n, true); ev.preventDefault();
+    });
+  });
+  $$('[data-go]').forEach(b => b.addEventListener('click', () => { go(b.dataset.go); window.scrollTo({ top: 0 }); }));
+  let rz = null; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => draw[step](), 150); });
+
+  /* ================= STEP 1: calendar heatmap ================= */
+  const CAL = DATA.calendar.days, CALI = {}; CAL.date.forEach((d, i) => { CALI[d] = i; });
+  const FIRST_FRI = (() => { let d = D.date[0]; while (C.dowOf(d) !== 5) d = C.addDays(d, -1); return d; })();   // first Saturday (name kept)
+  const NWEEKS = 16;
+  const ROWS = [5, 6, 0, 1, 2, 3, 4]; // Sat..Fri
+  const EVENTS = DATA.calendar.events.filter(e => e.end >= D.date[0] && e.start <= C.addDays(FIRST_FRI, NWEEKS * 7 - 1));
+  function isClassDay(iso) { const i = CALI[iso]; return i !== undefined && CAL.classes[i] === 'normal' && C.dowOf(iso) < 5; }
+  function dayType(iso) {
+    const i = CALI[iso]; if (i === undefined) return '';
+    const dw = C.dowOf(iso);
+    if (dw >= 5) return 'Weekend';
+    if (CAL.classes[i] === 'normal') return 'Class day';
+    return CAL.institute[i] === 'closed' ? 'No classes, Institute closed' : 'No classes';
+  }
+  function drawCal() {
+    const box = $('#calBox'), svg = $('#calChart');
+    const metric = document.querySelector('input[name=calMetric]:checked').value;
+    const spread = $('#calGap').value === 'spread';
+    const showCls = $('#calNoClass').checked, showGap = $('#calGaps').checked, showEv = $('#calEvents').checked;
+    const key = metric === 'units' ? (spread ? 'units' : 'units_raw') : (spread ? 'cents' : 'cents_raw');
+    const edges = BINS[metric];
+    const W = widthOf(box), L = 34, T = showEv ? 40 : 24;
+    const pitch = Math.min(38, (W - L - 2) / NWEEKS), cell = pitch - 2;
+    const H = T + 7 * pitch + 4;
+    let g = `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--hatch);stroke-width:1.4;opacity:.55"/></pattern></defs>`;
+    ROWS.forEach((dw, r) => { g += `<text class="tick" x="${L - 6}" y="${T + r * pitch + pitch / 2 + 4}" text-anchor="end">${DOW[dw]}</text>`; });
+    const evByCol = {};
+    if (showEv) EVENTS.forEach((e, k) => {
+      const s = e.start < D.date[0] ? D.date[0] : e.start;
+      const col = Math.floor((Date.parse(s) - Date.parse(FIRST_FRI)) / 864e5 / 7);
+      if (col >= 0 && col < NWEEKS) (evByCol[col] = evByCol[col] || []).push(k + 1);
+    });
+    let prevM = -1;
+    for (let c = 0; c < NWEEKS; c++) {
+      const fri = C.addDays(FIRST_FRI, c * 7), m = +fri.slice(5, 7), day = +fri.slice(8, 10);
+      const x = L + c * pitch + pitch / 2;
+      const lab = m !== prevM ? MON[m - 1] + ' ' + day : String(day); prevM = m;
+      if (pitch >= 26 || c % 2 === 0 || m !== +C.addDays(fri, -7).slice(5, 7)) g += `<text class="tick" x="${x}" y="${T - 6}" text-anchor="middle">${lab}</text>`;
+      if (evByCol[c]) g += `<text class="labm" x="${x}" y="${T - 22}" text-anchor="middle" style="font-family:var(--font-mono);fill:var(--accent);font-weight:500">${evByCol[c].join(',')}</text>`;
+      for (let r = 0; r < 7; r++) {
+        const iso = C.addDays(fri, r), di = DI[iso];
+        const x0 = L + c * pitch + 1, y0 = T + r * pitch + 1;
+        if (showCls && CALI[iso] !== undefined) g += `<rect x="${x0 - 1}" y="${y0 - 1}" width="${pitch}" height="${pitch}" style="fill:${isClassDay(iso) ? 'var(--class)' : 'var(--break)'}"/>`;
+        const inset = showCls ? 3 : 0;
+        if (di === undefined) {
+          if (CALI[iso] !== undefined) g += `<rect data-k="${iso}" x="${x0 + inset}" y="${y0 + inset}" width="${cell - 2 * inset}" height="${cell - 2 * inset}" rx="3" style="fill:var(--surface);stroke:var(--line)"/>`;
+          continue;
+        }
+        const v = D[key][di];
+        g += `<rect data-k="${iso}" x="${x0 + inset}" y="${y0 + inset}" width="${cell - 2 * inset}" height="${cell - 2 * inset}" rx="3" style="fill:${QF(binOf(v, edges))}"/>`;
+        if (showGap && D.gap_day[di] === 1) g += `<rect x="${x0 + inset}" y="${y0 + inset}" width="${cell - 2 * inset}" height="${cell - 2 * inset}" rx="3" fill="url(#hatch)" pointer-events="none"/>`;
+      }
+    }
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = g;
+    bindMarks(box, svg, iso => {
+      const di = DI[iso], dt = dayType(iso), lab = CAL.label[CALI[iso]];
+      if (di === undefined) return `${wmd(iso)}<br>${esc(dt)}${lab ? '<br>' + esc(lab) : ''}<br>No data yet`;
+      let h = `${wmd(iso)} · ${esc(dt)}<br><b>${D.units_raw[di]}</b> drinks as polled · <b>${usd(D.cents_raw[di])}</b>`;
+      if (D.gap_hours[di] > 0 && D.regular[di] === 0) h += `<br><b>${f1(D.units[di])}</b> drinks after spreading gap lumps`;
+      if (D.lump_units[di] > 0) h += `<br>${D.lump_units[di]} of these arrived as a lump at the end of a polling gap`;
+      if (D.gap_day[di] === 1) h += `<br>Polling gap: ${D.gap_hours[di]} of 24 hours unobserved`;
+      h += `<br>${D.empty_slots[di]} of our slots suspected empty`;
+      if (lab) h += `<br>${esc(lab)}`;
+      if (D.partial[di]) h += `<br>Partial day (polling ${iso === LAST ? 'ends 6 PM' : 'starts 10:36 PM'})`;
+      return h;
+    });
+    // legend
+    const fmt = metric === 'units' ? String : (c => usd0(c));
+    let lg = rampLegend(edges, fmt);
+    if (showCls) lg += `<span><i class="sw" style="background:var(--class)"></i>Class day</span><span><i class="sw" style="background:var(--break)"></i>No classes (weekend, break, closure)</span>`;
+    if (showGap) lg += `<span><i class="sw" style="background-image:repeating-linear-gradient(45deg,var(--hatch) 0 1.4px,transparent 1.4px 5px);opacity:.7"></i>Polling gap day</span>`;
+    lg += `<span><i class="sw ring" style="border-color:var(--line)"></i>No data yet</span>`;
+    $('#calLegend').innerHTML = lg;
+    $('#calEventsList').hidden = !showEv;
+    $('#calEventsList').innerHTML = EVENTS.map((e, k) => `<li><span class="en">${k + 1}</span><span>${md(e.start)}${e.end !== e.start ? ' to ' + md(e.end) : ''}: ${esc(e.label)}${/inferred/.test(e.status) ? ' <span class="muted">(inferred)</span>' : ''}</span></li>`).join('');
+    // KPIs, computed from the daily table
+    const totU = C.sum(D.units_raw), totC = C.sum(D.cents_raw), lump = C.sum(D.lump_units);
+    const reg = D.date.map((_, i) => i).filter(i => D.regular[i] === 1);
+    const cls = reg.filter(i => D.class_day[i] === 1), wkd = reg.filter(i => D.dow[i] >= 5);
+    const byKey = i => metric === 'units' ? D.units[i] : D.cents[i] / 100;
+    const cm = C.mean(cls.map(byKey)), wm = C.mean(wkd.map(byKey));
+    const ff = metric === 'units' ? f1 : (v => '$' + f1(v));
+    $('#calKpis').innerHTML = [
+      ['Drinks sold', totU.toLocaleString('en-US'), `${D.date.length} days, ${md(D.date[0])} to ${md(LAST)}`, true],
+      ['Takings', usd(totC), 'tax included'],
+      ['Arrived in gap lumps', lump + ' · ' + pct(lump / totU), 'counted on the poll that ended a gap'],
+      [metric === 'units' ? 'Per class day' : 'Takings per class day', ff(cm), `regular era, ${cls.length} days`],
+      [metric === 'units' ? 'Per weekend day' : 'Takings per weekend day', ff(wm), `regular era, ${wkd.length} days`]
+    ].map(([l, v, s, hl]) => `<div class="kpi${hl ? ' hl' : ''}"><div class="v">${v}</div><div class="l">${l} · ${s}</div></div>`).join('');
+    let bi = 0; D.date.forEach((_, i) => { if (D[key][i] > D[key][bi]) bi = i; });
+    const gapDays = D.gap_day.filter(v => v === 1).length;
+    $('#calRead').innerHTML = `<p>Busiest day on this setting: <b>${wmd(D.date[bi])}</b> with <span class="num">${metric === 'units' ? (spread ? f1(D[key][bi]) : D[key][bi]) + ' drinks' : usd(D[key][bi])}</span>${D.lump_units[bi] > 0 && !spread ? `, of which ${D.lump_units[bi]} arrived as one lump after a polling gap` : ''}.</p>` +
+      `<p>${gapDays} days before regular polling (Sep 21) have polling gaps. Treat those days as missing, not as zero. Weekends sell about ${pct(wm / cm)} of a class day.</p>`;
+    $('#calTable').innerHTML = D.date.map((d, i) => `<tr><td>${wmd(d)}</td><td class="l">${esc(dayType(d))}${D.gap_day[i] ? ', polling gap' : ''}</td><td>${D.units_raw[i]}</td><td>${f1(D.units[i])}</td><td>${usd(D.cents_raw[i])}</td><td>${D.gap_hours[i]}</td><td>${D.empty_slots[i]}</td></tr>`).join('');
+  }
+  $$('input[name=calMetric]').forEach(e => e.addEventListener('change', drawCal));
+  ['#calGap', '#calNoClass', '#calGaps', '#calEvents'].forEach(s => $(s).addEventListener('change', drawCal));
+
+  /* ================= STEP 2: class days vs no-class days ================= */
+  const REG = D.date.map((_, i) => i).filter(i => D.regular[i] === 1);
+  function dayValue(i, perSlot) {
+    if (!perSlot) return D.units[i];
+    let u = 0, n = 0; C.SLOTS.forEach(s => { const sd = DATA.slot_daily[s]; if (sd.e[i] === 0) { u += sd.u[i]; n++; } });
+    return n ? u / n : null;
+  }
+  const GROUPS = [
+    { id: 'cls', name: 'Class weekdays', test: i => D.class_day[i] === 1 },
+    { id: 'ncw', name: 'No-class weekdays', test: i => D.dow[i] < 5 && D.class_day[i] === 0 },
+    { id: 'wke', name: 'Weekends', test: i => D.dow[i] >= 5 }
+  ];
+  function drawCD() {
+    const per = $('#cdEmpty').checked, model = $('#cdModel').value;
+    const stats = GROUPS.map(gp => { const days = REG.filter(gp.test); const vals = days.map(i => dayValue(i, per)).filter(v => v !== null); return Object.assign({ days, vals }, C.ci95(vals)); });
+    $('#cdBarTitle').textContent = per ? 'Drinks per stocked slot per day' : 'Average drinks per day';
+    // bar chart
+    const box = $('#cdBarBox'), svg = $('#cdBar');
+    const W = widthOf(box), H = 260, L = 40, R = 8, T = 14, B = 40, pw = W - L - R, ph = H - T - B;
+    const top = Math.max(...stats.map(s => isNaN(s.hi) ? s.m : s.hi));
+    const yMax = niceMax(top * 1.05, 4), Y = v => T + ph - Math.max(0, Math.min(v, yMax)) / yMax * ph;
+    let g = '';
+    for (let k = 0; k <= 4; k++) { const v = yMax / 4 * k; g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="tick" x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${per ? v.toFixed(2) : Math.round(v)}</text>`; }
+    const bw = Math.min(24, pw / 3 * 0.4);
+    stats.forEach((s, k) => {
+      const cx = L + pw / 6 * (2 * k + 1), y = Y(s.m), y0 = Y(0);
+      g += `<path data-k="${k}" tabindex="0" d="M${cx - bw / 2} ${y0} V${y + 4} q0 -4 4 -4 h${bw - 8} q4 0 4 4 V${y0} Z" style="fill:var(--s1)"/>`;
+      if (!isNaN(s.lo)) {
+        const lo = Y(Math.max(s.lo, 0)), hi = Y(s.hi), clip = s.hi > yMax;
+        g += `<line x1="${cx}" x2="${cx}" y1="${lo}" y2="${hi}" style="stroke:var(--ink);stroke-width:1.5" pointer-events="none"/><line x1="${cx - 7}" x2="${cx + 7}" y1="${lo}" y2="${lo}" style="stroke:var(--ink);stroke-width:1.5"/>` + (clip ? '' : `<line x1="${cx - 7}" x2="${cx + 7}" y1="${hi}" y2="${hi}" style="stroke:var(--ink);stroke-width:1.5"/>`);
+        if (clip) g += `<text class="labm" x="${cx + 6}" y="${T + 10}">CI to ${per ? s.hi.toFixed(2) : f1(s.hi)} ↑</text>`;
+      }
+      g += `<text class="lab" x="${cx}" y="${Math.min(y, Y(isNaN(s.hi) ? s.m : Math.min(s.hi, yMax))) - 6}" text-anchor="middle" style="font-family:var(--font-mono)">${per ? s.m.toFixed(2) : f1(s.m)}</text>`;
+      g += `<text class="lab" x="${cx}" y="${H - B + 16}" text-anchor="middle">${GROUPS[k].name.split(' ')[0]}</text><text class="labm" x="${cx}" y="${H - B + 30}" text-anchor="middle">${GROUPS[k].name.split(' ').slice(1).join(' ')} · n=${s.n}</text>`;
+    });
+    g += `<line class="axis" x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}"/>`;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = g;
+    bindMarks(box, svg, k => { const s = stats[+k]; return `${GROUPS[+k].name}<br><b>${per ? s.m.toFixed(3) : f1(s.m)}</b> ${per ? 'drinks per stocked slot' : 'drinks'} per day<br>95% CI ${isNaN(s.lo) ? 'n/a' : (per ? s.lo.toFixed(3) + ' to ' + s.hi.toFixed(3) : f1(s.lo) + ' to ' + f1(s.hi))}<br>${s.n} days: ${s.n <= 4 ? s.days.map(i => md(D.date[i])).join(', ') : 'regular era'}`; });
+    // coefficient chart
+    const M = DATA.regression.calendar.models[model], terms = M.coefs.filter(c => c.term !== 'Intercept');
+    const box2 = $('#cdCoefBox'), svg2 = $('#cdCoef');
+    const W2 = widthOf(box2), rowH = 24, L2 = 92, R2 = 10, T2 = 8, H2 = T2 + terms.length * rowH + 26;
+    const lo = Math.min(...terms.map(t => t.ci_lo)), hi = Math.max(...terms.map(t => t.ci_hi));
+    const xMin = Math.floor(lo / 5) * 5, xMax = Math.ceil(hi / 5) * 5, X2 = v => L2 + (v - xMin) / (xMax - xMin) * (W2 - L2 - R2);
+    let g2 = '';
+    for (let v = xMin; v <= xMax; v += 5) g2 += `<line class="grid" x1="${X2(v)}" x2="${X2(v)}" y1="${T2}" y2="${H2 - 22}"/>` + (v % 10 === 0 ? `<text class="tick" x="${X2(v)}" y="${H2 - 8}" text-anchor="middle">${v}</text>` : '');
+    g2 += `<line x1="${X2(0)}" x2="${X2(0)}" y1="${T2}" y2="${H2 - 22}" style="stroke:var(--ink);stroke-width:1"/>`;
+    const tname = t => t === 'no_class' ? 'No classes' : t === 'week_of_term' ? 'Week of term' : t === 'empty_slots' ? 'Empty slot (each)' : t + ' vs Mon';
+    terms.forEach((t, k) => {
+      const y = T2 + k * rowH + rowH / 2, hl = t.term === 'no_class';
+      g2 += `<g data-k="${k}" tabindex="0"><rect x="0" y="${y - rowH / 2}" width="${W2}" height="${rowH}" fill="transparent"/><text class="lab" x="${L2 - 8}" y="${y + 4}" text-anchor="end" style="${hl ? 'font-weight:600' : ''}">${tname(t.term)}</text>` +
+        `<line x1="${X2(t.ci_lo)}" x2="${X2(t.ci_hi)}" y1="${y}" y2="${y}" style="stroke:var(--s1);stroke-width:2"/><circle cx="${X2(t.coef)}" cy="${y}" r="${hl ? 5.5 : 4}" style="fill:var(--s1);stroke:var(--surface);stroke-width:2"/></g>`;
+    });
+    svg2.setAttribute('viewBox', `0 0 ${W2} ${H2}`); svg2.innerHTML = g2;
+    bindMarks(box2, svg2, k => { const t = terms[+k]; return `${tname(t.term)}<br><b>${sgn(t.coef, f2)}</b> drinks per day<br>95% CI ${f2(t.ci_lo)} to ${f2(t.ci_hi)} · p ${t.p < 0.001 ? '< 0.001' : t.p.toFixed(3)}`; });
+    // table with plain reading
+    const read = t => {
+      const crosses = t.ci_lo < 0 && t.ci_hi > 0;
+      if (t.term === 'Intercept') return `A Monday with classes in the first week of term: about ${Math.round(t.coef)} drinks.`;
+      if (t.term === 'no_class') return `A weekday without classes sells about ${f1(-t.coef)} fewer drinks than the same weekday with classes (between ${f1(-t.ci_hi)} and ${f1(-t.ci_lo)} fewer). It rests on only ${DATA.hourly.no_class_weekdays.length} days: ${DATA.hourly.no_class_weekdays.map(md).join(' and ')}.`;
+      if (t.term === 'week_of_term') return `Each week further into term, a day sells about ${f1(-t.coef)} fewer drinks, with the weekday held fixed. Most of that slide is the shelves running out: the last refill proven at a single visit was ${RESTOCK.weekday} ${md(RESTOCK.start.slice(0, 10))} (step 4).`;
+      if (t.term === 'empty_slots') return crosses ? `Adding the count of suspected-empty slots changes almost nothing; the interval sits on both sides of zero. Emptying and the term slide move together, so this regression cannot pull them apart. The door counter can: step 4 shows regular refilling stopped after ${md(RESTOCK.start.slice(0, 10))}.` : `Each extra suspected-empty slot shifts a day by ${f2(t.coef)} drinks.`;
+      if (t.term === 'Sat' || t.term === 'Sun') return `${t.term === 'Sat' ? 'Saturday' : 'Sunday'} sells about ${f1(-t.coef)} fewer drinks than Monday: the building is quiet.`;
+      return crosses ? `${t.term} is not clearly different from Monday; the interval runs from ${f1(t.ci_lo)} to ${f1(t.ci_hi)}.` : `${t.term} sells about ${f1(Math.abs(t.coef))} ${t.coef > 0 ? 'more' : 'fewer'} drinks than Monday.`;
+    };
+    $('#cdTable').innerHTML = M.coefs.map(t => `<tr><td class="l">${t.term === 'Intercept' ? 'Baseline (Mon, week 0)' : tname(t.term)}</td><td>${t.term === 'Intercept' ? f2(t.coef) : sgn(t.coef, f2)}</td><td>${f2(t.ci_lo)} to ${f2(t.ci_hi)}</td><td>${t.p < 0.001 ? '< 0.001' : t.p.toFixed(3)}</td><td class="l" style="min-width:280px">${esc(read(t))}</td></tr>`).join('');
+    $('#cdNote').textContent = `Model ${model} (${M.y}): ${M.formula}. R² ${M.r2}, adjusted R² ${M.adj_r2}, n = ${M.n} days (Sep 21 to Nov 11). Robust (HC3) standard errors. Weekday effects are compared with Monday.`;
+    const [a, b, c] = stats, nc = M.coefs.find(t => t.term === 'no_class');
+    const ratio = a.m ? b.m / a.m : NaN;
+    $('#cdRead').innerHTML = `<p>A class weekday averages <b class="num">${per ? a.m.toFixed(2) : f1(a.m)}</b>${per ? ' drinks per stocked slot' : ' drinks'}. The ${b.n} no-class weekdays average <b class="num">${per ? b.m.toFixed(2) : f1(b.m)}</b> (${pct(ratio)} of a class day) and weekends <b class="num">${per ? c.m.toFixed(2) : f1(c.m)}</b>.</p>` +
+      `<p>With only ${b.n} no-class weekdays the raw interval is very wide. The regression borrows strength from the other days and puts the no-class effect at <b class="num">${sgn(nc.coef, f1)}</b> drinks a day (CI ${f1(nc.ci_lo)} to ${f1(nc.ci_hi)}). Either way, a weekday without classes behaves like a weekend day.</p>`;
+  }
+  $('#cdEmpty').addEventListener('change', drawCD); $('#cdModel').addEventListener('change', drawCD);
+
+  /* ================= STEP 3: weekday x hour ================= */
+  const H0 = 6, H1 = 21; // hours shown: 6:00 to 20:59
+  const hl = h => (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? ' AM' : ' PM');
+  function drawHr() {
+    const setKey = $('#hrSet').value, set = DATA.hourly[setKey], M = set.mean_units_per_day, n = set.n_days;
+    const box = $('#hrBox'), svg = $('#hrChart');
+    const W = widthOf(box), L = 74, T = 20, ncol = H1 - H0, pitch = Math.min(40, (W - L - 2) / ncol), cell = pitch - 2, H = T + 7 * pitch + 4;
+    const mx = Math.max(...M.flat().filter(v => v !== null));
+    const edges = [0.0001, mx / 64, mx / 32, mx / 16, mx / 8, mx / 4, mx / 2];
+    let g = `<defs><pattern id="hatch2" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--hatch);stroke-width:1.2;opacity:.4"/></pattern></defs>`;
+    for (let h = H0; h < H1; h++) if ((h - H0) % (pitch < 24 ? 3 : 2) === 0) g += `<text class="tick" x="${L + (h - H0) * pitch + pitch / 2}" y="${T - 6}" text-anchor="middle">${h}</text>`;
+    for (let d = 0; d < 7; d++) {
+      g += `<text class="tick" x="${L - 6}" y="${T + d * pitch + pitch / 2 + 4}" text-anchor="end">${DOW[d]} (${n[d]})</text>`;
+      for (let h = H0; h < H1; h++) {
+        const v = M[d][h], x = L + (h - H0) * pitch + 1, y = T + d * pitch + 1;
+        if (v === null) g += `<rect data-k="${d}-${h}" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="3" fill="url(#hatch2)"/>`;
+        else g += `<rect data-k="${d}-${h}" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="3" style="fill:${QF(binOf(v, edges))}"/>`;
+      }
+    }
+    if (setKey !== 'no_class_days' || M[4][15] !== null) { const x = L + (15 - H0) * pitch + 1, y = T + 4 * pitch + 1; g += `<rect x="${x - 1.5}" y="${y - 1.5}" width="${cell + 3}" height="${cell + 3}" rx="4" style="fill:none;stroke:var(--warn);stroke-width:2" pointer-events="none"/>`; }
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = g;
+    bindMarks(box, svg, k => { const [d, h] = k.split('-').map(Number); const v = M[d][h]; return v === null ? `${DOW[d]} ${hl(h)}: no days of this kind` : `${DOW[d]}, ${hl(h)} to ${hl((h + 1) % 24)}<br><b>${v.toFixed(2)}</b> drinks per day on average<br>over ${n[d]} ${DOW[d]}s`; });
+    $('#hrLegend').innerHTML = `<span><i class="sw" style="background:var(--sunk)"></i>0</span><span class="ramp">${edges.map((_, k) => `<i style="background:var(--q${k + 1})"></i>`).join('')}</span><span>up to ${mx.toFixed(1)} drinks per hour per day (each step doubles)</span><span><i class="sw" style="background-image:repeating-linear-gradient(45deg,var(--hatch) 0 1.2px,transparent 1.2px 5px);opacity:.6"></i>No days of this kind</span><span><i class="sw ring" style="border-color:var(--warn)"></i>Friday 3 PM</span><span class="muted">(n) = days averaged</span>`;
+    // hour profile
+    const sh = C.hourShares(set);
+    const stamp = $('#hrStamp').checked;
+    const mid = DATA.hourly.hour_units_midpoint, ps = DATA.hourly.hour_units_poll_stamp;
+    const psS = ps.map(v => v / C.sum(ps));
+    const box2 = $('#hrLineBox'), svg2 = $('#hrLine');
+    const W2 = widthOf(box2), H2 = 220, L2 = 40, R2 = 10, T2 = 12, B2 = 28, pw = W2 - L2 - R2, ph = H2 - T2 - B2;
+    const n2 = H1 - H0, X = i => L2 + i / (n2 - 1) * pw;
+    const yMax = niceMax(Math.max(...sh.slice(H0, H1), stamp ? Math.max(...psS) : 0) * 1.05, 4), Y = v => T2 + ph - v / yMax * ph;
+    let g2 = '';
+    for (let k = 0; k <= 4; k++) { const v = yMax / 4 * k; g2 += `<line class="grid" x1="${L2}" x2="${W2 - R2}" y1="${Y(v)}" y2="${Y(v)}"/><text class="tick" x="${L2 - 6}" y="${Y(v) + 4}" text-anchor="end">${Math.round(v * 100)}%</text>`; }
+    for (let i = 0; i < n2; i += 2) g2 += `<text class="tick" x="${X(i)}" y="${H2 - 8}" text-anchor="middle">${H0 + i}</text>`;
+    const path = arr => arr.slice(H0, H1).map((v, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
+    if (stamp) g2 += `<path d="${path(psS)}" style="fill:none;stroke:var(--s2);stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/>`;
+    g2 += `<path d="${path(sh)}" style="fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/>`;
+    const pk = sh.indexOf(Math.max(...sh));
+    g2 += `<circle cx="${X(pk - H0)}" cy="${Y(sh[pk])}" r="4" style="fill:var(--s1);stroke:var(--surface);stroke-width:2"/><text class="lab" x="${X(pk - H0) + 8}" y="${Y(sh[pk]) + 4}">${hl(pk)} · ${pct(sh[pk])}</text>`;
+    g2 += `<line class="axis" x1="${L2}" x2="${W2 - R2}" y1="${Y(0)}" y2="${Y(0)}"/><line class="cross" x1="0" x2="0" y1="${T2}" y2="${T2 + ph}" style="stroke:var(--muted);stroke-width:1" opacity="0"/>`;
+    svg2.setAttribute('viewBox', `0 0 ${W2} ${H2}`); svg2.innerHTML = g2;
+    const setName = { all: 'All days', class_days: 'Class days', no_class_days: 'No-class days' }[setKey];
+    bindCross(box2, svg2, { W: W2, H: H2, T: T2 }, n2, X, i => { const h = H0 + i; return `${hl(h)} to ${hl(h + 1)}<br><b>${(sh[h] * 100).toFixed(1)}%</b> ${setName}, mid-interval timing` + (stamp ? `<br><b>${(psS[h] * 100).toFixed(1)}%</b> all days, poll-stamp timing` : ''); });
+    $('#hrLineLegend').innerHTML = `<span><i class="sw line" style="border-color:var(--s1)"></i>${setName}, sale timed mid-interval</span>` + (stamp ? `<span><i class="sw line" style="border-color:var(--s2)"></i>All days, filed under the poll's hour</span>` : '');
+    const m811 = sh[8] + sh[9] + sh[10], outside = C.sum(sh.slice(0, H0)) + C.sum(sh.slice(H1));
+    const totDay = M.map(r => r.every(v => v === null) ? null : C.sum(r.map(v => v || 0)));
+    $('#hrRead').innerHTML = `<p>${setName}: the busiest hour is <b>${hl(pk)} to ${hl(pk + 1)}</b> with ${pct(sh[pk])} of the day's drinks. 8 to 11 AM carries <b>${pct(m811)}</b>. Hours outside the chart (before 6 AM, after 9 PM) carry ${(outside * 100).toFixed(1)}%.</p>` +
+      `<p>Average drinks per day: ${totDay.map((v, d) => v === null ? null : `${DOW[d]} <span class="num">${f1(v)}</span>`).filter(Boolean).join(' · ')}.</p>` +
+      (setKey === 'no_class_days' ? `<p>Only ${n.slice(0, 5).reduce((a, b) => a + b, 0)} no-class weekdays are in this window, so treat their rows as anecdotes.</p>` : '');
+    $('#hrTHead').innerHTML = `<tr><th>Day (n)</th>${Array.from({ length: n2 }, (_, i) => `<th>${H0 + i}</th>`).join('')}</tr>`;
+    $('#hrTable').innerHTML = M.map((r, d) => `<tr><td>${DOW[d]} (${n[d]})</td>${r.slice(H0, H1).map(v => `<td>${v === null ? '–' : v.toFixed(2)}</td>`).join('')}</tr>`).join('');
+    // Friday 3 PM callout, from the gap list and the poll-stamp counts
+    const ps15 = DATA.poll_stamp, f15 = DATA.hourly.all.mean_units_per_day[4][15];
+    const friMean = DATA.hourly.all.mean_units_per_day[4].reduce((a, v) => a + (v || 0), 0);
+    $('#hrFri').innerHTML = `<b>About that Friday 3 PM spike.</b> Counted by poll stamp over the whole history, the 3 PM Friday hour logged ${ps15.friday_15h_units} drinks across the whole machine, and Fridays logged ${ps15.friday_units} of ${DATA.meta.machine_totals.units}.${ps15.lump_at ? ` But ${ps15.friday_15h_sep18} of those ${ps15.friday_15h_units} came from one poll at ${hm(ps15.lump_at)} on ${wmd(ps15.lump_at.slice(0, 10))} that ended a ${Math.round(ps15.lump_hours)}-hour polling gap. They were sold over the days before it, not at 3 PM.` : ''} In the regular-polling era a Friday averages <span class="num">${f15.toFixed(2)}</span> drinks between 3 and 4 PM, out of <span class="num">${f1(friMean)}</span> for the whole Friday. Friday is a normal class day, not a special one.`;
+  }
+  $('#hrSet').addEventListener('change', drawHr); $('#hrStamp').addEventListener('change', drawHr);
+
+  /* ================= STEP 4: term cycle ================= */
+  const WK = DATA.weekly.filter(w => w.term_week >= -1);
+  const SUP = {}; DATA.supply.forEach(w => { SUP[w.week] = w; });
+  function drawVisits(W, L, R, slot, X) {
+    // one lane, same x as the weekly charts: a visit sits at its day and hour inside its Saturday-to-Friday week
+    // below 600px the marks crowd together: draw the strip at 640px wide and let it scroll
+    const box = $('#tcVisBox'), svg = $('#tcVis'), MINW = 640;
+    if (W < 600) { box.style.minWidth = MINW + 'px'; slot = (MINW - L - R) / WK.length; X = i => L + slot * (i + 0.5); W = MINW; } else box.style.minWidth = '';
+    const H = 96, y0 = 30, lh = 22, w0 = WK[0].week;
+    const xOf = iso => { const days = (Date.parse(iso.slice(0, 16) + 'Z') - Date.parse(w0 + 'T00:00Z')) / 864e5; return L + slot * days / 7; };
+    let g = '';
+    g += `<rect x="${L}" y="${y0}" width="${W - L - R}" height="${lh}" rx="3" style="fill:var(--sunk)"/>`;
+    WK.forEach((w, i) => { if (i) g += `<line x1="${L + slot * i}" x2="${L + slot * i}" y1="${y0}" y2="${y0 + lh}" style="stroke:var(--line);stroke-width:1"/>`; g += `<text class="tick" x="${X(i)}" y="${y0 + lh + 16}" text-anchor="middle">${w.term_week}</text>`; });
+    g += `<text class="labm" x="${L + (W - L - R) / 2}" y="${H - 2}" text-anchor="middle">Week of term · each mark is one visit, placed at its day and hour</text>`;
+    // last single-visit-proven refill: a marker line and label
+    const xr = xOf(RESTOCK.end);
+    g += `<line x1="${xr}" x2="${xr}" y1="6" y2="${y0 + lh}" style="stroke:var(--ink);stroke-width:1.2;stroke-dasharray:3 3"/><text class="lab" x="${xr - 4}" y="14" text-anchor="end" style="font-size:11px">Last proven refill, ${RESTOCK.weekday} ${md(RESTOCK.start.slice(0, 10))}</text>`;
+    const mw = Math.max(5, Math.min(9, slot / 7 - 1));
+    VIS.forEach(v => {
+      const e = evOf(v), x = xOf(v.first_rise);
+      g += `<rect data-k="${v.id}" tabindex="0" x="${(x - mw / 2).toFixed(1)}" y="${y0 + 2}" width="${mw}" height="${lh - 4}" rx="2" style="fill:${e.fill};stroke:${e.stroke};stroke-width:1.5"/>`;
+      if (/^student team/.test(v.note)) g += `<text class="labm" x="${x}" y="${y0 - 5}" text-anchor="middle" style="font-size:10px">photo</text>`;
+    });
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = g;
+    bindMarks(box, svg, k => {
+      const v = VBY[+k], e = evOf(v), sl = [];
+      if (v.proven_slots.length) sl.push(`capacity-proven: ${v.proven_slots.join(', ')}`);
+      if (v.resumed_slots.length) sl.push(`resumed after looking empty: ${v.resumed_slots.join(', ')}`);
+      const win = v.start.slice(0, 10) === v.end.slice(0, 10) ? `${hm(v.start)} to ${hm(v.end)}` : `between polls ${md(v.start.slice(0, 10))} ${hm(v.start)} and ${md(v.end.slice(0, 10))} ${hm(v.end)}`;
+      return `Visit ${v.id} · ${vlab(v)}, ${win}<br>${v.openings} door opening${v.openings > 1 ? 's' : ''}<br><b>${esc(e.name)}</b>: ${esc(e.note)}${sl.length ? '<br>' + sl.join('<br>') : ''}${v.note ? '<br>' + esc(v.note.split(';')[0]) : ''}`;
+    });
+    $('#tcVisLegend').innerHTML = ['proven refill', 'likely refill', 'possible top-up', 'no sign of refill'].map(k => { const n = VIS.filter(v => v.evidence === k).length; return `<span><i class="sw" style="background:${EVID[k].fill};border:1.5px solid ${EVID[k].stroke}"></i>${EVID[k].name} (${n})</span>`; }).join('') + `<span><i class="sw line" style="border-top:1.5px dashed var(--ink)"></i>Last proven refill</span>`;
+    $('#tcVisTable').innerHTML = VIS.map(v => `<tr><td>${v.id}</td><td class="l">${vlab(v)} ${hm(v.first_rise)}${v.note ? ` <span class="muted">(${esc(v.note.split(';')[0])})</span>` : ''}</td><td>${v.openings}</td><td class="l">${esc(evOf(v).name)}</td><td class="l">${[v.proven_slots.length ? 'proven ' + v.proven_slots.join(', ') : '', v.resumed_slots.length ? 'resumed ' + v.resumed_slots.join(', ') : ''].filter(Boolean).join('; ') || '–'}</td></tr>`).join('');
+  }
+  function drawTC() {
+    const metric = $('#tcMetric').value, raw = $('#tcGap').value === 'raw', showT = $('#tcTrend').checked, from = +$('#tcFrom').value;
+    $('#tcFromVal').textContent = from; $('#tcFrom').disabled = !showT; $('#tcFrom').closest('label').classList.toggle('disabled', !showT);
+    const val = w => { const u = raw ? w.units_raw : w.units; return metric === 'units' ? u : (w.class_days ? u / w.class_days : null); };
+    const ys = WK.map(val);
+    const fv = v => Number.isInteger(v) ? String(v) : f1(v);
+    const box = $('#tcBox'), svg = $('#tcChart');
+    const W = widthOf(box), H = 270, L = 40, R = 10, T = 26, B = 40, pw = W - L - R, ph = H - T - B, n = WK.length, slot = pw / n;
+    const X = i => L + slot * (i + 0.5);
+    const yMax = niceMax(Math.max(...ys.filter(v => v !== null)) * 1.12, 4), Y = v => T + ph - v / yMax * ph;
+    let g = '';
+    const hasOff = w => { for (let k = 0; k < 7; k++) { const d = C.addDays(w.week, k), j = CALI[d]; if (j !== undefined && d <= LAST && C.dowOf(d) < 5 && CAL.classes[j] !== 'normal') return true; } return false; };
+    WK.forEach((w, i) => { const brk = hasOff(w); g += `<rect x="${L + slot * i}" y="${T}" width="${slot}" height="${ph}" style="fill:${brk ? 'var(--break)' : 'var(--class)'}" opacity="${brk ? 1 : .55}"/>`; });
+    for (let k = 0; k <= 4; k++) { const v = yMax / 4 * k; g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="tick" x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${Math.round(v)}</text>`; }
+    const bw = Math.min(24, slot - 6);
+    WK.forEach((w, i) => {
+      const v = ys[i]; if (v === null) return;
+      const y = Y(v), y0 = Y(0), r = Math.min(4, (y0 - y) / 2);
+      g += `<path data-k="${i}" tabindex="0" d="M${X(i) - bw / 2} ${y0} V${y + r} q0 -${r} ${r} -${r} h${bw - 2 * r} q${r} 0 ${r} ${r} V${y0} Z" style="fill:var(--s1)" opacity="${w.partial ? .4 : 1}"/>`;
+    });
+    WK.forEach((w, i) => { g += `<text class="tick" x="${X(i)}" y="${H - B + 15}" text-anchor="middle">${w.term_week}</text>` + ((i % 2 === 0 || slot > 44) ? `<text class="labm" x="${X(i)}" y="${H - B + 29}" text-anchor="middle" style="font-size:10px">${md(w.week)}</text>` : ''); });
+    g += `<line class="axis" x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}"/>`;
+    // peak + latest full week annotations
+    const full = WK.map((w, i) => i).filter(i => !WK[i].partial && ys[i] !== null);
+    const pk = full.reduce((a, i) => ys[i] > ys[a] ? i : a, full[0]), lastFull = full[full.length - 1];
+    g += `<text class="lab" x="${X(pk)}" y="${Y(ys[pk]) - 8}" text-anchor="middle" style="font-weight:600">Peak ${fv(ys[pk])}</text>`;
+    const drop = 1 - ys[lastFull] / ys[pk];
+    g += `<text class="lab" x="${X(lastFull)}" y="${Y(ys[lastFull]) - 8}" text-anchor="middle">−${pct(drop)}</text>`;
+    // trend
+    let fit = null;
+    if (showT) {
+      const idx = full.filter(i => WK[i].term_week >= from && WK[i].class_days > 0);
+      if (idx.length >= 3) {
+        fit = C.ols(idx.map(i => WK[i].term_week), idx.map(i => ys[i]));
+        const i0 = idx[0], i1 = idx[idx.length - 1];
+        const fy = i => fit.a + fit.b * WK[i].term_week;
+        g += `<line x1="${X(i0)}" x2="${X(i1)}" y1="${Y(Math.max(0, fy(i0)))}" y2="${Y(Math.max(0, fy(i1)))}" style="stroke:var(--s2);stroke-width:2;stroke-linecap:round"/>`;
+      }
+    }
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = g;
+    const unit = metric === 'units' ? 'drinks' : 'drinks per class day';
+    bindMarks(box, svg, k => { const w = WK[+k]; return `Week ${w.term_week} · ${md(w.week)} to ${md(C.addDays(w.week, w.days - 1))}${w.partial ? ' (partial)' : ''}<br><b>${f1(ys[+k])}</b> ${unit}<br>${w.class_days} class days · ${w.units_raw} drinks as polled${w.lump_units ? `, ${w.lump_units} in gap lumps` : ''}${fit ? `<br>Trend: ${f1(Math.max(0, fit.a + fit.b * w.term_week))}` : ''}`; });
+    $('#tcLegend').innerHTML = `<span><i class="sw" style="background:var(--s1)"></i>${metric === 'units' ? 'Drinks per week' : 'Drinks per class day'}</span>` + (fit ? `<span><i class="sw line" style="border-color:var(--s2)"></i>Straight-line trend, weeks ${from} to ${WK[lastFull].term_week}</span>` : '') + `<span><i class="sw" style="background:var(--class)"></i>Full class week</span><span><i class="sw" style="background:var(--break)"></i>Week with a weekday off</span>`;
+    // slots chart: same x, separate y (both counts of slots)
+    const box2 = $('#tcSlotBox'), svg2 = $('#tcSlot');
+    const NS = C.SLOTS.length, H2 = 200, ph2 = H2 - 14 - 34, Y2 = v => 14 + ph2 - v / NS * ph2;
+    let g2 = '';
+    for (let v = 0; v <= NS; v += 5) g2 += `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y2(v)}" y2="${Y2(v)}"/><text class="tick" x="${L - 6}" y="${Y2(v) + 4}" text-anchor="end">${v}</text>`;
+    WK.forEach((w, i) => { g2 += `<text class="tick" x="${X(i)}" y="${H2 - 16}" text-anchor="middle">${w.term_week}</text>`; });
+    g2 += `<text class="labm" x="${L + pw / 2}" y="${H2 - 2}" text-anchor="middle">Week of term (week 0 starts ${wmd((WK.find(w => w.term_week === 0) || WK[0]).week)})</text>`;
+    const pth = k => WK.map((w, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y2(w[k]).toFixed(1)).join(' ');
+    const nr = WK.map(w => SUP[w.week] ? SUP[w.week].slots_empty_never_refilled : 0);
+    const pthNR = WK.map((w, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y2(nr[i]).toFixed(1)).join(' ');
+    g2 += `<path d="${pth('active_slots')}" style="fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round"/><path d="${pth('slots_empty_any_day')}" style="fill:none;stroke:var(--s2);stroke-width:2;stroke-linejoin:round"/><path d="${pthNR}" style="fill:none;stroke:var(--s3);stroke-width:2;stroke-linejoin:round"/>`;
+    const li = WK.length - 1;
+    g2 += `<circle cx="${X(li)}" cy="${Y2(WK[li].active_slots)}" r="4" style="fill:var(--s1);stroke:var(--surface);stroke-width:2"/><circle cx="${X(li)}" cy="${Y2(WK[li].slots_empty_any_day)}" r="4" style="fill:var(--s2);stroke:var(--surface);stroke-width:2"/><circle cx="${X(li)}" cy="${Y2(nr[li])}" r="4" style="fill:var(--s3);stroke:var(--surface);stroke-width:2"/>`;
+    g2 += `<line class="axis" x1="${L}" x2="${W - R}" y1="${Y2(0)}" y2="${Y2(0)}"/><line class="cross" x1="0" x2="0" y1="14" y2="${14 + ph2}" style="stroke:var(--muted);stroke-width:1" opacity="0"/>`;
+    svg2.setAttribute('viewBox', `0 0 ${W} ${H2}`); svg2.innerHTML = g2;
+    bindCross(box2, svg2, { W, H: H2, T: 14 }, WK.length, X, i => { const sp = SUP[WK[i].week]; return `Week ${WK[i].term_week} · ${md(WK[i].week)}${WK[i].partial ? ' (partial)' : ''}<br><b>${WK[i].active_slots}</b> of our slots sold at least one drink<br><b>${WK[i].slots_empty_any_day}</b> suspected empty on some day<br><b>${nr[i]}</b> empty at week end and never refilled` + (sp && nr[i] ? `: ${sp.slots_sold_out_not_refilled} sold out after the ${md(RESTOCK.start.slice(0, 10))} proven refill, ${sp.slots_silent_since_before_last_restock} silent since before it` : ''); });
+    $('#tcSlotLegend').innerHTML = `<span><i class="sw line" style="border-color:var(--s1)"></i>Our slots that sold</span><span><i class="sw line" style="border-color:var(--s2)"></i>Our slots suspected empty on at least one day</span><span><i class="sw line" style="border-color:var(--s3)"></i>Empty at week end and not refilled through ${md(LAST)}</span>`;
+    drawVisits(W, L, R, slot, X);
+    // readouts
+    const tt = DATA.regression.calendar.models.A.coefs.find(c => c.term === 'week_of_term');
+    // selling slots: best FULL week vs the last FULL week (never a partial week)
+    const fullA = WK.map((w, i) => i).filter(i => !WK[i].partial && WK[i].term_week >= 1);
+    const pkA = fullA.reduce((a, i) => WK[i].active_slots > WK[a].active_slots ? i : a, fullA[0]), lfA = fullA[fullA.length - 1];
+    $('#tcPartialNote').textContent = `The current week (from ${wmd(WK[li].week)}) is ${WK[li].partial ? 'partial and is drawn faded. It never enters the trend fit' : 'complete'}.`;
+    $('#tcKpis').innerHTML = [
+      ['Peak week', `${fv(ys[pk])}`, `${unit}, week ${WK[pk].term_week} (${md(WK[pk].week)})`, true],
+      ['Last full week', `${fv(ys[lastFull])}`, `${unit}, week ${WK[lastFull].term_week}, ${pct(drop)} below peak`],
+      ['Trend slope', fit ? sgn(fit.b, f1) : 'off', fit ? `${unit} per week, 95% CI ${f1(fit.lo)} to ${f1(fit.hi)}, ${fit.n} weeks` : 'turn on the trend line'],
+      ['Our slots selling', `${WK[pkA].active_slots} → ${WK[lfA].active_slots}`, `best full week ${WK[pkA].term_week} to last full week ${WK[lfA].term_week}`],
+      ['Last proven refill', `${RESTOCK.weekday} ${md(RESTOCK.start.slice(0, 10))}`, `at a single visit; later visits refilled only some of our rails`]
+    ].map(([l, v, s, h]) => `<div class="kpi${h ? ' hl' : ''}"><div class="v">${v}</div><div class="l">${l} · ${s}</div></div>`).join('');
+    // supply story, all from the data: weeks from the last proven refill on, slots never refilled, visits after it
+    const rw = WK.findIndex(w => w.week <= RESTOCK.start.slice(0, 10) && C.addDays(w.week, 7) > RESTOCK.start.slice(0, 10));
+    const tail = rw >= 0 ? WK.slice(rw).filter(w => !w.partial) : [];
+    const after = VIS.filter(v => v.id > RESTOCK.visit);
+    const lp = VBY[LR.visit], spEnd = SUP[WK[li].week] || {};
+    const nm = v => /^student team/.test(v.note) ? "the student team's photo visit" : `a ${evOf(v).name.toLowerCase()}${v.resumed_slots.length ? ` (${v.resumed_slots.length} of our slots resumed)` : ''}`;
+    const afterL = after.map(v => `${nm(v)} on ${vlab(v)}`);
+    const afterTxt = afterL.length > 1 ? afterL.slice(0, -1).join(', ') + ' and ' + afterL[afterL.length - 1] : (afterL[0] || 'none');
+    $('#tcRead').innerHTML = `<p><b>The shelves ran out.</b> The last refill proven at a single visit was ${vlab(lp)} (slots ${LR.proven_slots.join(', ')} sold more than one rail holds). ${LR.pair_slots.length ? `Slots ${LR.pair_slots.join(' and ')} prove one more refill on ${LR.pair_visits.map(i => vlab(VBY[i])).join(' or ')}. ` : ''}After it the door openings were ${afterTxt}. The operators stopped regular refilling ahead of the project; by our slots' own counters the later visits put product back in only some rails.</p>` +
+      `<p>So the fall from ${tail.map(w => `<span class="num">${fv(raw ? w.units_raw : w.units)}</span>`).join(' to ')} drinks a week across the machine (full weeks), and from ${WK[pkA].active_slots} to ${WK[lfA].active_slots} of our slots selling (best full week to last full week), is supply running out, not demand fading. By ${md(LAST)}, <b class="num">${spEnd.slots_empty_never_refilled}</b> of our slots were suspected empty and not refilled since: ${spEnd.slots_sold_out_not_refilled} sold out after the ${md(RESTOCK.start.slice(0, 10))} proven refill and ${spEnd.slots_silent_since_before_last_restock} had been silent since before it. The student team's photo on ${md(DATA.photo.at.slice(0, 10))} shows product in only ${DATA.photo.stocked.length} of our ${DATA.photo.rails} rails (product at the back of a rail can be hidden).</p>` +
+      `<p><b>The photo is also a check on the model.</b> ${(() => { const P = DATA.photo, nE = P.rails - P.stocked.length, nR = nE - P.empty_and_flagged_empty.length - P.empty_and_not_flagged.length; return `Of our ${nE} rails that look empty, the sales-based empty check had flagged <span class="num">${P.empty_and_flagged_empty.length}</span>.${P.empty_and_not_flagged.length ? ` It missed <span class="num">${P.empty_and_not_flagged.length}</span> (slots ${P.empty_and_not_flagged.join(', ')}).` : ' It missed none that it scores.'}${nR ? ` ${nR} more had sold within the last week, so they had run out too recently to flag (or still held product hidden at the back).` : ''}${P.stocked_and_flagged_empty.length ? ` Slots ${P.stocked_and_flagged_empty.join(', ')} look stocked but were flagged empty: slow sellers, not stock-outs.` : ''} Inferred state and photo agree on ${pct(P.agreement)} of our rails.`; })()}</p>` +
+      `<p class="small muted">The daily regression in step 2 (model A) puts the slide at <span class="num">${f2(tt.coef)}</span> drinks per day for each week of term (CI ${f2(tt.ci_lo)} to ${f2(tt.ci_hi)}). For {{OUR}} the empty-slot count cannot separate it from supply (model B slope with that control <span class="num">${f2(DATA.regression.calendar.models.B.coefs.find(c => c.term === 'week_of_term').coef)}</span>, r = ${DATA.regression.calendar.corr_week_vs_empty_slots}), because the count is a guess from sales. The door counter is direct evidence, so read the trend line as the machine emptying.</p>`;
+    $('#tcTry').innerHTML = `<b>Try this.</b> Hover the marks in the visit strip after the dashed line: none proves a refill at a single visit, and the ones that show evidence brought back only a few of our rails, while the line of our slots not refilled ends at ${spEnd.slots_empty_never_refilled}. Then switch the bars to drinks per class day: the drop survives, so it is not just the short weeks.`;
+  }
+  ['#tcMetric', '#tcGap', '#tcTrend'].forEach(s => $(s).addEventListener('change', drawTC)); $('#tcFrom').addEventListener('input', drawTC);
+
+  /* ================= STEP 5: slow-seller rule simulator ================= */
+  const RULE = DATA.rule, DIDS = RULE.decision_visit_ids;
+  const PLAN_LAB = `next visit (data to ${wmd(LAST)})`;
+  const DEC_LAB = DIDS.map(id => { if (id == null) return 'Next visit'; const v = VBY[id], k = evOf(v).k; return vlab(v) + (k ? ' · ' + k : ''); });
+  const decLong = di => { const id = DIDS[di]; if (id == null) return `${PLAN_LAB}, no visit scheduled in the data`; const v = VBY[id]; return `${vlab(v)} visit at ${hm(v.first_rise)} (${v.evidence})`; };
+  const VDEC = DIDS.map((id, di) => di).filter(di => DIDS[di] != null);
+  const KNOWN_DEC = VDEC.filter(di => RULE.outcome.code[di][0] !== '0');
+  (function () {
+    const a = VBY[DIDS[VDEC[0]]], b = VBY[DIDS[VDEC[VDEC.length - 1]]];
+    $('#ruleIntro').innerHTML = `Stand at each of the ${VDEC.length} visits where the door counter and the sales show a refill or a possible top-up (${vlab(a)} to ${vlab(b)}), plus the next visit, judged on data to ${wmd(LAST)}: no visit after that is in the data. Apply a rule to every slot using only the whole days before the visit. Then follow each flagged slot for 7 days from the moment the door opened. If it sold again with no refill in between, it was <b>alive</b>: the flag misjudged a slow seller or a lull. If it sold again only after a visit that refilled it (the decision visit counts), it was probably <b>empty</b>, which a rule that sees only sales cannot tell from dead. Otherwise it stayed <b>silent</b>. The lab recomputes the flags from the per-slot daily sales; the outcomes use the analysis script's sales events and visit list.`;
+  })();
+  function cfgNow() { return { type: document.querySelector('input[name=ruleType]:checked').value, N: +$('#ruleN').value, alpha: +$('#ruleAlpha').value, skipEmpty: $('#ruleSkip').checked }; }
+  function ruleName(c) {
+    const base = c.type === 'cal' ? `No sales in ${c.N} calendar days` : c.type === 'class' ? `No sales in ${c.N} observed class days` : `Poisson surprise, P(0) < ${c.alpha}`;
+    return base + (c.skipEmpty ? ', empty check' : '');
+  }
+  let lastSim = null; const LOG = [];
+  function drawRule() {
+    const c = cfgNow();
+    $('#ruleNVal').textContent = c.N; $('#ruleNUnit').textContent = c.type === 'cal' ? 'calendar days' : 'observed class days';
+    $('#ruleN').disabled = c.type === 'poisson'; $('#ruleNLabel').classList.toggle('disabled', c.type === 'poisson');
+    $('#ruleAlpha').disabled = c.type !== 'poisson'; $('#ruleAlphaLabel').classList.toggle('disabled', c.type !== 'poisson');
+    $('#ruleExplain').textContent = c.type === 'cal' ? 'Counts every day, including weekends, breaks and polling-gap days.' :
+      c.type === 'class' ? 'Counts only Monday to Friday days with classes in session and no polling gap. Weekends, breaks and gap days pause the clock.' :
+        'Uses each slot\'s own sales rate per in-stock class day since Sep 9 (needs 5 or more such days). P(0) = e^−(rate × class days since its last sale). N is not used.';
+    const sim = CORE.simulate(c); lastSim = { c, sim };
+    const S = sim.summary;
+    $('#ruleKpis').innerHTML = [
+      ['Alive rate', S.share === null ? 'n/a' : pct(S.share), `${S.contradicted} of ${S.known} flags sold again within 7 days with no refill in between`, true],
+      ['Sold again after a refill', S.afterRefill + (S.refillShare === null ? '' : ' · ' + pct(S.refillShare)), 'the rail was probably empty, not dead'],
+      ['Silent the next week', S.silentNext, 'dead, or still not refilled'],
+      ['Flags raised', S.flags, `over ${VDEC.length} visits and the next visit`],
+      ['Flags on suspected-empty slots', S.emptyFlags, 'slot looked empty the day before'],
+      ['Flagged now', S.now.length, `for the ${PLAN_LAB}`]
+    ].map(([l, v, s, h]) => `<div class="kpi${h ? ' hl' : ''}"><div class="v">${v}</div><div class="l">${l} · ${s}</div></div>`).join('');
+    $('#ruleLegend').innerHTML = `<span><i class="sw" style="background:var(--s2)"></i>Flagged, sold again with no refill (alive)</span><span><i class="sw" style="background:var(--s3)"></i>Flagged, sold again after a refill (was empty)</span><span><i class="sw" style="background:var(--s1)"></i>Flagged, silent the next week</span><span><i class="sw" style="background:var(--surface);border:1.5px solid var(--muted)"></i>Flagged, outcome not known yet (?)</span><span><i class="sw" style="background:var(--sunk)"></i>Not flagged</span><span><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="3" style="fill:var(--ink)"/></svg>Suspected empty the day before</span><span><i class="sw" style="background-image:repeating-linear-gradient(45deg,var(--hatch) 0 1.4px,transparent 1.4px 5px);opacity:.6"></i>${TURF.label}</span>`;
+    // grid: rows = decisions, columns = slots grouped by shelf
+    const box = $('#ruleBox'), svg = $('#ruleGrid');
+    const W = Math.max(760, widthOf(box)), L = 112, T = 34, gapS = 8;
+    // The machine as you face it, shelf by shelf (DATA.scope.machine): each of our slots gets a column; every run of
+    // rails that are not ours becomes one hatched band (2 pitches wide), with no values.
+    const MC = DATA.scope.machine, OURS = new Set(CORE.SLOTS), LAY = [];
+    for (let r = 1; r <= MC.shelves; r++) {
+      let inBand = false;
+      for (let c = 1; c <= MC.columns; c++) {
+        const id = '' + r + c;
+        if (OURS.has(id)) { LAY.push({ r, j: CORE.SLOTS.indexOf(id) }); inBand = false; }
+        else if (!inBand) { LAY.push({ r, turf: true }); inBand = true; }
+      }
+    }
+    const NSH = MC.shelves, NB = LAY.filter(e => e.turf).length;
+    const pitch = Math.min(26, (W - L - (NSH - 1) * gapS - NB * 4 - 2) / (CORE.SLOTS.length + 2 * NB)), cell = pitch - 2, bandW = 2 * pitch, H = T + CORE.DEC.length * pitch + 6;
+    const XJ = [], BANDS = [], SHX = {};
+    LAY.reduce((x, e, i) => {
+      if (i > 0 && LAY[i - 1].r !== e.r) x += gapS;
+      if (!(e.r in SHX)) SHX[e.r] = x;
+      if (e.turf) { BANDS.push(x); return x + bandW + 4; }
+      XJ[e.j] = x; return x + pitch;
+    }, L);
+    const XS = j => XJ[j];
+    let g = `<defs><pattern id="turfHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--hatch);stroke-width:1.4;opacity:.45"/></pattern></defs>`;
+    BANDS.forEach(bx => {
+      const bh = CORE.DEC.length * pitch - 2;
+      g += `<rect data-k="turf" x="${bx}" y="${T}" width="${bandW - 2}" height="${bh}" rx="3" fill="url(#turfHatch)" style="stroke:var(--line)"/>`;
+      g += `<text class="labm" transform="translate(${bx + bandW / 2 + 2} ${T + bh / 2}) rotate(-90)" text-anchor="middle" style="font-size:9px" pointer-events="none">${TURF.label}</text>`;
+    });
+    for (let r = 1; r <= NSH; r++) {
+      g += `<text class="labm" x="${SHX[r]}" y="${T - 20}">Shelf ${r}${r === 1 ? ' (top)' : ''}</text>`;
+      CORE.SLOTS.forEach((s, j) => { if (+s[0] === r) g += `<text class="tick" x="${XS(j) + cell / 2}" y="${T - 6}" text-anchor="middle" style="font-size:${pitch < 18 ? 8 : 10}px">${s}</text>`; });
+    }
+    sim.cells.forEach((row, di) => {
+      const y = T + di * pitch;
+      g += `<text class="tick" x="${L - 8}" y="${y + cell / 2 + 4}" text-anchor="end">${DEC_LAB[di]}</text>`;
+      row.forEach((cl, j) => {
+        const fill = !cl.hit ? 'var(--sunk)' : cl.outcome === 1 ? 'var(--s2)' : cl.outcome === 2 ? 'var(--s1)' : cl.outcome === 3 ? 'var(--s3)' : 'var(--surface)';
+        const unk = cl.hit && cl.outcome === 0;
+        g += `<rect data-k="${di}-${j}" x="${XS(j)}" y="${y}" width="${cell}" height="${cell}" rx="3" style="fill:${fill}${unk ? ';stroke:var(--muted);stroke-width:1.5' : ''}"/>`;
+        if (unk) g += `<text x="${XS(j) + cell / 2}" y="${y + cell / 2 + 4}" text-anchor="middle" style="font-size:11px;font-weight:600;fill:var(--ink)" pointer-events="none">?</text>`;
+        if (cl.emptyAt) g += `<circle cx="${XS(j) + cell - 4}" cy="${y + 4}" r="2.4" style="fill:${cl.hit && !unk ? '#ffffff' : 'var(--ink)'}" pointer-events="none"/>`;
+      });
+    });
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = g;
+    bindMarks(box, svg, k => {
+      if (k === 'turf') return `<b>${esc(TURF.label)}</b><br>${esc(TURF.tip)}`;
+      const [di, j] = k.split('-').map(Number), cl = sim.cells[di][j];
+      const OUTN = { 0: 'outcome not known yet', 1: 'alive: sold again with no refill in between', 2: 'silent the next week', 3: 'sold again after a refill: the rail was probably empty' };
+      let h = `Slot ${cl.slot} · ${decLong(di)}<br>${cl.hit ? `<b>Flagged</b>, ${OUTN[cl.outcome]}` : 'Not flagged'}`;
+      h += `<br>${cl.silent} observed class day${cl.silent === 1 ? '' : 's'} since its last sale${cl.lastSale ? ' (' + md(cl.lastSale) + ')' : ''}`;
+      if (c.type === 'poisson') h += cl.p0 === null ? '<br>Too few in-stock class days to estimate a rate' : `<br>Expected ${f2(cl.lam)} sales in that silence · P(0) ${cl.p0 < 0.001 ? '< 0.001' : cl.p0.toFixed(3)}`;
+      if (cl.emptyAt) h += '<br>Suspected empty the day before';
+      h += cl.n7 === null ? '<br>Next 7 days: not in the data yet' : `<br>Sold <b>${cl.n7}</b> in the 7 days after the door opened` + (cl.refillVisit ? `, after a refill at visit ${cl.refillVisit} (${vlab(VBY[cl.refillVisit])})` : cl.n7 > 0 ? ', with no refill in between' : '');
+      return h;
+    });
+    const sid = CORE.scriptRuleId(c), ref = sid ? DATA.rule.script_summary.find(r => r.rule === sid) : null;
+    const match = ref && ref.flags === S.flags && ref.contradicted === S.contradicted && ref.flags_with_outcome === S.known && ref.sold_after_refill === S.afterRefill;
+    $('#ruleRead').innerHTML = `<p><b>Flagged now</b> for the ${PLAN_LAB}: <span class="flaglist">${S.now.length ? S.now.join(', ') : 'none'}</span>.${S.now.length ? `${S.nowEmpty ? ` Of these, ${S.nowEmpty} looked empty on the last day of data.` : ''} No refill has been proven at a single visit since ${RESTOCK.weekday} ${md(RESTOCK.start.slice(0, 10))}, so check each one at the next visit before acting: a flag on an unrefilled rail says nothing about demand.` : ''}</p>` +
+      `<p>Of the ${S.known} flags with an outcome, <b class="num">${S.contradicted}</b> were alive and <b class="num">${S.afterRefill}</b> were rails that sold again once refilled. Counting every later sale as a false alarm would lump those together and blame the rule for empty rails.</p>` +
+      `<p>Flagged slots sold <span class="num">${S.next14}</span> drinks in the 14 days after their flags (flags with an outcome; each slot-day counted once). That is what acting on those flags would have put at risk.</p>` +
+      (() => { const V = CORE.emptyVerdict(c), sv = DATA.rule.verdicts.find(r => r.filtered === CORE.scriptRuleId(Object.assign({}, c, { skipEmpty: true }))); return `<p><b>Does the empty check help?</b> Without it this rule raises <span class="num">${V.base.flags}</span> flags (${V.base.known} with an outcome, ${V.base.contradicted} alive); with it, <span class="num">${V.filt.flags}</span> (${V.filt.known} with an outcome, ${V.filt.contradicted} alive). Verdict: <b>${esc(V.verdict)}</b>. Fewer flags is not fewer wrong flags: a sales-only empty check cannot tell an empty rail from a dead product.${sv && sv.verdict !== V.verdict ? ' (The analysis script words it differently: ' + esc(sv.verdict) + '.)' : ''}</p>`; })() +
+      (ref ? `<p class="small muted">Check: the analysis script's replay of this rule (${esc(sid)}) found ${ref.flags} flags, ${ref.flags_with_outcome} with an outcome, ${ref.contradicted} alive, ${ref.sold_after_refill} after a refill. ${match ? 'The lab matches it.' : 'The lab differs from it.'}</p>` : '');
+    drawSweep(c);
+    if (step === 6) drawGuide();
+  }
+  function drawSweep(c) {
+    const Ns = []; for (let n = 3; n <= 14; n++) Ns.push(n);
+    const series = [['cal', 'Calendar days', 'var(--s1)'], ['class', 'Observed class days', 'var(--s2)']].map(([t, name, col]) => ({ t, name, col, r: Ns.map(N => CORE.simulate({ type: t, N, alpha: c.alpha, skipEmpty: c.skipEmpty }).summary) }));
+    const box = $('#sweepBox'), svg = $('#sweepChart');
+    const W = widthOf(box), H = 230, L = 40, R = 12, T = 12, B = 30, pw = W - L - R, ph = H - T - B, X = i => L + i / (Ns.length - 1) * pw;
+    const Y = v => T + ph - v * ph;
+    let g = '';
+    for (let k = 0; k <= 4; k++) { const v = k / 4; g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="tick" x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v * 100}%</text>`; }
+    Ns.forEach((N, i) => { g += `<text class="tick" x="${X(i)}" y="${H - 10}" text-anchor="middle">${N}</text>`; });
+    series.forEach(s => {
+      let d = '', pen = false; s.r.forEach((r, i) => { if (r.share === null) { pen = false; return; } d += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(r.share).toFixed(1) + ' '; pen = true; });
+      g += `<path d="${d}" style="fill:none;stroke:${s.col};stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/>`;
+    });
+    if (c.type !== 'poisson') {
+      const s = series.find(x => x.t === c.type), i = c.N - 3, r = s.r[i];
+      if (r.share !== null) g += `<circle cx="${X(i)}" cy="${Y(r.share)}" r="5" style="fill:${s.col};stroke:var(--surface);stroke-width:2"/><text class="lab" x="${X(i) + 8}" y="${Y(r.share) - 8}">N = ${c.N}</text>`;
+    }
+    g += `<line class="axis" x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}"/><line class="cross" x1="0" x2="0" y1="${T}" y2="${T + ph}" style="stroke:var(--muted);stroke-width:1" opacity="0"/>`;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = g;
+    bindCross(box, svg, { W, H, T }, Ns.length, X, i => `N = ${Ns[i]}${c.skipEmpty ? ', empty check on' : ''}` + series.map(s => { const r = s.r[i]; return `<br>${s.name}: alive <b>${r.share === null ? 'n/a' : pct(r.share)}</b> (${r.contradicted} of ${r.known}), ${r.afterRefill} after a refill; ${r.flags} flags, ${r.now.length} now`; }).join(''));
+    $('#sweepLegend').innerHTML = series.map(s => `<span><i class="sw line" style="border-color:${s.col}"></i>${s.name}</span>`).join('') + '<span class="muted">x-axis: N</span>';
+    $('#sweepNote').textContent = `Alive rate (sold again with no refill in between) for every N from 3 to 14, for both ways of counting days, with the empty check ${c.skipEmpty ? 'on' : 'off'}. Large N leaves few flags with an outcome, so the right end of each line rests on a handful of cases.`;
+  }
+  function renderLog() {
+    const html = LOG.length ? LOG.map(r => `<tr><td class="l" style="min-width:220px">${esc(r.name)}</td><td>${r.S.flags}</td><td>${r.S.known}</td><td>${r.S.contradicted}</td><td>${r.S.share === null ? 'n/a' : pct(r.S.share)}</td><td>${r.S.afterRefill}</td><td>${r.S.silentNext}</td><td>${r.S.now.length}</td></tr>`).join('') : '<tr><td class="l muted" colspan="8">Press "Log this run" in step 5 to keep a row here.</td></tr>';
+    $('#logTable5').innerHTML = html; $('#logTable6').innerHTML = html;
+  }
+  $$('input[name=ruleType]').forEach(e => e.addEventListener('change', drawRule));
+  $('#ruleN').addEventListener('input', drawRule); $('#ruleAlpha').addEventListener('change', drawRule); $('#ruleSkip').addEventListener('change', drawRule);
+  function preset(type, N, alpha, skip) { $(type === 'cal' ? '#ruleCal' : type === 'class' ? '#ruleClass' : '#rulePois').checked = true; $('#ruleN').value = N; $('#ruleAlpha').value = String(alpha); $('#ruleSkip').checked = skip; drawRule(); }
+  $('#preTeam').addEventListener('click', () => preset('cal', 7, 0.05, false));
+  $('#preWeek').addEventListener('click', () => preset('class', 5, 0.05, true));
+  $('#prePois').addEventListener('click', () => preset('poisson', 5, 0.05, true));
+  $('#ruleLog').addEventListener('click', () => { if (!lastSim) return; LOG.unshift({ name: ruleName(lastSim.c), S: lastSim.sim.summary }); renderLog(); });
+  $('#logClear5').addEventListener('click', () => { LOG.length = 0; renderLog(); });
+
+  /* ================= STEP 6: guideline ================= */
+  function upcomingPauses() {
+    // runs of consecutive no-class days after the data ends that include at least one weekday
+    const out = []; let run = null;
+    CAL.date.forEach((d, i) => {
+      if (d <= LAST) return;
+      const off = CAL.classes[i] !== 'normal' || C.dowOf(d) >= 5;
+      if (off) { if (!run) run = { s: d, e: d, wk: false, closed: [] }; run.e = d; if (C.dowOf(d) < 5) run.wk = true; if (CAL.institute[i] === 'closed' && C.dowOf(d) < 5) run.closed.push(d); }
+      else if (run) { if (run.wk) out.push(run); run = null; }
+    });
+    if (run && run.wk) out.push(run);
+    return out.map(r => { let s = r.s, e = r.e; while (C.dowOf(s) >= 5 && s < e) s = C.addDays(s, 1); while (C.dowOf(e) >= 5 && e > s) e = C.addDays(e, -1); return { s, e, closed: r.closed }; });
+  }
+  function drawGuide() {
+    if (!lastSim) lastSim = { c: cfgNow(), sim: CORE.simulate(cfgNow()) };
+    const { c, sim } = lastSim, S = sim.summary;
+    $('#gRule').textContent = ruleName(c);
+    const act = $('#gAction').value, mid = $('#gMidweek').checked, lg = $('#gLog').checked, pz = $('#gPause').checked;
+    const pauses = upcomingPauses();
+    const trig = c.type === 'cal' ? `the slot sold nothing in the last ${c.N} calendar days` :
+      c.type === 'class' ? `the slot sold nothing in the last ${c.N} observed class days` :
+        `zero sales would be surprising for this slot: P(0) = e^−(its sales per in-stock class day × observed class days since its last sale) is below ${c.alpha}. A slot needs at least 5 in-stock class days of history before this test applies`;
+    const steps = [];
+    if (c.type === 'cal') steps.push(`Count calendar days. Note: this counts weekends, breaks and days with polling gaps, so silences caused by the calendar will trigger the rule.`);
+    else steps.push(`Count only observed class days: Monday to Friday with classes in session and no polling gap of 2 or more daytime hours. Weekends, breaks, closures and polling-gap days pause the clock; they are never evidence that a product is unwanted.` + (pz && pauses.length ? ` Coming pauses: ${pauses.map(p => p.s === p.e ? wmd(p.s) : `${wmd(p.s)} to ${wmd(p.e)}`).join('; ')}.` : ''));
+    steps.push(`Trigger: flag a slot when ${trig}.`);
+    if (c.skipEmpty) steps.push(`Stock-out check first. The machine reports what it sold, not what it holds. If the slot sold steadily and then stopped, or the restocker finds it empty, treat the silence as a stock-out: refill it deeper${mid ? ', and consider the $25 midweek visit if it empties before the next regular visit' : ''}. Do not count that silence against the product.`);
+    else steps.push(`This rule does not check for empty slots. Before acting on any flag, confirm the slot actually held product during the silence${mid ? ' (and use the $25 midweek visit for slots that keep emptying early)' : ''}.`);
+    steps.push(act === 'price' ? `Action: at the next visit, run a price test on the flagged slot (one change, held for a full stocked school week). Remove or swap the product only after a full stocked school week with zero sales.` :
+      act === 'swap' ? `Action: at the next visit, swap in a different product. Only do this after confirming the slot was stocked for the whole silence.` :
+        `Action: remove the product at the next visit, but only after a full stocked school week with zero sales.`);
+    if (lg) steps.push(`Use the door counter to detect visits: every DEX poll carries a lifetime door-open count (EA2*DO), and a rise means someone opened the machine. Do not assume a visit day. Log the units loaded into each rail at every visit, so refills and stock-outs can be seen instead of guessed.`);
+    const kA = VBY[DIDS[KNOWN_DEC[0]]], kB = VBY[DIDS[KNOWN_DEC[KNOWN_DEC.length - 1]]];
+    const recentLab = VDEC.filter(di => !KNOWN_DEC.includes(di)).map(di => vlab(VBY[DIDS[di]])).join(' and ');
+    const ev = S.known ? `In a replay of the ${KNOWN_DEC.length} past door visits from ${vlab(kA)} to ${vlab(kB)} whose next 7 days are in the data, this rule raised ${S.known} flags${S.recent ? ` (plus ${S.recent} at the ${recentLab} visit, too recent to judge)` : ''}. Of these, ${S.contradicted} (${pct(S.share)}) sold again with no refill in between, so the slot was alive and the flag was wrong; ${S.afterRefill} sold again only after a refill (the rail was probably empty); ${S.silentNext} stayed silent. ${S.emptyFlags} of all flags fell on slots that looked empty. The machine's last refill proven at a single visit was ${RESTOCK.weekday} ${md(RESTOCK.start.slice(0, 10))}, so silences since then mostly mean empty rails, not unwanted products.${c.skipEmpty ? ` Against the same rule without the empty check, the check is ${CORE.emptyVerdict(c).verdict}.` : ''}` : `In the replay this rule has no flags with a known outcome yet, so it cannot be judged on this data.`;
+    $('#gText').innerHTML = `<p><b>Slow-seller rule.</b> At each restock visit (found from the door counter, not assumed to be a Friday), check each of our slots:</p><ol>${steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol><p class="small"><b>Evidence.</b> ${esc(ev)} Slots flagged by this rule for the next visit: ${S.now.length ? esc(S.now.join(', ')) : 'none'}.</p>`;
+    renderLog();
+  }
+  ['#gAction', '#gMidweek', '#gLog', '#gPause'].forEach(s => $(s).addEventListener('change', drawGuide));
+  $('#gEdit').addEventListener('click', () => { go(5); window.scrollTo({ top: 0 }); });
+
+  /* ---------- footer + start ---------- */
+  $('#fPolls').textContent = DATA.meta.polls.toLocaleString('en-US');
+  $('#fFrom').textContent = DATA.meta.first_poll.slice(0, 16).replace('T', ' ');
+  $('#fTo').textContent = DATA.meta.last_poll.slice(0, 16).replace('T', ' ');
+  renderLog();
+  let start = 1;
+  const h = (location.hash.match(/step([1-6])/) || [])[1];
+  if (h) start = +h; else { try { const s = +localStorage.getItem('rhythm-lab-step'); if (s >= 1 && s <= 6) start = s; } catch (e) { } }
+  go(start);
+})();
+</script>

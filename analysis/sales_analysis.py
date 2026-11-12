@@ -1,22 +1,26 @@
 #!/usr/bin/env python
-"""Vending machine vmc1 sales analysis for OUR 20 slots, using standard forecasting practice.
+"""Vending machine sales analysis for OUR slots, using standard forecasting practice.
 
 One rerunnable script. Fixed seeds. pandas / numpy / statsmodels / scipy / scikit-learn only.
 
 Usage:
-    python -I sales_analysis.py [--sales sales_events.csv] [--readings poll_readings.csv]
+    python -I sales_analysis.py [--slots 15,16,...] [--sales sales_events.csv] [--readings poll_readings.csv]
                                 [--polls polls.csv] [--machine machine_hourly.csv] [--doors door_events.csv]
                                 [--calendar calendar.json] [--photos planograms_photos.json] [--out OUT_DIR]
 
 Defaults: inputs in analysis/data/*.csv (written by analysis/export_sales.py), the calendar and photo files in
 analysis/, outputs in analysis/out/ (both folders gitignored).
 
+Which slots are ours: --slots, else data/slots.json (written by the export with the list it used), else
+vending.slots.SLOTS. If the CSVs were exported for a different list than the one asked for, the script stops
+and says to re-export. See analysis/slots_config.py.
+
 Outputs (OUT_DIR):
     lab_data.json        compact data for the interactive labs
     analysis_report.md   headline findings, the slow-seller rule recommendation, caveats
 
 Scope (binding team decision): anything per slot -- product, price, position, segments, experiments, stock-outs,
-refill evidence, slow-seller flags -- uses ONLY our slots (vending.slots.SLOTS on vending.slots.DEVICE_ID), and no
+refill evidence, slow-seller flags -- uses ONLY our slots (the resolved slot list on vending.slots.DEVICE_ID), and no
 slot is ever judged by another slot's state.  Machine-wide data enters only as totals over the whole machine
 (machine_hourly.csv), and only for: calendar / day-off effects, time-of-day and day-of-week profiles, the overall
 trend, forecasting machine totals, and dating door visits.  The machine-wide history is pre-competition: course
@@ -39,7 +43,7 @@ Key data choices (each is also written to lab_data.json meta.notes):
     series, weighted by calendar day type (class day = its weekday profile; open weekday
     without classes = the weekend rate; weekday the Institute is closed = 0).  Totals are
     identical.  A gap is missing data, never zero sales.  Machine totals are spread with the
-    machine-wide profile; our slots with the profile of our 20 slots combined.
+    machine-wide profile; our slots with the profile of our slots combined.
   * Regular hourly polling starts 2026-09-21 01:00 ET.  Rates, hour profiles and test windows
     use that era; forecast training also uses the gap-spread days from term start (Sep 9).
     In the backtests each plan date re-spreads the lumps with a profile built only from
@@ -76,7 +80,10 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.seasonal import STL
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (plain constants; no database needed)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from slots_config import SOURCE_CLI, SOURCE_DEFAULT, check, parse_slots  # noqa: E402
+from slots_config import ranges as slot_ranges  # noqa: E402
+from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (defaults; configure() sets the ones this run uses)
 
 TZ = "America/New_York"
 SEED = 42
@@ -97,21 +104,86 @@ VISIT_MERGE_H = 3                 # door-counter rises within 3 h of each other 
 CAPACITY_MAX = 11                 # largest units per column on the Package Loading label (240/250 ml cans)
 SILENT_DAYS = 5                   # a slot silent this many days before a visit counts as "silent"
 RESUME_DAYS = 4                   # ... and "resumed" if it sells within this many days after the visit
-LIKELY_MIN = 2                    # >= this many of our silent slots resuming = "likely refill" (4 of 40 scaled to 2 of 20)
+LIKELY_MIN = 2                    # >= this many of our silent slots resuming = "likely refill"; configure() sets 1 per 10 slots (2 for 20)
 REFILL_EVIDENCE = ("proven refill", "likely refill", "possible top-up")
 # Photo of the machine taken by the student team at the Nov 9 visit: rails with product visible at the front.
 # Product further back in a rail can be hidden, so "looks empty" is not proof of empty.  Our slots only.
-PHOTO_NOV9 = dict(date="2026-11-09", stocked=["25", "27", "28", "36", "47"],
-                  note="Student team photo of the machine at the Mon Nov 9 visit (door counter rise at 09:31). Of our 20 rails, "
-                       "product is visible at 25, 27 and 28 (shelf 2), 36 (shelf 3) and 47 (shelf 4); shelves 1 and 5 look empty.")
+PHOTO_NOV9_SEEN = ["25", "27", "28", "36", "47"]   # every rail of ours in the photo with product visible
+PHOTO_NOV9 = dict(date="2026-11-09", stocked=list(PHOTO_NOV9_SEEN))   # configure() keeps only the slots of this run
 VISIT_NOTES = {"2026-11-09": "student team photographing the machine (not a refill)",
                "2026-11-11": "not the student team; probably course staff or the operator"}
 KNOWN_NOT_REFILL = {"2026-11-09"}  # visits known not to be refills (never end a stock-out window, never count as a refill)
-SCOPE_NOTE = ("Machine-wide data is used only as totals over the whole machine, for the calendar and day-off effects, "
-              "the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits: "
-              "that history is from before the competition, when course staff stocked every slot, so it reflects no rival "
-              "strategy. Everything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller "
-              "flags, experiments) uses only our 20 slots, and no slot is judged by another slot's state.")
+SLOT_SOURCE = SOURCE_DEFAULT
+SLOTS_RESOLVED_AT = None
+OUR = "our slots"                 # set by configure(): "our N slots" for the slot list this run uses
+SCOPE_NOTE = ""
+
+
+def configure(device, slots, source, resolved_at=None):
+    """Set the slot list this run uses, and every text that names it."""
+    global DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT, OUR, SCOPE_NOTE, LIKELY_MIN
+    DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT = device, tuple(slots), source, resolved_at
+    OUR = f"our {len(SLOTS)} slot" + ("" if len(SLOTS) == 1 else "s")
+    LIKELY_MIN = max(1, round(len(SLOTS) / 10))
+    PHOTO_NOV9["stocked"] = [s for s in PHOTO_NOV9_SEEN if s in SLOTS]
+    PHOTO_NOV9["note"] = (f"Student team photo of the machine at the Mon Nov 9 visit (door counter rise at 09:31). Of our {len(SLOTS)} "
+                          f"rail{'' if len(SLOTS) == 1 else 's'}, " + photo_note_tail(PHOTO_NOV9["stocked"], SLOTS))
+    SCOPE_NOTE = ("Machine-wide data is used only as totals over the whole machine, for the calendar and day-off effects, "
+                  "the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits: "
+                  "that history is from before the competition, when course staff stocked every slot, so it reflects no rival "
+                  "strategy. Everything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller "
+                  f"flags, experiments) uses only {OUR}, and no slot is judged by another slot's state.")
+
+
+def _and(items):
+    items = list(items)
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def photo_note_tail(stocked, slots):
+    """'product is visible at 25, 27 and 28 (shelf 2) ...; shelves 1 and 5 look empty.' Our slots only."""
+    shelves = sorted({s[0] for s in slots})
+    full = sorted({s[0] for s in stocked})
+    empty = [r for r in shelves if r not in full]
+    parts = [f"{_and([s for s in stocked if s[0] == r])} (shelf {r})" for r in full]
+    text = f"product is visible at {_and(parts)}" if parts else "no product is visible at the front of any of them"
+    if parts and empty:
+        text += f"; shelf {empty[0]} looks empty" if len(empty) == 1 else f"; shelves {_and(empty)} look empty"
+    return text + "."
+
+
+def source_line():
+    """One line for the labs and the report: where the slot list came from."""
+    if SLOT_SOURCE == SOURCE_DEFAULT:
+        return ("Slots: confirmed by the inventory server, 12 Nov 2026 "
+                "(the default list in vending/slots.py matches its answer).")
+    if SLOT_SOURCE == SOURCE_CLI:
+        return "Slots: set on the command line for this run" + (f" ({SLOTS_RESOLVED_AT[:10]})." if SLOTS_RESOLVED_AT else ".")
+    return "Slots: the assignment stored from the inventory server" + (f" (read {SLOTS_RESOLVED_AT[:10]})." if SLOTS_RESOLVED_AT else ".")
+
+
+def resolve(args):
+    """The slot list for this run, checked against the list the CSVs were exported for (data/slots.json)."""
+    manifest = Path(args.slots_file)
+    exported = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else None
+    if args.slots is not None:
+        device, slots, source = DEVICE_ID, parse_slots(args.slots), SOURCE_CLI
+        at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        if exported and set(exported["slots"]) == set(slots) and exported["device"] == device:
+            source, at = exported["source"], exported.get("resolved_at")   # same list as exported: keep where it came from
+    elif exported:
+        device, slots, source, at = exported["device"], check(exported["slots"], str(manifest)), exported["source"], exported.get("resolved_at")
+    else:
+        device, slots, source, at = DEVICE_ID, check(SLOTS, "vending.slots.SLOTS"), SOURCE_DEFAULT, None
+    if exported and (set(exported["slots"]) != set(slots) or exported["device"] != device):
+        raise SystemExit(
+            f"SLOTS: the CSVs in {manifest.parent} were exported for {len(exported['slots'])} slots on {exported['device']} "
+            f"({slot_ranges(check(exported['slots'], str(manifest)))}), but this run asks for {len(slots)} on {device} ({slot_ranges(slots)}). "
+            f"Re-export first: python analysis/export_sales.py --slots {','.join(slots)}  (or python analysis/rebuild.py --slots ...)")
+    if exported is None:
+        print(f"WARNING: no {manifest.name} next to the CSVs, so it can't be checked which slots they were exported for; "
+              "the per-slot rows are still checked against the slot list below")
+    configure(device, slots, source, at)
 
 
 # ============================================================== helpers
@@ -217,7 +289,8 @@ def load(args):
     extra = sorted((set(sales.slot) | set(reads.slot)) - ours)
     if extra:
         # the exporter writes our slots only; an older export would carry other slots: never use them
-        raise SystemExit(f"SCOPE: the export carries per-slot rows for {len(extra)} slots outside ours: rerun export_sales.py")
+        raise SystemExit(f"SCOPE: the export carries per-slot rows for {len(extra)} slots outside ours ({slot_ranges(extra)}): "
+                         "re-export with the same slot list (python analysis/export_sales.py --slots ...)")
     sales["t"] = to_et(sales.at_eastern)
     reads["t"] = to_et(reads.at_eastern)
     polls = pd.read_csv(args.polls)
@@ -245,6 +318,10 @@ def load(args):
 def main():
     root = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--slots", help='our slot codes, comma or space separated ("15,16,17,18"); default: data/slots.json, '
+                    "else vending.slots.SLOTS")
+    ap.add_argument("--slots-file", default=str(root / "data" / "slots.json"),
+                    help="which slots the CSVs were exported for (written by export_sales.py)")
     ap.add_argument("--sales", default=str(root / "data" / "sales_events.csv"))
     ap.add_argument("--readings", default=str(root / "data" / "poll_readings.csv"))
     ap.add_argument("--polls", default=str(root / "data" / "polls.csv"))
@@ -262,6 +339,8 @@ def main():
     np.random.seed(SEED)
     warnings.filterwarnings("ignore")      # noisy library warnings; Holt-Winters warnings are counted where they matter
 
+    resolve(args)
+    print(f"slots: {len(SLOTS)} on {DEVICE_ID} ({slot_ranges(SLOTS)}), from {SLOT_SOURCE}")
     sales, reads, polls, mach, cal, doors, photos, oct8 = load(args)
     P = polls.t
     Pv = P.values
@@ -306,7 +385,7 @@ def main():
         return e.groupby([ah.dt.dayofweek, ah.dt.hour]).units.sum().reindex(n_how.index).fillna(0) / n_how
     era = msales[(msales.t_attr >= REGULAR_START) & ~msales.lump]       # machine-wide, regular era, no lumps
     how_machine = how_of(msales)       # time-of-day / day-of-week profile of the whole machine (an aggregate)
-    how_ours = how_of(sales)           # the same for our 20 slots combined: used for anything per slot
+    how_ours = how_of(sales)           # the same for our slots combined: used for anything per slot
 
     # calendar-aware spreading weight for one gap hour: class days use the weekday x hour profile, weekends their
     # own profile, open weekdays without classes (break, orientation) the average weekend rate for that hour, and
@@ -372,7 +451,7 @@ def main():
     D["cents_raw"] = msales.groupby("date").cents.sum().reindex(dates).fillna(0).astype(int)
     D["units"] = mspread.groupby("date").units.sum().reindex(dates).fillna(0)      # gap-spread
     D["cents"] = mspread.groupby("date").cents.sum().reindex(dates).fillna(0)
-    # our 20 slots
+    # our slots
     D["units_ours_raw"] = sales.groupby("date").units.sum().reindex(dates).fillna(0).astype(int)
     D["cents_ours_raw"] = sales.groupby("date").cents.sum().reindex(dates).fillna(0).astype(int)
     D["units_ours"] = spread.groupby("date").units.sum().reindex(dates).fillna(0)
@@ -392,7 +471,7 @@ def main():
     SD = sales.groupby(["date", "slot"]).units.sum().unstack(fill_value=0).reindex(index=dates, columns=slots, fill_value=0).astype(int)
 
     # ---------------------------------------------------------- the stock-out clock: calendar time, not other slots
-    # Expected units of our 20 slots combined in each hour, from their regular-era hour-of-week profile and the calendar.
+    # Expected units of our slots combined in each hour, from their regular-era hour-of-week profile and the calendar.
     # A slot's expected sales over a silence = its share of this clock.  No other slot's sales or state enters it.
     I_h = np.array([spread_w(how_ours, h) for h in hours])
     cum_I = np.concatenate([[0.0], np.cumsum(I_h)])
@@ -592,7 +671,7 @@ def main():
         v = vis_by_id.get(w["visit"]) if w["visit"] else None
         if w["how"] == "ongoing":
             w["status"] = ("sold out, not refilled" if last_proven is not None and w["start"] >= last_proven["start"]
-                           else "silent since before the last proven refill (skipped then, or no longer selling)" if last_proven is not None
+                           else "silent since before the last single-visit proven refill (skipped then, or no longer selling)" if last_proven is not None
                            else "ongoing")
         else:
             kind_ = ("capacity proof for this slot" if s in v["proven_slots"] else "resumed after the visit" if s in v["resumed_slots"]
@@ -625,7 +704,7 @@ def main():
     D["term_week"] = [((week_of(d) - week_of(TERM_START)).days // 7) for d in dates]   # 0 = week of Sat Sep 5 (term starts Wed Sep 9)
     daily_out = dict(
         note="units / cents / units_raw / cents_raw are MACHINE-WIDE totals (aggregates over every slot, used only for the calendar, "
-             "time profiles, trend and the machine forecast). units_ours* are our 20 slots. empty_slots and active_slots count our slots.",
+             f"time profiles, trend and the machine forecast). units_ours* are {OUR}. empty_slots and active_slots count our slots.",
         date=[ds(d) for d in dates], dow=D.dow.tolist(), units_raw=D.units_raw.tolist(), units=rl(D.units, 1),
         cents_raw=D.cents_raw.tolist(), cents=rl(D.cents, 0), units_ours_raw=D.units_ours_raw.tolist(), units_ours=rl(D.units_ours, 1),
         cents_ours_raw=D.cents_ours_raw.tolist(), classes=D.classes.tolist(), institute=D.institute.tolist(),
@@ -708,7 +787,7 @@ def main():
             note=PHOTO_NOV9["note"] + " Compared with the model's state at the start of that visit "
                  f"({t_ph:%a %b %d %H:%M}): 'suspected empty' = inside a stock-out window. Product further back in a rail "
                  "can be hidden, so 'looks empty' is not proof.",
-            visit=pv["id"], at=t_ph.isoformat(timespec="minutes"), photo_stocked=PHOTO_NOV9["stocked"], rails=len(slots),
+            visit=pv["id"], at=t_ph.isoformat(timespec="minutes"), photo_stocked=list(PHOTO_NOV9["stocked"]), rails=len(slots),
             stocked_and_flagged_empty=[r["slot"] for r in ph_st if r["inferred"] == "suspected empty"],
             stocked_and_selling=[r["slot"] for r in ph_st if r["inferred"] == "sold in the last 7 days"],
             stocked_but_quiet=[r["slot"] for r in ph_st if r["inferred"] == "quiet, not flagged empty"],
@@ -719,6 +798,9 @@ def main():
             agreement=rnd(sum(1 for r in rows_ph if r["verdict"].startswith("agree")) / len(rows_ph), 3),
             no_conflict_share=rnd(sum(1 for r in rows_ph if not r["verdict"].startswith("conflict")) / len(rows_ph), 3),
             tally=tally, slots=rows_ph)
+        if not set(photo_check["photo_stocked"]) <= set(slots):
+            raise SystemExit(f"SCOPE: the Nov 9 photo list has slots that are not ours: "
+                             f"{sorted(set(photo_check['photo_stocked']) - set(slots))}")
 
     # hourly weekday x hour matrices: MACHINE-WIDE (a time-of-day profile), regular era full days, midpoint/spread timing
     hr_days = [d for d in dates if D.loc[d, "regular"] and not D.loc[d, "partial"] and d > REGULAR_START.date()]
@@ -790,7 +872,7 @@ def main():
     trend_test = [slope(m_tr, "all days: machine units ~ week + weekday (HAC SE)"),
                   slope(m_tr_c, "class days only: machine units ~ week + weekday (HAC SE)")]
 
-    # academic-calendar regressions.  A: machine-wide units (calendar effects).  B: our 20 slots' units with the count of
+    # academic-calendar regressions.  A: machine-wide units (calendar effects).  B: our slots. units with the count of
     # our slots suspected empty (supply control).  Each table in the report quotes its own model.
     rdf = tdf.copy()
     rdf["no_class"] = rdf.no_class_weekday.astype(int)
@@ -801,8 +883,8 @@ def main():
     specs = {"A": "units ~ C(dowc) + no_class + week_of_term",
              "B0": "units_ours ~ C(dowc) + no_class + week_of_term",
              "B": "units_ours ~ C(dowc) + no_class + week_of_term + empty_slots"}
-    scope_of = {"A": "machine-wide daily units (aggregate over every slot)", "B0": "daily units of our 20 slots",
-                "B": "daily units of our 20 slots, with a supply control"}
+    scope_of = {"A": "machine-wide daily units (aggregate over every slot)", "B0": f"daily units of {OUR}",
+                "B": f"daily units of {OUR}, with a supply control"}
     meaning = {
         "Intercept": "Model baseline: a Monday with classes, extrapolated back to the start of term (week_of_term = 0 is Wed Sep 9; "
                      "no data before Sep 21, so this value is not observed).",
@@ -814,7 +896,7 @@ def main():
     regression = dict(note="OLS on daily gap-spread units, regular-polling era "
                            f"({ds(rdf.index[0])} to {ds(rdf.index[-1])}, n={len(rdf)}). HC3 robust standard errors. "
                            "Weekday coefficients are lifts vs Monday. Model A: machine-wide totals (calendar effects). "
-                           "Model B0: our 20 slots. Model B: B0 plus the count of our slots suspected empty (supply control).",
+                           f"Model B0: {OUR}. Model B: B0 plus the count of our slots suspected empty (supply control).",
                       models={})
     for k, f in specs.items():
         m = smf.ols(f, data=rdf).fit(cov_type="HC3")
@@ -1120,7 +1202,7 @@ def main():
                                      "Holt-Winters falls back to seasonal naive, Holt to the SES level) and fits that raised a warning "
                                      "(e.g. no convergence).", backtest=fit_log_backtest, all=fit_log_all)
 
-    # restocked (supply-restored) scenario for OUR 20 slots: sum of their in-stock rates per class day
+    # restocked (supply-restored) scenario for OUR slots: sum of their in-stock rates per class day
     reg_class = [d for d in dates if D.loc[d, "regular"] and D.loc[d, "class_day"]]
     recent_cut = d1 - dt.timedelta(days=27)
 
@@ -1144,9 +1226,9 @@ def main():
     scen_recent = [restock_rate_recent * shape[d.weekday()] if c else wk_mean_ours for d, c in zip(fdates, f_class)]
     scen_all = [restock_rate_all * shape[d.weekday()] if c else wk_mean_ours for d, c in zip(fdates, f_class)]
     forecasts["restocked_scenario"] = dict(
-        scope="our 20 slots", recent_rates=rl(scen_recent, 2), regular_era_rates=rl(scen_all, 2),
+        scope=OUR, recent_rates=rl(scen_recent, 2), regular_era_rates=rl(scen_all, 2),
         per_class_day_recent=rnd(restock_rate_recent, 1), per_class_day_regular_era=rnd(restock_rate_all, 1),
-        note="OUR 20 SLOTS only (the model forecasts above are machine-wide totals): if each of our slots were kept stocked, the sum of "
+        note=f"{OUR.upper()} only (the model forecasts above are machine-wide totals): if each of our slots were kept stocked, the sum of "
              "their units per in-stock class day (last 4 weeks where a slot was in stock >= 3 class days, else its whole regular-era "
              "rate), shaped by our class-day weekday pattern; other days at our average weekend day. Upper reference, not a forecast: "
              "it assumes the products that sold before are still there and still wanted.")
@@ -1159,7 +1241,7 @@ def main():
                                 restocked_recent=rnd(sum(scen_recent[i] for i in ix), 1))
                            for w, ix in fw.items()]
 
-    # ============================================================ 5. SLOT LEVEL (our 20 slots only)
+    # ============================================================ 5. SLOT LEVEL (our slots only)
     rd = reads.sort_values(["slot", "t"]).copy()
     rd["old"] = rd.groupby("slot").price_cents.shift()
     pcs = rd[rd.old.notna() & (rd.old != rd.price_cents)]
@@ -1283,7 +1365,7 @@ def main():
                "not elasticities.",
         changes=pc_rows)
 
-    # row / column regression (our slots: shelves 1-5, columns 5-8)
+    # row / column regression (our slots' shelves and columns)
     rcdf = SL.reset_index()[["slot", "row", "col", "rate", "avg_price", "instock_class_days"]].copy()
     rcdf = rcdf[rcdf.instock_class_days >= 3]
     m_rc = smf.ols("rate ~ C(row) + C(col) + avg_price", data=rcdf).fit()
@@ -1630,7 +1712,7 @@ def main():
                                                                3 if f["outcome"].startswith("sold again after") else 2)] for f in flags]))
 
     slot_daily = dict(
-        note="Our 20 slots only. Per slot-day arrays aligned to daily.date. u = units (midpoint timing, lumps on their poll day), "
+        note=f"{OUR.capitalize()} only. Per slot-day arrays aligned to daily.date. u = units (midpoint timing, lumps on their poll day), "
              "e = 1 if suspected empty for >= half of 08:00-17:00 (whole-history view: windows end at door visits), "
              "p = listed price in cents at 12:00 noon ET that day.",
         dates=[ds(d) for d in dates],
@@ -1756,7 +1838,7 @@ def main():
                 r["avg_price"] = rnd(r["cents"] / r["units"] / 100, 2) if r["units"] else None
             runs[s] = rs_
         products = dict(
-            note=("Our 20 slots only. What each slot held comes from the dated team photos (planograms_photos.json, planogram_2026-10-08.json); "
+            note=(f"{OUR.capitalize()} only. What each slot held comes from the dated team photos (planograms_photos.json, planogram_2026-10-08.json); "
                   "the units and prices come from that slot's own counters. A sale is attributed to the product in the photo before it, or, when "
                   "that photo shows the rail empty (or there is none), to the product in the photo after it. 'bracketed' units sit between two "
                   "photos that show the same brand. Price paid = cents / units from the counters (tax included)."),
@@ -1939,20 +2021,20 @@ def main():
         return f"Sat {md(dt.date.fromisoformat(w))}"
     v5, vp = vd.get("c_5cd_notempty", {}), vd.get("d_p05_notempty", {})
     findings = [
-        dict(title="Takings and volume, our 20 slots", number=f"{TOTAL_UNITS} drinks / ${TOTAL_CENTS / 100:,.2f}",
+        dict(title=f"Takings and volume, {OUR}", number=f"{TOTAL_UNITS} drinks / ${TOTAL_CENTS / 100:,.2f}",
              detail=f"Slots {slots_text}, from {T0:%b %d} to {T1:%b %d %H:%M} ET ({(T1 - T0).days} days, {len(P)} polls). Daily, weekly and "
                     f"per-slot totals reconcile with the counters (checked slot by slot). The whole machine sold {MACHINE_UNITS} "
                     "(an aggregate, used only for the calendar, time-of-day, trend and machine-forecast work)."),
         dict(title="Visits are dated from the door counter, not assumed weekdays",
-             number=(f"{len(vis)} visits ({n_open} door openings); {len(ev_vis)} regular-era visits with refill evidence on our slots: {wd_str}"
+             number=(f"{len(vis)} visits ({n_open} door openings); {len(ev_vis)} visits with refill evidence on our slots since hourly polling began ({REGULAR_START:%b} {REGULAR_START.day}): {wd_str}"
                      if doors is not None else "no door data: visits assumed every Friday 08:00"),
              detail=("The machine counts door openings (EVA-DTS EA2*DO) and reports the count at every poll, so each visit is dated to within "
                      "the poll interval (one hour since Sep 21). Visits were spread over the week (the last six on "
                      + ", ".join(f"{v['first_rise']:%a %b %d}" for v in vis[-6:]) + "). Evidence per visit, from our slots only: "
                      + ", ".join(f"{k} {int(ev_counts.get(k, 0))}" for k in ("proven refill", "likely refill", "possible top-up", "no sign of refill"))
                      + ". The counter says when the door opened, not what was loaded.")),
-        dict(title=("Regular refilling stopped after the last proven refill" + (f" ({last_proven['first_rise']:%b} {last_proven['first_rise'].day})" if last_proven is not None else "")),
-             number=(f"last single-visit proof {vwin(last_proven)}; {len(after_lp)} later visits refilled some of our rails" if last_proven is not None else "n/a"),
+        dict(title="Regular refilling stopped after the last single-visit proven refill",
+             number=(f"{vwin(last_proven)}; {len(after_lp)} later visits refilled only some of our rails" if last_proven is not None else "n/a"),
              detail=(lpr["statement"] or "") + f" Later visits with refill evidence on our slots: {later_text}. The operators stopped regular "
                     "refilling to prepare for the project; by our slots' own counters the later visits put product back in some rails, not the "
                     "whole machine." + (
@@ -1966,7 +2048,7 @@ def main():
              detail=(f"Full weeks starting {', '.join(wk(r['week']) for r in last3)}; the best full week for selling slots began {wk(peak_full['week'])}. "
                      "The operators stopped regular refilling to prepare for the project: by the end of the data "
                      f"{sup_now['slots_empty_at_week_end']} of our slots are suspected empty ({sup_now['slots_sold_out_not_refilled']} sold out "
-                     f"after the last proven refill and not refilled since, {sup_now['slots_silent_since_before_last_restock']} silent since before it), and the "
+                     f"after the last single-visit proven refill and not refilled since, {sup_now['slots_silent_since_before_last_restock']} silent since before it), and the "
                      f"Nov 9 photo shows product on only {len(PHOTO_NOV9['stocked'])} of our {len(slots)} rails. Demand is better read from in-stock "
                      f"rates: if each of our slots were kept stocked, their own rates add up to about {restock_rate_recent:.0f} units per class day "
                      f"(recent) or {restock_rate_all:.0f} (whole era), vs {instock_obs:.1f} observed per weekday in the last 4 weeks.")),
@@ -1986,7 +2068,7 @@ def main():
                      f"to {regA['week_of_term']['ci_hi']:+.2f})"),
              detail=f"Weekday-adjusted daily machine units fall each week of term (model A, the table below; "
                     f"p{'<0.001' if regA['week_of_term']['p'] < 0.001 else '=' + str(regA['week_of_term']['p'])}). "
-                    f"For our 20 slots, adding the count of our suspected-empty slots (model B vs B0) changes the week-of-term coefficient from "
+                    f"For {OUR}, adding the count of our suspected-empty slots (model B vs B0) changes the week-of-term coefficient from "
                     f"{wk_coefB0.get('coef')} to {wk_coefB.get('coef')}; each extra empty slot is worth {emp_coef.get('coef')} units/day "
                     f"(95% CI {emp_coef.get('ci_lo')} to {emp_coef.get('ci_hi')}). Trend and empty slots move together (r={regression['corr_week_vs_empty_slots']}), "
                     "so the regression alone cannot split them; the door counter and the operators' account (regular refilling stopped in late October) "
@@ -2060,7 +2142,8 @@ def main():
         per_origin=per_origin, weekly=weekly_bt, fit_log=fit_log_backtest)
 
     lab = dict(
-        scope=dict(device=DEVICE_ID, our_slots=slots, note=SCOPE_NOTE),
+        scope=dict(device=DEVICE_ID, our_slots=slots, n_slots=len(slots), slots_text=slots_text, source=SLOT_SOURCE,
+                   resolved_at=SLOTS_RESOLVED_AT, source_line=source_line(), machine=dict(shelves=5, columns=8), note=SCOPE_NOTE),
         visits=visits_out, refill_evidence=refill_evidence, last_proven_refill=lpr, supply=supply, photo_check=photo_check,
         meta=dict(generated_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), device=DEVICE_ID, timezone=TZ,
                   first_poll=T0.isoformat(timespec="minutes"), last_poll=T1.isoformat(timespec="minutes"), polls=len(P),
@@ -2178,7 +2261,7 @@ def main():
         print(f"  {v['id']:2d} {vwin(v)} open {v['openings']}  {v['evidence']:18s} "
               f"proven {v['proven_slots']} pair {v['pair_proof_slots']} resumed {v['resumed_slots']} {v['note']}")
     print(f"  {lpr['statement']}")
-    print("=== supply, our slots (week: units, selling, empty at end, sold out not refilled, silent since before last proven refill) ===")
+    print("=== supply, our slots (week: units, selling, empty at end, sold out not refilled, silent since before last single-visit proven refill) ===")
     for r in supply:
         print(f"  {r['week']} {r['units']:4d} {r['slots_selling']:3d} {r['slots_empty_at_week_end']:3d} {r['slots_sold_out_not_refilled']:3d} "
               f"{r['slots_silent_since_before_last_restock']:3d} visits {r['visits']} ({', '.join(r['visit_evidence'])})")
@@ -2223,12 +2306,16 @@ def write_report(path, L):
         for c in reg_models[model]["coefs"]:
             w(f"| {c['term']} | {c['coef']} | {c['ci_lo']} to {c['ci_hi']} | {pv_(c['p'])} | {c['meaning']} |")
 
-    w("# Vending machine vmc1: sales analysis of our 20 slots")
+    w(f"# Vending machine {DEVICE_ID}: sales analysis of {OUR}")
     w("")
     w(f"Data: {T0:%Y-%m-%d %H:%M} to {T1:%Y-%m-%d %H:%M} ET. Our slots {L['slots_text']}: {checks['units_ours']} drinks, "
       f"${checks['cents_ours'] / 100:,.2f} tax-included. Generated by `analysis/sales_analysis.py` (rerunnable, fixed seed 42).")
     w("")
-    w(f"**Scope.** {SCOPE_NOTE} Weeks run Saturday to Friday, as in the ledger and the P&L page (`vending/ledger.py`, `WEEK_STARTS = 5`).")
+    w(f"**Scope.** {SCOPE_NOTE}")
+    w("")
+    w(f"**Slots.** {len(slots)} on {DEVICE_ID}: {L['slots_text']}. Source: {SLOT_SOURCE}.")
+    w("")
+    w("**Weeks.** Weeks run Saturday to Friday, as in the ledger and the P&L page (`vending/ledger.py`, `WEEK_STARTS = 5`).")
     w("")
     w("## Headline findings")
     w("")
@@ -2255,9 +2342,9 @@ def write_report(path, L):
         w(f"Times before Sep 21 are only 'between two polls' (polling was days apart). {lpr['statement'] or ''}")
         w("")
         w("Supply of our slots by week (Saturday start; slots that sold; slots suspected empty at the end of the week; of those, sold out "
-          "after the last proven refill and not refilled since):")
+          "after the last single-visit proven refill and not refilled since):")
         w("")
-        w("| Week (Sat start) | Units | Slots selling | Suspected empty at week end | Sold out, not refilled | Empty since before the last proven refill | Visits (evidence) |")
+        w("| Week (Sat start) | Units | Slots selling | Suspected empty at week end | Sold out, not refilled | Empty since before the last single-visit proven refill | Visits (evidence) |")
         w("|---|---|---|---|---|---|---|")
         for r in supply:
             if r["units"] == 0 and not r["visits"]:
@@ -2355,14 +2442,14 @@ def write_report(path, L):
     w("")
     w("## Next 4 weeks (machine-wide totals)")
     w("")
-    w("| Week (Sat start) | Days | Class days | " + " | ".join(fc["models"].keys()) + " | Restocked scenario (our 20 slots) |")
+    w("| Week (Sat start) | Days | Class days | " + " | ".join(fc["models"].keys()) + f" | Restocked scenario ({OUR}) |")
     w("|---|---|---|" + "---|" * len(fc["models"]) + "---|")
     for r in fc["weekly"]:
         w(f"| {r['week']} | {r['days']} | {r['class_days']} | " + " | ".join(str(r[m]) for m in fc["models"]) + f" | {r['restocked_recent']} |")
     w("")
     w(f"- {fc['supply_warning']}")
     w(f"- Days off ahead (calendar file): {fc['breaks_ahead']}. Expect near-zero sales on them; they must not count as 'nothing moved' for any slot.")
-    w(f"- Restocked scenario: about {fc['restocked_scenario']['per_class_day_recent']} units per class day from our 20 slots if each were kept full (recent in-stock rates).")
+    w(f"- Restocked scenario: about {fc['restocked_scenario']['per_class_day_recent']} units per class day from {OUR} if each were kept full (recent in-stock rates).")
     w("")
     w("## Calendar regression (daily units, regular-polling era)")
     w("")
@@ -2490,7 +2577,7 @@ def write_report(path, L):
     w("")
     w("## Caveats")
     w("")
-    w(f"- **{L['n_weeks_total']:.0f} weeks, one machine, our 20 slots.** {L['n_reg_full']} full Saturday-start weeks of regular polling. Every estimate "
+    w(f"- **{L['n_weeks_total']:.0f} weeks, one machine, {OUR}.** {L['n_reg_full']} full Saturday-start weeks of regular polling. Every estimate "
       f"has wide error bars; weekday and calendar effects rest on a handful of days ({len(L['nc_days'])} no-class weekdays in the clean data).")
     w("- **Products come from photos.** Shelf, column, price and product are confounded, so row/column/price results are associations, not causes; "
       "product attributions depend on photo dates that are windows.")
