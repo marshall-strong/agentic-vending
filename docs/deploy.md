@@ -57,7 +57,12 @@ can't fill the disk.
 over stdio from the same image, with `VENDING_TOOLS=built` so only working tools are offered.
 Until then the container gets **no Anthropic key**, since nothing in it calls the model; the change
 that runs the agent loop here adds the secret to `$Secrets` in the deploy script, under the name the
-agent reads (`VENDING_ANTHROPIC_API_KEY`, per the README).
+agent reads (`VENDING_ANTHROPIC_API_KEY`, per the README). The deploy of `c1505c2` on 11 Nov, from
+the script before this change, did set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
+adds, so the script now passes `--remove-env-vars` for it when the app still has it (the list is
+`$Retired`). The `anthropic-api-key` secret itself stays in the app, unused by any variable; to
+delete it:
+`az containerapp secret remove --name ai-group-2-vend --resource-group data_systems_resource_group --secret-names anthropic-api-key`.
 
 **Nothing in the image migrates.** The worker's syncs, the server, the halt switch and the ledger
 CLI all refuse to run on a database that is behind and name the command. After a merge that adds

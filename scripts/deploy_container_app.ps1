@@ -56,6 +56,10 @@ $ImagePaths = @("requirements.txt", "vending", "db", "docker")
 # yet, so a key would only sit in a running container. The change that runs the agent loop here
 # adds it, under the name the agent reads.
 $Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey" }
+# Env vars an earlier deploy set that this one doesn't. --set-env-vars only adds, so the update
+# removes these by name, and only when the app has them: az warns on stderr about a name the app
+# doesn't have, which Windows PowerShell 5.1 can turn into an error.
+$Retired = @("ANTHROPIC_API_KEY")
 
 # Whenever the tag comes from HEAD (a build, or -SkipBuild without -Tag), HEAD must be
 # origin/main exactly, so the tag names a commit everyone can see on main.
@@ -148,6 +152,9 @@ if ($SetSecrets) {
 
 $before = az containerapp show --name $App --resource-group $ResourceGroup --query "properties.latestRevisionName" --output tsv
 if ($LASTEXITCODE -ne 0) { throw "az containerapp show failed" }
+$present = @(az containerapp show --name $App --resource-group $ResourceGroup --query "properties.template.containers[0].env[].name" --output tsv)
+if ($LASTEXITCODE -ne 0) { throw "az containerapp show failed" }
+$remove = @($Retired | Where-Object { $present -contains $_ })
 
 # Before the image changes, so the new revision's health probes go to the port it listens on.
 # Moved back below if the update fails, so the running revision keeps the port it listens on.
@@ -162,7 +169,12 @@ if ($targetPort -ne "$Port") {
 Write-Host "Rolling $App to $full with $MinReplicas-$MaxReplicas replicas..."
 $envVars = @($Secrets.GetEnumerator() | ForEach-Object { "$($_.Key)=secretref:$($_.Value)" }) + @("VENDING_TOOLS=built", "TS_HOSTNAME=agentic-vending-azure", "PORT=$Port")
 if ($dexBase) { $envVars += "DEX_BASE_URL=$dexBase" }
-az containerapp update --name $App --resource-group $ResourceGroup --image $full --min-replicas $MinReplicas --max-replicas $MaxReplicas --set-env-vars @envVars --output none
+$removeArgs = @()
+if ($remove) {
+    Write-Host "Removing $($remove -join ', '), which an earlier deploy set..."
+    $removeArgs = @("--remove-env-vars") + $remove
+}
+az containerapp update --name $App --resource-group $ResourceGroup --image $full --min-replicas $MinReplicas --max-replicas $MaxReplicas --set-env-vars @envVars @removeArgs --output none
 if ($LASTEXITCODE -ne 0) {
     if ($targetPort -ne "$Port") {
         Write-Host "Pointing ingress back at port $targetPort..."
