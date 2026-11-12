@@ -19,8 +19,8 @@ from pydantic import BaseModel
 
 from vending.tools import Reply
 
-# The sync is meant to run daily (nothing schedules it yet), so a catalog older
-# than a day and a half means a missed run.
+# The worker runs the sync every hour, so a catalog older than a day and a half
+# means the sync has been failing, or the worker hasn't been running.
 STALE_AFTER = timedelta(hours=36)
 
 SYNC_COMMAND = "python -m vending.sync_catalog"

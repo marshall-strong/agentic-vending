@@ -2,8 +2,9 @@
 
     python -m vending.sync_catalog
 
-Meant to run once a day: the catalog changes rarely, and this is one small read
-that never touches the machine. `get_catalog` reads the copy, so the agent never
+The worker (`vending.worker`) runs it every hour with the other syncs. Once a
+day would do, since the catalog changes rarely, but this is one small read that
+never touches the machine, so it isn't worth a schedule of its own. `get_catalog` reads the copy, so the agent never
 waits on the bridge and a bridge outage doesn't hide the catalog.
 
 Each run lists every product once. New products are added; listed ones get

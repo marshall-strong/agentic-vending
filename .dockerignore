@@ -1,0 +1,31 @@
+# Secrets never go into the image: they are Container App secrets.
+.env
+.env.*
+*postman_environment.json
+*.pem
+*.key
+
+# Local state and data
+.venv/
+venv/
+data/
+snapshots/
+*.dex
+*.sqlite
+*.db
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Not needed to run
+.git/
+.github/
+.claude/
+.vs/
+.vscode/
+.idea/
+tests/
+docs/
+scripts/
+*.md
+compose.yaml

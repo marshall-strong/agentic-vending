@@ -1,20 +1,21 @@
 # The MCP server
 
-The agent's 10 tools, served over stdio by `python -m vending.server`. It's plain Python on the
+The agent's 11 tools, served over stdio by `python -m vending.server`. It's plain Python on the
 official MCP SDK, in the same package as the history sync, so the tools import the parser, the
-pricing gate and the database layer directly. The read tools only read our database; the one
+pricing gate and the database layer directly. The read tools only read our database, except `get_project_rules`, which reads our notes in `docs/agent/`; the one
 built write tool, `request_catalog_product`, also calls the DEX bridge. Nothing here polls the
 machine.
 
 | Tool | State |
 | --- | --- |
-| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls. Fields that need restock receipts are `null`. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
+| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls; and from the receipts (`vending.stock`), the product, stock on hand (since the product went in), units sold and days since the last load, and days of stock left. The closet per product with its value at cost, and any stock warnings. A slot with no receipts has those fields `null` and is named in the message. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
 | `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. |
 | `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, `slot_capacity` isn't set, or the catalog can't be read. |
 | `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
 | `get_catalog` | **Works, version 1.** The single-item products the bridge lists (sku, name, line, flavor, size), searchable by text, with when the catalog was last synced. Says so when that was over 36 hours ago. Our last unit cost, sourcing rows and pending catalog requests are not in it yet. |
+| `get_project_rules` | **Works.** Our own notes on the project brief, from [`agent/`](agent/README.md). With no topic, the list of topics and their one-line summaries; with a topic, that file's text. A topic is a plain name from the list: paths, `..` and unknown names are refused with the list. Logged like any read. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state` | **Works.** Plans the desired state again on live data inside the write gate, refuses with every problem at once, otherwise POSTs it once and records the request. Saves what it is about to send before sending, so a lost answer leaves a row a person settles with `python -m vending.submissions resolve`. |
 | `set_price` | **Dropped.** Prices change only at a worker visit (free Friday, $25 midweek), through `submit_desired_state`. The stub stays so a call gets that answer. |
@@ -25,7 +26,7 @@ You need the local database from the history sync first ([`README.md`](../README
 `DATABASE_URL` in your `.env`):
 
 ```
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate            # creates or updates the tables
 python -m vending.sync_history          # needs the class tailnet; loads real polls
@@ -38,7 +39,7 @@ Container App, it's the shared Azure database), then run `python -m vending.db m
 
 **For the live run, set `VENDING_TOOLS=built` in the real environment** (it is not read from `.env`). Then only working tools are registered, so the
 agent doesn't pay tokens on every request to describe stubs. The default, `all`, registers all
-10 so the team can see the whole contract in a client.
+11 so the team can see the whole contract in a client.
 
 **The sync needs the class tailnet; the tests don't.** On a laptop also on a personal tailnet,
 sign in to the class account once with `tailscale login`, then move between tailnets with
