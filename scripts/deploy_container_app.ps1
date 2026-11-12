@@ -39,11 +39,14 @@ param(
     [switch]$SetSecrets,
     [switch]$Force,
     [switch]$SkipPullCheck,
-    [string]$EnvFile = (Join-Path $PSScriptRoot "..\.env")
+    [string]$EnvFile
 )
 
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+# Not a default in param(): Windows PowerShell 5.1 leaves $PSScriptRoot empty there when a
+# [CmdletBinding()] script is started with powershell -File, and the script would fail to start.
+if (-not $EnvFile) { $EnvFile = Join-Path $root ".env" }
 # The image runs as a normal user, which can't listen below 1024.
 $Port = 8080
 # What the Dockerfile copies into the image; keep in step with its COPY lines. An untracked
