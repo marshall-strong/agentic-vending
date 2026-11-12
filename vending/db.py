@@ -19,6 +19,19 @@ MIGRATIONS = settings.REPO_ROOT / "db" / "migrations"
 MIGRATION_LOCK = 4_200_001
 # Seconds to wait when connecting; room for a slow Azure connect.
 CONNECT_TIMEOUT = 10
+# Postgres hands back each `timestamptz` in the session's time zone, and the tools print times
+# with a `UTC` label (#87). Every connection we open pins its session to UTC, so the label is
+# true whatever time zone the server, database or role is set to.
+UTC_SESSION = "-c TimeZone=UTC"
+
+
+def session_options(url: str, *extra: str) -> str:
+    """Startup options for a connection to `url`: any the URL already sets, then `extra`, then
+    `UTC_SESSION`. UTC goes last because the last setting of a parameter wins."""
+    from psycopg.conninfo import conninfo_to_dict
+
+    given = conninfo_to_dict(url).get("options") or ""
+    return " ".join(option for option in (given, *extra, UTC_SESSION) if option)
 
 
 def connect() -> psycopg.Connection:
@@ -31,8 +44,9 @@ def connect() -> psycopg.Connection:
     # commits on its own. Without it, psycopg wraps everything in one implicit
     # transaction and a long backfill would lose all its work on any error.
     # A time limit, so a down or unreachable database fails with an error
-    # instead of hanging on TCP retries.
-    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
+    # instead of hanging on TCP retries. The session runs in UTC (`UTC_SESSION`).
+    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
+                           options=session_options(url))
 
 
 def migrate(conn: psycopg.Connection) -> list[str]:
