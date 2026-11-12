@@ -77,7 +77,7 @@ from day one.
 | [`docs/process-map.md`](docs/process-map.md) | The process map and state model: the weekly cycle from sales to the next order, and every state a purchase request can be in |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
 | [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
-| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live run, with its reasons and a check against our own directive rules |
+| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live test run, with its reasons and a check against our own directive rules |
 | [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
 | [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |
