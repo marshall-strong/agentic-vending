@@ -1,10 +1,14 @@
 """The container image carries `docs/agent/`, which `get_project_rules` reads at run time.
 
 `.dockerignore` leaves out `docs/` and `*.md`, then lets `docs/agent/` back in. These
-tests apply its rules the way Docker does (each pattern is a path glob from the context
-root, `*` does not cross `/`, a pattern also covers everything under a matched folder,
-and the last matching pattern wins), so a change that drops the notes from the image, or
-lets the rest of `docs/` in, fails here instead of in the deployed container.
+tests apply a simplified copy of Docker's rules (each pattern is a path glob from the
+context root, `*` does not cross `/`, a pattern also covers everything under a matched
+folder, and the last matching pattern wins), so a change that drops the notes from the
+image, or lets the rest of `docs/` in, fails here instead of in the deployed container.
+
+The copy does not handle character classes such as `[cod]` or a leading `./`. For today's
+patterns it agrees with a real BuildKit export of the context (2026-11-11: under `docs/`,
+exactly the ten `docs/agent/*.md` files). Recheck that way if you add such a pattern.
 """
 
 from __future__ import annotations
