@@ -46,7 +46,12 @@ variable the key came from (never the key), so each row says which key paid.
 
 Not priced here, so refused: server tools (web search bills per use), fast
 mode, priority capacity (requests are sent `standard_only`), streaming (use a
-non-streaming call) and `extra_body`. Add their prices before allowing them.
+non-streaming call), `extra_body`, `betas` and `fallbacks`. Add their prices
+before allowing them. (A fallback re-runs a declined request on another model in
+the same call and bills both, more than the one worst case reserved here.)
+
+"Now" is the database clock, read under the lock, the same clock the ledger's
+cut-offs use (see `ledger.db_now`). The host clock can run behind it.
 """
 
 from __future__ import annotations
@@ -233,6 +238,11 @@ def _refuse_unpriced(request: dict) -> None:
         raise HarnessError("only standard capacity is priced here; send service_tier standard_only or leave it out")
     if request.get("stream"):
         raise HarnessError("streaming isn't supported here; send a non-streaming request")
+    if "fallbacks" in request:
+        raise HarnessError("a fallback bills a second model in the same call, more than the worst case "
+                           "reserved here; not sent")
+    if "betas" in request:
+        raise HarnessError("beta features aren't priced here (and need the beta client); not sent")
     for key in ("extra_body", "extra_query", "extra_headers"):
         if key in request:
             raise HarnessError(f"{key} could change what's billed without the harness seeing it; not sent")
@@ -298,7 +308,7 @@ class Harness:
         self.host = socket.gethostname()
         self.prices = prices or load_prices()
         self.min_tokens = min_tokens
-        self.now = now or (lambda: datetime.now(timezone.utc))
+        self.now = now      # None: the database clock, read under the lock (a test may pass a fixed one)
         daily_key, daily_default = DAILY_CAPS[purpose]
         with connect() as conn:
             self.run_cap = run_cap_usd if run_cap_usd is not None else Decimal(
@@ -337,9 +347,8 @@ class Harness:
         except anthropic.APIError as error:
             raise HarnessError(f"counting the request failed ({_describe(error)}); nothing was sent or spent") from None
 
-        now = self.now()
         reference = f"{self.purpose}{' ' + label if label else ''}"
-        held = self._reserve(model, effort, counted, wanted, floor, caches, label, reference, now)
+        held = self._reserve(model, effort, counted, wanted, floor, caches, label, reference)
         self.spent += held.worst
         self.reserved += 1
 
@@ -397,12 +406,13 @@ class Harness:
         return call
 
     def _reserve(self, model: str, effort: str | None, counted: int, wanted: int, floor: int, caches: str | None,
-                 label: str, reference: str, now: datetime) -> _Reserved:
+                 label: str, reference: str) -> _Reserved:
         """Fit max_tokens under the caps and write the worst case, under a short lock."""
         try:
             with self.connect() as conn, conn.transaction():
                 conn.execute(f"set local lock_timeout = '{LOCK_TIMEOUT}'")
                 conn.execute("select pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+                now = self.now() if self.now else ledger.db_now(conn)
                 left_today = self.daily_cap - spent_since(conn, day_start(now), self.purpose)
                 allowed = min(self.run_cap - self.spent, left_today)
                 room = allowed - worst_case_usd(model, counted, 0, self.prices, caches=caches)
