@@ -36,7 +36,7 @@ We don't depend on a set restock time. A student worker won't always be on time,
 
 ## What David said (12 Nov)
 
-- **Restocks will be standard on Fridays around 3 PM**, possibly slipping toward 4 when the student worker comes after class. That's in our quietest stretch.
+- **Restocks will be standard on Friday afternoons**, with 3 PM as the target. The student worker gets out of class at 1 and may have to drive to the stores first, so the load may well come at 3 to 5 PM or later. Our sales are lowest then (about 0.2 an hour after 3 PM), so a later visit puts even fewer sales in doubt. Poll about every 10 minutes from about 2 to 6 PM on Fridays.
 - **`fulfilled_at` is the end of the visit**, set when the worker submits the receipt after loading. There's no push notification; we poll the request.
 - **Door-open and door-closed times on the receipt** are likely, not built yet.
 - **Polling about every 10 minutes is allowed.** That shrinks the one gap door times don't close: a sale between the last poll and the door opening. David named that case himself.
