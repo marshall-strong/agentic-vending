@@ -40,7 +40,7 @@ from vending import db
 from vending.bridge import Bridge
 from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, catalog, catalog_request,
                            machine_state, pnl, preview, project_rules, purchase_requests, sales_history,
-                           stubs)
+                           stubs, submit)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -185,10 +185,13 @@ def _preview(conn: psycopg.Connection, desired: DesiredState) -> preview.PlanRep
     return preview.preview_desired_state(conn, desired, bridge())
 
 
-@_tool(built=False)
-async def submit_desired_state(desired: DesiredState) -> WriteReply:
-    """Submit a desired state for all 20 slots as a purchase request. Same input as preview_desired_state."""
-    return await _write("submit_desired_state", {"desired": desired}, stubs.submit_desired_state(desired))
+@_tool(built=True)
+async def submit_desired_state(desired: DesiredState, expected_plan_hash: str | None = None) -> submit.SubmitReply:
+    """Submit a desired state for all 20 slots as a purchase request, after planning it again on live data. Same input as preview_desired_state; pass its plan_hash as expected_plan_hash to be refused if anything changed since. Refused with every problem at once; spends real money when accepted."""
+    return await _write("submit_desired_state", {"desired": desired, "expected_plan_hash": expected_plan_hash},
+                        submit.submit_desired_state(desired, lambda: bridge(), lambda: connect(),
+                                                    expected_plan_hash=expected_plan_hash),
+                        submit.SubmitReply)
 
 
 @_tool(built=True)
