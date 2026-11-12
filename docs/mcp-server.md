@@ -25,7 +25,7 @@ You need the local database from the history sync first ([`README.md`](../README
 `DATABASE_URL` in your `.env`):
 
 ```
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate            # creates or updates the tables
 python -m vending.sync_history          # needs the class tailnet; loads real polls

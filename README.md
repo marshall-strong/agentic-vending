@@ -172,7 +172,7 @@ Azure database; locally it runs in Docker. Set `VENDING_DB_PASSWORD` (any passwo
 ```
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate
 python -m vending.sync_history --since 2026-08-28
@@ -193,6 +193,12 @@ refuses and names that command. See "the ledger" in `docs/mcp-server.md`.
 `python -m vending.sync_requests` does the same for our purchase requests: it reads back
 every request still pending, and every one fulfilled in the last 30 days, and stores the
 receipts the stock counts come from. It only reads; it never submits a request.
+
+## Deploying
+
+The agent runs in an Azure Container App; `docs/deploy.md` has the one-time setup, the deploy
+script (`scripts/deploy_container_app.ps1`), how to check `/health` and the logs, and how to roll
+back. Nothing in the image migrates the database: a person runs `python -m vending.db migrate`.
 
 ## Working on this repo
 
