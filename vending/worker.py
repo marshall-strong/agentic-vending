@@ -136,6 +136,9 @@ def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: floa
 
 class _Health(BaseHTTPRequestHandler):
     state: State
+    # Seconds a client has to send its request. The endpoint is public, and without a limit a
+    # connection that sends nothing holds one of the server's threads for ever.
+    timeout = 10
 
     def log_message(self, *args):
         pass
