@@ -82,8 +82,9 @@ reused almost unchanged.
    rather than 17, with precise but tight descriptions and prompt caching.
 6. **Rival visibility ends next quarter.** This quarter we can see every selection.
    During the live run we probably won't see the other team's prices. **Pricing must not
-   depend on rival prices.** Treat them as a bonus signal when available, never a
-   required input.
+   depend on rival prices.** David has since said teams act with integrity: we don't
+   change our strategy based on the other team's slots, pricing or strategy. For now our
+   pricing ignores their prices (team may revisit). See [`docs/integrity.md`](../integrity.md).
 7. **Reconsider "not n8n".** It's on the syllabus, we already know it, and routing
    through Postgres removes the one real obstacle.
 
@@ -123,7 +124,7 @@ those hours. Keep one live read only as a fallback, if we find a real need for i
 |---|---|---|---|---|
 | A. Perception and inventory | `get_machine_state` | R | Per slot: current price, units sold since the last load, stock on hand (= loaded − sold) | `search_equipment` |
 | | `get_sales_history` | R | Units and ex-tax revenue per slot over a window | `get_rental_history` |
-| B. Pricing | `set_price` | W | Queues a price change for the **next service visit** (prices are physical tags the worker changes). **Gated on our own floor and ceiling** | `update_customer` |
+| B. Pricing | ~~`set_price`~~ | W | **Dropped (9 Nov).** Prices change only at a visit, from the sale price on each line of `submit_desired_state`. | `update_customer` |
 | C. Purchasing and restocking | `get_account_balance` | R | From our ledger, never a stored figure | `get_overdue_rentals` |
 | | `preview_purchase_order` | R | Prices a PO without submitting it | `estimate_rental_cost` |
 | | `submit_purchase_order` | W | Item, link, quantity, **slot, sale price, 1–2 alternates**. Gated on balance, halt, Thursday-midnight cutoff, and the product existing in the shared product table. Returns a PO ID | `create_rental` (the gate) |
@@ -140,8 +141,8 @@ Ten tools, against 17 last time.
   seen our code must be able to act on it without asking.
 - **Logging is not a tool.** Every write adds its `action_log` row inside the same
   statement.
-- **Competitor prices** are part of `get_machine_state` while they're visible, and the
-  tool is written so it still works when they're not.
+- **No competitor prices.** `get_machine_state` reports our 20 slots only. The other
+  team's prices are never an input (docs/integrity.md).
 
 ## How the machine gets changed: service visits
 
@@ -161,7 +162,7 @@ Source: Marshall's understanding from class discussions, not the recorded meetin
 | Guardrail | Enforced in | Why the agent can't get around it |
 |---|---|---|
 | Spend only what you have | `submit_purchase_order` and `request_service_visit` SQL: insert only if the ledger covers it | Check and write are one statement |
-| Price bounds (**ours**) | `set_price` and `submit_purchase_order` SQL, against `config.price_floor` and `config.price_ceiling` | No other path sets a price |
+| Price bounds (**ours**) | `submit_desired_state` (the pricing gate, `check_price`), against `config.price_floor` and `config.price_ceiling` | No other path sets a price |
 | **Prices in 5-cent steps** (course rule) | Same SQL: reject unless `price_cents % 5 = 0` | $2.00 and $2.05 are allowed; $1.63 is rejected, not rounded |
 | Halt switch | `config.halted` checked in every write, **plus** switching off the MCP workflow in n8n | The second one needs nothing from the agent |
 | Full logging | `action_log` insert inside every write | An unlogged write can't happen |

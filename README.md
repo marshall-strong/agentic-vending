@@ -57,7 +57,8 @@ from day one.
   refuse an order, so every order carries a backup choice.
 - **Friday's visit is free. Any midweek visit costs $25**, whether it is a restock, a
   product swap, or a price change. Prices are physical tags, so they only change when
-  someone visits.
+  someone visits. **There are no remote price changes:** the worker changes them by hand,
+  on the free Friday visit or a $25 midweek one, so the agent sets prices in its order.
 
 ## Planning documents
 
@@ -70,7 +71,9 @@ from day one.
 | [`docs/dex-api-quickstart.md`](docs/dex-api-quickstart.md) | **New to the API?** From Tailscale and a key to your first calls, plus troubleshooting |
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
+| [`docs/db-explorer.md`](docs/db-explorer.md) | The DB explorer: a read-only page that lists every table and shows its columns and rows, so you don't need psql |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
+| [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
 
 ## Getting set up

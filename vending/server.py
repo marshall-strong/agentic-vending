@@ -152,7 +152,7 @@ def _write_sync(tool: str, arguments: dict[str, Any], action: Callable[[psycopg.
 
 @_tool(built=True)
 async def get_machine_state() -> machine_state.MachineState:
-    """Each of our 20 slots: price, lifetime units, units sold and units/day over the last 7 days, from the latest stored poll."""
+    """Each of our 20 slots: price, units sold and units/day over the last 7 days, and from receipts the product, stock on hand, days since loaded and days of stock left. Plus the closet (back stock) at cost."""
     return await _read("get_machine_state", machine_state.get_machine_state)
 
 
@@ -198,7 +198,7 @@ async def get_purchase_requests(pending_only: bool = False) -> purchase_requests
 
 @_tool(built=False)
 async def set_price(slot: str, sale_price: str) -> WriteReply:
-    """Change one slot's price remotely between visits. sale_price like "2.50"."""
+    """DROPPED: prices can't change remotely. Set sale_price on the slot in submit_desired_state; the worker changes the tag at a visit."""
     return await _write("set_price", {"slot": slot, "sale_price": sale_price}, stubs.set_price(slot, sale_price))
 
 
