@@ -28,7 +28,8 @@ Watch `/health` yourself, or alert on it, instead.
 The image runs as a normal user (`vending`, uid 10001), with pinned base images and no test
 packages (`pytest` is in `requirements-dev.txt`). It runs **Python 3.14**, the newest version any
 of us develops on, so code that passes on a laptop also runs in Azure; bump the `FROM` line when
-the team's venvs move.
+the team's venvs move. `tini` is PID 1: it passes Azure's `SIGTERM` to the worker and reaps the
+entrypoint's background loops when they end.
 
 To run the tests inside the image, with the image's own Python, before a deploy that changes it:
 

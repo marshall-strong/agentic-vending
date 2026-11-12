@@ -55,11 +55,13 @@ if [ -n "${TS_AUTHKEY:-}" ]; then
             joined=no
             echo "tailscale up failed; running without the tailnet and retrying every 60 s. tailscaled says:" >&2
             tail -n 20 "$TS_LOG" >&2 || true
-            (
+            # A grandchild, so when it ends tini reaps it. A plain ( ... ) & would be a child
+            # of the command exec'd below, which never waits for it: a zombie after a late join.
+            ( (
                 until join; do sleep 60; done
                 rm -f "$key_file"
                 echo "tailscale: joined after retrying: $(tailscale --socket="$TS_SOCKET" status --peers=false 2>/dev/null | head -1)"
-            ) &
+            ) & )
             break
         fi
         sleep 2
@@ -77,7 +79,8 @@ else
     echo "TS_AUTHKEY is not set: running without Tailscale, so the bridge is unreachable" >&2
 fi
 
-# exec, so the command is PID 1 and gets Azure's SIGTERM itself; the worker
-# handles it. Nothing logs tailscaled out: the node is ephemeral, so Tailscale
-# removes it once it goes offline.
+# exec, so the command takes this shell's place under tini (PID 1, see the
+# Dockerfile), which passes it Azure's SIGTERM; the worker handles it. tini also
+# reaps the background loops above when they end. Nothing logs tailscaled out:
+# the node is ephemeral, so Tailscale removes it once it goes offline.
 exec "$@"

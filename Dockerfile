@@ -27,6 +27,12 @@ FROM python:3.14.10-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52
 COPY --from=tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c \
     /usr/local/bin/tailscaled /usr/local/bin/tailscale /usr/local/bin/
 
+# tini runs as PID 1: it passes Azure's SIGTERM on to the worker and reaps the
+# entrypoint's background loops when they end, which Python as PID 1 never does.
+# Container Apps has no `docker run --init`, so it is in the image.
+RUN apt-get update && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 # Runtime packages only; pytest is in requirements-dev.txt.
 COPY requirements.txt .
@@ -44,5 +50,5 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8080
 EXPOSE 8080
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
 CMD ["python", "-m", "vending.worker"]
