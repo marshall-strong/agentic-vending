@@ -255,7 +255,7 @@ def week_row(w: ledger.WeekPnl, first: date, last: date, running: tuple[Fraction
     """One week; a week that lost money says "Loss" next to its dates, not only in colour."""
     cost_note = f"{w.units_costed} of {w.units_sold} units costed" if not w.cost_of_sales_complete else ""
     known = _known(w)
-    lost = known and w.net_cents < 0
+    lost = _lost(ledger.money(w.net_cents), known)        # by the figure shown: $0.00 is not a loss
     cells = {
         "units": _e(w.units_sold),
         "takings": amount(w.takings_cents),
@@ -269,7 +269,8 @@ def week_row(w: ledger.WeekPnl, first: date, last: date, running: tuple[Fraction
         "profit": amount(w.net_cents, known),
         "running": amount(running[0], running[1]),
     }
-    label = _e(week_label(w, first, last)) + (f" {LOSS}" if lost else "")
+    days = week_label(w, first, last).split(" to ")       # a narrow screen wraps between the days, not in one
+    label = " to ".join(f'<span class="day">{_e(d)}</span>' for d in days) + (f" {LOSS}" if lost else "")
     return _row(label, cells, view, "loss" if lost else "")
 
 
@@ -304,27 +305,34 @@ def _lost(text: str | None, known: bool) -> bool:
 
 def chart(weeks: list[ledger.WeekPnl], first: date, last: date) -> str:
     """Weekly profit as bars above and below a zero line, in inline SVG (no script). A week whose
-    profit is unknown gets a "?" at the zero line instead of a bar. Each bar's <title> gives its figure."""
+    profit is unknown gets a "?" at the zero line instead of a bar. Each bar's <title> gives its figure;
+    a scale on the left gives the top and bottom of the plot (and zero, when there is room) in dollars."""
     if not weeks:
         return ""
-    width, height, top, bottom = 720, 170, 8, 22
+    width, height, top, bottom, left = 720, 170, 12, 22, 100
     plot = height - top - bottom
     known = [w.net_cents for w in weeks if _known(w)]
     high, low = max([Fraction(0), *known]), min([Fraction(0), *known])
     span = (high - low) or Fraction(1)
     zero = top + plot * high / span
-    slot = Fraction(width, len(weeks))
+    slot = Fraction(width - left, len(weeks))
     every = max(1, len(weeks) // 12)                        # at most about 12 date labels
     px = lambda v: f"{float(v):.1f}"  # noqa: E731  (pixels, not money)
+    marks = [(Fraction(top), high)] + ([(Fraction(top + plot), low)] if low != high else [])
+    if 0 not in (high, low) and min(zero - top, top + plot - zero) >= 26:   # room for a "$0.00" label
+        marks.insert(1, (zero, Fraction(0)))
+    scale = "".join(f'<line class="grid" x1="{left}" x2="{width}" y1="{px(y)}" y2="{px(y)}"></line>'
+                    f'<text class="scale" x="{left - 6}" y="{px(y)}" text-anchor="end" dominant-baseline="middle">'
+                    f'{_e(dollars(ledger.money(v)))}</text>' for y, v in marks)
     bars, losing = [], 0
     for i, w in enumerate(weeks):
         label = week_label(w, first, last)
-        x = slot * i + slot / 10
+        x = left + slot * i + slot / 10
         if _known(w):
-            kind = "neg" if w.net_cents < 0 else "pos"
+            kind = "neg" if _lost(ledger.money(w.net_cents), True) else "pos"   # as the table shows it
             losing += kind == "neg"
             size = plot * abs(w.net_cents) / span
-            y = zero if w.net_cents < 0 else zero - size
+            y = zero if kind == "neg" else zero - size
             tip = f"{label}: {dollars(ledger.money(w.net_cents))}" + (" (loss)" if kind == "neg" else "")
             bars.append(f'<rect class="bar {kind}" x="{px(x)}" y="{px(y)}" width="{px(slot * 8 / 10)}" '
                         f'height="{px(max(size, Fraction(1, 2)))}"><title>{_e(tip)}</title></rect>')
@@ -340,7 +348,7 @@ def chart(weeks: list[ledger.WeekPnl], first: date, last: date) -> str:
             'aria-labelledby="chart-title chart-desc">'
             '<title id="chart-title">Profit by week</title>'
             f'<desc id="chart-desc">{_e(desc)}</desc>'
-            f'<line class="zero" x1="0" x2="{width}" y1="{px(zero)}" y2="{px(zero)}"></line>'
+            f'{scale}<line class="zero" x1="{left}" x2="{width}" y1="{px(zero)}" y2="{px(zero)}"></line>'
             + "".join(bars) + "</svg>")
 
 
@@ -360,7 +368,8 @@ def render(report: Report) -> tuple[int, str]:
                    for w, r in zip(report.weeks, running_totals(report.weeks)))
     hint = ("" if report.view == "detailed" else
             '<p class="meta">Profit also counts shrinkage and adjustments; Detailed shows them.</p>')
-    table = (f'<div class="scroll"><table class="weeks"><thead><tr>{head}</tr></thead><tbody>{rows}</tbody>'
+    swipe = '<p class="meta swipe no-print">The table is wider than the screen: swipe it sideways for profit.</p>'
+    table = (f'{swipe}<div class="scroll"><table class="weeks"><thead><tr>{head}</tr></thead><tbody>{rows}</tbody>'
              f'<tfoot>{totals_row(t, report.weeks, report.view)}</tfoot></table></div>'
              f'{hint}<p class="meta">{_e(ROUNDING_NOTE)}</p>')
     figure = chart(report.weeks, first, last)
@@ -468,6 +477,28 @@ def _note_key(note: str) -> str:
     return note[:match.start(1)] + moment.astimezone(timezone.utc).isoformat() + note[match.end(1):]
 
 
+_NO_POLL_NOTE = re.compile(r"^no poll at or before (\S+), so takings start at the first poll after it$")
+_NO_POLLS_NOTE = "no polls in the window, so takings are unknown and counted as 0"
+
+
+def plain_note(note: str) -> str:
+    """A ledger note as a sentence a teammate can read: the "poll" notes in plain words, with Eastern time."""
+    if note == _NO_POLLS_NOTE:
+        return "The machine's sales counters were not read in this range, so takings are unknown and counted as $0.00."
+    match = _NO_POLL_NOTE.match(note)
+    if match is not None:
+        try:
+            moment = datetime.fromisoformat(match.group(1))
+        except ValueError:
+            moment = None
+        if moment is not None and moment.tzinfo is not None:
+            when = moment.astimezone(EASTERN)
+            return (f"The machine's sales counters were first read after {when:%a %Y-%m-%d %H:%M %Z}, so"
+                    " takings count from that first reading; any sale before it is not counted.")
+    text = note[:1].upper() + note[1:]
+    return text if text.endswith(".") else text + "."
+
+
 def _notes(t: Pnl, b: AccountBalance | None) -> str:
     notes, seen = [], set()
     for note in list(t.notes) + (list(b.notes) if b is not None else []):
@@ -476,7 +507,7 @@ def _notes(t: Pnl, b: AccountBalance | None) -> str:
             notes.append(note)
     if not notes:
         return ""
-    return '<h2>Notes</h2><ul class="notes">' + "".join(f"<li>{_e(n)}</li>" for n in notes) + "</ul>"
+    return '<h2>Notes</h2><ul class="notes">' + "".join(f"<li>{_e(plain_note(n))}</li>" for n in notes) + "</ul>"
 
 
 STYLE = """
@@ -506,17 +537,24 @@ form { margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: c
 .tile.loss .tile-value { color: var(--loss); }
 .cue { display: inline-block; font-size: 11px; font-weight: 600; color: var(--loss); border: 1px solid var(--loss);
        border-radius: 3px; padding: 0 4px; vertical-align: middle; }
-.chart { display: block; width: 100%; height: auto; max-height: 220px; }
+.chart { display: block; width: 100%; height: auto; }
 .chart .bar.pos { fill: var(--gain); } .chart .bar.neg { fill: var(--loss); }
 .chart .bar.unknown { fill: var(--muted); font-size: 12px; }
 .chart .zero { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.chart .axis { fill: var(--muted); font-size: 10px; }
-@media (max-width: 600px) { .chart .axis { font-size: 22px; } .chart .bar.unknown { font-size: 26px; } }
+.chart .axis, .chart .scale { fill: var(--muted); font-size: 10px; }
+.chart .grid { stroke: var(--rule); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.swipe { display: none; }
+@media (max-width: 600px) {
+  .chart .axis { font-size: 22px; } .chart .scale { font-size: 20px; } .chart .bar.unknown { font-size: 26px; }
+  .swipe { display: block; }
+  table.weeks tbody th, table.weeks tfoot th { white-space: normal; min-width: 8.5em; }
+}
 .scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { border-bottom: 1px solid var(--rule); padding: 4px 6px; text-align: left; vertical-align: top; }
 thead th { font-size: 12px; border-bottom: 2px solid var(--ink); }
 td.num { text-align: right; white-space: nowrap; }
+.day { white-space: nowrap; }
 tbody th { white-space: nowrap; }
 tfoot th, tfoot td { border-top: 2px solid var(--ink); font-weight: 600; }
 tbody tr:nth-child(even) { background: var(--band); }
@@ -526,8 +564,8 @@ table.balance { width: auto; } table.balance th { padding-right: 24px; }
 .unknown { font-style: italic; } small { color: var(--muted); }
 .error { color: var(--error); font-weight: 600; }
 @media print {
-  :root { color-scheme: light; --ink: #000; --muted: #444; --rule: #bbb; --bg: #fff; --tile: #fff; --loss: #8b1a14;
-          --loss-bg: #fff; --gain: #2f6f44; }
+  :root { color-scheme: light; --ink: #000; --muted: #444; --rule: #bbb; --band: #fff; --bg: #fff; --tile: #fff;
+          --link: #0b57d0; --loss: #8b1a14; --loss-bg: #fff; --gain: #2f6f44; --error: #9b1c1c; }
   @page { size: landscape; margin: 12mm; }
   body { margin: 0; max-width: none; padding: 0; font-size: 9pt; }
   .no-print { display: none; }

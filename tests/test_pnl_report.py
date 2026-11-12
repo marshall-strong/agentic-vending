@@ -173,6 +173,21 @@ def test_a_losing_week_is_marked_with_text_not_only_colour():
     assert "Loss" not in pr.week_row(unknown, date(2026, 11, 1), date(2026, 11, 30), (unknown.net_cents, False))
 
 
+def test_a_week_short_by_less_than_half_a_cent_is_not_a_loss():
+    tiny = week(takings_cents=100, tax_cents=0, units_sold=1, units_costed=1, cost_of_sales_cents=Fraction(301, 3))
+    assert tiny.net_cents < 0 and pr.amount(tiny.net_cents) == "$0.00"
+    row = pr.week_row(tiny, date(2026, 11, 1), date(2026, 11, 30), (tiny.net_cents, True))
+    assert "loss" not in row.lower()
+    svg = pr.chart([tiny], date(2026, 11, 1), date(2026, 11, 30))
+    assert 'class="bar neg"' not in svg and "(loss)" not in svg
+
+
+def test_a_week_label_wraps_between_its_days_not_inside_a_date():
+    row = pr.week_row(week(), date(2026, 11, 9), date(2026, 11, 11), (week().net_cents, True))
+    assert '<span class="day">Mon 2026-11-09</span> to <span class="day">Wed 2026-11-11</span>' in row
+    assert ".day { white-space: nowrap; }" in pr.STYLE
+
+
 def tiles(body: str) -> str:
     return body.split('<section class="tiles"')[1].split("</section>")[0]
 
@@ -193,6 +208,15 @@ def test_the_chart_has_one_bar_per_week_and_escaped_labels(monkeypatch):
     assert svg.count('class="bar neg"') == 1 and svg.count('class="bar pos"') == 1
     assert svg.count('class="bar unknown"') == 1
     assert 'class="zero"' in svg
+    zero = float(re.search(r'class="zero"[^>]*y1="([\d.]+)"', svg).group(1))
+    bars = [(kind, float(y), float(h)) for kind, y, h in
+            re.findall(r'class="bar (neg|pos)" x="[\d.]+" y="([\d.]+)" width="[\d.]+" height="([\d.]+)"', svg)]
+    (_, loss_y, loss_h), (_, gain_y, gain_h) = bars
+    assert loss_y == pytest.approx(zero, abs=0.1)           # a loss hangs below the zero line
+    assert gain_y + gain_h == pytest.approx(zero, abs=0.1)  # a profit stands on it
+    assert gain_h / loss_h == pytest.approx(float(abs(weeks[1].net_cents / weeks[0].net_cents)), rel=0.01)
+    scale = re.findall(r'<text class="scale"[^>]*>(.*?)</text>', svg)
+    assert scale[0] == "$5.95" and scale[-1] == "-$44.05"  # the scale gives the top and bottom in dollars
     monkeypatch.setattr(pr, "week_label", lambda w, first, last: "<b>&")
     escaped = pr.chart(weeks, date(2026, 10, 31), date(2026, 11, 20))
     assert "<b>" not in escaped and "&lt;b&gt;&amp;" in escaped
@@ -203,6 +227,9 @@ def test_the_page_says_how_to_print_without_a_script():
     _, body = pr.render(pr.Report(None, None, PRINTED, totals(), [week()]))
     assert "<script" not in body and "Press Ctrl+P to print" in body
     assert "prefers-color-scheme: dark" in body
+    printed = body.split("@media print")[1].split("}")[0]
+    for token in ("--error", "--link", "--band", "--ink", "--bg", "--loss"):
+        assert f"{token}:" in printed                    # a dark screen doesn't print pale text on white
 
 
 def test_the_same_note_with_a_different_timestamp_is_shown_once():
@@ -212,7 +239,20 @@ def test_the_same_note_with_a_different_timestamp_is_shown_once():
              "no sales in the window"]
     body = pr.render(pr.Report(None, None, PRINTED, totals(notes=notes), [week()]))[1]
     items = re.findall(r"<li>(.*?)</li>", body.split('<ul class="notes">')[1])
-    assert items == [notes[0], notes[2], notes[3]]
+    assert items == [
+        "The machine&#x27;s sales counters were first read after Sat 2026-10-24 09:00 EDT, so takings count from "
+        "that first reading; any sale before it is not counted.",
+        "The machine&#x27;s sales counters were first read after Sun 2026-10-25 09:00 EDT, so takings count from "
+        "that first reading; any sale before it is not counted.",
+        "No sales in the window."]
+
+
+def test_notes_are_plain_sentences():
+    assert pr.plain_note("no polls in the window, so takings are unknown and counted as 0") == (
+        "The machine's sales counters were not read in this range, so takings are unknown and counted as $0.00.")
+    assert pr.plain_note("2 entries are dated before x") == "2 entries are dated before x."
+    assert pr.plain_note("no poll at or before soon, so takings start at the first poll after it") == (
+        "No poll at or before soon, so takings start at the first poll after it.")   # not a time: kept as given
 
 
 # --- Database -----------------------------------------------------------------------------------

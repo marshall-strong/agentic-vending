@@ -24,13 +24,14 @@ the weeks table, the balance at the end of the range, and the notes.
 the range, labelled the same way as the balance table ("Balance now", or "Balance at the end of
 Mon 2026-11-09"). When the range ends before the ledger opened, the balance tiles are left out.
 
-**Chart.** One bar per week: profit above the zero line, a loss below it. Each bar's tooltip gives
+**Chart.** One bar per week: profit above the zero line, a loss below it. A scale on the left gives
+the top and bottom of the chart in dollars, and zero when there is room. Each bar's tooltip gives
 the week and its profit. A week whose profit is unknown shows "?" instead of a bar. It is inline
 SVG with a title and description for screen readers, and needs no script.
 
-**Losing weeks.** A week with profit below zero has a tinted row, red profit and a **Loss** tag
+**Losing weeks.** A week whose profit shows below $0.00 has a tinted row, red profit and a **Loss** tag
 next to its dates, so it shows in print and without colour too. A week whose profit is unknown is
-not marked.
+not marked, and neither is a week short by under half a cent, which shows as $0.00.
 
 One row per week. A week runs **Saturday to Friday, Eastern time**, the ledger's week: it turns
 over after the Friday visit, and the sales tax is rounded per week (the team's 19 Oct decision).
@@ -107,7 +108,8 @@ controls, keeps the tiles, chart and table, prints in light colours, and fits th
 page width in landscape.
 
 **Light and dark.** The page follows the browser's light or dark setting. At phone width only the
-weeks table scrolls sideways.
+weeks table scrolls sideways; a line above it says so, and the week's dates wrap between the two
+days so more columns fit.
 
 ![Simple view, dark](pnl-report/whole-run-simple-1280-dark.png)
 
@@ -133,3 +135,7 @@ range is refused with a message.
 
 The notes from the P&L and the balance are listed once each. The ledger can give the same "no poll
 at or before ..." note with one moment in UTC and in Eastern time; the page shows it once.
+The "poll" notes are reworded in plain language with the time in Eastern, for example "The
+machine's sales counters were first read after Sat 2026-10-24 09:00 EDT, so takings count from
+that first reading; any sale before it is not counted." Other notes are shown as the ledger
+gives them, starting with a capital and ending with a full stop.
