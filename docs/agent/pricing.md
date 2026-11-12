@@ -14,7 +14,7 @@ The preview refuses any price outside these bounds.
 
 1. **One price per product.** The same drink costs the same in every slot it fills.
 2. **A product new to a slot starts at its reference price** from `price-history`. If the floor is higher, use the floor. If the floor is above the reference, the drink costs too much to sell at its usual price, so prefer a cheaper size, pack or store. If you stock it anyway, say it will probably sell slowly.
-3. **A slow seller comes first.** Zero sales for 5 school days while our records say the slot held stock is a slow seller (`restocking`): at the next Friday visit, lower its price one step if the floor allows, or swap the product. Otherwise, hold a price for two stocked weeks, counting only weeks in stock while classes ran. While stocked, a slot sells about 3 to 9 units a week, so one week can't show the effect of a change.
+3. **A slow seller comes first.** Zero sales for 5 class days while our records say the slot held stock is a slow seller (`restocking`): at the next Friday visit, lower its price one step if the floor allows, or swap the product. Otherwise, hold a price for two stocked weeks, counting only weeks in stock while classes ran. While stocked, a slot sells about 3 to 9 units a week, so one week can't show the effect of a change.
 4. **Then hold, or move one $0.25 step:**
    - It **ran out** before the visit in both weeks: raise it $0.25, and load more.
    - **Otherwise** hold it, or test a $0.25 step up or down under step 5. Slow but steady sales aren't a slow seller: no low-rate rule until we have sales of our own drinks.

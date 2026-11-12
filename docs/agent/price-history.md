@@ -41,7 +41,7 @@ What each drink sold for in our 20 slots this fall, before the competition: the 
 **What it says:**
 
 - **Energy drinks were 45% of our units.** Monster, Gorgie and Ghost sold at $4.50 to $5.00; Celsius and Red Bull Pink at $3.00 to $3.50.
-- **20 oz sodas sold at $2.00.** At Amazon's prices on the team's 11 Nov price list (branch `add_price_list`), our floor is $2.70 for Diet Coke and $2.90 for Coke, so we can't match that. A 12 oz Coke can costs about $0.64 a unit, so it can.
+- **20 oz sodas sold at $2.00.** At the Amazon prices the team checked on 11 Nov, our floor for a 20 oz bottle is $2.70 for Diet Coke and $2.90 for Coke, so we can't match that. A 12 oz Coke can cost about $0.64 a unit then, so it can. Prices change: the floor `preview_desired_state` shows is the one that counts.
 - **The history can't tell us how price changes sales.** The 30 Sep repricing had 0 to 15 units on each side while demand was falling. Our own tests have to (`pricing`, step 5).
 
 **Cautions:**
