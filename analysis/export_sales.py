@@ -1,10 +1,14 @@
-"""Export the sales history of our 20 slots, plus machine-wide totals, from the database to CSV (read-only).
+"""Export the sales history of our slots, plus machine-wide totals, from the database to CSV (read-only).
 
 Run from the repo root with the project's venv and a DATABASE_URL in .env:
-    python analysis/export_sales.py            # writes analysis/data/*.csv
+    python analysis/export_sales.py                     # writes analysis/data/*.csv
     python analysis/export_sales.py OUT_DIR
+    python analysis/export_sales.py --slots 15,16,...   # only part of our slots (see slots_config.py)
 
-Scope: per-slot rows are written ONLY for our slots (`vending.slots.SLOTS` on `vending.slots.DEVICE_ID`), filtered
+Which slots are ours: --slots, else the assignment stored from the inventory server (vending.slots.our_slots),
+else vending.slots.SLOTS. See analysis/slots_config.py.
+
+Scope: per-slot rows are written ONLY for our slots on `vending.slots.DEVICE_ID`, filtered
 the same way as `vending.ledger._counter_rows`. The other slots in the machine are read only to add them into
 machine-wide totals per poll (machine_hourly.csv); no per-slot value of another slot is written anywhere.
 
@@ -16,8 +20,13 @@ Writes:
                         selections, each slot's rise found with vending.counters.rises). Aggregates only.
     door_events.csv     every poll's EVA-DTS door-open counter (EA2*DO*<since reset>*<lifetime>) and its rise
                         since the previous poll: a rise means the door was opened (a visit) in between
+    slots.json          which slots the CSVs cover: {device, slots, source, resolved_at}. sales_analysis.py
+                        reads it, and stops if it is asked about a different slot list.
 """
+import argparse
 import csv
+import datetime as dt
+import json
 import re
 import sys
 from collections import defaultdict
@@ -25,16 +34,23 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vending import db  # noqa: E402
 from vending.counters import rises  # noqa: E402
-from vending.slots import DEVICE_ID, SLOTS  # noqa: E402
+from slots_config import resolve_slots  # noqa: E402
 
 EASTERN = ZoneInfo("America/New_York")
-out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent / "data"
+ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+ap.add_argument("out", nargs="?", default=str(Path(__file__).resolve().parent / "data"), help="folder for the CSVs")
+ap.add_argument("--slots", help='our slot codes, comma or space separated ("15,16,17,18"); overrides the stored list')
+args = ap.parse_args()
+out = Path(args.out)
 out.mkdir(parents=True, exist_ok=True)
 
 with db.connect() as c:
     c.execute("set default_transaction_read_only = on")
+    DEVICE_ID, SLOTS, SOURCE = resolve_slots(args.slots, c)
+    print(f"slots: {len(SLOTS)} on {DEVICE_ID}, from {SOURCE}")
     # our slots: same filter as vending.ledger._counter_rows
     rows = c.execute(
         "select ps.selection, p.started_at, ps.lifetime_units, ps.lifetime_sales_cents, ps.price_cents"
@@ -125,6 +141,10 @@ with open(out / "door_events.csv", "w", newline="") as f:
         rise = life - prev if prev is not None and life >= prev else 0
         w.writerow([at.astimezone(EASTERN).isoformat(), life, since, rise])
         prev = life
+
+(out / "slots.json").write_text(json.dumps(dict(
+    device=DEVICE_ID, slots=list(SLOTS), source=SOURCE,
+    resolved_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")), indent=1) + "\n", encoding="utf-8")
 
 print(f"{len(rows)} readings of our {len(SLOTS)} slots on {DEVICE_ID}, {len(polls)} polls, "
       f"machine total {sum(m_units.values())} units -> {out}")
