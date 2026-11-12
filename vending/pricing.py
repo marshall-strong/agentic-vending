@@ -1,6 +1,6 @@
 """The pricing gate: the one function that decides whether a sale price is legal.
 
-`plan_restock`, `preview_desired_state`, `submit_desired_state` and `set_price`
+`plan_restock`, `preview_desired_state` and `submit_desired_state`
 all call `check_price`, so there is exactly one place where the rule lives.
 See "The pricing gate" in docs/planning/tool-list.md.
 

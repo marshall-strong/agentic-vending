@@ -32,3 +32,10 @@ class NotBuilt(Exception):
 
     def __init__(self, tool: str, waiting_on: str):
         super().__init__(f"{tool} is not built yet ({waiting_on}).")
+
+
+class Dropped(NotBuilt):
+    """A registered tool the team decided not to build. It stays registered so a call explains why."""
+
+    def __init__(self, tool: str, instead: str):
+        Exception.__init__(self, f"{tool} is dropped and won't be built: {instead}.")
