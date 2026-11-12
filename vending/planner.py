@@ -47,6 +47,7 @@ from decimal import Decimal
 from fractions import Fraction
 from urllib.parse import urlparse
 
+from vending import capacity
 from vending.pricing import (
     DEFAULT_TAX_PERCENT,
     Refusal,
@@ -126,9 +127,13 @@ class PendingRequest:
 
 @dataclass(frozen=True)
 class CatalogProduct:
-    """One single-item product from /products. Inactive products are refused."""
+    """One single-item product from /products. Inactive products are refused.
+
+    `size` is the catalog's ("20 oz bottle"); it sets how many fit in a column.
+    """
     product: str
     active: bool = True
+    size: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,8 +187,8 @@ class DesiredSlot:
     """What the agent wants one slot to look like after the visit.
 
     `keep=True` means no change and ignores the other fields. Otherwise the
-    agent gives the product and the sale price; `fill_to` defaults to the
-    slot's capacity. `product=None` asks for an empty slot, which the API
+    agent gives the product and the sale price; `fill_to` defaults to as
+    many of that product as fit in a column. `product=None` asks for an empty slot, which the API
     can't express yet, so it is refused.
     """
     slot: str
@@ -232,7 +237,10 @@ def _default_cutoffs() -> dict[str, Cutoff]:
 class Config:
     """The `config` table. Most of it is still undecided, so all of it is data.
 
-    `slot_capacity` has no default because nobody has measured a rail yet.
+    How many units fit in a column depends on the package, so capacity comes
+    from each product's catalog size and the loading chart (`vending.capacity`).
+    `capacity_overrides` holds a person's count per product, which wins over
+    the chart and is the only capacity for a package the chart doesn't list.
     The ceiling default is the team's $6.00 proposal; the API refuses any
     sale price over $10.00, so a higher ceiling is an error. Cutoffs are per
     store and in `timezone`; past a cutoff in `soft_cutoff_stores` is a
@@ -244,7 +252,7 @@ class Config:
     `timezone` may be a name or a tzinfo. A name needs the IANA database,
     which Windows lacks unless the `tzdata` package is installed.
     """
-    slot_capacity: int
+    capacity_overrides: Mapping[str, int] = field(default_factory=dict)
     price_ceiling_cents: int = 600
     tax_percent: int = DEFAULT_TAX_PERCENT
     midweek_fee_cents: int = 2500
@@ -475,11 +483,25 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     #    be checked and every refusal reported at once.
     targets = _check_slot_list(desired.slots, config.slots, refusals)
     active = {p.product for p in current.catalog if p.active}
+    capacities = {p.product: capacity.for_product(p.product, p.size, config.capacity_overrides)
+                  for p in current.catalog}
+    sizes = {p.product: p.size for p in current.catalog}
+    for sku in sorted(set(config.capacity_overrides) - capacities.keys()):
+        # Most likely misspelt: the lookup is exact, so the count is never used.
+        warnings.append(f"capacity_overrides counts {sku}, which isn't in the catalog (SKUs match exactly, "
+                        "case included), so that count is ignored")
+    for sku, units in sorted(config.capacity_overrides.items()):
+        chart = capacity.from_size(sizes.get(sku))
+        if chart is not None and units > chart * capacity.OVERRIDE_WARN_RATIO:
+            # Likely a typo (18 for 8), and a restock without fill_to would buy to it.
+            warnings.append(f"capacity_overrides counts {units} {sku} a column, but the loading chart says "
+                            f"{chart} for a {sizes[sku]}; check the count")
     sources = _Sources(desired.sourcing, current.sourcing_table, config, refusals)
 
     # 2. Classify each slot and work out how many units it needs.
     states = {s.slot: s for s in current.slots}
-    slots = [_intend(slot, states.get(slot), targets.get(slot), active, config, refusals)
+    slots = [_intend(slot, states.get(slot), targets.get(slot), active, capacities, refusals,
+                     sizes=sizes, counted=config.capacity_overrides)
              for slot in config.slots]
 
     # 3. Supply: only what the closet holds before the visit. Units pulled at
@@ -658,8 +680,16 @@ def _check_slot_list(targets: tuple[DesiredSlot, ...], ours: tuple[str, ...],
 
 
 def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
-            active: set[str], config: Config, refusals: list[Refusal]) -> _Slot:
-    """Read one slot's target, refusing what can't be planned."""
+            active: set[str], capacities: Mapping[str, int | None],
+            refusals: list[Refusal], *, sizes: Mapping[str, str | None] | None = None,
+            counted: Mapping[str, int] | None = None) -> _Slot:
+    """Read one slot's target, refusing what can't be planned.
+
+    `sizes` (product to catalog size) and `counted` (a person's counts) only shape the
+    capacity refusals' wording, so they can say where a limit came from.
+    """
+    sizes = sizes or {}
+    counted = counted or {}
     state = state or SlotState(slot, None, None, 0, None)
     on_hand = max(0, state.units)   # loaded - sold can drift below zero
     held = _Slot(slot, state, on_hand, state.product, state.price_cents, on_hand, on_hand)
@@ -693,11 +723,31 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
                 usable = False
                 refusals.append(Refusal("below_floor", f"slot {slot}: a sale price must be above $0.00", slot))
 
-    fill_to = config.slot_capacity if target.fill_to is None else target.fill_to
-    if not 0 <= fill_to <= config.slot_capacity:
-        usable = False
-        refusals.append(Refusal("over_capacity", (
-            f"slot {slot} fill_to {fill_to} is outside 0-{config.slot_capacity}"), slot))
+    fill_to = target.fill_to
+    if target.product in active:
+        most = capacities.get(target.product)
+        already = on_hand if target.product == state.product else 0
+        if most is None:
+            # A slot that loads nothing doesn't need to know what fits, so it gets only the
+            # refusals that are really about it (`price_only_unsupported`, say).
+            if fill_to is None or fill_to > already:
+                usable = False
+                size = sizes.get(target.product)
+                why = (f"its size, {size!r}, isn't on the loading chart" if size and size.strip()
+                       else "the catalog gives no size for it, so the loading chart can't be used")
+                refusals.append(Refusal("unknown_capacity", (
+                    f"nobody knows how many {target.product} fit in a column: {why}; "
+                    f"{capacity.OVERRIDE_HINT}"), slot))
+        else:
+            fill_to = most if fill_to is None else fill_to
+            if not 0 <= fill_to <= most:
+                usable = False
+                source = ("the count in capacity_overrides" if target.product in counted
+                          else "the loading chart's figure")
+                refusals.append(Refusal("over_capacity", (
+                    f"slot {slot} fill_to {fill_to} is outside 0-{most}, as many {target.product} "
+                    f"as fit in a column ({source}); if a column really holds more, "
+                    f"{capacity.OVERRIDE_HINT}"), slot))
     if usable and fill_to == 0 and target.product != state.product:
         # A switch that loads nothing gets no request line, so it would silently never happen.
         usable = False

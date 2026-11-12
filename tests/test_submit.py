@@ -19,7 +19,7 @@ from vending.purchase_requests import store  # noqa: E402
 
 
 def submit(expected_plan_hash=None, **arguments):
-    body = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()], **arguments).model_dump()
+    body = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()], **arguments).model_dump()
     args = {"desired": body}
     if expected_plan_hash:
         args["expected_plan_hash"] = expected_plan_hash
@@ -29,7 +29,7 @@ def submit(expected_plan_hash=None, **arguments):
 
 
 def preview():
-    body = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()]).model_dump()
+    body = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]).model_dump()
     return call("preview_desired_state", {"desired": body}).structuredContent
 
 
@@ -38,7 +38,7 @@ def codes(reply):
 
 
 def prepared(db):  # noqa: F811
-    ready(db, capacity=20)
+    ready(db, capacity=15)
     stocked(db)
 
 
@@ -89,7 +89,7 @@ def test_a_resolved_submission_carries_the_fee_too(db, fake, schema_url, monkeyp
 
 def test_a_refused_plan_sends_nothing_and_saves_nothing(db, fake):  # noqa: F811
     prepared(db)
-    body = desired(restock_15(price="1.20", fill_to=20), sourcing=[coke_sourcing()]).model_dump()
+    body = desired(restock_15(price="1.20", fill_to=15), sourcing=[coke_sourcing()]).model_dump()
     reply = call("submit_desired_state", {"desired": body}).structuredContent
     assert not reply["success"] and codes(reply) == ["below_floor"]
     assert fake.posts == [] and db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
@@ -97,10 +97,10 @@ def test_a_refused_plan_sends_nothing_and_saves_nothing(db, fake):  # noqa: F811
 
 
 def test_not_ready_is_a_failure_not_a_refusal(db, fake):  # noqa: F811
-    ready(db, capacity=20)                                 # no ledger entry... but ready opens it; drop capacity instead
-    db.execute("delete from config where key = 'slot_capacity'")
+    ready(db, capacity=15)
+    fake.catalog_status = 503
     reply = submit()
-    assert not reply["success"] and "Can't submit yet" in reply["message"] and "slot_capacity" in reply["message"]
+    assert not reply["success"] and "Can't submit yet" in reply["message"] and "couldn't read the catalog" in reply["message"]
     assert fake.posts == []
     assert db.execute("select outcome from action_log where tool = 'submit_desired_state'").fetchall() == [("failed",)]
 
@@ -161,7 +161,7 @@ def test_a_settle_failure_after_the_bridge_accepted_still_names_the_request_id(d
 
     original = submissions.settle
     monkeypatch.setattr(submissions, "settle", crash)
-    body = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()]).model_dump()
+    body = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]).model_dump()
     result = call("submit_desired_state", {"desired": body})
     assert result.isError
     text = result.content[0].text
@@ -188,7 +188,7 @@ def test_a_side_connection_that_fails_before_the_post_sends_nothing(db, fake, sc
     def refuse():
         raise psycopg.OperationalError("too many connections")
 
-    body = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()]).model_dump()
+    body = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]).model_dump()
     # The gate keeps its own connection; only the side connection the submit opens fails.
     with open_in(*schema_url) as gate:
         monkeypatch.setattr(server, "_conn", gate)
@@ -219,8 +219,9 @@ def test_a_plan_that_changed_since_the_preview_is_refused_when_its_hash_is_given
     prepared(db)
     previewed = preview()
     assert previewed["success"] and previewed["plan_hash"]
-    # Three more sold since the preview: the rail holds 5, so the plan now buys 15, not 12.
-    store_poll(db, "b", "2026-11-09T10:00:00+00:00", {"15": (250, 103)})
+    # Six more sold since the preview: the rail holds 2, so the plan now loads 13, not 7,
+    # which takes a second pack of 12.
+    store_poll(db, "b", "2026-11-09T10:00:00+00:00", {"15": (250, 106)})
     reply = submit(expected_plan_hash=previewed["plan_hash"])
     assert codes(reply) == ["plan_changed"] and previewed["plan_hash"] in reply["refusals"][0]["message"]
     assert fake.posts == []
@@ -231,7 +232,7 @@ def test_a_plan_that_changed_since_the_preview_is_refused_when_its_hash_is_given
 
 def test_a_new_visit_fee_since_the_preview_is_a_changed_plan(db, fake):  # noqa: F811
     prepared(db)
-    body = desired(restock_15(fill_to=20), off_cycle=True, sourcing=[coke_sourcing()]).model_dump()
+    body = desired(restock_15(fill_to=15), off_cycle=True, sourcing=[coke_sourcing()]).model_dump()
     previewed = call("preview_desired_state", {"desired": body}).structuredContent
     assert previewed["success"]
     # The request body is the same; only what the visit costs moved.
@@ -269,7 +270,7 @@ def test_every_refusal_is_shown_at_once_including_an_unresolved_submission(db, f
     prepared(db)
     fake.answer = (503, {"detail": "down"})
     submit()
-    body = desired(restock_15(price="1.20", fill_to=20), sourcing=[coke_sourcing()]).model_dump()
+    body = desired(restock_15(price="1.20", fill_to=15), sourcing=[coke_sourcing()]).model_dump()
     reply = call("submit_desired_state", {"desired": body}).structuredContent
     assert codes(reply) == ["below_floor", "submission_unresolved"]
 
@@ -278,7 +279,7 @@ def test_two_concurrent_submits_file_one_request(db, fake, schema_url):  # noqa:
     prepared(db)
     from vending.tools import submit as submit_tool
     from vending.write_gate import Refused, run_write
-    plan = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()])
+    plan = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()])
     outcomes = []
 
     def one():
@@ -357,7 +358,7 @@ def test_resolve_waits_for_a_submit_in_flight(db, fake, schema_url):  # noqa: F8
     prepared(db)
     from vending.tools import submit as submit_tool
     from vending.write_gate import run_write
-    plan = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()])
+    plan = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()])
     fake.hold = threading.Event()
     results = {}
 
