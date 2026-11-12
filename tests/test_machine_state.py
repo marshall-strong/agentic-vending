@@ -6,7 +6,7 @@ from fractions import Fraction
 from tests.conftest import store_poll
 from vending.slots import SLOTS
 from vending.stock import ClosetCount, SlotCount
-from vending.tools.machine_state import build, closet_items, get_machine_state
+from vending.tools.machine_state import build, closet_items, get_machine_state, sold_in_window
 
 NOW = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
 
@@ -16,7 +16,7 @@ def by_slot(states):
 
 
 def test_build_sales_over_the_window():
-    states = by_slot(build(NOW, {"15": (250, 110)}, NOW - timedelta(days=7), {"15": (250, 100)}))
+    states = by_slot(build(NOW, {"15": (250, 110)}, NOW - timedelta(days=7), {"15": 10}))
     assert len(states) == 20
     assert states["15"].price == "2.50"
     assert states["15"].units_sold_in_window == 10
@@ -31,9 +31,22 @@ def test_build_unknowns_are_null_not_zero():
     assert states["15"].stock_on_hand is None
 
 
-def test_build_ignores_a_counter_that_went_down():
-    states = by_slot(build(NOW, {"15": (250, 3)}, NOW - timedelta(days=7), {"15": (250, 100)}))
-    assert states["15"].units_sold_in_window is None
+def test_window_sales_follow_the_counter_misread_rule():
+    start, h = NOW - timedelta(days=7), timedelta(hours=1)
+
+    def sold(*readings):  # the first reading is the poll before the window, the second its baseline
+        return sold_in_window([("15", start + (n - 1) * h, v) for n, v in enumerate(readings)], start).get("15")
+    assert sold(98, 100, 104, 110) == 10      # the rise up to the baseline is before the window
+    assert sold(1000, 1000, 5, 1010) == 10    # a misread inside the window is not 1005 sold
+    assert sold(1000, 5, 1003, 1010) == 10    # nor is a misread at the baseline poll itself
+    assert sold(1000, 1000, 3, 8) == 5        # a board swap still counts the sales after it
+    assert sold(1000, 1000, 3) == 0           # a lone drop at the latest poll counts nothing yet
+
+
+def test_window_sales_need_a_reading_at_the_start():
+    start = NOW - timedelta(days=7)
+    rows = [("15", start, 100), ("15", NOW, 110), ("16", start + timedelta(days=1), 7), ("16", NOW, 9)]
+    assert sold_in_window(rows, start) == {"15": 10}  # 16 wasn't in the baseline poll
 
 
 def test_build_with_no_window():
@@ -83,7 +96,7 @@ def count(slot="15", product="COKE20", units=20, loaded=24, sold=4, since=NOW - 
 
 
 def test_build_fills_receipt_fields_for_a_slot_with_receipts():
-    states = by_slot(build(NOW, {"15": (250, 114)}, NOW - timedelta(days=7), {"15": (250, 100)},
+    states = by_slot(build(NOW, {"15": (250, 114)}, NOW - timedelta(days=7), {"15": 14},
                            counts={"15": count()}, last_loaded={"15": NOW - timedelta(days=2, hours=3)},
                            sold_since_load={"15": 4}, now=NOW))
     s = states["15"]
@@ -94,7 +107,7 @@ def test_build_fills_receipt_fields_for_a_slot_with_receipts():
 
 def test_days_of_stock_left_edges():
     def left(units, sold_in_week):
-        return by_slot(build(NOW, {"15": (250, 100 + sold_in_week)}, NOW - timedelta(days=7), {"15": (250, 100)},
+        return by_slot(build(NOW, {"15": (250, 100 + sold_in_week)}, NOW - timedelta(days=7), {"15": sold_in_week},
                              counts={"15": count(units=units)}, now=NOW))["15"].days_of_stock_left
     assert left(0, 0) == "0.0"     # empty is empty, whatever the rate
     assert left(5, 0) is None      # sold nothing: no end in sight, not "infinity"
@@ -167,3 +180,33 @@ def test_a_rejected_request_moves_no_stock(conn):
     fulfilled(conn, "r1", datetime(2026, 10, 28, tzinfo=timezone.utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
     conn.execute("update purchase_requests set status = 'rejected'")
     assert by_slot(get_machine_state(conn, now=NOW).data)["15"].stock_on_hand is None
+
+
+def test_sold_since_load_follows_the_counter_misread_rule():
+    from vending import stock
+    from vending.tools.machine_state import _sold_since_load
+    t0, h = datetime(2026, 11, 2, 12, tzinfo=timezone.utc), timedelta(hours=1)
+    line = dict(request_id="r1", line_no=0, slot="15", outcome="primary", sku="COKE20", total_paid="10.00",
+                units_loaded=20, units_lost=0, units_to_back_stock=0, units_from_back_stock=0,
+                units_pulled=0, pulled_sku=None, slot_reassigned=False, resolved_at=t0 + 2 * h)
+
+    def sold(*readings):
+        polls = [("15", t0 + (n if n < 2 else n + 1) * h, v) for n, v in enumerate(readings)]  # no poll at the load
+        replay = stock.weighted_average(stock.movements_from_receipts([line], []) + stock.sales_from_counters(polls))
+        return _sold_since_load(replay.sales, {"15": t0 + 2 * h})["15"]
+
+    assert sold(1000, 5, 1010) == 10      # a misread just before the load is not 1005 sold
+    assert sold(1000, 1000, 3, 8) == 5    # a board swap after the load still counts
+    assert sold(1000, 1002, 1010) == 8
+
+
+def test_a_misread_poll_moves_no_sales(conn):
+    store_poll(conn, "p0", "2026-10-22T12:00:00+00:00", {"15": (250, 1000)})
+    store_poll(conn, "p1", "2026-10-24T12:00:00+00:00", {"15": (250, 5)})      # misread, just before the load
+    fulfilled(conn, "r1", datetime(2026, 10, 24, 15, tzinfo=timezone.utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
+    store_poll(conn, "p2", "2026-10-26T12:00:00+00:00", {"15": (250, 1010)})
+    store_poll(conn, "p3", "2026-10-29T12:00:00+00:00", {"15": (250, 1014)})
+    s = by_slot(get_machine_state(conn, now=NOW).data)["15"]
+    assert (s.units_sold_in_window, s.units_per_day) == (14, "2.00")
+    assert (s.stock_on_hand, s.units_sold_since_load) == (6, 14)   # not 1009 sold since the load
+    assert s.days_of_stock_left == "3.0"

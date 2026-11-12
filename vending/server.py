@@ -152,7 +152,7 @@ def _write_sync(tool: str, arguments: dict[str, Any], action: Callable[[psycopg.
 
 @_tool(built=True)
 async def get_machine_state() -> machine_state.MachineState:
-    """Each of our 20 slots: price, units sold and units/day over the last 7 days, and from receipts the product, stock on hand, days since loaded and days of stock left. Plus the closet (back stock) at cost."""
+    """Each of our 20 slots: price, lifetime units, units sold and units/day over the last 7 days, and from receipts the product, stock on hand, days since loaded and days of stock left. Plus the closet (back stock) at cost."""
     return await _read("get_machine_state", machine_state.get_machine_state)
 
 
