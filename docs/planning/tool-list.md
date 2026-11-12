@@ -37,7 +37,7 @@ there; this file is a point-in-time copy so the plan sits next to the code.
 
 ## Purpose
 
-The group-b vending agent should get **10 MCP tools**: 7 that read and 3 that write. Every write is checked in code before it runs. This is the working list for the team. It reconciles the 21 September build plan, the bridge's live API spec (`http://aihub-pi:8000/docs`, version `0.1.0`), the whiteboard from the 8 October team meeting, and David's answers of 19 October, which outrank the spec.
+The group-b vending agent should get **10 MCP tools**: 7 that read and 3 that write. Every write is checked in code before it runs. (Since 11 Nov there is an eleventh, read-only `get_project_rules`, #12 below.) This is the working list for the team. It reconciles the 21 September build plan, the bridge's live API spec (`http://aihub-pi:8000/docs`, version `0.1.0`), the whiteboard from the 8 October team meeting, and David's answers of 19 October, which outrank the spec.
 
 Edit it inline or leave comments. Questions we still need the instructors to answer are collected at the end.
 
@@ -83,6 +83,7 @@ Nine tools: seven read data and two change something (#9 is folded into #6; #8 i
 | 9 | `request_service_visit` | — | **Folded into #6** as `visit: "midweek"`, so a $25 visit always carries a full desired state | — | — |
 | 10 | `get_pnl` | R | Ex-tax revenue, cost of goods (actual cost from receipts, spread over the units left after spoilage), visit fees, token spend, sales tax set aside, and inventory at cost (machine + closet) | — | Our ledger |
 | 11 | `request_catalog_product` | W | Asks the instructors to add a single-item product (brand, flavor, size; no pack). The sync job checks it until it is approved, with the new product code, or denied. | Not halted; a drink; no alcohol or THC; not already in the catalog or already requested | Catalog-request routes (coming: submit and status) |
+| 12 | `get_project_rules` | R | **Added 11 Nov (repo only).** Our condensed notes on the project brief, one topic per file in `docs/agent/`. No topic: the topics and their summaries. A topic: its text. The short always-on rules card goes in the agent's prompt; details are looked up here. | Topic must be a name in `docs/agent/README.md`; no paths | `docs/agent/` |
 
 `check_books` waits until the instructors' balance-check endpoint exists. It would compare our figures with theirs and report a match or the difference.
 
@@ -130,7 +131,7 @@ What the agent passes to #5 and #6 (field names are ours until David publishes h
 | `keep: true` | No change: same product, same price, nothing loaded | David's "no change to this slot" |
 | `product` | Catalog code for a single item | Active in the catalog |
 | `sale_price` | Shelf price, tax included | Pricing gate: floor, ceiling, 5-cent step |
-| `fill_to` | Units on the rail after the visit | At most `config.slot_capacity`; omitted means fill to capacity |
+| `fill_to` | Units on the rail after the visit | At most what fits in a column for that product's package (7 to 11, from the loading chart, or a person's count in `config.capacity_overrides`); omitted means fill the column |
 | `sourcing[]` | How to buy each product the plan is short of, one entry per product | Needed only for a shortfall. If missing, the planner uses our sourcing table, else refuses. |
 | `store` | `WALMART`, `AMAZON`, `BJS`, possibly `COSTCO` | Store list waits on David |
 | `link` | Product page | Required for Amazon |
@@ -165,7 +166,7 @@ The planner reduces each slot to one of David's cases:
 | `sourcing_table` | Filled in by the team | Default store, link, pack size, expected and max pack price per product |
 | `balance` | Ledger | Spendable balance after the sales-tax set-aside |
 | `desired` | The agent | The request in the previous section |
-| `config` | `config` table | Cutoff per store, slot capacity, price ceiling, tax rate (8%), midweek fee ($25), halt flag |
+| `config` | `config` table | Cutoff per store, counted capacity per product, price ceiling, tax rate (8%), midweek fee ($25), halt flag |
 | `now` | Clock | Compared with the cutoff |
 
 **Steps**
@@ -201,7 +202,8 @@ The planner reduces each slot to one of David's cases:
 | `product_unknown` | A product is not in the catalog or is inactive | Request it (#11) and wait for approval |
 | `no_sourcing` | A slot needs more than the closet holds, the closet has none of the product, and it has no sourcing, given or in the table | Add `sourcing` for it |
 | `bad_sourcing` | Store not `Walmart`, `Costco`, `Amazon` or `BJs`; Amazon without an Amazon `url`; `units_per_pack` outside 1-60; `max_price_per_pack` not above $0, over $200, or below the expected price; `pack_description` over 100 characters | Fix the field; for a max below the expected price, give your own `expected_price_per_pack` if you know the pack costs less |
-| `over_capacity` | `fill_to` exceeds the slot's capacity | Lower `fill_to` |
+| `over_capacity` | `fill_to` exceeds what fits in a column for that product | Lower `fill_to` |
+| `unknown_capacity` | The product's package isn't on the loading chart and nobody has counted it | A person counts a column and sets `capacity_overrides` |
 | `insufficient_stock` | A slot needs more than the closet holds, the closet has some of the product, and there's no sourcing to buy it | Add sourcing, or lower `fill_to` to what the closet holds |
 | `price_off_step` | A price is missing, unreadable, or not a multiple of 5 cents | Pick a legal price; it is not rounded for you |
 | `below_floor` | A price is under the slot's floor, or is $0.00 | Raise the price, lower the max pack price (no lower than the pack costs), or pick a cheaper store or pack; the refusal shows the floor |

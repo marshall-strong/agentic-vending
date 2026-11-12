@@ -65,6 +65,7 @@ from day one.
 | File | What it is |
 |---|---|
 | [`docs/planning/tool-list.md`](docs/planning/tool-list.md) | **Start here.** The agent's proposed tools, what the bridge API actually offers, and the open questions. A snapshot of the [live Claude doc](https://claude.ai/code/artifact/82ae22ab-53a2-48c0-b4d5-c636efcc877d), where edits and comments go |
+| [`docs/artifacts.md`](docs/artifacts.md) | **The team's main live project pages in one place:** the roadmap, the team summary, the sales and data labs, and the agent walkthroughs |
 | [`docs/planning/build-plan.md`](docs/planning/build-plan.md) | The 21 September build plan: architecture, guardrails, order of work |
 | [`docs/planning/2026-10-19-david-api-qa.md`](docs/planning/2026-10-19-david-api-qa.md) | What David answered on 19 October about the API he is still building. These answers outrank the live spec |
 | [`docs/planning/2026-09-21-design-brief-meeting.md`](docs/planning/2026-09-21-design-brief-meeting.md) | What Graham and David answered in the Design Brief meeting, and what they still owe us |
@@ -72,9 +73,13 @@ from day one.
 | [`docs/dex-bridge.md`](docs/dex-bridge.md) | How to talk to the Pi and its API with `scripts/bridge.py` |
 | [`docs/mcp-server.md`](docs/mcp-server.md) | The MCP server: run it, connect Claude Desktop or the Inspector, the halt switch and the write gate |
 | [`docs/db-explorer.md`](docs/db-explorer.md) | The DB explorer: a read-only page that lists every table and shows its columns and rows, so you don't need psql |
+| [`docs/process-map.md`](docs/process-map.md) | The process map and state model: the weekly cycle from sales to the next order, and every state a purchase request can be in |
 | [`docs/week-replayer.md`](docs/week-replayer.md) | The week replayer: score a decision-maker on past weeks, its hard checks, test cases and demand assumptions |
+| [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
+| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live run, with its reasons and a check against our own directive rules |
 | [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
+| [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |
 
 ## Getting set up
 
@@ -152,6 +157,20 @@ when it asks. It's read as a prompt, so the key doesn't end up in your command h
 On macOS or Linux, add `export VENDING_ANTHROPIC_API_KEY='<the key>'` to `~/.zshrc` or
 `~/.bashrc`. In production it's a secret on our Azure Container App.
 
+**Every use of the key is recorded.** All our model calls go through `vending/harness.py`, which
+writes each one to the `model_calls` table before it is sent: what asked for it, the model and
+effort, which key paid, tokens, cost and time. Live calls also go in the ledger, because their
+cost comes out of the $600; test runs, replays and sweeps don't, but they're in `model_calls` all
+the same. See it all with:
+
+```
+python -m vending.usage
+```
+
+Test calls stop at a daily cap shared by the whole team (`model_test_daily_cap_cents`, $20 by
+default); live calls have their own (`model_daily_cap_cents`). Anthropic's own record is the
+Claude Console's Usage and Cost pages for the key's workspace.
+
 ### 4. Check that you can reach the machine
 
 ```
@@ -172,7 +191,7 @@ Azure database; locally it runs in Docker. Set `VENDING_DB_PASSWORD` (any passwo
 ```
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate
 python -m vending.sync_history --since 2026-08-28
@@ -193,6 +212,12 @@ refuses and names that command. See "the ledger" in `docs/mcp-server.md`.
 `python -m vending.sync_requests` does the same for our purchase requests: it reads back
 every request still pending, and every one fulfilled in the last 30 days, and stores the
 receipts the stock counts come from. It only reads; it never submits a request.
+
+## Deploying
+
+The agent runs in an Azure Container App; `docs/deploy.md` has the one-time setup, the deploy
+script (`scripts/deploy_container_app.ps1`), how to check `/health` and the logs, and how to roll
+back. Nothing in the image migrates the database: a person runs `python -m vending.db migrate`.
 
 ## Working on this repo
 

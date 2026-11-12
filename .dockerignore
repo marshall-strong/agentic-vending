@@ -1,0 +1,34 @@
+# Secrets never go into the image: they are Container App secrets.
+.env
+.env.*
+*postman_environment.json
+*.pem
+*.key
+
+# Local state and data
+.venv/
+venv/
+data/
+snapshots/
+*.dex
+*.sqlite
+*.db
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Not needed to run
+.git/
+.github/
+.claude/
+.vs/
+.vscode/
+.idea/
+tests/
+docs/
+scripts/
+*.md
+# ...except the agent's rule notes, which get_project_rules reads at run time
+!docs/agent/
+!docs/agent/*.md
+compose.yaml

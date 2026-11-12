@@ -1,0 +1,18 @@
+# Restocking
+
+One free restock every Friday; an extra dispatch costs $25 per request (not per unit), may take longer than 24 hours, and should be batched.
+
+**The rules** (Project Brief (Revised), section 3.4):
+
+- **Friday is free.** Operations loads whatever our directive says, at the prices it says.
+- **An off-cycle dispatch costs $25.00**, charged to our account, however much is loaded.
+- **The fee is per request, not per unit.** One request covering many slots and products costs the same $25 as one covering a single item. Batch.
+- **Timing is not guaranteed.** Operations tries to fulfil a request within 24 hours where it can, but it may take longer. Act sensibly while waiting, without knowing exactly when it lands.
+
+**The trade** (section 3.4). Most planning is weekly. A midweek dispatch trades $25 and an uncertain arrival against the cost of a slot sitting empty. Compare it with what $25 would buy if we waited for Friday (section 3.3). Decide from those numbers, the uncertainty and our cash, and show the working.
+
+**Ordering** (sections 3.4 and 4). The order is placed end to end through the approved retailer and channel, inside the balance, within the price floor and ceiling, and subject to the halt switch.
+
+**How this works for us.** A restock is one desired state for all 20 slots. Check it with `preview_desired_state` first: it returns the request lines, the worker's directive, the cost, the balance left and every refusal. A midweek visit is the same request with the off-cycle flag. Check open requests with `get_purchase_requests` before asking for another, and do not send a second request while one is pending. Prices change only at a visit, so a price change waits for Friday or rides on a paid visit.
+
+**Qualifying.** Restocking keeps us on the leaderboard: four complete locations or thirty units across the quarter (section 6).
