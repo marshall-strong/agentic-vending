@@ -76,3 +76,18 @@ def test_grades_come_from_the_lab_data_by_window_start():
 def test_without_lab_data_visits_are_ungraded():
     r = vw.analyse(door({6: 1}), polls(range(13)), [])
     assert r["visits"][0]["grade"] is None and r["summary"]["graded"] is False
+
+
+def test_a_sale_between_two_merged_rises_is_inside_the_window():
+    r = vw.analyse(door({4: 1, 6: 1}), polls(range(13)), [sale(5, 3), sale(6, 1), sale(8, 2)])
+    (v,) = r["visits"]
+    assert v["our_units_inside"] == 4                               # 11:00 to 13:00: the 12:00 and 13:00 polls
+
+
+def test_hours_follow_the_hour_a_poll_closes_whether_it_lands_at_59_or_00():
+    t59 = (T0 + timedelta(hours=6, minutes=59)).isoformat()         # 13:59 poll: sold 13:00-14:00
+    t00 = (T0 + timedelta(hours=7)).isoformat()                     # 14:00 poll: also 13:00-14:00
+    sales = [{"slot": "15", "at_eastern": t59, "units": "2"}, {"slot": "15", "at_eastern": t00, "units": "1"}]
+    r = vw.analyse(door({}), polls(range(13)), sales)
+    by = {p["hour"]: p["units_per_day"] for p in r["hour_profile"]}
+    assert by[13] == 3 and by[14] == 0

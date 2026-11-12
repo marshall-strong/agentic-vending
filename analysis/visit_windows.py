@@ -14,9 +14,10 @@ What it measures (hourly-polling era only, from 21 Sep 2026, when polls came eve
                   poll before the first opening to the poll that saw the last one.
     grades        the analysis's refill grade for each visit (proven, likely, possible top-up, no sign).
     poll gaps     how often a gap between polls is longer than an hour: a longer gap widens any window.
-    exposure      our units sold at a poll that also saw the door open (these are the units a product or
-                  price change would make ambiguous), and our class-day sales by hour, which gives the
-                  expected exposure for a visit at each hour.
+    exposure      our units sold inside a visit window (the units a product or price change would make
+                  ambiguous), and our class-day sales by hour, which gives the expected exposure for a
+                  visit at each hour. A sale is stamped at the poll that saw it (on the hour, at :00 or
+                  :59), so it's put in the hour that poll closes: a 14:00 or 13:59 poll means 13:00-14:00.
     after         minutes from the end of each window to our slots' next sale.
 
 Scope (docs/integrity.md): sales are our slots only (sales_events.csv holds only them). The door counter is
@@ -43,6 +44,11 @@ def _median(values):
     """Median of the values that aren't None, or None when there are none."""
     vals = [v for v in values if v is not None]
     return statistics.median(vals) if vals else None
+
+
+def _gaps(visits) -> list[int]:
+    dates = sorted({v["from"][:10] for v in visits})
+    return [(datetime.fromisoformat(b) - datetime.fromisoformat(a)).days for a, b in zip(dates, dates[1:])]
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -119,7 +125,7 @@ def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> di
     for v in find_visits(door_rows):
         if v["first"] < since:
             continue
-        inside = sum(units_at.get(t, 0) for t in v["rise_polls"])
+        inside = sum(u for t, u, _ in sales if v["from"] < t <= v["last"])   # can't be placed before or after
         nxt = next((t for t, u, _ in sales if t > v["last"] and u > 0), None)
         mid = v["from"] + (v["last"] - v["from"]) / 2
         visits.append({
@@ -148,12 +154,12 @@ def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> di
         if cdays is not None and d not in cdays:
             continue
         day_set.add(d)
-        by_hour[t.hour] += u
+        by_hour[(t - timedelta(minutes=30)).hour] += u      # the hour this poll closes
     n_days = len({t.date().isoformat() for t in (when(r["at_eastern"]) for r in poll_rows)
                   if t >= since and t.weekday() <= 4 and (cdays is None or t.date().isoformat() in cdays)}) or 1
     profile = [{"hour": h, "units_per_day": round(by_hour.get(h, 0) / n_days, 2)} for h in range(DAY_H0, DAY_H1 + 1)]
-    # A sale observed at the poll ending hour h happened in the hour before it, so a visit in hour h-1..h exposes these.
-    quiet = sorted((p for p in profile if 8 <= p["hour"] <= 16), key=lambda p: p["units_per_day"])
+    # "hour" is the start of the hour: 13 means 13:00-14:00. Visits so far fell between 7:30 and 15:30.
+    quiet = sorted((p for p in profile if 8 <= p["hour"] <= 17), key=lambda p: p["units_per_day"])
 
     return {
         "since": since.isoformat(timespec="minutes"),
@@ -175,6 +181,7 @@ def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> di
             "restock_mid_hours": sorted(v["mid_hour"] for v in restocks),
             "days_between_restocks": between,
             "days_between_restocks_median": statistics.median(between) if between else None,
+            "days_between_refills_median": _median(_gaps([v for v in restocks if v["grade"] != "possible top-up"])),
             "minutes_to_next_sale_median": _median([v["minutes_to_next_sale"] for v in visits]),
             "class_days": n_days,
             "quietest_hours": [p["hour"] for p in quiet[:3]],
@@ -196,6 +203,8 @@ def main(argv=None):
     lab_path = Path(args.lab_data)
     lab = json.loads(lab_path.read_text(encoding="utf-8")) if lab_path.exists() else None
     result = analyse(read_csv(data / "door_events.csv"), read_csv(data / "polls.csv"), read_csv(data / "sales_events.csv"), lab)
+    if lab and any(v["grade"] is None for v in result["visits"]):
+        print("WARNING: some visits have no refill grade: lab_data.json may be older than the CSVs; rerun the analysis")
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=1), encoding="utf-8")
