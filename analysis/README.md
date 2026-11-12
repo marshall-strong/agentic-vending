@@ -12,7 +12,7 @@ Anything per slot (products, prices, position, segments, stock-outs, refill evid
 
 The assignment from the inventory server (`GET /api/v1/slots`) is team group-b on `vmc1`: slots 15-18, 25-28, 35-38, 45-48, 55-58, the same as `vending.slots.SLOTS`. The scripts take the slot list from the first of these that is set:
 
-1. `--slots` on the command line, comma or space separated. It can only narrow the list: a code outside our assignment (the stored server answer, else `vending.slots.SLOTS`) is refused, so the export never writes another team's per-slot values.
+1. `--slots` on the command line, comma or space separated. It can only narrow the list: a code outside `vending.slots.SLOTS` is refused (a stored server answer is held to it too), so the export never writes another team's per-slot values.
 2. The assignment stored from the inventory server, read with `vending.slots.our_slots(conn)`, once that function exists and a row is stored.
 3. `vending.slots.SLOTS`.
 

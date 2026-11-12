@@ -6,7 +6,8 @@
     3. vending.slots.SLOTS, the default list
 
 The result is checked: 1 to 40 different codes, each a shelf digit 1-5 then a column digit 1-8, and every
-code must be one of OUR slots: the stored server assignment when there is one, else vending.slots.SLOTS.
+code must be one of OUR slots: vending.slots.SLOTS. A stored server assignment can narrow that list but never
+widen it, so when the assignment changes (#69), SLOTS changes with it.
 --slots can only narrow the list, never add a slot that isn't ours (docs/integrity.md): the export writes
 per-slot prices and sales for every slot on the list.
 Slots come back in shelf order (shelf 1 first, then by column).
@@ -24,8 +25,11 @@ SOURCE_DEFAULT = "default list in vending/slots.py"
 
 def parse_slots(value, ours=SLOTS):
     """Slot codes from "15,16 17", checked against `ours`. Exits with a message on anything else."""
-    codes = [c for c in str(value).replace(",", " ").split() if c]
-    return check(codes, "--slots", ours)
+    codes = check([c for c in str(value).replace(",", " ").split() if c], "--slots", ours)
+    if set(codes) != set(ours) and (len({c[0] for c in codes}) < 2 or len({c[1] for c in codes}) < 2):
+        raise SystemExit(f"--slots: {ranges(codes)} covers one shelf or one column; the analysis's shelf and column "
+                         "models need at least two of each. Narrow to two shelves or more, such as 15,16,17,18,25,26,27,28.")
+    return codes
 
 
 def is_default(source):
@@ -111,8 +115,8 @@ def ours_for(source, slots):
     """The list a recorded scope (data/slots.json, lab_data.json) may cover: always vending.slots.SLOTS.
 
     A recorded list can't be checked against the server without the database, so it may only ever be
-    vending.slots.SLOTS or part of it, whatever source it names. Only the export, which reads the server's
-    stored answer itself, can use a list beyond SLOTS (resolve_slots). Unknown sources are refused, and so is
+    vending.slots.SLOTS or part of it, whatever source it names (the export's own list, from resolve_slots,
+    is held to SLOTS as well). Unknown sources are refused, and so is
     a list recorded as the server's answer while this code can't read one (#69).
     """
     if not (source in (SOURCE_CLI, SOURCE_SERVER) or is_default(source)):

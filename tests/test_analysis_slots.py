@@ -47,11 +47,11 @@ def test_resolve_refuses_a_command_line_code_outside_ours():
 
 
 def test_resolve_checks_the_command_line_against_the_stored_server_assignment(monkeypatch):
-    monkeypatch.setattr(slots_config, "from_server", lambda conn: ("15", "16"))
-    assert slots_config.resolve_slots("16")[1:] == (("16",), slots_config.SOURCE_CLI)
+    monkeypatch.setattr(slots_config, "from_server", lambda conn: ("15", "16", "25", "26"))
+    assert slots_config.resolve_slots("15,16,25")[1:] == (("15", "16", "25"), slots_config.SOURCE_CLI)
     with pytest.raises(SystemExit, match="not one of our slots"):
         slots_config.resolve_slots("17")             # in SLOTS, but not in the server's answer
-    assert slots_config.resolve_slots(None)[1:] == (("15", "16"), slots_config.SOURCE_SERVER)
+    assert slots_config.resolve_slots(None)[1:] == (("15", "16", "25", "26"), slots_config.SOURCE_SERVER)
 
 
 def test_the_default_source_claims_no_server_check():
@@ -120,11 +120,11 @@ def test_run_refuses_a_manifest_for_another_device():
 
 def test_run_command_line_must_match_the_export():
     with pytest.raises(SystemExit, match="Re-export first"):
-        slots_config.resolve_run("15,16", manifest(), "slots.json", NOW)
+        slots_config.resolve_run("15,16,25,26", manifest(), "slots.json", NOW)
     _, slots, source, at = slots_config.resolve_run(",".join(OURS), manifest(), "slots.json", NOW)
     assert (slots, source, at) == (OURS, slots_config.SOURCE_DEFAULT, "2026-11-12T12:00:00+00:00")
-    _, slots, source, at = slots_config.resolve_run("16,15", None, "slots.json", NOW)
-    assert (slots, source, at) == (("15", "16"), slots_config.SOURCE_CLI, NOW)
+    _, slots, source, at = slots_config.resolve_run("26,25,16,15", None, "slots.json", NOW)
+    assert (slots, source, at) == (("15", "16", "25", "26"), slots_config.SOURCE_CLI, NOW)
 
 
 def lab_data(slots=OURS, source=slots_config.SOURCE_CLI, device=slots_config.DEVICE_ID):
@@ -157,7 +157,7 @@ def test_a_stored_server_answer_beyond_our_slots_is_refused(monkeypatch):
     with pytest.raises(SystemExit, match="not one of our slots"):
         slots_config.resolve_slots(None)
     with pytest.raises(SystemExit, match="not one of our slots"):
-        slots_config.resolve_slots("15")
+        slots_config.resolve_slots("15,16,25,26")
 
 
 def test_a_narrowed_run_labels_the_rest_not_in_this_run():
@@ -170,3 +170,11 @@ def test_a_narrowed_run_labels_the_rest_not_in_this_run():
     assert (part["TURF_LABEL"], part["OTHER_PHRASE"]) == ("Not in this run", "left out of this run")
     for v in (*full.values(), *part.values()):
         assert labkit.SAFE.fullmatch(v), v
+
+
+def test_a_narrowed_run_needs_two_shelves_and_two_columns():
+    with pytest.raises(SystemExit, match="one shelf or one column"):
+        slots_config.parse_slots("15,16,17,18")               # one shelf
+    with pytest.raises(SystemExit, match="one shelf or one column"):
+        slots_config.parse_slots("15,25,35")                  # one column
+    assert slots_config.parse_slots("15,16,25,26") == ("15", "16", "25", "26")

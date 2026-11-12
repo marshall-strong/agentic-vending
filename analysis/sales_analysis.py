@@ -1961,7 +1961,8 @@ def main():
                 f"any run of one of our slots' sales over {CAPACITY_MAX} units needs a refill between its first and last unit; if exactly one "
                 f"visit window overlaps, that visit is a proven refill (several = at least one of them). Resumed: one of our slots silent >= "
                 f"{SILENT_DAYS} days with its own clock giving P(0) < {ALPHA_EMPTY} (it looked empty) that sells within {RESUME_DAYS} days after "
-                f"the first opening. Likely refill = >= {LIKELY_MIN} resumed slots; possible top-up = 1."),
+                f"the first opening. Likely refill = >= {LIKELY_MIN} resumed slots"
+                f"{'; possible top-up = 1' if LIKELY_MIN > 1 else ' (with this few slots, one resumed slot is already likely)'}."),
         capacity_max=CAPACITY_MAX, silent_days=SILENT_DAYS, resume_days=RESUME_DAYS, likely_min=LIKELY_MIN,
         per_visit={str(v["id"]): dict(evidence=v["evidence"], proven_slots=v["proven_slots"], pair_proof_slots=v["pair_proof_slots"],
                                       resumed_slots=v["resumed_slots"], outcome_refill_slots=v["outcome_refill_slots"]) for v in vis},
