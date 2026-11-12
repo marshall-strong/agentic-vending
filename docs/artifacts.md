@@ -2,8 +2,6 @@
 
 Every page the team has published about the vending project, in one place. These are live pages on claude.ai: each link always shows the latest version, so there is nothing to download or keep in sync.
 
-If a link won't open for you, tell Kevin.
-
 When you publish a new page about the project, add a row here in the same PR or a follow-up.
 
 ## Plan and status
