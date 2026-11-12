@@ -17,13 +17,13 @@ The project brief asks for a "documented restock and dispatch policy, with the d
 |---|---|---|
 | Regular visit | Friday afternoon, 3 PM target, likely 3 to 5 PM or later | #106 row 14 (`docs/planning/2026-11-12-david-answers.md`) |
 | Friday request cutoffs | In-store: Thursday 23:59. Amazon: no hard deadline; the planner warns after Wednesday 23:59 | #106 row 1; `vending/planner.py` |
-| Our sales after 3 PM | about 0.2 units an hour | `docs/cutover.md` (#105) |
+| Our sales after 3 PM | about 0.2 units an hour | `docs/cutover.md` (PR #105, open) |
 | Machine units sold 8 to 11 AM | 66% | `analysis/REPORT.md`, finding 7 |
 | Midweek visit | $25 a request, any number of slots; may take longer than 24 hours | `docs/agent/restocking.md`; config `midweek_fee_cents` |
 | Open requests | One at a time today; David may lift this | `docs/process-map.md`; #106 row 12 |
 | Column capacity | 7 (20 oz bottle), 8 (12 oz can), 11 (8.4 oz can) | `vending/capacity.py` |
 | Sales tax inside the shelf price | 8% | `vending/pricing.py`, config `tax_percent` |
-| Competition start | Thu 3 Dec. Staff first fill all 20 slots to capacity from our $600 (David to confirm the $600 part). The ledger opening is recorded before that fill. | #106 rows 2 and 3; #107 |
+| Competition start | Thu 3 Dec. Staff first fill all 20 slots to capacity from our $600 (David to confirm the $600 part; whether a slot may take fewer units is still asked, #102). The ledger opening is recorded before that fill. | #106 rows 2 and 3; #107 |
 | Run length | to the end of run week 9 | `docs/agent/rules-card.md` |
 
 **Sales rates.** Units per class day while the slot held stock, by segment of our 20 slots (`analysis/REPORT.md`, "Our slots"):
@@ -35,7 +35,7 @@ The project brief asks for a "documented restock and dispatch policy, with the d
 | Slow seller, low-priced | 0.767 | $2.165 |
 | Slow seller, erratic | 0.722 | $3.007 |
 
-Kept full, the 20 slots would sell about 23.3 units a class day (`analysis/REPORT.md`, "Next 4 weeks"). These are fall rates for other products; each slot's own rate replaces them once it counts (rule 1).
+Kept full, the 20 slots would sell about 23.3 units a class day (`analysis/REPORT.md`, "Next 4 weeks"). These fall rates are for other products; each slot's own rate replaces them (rule 1).
 
 **The gap between visits: 5 class days.** A Friday afternoon visit lands after the morning rush, so one gap holds Monday to Thursday plus next Friday morning. Friday afternoon adds little (0.2 an hour). Holiday weeks count class days only (`analysis/golisano_calendar_2026_27.json`; Winter Holiday Break 22 Dec to 1 Jan).
 
@@ -57,6 +57,8 @@ Kept full, the 20 slots would sell about 23.3 units a class day (`analysis/REPOR
 
 The factor is 1.6 to 1.9. Poisson understates the spread (rates rest on 11 weeks of one machine; `analysis/REPORT.md`, "Caveats"), so we round up to **2** (Proposed). 2 weeks = 14 days, because `units_per_day` is the last 7 calendar days' sales ÷ 7 (`vending/tools/machine_state.py`). Rounding up is cheap: unsold units keep their cost (A5); a stockout loses the sale.
 
+**Why slot plus closet.** 14 days of `units_per_day` is 2 weeks of mean sales, which equals one gap's 95% cover (1.6 to 1.9 × the mean, rounded to 2), not two gaps' need. Closet units count because step 1 loads them into the slot at this visit. Only slot units serve the gap, so where the cover exceeds a column (below) the excess waits in the closet for next Friday (Proposed).
+
 **Capacity limits.** One column holds the 95% cover only for slow sellers (7) or mid sellers in 8.4 oz cans (11). Chance a gap's sales exceed a full column:
 
 | Segment | 8.4 oz cans (11) | 12 oz cans (8) | 20 oz bottles (7) |
@@ -77,7 +79,7 @@ The fix is product choice, not visits: high-capacity packages, or two columns fo
 
 ## 2. Midweek visit: when $25 pays
 
-**Rule.** Ask for a midweek visit only when the margin it saves before Friday is more than $25:
+**Rule.** Ask for a midweek visit only when the margin it saves before Friday is more than $25 (no substitution between our slots, R9):
 
 > saved margin = sum over empty slots of (rate per class day × class days saved × margin per unit)
 
@@ -90,7 +92,7 @@ Plan on **2 class days saved** for a Monday-morning request, **1** for Tuesday, 
 | Product (run 2) | Unit cost at most | Price | Price ex tax | Margin | Break-even units (25 ÷ margin, rounded up) |
 |---|---|---|---|---|---|
 | Red Bull 8.4 oz | $40.50 ÷ 24 = $1.69 | $4.50 | $4.17 | $2.48 | 11 |
-| Celsius 12 oz | $25.00 ÷ 12 = $2.08 | $4.50 | $4.17 | $2.08 | 13 |
+| Celsius 12 oz | $25.00 ÷ 12 = $2.08 | $4.50 | $4.17 | $2.08 | 12 |
 | Mountain Dew 20 oz | $57.00 ÷ 24 = $2.38 | $3.25 | $3.01 | $0.63 | 40 |
 | Coca-Cola 20 oz | $63.50 ÷ 24 = $2.65 | $3.50 | $3.24 | $0.59 | 43 |
 | Diet Coke 20 oz | $59.00 ÷ 24 = $2.46 | $3.25 | $3.01 | $0.55 | 46 |
@@ -107,7 +109,7 @@ Plan on **2 class days saved** for a Monday-morning request, **1** for Tuesday, 
 | Diet Coke, fast rate, Monday | $1.87 | 14 (13.3) |
 | Red Bull, premium rate, Tuesday | 1.354 × 1 × $2.4792 | **8** (25 ÷ (1.354 × $2.4792) = 7.4) |
 
-One empty slot never pays for a visit. Soda needs more than half our slots empty.
+One empty slot never pays; soda needs over half our slots empty.
 
 **When cash is short, the bar rises.** If cash does not limit Friday's order, a visit costs $25. If it does, the $25 also pushes the last whole pack out of the order, with its margin:
 
@@ -118,22 +120,24 @@ One empty slot never pays for a visit. Soda needs more than half our slots empty
 
 The margin is a ceiling (A5). In practice, a cash-short week waits for Friday.
 
-**Riders.** Put all price changes and top-ups on the paid request. Only one request may be open (`request_pending`), and a Wednesday fill can push Amazon items past the Wednesday warning, so decide on a midweek visit before planning Friday.
+**Riders.** Put all price changes and top-ups on the paid request. Only one request may be open (`request_pending`), so decide on a midweek visit before planning Friday.
 
 ## 3. Slow sellers: when to pull
 
 The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 - **Flag** a slot with no sales for **5 school days in a row while records (a receipt or a count) say it held stock**. Break days don't count. A slot that may be empty is not slow.
-- **Act at the next Friday visit:** lower the price or swap the product. Pulled units go to the closet at cost. A flagged slot gets no new purchase. Swap pricing follows PR #99 and the $6.50 ceiling.
+- **Act at the next Friday visit:** lower the price or swap the product. Pulled units go to the closet at cost.
+
+**Proposed here (not in PR #100):** a flagged slot gets no new purchase; a swapped-in product is priced by PR #99's method (open) under the $6.50 ceiling.
 
 **Evidence** (`analysis/REPORT.md`, "Slow-seller rule"): over the fall, 75 flags. Of 39 with an outcome, 4 (10%) were live and 20 (51%) sold again only after a refill (probably empty). Hence the held-stock check, unvalidated (no fall receipts).
 
-**Swap first (Proposed by Kevin, 12 Nov; not agreed).** At a flag, allow **at most one price step down** (PR #99's step) if the slot has had no price test; if flagged again, swap. The units' cost is spent either way. At the floor (cost × 1.08, rounded up to 5 cents; `vending/pricing.py`) a sale keeps at most 4 cents over cost and ties up the slot; a swap at the free Friday visit gives it to a product that sells. This depends on R6: if end stock is valued below cost, a markdown gets closer to a swap (#102, P2).
+**Swap first (Proposed by Kevin, 12 Nov; not agreed).** At a flag, allow **at most one price step down** (PR #99's step), then swap; pulled units go to the closet at cost. The units' cost is spent either way. At the floor (cost × 1.08, rounded up to 5 cents; `vending/pricing.py`) a sale keeps at most 4 cents over cost and ties up the slot; a swap at the free Friday visit gives it to a product that sells. This depends on A5 (R6): if end stock is valued below cost, a markdown gets closer to a swap (#102, P2).
 
 **Paying for a swap:** takings plus the switch reserve ($68, one pack; #90). The first flag can't act before Fri 11 Dec (Thu 3 to Wed 9 Dec are the first 5 class days), so a week of takings is in.
 
-**The wildcard slot (Proposed by Kevin on #100; not agreed).** The agent picks one of our 20 slots, names it in its plan with a reason, and moves it only at a Friday visit. Ceiling about $8.00 (vs $6.50, PR #100); same floor as every slot, which today breaks even after tax, so Kevin's no-loss-leader aim needs a higher floor (open). Ideas: premium drink, high-price test, rotating feature, seasonal bet, anchor. Rules 1 to 3 apply. Purchase cap $82 (#90).
+**The wildcard slot (Proposed by Kevin on #100; not agreed).** The agent picks one of our 20 slots, names it in its plan with a reason, and moves it only at a Friday visit. Ceiling about $8.00 (others $6.50, PR #100); same floor as every slot. Aim: every sale profits, no loss leaders, which needs a floor above today's break-even (open). Ideas: premium drink, high-price test, rotating feature, seasonal bet, anchor. Purchase cap $82 (#90).
 
 ## 4. How the balance limits orders
 
@@ -147,13 +151,13 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 **Where $53 comes from** (#90): one midweek fee ($25.00, `midweek_fee_cents`) + one week of model spend at the daily cap (7 × $4.00 = $28.00, `model_daily_cap_cents`). The cap is the code's maximum, not typical spend ($0.02 to $0.80 a run, #90).
 
-**Spendable** = balance less sales tax owed (`get_account_balance`). The planner already refuses orders above spendable (`insufficient_balance`); the floor is stricter. Orders usually cost less than their maximum (run 2: $233.31 expected, $270.00 at most, `docs/sample-directive.md`).
+**Spendable** = balance less sales tax owed (`get_account_balance`). The planner refuses orders above spendable (`insufficient_balance`); the floor is stricter.
 
 **Condition on the capital plan:** at least $53 spendable after the day-one fill. Its caps leave $157 ($600 − $360 − $82 − $1). Then sales refill the account (about 23.3 × 5 = 117 units a week; cash depends on prices).
 
 ## Agent follow-ups (separate PR, after #99 and #100)
 
-#91 is done only when the agent's rules card points here. Needed: a pointer from `docs/agent/rules-card.md` and `docs/agent/restocking.md`; an in-stock rate per slot (from receipts, `vending/stock.py`); days of cover including the closet; the "when a rate counts" check; and `docs/agent/money.md` noting the fee's extra cost when cash binds. Until then, the agent buys when unsure.
+Once the team signs off, the agent needs: pointers from `docs/agent/rules-card.md` and `restocking.md`; an in-stock rate per slot (`vending/stock.py`); days of cover including the closet; and the "when a rate counts" check. Until then, the agent buys when unsure.
 
 ## Assumptions
 
@@ -169,6 +173,7 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 | R6 | Unsold stock is valued at cost at the end (A5), so over-stocking costs cash timing, not profit. | David valuing end stock at less than cost (#102). |
 | R7 | The held-stock check in the slow-seller rule works on receipts and counts. | Flagged slots that turn out empty. |
 | R8 | 5 class days of in-stock sales are enough for a slot's own rate to replace the segment prior. | Rates that keep moving a lot after 5 days. |
+| R9 | No substitution between our slots: a buyer who finds a slot empty buys nothing from us (unmeasured; `docs/inventory-demand.md`). If some switch, rule 2's saved margin is too high. | Sales in our other slots rising while one is empty. |
 
 ## Open decisions
 
@@ -178,6 +183,7 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - **The $53 spendable floor.** Proposed in #90, which owns it.
 - **Midweek trigger** (4 or more premium-priced slots empty by Monday; 8 by Tuesday; none after). Proposed here. #90 holds back 2 visits ($50).
 - **Order of cuts when the floor binds** (rule 4). Proposed here.
+- **Slot plus closet in rule 1**, and **no purchase for a flagged slot; swaps priced by PR #99 under $6.50** (rule 3). Proposed here.
 - **Swap first at a slow-seller flag** (rule 3). Proposed by Kevin, 12 Nov; depends on R6 (#102, P2).
 - **The wildcard slot** (rule 3; ceiling about $8.00, same floor). Proposed by Kevin on #100. Its $82 cap is #90's.
 - **The floor: break-even or profit.** Today's breaks even after tax; Kevin's aim needs a higher one. Not decided.
@@ -194,6 +200,6 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - `analysis/REPORT.md` (segment rates, restocked scenario, time of day, slow-seller simulation, caveats); `analysis/golisano_calendar_2026_27.json`.
 - `vending/tools/machine_state.py`, `vending/stock.py`, `vending/capacity.py`, `vending/config.py`, `vending/pricing.py`, `vending/planner.py`.
 - `docs/sample-directive.md` (run 2 pack prices and order cost); `docs/process-map.md` (one open request).
-- PR #99 (pricing method; not merged), PR #100 (slow-seller rule, $6.50 ceiling; agreed 12 Nov, not merged), PR #105 (`docs/cutover.md`), PR #106 (David's 12 Nov answers; merged).
-- `docs/opening-capital-plan.md` (#90); `docs/inventory-demand.md` (#93).
+- PR #99 (pricing method; not merged), PR #100 (slow-seller rule, $6.50 ceiling; agreed 12 Nov, not merged), PR #105 (`docs/cutover.md`; open), PR #106 (David's 12 Nov answers; merged).
+- `docs/opening-capital-plan.md` (#90); `docs/inventory-demand.md` (#93): sibling branches, to merge with this one.
 - Issues #90, #91 (this deliverable), #102 (open questions), #107 (actions from 12 Nov).
