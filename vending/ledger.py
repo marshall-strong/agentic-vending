@@ -58,7 +58,7 @@ from psycopg.types.json import Jsonb
 
 from vending import config, counters, db, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
-from vending.slots import DEVICE_ID, our_slots
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools.sales_history import tax_cents
 
 KINDS = ("opening", "capital", "tokens", "adjustment", "tax_remitted")
@@ -692,7 +692,9 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"{e.id:>4}  {e.at:%Y-%m-%d %H:%M}  {e.kind:12}  {money(e.amount_cents):>10}  {e.detail}"
                           + (f"  [{e.reference}]" if e.reference else "") + f"  by {e.recorded_by}")
                 return 0
-        except LedgerError as error:
+        except (LedgerError, SlotsNotRecorded) as error:
+            # SlotsNotRecorded: the balance counts our slots' sales, so `show` needs the assignment
+            # (python -m vending.slots record), which Azure lacks between `migrate` and `record`.
             print(error, file=sys.stderr)
             return 1
         if args.action != "open":
