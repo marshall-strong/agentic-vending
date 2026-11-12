@@ -150,3 +150,23 @@ def test_labs_refuse_a_server_scope_beyond_our_slots(monkeypatch):
     monkeypatch.setattr(slots_config, "server_assignment_supported", lambda: True)
     with pytest.raises(SystemExit, match="not one of our slots"):
         labkit.scope_of(lab_data(("11", "12", "15"), slots_config.SOURCE_SERVER))
+
+
+def test_a_stored_server_answer_beyond_our_slots_is_refused(monkeypatch):
+    monkeypatch.setattr(slots_config, "from_server", lambda conn: ("11", "15"))
+    with pytest.raises(SystemExit, match="not one of our slots"):
+        slots_config.resolve_slots(None)
+    with pytest.raises(SystemExit, match="not one of our slots"):
+        slots_config.resolve_slots("15")
+
+
+def test_a_narrowed_run_labels_the_rest_not_in_this_run():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "analysis" / "labs"))
+    import labkit
+    scope = {"device": slots_config.DEVICE_ID, "machine": {"shelves": 5, "columns": 8}, "slots_text": "x", "source_line": "x"}
+    full = labkit.tokens({**scope, "our_slots": list(OURS)})
+    part = labkit.tokens({**scope, "our_slots": ["15", "16"]})
+    assert (full["TURF_LABEL"], full["OTHER_PHRASE"]) == ("Not our turf", "not ours")
+    assert (part["TURF_LABEL"], part["OTHER_PHRASE"]) == ("Not in this run", "left out of this run")
+    for v in (*full.values(), *part.values()):
+        assert labkit.SAFE.fullmatch(v), v

@@ -52,7 +52,8 @@ def lab_cut(d):
                   # the reference visit is the last refill PROVEN at a single visit; later visits refilled only some of our rails
                   last=dict(statement=lpr['statement'], proven_visit=lpr['visit'], proven_slots=lpr['slots'],
                             restock_visit=lpr['visit'], max_after_restock=lpr['max_units_one_slot_after'],
-                            pair_visits=[x['visit'] for x in lpr['later_pair']['visits']], pair_slots=lpr['later_pair']['slots'],
+                            pair_visits=[x['visit'] for x in (lpr.get('later_pair') or {}).get('visits', [])],
+                            pair_slots=(lpr.get('later_pair') or {}).get('slots', []),
                             topups=[v['id'] for v in d['visits'] if v['id'] > lpr['visit']
                                     and v['evidence'] in ('proven refill', 'likely refill', 'possible top-up')]))
     pc_ = d['photo_check']

@@ -18,7 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent          # analysis/labs
 ANALYSIS = HERE.parent                          # analysis
 sys.path.insert(0, str(ANALYSIS))
-from slots_config import check_scope  # noqa: E402  (refuses a scope with a slot that isn't ours)
+from slots_config import SLOTS as ASSIGNED, check_scope  # noqa: E402  (refuses a scope with a slot that isn't ours)
 LAB_DATA = ANALYSIS / "out" / "lab_data.json"
 DATA = ANALYSIS / "data"
 OUT = ANALYSIS / "out" / "labs"
@@ -72,7 +72,11 @@ def tokens(scope):
     rows = sorted({int(s[0]) for s in slots})
     cols = sorted({int(s[1]) for s in slots})
     our = f"our {n} slot" + ("" if n == 1 else "s")
+    partial = set(slots) != set(ASSIGNED)    # a narrowed --slots run: some hatched rails are ours
     return {
+        "TURF_LABEL": "Not in this run" if partial else "Not our turf",
+        "TURF_TIP": "Left out of this run (a narrowed slot list). It may be one of ours." if partial else "Rival rails. Eyes front.",
+        "OTHER_PHRASE": "left out of this run" if partial else "not ours",
         "DEVICE": scope["device"],
         "N_SLOTS": str(n),
         "N_OTHER": str(scope["machine"]["shelves"] * scope["machine"]["columns"] - n),

@@ -1382,6 +1382,8 @@ def main():
         """Pairwise level differences (a - b) from m_rc with 95% CI, plus Bonferroni-adjusted CI over all pairs."""
         names = list(m_rc.params.index)
         npair = len(levels) * (len(levels) - 1) // 2
+        if npair == 0:
+            return []                       # one level only (a narrowed run): nothing to compare
         zb = stats.t.ppf(1 - 0.025 / npair, m_rc.df_resid)
         out = []
         for i, a in enumerate(levels):

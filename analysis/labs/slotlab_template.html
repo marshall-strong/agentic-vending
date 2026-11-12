@@ -249,7 +249,7 @@ rect.cf-yes{fill:var(--s2)} rect.cf-no{fill:var(--s3)} rect.cf-unk{fill:var(--ra
   <div class="panel-head">
     <span class="eyebrow">Step 1 · Machine front</span>
     <h2>Which slots sell, once you allow for empty shelves?</h2>
-    <p class="muted">The picture is the front of the machine as you face it: shelf 1 is the top shelf, and each shelf runs from selection 1 on the left to 8 on the right, so slot 36 is shelf 3, sixth from the left. Each tall rail is one slot, colored by the metric you pick, with its number and current price on the ledge below it, as on the real tags. The totals to the right add up our slots on each shelf; the ones below add up each of our columns. Hatched rails are not ours and carry no values. Turn on the stock-out adjustment to see what the slot would look like if it had never run empty.</p>
+    <p class="muted">The picture is the front of the machine as you face it: shelf 1 is the top shelf, and each shelf runs from selection 1 on the left to 8 on the right, so slot 36 is shelf 3, sixth from the left. Each tall rail is one slot, colored by the metric you pick, with its number and current price on the ledge below it, as on the real tags. The totals to the right add up our slots on each shelf; the ones below add up each of our columns. Hatched rails are {{OTHER_PHRASE}} and carry no values. Turn on the stock-out adjustment to see what the slot would look like if it had never run empty.</p>
   </div>
   <div class="grid2">
     <div class="card stack">
@@ -547,7 +547,7 @@ rect.cf-yes{fill:var(--s2)} rect.cf-no{fill:var(--s3)} rect.cf-unk{fill:var(--ra
 
 <footer>
   <p id="footData"></p>
-  <p>Sales are counter rises between polls, assigned to days by the time of the poll (regular polling) or spread across the gap (earlier). Visits are rises in the machine's door-open counter (EA2*DO), merged when they fall within 3 hours; the counter proves the door opened, not what was loaded. "Suspected empty" comes from a heuristic that compares a slot's silence with what it normally sells; it is not an inventory count. The machine does not report product names; the ones in step 2 are read from the team's dated photos. Only {{OUR}} carry values here: hatched rails are not ours and show none.</p>
+  <p>Sales are counter rises between polls, assigned to days by the time of the poll (regular polling) or spread across the gap (earlier). Visits are rises in the machine's door-open counter (EA2*DO), merged when they fall within 3 hours; the counter proves the door opened, not what was loaded. "Suspected empty" comes from a heuristic that compares a slot's silence with what it normally sells; it is not an inventory count. The machine does not report product names; the ones in step 2 are read from the team's dated photos. Only {{OUR}} carry values here: hatched rails are {{OTHER_PHRASE}} and show none.</p>
   <p>{{SOURCE_LINE}} Ours: {{SLOT_RANGES}} on machine {{DEVICE}}.</p>
 </footer>
 </div>
@@ -556,8 +556,8 @@ rect.cf-yes{fill:var(--s2)} rect.cf-no{fill:var(--s3)} rect.cf-unk{fill:var(--ra
 <script>
 const DATA = __DATA__;
 // Lab core: pure functions, shared by the page and the offline check script.
-// The label for rails that are not ours (the team may rename it: change it here only). They are drawn hatched, with no values.
-const TURF = { label: 'Not our turf', tip: 'Rival rails. Eyes front.' };
+// The label for rails that are {{OTHER_PHRASE}} (the team may rename it: change it here only). They are drawn hatched, with no values.
+const TURF = { label: '{{TURF_LABEL}}', tip: '{{TURF_TIP}}' };
 const SLOTS = DATA.slots, BY = {};
 SLOTS.forEach(s => { BY[s.slot] = s; });
 const D = DATA.days, ND = D.date.length;
@@ -1014,7 +1014,7 @@ const current = () => ($$('nav.steps [aria-selected=true]')[0] || {}).dataset.st
 
 /* ---------- header / footer ---------- */
 const M = DATA.meta;
-$('#turfNote').textContent = 'Shelf and column totals add up our ' + SLOTS.length + ' slots only. Hatched rails ("' + TURF.label + '") are not ours: no values, not counted.';
+$('#turfNote').textContent = 'Shelf and column totals add up our ' + SLOTS.length + ' slots only. Hatched rails ("' + TURF.label + '") are {{OTHER_PHRASE}}: no values, not counted.';
 $('#effN').textContent = 'Units per in-stock class day. One estimate per slot (n = ' + SLOTS.length + ' of our slots), so each shelf has ' + LEVELS.col.length + ' slots and each column ' + LEVELS.row.length + '.';
 $('#hdrRange').textContent = 'Polls from ' + fmtDate(M.first_poll) + ' to ' + fmtDate(M.last_poll) + ', 2026.';
 $('#footData').textContent = 'Data: ' + M.polls.toLocaleString('en-US') + ' polls of machine {{DEVICE}} from ' + M.first_poll.replace('T', ' ') + ' to ' + M.last_poll.replace('T', ' ') + ' (Eastern). Our ' + SLOTS.length + ' slots sold ' + M.totals.units + ' units for ' + money(M.totals.cents / 100) + ' in takings, tax included. Regular hourly polling from ' + fmtDate(M.regular_from) + '. Regular-era class days used for rates: ' + REGCLS.length + '.';

@@ -12,7 +12,7 @@ Steps, each stops the run if it fails:
     1. analysis/export_sales.py        (skipped with --no-export)
     2. analysis/sales_analysis.py      writes analysis/out/lab_data.json and analysis_report.md
     3. analysis/labs/*_lab.py          write analysis/out/labs/<lab>/index.html and standalone.html
-    4. copy analysis_report.md to analysis/REPORT.md (only when every check passed)
+    4. copy analysis_report.md to analysis/REPORT.md (only when every check passed and the run covers all our slots)
 
 Full output of every step goes to analysis/out/rebuild_log.txt. Exits 1 if a step fails or all_ok is false.
 """
@@ -29,6 +29,9 @@ REPO = ANALYSIS.parent
 OUT = ANALYSIS / "out"
 LABS = [("forecast-lab", "forecast_lab.py"), ("rhythm-lab", "rhythm_lab.py"), ("slot-lab", "slot_lab.py")]
 TURF = "Not our turf"
+TURF_PARTIAL = "Not in this run"
+sys.path.insert(0, str(ANALYSIS))
+from slots_config import SLOTS as ASSIGNED  # noqa: E402
 
 
 def project_python():
@@ -77,17 +80,24 @@ def main():
     all_ok = bool(checks.get("all_ok"))
     n = len(sc["our_slots"])
     rival = sc["machine"]["shelves"] * sc["machine"]["columns"] - n
+    partial = set(sc["our_slots"]) != set(ASSIGNED)     # a narrowed --slots run
+    turf = TURF_PARTIAL if partial else TURF
     print()
     print(f"slots     {n} on {sc['device']}: {sc['slots_text']}")
     print(f"source    {sc['source']}")
     print(f"          {sc['source_line']}")
     print(f"all_ok    {all_ok}")
     print(f"data      {lab['meta']['first_poll']} to {lab['meta']['last_poll']}, {lab['meta']['polls']} polls")
-    print(f"not ours  {rival} rails, drawn hatched as '{TURF}' with no values")
+    if partial:
+        print(f"narrowed  {n} of our {len(ASSIGNED)} slots; the other {rival} rails are hatched as '{turf}' with no values")
+    else:
+        print(f"not ours  {rival} rails, drawn hatched as '{turf}' with no values")
     for name, _ in LABS:
         page = (OUT / "labs" / name / "index.html").read_text(encoding="utf-8")
-        print(f"{name:13s} {OUT / 'labs' / name / 'index.html'}  (+ standalone.html)  '{TURF}' in source: {page.count(TURF)}")
-    if all_ok and not args.no_report_copy:
+        print(f"{name:13s} {OUT / 'labs' / name / 'index.html'}  (+ standalone.html)  '{turf}' in source: {page.count(turf)}")
+    if partial:
+        print(f"report    left as is: a narrowed run's report stays in {OUT / 'analysis_report.md'}")
+    elif all_ok and not args.no_report_copy:
         shutil.copyfile(OUT / "analysis_report.md", ANALYSIS / "REPORT.md")
         print(f"report    copied to {ANALYSIS / 'REPORT.md'}")
     print(f"log       {OUT / 'rebuild_log.txt'}")

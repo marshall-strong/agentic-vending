@@ -370,7 +370,7 @@ svg [data-k]:focus{outline:none;stroke:var(--ink);stroke-width:2}
   </div>
   <div class="card stack" style="margin-top:20px">
     <h3>Which slots each visit would flag</h3>
-    <p class="small muted">Rows are the visits, with their refill evidence (P proven, L likely, T possible top-up), and the next visit (data to the last day) at the bottom. Columns are {{OUR}} by shelf (shelf 1 is the top). The hatched bands stand for the other {{N_OTHER}} slots, which are not ours: they are shown without values. Hover or tap a square for the slot's silence, its next 7 days, any refill in between and, for the Poisson rule, its P(0).</p>
+    <p class="small muted">Rows are the visits, with their refill evidence (P proven, L likely, T possible top-up), and the next visit (data to the last day) at the bottom. Columns are {{OUR}} by shelf (shelf 1 is the top). The hatched bands stand for the other {{N_OTHER}} slots, which are {{OTHER_PHRASE}}: they are shown without values. Hover or tap a square for the slot's silence, its next 7 days, any refill in between and, for the Poisson rule, its P(0).</p>
     <div class="legend" id="ruleLegend"></div>
     <div class="scrollx"><div class="chartbox" id="ruleBox" style="min-width:760px"><svg id="ruleGrid" role="img" aria-label="Slots flagged at each visit"></svg><div class="tip" hidden></div></div></div>
   </div>
@@ -588,7 +588,7 @@ if (typeof module !== 'undefined') module.exports = { DATA, CORE };
 (function () {
   if (typeof document === 'undefined') return;
   const C = CORE, D = DATA.daily;
-  const TURF = { label: 'Not our turf', tip: 'Rival rails. Eyes front.' };
+  const TURF = { label: '{{TURF_LABEL}}', tip: '{{TURF_TIP}}' };
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1078,7 +1078,7 @@ if (typeof module !== 'undefined') module.exports = { DATA, CORE };
     const box = $('#ruleBox'), svg = $('#ruleGrid');
     const W = Math.max(760, widthOf(box)), L = 112, T = 34, gapS = 8;
     // The machine as you face it, shelf by shelf (DATA.scope.machine): each of our slots gets a column; every run of
-    // rails that are not ours becomes one hatched band (2 pitches wide), with no values.
+    // rails that are {{OTHER_PHRASE}} becomes one hatched band (2 pitches wide), with no values.
     const MC = DATA.scope.machine, OURS = new Set(CORE.SLOTS), LAY = [];
     for (let r = 1; r <= MC.shelves; r++) {
       let inBand = false;

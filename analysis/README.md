@@ -60,11 +60,15 @@ Then one command does it all. Run it from the repo root with the analysis venv; 
 analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe
 ```
 
-When every check passes it copies the report to `REPORT.md`. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/`. If our slot list ever changes:
+When every check passes it copies the report to `REPORT.md`. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/`.
+
+To look at only some of our slots, say shelves 1 and 2, narrow the list:
 
 ```powershell
-analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe --slots 15,16,17,18,25,26,27,28,35,36,37,38,45,46,47,48,55,56,57,58
+analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe --slots 15,16,17,18,25,26,27,28
 ```
+
+`--slots` can only narrow our list, never add to it. A narrowed run leaves `REPORT.md` as it is (its report stays in `analysis/out/`), and the labs hatch the rest as "Not in this run", not "Not our turf". Run it again without `--slots` to go back to all our slots. If our assignment ever changes, change `vending.slots.SLOTS` (with #69) instead of passing `--slots`.
 
 The steps by hand:
 

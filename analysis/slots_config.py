@@ -89,7 +89,8 @@ def _rollback(conn):
 def resolve_slots(cli_value, conn=None):
     """(device_id, slots, source) for this run. See the module docstring for the order."""
     stored = from_server(conn)
-    ours = check(stored, "stored server assignment", stored) if stored else SLOTS
+    # The stored answer is bounded by SLOTS as well: when #69 lands, SLOTS must be updated with it.
+    ours = check(stored, "stored server assignment", SLOTS) if stored else SLOTS
     if cli_value is not None:
         return DEVICE_ID, parse_slots(cli_value, ours), SOURCE_CLI   # only ever a part of our list
     if stored:
