@@ -42,6 +42,8 @@ class FakeBridge:
         self.catalog_body = None     # set to serve something other than {"products": CATALOG}
         self.cut = False             # answer the POST (with `answer`'s status) with a body shorter than its Content-Length
         self.answer = (201, {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
+        self.received = threading.Event()  # set once a POST has arrived
+        self.hold: threading.Event | None = None  # if set, a POST isn't answered until this is
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -64,6 +66,9 @@ class FakeBridge:
             def do_POST(self):
                 assert self.path == "/api/v1/purchase-requests" and self.headers["X-API-Key"] == "test-key"
                 fake.posts.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                fake.received.set()
+                if fake.hold is not None:
+                    fake.hold.wait(30)
                 if fake.cut:
                     data = b'{"id": "pr-1", "status": "pen'
                     self.send_response(fake.answer[0])

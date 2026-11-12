@@ -17,9 +17,13 @@ anything is sent:
    bridge said no, and says why), `not_filed` (it never left), or `unknown`
    (sent, no usable answer; a 5xx keeps the body the bridge sent).
 
+The reply carries the plan's `warnings` and `notes`, as preview's does.
+
 If the bridge accepted the request but recording that fails anyway, the answer
 is written to stderr and the error the agent sees names the request ID and the
-`resolve` command, so the ID is never only in memory. While a row is `sending`
+`resolve` command, so the ID is never only in memory. That includes finding the
+row already settled by something else (`submissions.AlreadySettled`), which
+`settle` refuses to overwrite. While a row is `sending`
 or `unknown`, the request may or may not exist on the bridge, so the tool
 refuses to submit anything until a person settles it with
 `python -m vending.submissions resolve`.
@@ -53,6 +57,9 @@ class SubmitReply(WriteReply):
     lines: int = 0
     max_cost: str | None = None
     directive: str | None = None
+    # The same as preview_desired_state's, from the plan that was sent.
+    warnings: list[str] = []
+    notes: list[str] = []
 
 
 class AnswerNotStored(RuntimeError):
@@ -97,7 +104,9 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
         # fails now, while nothing has left, not after the bridge has the request.
         with connect() as side:
             row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee)
-            return _send(client, plan, body, row, side, gathered.now)
+            reply = _send(client, plan, body, row, side, gathered.now)
+        # What preview would have said about this plan, so a changed warning since the preview isn't missed.
+        return reply.model_copy(update={"warnings": list(plan.warnings), "notes": list(gathered.notes)})
 
     return action
 

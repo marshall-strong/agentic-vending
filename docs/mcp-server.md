@@ -296,9 +296,15 @@ python -m vending.submissions resolve 7 --not-filed --by kevin              # it
 Resolving with a request ID also records it in `purchase_requests`. Both paths carry the midweek
 visit fee the plan quoted for an off-cycle request (`visit_fee_cents`, saved on the `sending` row
 before the POST), so the ledger charges what was agreed then even if `config.midweek_fee_cents`
-changes later. Every change is logged with the `--by` name. The reply to an accepted submit carries
-the request ID, the plan hash, the number of lines, the max cost and the directive the worker will
-read.
+changes later. Every change is logged with the `--by` name.
+
+`resolve` takes the same lock as every write, so while a submit is in flight it waits (and says
+so) until that submit has settled its row; a person's answer and the bridge's can't overwrite each
+other. The settle itself only ever changes a row that is still `sending`.
+
+The reply to an accepted submit carries the request ID, the plan hash, the number of lines, the max
+cost and the directive the worker will read, plus the plan's `warnings` and `notes`, the same as
+the preview's.
 
 ## Adding a tool's logic
 

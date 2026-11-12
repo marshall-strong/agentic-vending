@@ -339,3 +339,99 @@ def test_cli_lists_and_resolves(db, fake, schema_url, monkeypatch, capsys):  # n
     assert "not sending or unknown" in capsys.readouterr().err
     assert submissions.main(["list"]) == 0
     assert "Nothing to settle" in capsys.readouterr().out
+
+
+def test_settle_never_overwrites_a_row_a_person_already_settled(db, schema_url):  # noqa: F811
+    with open_in(*schema_url) as side:
+        row = submissions.save_sending(side, "h", {"lines": [], "off_cycle": False}, None)
+        submissions.resolve(db, row, None, "kevin")
+        with pytest.raises(submissions.AlreadySettled, match="not_filed by kevin"):
+            submissions.settle(side, row, "accepted", request_id="pr-1", response={"id": "pr-1"},
+                               submitted_at=datetime(2026, 11, 9, tzinfo=timezone.utc))
+    assert db.execute("select status, request_id, resolved_by from purchase_submissions").fetchall() == [
+        ("not_filed", None, "kevin")]
+    assert db.execute("select count(*) from purchase_requests where request_id = 'pr-1'").fetchone() == (0,)
+
+
+def test_resolve_waits_for_a_submit_in_flight(db, fake, schema_url):  # noqa: F811
+    prepared(db)
+    from vending.tools import submit as submit_tool
+    from vending.write_gate import run_write
+    plan = desired(restock_15(fill_to=20), sourcing=[coke_sourcing()])
+    fake.hold = threading.Event()
+    results = {}
+
+    def sending():
+        with open_in(*schema_url) as conn:
+            action = submit_tool.submit_desired_state(plan, fake.client, lambda: open_in(*schema_url))
+            results["submit"] = run_write(conn, "submit_desired_state", {}, action).request_id
+
+    def resolving():
+        with open_in(*schema_url) as conn:
+            try:
+                results["resolve"] = submissions.resolve(conn, 1, None, "kevin")
+            except ValueError as error:
+                results["resolve"] = str(error)
+
+    submitter = threading.Thread(target=sending)
+    submitter.start()
+    # The POST has arrived and isn't answered yet, so submission 1 is `sending`.
+    assert fake.received.wait(30)
+    resolver = threading.Thread(target=resolving)
+    resolver.start()
+    resolver.join(timeout=1)
+    assert resolver.is_alive(), "resolve settled the row while its request was still in flight"
+    fake.hold.set()
+    submitter.join(timeout=60)
+    resolver.join(timeout=60)
+    # The bridge's answer is recorded; the person's resolve then finds nothing left to settle.
+    assert results["submit"] == "pr-1"
+    assert "is accepted, not sending or unknown" in results["resolve"]
+    assert db.execute("select status, request_id, resolved_by from purchase_submissions").fetchall() == [
+        ("accepted", "pr-1", None)]
+
+
+def test_resolve_gives_up_waiting_when_asked_to(db, schema_url):  # noqa: F811
+    from vending.config import is_halted, set_halted
+    set_halted(db, False, "test")
+    with open_in(*schema_url) as holder:
+        with holder.transaction():
+            is_halted(holder, lock=True)
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                submissions.resolve(db, 1, None, "kevin", lock_timeout_ms=100)
+
+
+def test_cli_says_it_is_waiting_for_a_submit_in_flight(db, fake, schema_url, monkeypatch, capsys):  # noqa: F811
+    prepared(db)
+    fake.answer = (503, {"detail": "down"})
+    submit()
+    from vending import db as db_module
+    from vending.config import is_halted
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(submissions, "WAIT_NOTICE_MS", 100)
+    locked, release = threading.Event(), threading.Event()
+
+    def hold_the_write_lock():
+        with open_in(*schema_url) as holder:
+            with holder.transaction():
+                is_halted(holder, lock=True)
+                locked.set()
+                release.wait(30)
+
+    holder = threading.Thread(target=hold_the_write_lock)
+    holder.start()
+    assert locked.wait(30)
+    threading.Timer(1, release.set).start()
+    assert submissions.main(["resolve", "1", "--not-filed", "--by", "kevin"]) == 0
+    holder.join(timeout=30)
+    out = capsys.readouterr().out
+    assert "waiting for a submit in flight to finish" in out and "marked never filed by kevin" in out
+
+
+def test_submit_returns_the_same_warnings_and_notes_as_preview(db, fake):  # noqa: F811
+    prepared(db)
+    previewed = preview()
+    reply = submit()
+    assert reply["success"]
+    assert (reply["warnings"], reply["notes"]) == (previewed["warnings"], previewed["notes"])
+    assert reply["warnings"] or reply["notes"], "the case should have something to show"
