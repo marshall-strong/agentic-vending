@@ -11,8 +11,10 @@ One run:
    offers the model the tools the server lists. A dry run hides every write tool. A live run
    refuses to start while `submit_desired_state` isn't built, sends only the plan its last preview
    accepted (with that preview's plan hash), and sends at most once.
-3. The model gets the time, the week's rhythm and its own notes from the last run. It calls tools
-   until it answers with a decision (submit or skip), a weekly update for the team and notes for
+3. The system prompt is the rules card (`docs/agent/rules-card.md`, read once at the start; a run
+   without it fails before any model request) followed by `SYSTEM`. Nothing in it changes between
+   requests, so it is read from cache. The model gets the time, the week's rhythm and its own
+   notes from the last run in the first message, after the system prompt. It calls tools until it answers with a decision (submit or skip), a weekly update for the team and notes for
    next week. Every request goes through `vending.harness`, so its cost is in the ledger before it
    is sent and the run and daily caps hold.
 4. The run is recorded in `agent_runs`: `submitted` once a `submit_desired_state` call
@@ -33,6 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -42,6 +45,7 @@ from psycopg.types.json import Jsonb
 from vending import agent_runs, db
 from vending.config import is_halted
 from vending.harness import EASTERN, Harness, HarnessError
+from vending.tools.project_rules import RULES_DIR
 
 DEFAULT_MODEL = "claude-opus-5-5"   # pending a team decision
 DEFAULT_EFFORT = "medium"
@@ -52,11 +56,13 @@ MAX_TURNS = 15                      # tool rounds; on the last one the model mus
 WRITE_TOOLS = frozenset({"submit_desired_state", "set_price", "request_catalog_product"})
 SUBMIT = "submit_desired_state"
 PREVIEW = "preview_desired_state"
+RULES_CARD = RULES_DIR / "rules-card.md"
 
+# Follows the rules card in the system prompt; the card holds the goal, guardrails and integrity rules.
 SYSTEM = """\
-You run the 20 vending-machine slots a student team operates as a business, one week at a time. \
-Profit is revenue (ex 8% sales tax) minus what the drinks cost minus $25 for each midweek visit \
-minus what you cost to run, so don't buy what won't sell and don't run out of what does.
+You run the slots one week at a time. Revenue is counted ex 8% sales tax. Don't buy what won't \
+sell and don't run out of what does. The rules card above is always on; call get_project_rules \
+for the details behind it (pricing, restocking, money, guardrails).
 
 The week: the main run is Thursday, before the midnight cutoff for Friday's restock. A student \
 worker loads the machine at the free Friday visit. Prices change only at a visit, by hand: set \
@@ -105,6 +111,23 @@ class Outcome:
 
 UNRESOLVED = ("SUBMISSION UNRESOLVED: the bridge may have accepted it. Check `python -m vending.submissions list` "
               "before anyone submits again. ")
+
+
+class RulesCardMissing(RuntimeError):
+    """The rules card can't be read: the agent doesn't run without it."""
+
+
+def system_prompt(card_path: Path | None = None) -> str:
+    """The rules card, then `SYSTEM`. Raises `RulesCardMissing` rather than run without the card."""
+    path = card_path or RULES_CARD
+    try:
+        card = path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise RulesCardMissing(f"The rules card {path} can't be read ({error}); the agent doesn't run "
+                               "without its rules.") from error
+    if not card:
+        raise RulesCardMissing(f"The rules card {path} is empty; the agent doesn't run without its rules.")
+    return f"{card}\n\n{SYSTEM}"
 
 
 def tool_definitions(listed: list[Any], *, live: bool) -> list[dict]:
@@ -160,7 +183,8 @@ def brief(now: datetime, notes: str, *, live: bool) -> str:
 
 
 async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tools: list[dict], out: Outcome, *,
-                   model: str, effort: str, opening: str, live: bool, halted: Callable[[], bool] = lambda: False,
+                   model: str, effort: str, system: str, opening: str, live: bool,
+                   halted: Callable[[], bool] = lambda: False,
                    on_submit: Callable[[Outcome], None] = lambda out: None, max_turns: int = MAX_TURNS,
                    label: str = "") -> None:
     """The tool loop, filling in `out` as it goes so nothing it learned is lost if it stops early.
@@ -174,7 +198,7 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
         if await anyio.to_thread.run_sync(halted):
             out.status, out.detail = "halted", f"The halt switch was turned on; stopped before turn {turn + 1}."
             return
-        request = {"model": model, "max_tokens": MAX_TOKENS, "system": SYSTEM, "messages": messages,
+        request = {"model": model, "max_tokens": MAX_TOKENS, "system": system, "messages": messages,
                    "tools": tools, "tool_choice": {"type": "auto" if turn < max_turns else "none"},
                    "cache_control": {"type": "ephemeral"},     # each turn re-sends the history: read it from cache
                    "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": ANSWER_SCHEMA}}}
@@ -299,7 +323,7 @@ def _settle(out: Outcome) -> None:
 async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT,
               connect: Callable[[], psycopg.Connection] = db.connect, client: Any = None,
               now: Callable[[], datetime] | None = None, open_tools: Callable | None = None,
-              max_turns: int = MAX_TURNS) -> tuple[int, Outcome]:
+              max_turns: int = MAX_TURNS, rules_card: Path | None = None) -> tuple[int, Outcome]:
     """One weekly run, recorded in `agent_runs`. Returns (run id, outcome)."""
     now = now or (lambda: datetime.now(timezone.utc))
     with connect() as conn:
@@ -315,6 +339,7 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
         if halted():
             out.status, out.detail = "halted", "The halt switch is on: nothing was read, called or sent."
             return run_id, out
+        system = system_prompt(rules_card)     # before any server is started or request sent
         with connect() as conn:
             notes = last_notes(conn, live=live)
         if client is None:
@@ -326,7 +351,8 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
                 out.detail = "submit_desired_state isn't built on this server, so a live run can't submit. Use a dry run."
             else:
                 await converse(harness, call_tool, tool_definitions(listed, live=live), out, model=model,
-                               effort=effort, opening=brief(now(), notes, live=live), live=live, halted=halted,
+                               effort=effort, system=system, opening=brief(now(), notes, live=live), live=live,
+                               halted=halted,
                                on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
                                label=f"agent run {run_id}")
     except Exception as error:   # record the run whatever broke; the ledger already holds what was spent

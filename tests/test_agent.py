@@ -391,3 +391,50 @@ def test_a_submit_call_that_raises_is_flagged_unresolved(connect, conn):
     run_id, out = go(connect, client, DiesOnSubmit(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED}), live=True)
     status, detail = stored(conn, run_id)[1], stored(conn, run_id)[5]
     assert status == "failed" and detail.startswith("SUBMISSION UNRESOLVED") and "stdio closed" in detail
+
+
+# --- The rules card -----------------------------------------------------------------
+
+def test_the_system_prompt_is_the_rules_card_then_the_instructions(connect, conn):
+    go(connect, Script(answer(notes="Slot 3 is slow.")), Tools())
+    client = Script(tool_turn(use("get_machine_state")), answer())
+    go(connect, client, Tools())
+    card = agent.RULES_CARD.read_text(encoding="utf-8").strip()
+    system = client.sent[0]["system"]
+    assert system.startswith(card) and system.index(card) < system.index(agent.SYSTEM)
+    assert "get_project_rules" in system
+    # The volatile part (the time, last week's notes) is in the messages, never in the cached system prompt.
+    assert "Slot 3 is slow" not in system and "Eastern" not in system
+    assert "Slot 3 is slow" in client.sent[0]["messages"][0]["content"]
+    assert [r["system"] for r in client.sent] == [system, system]
+
+
+def test_a_missing_rules_card_fails_the_run_before_any_model_request(connect, conn, tmp_path):
+    opened = []
+
+    class Watched(Tools):
+        def opener(self):
+            opened.append(True)
+            return super().opener()
+
+    client, tools = Script(answer()), Watched()
+    missing = tmp_path / "rules-card.md"
+    run_id, out = anyio.run(lambda: agent.run(live=False, connect=connect, client=client, now=lambda: NOW,
+                                              open_tools=tools.opener, rules_card=missing))
+    assert out.status == "failed" and "RulesCardMissing" in out.detail and "rules card" in out.detail
+    assert client.sent == [] and tools.calls == [] and opened == []
+    assert stored(conn, run_id)[:2] == ("dry-run", "failed")
+    assert tokens(conn) == (0, 0)
+
+
+def test_an_empty_rules_card_is_refused(tmp_path):
+    empty = tmp_path / "rules-card.md"
+    empty.write_text("  \n", encoding="utf-8")
+    with pytest.raises(agent.RulesCardMissing):
+        agent.system_prompt(empty)
+
+
+def test_get_project_rules_is_offered_when_the_server_lists_it(connect, conn):
+    client = Script(answer())
+    go(connect, client, Tools(SERVER_TOOLS + ["get_project_rules"]))
+    assert "get_project_rules" in {t["name"] for t in client.sent[0]["tools"]}
