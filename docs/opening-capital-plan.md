@@ -26,8 +26,8 @@ So the plan's first line is the day-one fill. Everything else is what we keep ba
 | Day-one fill, most it may cost | **$400.00** | Proposed cap. The example fill below is $365.50 at most; run 1's dry run was $360 at most (#90) |
 | Midweek visit fees | $50.00 | 2 visits × $25 (`docs/agent/restocking.md`) |
 | Model spend | $9.00 | 9 run weeks × 1 weekly run × $1.00 run cap (#51) |
-| Product-switch reserve | $127.00 | 2 packs × $63.50, the dearest pack on our price list |
-| Safety margin | $14.00 | What is left: $600 − $400 − $50 − $9 − $127 |
+| Product-switch reserve | $136.00 | 2 packs × $68.00, the dearest pack on our price list at the worker's maximum (Mountain Dew Baja Blast 20 oz) |
+| Safety margin | $5.00 | What is left: $600 − $400 − $50 − $9 − $136 |
 | **Total** | **$600.00** | |
 
 The fill cap is a ceiling at the worker's maximum prices. If the worker pays the expected prices, the fill costs less and the margin grows. In the example fill that is $365.50 − $315.94 = $49.56 more, on top of the $400.00 − $365.50 = $34.50 the example leaves under the cap.
@@ -64,6 +64,8 @@ A 16 oz can is not on the chart. It needs a person to count how many fit before 
 | Pepsi 20 oz | 12 | $29.99 | $2.50 | 7 | $17.49 |
 | Red Bull Red Edition 8.4 oz | 24 | $47.99 | $2.00 | 11 | $22.00 |
 
+This is a selection: 11 of the 20 drinks on the list. The other 9 cost $6.97 to $19.47 a slot (Spindrift Raspberry Lime or Lemon: $20.91 ÷ 24 × 8 = $6.97; Red Bull Yellow: $42.48 ÷ 24 × 11 = $19.47). So the cheapest and dearest cases below don't change.
+
 **The range.** Amazon sells packs, not single units. Units that don't fit a slot go to our closet as back stock, but we still pay for them.
 
 | Case | Units loaded | Packs | Cost |
@@ -88,7 +90,7 @@ The dearest case would leave $45 of the $600 at the worker's maximum prices. Tha
 | Coca-Cola 12 oz can | 1 | 8 | 1 × 12 | $7.68 | $9.00 |
 | **Total** | **20** | **163** | **10** | **$315.94** | **$365.50** |
 
-"Most" is the worker's maximum per pack. For the five drinks in the catalog it comes from the price list. For Kiwi Guava and the Coca-Cola can it is the price list's rule: price plus about 15%, rounded up to the next 50 cents ($19.98 × 1.15 = $22.98, so $23.00; $7.68 × 1.15 = $8.83, so $9.00). The mix sends 17 units to the closet: 4 Red Bull, 3 of each 20 oz drink and 4 Coca-Cola cans.
+"Most" is the worker's maximum per pack. For the five drinks in the catalog it comes from the price list. For Kiwi Guava and the Coca-Cola can we work it out. The price list says price plus about 15%. Its five Max values all round up to the next 50 cents (for example $54.95 × 1.15 = $63.19, listed as $63.50), so we do the same ($19.98 × 1.15 = $22.98, so $23.00; $7.68 × 1.15 = $8.83, so $9.00). The mix sends 17 units to the closet: 4 Red Bull, 3 of each 20 oz drink and 4 Coca-Cola cans.
 
 **Grouping saves cash.** Three slots of a 20 oz drink use 21 of a 24-pack. One slot uses 7 and leaves 17 in the closet. Two Red Bull slots use 22 of 24. Three Celsius slots use exactly two 12-packs.
 
@@ -100,7 +102,7 @@ The dearest case would leave $45 of the $600 at the worker's maximum prices. Tha
 
 The pricing gate sets every price at or above a floor: the most the worker may pay per unit, times 1.08, rounded up to the next 5 cents (`vending/pricing.py`). So each unit sold returns at least its maximum cost once tax is taken out (price ÷ 1.08 is at least the maximum cost). Takings are counted from the machine's counters, hourly, before we send a request (`vending/ledger.py`).
 
-So refilling the same products with what sold pays for itself. A worked example for the first full week, 3 to 9 Dec (5 class days, the Wednesday before a Friday-11-Dec Amazon order):
+So refilling the same products with what sold pays for itself. A worked example for the first stocked days, Thu 3 to Wed 9 Dec (5 class days), before an order for Fri 11 Dec. The planner warns about Amazon orders after Wednesday 23:59, but Amazon has no hard deadline (#106, #107).
 
 | | High rate (23 a class day) | Low rate (14 a class day) |
 |---|---|---|
@@ -115,9 +117,11 @@ The catch is whole packs. Refilling 5 units of a 20 oz drink means buying a 24-p
 
 If there is a regular Friday restock on 4 Dec, its request is due the night we go live (#107). Only about one class day will have sold, so it would be small.
 
-### Product-switch reserve: $127.00
+### Product-switch reserve: $136.00
 
-After the first stocked week, we expect to drop products that don't sell and try others. That needs new packs before the old stock is sold, so takings don't cover it. The reserve buys 2 packs at the dearest maximum on our price list (Coca-Cola 20 oz, $63.50): 2 × $63.50 = $127.00. That is 2 to 6 slots of new products, depending on how many slots a pack fills.
+After the first stocked week, we expect to drop products that don't sell and try others. That needs new packs before the old stock is sold, so takings don't cover it. The reserve buys 2 packs of the dearest drink on the team's 11 Nov price list (branch `add_price_list`), Mountain Dew Baja Blast 20 oz at $58.80 a 24-pack. The list gives no maximum for it, so we use the same rule as above: $58.80 × 1.15 = $67.62, rounded up to $68.00. So 2 × $68.00 = $136.00. That is 2 to 6 slots of new products, depending on how many slots a pack fills.
+
+A product not on the price list may cost more, for example one for the wildcard slot (see "Open decisions"). The reserve does not cover that.
 
 ### Midweek visit fees: $50.00
 
@@ -131,11 +135,11 @@ Every live model call is charged to the ledger at its real cost (`vending/harnes
 - The harness caps a run at $1.00 and a day at $4.00. Both are placeholders (#51).
 - Nothing schedules the agent yet (#39, #107). We assume one live run a week.
 
-So 9 run weeks × 1 run × $1.00 = $9.00. If the agent ran every day at the $4.00 daily cap, 63 days × $4.00 = $252.00, which is 42% of the $600. The daily cap should be set to fit this plan before the agent goes live (see "Open decisions").
+So 9 run weeks × 1 run × $1.00 = $9.00. Live runs between the ledger's opening and 3 Dec also count, for example one that builds or checks the day-one request. At one such run that is another $1.00 at most, which the margin covers. If the agent ran every day at the $4.00 daily cap, 63 days × $4.00 = $252.00, which is 42% of the $600. The daily cap should be set to fit this plan before the agent goes live (see "Open decisions").
 
-### Safety margin: $14.00
+### Safety margin: $5.00
 
-This is the remainder. It is small because the other lines are already sized at the worker's maximum prices. In practice it is larger: the fill is unlikely to hit its cap, and the example fill at expected prices leaves $84.06 under it ($400.00 − $315.94).
+This is the remainder. It is very small because the other lines are already sized at the worker's maximum prices. In practice it is larger: the fill is unlikely to hit its cap, and the example fill at expected prices leaves $84.06 under it ($400.00 − $315.94).
 
 ### Sales tax: $0 from the capital
 
@@ -154,32 +158,33 @@ Shelf prices include 8% sales tax. The team set aside takings × 0.08 ÷ 1.08 ea
 To number in `docs/assumptions.md`. They aren't numbered here because open PRs are already taking numbers (A16 in #69; A17 and A18 in #99).
 
 1. **The day-one fill comes out of the $600.** The instructor said so on 12 Nov, but wasn't sure he had understood the question and said he would check (#106, row 3).
-2. **Amazon prices hold near 11 Nov's.** The price list says they will change. The plan uses the worker's maximum, about 15% over, to cover that.
-3. **The loading chart is right.** The chart calls its numbers approximate (`vending/capacity.py`).
-4. **Our new products sell at about the rate our slots sold this fall when stocked**, 14 to 23 units a class day. Different products and prices may sell differently. The price history (#99, `docs/agent/price-history.md`) can't tell us how price changes sales.
-5. **The agent runs live once a week.** No schedule is set (#39).
-6. **The run is 9 weeks** from 3 Dec (`docs/agent/goal-and-scoring.md`).
-7. **Closet stock is worth what we paid for it** at the end. The instructor believes so and is checking (`docs/planning/2026-10-19-david-api-qa.md`, row 16).
+2. **The day-one fill is bought from Amazon at the price list's packs and prices.** How the order is sent and bought is not confirmed (#102). If staff buy elsewhere, or Amazon can't deliver while the Institute is closed (26 to 29 Nov), prices and pack sizes change (#106).
+3. **Amazon prices hold near 11 Nov's.** The price list says they will change. The plan uses the worker's maximum, about 15% over, to cover that.
+4. **The loading chart is right.** The chart calls its numbers approximate (`vending/capacity.py`).
+5. **Our new products sell at about the rate our slots sold this fall when stocked**, 14 to 23 units a class day. Different products and prices may sell differently. The price history (#99, `docs/agent/price-history.md`) can't tell us how price changes sales. The price history also says our floor for 20 oz Coke and Diet Coke ($2.90 and $2.70) is above the $2.00 they sold at this fall, so the 9 slots of 20 oz soda in the example mix may sell slower than fall rates suggest.
+6. **The agent runs live once a week.** No schedule is set (#39).
+7. **The run is 9 weeks** from 3 Dec (`docs/agent/goal-and-scoring.md` for week 9; #106 for the 3 Dec start).
+8. **Closet stock is worth what we paid for it** at the end. The instructor believes so and is checking (`docs/planning/2026-10-19-david-api-qa.md`, row 16).
 
 ## Open decisions
 
 These are the team's to make. This plan does not decide them.
 
 1. **Which products go in the 20 slots on day one, and at what prices** (#107). The example mix is only a pricing example. Three of the top sellers this fall (Monster, Gorgie and Ghost, `analysis/REPORT.md`) aren't on the price list yet.
-2. **The wildcard slot.** Kevin proposed one slot with a looser ceiling, about $8.00, against $6.50 for the rest (comment on #100). Not decided. Its effect on the fill is small: the dearest slot on the price list is one 24-pack at $55.50 most ($47.99 × 1.15 = $55.19, rounded up; $47.99 expected), against $57.00 to $63.50 for a 20 oz pack.
+2. **The wildcard slot.** Kevin proposed one slot with a looser ceiling, about $8.00, against $6.50 for the rest (comment on #100). Not decided. Its cost depends on which product it holds, which is also open. At the floor rule a product sold at up to $8.00 can cost up to $7.41 a unit ($8.00 ÷ 1.08, `vending/pricing.py`). So one wildcard slot could cost up to 7 × $7.41 = $51.87 as a 20 oz bottle, or 11 × $7.41 = $81.51 as an 8.4 oz can, against $4.65 to $22.00 for a slot from the price list. It could take a larger share of the fill cap than any listed product.
 3. **The fill cap.** $400.00 at most is this plan's proposal.
 4. **How many midweek visits to hold back for.** This plan says 2.
 5. **The model caps and how often the agent runs** (#51, #39). The $4.00 daily cap doesn't fit a $9.00 line.
 6. **The exact day-one deadline and how to send the order** (#102).
 
-**Agent-facing follow-ups (not done here).** `docs/agent/money.md` says to follow the team's opening capital plan and to say so if there is none. Once this plan is agreed, it should point here, as #90 asks. #90 also names the file `docs/opening-capital-plan.md`. A rule that keeps $59 spendable after any request would need a check in the planner.
+**Agent-facing follow-ups (not done here).** `docs/agent/money.md` says to follow the team's opening capital plan and to say so if there is none. Once this plan is agreed, it should point here, as #90 asks. A rule that keeps $59 spendable after any request would need a check in the planner.
 
 ## Sources
 
 - Issue #90 and its comment: the brief's wording, run 1's dry run (159 units, $293 expected, $360 most), the 70-a-week estimate and token spend per run.
 - PR #106 (`docs/planning/2026-11-12-david-answers.md`) and issue #107: the instructor's 12 Nov answers.
 - PR #100 and its comments: the $6.50 ceiling and the wildcard proposal.
-- PR #99 (`docs/agent/price-history.md`): reference prices.
+- PR #99 (`docs/agent/price-history.md`): the 20 oz soda floor against its $2.00 fall price.
 - PR #104: development and competition spend split at the ledger's opening.
 - PR #51 and `vending/harness.py`: model-call costs and the run and daily caps.
 - Branch `add_price_list` (`docs/agent/price-list.md`): Amazon packs and prices, 11 Nov 2026.
