@@ -2,6 +2,8 @@
 
 The team's main pages about the vending project, in one place. These are live pages on claude.ai: each link always shows the latest version, so there is nothing to download or keep in sync.
 
+Four pages open only with a Golisano Claude sign-in, so use your institute account for them: the Vending Agent Roadmap, the Vending Agent Dashboard, the Machine Sales Map and the Cutover Clock. The others open with any sign-in.
+
 When you publish a new page about the project, add a row here in the same PR or a follow-up.
 
 ## Plan and status
