@@ -62,15 +62,24 @@ def _ceiling(value: Any) -> str | None:
     return None
 
 
+# The loading chart's largest figure is 11 a column; a count far above that is almost always a
+# typo (18 for an 8-can column), and every restock without `fill_to` would buy to it.
+MAX_OVERRIDE_UNITS = 15
+
+
 def _overrides(value: Any) -> str | None:
     if not isinstance(value, dict):
         return f'must be a JSON object of SKU to units, like {{"MONSTER-WHITE-16CAN": 8}}, not {json.dumps(value)}'
     for sku, units in value.items():
         if not sku.strip():
             return "has a blank SKU"
-        problem = _whole(units, 1, 30, "units")
+        if any(c.isspace() for c in sku):
+            # SKUs have no spaces, and the lookup is exact, so this count would never be used.
+            return f"SKU {json.dumps(sku)} has a space in it; SKUs have none, so it would never match"
+        problem = _whole(units, 1, MAX_OVERRIDE_UNITS, "units")
         if problem:
-            return f"{sku} {problem}"
+            return (f"{sku} {problem} (the loading chart's largest figure is 11 a column, "
+                    "so check the count)")
     return None
 
 
@@ -182,12 +191,19 @@ def main(argv: list[str] | None = None) -> int:
                 value = json.loads(args.value)
             except json.JSONDecodeError:
                 value = args.value
+            before = get_value(conn, args.key, None)
             try:
                 set_value(conn, args.key, value, args.by)
             except ValueError as error:
                 print(error, file=sys.stderr)
                 return 1
             print(f"{args.key} = {json.dumps(value)}")
+            if args.key == "capacity_overrides" and isinstance(before, dict):
+                # `set` replaces the whole object, so name any count it just threw away.
+                dropped = {sku: units for sku, units in before.items() if sku not in value}
+                if dropped:
+                    print(f"Removed counts that were in the old value: {json.dumps(dropped)}. "
+                          "To keep them, set the object again with them included.", file=sys.stderr)
             return 0
         for key, value, at, by in conn.execute("select key, value, updated_at, updated_by from config order by key"):
             unused = "" if key in KNOWN or key == "halted" else "  [no longer used]"

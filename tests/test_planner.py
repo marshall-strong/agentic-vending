@@ -475,6 +475,37 @@ class Refusals(unittest.TestCase):
         self.assertEqual(codes(p), ["unknown_capacity"])
         self.assertIn("capacity_overrides", p.refusals[0].message)
 
+    def test_a_count_far_above_the_chart_is_warned_about(self):
+        catalog = (CatalogProduct(MTDEW, size="20 oz bottle"),) + CATALOG[1:]
+        state = replace(current(), catalog=catalog)
+        # 18 typed for a 7-a-column bottle: still used, but named.
+        p = plan_restock(state, desired(restock_15(fill_to=7)),
+                         Config(capacity_overrides={MTDEW: 18}, timezone=EDT), TUESDAY)
+        self.assertTrue(any(MTDEW in w and "18" in w and "says 7" in w for w in p.warnings), p.warnings)
+        # 10 is within 1.5 times 7, so a real count a little over the chart isn't flagged.
+        p = plan_restock(state, desired(restock_15(fill_to=7)),
+                         Config(capacity_overrides={MTDEW: 10}, timezone=EDT), TUESDAY)
+        self.assertFalse(any("loading chart says" in w for w in p.warnings), p.warnings)
+
+    def test_unknown_capacity_says_when_the_catalog_gave_no_size(self):
+        p = plan_restock(current(), desired(restock_15(fill_to=6)), Config(timezone=EDT), TUESDAY)
+        self.assertEqual(codes(p), ["unknown_capacity"])
+        self.assertIn("catalog gives no size", p.refusals[0].message)
+        catalog = (CatalogProduct(MTDEW, size="16 oz can"),) + CATALOG[1:]
+        p = plan_restock(replace(current(), catalog=catalog), desired(restock_15(fill_to=6)),
+                         Config(timezone=EDT), TUESDAY)
+        self.assertIn("'16 oz can', isn't on the loading chart", p.refusals[0].message)
+
+    def test_over_capacity_names_where_the_limit_came_from_and_the_fix(self):
+        catalog = (CatalogProduct(MTDEW, size="20 oz bottle"),) + CATALOG[1:]
+        state = replace(current(), catalog=catalog)
+        p = plan_restock(state, desired(restock_15(fill_to=8)), Config(timezone=EDT), TUESDAY)
+        self.assertIn("the loading chart's figure", p.refusals[0].message)
+        self.assertIn("capacity_overrides", p.refusals[0].message)
+        p = plan_restock(state, desired(restock_15(fill_to=9)),
+                         Config(capacity_overrides={MTDEW: 8}, timezone=EDT), TUESDAY)
+        self.assertIn("the count in capacity_overrides", p.refusals[0].message)
+
     def test_a_count_for_a_sku_not_in_the_catalog_is_named(self):
         config = Config(capacity_overrides={MTDEW.lower(): 8}, timezone=EDT)
         p = plan_restock(current(), desired(restock_15()), config, TUESDAY)

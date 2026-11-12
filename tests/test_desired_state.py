@@ -199,13 +199,13 @@ def test_with_nothing_counted_the_catalog_size_sets_the_capacity(db, fake):  # n
 
 
 def test_a_restock_plans_one_purchase_line_priced_against_its_floor(db, fake):  # noqa: F811
-    ready(db, capacity=20)
+    ready(db, capacity=15)
     stocked(db)
-    # 8 on hand, 3 in the closet: filling to 20 needs 12, more than the closet holds, so it buys a pack.
-    reply = preview_desired_state(db, desired(restock_15(fill_to=20), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    # 8 on hand, 3 in the closet: filling to 15 needs 7, more than the closet holds, so it buys a pack.
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]), fake.client(), NOW)
     assert reply.success and reply.ok and reply.plan_hash and reply.refusals == []
     [line] = reply.lines
-    assert (line.slot, line.action, line.source, line.units_staying, line.units_to_load) == ("15", "restock", "purchase", 8, 12)
+    assert (line.slot, line.action, line.source, line.units_staying, line.units_to_load) == ("15", "restock", "purchase", 8, 7)
     assert any("3 COKE20 in the closet go unused" in w for w in reply.warnings)
     assert line.api["primary"] == {"sku": "COKE20", "store": "Costco", "packs": 1, "units_per_pack": 12,
                                    "max_price_per_pack": "13.00", "sale_price": "2.50", "change_product": False}
@@ -273,9 +273,9 @@ def test_a_back_stock_load_costs_nothing(db, fake):  # noqa: F811
 
 
 def test_a_midweek_visit_adds_the_fee(db, fake):  # noqa: F811
-    ready(db, capacity=20)
+    ready(db, capacity=15)
     stocked(db)
-    wanted = desired(restock_15(fill_to=20), off_cycle=True, sourcing=[coke_sourcing()])
+    wanted = desired(restock_15(fill_to=15), off_cycle=True, sourcing=[coke_sourcing()])
     reply = preview_desired_state(db, wanted, fake.client(), NOW)
     assert reply.success and (reply.cost.visit_fee, reply.cost.max) == ("25.00", "38.00")
     set_value(db, "midweek_fee_cents", 3000, "test")
@@ -346,6 +346,20 @@ def test_config_cli_sets_and_shows(schema_url, monkeypatch, capsys):
         assert conn.execute("select count(*) from action_log where tool = 'config.set'").fetchone() == (2,)
 
 
+def test_config_cli_names_counts_a_new_override_object_drops(schema_url, monkeypatch, capsys):
+    from tests.conftest import open_in
+    from vending import config, db as db_module
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    assert config.main(["set", "capacity_overrides", '{"COKE20": 8, "PICKLE": 6}', "--by", "marshall"]) == 0
+    capsys.readouterr()
+    # Someone sets one SKU, forgetting `set` replaces the whole object: PICKLE's count is lost.
+    assert config.main(["set", "capacity_overrides", '{"COKE20": 9}', "--by", "kevin"]) == 0
+    err = capsys.readouterr().err
+    assert 'Removed counts that were in the old value: {"PICKLE": 6}' in err
+    assert config.main(["set", "capacity_overrides", '{"COKE20": 9, "PICKLE": 6}', "--by", "kevin"]) == 0
+    assert "Removed" not in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("key, value, problem", [
     ("midweek_fee_cents", 25, "less than a dollar"),          # dollars typed: would bill 25 cents a visit
     ("midweek_fee_cents", -2500, "between 0 and 10000"),      # a visit that adds money
@@ -353,9 +367,12 @@ def test_config_cli_sets_and_shows(schema_url, monkeypatch, capsys):
     ("price_ceiling_cents", 1200, "over 1000 cents"),         # the API's $10.00 limit
     ("price_ceiling_cents", 603, "multiple of 5"),
     ("capacity_overrides", 10, "JSON object of SKU to units"),
-    ("capacity_overrides", {"COKE20": 0}, "between 1 and 30"),
+    ("capacity_overrides", {"COKE20": 0}, "between 1 and 15"),
+    ("capacity_overrides", {"COKE20": 18}, "between 1 and 15"),       # 18 typed for an 8-can column
     ("capacity_overrides", {"COKE20": True}, "whole number of units"),
     ("capacity_overrides", {" ": 8}, "blank SKU"),
+    ("capacity_overrides", {"COKE20 ": 8}, "has a space"),            # would never match the catalog
+    ("capacity_overrides", {"COKE 20": 8}, "has a space"),
     ("tax_percent", 108, "between 0 and 100"),
     ("midweek_fee", 2500, "unknown setting"),
 ])

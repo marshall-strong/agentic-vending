@@ -232,7 +232,7 @@ planner's settings from `config`.
 
 **How many units fit in a column depends on the package**, not the slot: each column is a row of
 packages in front of a pusher. `vending/capacity.py` matches each product's catalog `size` against
-the machine's Package Loading chart (photographed 9 Nov): 20 oz bottle 7, 16 oz bottle 7 (the chart
+the machine's Package Loading chart ([photographed 9 Nov](images/package-loading-chart-2026-11-09.jpg)): 20 oz bottle 7, 16 oz bottle 7 (the chart
 says glass 7, PET 8, and the catalog doesn't say which), 14 oz bottle 8, 12 oz can 8, 240/250 ml can
 11. A package the chart doesn't list (a 16 oz can, a 16.9 oz bottle, a carton) is refused as
 `unknown_capacity` until a person counts how many fit and records it; a count also wins over the
@@ -243,7 +243,17 @@ python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 6}' --b
 python -m vending.config show
 ```
 
-`set` replaces the whole object, so copy the current one from `show` and add to it.
+In Windows PowerShell 5.1 the inner quotes are lost unless escaped:
+
+```
+python -m vending.config set capacity_overrides '{\"MONSTER-WHITE-16CAN\": 6}' --by marshall
+```
+
+`set` replaces the whole object, so copy the current one from `show` and add to it; `set` names
+any count the new value dropped. A count must be 1 to 15 units (the chart's largest figure is 11),
+and a SKU with a space in it is refused, since SKUs have none and it would never match. Preview
+warns about a count for a SKU that isn't in the catalog, and about one more than 1.5 times the
+chart's figure for that package.
 
 The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` (8) and
 `midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for

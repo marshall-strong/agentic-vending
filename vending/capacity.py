@@ -3,7 +3,8 @@
 A column holds packages in a row in front of a pusher, so how many fit depends
 on the package, not the slot: David said on 21 Sep there is no fixed capacity,
 "as many as physically fit". The chart on the inside of the door (part
-931,650,021, photographed whole on 9 Nov 2026) gives the manufacturer's
+931,650,021, photographed whole on 9 Nov 2026:
+`docs/images/package-loading-chart-2026-11-09.jpg`) gives the manufacturer's
 numbers, which it calls approximate:
 
     20oz PET 7, 16oz glass 7, 16oz PET 8, 12oz can 8, 240/250ml can 11, 14oz PET 8
@@ -35,7 +36,11 @@ CHART: tuple[tuple[str, Fraction, Fraction, int], ...] = (
 )
 
 OVERRIDE_HINT = ("count how many fit in one column, then add it to the others in config with: "
-                 "python -m vending.config set capacity_overrides '{\"SKU\": 8}' --by NAME")
+                 "python -m vending.config set capacity_overrides '{\"SKU\": 8}' --by NAME "
+                 "(in Windows PowerShell 5.1: '{\\\"SKU\\\": 8}')")
+
+# A count more than this many times the chart's figure is warned about as a likely typo.
+OVERRIDE_WARN_RATIO = Fraction(3, 2)
 
 # "20 oz bottle", "20-oz. bottles", "12 fl oz sleek can", "591 ml plastic bottle": an amount, a unit,
 # at most one word about the package, then the container.

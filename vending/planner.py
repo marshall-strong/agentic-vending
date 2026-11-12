@@ -485,15 +485,23 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     active = {p.product for p in current.catalog if p.active}
     capacities = {p.product: capacity.for_product(p.product, p.size, config.capacity_overrides)
                   for p in current.catalog}
+    sizes = {p.product: p.size for p in current.catalog}
     for sku in sorted(set(config.capacity_overrides) - capacities.keys()):
         # Most likely misspelt: the lookup is exact, so the count is never used.
         warnings.append(f"capacity_overrides counts {sku}, which isn't in the catalog (SKUs match exactly, "
                         "case included), so that count is ignored")
+    for sku, units in sorted(config.capacity_overrides.items()):
+        chart = capacity.from_size(sizes.get(sku))
+        if chart is not None and units > chart * capacity.OVERRIDE_WARN_RATIO:
+            # Likely a typo (18 for 8), and a restock without fill_to would buy to it.
+            warnings.append(f"capacity_overrides counts {units} {sku} a column, but the loading chart says "
+                            f"{chart} for a {sizes[sku]}; check the count")
     sources = _Sources(desired.sourcing, current.sourcing_table, config, refusals)
 
     # 2. Classify each slot and work out how many units it needs.
     states = {s.slot: s for s in current.slots}
-    slots = [_intend(slot, states.get(slot), targets.get(slot), active, capacities, refusals)
+    slots = [_intend(slot, states.get(slot), targets.get(slot), active, capacities, refusals,
+                     sizes=sizes, counted=config.capacity_overrides)
              for slot in config.slots]
 
     # 3. Supply: only what the closet holds before the visit. Units pulled at
@@ -673,8 +681,15 @@ def _check_slot_list(targets: tuple[DesiredSlot, ...], ours: tuple[str, ...],
 
 def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
             active: set[str], capacities: Mapping[str, int | None],
-            refusals: list[Refusal]) -> _Slot:
-    """Read one slot's target, refusing what can't be planned."""
+            refusals: list[Refusal], *, sizes: Mapping[str, str | None] | None = None,
+            counted: Mapping[str, int] | None = None) -> _Slot:
+    """Read one slot's target, refusing what can't be planned.
+
+    `sizes` (product to catalog size) and `counted` (a person's counts) only shape the
+    capacity refusals' wording, so they can say where a limit came from.
+    """
+    sizes = sizes or {}
+    counted = counted or {}
     state = state or SlotState(slot, None, None, 0, None)
     on_hand = max(0, state.units)   # loaded - sold can drift below zero
     held = _Slot(slot, state, on_hand, state.product, state.price_cents, on_hand, on_hand)
@@ -717,16 +732,22 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
             # refusals that are really about it (`price_only_unsupported`, say).
             if fill_to is None or fill_to > already:
                 usable = False
+                size = sizes.get(target.product)
+                why = (f"its size, {size!r}, isn't on the loading chart" if size and size.strip()
+                       else "the catalog gives no size for it, so the loading chart can't be used")
                 refusals.append(Refusal("unknown_capacity", (
-                    f"nobody knows how many {target.product} fit in a column: its size isn't on the "
-                    f"loading chart; {capacity.OVERRIDE_HINT}"), slot))
+                    f"nobody knows how many {target.product} fit in a column: {why}; "
+                    f"{capacity.OVERRIDE_HINT}"), slot))
         else:
             fill_to = most if fill_to is None else fill_to
             if not 0 <= fill_to <= most:
                 usable = False
+                source = ("the count in capacity_overrides" if target.product in counted
+                          else "the loading chart's figure")
                 refusals.append(Refusal("over_capacity", (
                     f"slot {slot} fill_to {fill_to} is outside 0-{most}, as many {target.product} "
-                    f"as fit in a column"), slot))
+                    f"as fit in a column ({source}); if a column really holds more, "
+                    f"{capacity.OVERRIDE_HINT}"), slot))
     if usable and fill_to == 0 and target.product != state.product:
         # A switch that loads nothing gets no request line, so it would silently never happen.
         usable = False
