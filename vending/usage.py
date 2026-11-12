@@ -99,11 +99,10 @@ def report(conn: psycopg.Connection, now: datetime, since: date | None = None, r
     window = list(windows.values())[-1]
     opened = ledger.opening(conn) if conn.execute("select to_regclass('ledger_entries')").fetchone()[0] else None
     start = opened.at if opened else None
-    split = {"development (before the competition)": totals(conn, None, start),
-             "the competition (from the opening)": totals(conn, start) if start else None}
+    split = {"development": totals(conn, None, start), "competition": totals(conn, start) if start else None}
     return {
         "as_of": now.astimezone(EASTERN).isoformat(timespec="seconds"),
-        "competition_start": start.astimezone(EASTERN).isoformat(timespec="minutes") if start else None,
+        "competition_start": start.astimezone(EASTERN).isoformat() if start else None,
         "split": split,
         "windows": {name: totals(conn, w) for name, w in windows.items()},
         "by": {by: grouped(conn, by, window) for by in GROUPS},
@@ -141,8 +140,9 @@ def render(rep: dict) -> str:
                     f"{t['pending']} pending, {t['error']} error" if t["pending"] or t["error"] else "")
                    for name, t in rep["windows"].items()])
     if rep["competition_start"]:
-        dev, comp = rep["split"].values()
-        out += ["", f"The competition started at the ledger's opening, {rep['competition_start']} (Eastern)."]
+        dev, comp = rep["split"]["development"], rep["split"]["competition"]
+        out += ["", f"The competition starts at the ledger's opening, {rep['competition_start'][:16].replace('T', ' ')} "
+                "(Eastern). All time, whatever --since says. Only live calls from the opening on come out of the $600."]
         out += _table(("", "Calls", "Spend", "Live", "Test"),
                       [(name, t["calls"], _money(t["cost_usd"]), _money(t["live_usd"]), _money(t["test_usd"]))
                        for name, t in (("Development, before it", dev), ("The competition, from it", comp))])
