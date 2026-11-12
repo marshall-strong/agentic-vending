@@ -74,6 +74,10 @@ closed window, a power cut). Only done runs are compared with.
     overspends the $8 or prices below the floor. If the judge gives the baseline 2 or more on one of
     these cases, it didn't read the plans. That case's grades are left out of every score, and the
     report says "Judge failed its control on <case>".
+    **Two of the five are weaker tests.** On `low-balance` and `price-below-floor` the baseline's own
+    `balance` or `prices` check shows `fail`, and the judge sees each plan's checks. So a judge that
+    reads only the check list still fails the control there. Only `slow-seller`, `midweek-visit`
+    and `tuesday-sellout` show that the judge read the plan itself.
   - **The control's own score between runs.** On the same cases the baseline's plans are always the
     same. So a change in the baseline's score is the judge's own noise, and the report says so when
     it moves 10 points or more. Read smaller changes in the other configs with that in mind.
@@ -189,8 +193,11 @@ so that judge had no control. Import it as the benchmark's first run with:
 python -m vending.bench import --dir <path>\sweep-results\20261111-173503 --grades <path>\grades.json
 ```
 
-An imported run's git sha, prompt hash and cases hash are taken when you import it, not when the run
-was made, and its note says so. The same folder can't be imported twice. These figures come from
+An imported run's git sha is taken when you import it, not when the run was made, and its note says
+so. Its prompt and cases hashes are left empty, so no later run is compared with it: the prompt or the
+cases may have changed between the run and the import (the 11 Nov sweep started at 17:35 ET, and
+`4795a15` changed `cases.py` and `model.py` at 17:50). Add `--same-inputs` only when you know they
+match; the import then takes today's hashes. The same folder can't be imported twice. These figures come from
 `grades.json` and `summary.json` through the importer:
 
 | Config | Score | Points of 50 | Right | Wrong | Invented | Checks ok | $/decision | Secs |

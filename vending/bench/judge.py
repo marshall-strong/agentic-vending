@@ -27,6 +27,7 @@ it never stops the run.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import threading
 import time
@@ -104,8 +105,10 @@ def grades_schema(labels: list[str]) -> dict:
 
 
 def judge_hash() -> str:
-    """The yardstick's version: a changed rubric, prompt or schema makes scores incomparable."""
-    text = SYSTEM + json.dumps(grades_schema(["P1"]), sort_keys=True)
+    """The yardstick's version: a changed rubric, schema, judge prompt, trap list or control threshold
+    makes scores incomparable. The prompt is hashed by its source, so editing `prompt()` moves it."""
+    text = "\n".join([SYSTEM, json.dumps(grades_schema(["P1"]), sort_keys=True), inspect.getsource(prompt),
+                      json.dumps(sorted(TRAP_CASES)), str(CONTROL_FAILS_AT)])
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 

@@ -56,7 +56,7 @@ def git_info() -> dict:
         except (OSError, subprocess.SubprocessError):
             return None
         return done.stdout.strip() if done.returncode == 0 else None
-    status = git("status", "--porcelain")
+    status = git("status", "--porcelain", "--untracked-files=no")
     return {"git_sha": git("rev-parse", "HEAD"), "git_branch": git("rev-parse", "--abbrev-ref", "HEAD"),
             "git_dirty": None if status is None else bool(status)}
 
@@ -130,7 +130,20 @@ JSON_FIELDS = ("checks", "plan")
 
 
 def _db(column: str, value):
-    return Jsonb(value) if column in JSON_FIELDS and value is not None else value
+    if column in JSON_FIELDS and value is not None:
+        return Jsonb(_no_nul(value))
+    return value.replace("\x00", "") if isinstance(value, str) else value
+
+
+def _no_nul(value):
+    """Postgres `jsonb` refuses U+0000, and one refused answer would lose the whole run's insert."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {_no_nul(k): _no_nul(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_no_nul(v) for v in value]
+    return value
 
 
 def set_grade(conn: psycopg.Connection, run_id: int, config: str, repeat: int, case: str, *, decision: int,

@@ -246,6 +246,8 @@ def build(run: dict, rows: list[dict], earlier: list[dict], rows_of, history: li
         plain = comparable(run, earlier, name, configs_of)
         graded = graded_base(run, earlier, name, load)
         if plain is None and graded is None:
+            if not ln["control"]:
+                uncompared.append(f"{name}: no earlier run on the same cases ran it")
             continue
         compared[name] = _comparison(now, None if graded is None else of(graded["id"], name), graded, plain)
         delta = compared[name]["delta"]

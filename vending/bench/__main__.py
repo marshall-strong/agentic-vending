@@ -154,7 +154,7 @@ def _plans(run: Sweep, cases: list[Case]) -> dict[tuple[str, str], object]:
     out = {}
     for r in run.rows:
         if r.config == store.CONTROL:
-            out[(r.config, r.case)] = plan_json(Baseline().decide(by_case[r.case].state))
+            out[(r.config, r.case)] = model.strip_nulls(plan_json(Baseline().decide(by_case[r.case].state)))
             continue
         path = run.out / "plans" / sweep.plan_file(r.config, r.case)
         if r.status == "scored" and path.exists():
@@ -231,7 +231,7 @@ def _load_grades(path: Path) -> tuple[str | None, dict[tuple[str, str], dict]]:
 
 
 def _started(folder: Path, meta: dict) -> datetime | None:
-    for stamp in (meta.get("started"), folder.name):
+    for stamp in (meta.get("started"), folder.name, folder.name[:15]):   # bench folders are <stamp>-run<N>
         try:
             return datetime.strptime(str(stamp), "%Y%m%d-%H%M%S").replace(tzinfo=EASTERN)
         except ValueError:
@@ -277,8 +277,11 @@ def cmd_import(args) -> int:
             rec["judge_ok"] = False
     note = " ".join(filter(None, [
         args.note.strip().rstrip(".") + "." if args.note.strip() else "", f"Imported from {folder.name}.",
-        "git_sha, prompt_hash and cases_hash are as of the import, not as of the original run."
-        + ("" if len(current) == len(case_names) else " Some cases no longer exist, so cases_hash is left empty.")]))
+        "git_sha is as of the import, not as of the original run." + (
+            " Imported with --same-inputs: prompt_hash and cases_hash are as of the import." if args.same_inputs
+            else " prompt_hash and cases_hash are left empty, so later runs aren't compared with it.")
+        + ("" if not args.same_inputs or len(current) == len(case_names)
+           else " Some cases no longer exist, so cases_hash is left empty.")]))
     spent = meta.get("spent")
     try:
         spent = Decimal(spent) if spent is not None else sum((r["cost_usd"] for r in records), Decimal(0))
@@ -287,8 +290,8 @@ def cmd_import(args) -> int:
         print(f"{folder / 'summary.json'} has a spent or budget that isn't a number.", file=sys.stderr)
         return 2
     fields = dict(
-        status="done", **store.git_info(), prompt_hash=store.prompt_hash(),
-        cases_hash=store.cases_hash(current) if len(current) == len(case_names) else None,
+        status="done", **store.git_info(), prompt_hash=store.prompt_hash() if args.same_inputs else None,
+        cases_hash=store.cases_hash(current) if args.same_inputs and len(current) == len(case_names) else None,
         cases=case_names, configs=list(dict.fromkeys(r["config"] for r in records if not r["control"])),
         repeats=max((r["repeat"] for r in records), default=1),
         judge=args.judge or grade_judge or ("imported" if grades else "none"), judge_hash=None,
@@ -375,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--repeats", type=int, default=1, help="answers per case per config (1-5)")
     run.add_argument("--cases", help="only these cases, comma separated (default: all; a subset isn't "
                                      "compared with full runs)")
-    run.add_argument("--budget", type=Decimal, default=DEFAULT_BUDGET,
+    run.add_argument("--budget", type=sweep.dollars, default=DEFAULT_BUDGET,
                      help=f"dollars for answers and judge together (default {DEFAULT_BUDGET}, at most {MAX_BUDGET})")
     run.add_argument("--judge", default=DEFAULT_JUDGE, help=f"MODEL@EFFORT, or none (default {DEFAULT_JUDGE})")
     run.add_argument("--note", default="", help="what changed since the last run, in a few words")
@@ -387,6 +390,9 @@ def main(argv: list[str] | None = None) -> int:
     imp.add_argument("--grades", help="a grades file: {judge, grades: [{case, config, decision, reasoning, "
                                       "invented_numbers, why}]}")
     imp.add_argument("--judge", help="who graded it (default: the grades file's judge)")
+    imp.add_argument("--same-inputs", action="store_true",
+                     help="the prompt and cases haven't changed since the folder's run: stamp today's hashes "
+                          "so later runs are compared with it (default: no hashes, never compared)")
     imp.add_argument("--note", default="")
     imp.add_argument("--by", default="bench", help="who imported it, for the record")
     rep = sub.add_parser("report", help="one run against the last comparable one (reads only)")

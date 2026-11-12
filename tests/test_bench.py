@@ -718,3 +718,69 @@ def test_a_subset_run_in_between_doesnt_say_the_cases_changed(api, conn, capsys)
     out = capsys.readouterr().out
     assert "cases changed since run" not in out
     assert "haiku@low/y: decision went from 3 to 1" in out and re.search(rf"haiku@low\s+2/2.*\s{first}\s", out)
+
+
+# --- Review fixes on #66 (Marshall, 12 Nov) ------------------------------------------
+
+def test_a_new_config_with_no_history_is_listed_as_not_compared(api, conn, capsys):
+    stored_run(conn, [rec("baseline", "x", 0, control=True), rec("haiku@low", "x", 3)])
+    stored_run(conn, [rec("baseline", "x", 0, control=True), rec("haiku@low", "x", 3), rec("opus@high", "x", 0, 0)])
+    assert main(["report", "--json"]) == 0
+    rep = json.loads(capsys.readouterr().out)
+    assert "opus@high: no earlier run on the same cases ran it" in rep["uncompared"]
+    assert main(["report"]) == 0
+    assert "opus@high: no earlier run on the same cases ran it" in capsys.readouterr().out
+
+
+def test_an_import_has_no_hashes_unless_told_its_inputs_match(api, conn, tmp_path, capsys):
+    folder = sweep_folder(tmp_path)
+    assert main(["import", "--dir", str(folder)]) == 0
+    run = only_run(conn)
+    assert run["prompt_hash"] is None and run["cases_hash"] is None
+    assert "left empty, so later runs aren't compared with it" in run["note"]
+
+
+def test_an_import_with_same_inputs_takes_todays_hashes(api, conn, tmp_path, capsys):
+    folder = sweep_folder(tmp_path)
+    assert main(["import", "--dir", str(folder), "--same-inputs"]) == 0
+    run = only_run(conn)
+    assert run["prompt_hash"] == store.prompt_hash() and "--same-inputs" in run["note"]
+
+
+def test_the_judge_hash_moves_with_its_prompt_traps_and_threshold(monkeypatch):
+    before = judging.judge_hash()
+    monkeypatch.setattr(judging, "TRAP_CASES", frozenset())
+    assert judging.judge_hash() != before
+    monkeypatch.undo()
+    monkeypatch.setattr(judging, "CONTROL_FAILS_AT", 3)
+    assert judging.judge_hash() != before
+    monkeypatch.undo()
+    monkeypatch.setattr(judging, "prompt", lambda c, labelled: "something else")
+    assert judging.judge_hash() != before
+
+
+def test_the_control_plan_has_the_models_shape():
+    from vending.replay import model as replay_model
+
+    plan = replay_model.strip_nulls(judging.plan_json(Baseline().decide(case("slow-seller").state)))
+    assert all(None not in row.values() for row in plan["slots"])
+    assert all("product" not in row for row in plan["slots"])
+
+
+def test_a_bench_folder_name_gives_its_start_time(tmp_path):
+    started = bench._started(tmp_path / "20261112-013000-run12", {})
+    assert started is not None and started.strftime("%Y-%m-%d %H:%M") == "2026-11-12 01:30"
+
+
+def test_a_bad_budget_is_a_usage_error_not_a_traceback(capsys):
+    with pytest.raises(SystemExit) as exit_:
+        main(["run", "--budget", "abc"])
+    assert exit_.value.code == 2 and "invalid dollars value" in capsys.readouterr().err
+    with pytest.raises(ValueError):
+        sweep.dollars("abc")
+
+
+def test_a_nul_in_an_answer_is_dropped_not_fatal():
+    out = store._db("plan", {"reason": "a\x00b", "slots": [{"reason": "c\x00"}]})
+    assert out.obj == {"reason": "ab", "slots": [{"reason": "c"}]}
+    assert store._db("status", "x\x00y") == "xy"

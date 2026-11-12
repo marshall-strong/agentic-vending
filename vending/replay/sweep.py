@@ -52,6 +52,14 @@ from vending.replay.model import ModelDecider
 from vending.replay.scoring import FAIL, Score, score
 from vending.replay.state import EASTERN
 
+
+def dollars(text: str) -> Decimal:
+    """An argparse type for an amount: a bad one is a usage error, not a traceback."""
+    try:
+        return Decimal(text)
+    except ArithmeticError:   # decimal.InvalidOperation isn't a ValueError, so argparse wouldn't catch it
+        raise ValueError(text) from None
+
 ALIASES = {"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5"}
 DEFAULT_MODELS = ("haiku", "sonnet", "opus")
 DEFAULT_EFFORTS = ("low", "medium", "high")
@@ -400,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                                           "(instead of every model with every effort)")
     parser.add_argument("--cases", help="only these cases, comma separated (default: all ten)")
     parser.add_argument("--repeats", type=int, default=1, help="answers per case per model and effort (1-5)")
-    parser.add_argument("--budget", type=Decimal, default=DEFAULT_BUDGET, help="dollars for the whole sweep")
+    parser.add_argument("--budget", type=dollars, default=DEFAULT_BUDGET, help="dollars for the whole sweep")
     parser.add_argument("--workers", type=int, default=4, help="requests in flight at once (1-8)")
     parser.add_argument("--out", type=Path, help="results folder (default: sweep-results/<time>)")
     parser.add_argument("--dry-run", action="store_true", help="print the plan and its worst case; send nothing")
