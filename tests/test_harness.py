@@ -101,6 +101,10 @@ def test_an_unpriced_model_or_feature_is_refused():
         _refuse_unpriced({"extra_body": {"speed": "fast"}})
     with pytest.raises(HarnessError, match="standard capacity"):
         _refuse_unpriced({"service_tier": "auto"})
+    with pytest.raises(HarnessError, match="fallback bills a second model"):
+        _refuse_unpriced({"fallbacks": "default"})
+    with pytest.raises(HarnessError, match="beta features"):
+        _refuse_unpriced({"betas": ["server-side-fallback-2026-07-01"]})
     _refuse_unpriced({"tools": [{"name": "get_catalog", "input_schema": {"type": "object"}},
                                 {"type": "bash_20250124", "name": "bash"}]})
 
@@ -208,6 +212,25 @@ def test_the_daily_cap_counts_todays_entries_not_yesterdays(connect, conn):
     with pytest.raises(CapReached, match="Nothing was spent"):
         harness(connect, client, daily_cap_usd=Decimal("4.00")).call(REQUEST)
     assert client.messages.sent == []
+
+
+def test_without_a_clock_the_day_and_the_stamp_come_from_the_database(connect, conn, monkeypatch):
+    # The host clock says 10:00 Eastern on the 10th; the database says 23:30 on the 9th.
+    # The day, and so the daily cap, follow the database, and the entry is stamped by it.
+    from vending import ledger
+
+    db_time = datetime(2026, 11, 10, 4, 30, tzinfo=timezone.utc)     # 23:30 Eastern, the 9th
+    monkeypatch.setattr(ledger, "db_now", lambda conn: db_time)
+    ledger.record_tokens(conn, "3.99", "claude-opus-5-5", 1, 1, "the 9th",
+                         at=datetime(2026, 11, 9, 20, 0, tzinfo=timezone.utc))
+    client = FakeClient()
+    with pytest.raises(CapReached):
+        Harness(client, connect, purpose="test", daily_cap_usd=Decimal("4.00")).call(REQUEST)
+    assert client.messages.sent == []
+
+    Harness(client, connect, purpose="test", daily_cap_usd=Decimal("10")).call(REQUEST)
+    stamped, = conn.execute("select at from ledger_entries where reference like 'test msg_%'").fetchone()
+    assert stamped == db_time
 
 
 def test_caps_come_from_config(connect, conn):
