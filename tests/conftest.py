@@ -85,10 +85,13 @@ def schema_url(database_url):
 
 
 def open_in(url: str, schema: str):
+    """A connection in `schema`, in UTC like every connection the app opens (`db.session_options`)."""
     import psycopg
 
+    from vending import db
+
     return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
-                           options=f"-c search_path={schema}")
+                           options=db.session_options(url, f"-c search_path={schema}"))
 
 
 @pytest.fixture

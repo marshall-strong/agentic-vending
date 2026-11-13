@@ -11,6 +11,7 @@ import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
+from vending import db  # noqa: E402
 from vending import db_explorer as dx  # noqa: E402  (after the importorskip)
 from vending.db_explorer import BadRequest, Column, Request, Table  # noqa: E402
 
@@ -225,12 +226,12 @@ def test_handler_refuses_other_hosts_bad_requests_and_other_paths(server):
 
 # --- Regressions from the blind review ----------------------------------------------------------
 
-def test_the_explorer_connects_read_only_with_the_timeout(monkeypatch):
+def test_the_explorer_connects_read_only_with_the_timeout_in_utc(monkeypatch):
     assert "default_transaction_read_only=on" in dx.OPTIONS and "statement_timeout=5000" in dx.OPTIONS
     seen = {}
     monkeypatch.setattr(dx.settings, "require", lambda *a, **k: "postgresql://x@127.0.0.1/x")
     monkeypatch.setattr(dx.psycopg, "connect", lambda url, **kw: seen.update(kw) or "conn")
-    assert dx._connect() == "conn" and seen["options"] == dx.OPTIONS
+    assert dx._connect() == "conn" and seen["options"] == f"{dx.OPTIONS} {db.UTC_SESSION}"
 
 
 def test_paging_goes_on_past_the_count_cap():
