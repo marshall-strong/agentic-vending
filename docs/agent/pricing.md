@@ -2,14 +2,41 @@
 
 Prices stay within the floor and ceiling, must be explainable, may need deliberate variation to learn demand, and come from our own costs and sales only.
 
-**The rule** (Project Brief (Revised), sections 2, 3.2 and 4). Set each product's price within the "agreed floor and ceiling", with logic you can point to and explain. The bound is enforced in code where every price change passes, not by you remembering it.
+**The bounds** (Project Brief (Revised), sections 2 and 4). Code enforces these, not your memory.
 
-**Our floor and ceiling.** The instructors have given no numbers, so the team set its own. These are unconfirmed: the brief lists price bounds as not settled yet, and A10 in `docs/assumptions.md` waits on the instructional team to confirm them or give others. The ceiling is **$6.50**, the team's decision on 12 Nov (config `price_ceiling_cents`; the machine and the bridge refuse anything over $10.00). Each slot's floor comes from cost plus tax, rounded up to the next 5 cents. Prices go in **5-cent steps**: $2.05 is legal, $1.63 is not. `preview_desired_state` shows each slot's floor and refuses a price outside the bounds. Never guess a floor; read it from the preview.
+- **Floor:** the most we'd pay per unit, plus 8% tax, rounded up to the next 5 cents. Never guess it; `preview_desired_state` shows it for every slot.
+- **Ceiling:** $6.50, the team's decision on 12 Nov (`price_ceiling_cents`; the bridge refuses over $10.00). A10 in `docs/assumptions.md` is waiting on the instructional team to confirm it.
+- **Steps:** prices go in 5-cent steps.
 
-**The identification problem** (section 3.2). We set prices and observe the sales that follow. If we only ever set the price we already think is best, we never learn how demand responds to price. Deliberate price variation teaches us something but costs margin while we test. Decide whether to vary, and say so in the reason.
+The preview refuses any price outside these bounds.
 
-**Not a monopolist** (section 3.2). At least one other agent prices substitutable products nearby, and the brief calls the other row's price an input to pricing. **The team follows the instructor's in-class rule instead: never use another slot's price** (see `competition-and-integrity`).
+**How to choose a price.** Work through these steps for every slot in the plan.
 
-**Timing.** A price changes only when the worker changes the tag at a visit: free on Friday, $25 midweek. Price for the week ahead, not the next hour.
+1. **One price per product.** The same drink costs the same in every slot it fills.
+2. **A product new to a slot starts at its reference price** from `price-history`. If the floor is higher, use the floor. If the floor is above the reference, the drink costs too much to sell at its usual price, so prefer a cheaper size, pack or store. If you stock it anyway, say it will probably sell slowly.
+3. **A slow seller comes first.** Zero sales for 5 class days while our records say the slot held stock is a slow seller (`restocking`): at the next Friday visit, lower its price one step if the floor allows, or swap the product. Otherwise, hold a price for two stocked weeks, counting only weeks in stock while classes ran. While stocked, a slot sells about 3 to 9 units a week, so one week can't show the effect of a change.
+4. **Then hold, or move one $0.25 step:**
+   - It **ran out** before the visit in both weeks: raise it $0.25, and load more.
+   - **Otherwise** hold it, or test a $0.25 step up or down under step 5. Slow but steady sales aren't a slow seller: no low-rate rule until we have sales of our own drinks.
+5. **One test at a time** (section 3.2, the identification problem). Apart from new products, change at most one product's price a week, so any change in sales can be traced to it. After two stocked weeks at the new price, compare profit per stocked week at the old and new prices: units × (price ÷ 1.08 − unit cost). Keep whichever price earned more.
+6. **Never pay for a price change.** Change prices at the free Friday visit, or with a midweek restock that's worth its $25 anyway.
+7. **Never use other slots' prices.** Section 3.2 calls them an input; the team follows the instructor's integrity rule instead (A15, `competition-and-integrity`).
 
-**Write down the reason.** Every price change says why: the demand evidence, the cost, and any assumed elasticity and how it could be wrong (section 3.2).
+**Inputs:**
+
+- each product's unit cost and floor, from the preview
+- its reference price, from `price-history`
+- its sales and stocked weeks since its last price change, from `get_sales_history`, `get_machine_state` and your notes from earlier weeks
+
+**Outputs:**
+
+- a `sale_price` for every slot
+- a reason in `slot_reasons` that names the step used, for example "new, reference $4.50", "hold, week 1 of 2" or "test, up $0.25: ran out both weeks"
+
+**Assumptions** (A17 and A18 in `docs/assumptions.md`):
+
+- What a drink sold for in our slots this fall is a fair first price for it.
+- A $0.25 step held for two stocked weeks is big enough to show an effect and small enough to cost little if it's wrong.
+- How sales respond to price is unknown until we test it.
+
+Note in each reason when a number used is missing or stale.
