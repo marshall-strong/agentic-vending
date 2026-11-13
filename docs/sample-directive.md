@@ -2,12 +2,12 @@
 
 The project brief asks for "a sample restock and pricing directive -- the artifact operations would
 actually receive and act on" (Project Brief (Revised), section 5). This is a real one, not a mock-up:
-the agent's first live run produced it, and it went to the bridge as purchase request
+the agent's first live test run produced it, and it went to the bridge as purchase request
 `pr_v8hB_h3gQatc` for the scheduled visit on Friday 13 Nov 2026.
 
 | | |
 |---|---|
-| Run | Agent run 2, live, `claude-opus-5-5` at `medium` effort, 12 Nov 2026 00:02-00:04 ET, model cost $0.40 |
+| Run | Agent run 2, a live test before the competition, `claude-opus-5-5` at `medium` effort, 12 Nov 2026 00:02-00:04 ET, model cost $0.40 |
 | Request | `pr_v8hB_h3gQatc`, accepted by the bridge as `pending` at 05:04 UTC |
 | Visit | Scheduled (Friday, no fee) |
 | Money | $233.31 expected, $270.00 at most, from a spendable balance of $599.71 |
