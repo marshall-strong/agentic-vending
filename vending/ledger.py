@@ -479,7 +479,8 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
         notes.append("no sales in the window")
     elif units_costed < units:
         notes.append(f"{units - units_costed} of {units} units sold have no known cost (sold from a slot before we "
-                     "first loaded it, or past what we loaded), so cost of sales and margin leave their cost out")
+                     "first loaded it, past what we loaded, or across a product change the counters can't split), "
+                     "so cost of sales and margin leave their cost out")
     if sold.cents and not counted.slots:
         notes.append("the machine sold units but no receipts are stored, so nothing can be costed yet")
     lost = [s for s in counted.shrinkage if start < s.at <= end]

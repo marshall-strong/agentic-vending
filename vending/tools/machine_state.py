@@ -283,13 +283,15 @@ def _last_loaded(conn: psycopg.Connection) -> dict[str, datetime]:
 def _sold_since_load(sales: tuple[stock.SaleCost, ...], last_loaded: dict[str, datetime]) -> dict[str, int]:
     """Units sold in each slot since its last load: the replay's sales after it. Pure.
 
-    The replay reads the counters through `vending.counters.rises`, so a misread
+    The replay reads the counters through `vending.counters`, so a misread
     poll or a board swap counts the same here as in `stock_on_hand` and the ledger.
+    The old product's share of a window split at a product change left the
+    count at the change (`taken_at`), so it is not sold since that load.
     """
     sold = dict.fromkeys(last_loaded, 0)
     for sale in sales:
         loaded_at = last_loaded.get(sale.slot)
-        if loaded_at is not None and sale.at > loaded_at:
+        if loaded_at is not None and (sale.taken_at or sale.at) > loaded_at:
             sold[sale.slot] += sale.units
     return sold
 
