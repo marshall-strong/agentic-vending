@@ -17,7 +17,7 @@ The project brief asks for a "documented restock and dispatch policy, with the d
 |---|---|---|
 | Regular visit | Friday afternoon, 3 PM target, likely 3 to 5 PM or later | #106 row 14 (`docs/planning/2026-11-12-david-answers.md`) |
 | Friday request cutoffs | In-store: Thursday 23:59. Amazon: no hard deadline; the planner warns after Wednesday 23:59 | #106 row 1; `vending/planner.py` |
-| Our sales after 3 PM | about 0.2 units an hour | `docs/cutover.md` (PR #105, open) |
+| Our sales on Friday afternoons | 0.2 to 0.4 units an hour from 2 to 4 PM; under 0.7 an hour after 1 PM | `docs/cutover.md` (PR #105, open) |
 | Machine units sold 8 to 11 AM | 66% | `analysis/REPORT.md`, finding 7 |
 | Midweek visit | $25 a request, any number of slots; may take longer than 24 hours | `docs/agent/restocking.md`; config `midweek_fee_cents` |
 | Open requests | One at a time today; David may lift this | `docs/process-map.md`; #106 row 12 |
@@ -37,7 +37,7 @@ The project brief asks for a "documented restock and dispatch policy, with the d
 
 Kept full, the 20 slots would sell about 23.3 units a class day (`analysis/REPORT.md`, "Next 4 weeks"). These fall rates are for other products; each slot's own rate replaces them (rule 1).
 
-**The gap between visits: 5 class days.** A Friday afternoon visit lands after the morning rush, so one gap holds Monday to Thursday plus next Friday morning. Friday afternoon adds little (0.2 an hour). Holiday weeks count class days only (`analysis/golisano_calendar_2026_27.json`; Winter Holiday Break 22 Dec to 1 Jan).
+**The gap between visits: 5 class days.** A Friday afternoon visit lands after the morning rush, so one gap holds Monday to Thursday plus next Friday morning. Friday afternoon adds little (0.2 to 0.4 an hour from 2 to 4 PM). Holiday weeks count class days only (`analysis/golisano_calendar_2026_27.json`; Winter Holiday Break 22 Dec to 1 Jan).
 
 ## 1. Friday restock: how much stock a slot needs
 
@@ -153,7 +153,7 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 **Spendable** = balance less sales tax owed (`get_account_balance`). The planner refuses orders above spendable (`insufficient_balance`); the floor is stricter.
 
-**Condition on the capital plan:** at least $53 spendable after the day-one fill. Its caps leave $157 ($600 − $360 − $82 − $1). Then sales refill the account (about 23.3 × 5 = 117 units a week; cash depends on prices).
+**Condition on the capital plan:** at least $53 spendable after the day-one fill. Its caps leave $233 ($600 − $366 − $1), or $157 if the team adopts the wildcard option ($600 − $360 − $82 − $1). Then sales refill the account (about 23.3 × 5 = 117 units a week; cash depends on prices).
 
 ## Agent follow-ups (separate PR, after #99 and #100)
 
@@ -185,8 +185,8 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - **Order of cuts when the floor binds** (rule 4). Proposed here.
 - **Slot plus closet in rule 1**, and **no purchase for a flagged slot; swaps priced by PR #99 under $6.50** (rule 3). Proposed here.
 - **Swap first at a slow-seller flag** (rule 3). Proposed by Kevin, 12 Nov; depends on R6 (#102, P2).
-- **The wildcard slot** (rule 3; ceiling about $8.00, same floor). Proposed by Kevin on #100. Its $82 cap is #90's.
-- **The floor: break-even or profit.** Today's breaks even after tax; Kevin's aim needs a higher one. Not decided.
+- **The wildcard slot** (rule 3; ceiling about $8.00, same floor). Proposed by Kevin on #100; the team decides on #110 (item 1). Its $82 cap is an option in #90, not part of the plan.
+- **The floor: break-even or profit.** Today's breaks even after tax. Kevin proposed (unit cost + $0.25) × 1.08, rounded up to 5 cents, with a setting `min_margin_cents` (#100). Not decided.
 - **Day-one stock from the $600.** David to confirm (#106 row 3).
 - **First regular restock:** Fri 4 Dec or Fri 11 Dec (#102).
 - **Day-one deadline:** about Fri 27 Nov, inside the Institute's 26 to 29 Nov closure; time still being asked (#102).
