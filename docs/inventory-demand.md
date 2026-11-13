@@ -78,7 +78,7 @@ Whole week: 23.3 units per class day (REPORT.md, "Next 4 weeks") × 5 = 116.5, a
 
 ## Known gaps
 
-1. **Visit-time sales can land on the wrong product (#97).** An old-product sale just before the door opens is subtracted from the new product. Units balance, but shrinkage is overstated and new on-hand understated. Of 450 units our slots sold 21 Sep to 11 Nov, 37 (8%) fell in a visit window (`docs/cutover.md`, PR #105, open, which plans the fix).
+1. **Visit-time sales can land on the wrong product (#97).** An old-product sale just before the door opens is subtracted from the new product. Units balance, but shrinkage is overstated and new on-hand understated. Of 450 units our slots sold 21 Sep to 11 Nov, 37 (8%) fell in a visit window (`docs/cutover.md`, PR #105, open). PR #112 fixes the accounting side: it splits a swap day's sales between the two products using the two prices. A swap where both products have the same price still can't be split (#110, item 7).
 2. **Hidden product.** A photo sees only the front of a rail. Only a `door` count is exact.
 3. **Counts don't correct the books.** They override `get_machine_state` but not `vending/stock.py` or the ledger.
 4. **The agent's rate ignores censoring and the calendar.** `units_per_day` divides by calendar days, so a sold-out slot looks slow and a break week makes `days_of_stock_left` huge.
