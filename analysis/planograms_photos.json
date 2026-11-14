@@ -3239,13 +3239,13 @@
    "chronological_rank": 13,
    "source": "dated reference photo (Sean, four photos of the machine front)",
    "window": {
-    "earliest": "2026-11-14T10:43-05:00",
+    "earliest": "2026-11-14T00:00-05:00",
     "latest": "2026-11-14T10:43-05:00",
     "best_guess": "2026-11-14T10:43-05:00"
    },
    "confidence": "dated photo",
    "evidence": [
-    "Taken Sat 14 Nov 2026; 10:43 ET is when Sean sent the photos, so the time is approximate.",
+    "Taken Sat 14 Nov 2026, at or before 10:43 ET (when Sean sent the photos); best_guess uses 10:43.",
     "Read twice, separately, by two readers; both reads agreed on every product and every legible tag.",
     "Every legible tag on our slots matches the Sep 30 price schedule; 47 and 55 are hidden (glare, pickup cup).",
     "19 of our 20 rails show product; only 18 is empty. The Nov 9 photo showed 5 stocked, so the machine was refilled between Nov 9 and Nov 14.",
@@ -3567,7 +3567,7 @@
   },
   {
    "file": null,
-   "taken": "2026-11-14T10:43-05:00:00",
+   "taken": "2026-11-14T10:43:00-05:00",
    "note": "Nov 14 reference photos; read slot by slot in 'photos' as reference-2026-11-14 (the whole machine is in db/counts/2026-11-14-photo.json)"
   }
  ],
