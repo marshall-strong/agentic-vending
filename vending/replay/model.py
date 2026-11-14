@@ -50,7 +50,7 @@ PLAN_RULES = """\
 The plan lists every slot once:
 - keep: true means no change and nothing loaded. Then fill_to, sale_price and product are null.
 - Otherwise fill_to is the units on the rail after the visit (0 to 50) and sale_price is the shelf \
-price including tax, as text like "2.50": a multiple of $0.05, at most $6.00, and when the unit cost \
+price including tax, as text like "2.50": a multiple of $0.05, at most $6.50, and when the unit cost \
 is known, at least unit cost x 1.08 rounded up to the next $0.05.
 - product is null to keep the slot's current product. Name a product only to switch, only one in \
 the catalog, and never one whose catalog request was refused.

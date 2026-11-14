@@ -68,7 +68,8 @@ except Exception:  # no IANA database: show UTC rather than fail the page
 
 def _connect() -> psycopg.Connection:
     url = settings.require("DATABASE_URL", "Copy the DATABASE_URL line from .env.example into .env.")
-    return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT, options=OPTIONS)
+    return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT,
+                           options=db.session_options(url, OPTIONS))
 
 
 # Tests swap this to point at the local test database.

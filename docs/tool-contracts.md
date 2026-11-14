@@ -194,7 +194,7 @@ Both `preview_desired_state` and `submit_desired_state` return these.
 | `product_unknown` | The SKU is not active in the catalog. |
 | `price_off_step` | No sale price, a malformed one, or not a multiple of 5 cents. |
 | `below_floor` | Price under the slot's floor, or $0.00. |
-| `above_ceiling` | Price over the ceiling (`price_ceiling_cents`, $6.00 by default). |
+| `above_ceiling` | Price over the ceiling (`price_ceiling_cents`, $6.50 by default). |
 | `unknown_capacity` | Nobody knows how many of this package fit in a column. |
 | `over_capacity` | `fill_to` is more than fit in a column. |
 | `bad_sourcing` | A purchase option is invalid (store, Amazon link, pack size, max price below expected). |

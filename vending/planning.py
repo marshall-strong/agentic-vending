@@ -70,7 +70,7 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
     return planner.Config(
         capacity_overrides=overrides,
         slots=slots,
-        price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 600),
+        price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 650),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
         halted=config.is_halted(conn),

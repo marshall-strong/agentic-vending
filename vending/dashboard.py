@@ -87,7 +87,7 @@ SHELVES, COLUMNS = 5, 8
 def _connect() -> psycopg.Connection:
     url = settings.require("DATABASE_URL", "Copy the DATABASE_URL line from .env.example into .env.")
     return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT,
-                           options=READ_ONLY)
+                           options=db.session_options(url, READ_ONLY))
 
 
 # Tests swap this to point at a throwaway schema.

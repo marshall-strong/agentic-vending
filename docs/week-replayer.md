@@ -48,7 +48,7 @@ You need the local database with real polls in it, as in [`mcp-server.md`](mcp-s
 | balance | The plan's purchases, plus $25 for a midweek visit, cost more than the balance | The balance or a unit cost is unknown |
 | no writes | A write tool call was logged in `action_log` while the decider ran. It counts every write, so run replays when nothing else is writing. | The decider can't reach the database (the baseline and file plans) |
 
-**The price ceiling is $6.00**, the team's proposal in "Decide as a team". It lives in
+**The price ceiling is $6.50**, the team's decision on 12 Nov ("Decide as a team"). It lives in
 `PRICE_CEILING_CENTS` in `vending/replay/scoring.py`. The balance check uses actual unit cost;
 the restock planner will check the max pack price once it plugs in.
 

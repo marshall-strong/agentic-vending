@@ -20,8 +20,8 @@ from vending.replay.deciders import Plan, SlotPlan, check_plan
 from vending.replay.state import SlotWeek, WeekState
 from vending.tools.sales_history import tax_cents
 
-# The team's proposed ceiling ("Decide as a team" in tool-list.md), used here as agreed.
-PRICE_CEILING_CENTS = 600
+# The team's ceiling, decided 12 Nov ("Decide as a team" in tool-list.md); the planner's default too.
+PRICE_CEILING_CENTS = 650
 MIDWEEK_FEE_CENTS = 2500
 
 PASS, FAIL, SKIP = "pass", "fail", "skip"
