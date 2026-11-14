@@ -154,7 +154,7 @@ To be numbered in `docs/assumptions.md` (open PRs take A16 to A19: #69 A16, #99 
 1. **Day-one products and prices** (#107). Fall top sellers Monster, Gorgie and Ghost (`analysis/REPORT.md`) are not on the price list.
 2. **Wildcard slot** (Kevin, #100; #110 item 1). Not in the plan; section 2 shows it as an option: an $82.00 line and per-purchase cap, taken from the safety margin and the 20th slot's fill.
 3. **The floor.** Today's breaks even after tax. Kevin proposed (unit cost + $0.25) × 1.08, rounded up to 5 cents, for every slot, with a new setting `min_margin_cents` defaulting to 25 (#100). Not decided.
-4. **Swap first at a slow-seller flag** (Kevin, 12 Nov): at most one price step down, then swap; pulled units to the closet at cost. Depends on A5, end stock valued at cost (instructor checking: `docs/planning/2026-10-19-david-api-qa.md` row 16; #102, P2). Reasoning: restock policy rule 3.
+4. **Swap first at a slow-seller flag** (Kevin, 12 Nov): at most one price step down, then swap; pulled units to the closet at cost. Depends on A5, end stock valued at cost (confirmed: `docs/planning/2026-10-19-david-api-qa.md` row 16; #102, P2). Reasoning: restock policy rule 3.
 5. **Fill cap.** Proposed: $366.00 most for 20 slots (the 20-slot example rounded up); $360.00 for 19 if the wildcard is adopted.
 6. **Switch reserve.** Proposed: one pack, $68.00 (earlier draft: two, $136.00).
 7. **Safety margin.** Proposed: $107.00, the residual ($28 of it is spendable floor); $31.00 with the wildcard.
