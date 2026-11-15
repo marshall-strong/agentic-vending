@@ -8,17 +8,17 @@ What the machine's sales history says about demand for **our 20 slots** (15-18, 
 
 Anything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller flags, experiments) uses only our slots on `vending.slots.DEVICE_ID` (see [Which slots are ours](#which-slots-are-ours)), and no slot is ever judged by another slot's state (`docs/integrity.md`). Machine-wide data is used only as totals over the whole machine, and only for the calendar and day-off effects, the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. That history is from before the competition, when course staff stocked every slot, so it reflects no rival strategy. The export never writes a per-slot value of another slot, and the analysis stops if its lab data would carry one.
 
-**The fall run is the one exception.** Before the start (Thu 3 Dec 2026) no selection is either team's: course staff stocked the whole machine, and the inventory server may redraw the split once before the start (`docs/integrity.md`). So `export_sales.py --fall-all` writes per-selection rows for all 40 selections, from polls before 3 Dec 2026 00:00 Eastern only, to `analysis/data/fall40/`. `slots_config.check_before_start` refuses a row for a selection outside our assignment from the start on, in the export and again when `sales_analysis.py` loads it. `fall_rates.py` summarizes that run.
+**The fall run is the one exception.** Before the start (Thu 3 Dec 2026) no selection is either team's: course staff stocked the whole machine, and the inventory server may redraw the split once before the start (`docs/integrity.md`). So `export_sales.py --fall-all` writes per-selection rows for all 40 selections, from polls before 3 Dec 2026 00:00 Eastern only, to `analysis/data/fall40/`. `slots_config.check_before_start` refuses every row of the fall run from the start on, in the export and again when `sales_analysis.py` loads it. `fall_rates.py` summarizes that run.
 
 ## Which slots are ours
 
 The assignment from the inventory server (`GET /api/v1/slots`) is team group-b on `vmc1`: slots 15-18, 25-28, 35-38, 45-48, 55-58, the same as `vending.slots.SLOTS`. The scripts take the slot list from the first of these that is set:
 
-1. `--slots` on the command line, comma or space separated. It can only narrow the list: a code outside `vending.slots.SLOTS` is refused (a stored server answer is held to it too), so the export never writes another team's per-slot values.
-2. The assignment stored from the inventory server, read with `vending.slots.our_slots(conn)`, once that function exists and a row is stored.
-3. `vending.slots.SLOTS`.
+1. `--slots` on the command line, comma or space separated. It can only narrow the list: a code outside our assignment is refused, so the export never writes another team's per-slot values.
+2. The assignment stored from the inventory server, read with `vending.slots.stored(conn)` and checked by shape only (20 different selections of the 40), not against `vending.slots.SLOTS`, because the split may be redrawn once before the start (#75). A malformed one stops the run.
+3. `vending.slots.SLOTS`, when nothing is stored.
 
-The export writes the list it used to `analysis/data/slots.json`. The analysis reads it, and stops with a re-export message if it is asked for a different list. The labs take the list, the rails that are not ours and the source line in their footer from `lab_data.json`.
+The export writes the list it used, and our assignment as `assigned_slots`, to `analysis/data/slots.json`; a file without `assigned_slots` is refused (re-export). The analysis reads it, and stops with a re-export message if it is asked for a different list. The labs take the list, the rails that are not ours and the source line in their footer from `lab_data.json`.
 
 ## The interactive labs
 

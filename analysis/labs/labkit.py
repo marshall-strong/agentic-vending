@@ -18,7 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent          # analysis/labs
 ANALYSIS = HERE.parent                          # analysis
 sys.path.insert(0, str(ANALYSIS))
-from slots_config import SLOTS as ASSIGNED, check_scope  # noqa: E402  (refuses a scope with a slot that isn't ours)
+from slots_config import check_scope  # noqa: E402  (refuses a scope with a slot that isn't ours)
 LAB_DATA = ANALYSIS / "out" / "lab_data.json"
 DATA = ANALYSIS / "data"
 OUT = ANALYSIS / "out" / "labs"
@@ -48,14 +48,15 @@ def read(name, fill_from=None):
 def scope_of(d):
     """The slot scope every lab carries: which slots are ours, on which machine, and where that list came from."""
     sc = d.get("scope") or {}
-    for k in ("device", "our_slots", "source", "source_line", "machine"):
+    for k in ("device", "our_slots", "assigned_slots", "source", "source_line", "machine"):
         if k not in sc:
             raise SystemExit(f"lab_data.json has no scope.{k}: rerun analysis/sales_analysis.py")
-    check_scope(sc["device"], sc["our_slots"], sc["source"], "lab_data.json scope")
+    _, assigned = check_scope(sc["device"], sc["our_slots"], sc["source"], "lab_data.json scope", sc["assigned_slots"])
     stray = set((d.get("photo_check") or {}).get("photo_stocked") or []) - set(sc["our_slots"])
     if stray:
         raise SystemExit(f"lab_data.json: photo_check.photo_stocked has slots that are not ours: {sorted(stray)}")
-    return {k: sc.get(k) for k in ("device", "our_slots", "n_slots", "slots_text", "source", "source_line", "resolved_at", "machine")}
+    out = {k: sc.get(k) for k in ("device", "our_slots", "n_slots", "slots_text", "source", "source_line", "resolved_at", "machine")}
+    return {**out, "assigned_slots": list(assigned)}
 
 
 def _and_list(nums):
@@ -72,7 +73,7 @@ def tokens(scope):
     rows = sorted({int(s[0]) for s in slots})
     cols = sorted({int(s[1]) for s in slots})
     our = f"our {n} slot" + ("" if n == 1 else "s")
-    partial = set(slots) != set(ASSIGNED)    # a narrowed --slots run: some hatched rails are ours
+    partial = set(slots) != set(scope["assigned_slots"])    # a narrowed --slots run: some hatched rails are ours
     return {
         "TURF_LABEL": "Not in this run" if partial else "Not our turf",
         "TURF_TIP": "Left out of this run (a narrowed slot list). It may be one of ours." if partial else "Rival rails. Eyes front.",

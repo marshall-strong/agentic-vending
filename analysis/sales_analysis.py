@@ -82,10 +82,10 @@ from statsmodels.tsa.seasonal import STL
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from slots_config import SOURCE_CLI, SOURCE_DEFAULT, SOURCE_FALL, check_before_start, is_default, resolve_run  # noqa: E402
+from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (defaults; configure() sets the ones this run uses)
-from vending.slots import SLOTS as ASSIGNED  # noqa: E402  (our assignment: the bound for the fall run's date guard)
 
 TZ = "America/New_York"
 SEED = 42
@@ -117,14 +117,16 @@ VISIT_NOTES = {"2026-11-09": "student team photographing the machine (not a refi
 KNOWN_NOT_REFILL = {"2026-11-09"}  # visits known not to be refills (never end a stock-out window, never count as a refill)
 SLOT_SOURCE = SOURCE_DEFAULT
 SLOTS_RESOLVED_AT = None
+ASSIGNED = ()                     # our assignment (data/slots.json assigned_slots), set by configure(); none = no row may be from the start on
 OUR = "our slots"                 # set by configure(): "our N slots" for the slot list this run uses
 SCOPE_NOTE = ""
 
 
-def configure(device, slots, source, resolved_at=None):
-    """Set the slot list this run uses, and every text that names it."""
-    global DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT, OUR, SCOPE_NOTE, LIKELY_MIN
+def configure(device, slots, source, resolved_at=None, assigned=()):
+    """Set the slot list this run uses, our assignment (the date guard's exemption), and every text that names it."""
+    global DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT, ASSIGNED, OUR, SCOPE_NOTE, LIKELY_MIN
     DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT = device, tuple(slots), source, resolved_at
+    ASSIGNED = tuple(assigned)
     OUR = f"our {len(SLOTS)} slot" + ("" if len(SLOTS) == 1 else "s")
     if source == SOURCE_FALL:
         OUR = f"all {len(SLOTS)} selections (fall, before the start)"
@@ -178,16 +180,33 @@ def resolve(args):
     manifest = Path(args.slots_file)
     exported = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else None
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-    device, slots, source, at = resolve_run(args.slots, exported, str(manifest), now)
+    device, slots, source, at, assigned = resolve_run(args.slots, exported, str(manifest), now)
     if exported is None:
         print(f"WARNING: no {manifest.name} next to the CSVs, so it can't be checked which slots they were exported for; "
               "the per-slot rows are still checked against the slot list below")
-    configure(device, slots, source, at)
+    configure(device, slots, source, at, assigned)
 
 
 # ============================================================== helpers
-def to_et(col):
-    return pd.to_datetime(col, utc=True).dt.tz_convert(TZ)
+UTC_OFFSET = r"(?:Z|[+-]\d{2}:\d{2})$"    # how an ISO time ends when it says its offset ("-05:00", "Z")
+
+
+def to_et(col, where="a time column"):
+    """ISO times with their UTC offsets, in Eastern. Exits on a time with no offset, or one that can't be read.
+
+    pd.to_datetime(..., utc=True) would read a time with no offset as UTC: 2026-12-03T00:30:00 would become
+    19:30 Eastern on 2 Dec, before the start. The export always writes the offset, so a time without one is refused.
+    """
+    text = col.astype(str).str.strip()
+    naive = text[~text.str.contains(UTC_OFFSET, regex=True)]
+    if len(naive):
+        raise SystemExit(f"{where}: {len(naive)} time(s) with no UTC offset, first {naive.iloc[0]!r}; "
+                         "can't tell when it was (re-export with analysis/export_sales.py)")
+    try:
+        t = pd.to_datetime(text, utc=True, format="ISO8601")
+    except (ValueError, TypeError) as error:
+        raise SystemExit(f"{where}: a time that can't be read: {error}") from None
+    return t.dt.tz_convert(TZ)
 
 
 def floor_h(x):
@@ -290,24 +309,25 @@ def load(args):
         # the exporter writes our slots only; an older export would carry other slots: never use them
         raise SystemExit(f"SCOPE: the export carries per-slot rows for {len(extra)} slots outside ours ({slot_ranges(extra)}): "
                          "re-export with the same slot list (python analysis/export_sales.py --slots ...)")
-    sales["t"] = to_et(sales.at_eastern)
-    reads["t"] = to_et(reads.at_eastern)
+    sales["t"] = to_et(sales.at_eastern, f"{args.sales}")
+    reads["t"] = to_et(reads.at_eastern, f"{args.readings}")
     # Per-selection rows outside our assignment are allowed only before the start (slots_config.check_before_start).
-    # A normal run never has any (the check above); a fall run must have none from the start on.
-    check_before_start(zip(sales.slot, sales.t), ASSIGNED, f"{args.sales}")
-    check_before_start(zip(reads.slot, reads.t), ASSIGNED, f"{args.readings}")
+    # A normal run never has any (the check above); a fall run must have no row at all from the start on.
+    exempt = exempt_from_start(SLOT_SOURCE, ASSIGNED)
+    check_before_start(zip(sales.slot, sales.t), exempt, f"{args.sales}")
+    check_before_start(zip(reads.slot, reads.t), exempt, f"{args.readings}")
     polls = pd.read_csv(args.polls)
-    polls["t"] = to_et(polls.at_eastern)
+    polls["t"] = to_et(polls.at_eastern, f"{args.polls}")
     polls = polls.sort_values("t").reset_index(drop=True)
     if not Path(args.machine).exists():
         raise SystemExit(f"no machine totals at {args.machine}: rerun export_sales.py (it writes machine_hourly.csv)")
     mach = pd.read_csv(args.machine)
-    mach["t"] = to_et(mach.at_eastern)
+    mach["t"] = to_et(mach.at_eastern, f"{args.machine}")
     cal = json.loads(Path(args.calendar).read_text(encoding="utf-8"))
     doors = None
     if args.doors and Path(args.doors).exists():
         doors = pd.read_csv(args.doors)
-        doors["t"] = to_et(doors.at_eastern)
+        doors["t"] = to_et(doors.at_eastern, f"{args.doors}")
         doors = doors.sort_values("t").reset_index(drop=True)
         # Rises from the lifetime count with vending.counters.rises (a lone low reading is a misread), not the file's
         # `rise` column: exports written before export_sales.py used that rule turned (1000, 5, 1000) into a rise of 995.
@@ -2154,7 +2174,7 @@ def main():
         per_origin=per_origin, weekly=weekly_bt, fit_log=fit_log_backtest)
 
     lab = dict(
-        scope=dict(device=DEVICE_ID, our_slots=slots, n_slots=len(slots), slots_text=slots_text, source=SLOT_SOURCE,
+        scope=dict(device=DEVICE_ID, our_slots=slots, assigned_slots=list(ASSIGNED), n_slots=len(slots), slots_text=slots_text, source=SLOT_SOURCE,
                    resolved_at=SLOTS_RESOLVED_AT, source_line=source_line(), machine=dict(shelves=5, columns=8), note=SCOPE_NOTE),
         visits=visits_out, refill_evidence=refill_evidence, last_proven_refill=lpr, supply=supply, photo_check=photo_check,
         meta=dict(generated_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), device=DEVICE_ID, timezone=TZ,

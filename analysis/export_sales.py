@@ -15,8 +15,8 @@ machine-wide totals per poll (machine_hourly.csv); no per-slot value of another 
 
 --fall-all is the one exception: before the competition starts no selection is either team's (docs/integrity.md),
 so it writes per-selection rows for all 40, and every query stops at slots_config.START (3 Dec 2026 00:00
-Eastern). check_before_start() checks the rows read as well, and refuses the whole export if a selection outside
-our assignment has a row from the start on.
+Eastern). check_before_start() checks the rows read as well, and refuses the whole export if any of them is from
+the start on.
 
 Writes:
     poll_readings.csv   every poll x OUR slot: lifetime counters and the current price
@@ -27,8 +27,9 @@ Writes:
     door_events.csv     every poll's EVA-DTS door-open counter (EA2*DO*<since reset>*<lifetime>) and its rise
                         since the previous poll (door_events.door_rows: vending.counters.rises, misread-safe): a rise
                         means the door was opened (a visit) in between
-    slots.json          which slots the CSVs cover: {device, slots, source, resolved_at}. sales_analysis.py
-                        reads it, and stops if it is asked about a different slot list.
+    slots.json          which slots the CSVs cover: {device, slots, source, assigned_slots, resolved_at}, where
+                        assigned_slots is our assignment. sales_analysis.py reads it, and stops if it is asked
+                        about a different slot list or the assignment is missing or malformed.
 """
 import argparse
 import csv
@@ -44,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vending import db  # noqa: E402
 from vending.counters import rises  # noqa: E402
 from door_events import door_counter, door_rows  # noqa: E402
-from slots_config import START, check_before_start, resolve_slots  # noqa: E402
+from slots_config import START, check_before_start, exempt_from_start, resolve_slots  # noqa: E402
 
 EASTERN = ZoneInfo("America/New_York")
 ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -58,9 +59,8 @@ out.mkdir(parents=True, exist_ok=True)
 
 with db.connect() as c:
     c.execute("set default_transaction_read_only = on")
-    DEVICE_ID, SLOTS, SOURCE = resolve_slots(args.slots, c, fall=args.fall_all)
-    # our assignment, for the date guard: what a normal run would use (stored answer, else vending.slots.SLOTS)
-    ASSIGNED = resolve_slots(None, c)[1] if args.fall_all else SLOTS
+    # ASSIGNED is our assignment (the stored server answer, else vending.slots.SLOTS), recorded in slots.json
+    DEVICE_ID, SLOTS, SOURCE, ASSIGNED = resolve_slots(args.slots, c, fall=args.fall_all)
     # a fall run reads only polls before the start; a normal run reads every poll (its slots are ours)
     before = START if args.fall_all else dt.datetime.max.replace(tzinfo=dt.timezone.utc)
     print(f"slots: {len(SLOTS)} on {DEVICE_ID}, from {SOURCE}" + (f"; polls before {START.isoformat()}" if args.fall_all else ""))
@@ -86,7 +86,7 @@ with db.connect() as c:
 
 
 ours = set(SLOTS)
-check_before_start(((sel, at) for sel, at, *_ in rows), ASSIGNED, "export")
+check_before_start(((sel, at) for sel, at, *_ in rows), exempt_from_start(SOURCE, ASSIGNED), "export")
 by_slot: dict[str, list] = {}
 for sel, at, units, cents, price in rows:
     assert sel in ours
@@ -142,7 +142,8 @@ with open(out / "door_events.csv", "w", newline="") as f:
         w.writerow([at.astimezone(EASTERN).isoformat(), life, since, rise])
 
 (out / "slots.json").write_text(json.dumps(dict(
-    device=DEVICE_ID, slots=list(SLOTS), source=SOURCE, **({"before": START.isoformat()} if args.fall_all else {}),
+    device=DEVICE_ID, slots=list(SLOTS), source=SOURCE, assigned_slots=list(ASSIGNED),
+    **({"before": START.isoformat()} if args.fall_all else {}),
     resolved_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")), indent=1) + "\n", encoding="utf-8")
 
 print(f"{len(rows)} readings of {len(SLOTS)} {'selections (fall run)' if args.fall_all else 'of our slots'} on {DEVICE_ID}, {len(polls)} polls, "

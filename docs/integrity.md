@@ -53,9 +53,11 @@ repo root points here.
   counters only from `DEVICE_ID`, and only for the slots our own receipts name.
 - **The fall analysis stops at the start.** `analysis/export_sales.py --fall-all` writes
   per-selection rows for all 40 selections, but only from polls before 3 Dec 2026 00:00
-  Eastern (`analysis/slots_config.py`, `START`). `check_before_start` refuses any row for a
-  selection outside our assignment from the start on, in the export and again when the
-  analysis loads it; `tests/test_analysis_slots.py` checks that it does.
+  Eastern (`analysis/slots_config.py`, `START`). `check_before_start` refuses any row of the
+  fall run from the start on, ours included, in the export and again when the analysis loads
+  it. Normal runs may keep rows from the start on only for our assignment as stored from the
+  inventory server (recorded in each export as `assigned_slots`, not `vending.slots.SLOTS`),
+  and a time without a UTC offset is refused. `tests/test_analysis_slots.py` checks all of it.
 
 From 3 Dec the polls carry the full, raw DEX response (David, 17 Nov), so the other team's
 selections arrive with ours. From the start, everything that reads them for analysis, display or

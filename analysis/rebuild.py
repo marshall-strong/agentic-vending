@@ -34,7 +34,7 @@ LABS = [("forecast-lab", "forecast_lab.py"), ("rhythm-lab", "rhythm_lab.py"), ("
 TURF = "Not our turf"
 TURF_PARTIAL = "Not in this run"
 sys.path.insert(0, str(ANALYSIS))
-from slots_config import SLOTS as ASSIGNED  # noqa: E402
+from slots_config import check_assignment  # noqa: E402
 
 
 def project_python():
@@ -95,7 +95,8 @@ def main():
     all_ok = bool(checks.get("all_ok"))
     n = len(sc["our_slots"])
     rival = sc["machine"]["shelves"] * sc["machine"]["columns"] - n
-    partial = set(sc["our_slots"]) != set(ASSIGNED)     # a narrowed --slots run
+    assigned = check_assignment(sc.get("assigned_slots"), "lab_data.json scope: assigned_slots")   # our assignment
+    partial = set(sc["our_slots"]) != set(assigned)     # a narrowed --slots run
     turf = TURF_PARTIAL if partial else TURF
     print()
     print(f"slots     {n} on {sc['device']}: {sc['slots_text']}")
@@ -104,7 +105,7 @@ def main():
     print(f"all_ok    {all_ok}")
     print(f"data      {lab['meta']['first_poll']} to {lab['meta']['last_poll']}, {lab['meta']['polls']} polls")
     if partial:
-        print(f"narrowed  {n} of our {len(ASSIGNED)} slots; the other {rival} rails are hatched as '{turf}' with no values")
+        print(f"narrowed  {n} of our {len(assigned)} slots; the other {rival} rails are hatched as '{turf}' with no values")
     else:
         print(f"not ours  {rival} rails, drawn hatched as '{turf}' with no values")
     for name, _ in LABS:
