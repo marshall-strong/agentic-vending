@@ -53,7 +53,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import db, machine_art, settings, slot_counts, visits
+from vending import db, machine_art, money_panel, settings, slot_counts, visits
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
@@ -523,6 +523,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
                    {"ok": True, "data": {}}),
         "spend": _panel(lambda: _spend(conn, now)),
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
+        "money": _panel(lambda: _guarded(conn, lambda: money_panel.read(conn, now))),
         "purchase_requests": _panel(lambda: _rows(conn, """
             select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,
                    count(l.line_no) as lines,
@@ -617,6 +618,11 @@ def attention(snap: dict) -> list[dict]:
                 add("warn", f"Catalog request for {r['name']} {r['size']} is `{r['status']}`: check it on the "
                             "bridge, then settle it with `python -m vending.product_requests resolve`.")
 
+    money = snap.get("money")
+    if money and money["ok"]:
+        for level, text in money_panel.attention(money["data"]):
+            add(level, text)
+
     stock = snap["stock"]
     if stock["ok"] and stock["data"]["warnings"]:
         n = len(stock["data"]["warnings"])
@@ -625,8 +631,8 @@ def attention(snap: dict) -> list[dict]:
 
     for key, name in (("plan", "Plan"), ("runs", "Runs"), ("activity", "Tool calls"), ("sales", "Sales"),
                       ("stock", "Stock"), ("purchase_requests", "Purchase requests"),
-                      ("catalog_requests", "Catalog requests")):
-        if not snap[key]["ok"]:
+                      ("catalog_requests", "Catalog requests"), ("money", "Money")):
+        if key in snap and not snap[key]["ok"]:
             add("info", f"{name} isn't available: {snap[key]['why']}")
 
     order = {"bad": 0, "warn": 1, "info": 2}
@@ -1058,8 +1064,15 @@ def _tiles(snap: dict) -> str:
         tiles.append(("Machine data", f'<span class="big{tone}">{_time(d["as_of"], "ago", now)}</span>',
                       f"last poll &middot; {_plural(total, 'unit')} sold {since}"))
 
-    spend = snap["spend"]
-    if spend["ok"]:
+    spend, money = snap["spend"], snap.get("money")
+    ledgered = money["data"] if money and money["ok"] and money["data"].get("opened") else None
+    if ledgered:
+        # Once the ledger is open, one source for money on the whole page: the ledger's.
+        total = sum(Decimal(ledgered[k]) for k in ("receipts", "visit_fees", "tokens"))
+        tiles.append(("Spent since the opening", f'<span class="big">{_money(total)}</span>',
+                      f'drinks {_money(Decimal(ledgered["receipts"]))}, visits {_money(Decimal(ledgered["visit_fees"]))}, '
+                      f'model {_money(Decimal(ledgered["tokens"]))} &middot; from the ledger'))
+    elif spend["ok"]:
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
         unpriced = f' &middot; {m["unpriced"]} without a cost' if m["unpriced"] else ""
         visits = f' &middot; {_plural(dr["midweek"], "midweek visit")}' if dr["midweek"] else ""
@@ -1431,9 +1444,12 @@ footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8p
   .feed li { grid-template-columns:auto minmax(0, 1fr) } .feed .kind { display:none } }
 """
 
+STYLE += money_panel.STYLE   # the money panel's own rules (#48)
+
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
 # and says so. Without JavaScript the <noscript> meta refresh reloads the page instead.
+
 SCRIPT = """(function () {
   var REFRESH = %d * 1000, show = 'all', view = 'now', only = false, lastOk = Date.now(), failed = false;
   var shelf = '';
@@ -1463,6 +1479,7 @@ SCRIPT = """(function () {
       else if (f === 'until') t.textContent = d > now ? span(d - now) : 'passed';
       else if (f === 'since') t.textContent = span(now - d);
       else if (f === 'clock') t.textContent = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+      else if (f === 'day') t.textContent = d.toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'});
       else t.textContent = d.toLocaleString([], {weekday: 'short', month: 'short', day: 'numeric',
                                                   hour: 'numeric', minute: '2-digit'});
       t.title = d.toLocaleString();
@@ -1574,7 +1591,9 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
             f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
             f'refreshes every {int(refresh)} s</span> &middot; <a href="{_e(json_href)}">JSON</a>{links}</span></header>')
-    body = (head + _tiles(snap) + _attention_html(items) + _cabinet_html(snap)
+    money = (f'<section id="money"><h2>Money <span class="hint">from the ledger &middot; exact to the cent'
+             f'</span></h2>{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
+    body = (head + _tiles(snap) + _attention_html(items) + money + _cabinet_html(snap)
             + f'<section id="plan"><h2>The plan <span class="hint">{plan_hint}</span></h2>'
             + _plan_html(snap) + _words_html(snap["plan"]) + "</section>"
             + '<div class="grid2">'
@@ -1589,8 +1608,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + f'<section id="closet"><h2>Back stock <span class="hint">the closet, from receipts</span></h2>'
               f'{_closet_html(snap["stock"])}</section>'
             + "</div>"
-            + '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code>'
-              '<br>No balance or profit shown yet: the ledger (#35) has landed, and its panel is the next step.</footer>')
+            + '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code></footer>')
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             # The query marks the reload as one, so the visit counter doesn't count it (`vending.visits`).
