@@ -7,6 +7,8 @@ too many open ones get a `429`. So before sending, it refuses, all at once:
 a field the bridge would reject, a size that isn't a liquid volume, alcohol or
 THC, a product already in the catalog, one we have already requested, and any
 request over our own weekly limit (larger while the catalog is still small).
+That limit applies only from the competition's start: before it, the team
+may ask for as many drinks as it wants (Kevin, 15 Nov 2026).
 
 The bridge has no route that lists our requests, so `product_requests` is our
 only record, and the duplicate check reads it. Runs inside the write gate, so
@@ -34,6 +36,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -51,6 +55,11 @@ MAX_NOTE = 500
 # limit is higher until the catalog reaches SMALL_CATALOG products.
 # PLACEHOLDERS: these three numbers are guesses, not a team decision. See
 # "Open questions for the team" in PR #14 and docs/mcp-server.md.
+# Before the competition starts there is no limit at all: the bridge charges
+# nothing for a request, and the team wants a wide catalog for day one
+# (Kevin, 15 Nov 2026). The bridge's own 429 for too many open requests
+# still applies.
+COMPETITION_START = datetime(2026, 12, 3, tzinfo=ZoneInfo("America/New_York"))
 WEEKLY_LIMIT = 3
 STARTUP_WEEKLY_LIMIT = 15
 SMALL_CATALOG = 25
@@ -154,7 +163,10 @@ def already_in_catalog(catalog: list[dict], wanted: list[str]) -> list[Refusal]:
 
 
 def over_weekly_limit(conn: psycopg.Connection, catalog_size: int) -> list[Refusal]:
-    """A refusal if we've already filed this week's share of requests."""
+    """A refusal if we've already filed this week's share of requests. None before the start."""
+    (now,) = conn.execute("select now()").fetchone()
+    if now < COMPETITION_START:
+        return []
     limit = STARTUP_WEEKLY_LIMIT if catalog_size < SMALL_CATALOG else WEEKLY_LIMIT
     (recent,) = conn.execute(
         "select count(*) from product_requests where requested_at > now() - interval '7 days'").fetchone()

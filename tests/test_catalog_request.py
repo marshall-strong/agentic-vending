@@ -1,6 +1,8 @@
 """`request_catalog_product` through the MCP client, the write gate and Postgres,
 against a local HTTP server standing in for the bridge's two routes."""
 
+from datetime import datetime, timezone
+
 import json
 import threading
 import time
@@ -298,6 +300,7 @@ def test_halted_never_calls_the_bridge(db, fake):  # noqa: F811
 
 
 def test_the_weekly_limit_is_higher_while_the_catalog_is_small(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "COMPETITION_START", PAST)
     monkeypatch.setattr(catalog_request, "STARTUP_WEEKLY_LIMIT", 3)
     monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
     for i, drink in enumerate(["Sprite", "Fanta", "Pibb"]):
@@ -309,6 +312,7 @@ def test_the_weekly_limit_is_higher_while_the_catalog_is_small(db, fake, monkeyp
 
 
 def test_the_normal_limit_applies_once_the_catalog_is_full(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "COMPETITION_START", PAST)
     monkeypatch.setattr(catalog_request, "SMALL_CATALOG", len(CATALOG))
     monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
     assert ask(name="Sprite")["success"]
@@ -317,9 +321,24 @@ def test_the_normal_limit_applies_once_the_catalog_is_full(db, fake, monkeypatch
 
 
 def test_requests_older_than_a_week_do_not_count(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "COMPETITION_START", PAST)
     monkeypatch.setattr(catalog_request, "SMALL_CATALOG", len(CATALOG))
     monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
     assert ask(name="Sprite")["success"]
     db.execute("update product_requests set requested_at = now() - interval '8 days'")
     fake.answer = (201, {"id": "req-2", "status": "pending"}, 0.0)
     assert ask(name="Fanta")["success"]
+
+
+PAST = datetime(2000, 1, 1, tzinfo=timezone.utc)
+FUTURE = datetime(2999, 1, 1, tzinfo=timezone.utc)
+
+
+def test_there_is_no_weekly_limit_before_the_start(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "COMPETITION_START", FUTURE)
+    monkeypatch.setattr(catalog_request, "SMALL_CATALOG", len(CATALOG))
+    monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
+    for i, drink in enumerate(["Sprite", "Fanta", "Pibb", "Fresca"]):
+        fake.answer = (201, {"id": f"req-{i}", "status": "pending"}, 0.0)
+        assert ask(name=drink)["success"], drink
+    assert len(fake.posts) == 4
