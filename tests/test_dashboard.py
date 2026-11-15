@@ -615,3 +615,22 @@ def test_runs_chips_read_a_keep_against_the_tag_like_the_plan_panel(conn, page_c
     runs = {r["id"]: r for r in dashboard.snapshot(page_conn, MONDAY)["runs"]["data"]}
     # Without the tag this read "set $3.00" here and "$2.50 to $3.00" in the Plan panel.
     assert runs[b]["changes"] == [{"slot": "28", "labels": ["$2.50 to $3.00"]}]
+
+
+@pytest.mark.parametrize("warning, kept", [
+    ("slot 16: the polls show 2 more sales", True),
+    ("slot 15: the polls show 2 more sales", False),
+    ("slots 15-17 sold across a change", False),      # a range reaching a slot not ours
+    ("slots 12, 16 sold across a change", False),
+    ("slot 16 and 15 were pulled", False),
+    ("slot 16 and slot 18 were pulled", True),
+    ("the slots were miscounted", False),             # names a slot we can't read
+    ("loaded 4 units of X from the closet but we counted only 2 there", True),
+])
+def test_only_ours_reads_plural_list_and_range_slot_names_in_warnings(warning, kept):
+    from vending import dashboard
+
+    snap = {"ours": {"ok": True, "data": ["16", "18"]}, "counts": {"ok": False},
+            "stock": {"ok": True, "data": {"slots": {}, "warnings": [warning]}}}
+    dashboard.only_ours(snap)
+    assert (snap["stock"]["data"]["warnings"] == [warning]) is kept

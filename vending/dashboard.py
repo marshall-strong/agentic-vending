@@ -425,11 +425,30 @@ def only_ours(snap: dict) -> None:
     if snap["stock"]["ok"]:
         stock = snap["stock"]["data"]
         stock["slots"] = {s: v for s, v in stock["slots"].items() if s in ours}
-        stock["warnings"] = [w for w in stock["warnings"] if set(_SLOT_NAMED.findall(w)) <= ours]
+        stock["warnings"] = [w for w in stock["warnings"] if _slots_named(w) <= ours]
 
 
-# How `vending.stock` names a selection in a warning: "slot 15".
+# How `vending.stock` names a selection in a warning: "slot 15". Plurals, lists and ranges
+# ("slots 15-17", "slots 12, 15", "slot 12 and 15") are read too, so a new wording can't slip one past.
 _SLOT_NAMED = re.compile(r"\bslot (\w+)")
+_SLOT_LIST = re.compile(r"\bslots? (\d+(?:\s*(?:,|-|–|and|or)\s*(?:slot\s+)?\d+)*)")
+_LIST_SEP = re.compile(r"\s*(?:,|\band\b|\bor\b)\s*(?:slot\s+)?")
+
+
+def _slots_named(warning: str) -> set[str]:
+    """Every selection a warning names. A warning that mentions slots but names none we can read
+    counts as naming one that isn't ours, so it stays off the public page."""
+    named = set(_SLOT_NAMED.findall(warning))
+    for listed in _SLOT_LIST.findall(warning):
+        for part in _LIST_SEP.split(listed):
+            low, _, high = (x.strip() for x in part.replace("–", "-").partition("-"))
+            if high.isdigit() and low.isdigit() and int(low) < int(high):
+                named.update(str(n) for n in range(int(low), int(high) + 1))
+            elif low:
+                named.add(low)
+    if not named and re.search(r"\bslots?\b", warning):
+        named.add("?")
+    return named
 
 
 def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
