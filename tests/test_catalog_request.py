@@ -1,7 +1,7 @@
 """`request_catalog_product` through the MCP client, the write gate and Postgres,
 against a local HTTP server standing in for the bridge's two routes."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import json
 import threading
@@ -299,31 +299,22 @@ def test_halted_never_calls_the_bridge(db, fake):  # noqa: F811
     assert fake.gets == 0 and fake.posts == []
 
 
-def test_the_weekly_limit_is_higher_while_the_catalog_is_small(db, fake, monkeypatch):  # noqa: F811
+def test_the_limit_in_the_first_competition_week(db, fake, monkeypatch):  # noqa: F811
     monkeypatch.setattr(catalog_request, "COMPETITION_START", PAST)
-    monkeypatch.setattr(catalog_request, "STARTUP_WEEKLY_LIMIT", 3)
-    monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
-    for i, drink in enumerate(["Sprite", "Fanta", "Pibb"]):
+    monkeypatch.setattr(catalog_request, "WEEKLY_LIMITS", ())
+    monkeypatch.setattr(catalog_request, "FINAL_WEEKLY_LIMIT", 2)
+    for i, drink in enumerate(["Sprite", "Fanta"]):
         fake.answer = (201, {"id": f"req-{i}", "status": "pending"}, 0.0)
         assert ask(name=drink)["success"]
     reply = ask(name="Fresca")
-    assert codes(reply) == ["request_limit"] and "start-up limit" in reply["refusals"][0]["message"]
-    assert len(fake.posts) == 3
-
-
-def test_the_normal_limit_applies_once_the_catalog_is_full(db, fake, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(catalog_request, "COMPETITION_START", PAST)
-    monkeypatch.setattr(catalog_request, "SMALL_CATALOG", len(CATALOG))
-    monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
-    assert ask(name="Sprite")["success"]
-    reply = ask(name="Fanta")
-    assert codes(reply) == ["request_limit"] and "start-up" not in reply["refusals"][0]["message"]
+    assert codes(reply) == ["request_limit"] and "the limit is 2" in reply["refusals"][0]["message"]
+    assert len(fake.posts) == 2
 
 
 def test_requests_older_than_a_week_do_not_count(db, fake, monkeypatch):  # noqa: F811
     monkeypatch.setattr(catalog_request, "COMPETITION_START", PAST)
-    monkeypatch.setattr(catalog_request, "SMALL_CATALOG", len(CATALOG))
-    monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
+    monkeypatch.setattr(catalog_request, "WEEKLY_LIMITS", ())
+    monkeypatch.setattr(catalog_request, "FINAL_WEEKLY_LIMIT", 1)
     assert ask(name="Sprite")["success"]
     db.execute("update product_requests set requested_at = now() - interval '8 days'")
     fake.answer = (201, {"id": "req-2", "status": "pending"}, 0.0)
@@ -336,9 +327,17 @@ FUTURE = datetime(2999, 1, 1, tzinfo=timezone.utc)
 
 def test_there_is_no_weekly_limit_before_the_start(db, fake, monkeypatch):  # noqa: F811
     monkeypatch.setattr(catalog_request, "COMPETITION_START", FUTURE)
-    monkeypatch.setattr(catalog_request, "SMALL_CATALOG", len(CATALOG))
-    monkeypatch.setattr(catalog_request, "WEEKLY_LIMIT", 1)
+    monkeypatch.setattr(catalog_request, "FINAL_WEEKLY_LIMIT", 1)
     for i, drink in enumerate(["Sprite", "Fanta", "Pibb", "Fresca"]):
         fake.answer = (201, {"id": f"req-{i}", "status": "pending"}, 0.0)
         assert ask(name=drink)["success"], drink
     assert len(fake.posts) == 4
+
+
+
+def test_the_limit_starts_at_20_and_falls_each_week():
+    start = catalog_request.COMPETITION_START
+    limit = catalog_request.weekly_limit
+    assert limit(start - timedelta(seconds=1)) is None
+    assert [limit(start + timedelta(days=7 * w)) for w in range(6)] == [20, 15, 10, 5, 3, 3]
+    assert limit(start + timedelta(days=6, hours=23)) == 20

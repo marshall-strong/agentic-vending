@@ -127,12 +127,11 @@ Each request goes to an instructor, and too many open ones get a `429`, so befor
 refuses, all at once: a field the bridge would reject, a size that isn't a liquid volume (`20 oz
 bottle`, `12 fl oz can`, `500 mL`), alcohol or THC (root beer and ginger ale are fine), a product
 already in the catalog, a product we already asked for, and a request over our weekly limit.
-The limit counts every request filed in the last 7 days, with a higher limit while the bridge
-catalog is small. **The limit applies only from the competition's start (3 Dec 2026,
-`COMPETITION_START`); before it there is none**, so the team can ask for as many drinks as it wants
-(Kevin, 15 Nov). The numbers after the start are placeholders the team still has to set: for now 3
-per week normally, 15 while the catalog has fewer than 25 products (`WEEKLY_LIMIT`,
-`STARTUP_WEEKLY_LIMIT` and `SMALL_CATALOG` in `vending/tools/catalog_request.py`). A request is a duplicate of an
+The limit counts every request filed in the last 7 days. **Before the competition starts (3 Dec
+2026, `COMPETITION_START`) there is none**, so the team can ask for as many drinks as it wants.
+From the start it is 20 in the first week, then 15, 10 and 5, and 3 a week after that, falling as
+the catalog grows (Kevin, 15 Nov; `WEEKLY_LIMITS` and `FINAL_WEEKLY_LIMIT` in
+`vending/tools/catalog_request.py`, a starting point the team can tune). A request is a duplicate of an
 earlier one, or of a catalog product, when its name, flavor and size have exactly the same words.
 Before comparing, units are normalised ("20oz", "20 ounce" and "20 fl oz" are all "20 oz"), and
 words that don't tell drinks apart are dropped: containers (bottle, can, pack) and default-flavor

@@ -6,9 +6,9 @@ It costs nothing and orders nothing, but each request goes to a person, and
 too many open ones get a `429`. So before sending, it refuses, all at once:
 a field the bridge would reject, a size that isn't a liquid volume, alcohol or
 THC, a product already in the catalog, one we have already requested, and any
-request over our own weekly limit (larger while the catalog is still small).
-That limit applies only from the competition's start: before it, the team
-may ask for as many drinks as it wants (Kevin, 15 Nov 2026).
+request over our own weekly limit. There is no limit before the competition
+starts; from the start it begins at 20 a week and falls each week as the
+catalog grows (Kevin, 15 Nov 2026).
 
 The bridge has no route that lists our requests, so `product_requests` is our
 only record, and the duplicate check reads it. Runs inside the write gate, so
@@ -51,18 +51,16 @@ from vending.write_gate import Refused
 MAX_FIELD = 100
 MAX_NOTE = 500
 # Our own limit on requests filed in any 7 days, so the agent can't flood the
-# instructors. While the catalog is small there's more worth asking for, so the
-# limit is higher until the catalog reaches SMALL_CATALOG products.
-# PLACEHOLDERS: these three numbers are guesses, not a team decision. See
-# "Open questions for the team" in PR #14 and docs/mcp-server.md.
-# Before the competition starts there is no limit at all: the bridge charges
-# nothing for a request, and the team wants a wide catalog for day one
-# (Kevin, 15 Nov 2026). The bridge's own 429 for too many open requests
-# still applies.
+# instructors (Kevin, 15 Nov 2026):
+# - before the competition starts, none: a request costs nothing, and a wide
+#   catalog helps the day-one fill;
+# - from the start, WEEKLY_LIMITS[n] in competition week n (week 0 starts at
+#   COMPETITION_START), falling as the catalog grows, then FINAL_WEEKLY_LIMIT.
+# The numbers are a starting point the team can tune. The bridge's own 429 for
+# too many open requests still applies.
 COMPETITION_START = datetime(2026, 12, 3, tzinfo=ZoneInfo("America/New_York"))
-WEEKLY_LIMIT = 3
-STARTUP_WEEKLY_LIMIT = 15
-SMALL_CATALOG = 25
+WEEKLY_LIMITS = (20, 15, 10, 5)
+FINAL_WEEKLY_LIMIT = 3
 # Statuses the bridge can give a request that our table stores as they are.
 KNOWN_STATUSES = {"pending", "approved", "rejected"}
 
@@ -162,20 +160,28 @@ def already_in_catalog(catalog: list[dict], wanted: list[str]) -> list[Refusal]:
     return [Refusal("already_in_catalog", f"already in the catalog: {listed}; order it by SKU instead")]
 
 
+def weekly_limit(now: datetime) -> int | None:
+    """Requests allowed in any 7 days at `now`: None (no limit) before the start, then the schedule."""
+    if now < COMPETITION_START:
+        return None
+    week = (now - COMPETITION_START).days // 7
+    return WEEKLY_LIMITS[week] if week < len(WEEKLY_LIMITS) else FINAL_WEEKLY_LIMIT
+
+
 def over_weekly_limit(conn: psycopg.Connection, catalog_size: int) -> list[Refusal]:
     """A refusal if we've already filed this week's share of requests. None before the start."""
     (now,) = conn.execute("select now()").fetchone()
-    if now < COMPETITION_START:
+    limit = weekly_limit(now)
+    if limit is None:
         return []
-    limit = STARTUP_WEEKLY_LIMIT if catalog_size < SMALL_CATALOG else WEEKLY_LIMIT
     (recent,) = conn.execute(
         "select count(*) from product_requests where requested_at > now() - interval '7 days'").fetchone()
     if recent < limit:
         return []
-    why = (f"the catalog has {catalog_size} products, under {SMALL_CATALOG}, so the start-up limit applies"
-           if limit == STARTUP_WEEKLY_LIMIT else f"the catalog has {catalog_size} products")
+    week = (now - COMPETITION_START).days // 7 + 1
     return [Refusal("request_limit", f"we've filed {recent} product requests in the last 7 days, the limit is "
-                                     f"{limit} ({why}); pick the most wanted ones and try again later")]
+                                     f"{limit} in competition week {week} (the catalog has {catalog_size} "
+                                     "products); pick the most wanted ones and try again later")]
 
 
 def request_catalog_product(name: str, size: str, line: str | None, flavor: str | None, note: str | None,
