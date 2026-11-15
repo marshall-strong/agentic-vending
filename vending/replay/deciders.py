@@ -128,8 +128,11 @@ def get_decider(name: str) -> Decider:
     raise ValueError(f"Unknown decider {name!r}. Use baseline, or file:PATH for a JSON plan.")
 
 
-def check_plan(answer: object) -> tuple[Plan | None, list[Refusal]]:
-    """The plan, or every reason it isn't a valid one. Never raises on bad input."""
+def check_plan(answer: object, slots: tuple[str, ...] = SLOTS) -> tuple[Plan | None, list[Refusal]]:
+    """The plan, or every reason it isn't a valid one. Never raises on bad input.
+
+    `slots` are the slots the plan must list once each; `score` passes the week's own.
+    """
     if isinstance(answer, Plan):
         plan, refusals = answer, []
     elif isinstance(answer, Mapping):
@@ -141,7 +144,7 @@ def check_plan(answer: object) -> tuple[Plan | None, list[Refusal]]:
         return None, [Refusal("not_a_plan", f"Expected a plan or a JSON object, got {type(answer).__name__}.")]
     if plan is None:
         return None, refusals
-    refusals += _structure(plan)
+    refusals += _structure(plan, slots)
     return (None, refusals) if refusals else (plan, [])
 
 
@@ -193,17 +196,17 @@ def _parse(raw: Mapping) -> tuple[Plan | None, list[Refusal]]:
     return Plan(tuple(slots), visit=visit, reason=reason, sourcing=tuple(sourcing)), refusals
 
 
-def _structure(plan: Plan) -> list[Refusal]:
+def _structure(plan: Plan, slots: tuple[str, ...]) -> list[Refusal]:
     refusals = []
     if plan.visit not in VISITS:
         refusals.append(Refusal("bad_visit", f"visit must be one of {', '.join(VISITS)}, not {plan.visit!r}."))
     names = [s.slot for s in plan.slots]
-    missing = [s for s in SLOTS if s not in names]
+    missing = [s for s in slots if s not in names]
     twice = sorted({s for s in names if names.count(s) > 1})
-    foreign = sorted(set(names) - set(SLOTS))
+    foreign = sorted(set(names) - set(slots))
     for label, found in (("missing", missing), ("listed twice", twice), ("not ours", foreign)):
         if found:
-            refusals.append(Refusal("slot_list", f"Slots {label}: {', '.join(found)}. List all 20 once."))
+            refusals.append(Refusal("slot_list", f"Slots {label}: {', '.join(found)}. List each of our {len(slots)} slots once."))
     for s in plan.slots:
         if not s.reason.strip():
             refusals.append(Refusal("no_reason", "Every slot needs a short reason.", s.slot))
