@@ -2,7 +2,7 @@
 
 The team's main pages about the vending project, in one place. These are live pages on claude.ai: each link always shows the latest version, so there is nothing to download or keep in sync.
 
-Four pages open only with a Golisano Claude sign-in, so use your institute account for them: the Vending Agent Roadmap, the Vending Agent Dashboard, the Machine Sales Map and the Cutover Clock. The others open with any sign-in.
+Five pages open only with a Golisano Claude sign-in, so use your institute account for them: the Vending Agent Roadmap, the Vending Agent Dashboard, the Day-One Plan Rounds, the Machine Sales Map and the Cutover Clock. The others open with any sign-in.
 
 When you publish a new page about the project, add a row here in the same PR or a follow-up.
 
@@ -15,6 +15,7 @@ When you publish a new page about the project, add a row here in the same PR or 
 | [Vending Agent Tool List](https://claude.ai/code/artifact/82ae22ab-53a2-48c0-b4d5-c636efcc877d) | The live version of [`planning/tool-list.md`](planning/tool-list.md): the agent's tools, the bridge API and the open questions. Edits and comments go here |
 | [PR Atlas](https://claude.ai/artifact/3zzzgvg1e7jQhMyMiMhWgL) | The project's pull requests grouped by workstream on a timeline, with review status and open issues |
 | [Vending Agent Dashboard](https://claude.ai/artifact/LjS75bStnTJgVRLF9hGGmW) | A sample snapshot of the agent dashboard in [`dashboard.md`](dashboard.md): the real page rendered once with the 9 Nov photo count and a made-up agent plan, showing the machine, the plan, runs, tool calls, requests and back stock |
+| [Day-One Plan Rounds](https://claude.ai/artifact/NfeMbbF34NDxQfW4vZQtkY) | The agent's day-one plan, one tab per round: our 20 slots on the machine, what changed since the round before, fill cost against the proposed $366 cap, projected gross profit and sell-out per slot with the projection's assumptions, the catalog requests it needs (#119) and the drinks the Interloper also sells (#116). Made with `python -m vending.plan_page --write`; see [`plan-page.md`](plan-page.md) |
 
 ## Data and sales history
 
