@@ -76,7 +76,8 @@ def test_interloper_shows_only_drinks_we_also_sell(tmp_path):
     rows = plan_page.overlap(page.rounds[-1], page.interloper)
     # Our round sells Red Bull and Coke ("SIM-COKE" -> the projection names it Coca-Cola) but no Mountain Dew.
     names = [r["drink"]["name"] for r in rows]
-    assert "Mountain Dew" not in names
+    assert names == ["Coca-Cola"]
+    assert plan_page.overlapping_slots(page.rounds[-1], page.interloper) == set(SLOTS[10:])
 
 
 def test_interloper_gap_only_when_sizes_match(tmp_path):
@@ -112,10 +113,11 @@ def test_a_database_error_is_shown_and_the_page_still_renders(tmp_path):
     import psycopg
 
     def broken():
-        raise psycopg.OperationalError("connection refused")
+        raise psycopg.ProgrammingError("invalid dsn: postgresql//admin:S3cretPW@host/db")
     page = plan_page.build(rounds(tmp_path), broken, interloper_dir(tmp_path))
-    assert page.errors == ["Catalog requests weren't read: connection refused"]
-    assert "connection refused" in plan_page.render(page)
+    html = plan_page.render(page)
+    assert "read (ProgrammingError)" in html
+    assert "S3cretPW" not in html
 
 
 def test_server_answers_local_hosts_only_and_sends_a_strict_csp(tmp_path):
@@ -148,3 +150,37 @@ def test_every_slot_row_is_one_of_ours(tmp_path):
     html = plan_page.render(plan_page.build(rounds(tmp_path), None, interloper_dir(tmp_path)))
     rows = re.findall(r'<tr id="2-s(\d\d)"', html)
     assert rows == list(SLOTS)
+
+
+def test_size_unknown_is_not_compared(tmp_path):
+    root = tmp_path / "rounds"
+    root.mkdir()
+    proj = projection()
+    proj["packs"][1]["name"] = "Coca-Cola"
+    write(root, "round1", "1", {"day_one": day_one()}, proj)
+    d = interloper_dir(tmp_path, [{"name": "Coca-Cola", "size": "bottle", "price_cents": 150, "match": ["coca", "cola"]}])
+    html = plan_page.render(plan_page.build(root, None, d))
+    assert "size unknown" in html and "dearer" not in html and "cheaper" not in html
+
+
+def test_a_rank_that_isnt_a_number_is_dropped(tmp_path):
+    page = plan_page.build(rounds(tmp_path, [{"rank": "<img src=x onerror=alert(1)>", "name": "Coca-Cola", "size": "12 oz can"},
+                                             {"rank": 2, "name": "Red Bull Sugarfree", "size": "8.4 oz can"}]),
+                           None, interloper_dir(tmp_path))
+    html = plan_page.render(page)
+    assert "<img src=x" not in html and "onerror" not in html
+    assert [q.rank for q in page.pipeline.by_round["2"]] == [None, 2]
+
+
+def test_round_tabs_and_the_changed_toggle_are_wired(tmp_path):
+    page = plan_page.build(rounds(tmp_path), None, interloper_dir(tmp_path))
+    html = plan_page.render(page)
+    for rid in ("1", "2"):
+        assert f"#tab-{rid}:checked ~ .rounds #round-{rid} {{ display:block }}" in html
+        assert f'id="round-{rid}"' in html
+    # Inputs come before the tabs and the rounds, so the sibling selectors reach them.
+    assert html.index('id="tab-1"') < html.index('class="tabs"') < html.index('class="rounds"')
+    # The first round has nothing to compare with, so no toggle; round 2 changed slot 15 only.
+    assert 'id="1-only"' not in html and 'id="2-only"' in html
+    assert re.search(r'<tr id="2-s15" class="changed">', html)
+    assert all(re.search(rf'<tr id="2-s{s}" class="same">', html) for s in SLOTS if s != "15")

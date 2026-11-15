@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
@@ -159,8 +159,23 @@ def _load(path: Path) -> Any:
         raise RoundError(f"{path.name}: can't read it as JSON ({error})") from None
 
 
+def _cents_field(value: Any, what: str) -> int:
+    """A `*_cents` field: whole cents, as an int (or a float or digit string with no fraction).
+    Anything else is refused rather than guessed at, so 405.0 is 405 cents, never $405."""
+    if isinstance(value, bool) or value is None:
+        raise RoundError(f"{what}: no amount")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
+        return int(value)
+    raise RoundError(f"{what}: {value!r} isn't a whole number of cents")
+
+
 def _cents(value: Any, what: str) -> int:
-    """Integer cents from cents, a price string, or a float that is a whole number of cents."""
+    """Integer cents from a dollar price: a price string, or a float that is a whole number of
+    cents (round 1's `price`). An int is taken as cents."""
     if isinstance(value, bool) or value is None:
         raise RoundError(f"{what}: no price")
     if isinstance(value, int):
@@ -226,8 +241,8 @@ def _packs(projection: dict, name: str) -> dict[str, Pack]:
         packs[sku] = Pack(
             sku=sku, name=p.get("name") or sku, size=p.get("size"), category=p.get("category"),
             units_per_pack=upp,
-            expected_cents=_cents(p.get("expected_cents"), f"{name}: pack {sku} expected_cents"),
-            max_cents=_cents(p.get("max_cents"), f"{name}: pack {sku} max_cents"),
+            expected_cents=_cents_field(p.get("expected_cents"), f"{name}: pack {sku} expected_cents"),
+            max_cents=_cents_field(p.get("max_cents"), f"{name}: pack {sku} max_cents"),
             column_capacity=_opt_int(p.get("column_capacity")),
             capacity_assumed=bool(p.get("capacity_assumed")),
             store=p.get("store"), real_sku=p.get("real_sku"))
@@ -257,7 +272,26 @@ def _check_slot(raw: Any, name: str) -> str:
     return slot
 
 
+def _check_note_slots(value: Any, name: str) -> None:
+    """Notes name slots in free text ("38, 45, 46"); every two-digit selection named must be ours."""
+    for item in value if isinstance(value, list) else [value]:
+        text = str(item.get("slot", "")) if isinstance(item, dict) else ""
+        for slot in re.findall(r"\b\d{2}\b", text):
+            _check_slot(slot, name)
+
+
 def load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> Round:
+    """One round, or RoundError naming the file when a plan or projection has an unexpected shape."""
+    try:
+        return _load_round(round_id, plan_path, projection_path)
+    except RoundError:
+        raise
+    except (AttributeError, TypeError, KeyError, ValueError) as error:
+        raise RoundError(f"round {round_id}: a plan or projection value has an unexpected shape "
+                         f"({type(error).__name__}: {error})") from None
+
+
+def _load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> Round:
     plan = _load(plan_path)
     pname = f"{plan_path.parent.name}/{plan_path.name}"
     projection = _load(projection_path) if projection_path else {}
@@ -296,13 +330,23 @@ def load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> 
         ps = proj_slots.get(slot, {})
         sku = entry.get("sku") or ps.get("sku")
         pack = packs.get(sku) if sku else None
-        product = entry.get("product") or ps.get("name") or (pack.name if pack else None) or sku or "unknown"
-        size = entry.get("size") or ps.get("size") or (pack.size if pack else None)
+        # The projection's name and size describe its own SKU; use them only when it is this slot's.
+        same = ps if ps and ps.get("sku") == sku else {}
+        if ps and ps.get("sku") and entry.get("sku") and ps.get("sku") != entry.get("sku"):
+            warnings.append(f"slot {slot}: the plan has {entry['sku']} but the projection has {ps['sku']}, "
+                            "so its forecast is for a different product")
+        product = entry.get("product") or same.get("name") or (pack.name if pack else None) or sku or "unknown"
+        size = entry.get("size") or same.get("size") or (pack.size if pack else None)
         units = _opt_int(entry.get("units"))
         if units is None or units < 0:
             raise RoundError(f"{pname}: slot {slot} has no units")
-        price = _cents(entry["price_cents"] if "price_cents" in entry else entry.get("price"),
-                       f"{pname}: slot {slot} price")
+        fill = _opt_int(ps.get("fill"))
+        if fill is not None and fill != units:
+            warnings.append(f"slot {slot}: the plan loads {units} units but the projection assumed {fill}")
+        if "price_cents" in entry:
+            price = _cents_field(entry["price_cents"], f"{pname}: slot {slot} price_cents")
+        else:
+            price = _cents(entry.get("price"), f"{pname}: slot {slot} price")
         problems: list[str] = []
         floor = most = expected = None
         if pack:
@@ -312,7 +356,8 @@ def load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> 
             expected = Fraction(units * pack.expected_cents, pack.units_per_pack)
         chart = capacity.from_size(size)
         cap = chart if chart is not None else (pack.column_capacity if pack else None)
-        assumed = chart is None and cap is not None
+        # Off the chart, the pack's figure is a count unless the projection says it was assumed.
+        assumed = chart is None and cap is not None and (pack is None or pack.capacity_assumed)
         if cap is not None and units > cap:
             problems.append(f"{units} units but a column holds {cap}" + (" (assumed, not counted)" if assumed else ""))
         if cap is None:
@@ -352,6 +397,13 @@ def load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> 
             purchases.append(Purchase(sku, p.name, units, n, p.units_per_pack, n * p.units_per_pack - units,
                                       n * p.expected_cents, n * p.max_cents))
         purchases.sort(key=lambda p: -p.most_cents)
+        # Each slot's share of its product's packs, closet leftovers included, so the shares add up to the fill.
+        bought = {p.sku: p for p in purchases}
+        for s in list(slots.values()):
+            if s.sku in bought:
+                b = bought[s.sku]
+                share = Fraction(s.units, b.units_loaded) if b.units_loaded else Fraction(0)
+                slots[s.slot] = replace(s, most_cents=share * b.most_cents, expected_cents=share * b.expected_cents)
         if all(s.sku in packs for s in slots.values()):
             fill_expected = sum(p.expected_cents for p in purchases)
             fill_most = sum(p.most_cents for p in purchases)
@@ -365,6 +417,7 @@ def load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> 
                 warnings.append(f"{mine.product}: the projection buys {p['packs']} packs, this page counts {mine.packs}")
 
     notes = {k: plan[k] for k in ("fallbacks", "asks", "checks", "expect", "note", "truncated") if plan.get(k)}
+    _check_note_slots(notes.get("fallbacks"), pname)
     for k in ("problems", "needs_hand_count", "needs_new_source"):
         if projection.get(k):
             notes[k] = projection[k]
@@ -403,7 +456,7 @@ def changes(after: Round, before: Round | None) -> dict[str, Change]:
         if (a is None) != (b is None):
             labels.append("added" if a else "dropped")
         elif a and b:
-            if (a.sku or a.product.lower()) != (b.sku or b.product.lower()):
+            if (a.sku != b.sku) if a.sku and b.sku else (_name(a.product) != _name(b.product)):
                 labels.append("new product")
             if a.price_cents != b.price_cents:
                 labels.append("price")
@@ -412,6 +465,10 @@ def changes(after: Round, before: Round | None) -> dict[str, Change]:
         if labels:
             out[slot] = Change(slot, tuple(labels), b, a)
     return out
+
+
+def _name(product: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", product.lower()))
 
 
 def same_assumptions(a: Round, b: Round) -> bool:

@@ -140,7 +140,7 @@ def pipeline(rounds: list[pr.Round], requests: list[dict] | None, catalog: list[
     if requests is None or catalog is None:
         return Pipeline(False, "No database was read, so nothing shows as filed or approved.",
                         {r.id: [Request("wanted", c.get("name") or c.get("sku") or "?", c.get("size"),
-                                        c.get("rank"), c.get("why"), None) for c in r.catalog_requests]
+                                        pr._opt_int(c.get("rank")), c.get("why"), None) for c in r.catalog_requests]
                          for r in rounds})
     req_words = [(q, words(q["name"], q.get("flavor"), _clean_size(q.get("size")))) for q in requests]
     cat_words = [words(c["name"], c.get("flavor"), _clean_size(c.get("size"))) for c in catalog]
@@ -166,7 +166,7 @@ def pipeline(rounds: list[pr.Round], requests: list[dict] | None, catalog: list[
                 stage = "filed"
             else:
                 stage = "wanted"
-            rows.append(Request(stage, name, size, c.get("rank"), c.get("why"), status,
+            rows.append(Request(stage, name, size, pr._opt_int(c.get("rank")), c.get("why"), status,
                                 filed["id"] if filed else None, filed["requested_at"] if filed else None,
                                 filed["decision_note"] if filed else None))
         for q, w in req_words:
@@ -219,6 +219,11 @@ def overlap(rnd: pr.Round, observations: list[Observation]) -> list[dict]:
     return rows
 
 
+def overlapping_slots(rnd: pr.Round, observations: list[Observation]) -> set[str]:
+    """Our slots in this round whose drink the Interloper also sells (the overlap table's rule)."""
+    return {s.slot for row in overlap(rnd, observations) for s in row["ours"]}
+
+
 def build(root: Path, conn_factory: Callable[[], psycopg.Connection] | None,
           interloper_dir: Path = INTERLOPER_DIR) -> Page:
     rounds = pr.load_all(root)
@@ -228,9 +233,12 @@ def build(root: Path, conn_factory: Callable[[], psycopg.Connection] | None,
         try:
             with conn_factory() as conn:
                 requests, catalog = _requests(conn)
-        except (psycopg.Error, settings.SettingsError) as error:
-            text = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
-            errors.append(f"Catalog requests weren't read: {text}")
+        except settings.SettingsError as error:
+            errors.append(f"Catalog requests weren't read: {error}")
+        except psycopg.Error as error:
+            # Only the error's kind: a driver message can quote DATABASE_URL, password included.
+            errors.append(f"Catalog requests weren't read ({type(error).__name__}). Check DATABASE_URL and "
+                          "that the database is up, or pass --no-db.")
     pipe = pipeline(rounds, requests, catalog)
     return Page(rounds, pipe, interloper(interloper_dir), str(root), datetime.now(timezone.utc), errors)
 
@@ -434,7 +442,7 @@ def _tiles(r: pr.Round) -> str:
     return f'<div class="tiles">{"".join(tiles)}</div>'
 
 
-def _face(r: pr.Round, changed: dict[str, pr.Change]) -> str:
+def _face(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str]) -> str:
     shelves = []
     for row in range(1, SHELVES + 1):
         cells = []
@@ -450,7 +458,7 @@ def _face(r: pr.Round, changed: dict[str, pr.Change]) -> str:
             flags = ""
             if s.needs_request:
                 flags += '<i class="flag req" title="needs a catalog request">R</i>'
-            if s.interloper:
+            if slot in next_door:
                 flags += '<i class="flag int" title="the Interloper sells this drink">I</i>'
             if s.refusals:
                 flags += '<i class="flag bad" title="' + _e("; ".join(s.refusals)) + '">!</i>'
@@ -502,20 +510,20 @@ def _change_list(r: pr.Round, before: pr.Round | None, changed: dict[str, pr.Cha
             f'<ul class="changes">{"".join(items)}</ul>{same}')
 
 
-def _slot_table(r: pr.Round, changed: dict[str, pr.Change]) -> str:
+def _slot_table(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str]) -> str:
     tid = _tab(r.id)
     gp_peak = max([1] + [s.projected["base"].gross_profit_cents or 0 for s in r.slots.values() if "base" in s.projected])
     rows = []
     for slot in SLOTS:
         s = r.slots.get(slot)
         if s is None:
-            rows.append(f'<tr id="{tid}-s{slot}" class="changed"><td>{slot}</td><td colspan="11" class="dim">No product.</td></tr>')
+            rows.append(f'<tr id="{tid}-s{slot}" class="{"changed" if slot in changed else "same"}"><td>{slot}</td><td colspan="11" class="dim">No product.</td></tr>')
             continue
         b, lo, hi = (s.projected.get(k) for k in ("base", "low", "high"))
         flags = []
         if s.needs_request:
             flags.append(_pill("request", "info", "needs a catalog request"))
-        if s.interloper:
+        if slot in next_door:
             flags.append(_pill("Interloper", "warn", "the Interloper sells this drink"))
         if s.capacity_assumed:
             flags.append(_pill(f"{s.capacity}/column assumed", "muted", "no one has counted a column of this size"))
@@ -550,12 +558,13 @@ def _slot_table(r: pr.Round, changed: dict[str, pr.Change]) -> str:
     head = ("<tr><th>Slot</th><th>Product</th><th>Units</th><th>Price</th><th>Floor</th><th>Fill cost<br>(most)</th>"
             "<th>Units /<br>class day</th><th>Class days<br>of cover</th><th>Sells out<br>(base)</th>"
             "<th>Margin<br>/ unit</th><th>Gross profit to window end<br>base (low&ndash;high)</th><th>Changed</th></tr>")
-    return (f'<input type="checkbox" class="onlychg" id="{tid}-only"><label class="toggle" for="{tid}-only">'
-            'Changed slots only</label>'
+    toggle = (f'<input type="checkbox" class="onlychg" id="{tid}-only"><label class="toggle" for="{tid}-only">'
+              'Changed slots only</label>') if changed else ""
+    return (toggle +
             f'<div class="scroll"><table class="slots"><thead>{head}</thead><tbody>{"".join(rows)}</tbody></table></div>'
             '<p class="sub">Units, price, floor and fill cost come from the plan and its pack prices, checked here with '
-            '<code>vending.pricing</code> and <code>vending.capacity</code>. Fill cost is the slot\'s share of its packs at '
-            'the most-we-pay price. The forecast columns are read from the projection file, base scenario: '
+            '<code>vending.pricing</code> and <code>vending.capacity</code>. Fill cost is the slot\'s share of its product\'s '
+            'packs at the most-we-pay price, closet leftovers included, so the column adds up to the fill. The forecast columns are read from the projection file, base scenario: '
             '<i>class days of cover</i> is a full column divided by the rate; <i>sells out</i> is the first class day it '
             'runs empty before a Friday refill. Margin per unit is price less 8% tax less expected unit cost.</p>')
 
@@ -585,7 +594,7 @@ def _pipeline(p: Pipeline, r: pr.Round) -> str:
         for q in sorted((q for q in rows if q.stage == stage), key=lambda q: (q.team_only, q.rank or 999, q.name)):
             meta = []
             if q.rank:
-                meta.append(f"#{q.rank} in round {_e(r.id)}")
+                meta.append(f"#{_e(q.rank)} in round {_e(r.id)}")
             if q.team_only:
                 meta.append("filed, not on this round's list")
             if q.request_id:
@@ -617,10 +626,12 @@ def _interloper(r: pr.Round, obs: list[Observation]) -> str:
             d = row["drink"]
             ours = row["ours"]
             our_prices = sorted({s.price_cents for s in ours})
-            same_size = _ounces(ours[0].size) == _ounces(d.get("size")) or _ounces(d.get("size")) is None
+            mine, theirs = _ounces(ours[0].size), _ounces(d.get("size"))
+            same_size = mine is not None and mine == theirs
             diff = our_prices[0] - d["price_cents"] if len(our_prices) == 1 and same_size else None
             tone = "" if diff is None else "bad-text" if diff > 0 else "ok-text" if diff < 0 else "dim"
-            gap = ("different size" if not same_size else "" if diff is None else
+            gap = ("size unknown" if mine is None or theirs is None else "different size" if not same_size else
+                   "" if diff is None else
                    "same price" if diff == 0 else f'{money(abs(diff))} {"dearer" if diff > 0 else "cheaper"}')
             hist = ", ".join(f"{money(c)} on {_day(o)}" for o, c in row["history"])
             slots = ", ".join(s.slot for s in ours)
@@ -696,12 +707,13 @@ def _notes(r: pr.Round) -> str:
 def _round(r: pr.Round, before: pr.Round | None, page: Page) -> str:
     tid = _tab(r.id)
     changed = pr.changes(r, before)
+    next_door = overlapping_slots(r, page.interloper)
     return (f'<div class="round" id="round-{tid}">'
             + _tiles(r)
             + f'<section><h2>The machine, round {_e(r.id)} <span class="hint">lit selections are ours</span></h2>'
-              f'<div class="vm-wrap"><div>{_face(r, changed)}</div><div class="card">{_change_list(r, before, changed)}</div></div></section>'
+              f'<div class="vm-wrap"><div>{_face(r, changed, next_door)}</div><div class="card">{_change_list(r, before, changed)}</div></div></section>'
             + f'<section><h2>Slot by slot <span class="hint">top shelf first &middot; forecast from the projection, base '
-              f'scenario</span></h2>{_slot_table(r, changed)}</section>'
+              f'scenario</span></h2>{_slot_table(r, changed, next_door)}</section>'
             + '<div class="grid2">'
             + f'<section><h2>Projected gross profit by week <span class="hint">our 20 slots &middot; bars base, lines low '
               f'to high &middot; weeks Thu&ndash;Wed</span></h2><div class="scroll">{weekly_chart(r) or "<p class=empty>No projection.</p>"}</div>'
@@ -734,6 +746,7 @@ def render(page: Page) -> str:
         f"#tab-{_tab(r.id)}:checked ~ .rounds #round-{_tab(r.id)} {{ display:block }}"
         f"#tab-{_tab(r.id)}:checked ~ .tabs label[for=tab-{_tab(r.id)}] {{ background:var(--accent); color:var(--surface); border-color:var(--accent) }}"
         f"#tab-{_tab(r.id)}:checked ~ .tabs label[for=tab-{_tab(r.id)}] .sub {{ color:inherit }}"
+        f"#tab-{_tab(r.id)}:focus-visible ~ .tabs label[for=tab-{_tab(r.id)}] {{ outline:2px solid var(--accent); outline-offset:2px }}"
         for r in rounds)
     errors = "".join(f'<p class="empty bad-text">{_e(e)}</p>' for e in page.errors)
     overview = (f'<section><h2>Rounds compared <span class="hint">most-we-pay against the cap, and projected gross profit'
@@ -805,7 +818,6 @@ header.top .meta { color:var(--muted); font-size:12px; margin-left:auto }
 .tabs { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px }
 .tab { border:1px solid var(--line); background:var(--surface); border-radius:999px; padding:5px 14px; font-weight:600;
   cursor:pointer; user-select:none }
-.tabin:focus-visible + * { outline:2px solid var(--accent) }
 .round { display:none }
 .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px; margin:0 0 14px }
 .tile { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px 14px; box-shadow:var(--shadow); min-width:0 }

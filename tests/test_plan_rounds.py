@@ -43,7 +43,7 @@ def projection(per_slot_gp: int = 1000, assumptions: dict | None = None) -> dict
         return {"totals": {"units_sold": 100.0, "gross_profit_cents": int(20 * per_slot_gp * mult),
                            "model_spend_cents": 900, "profit_cents": int(20 * per_slot_gp * mult) - 900,
                            "week1_gp_cents": int(20 * 600 * mult)}, "per_slot": per}
-    return {"schema": "vending-day1/projection/v1", "packs": [RB, COKE],
+    return {"schema": "vending-day1/projection/v1", "packs": [dict(RB), dict(COKE)],
             "slots": [{"slot": int(s), "sku": "SIM-RB" if i < 10 else "SIM-COKE", "interloper": i >= 10} for i, s in enumerate(SLOTS)],
             "fill_expected_cents": 4 * 3499 + 3 * 768, "fill_most_cents": 4 * 4050 + 3 * 900,
             "window": "2026-12-03 to 2027-01-29", "assumptions": assumptions or {"TIER_RATE": {"energy": 1.354}},
@@ -76,7 +76,7 @@ def test_floor_and_fill_cost_are_recomputed_from_the_pack_list(tmp_path):
     rb, coke = r.slots["15"], r.slots["58"]
     assert rb.floor_cents == 185          # $40.50 / 24 x 1.08 = $1.8225, up to $1.85
     assert coke.floor_cents == 85         # $9.00 / 12 x 1.08 = $0.81, up to $0.85
-    assert rb.most_cents == Fraction(11 * 4050, 24)
+    assert rb.most_cents == Fraction(11, 110) * 5 * 4050     # its share of 5 packs, closet included
     # 110 Red Bull = 5 packs of 24 (10 to the closet); 80 Coke = 7 packs of 12 (4 to the closet).
     buys = {p.sku: p for p in r.purchases}
     assert (buys["SIM-RB"].packs, buys["SIM-RB"].closet) == (5, 10)
@@ -148,3 +148,74 @@ def test_a_round_without_a_projection_has_no_cost_or_forecast(tmp_path):
     r = pr.load_all(tmp_path)[0]
     assert r.fill_most_cents is None and not r.projected and r.slots["15"].floor_cents is None
     assert not r.slots["15"].projected
+
+
+def test_cents_fields_are_cents_whatever_their_json_type(tmp_path):
+    proj = projection()
+    proj["packs"][0]["max_cents"] = 4050.0           # a float that is a whole number of cents
+    write(tmp_path, "round1", "1", {"day_one": day_one(**{"15": {"price_cents": "350"}})}, proj)
+    r = pr.load_all(tmp_path)[0]
+    assert r.slots["15"].price_cents == 350 and r.slots["15"].floor_cents == 185
+    proj["packs"][0]["max_cents"] = 4050.5
+    write(tmp_path, "round1", "1", {"day_one": day_one()}, proj)
+    with pytest.raises(pr.RoundError, match="whole number of cents"):
+        pr.load_all(tmp_path)
+
+
+def test_units_or_sku_that_drift_from_the_projection_are_warned_about(tmp_path):
+    proj = projection()
+    proj["slots"][0]["fill"] = 11
+    proj["slots"][0]["name"] = "Red Bull Original"
+    write(tmp_path, "round1", "1", {"day_one": day_one(**{"15": {"units": 9}, "16": {"sku": "SIM-COKE", "units": 8}})}, proj)
+    r = pr.load_all(tmp_path)[0]
+    assert any("slot 15: the plan loads 9 units but the projection assumed 11" in w for w in r.warnings)
+    assert any("slot 16: the plan has SIM-COKE but the projection has SIM-RB" in w for w in r.warnings)
+    assert r.slots["16"].product == "Coca-Cola"       # from its own pack, not the projection's slot
+
+
+def test_a_name_only_round_and_a_sku_round_compare_by_name(tmp_path):
+    named = [{"slot": int(s), "product": "Red Bull Original" if i < 10 else "Coca-Cola", "size": "8.4 oz can",
+              "units": 11 if i < 10 else 8, "price": 3.5 if i < 10 else 2.0} for i, s in enumerate(SLOTS)]
+    write(tmp_path, "round1", "1", {"day_one": named})
+    proj = projection()
+    proj["packs"][1]["name"] = "Coca-Cola"
+    write(tmp_path, "round2", "2", {"day_one": day_one()}, proj)
+    one, two = pr.load_all(tmp_path)
+    assert pr.changes(two, one) == {}
+
+
+def test_slot_cost_shares_add_up_to_the_fill(tmp_path):
+    write(tmp_path, "round1", "1", {"day_one": day_one()}, projection())
+    r = pr.load_all(tmp_path)[0]
+    assert sum(s.most_cents for s in r.slots.values()) == r.fill_most_cents
+    assert sum(s.expected_cents for s in r.slots.values()) == r.fill_expected_cents
+
+
+def test_an_off_chart_size_is_assumed_only_when_the_projection_says_so(tmp_path):
+    proj = projection()
+    proj["packs"][1].update(size="16 oz can", column_capacity=8, capacity_assumed=False)
+    write(tmp_path, "round1", "1", {"day_one": day_one()}, proj)
+    assert pr.load_all(tmp_path)[0].slots["58"].capacity_assumed is False
+    proj["packs"][1]["capacity_assumed"] = True
+    write(tmp_path, "round1", "1", {"day_one": day_one()}, proj)
+    assert pr.load_all(tmp_path)[0].slots["58"].capacity_assumed is True
+
+
+def test_a_malformed_file_is_a_round_error_not_a_crash(tmp_path):
+    proj = projection()
+    proj["scenarios"]["base"]["per_slot"][0]["weekly"] = ["not a dict"]
+    write(tmp_path, "round1", "1", {"day_one": day_one()}, proj)
+    with pytest.raises(pr.RoundError, match="unexpected shape"):
+        pr.load_all(tmp_path)
+    write(tmp_path, "round1", "1", {"day_one": ["not a dict"]})
+    with pytest.raises(pr.RoundError, match="unexpected shape"):
+        pr.load_all(tmp_path)
+
+
+def test_fallbacks_may_only_name_our_slots(tmp_path):
+    write(tmp_path, "round1", "1", {"day_one": day_one(), "fallbacks": [{"slot": "38, 45, 46", "if": "x", "then": "y"},
+                                                                       {"slot": "all requested slots", "if": "x", "then": "y"}]})
+    pr.load_all(tmp_path)
+    write(tmp_path, "round1", "1", {"day_one": day_one(), "fallbacks": [{"slot": "38, 44", "if": "x", "then": "y"}]})
+    with pytest.raises(pr.RoundError, match="slot 44 isn't one of ours"):
+        pr.load_all(tmp_path)
