@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 from vending import settings
 
@@ -165,6 +166,15 @@ class Bridge:
         except BridgeError:
             return False
         return True
+
+    def slots(self) -> Any:
+        """Our slot assignment (`GET /api/v1/slots`): `team`, `device_id` and `slots`, as the bridge sent it.
+        `vending.slots.parse` checks it."""
+        payload = self._get("/api/v1/slots")
+        try:
+            return json.loads(payload)
+        except ValueError:  # Not `JSONDecodeError`: bytes that aren't text raise `UnicodeDecodeError`.
+            raise BridgeError(f"/api/v1/slots was not JSON: {payload[:200]!r}") from None
 
     def history(self, day: str) -> list[dict]:
         """Stored polls for one UTC day (YYYY-MM-DD), oldest first.

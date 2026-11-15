@@ -39,7 +39,7 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import counters, slot_counts, stock
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SLOTS, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
 WINDOW = timedelta(days=7)
@@ -94,13 +94,13 @@ Counters = dict[str, tuple[int | None, int]]
 def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold: dict[str, int],
           counts: dict[str, stock.SlotCount] | None = None, last_loaded: dict[str, datetime] | None = None,
           sold_since_load: dict[str, int] | None = None, now: datetime | None = None,
-          seen: dict[str, dict] | None = None) -> list[SlotState]:
-    """Per-slot state from the latest poll, the window's sales, the receipts and the latest person's
-    count (`seen`, from `vending.slot_counts.latest`). Pure: no database, no clock."""
+          seen: dict[str, dict] | None = None, slots: tuple[str, ...] = SLOTS) -> list[SlotState]:
+    """Per-slot state for `slots` from the latest poll, the window's sales, the receipts and the latest
+    person's count (`seen`, from `vending.slot_counts.latest`). Pure: no database, no clock."""
     counts, last_loaded, sold_since_load, seen = counts or {}, last_loaded or {}, sold_since_load or {}, seen or {}
     days = Decimal((as_of - start).total_seconds()) / 86400 if start else Decimal(0)
     states = []
-    for slot in SLOTS:
+    for slot in slots:
         price, units = latest.get(slot, (None, None))
         sold = per_day = None
         if units is not None and slot in window_sold and days > 0:
@@ -180,6 +180,10 @@ def _dollars(cents: Fraction | None) -> str | None:
 
 def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> MachineState:
     now = now or datetime.now(timezone.utc)
+    try:
+        slots = our_slots(conn)
+    except SlotsNotRecorded as error:
+        return MachineState(success=False, message=str(error))
     latest = _poll(conn, "true")
     if latest is None:
         return MachineState(success=False, message=(
@@ -190,15 +194,15 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     if baseline and baseline[0] == latest[0]:
         baseline = None
     start = baseline[1] if baseline else None
-    window_sold = sold_in_window(_readings(conn, start, as_of), start) if start else {}
+    window_sold = sold_in_window(_readings(conn, start, as_of, slots), start) if start else {}
 
     counted = stock.stock(conn, until=now)
-    counts = {c.slot: c for c in counted.slots if c.slot in SLOTS}
+    counts = {c.slot: c for c in counted.slots if c.slot in slots}
     last_loaded = _last_loaded(conn)
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
     seen = _seen(conn)
-    states = build(as_of, _counters(conn, latest[0]), start, window_sold,
-                   counts, last_loaded, sold_since_load, now, seen)
+    states = build(as_of, _counters(conn, latest[0], slots), start, window_sold,
+                   counts, last_loaded, sold_since_load, now, seen, slots)
     closet, closet_value = closet_items(counted.closet)
 
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
@@ -210,7 +214,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
         success=True,
         stale=stale,
         message=(f"{warning}{len(states)} slots as of the poll at {as_of:%Y-%m-%d %H:%M} UTC; "
-                 f"sales window {window}. {_receipts_note(counts, closet, counted.warnings)}{_count_note(states)}"),
+                 f"sales window {window}. {_receipts_note(slots, counts, closet, counted.warnings)}{_count_note(states)}"),
         count=len(states),
         as_of=as_of,
         window_start=baseline[1] if baseline else None,
@@ -221,15 +225,15 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     )
 
 
-def _receipts_note(counts: dict, closet: list[ClosetItem], warnings: tuple[str, ...]) -> str:
-    missing = [slot for slot in SLOTS if slot not in counts]
-    if len(missing) == len(SLOTS):
+def _receipts_note(slots: tuple[str, ...], counts: dict, closet: list[ClosetItem], warnings: tuple[str, ...]) -> str:
+    missing = [slot for slot in slots if slot not in counts]
+    if len(missing) == len(slots):
         note = (f"No receipts are stored yet, so {RECEIPT_FIELDS} are null for every slot. "
                 "If a request has been fulfilled, run: python -m vending.sync_requests.")
     elif missing:
         note = f"No receipts yet for slots {', '.join(missing)}, so their {RECEIPT_FIELDS} are null."
     else:
-        note = "Stock is from receipts for all 20 slots."
+        note = f"Stock is from receipts for all {len(slots)} slots."
     note += f" Closet: {sum(c.units for c in closet)} units of {len(closet)} products." if closet else " Closet: empty."
     if warnings:
         note += f" {len(warnings)} stock warning{'s' if len(warnings) != 1 else ''}; see warnings."
@@ -306,18 +310,19 @@ def _first_poll(conn: psycopg.Connection) -> tuple[str, datetime] | None:
         " order by started_at limit 1", (DEVICE_ID,)).fetchone()
 
 
-def _readings(conn: psycopg.Connection, start: datetime, end: datetime) -> list[tuple[str, datetime, int]]:
-    """Every good poll's lifetime units for our slots from the poll before `start` to `end`, inclusive."""
+def _readings(conn: psycopg.Connection, start: datetime, end: datetime,
+              slots: tuple[str, ...] = SLOTS) -> list[tuple[str, datetime, int]]:
+    """Every good poll's lifetime units for `slots` from the poll before `start` to `end`, inclusive."""
     return conn.execute(
         "select s.selection, p.started_at, s.lifetime_units from poll_selections s join polls p using (session_id)"
         " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and p.started_at <= %s"
         " and p.started_at >= coalesce((select max(started_at) from polls"
         "   where device_id = %s and crc_ok and started_at < %s), %s)",
-        (DEVICE_ID, list(SLOTS), end, DEVICE_ID, start, start)).fetchall()
+        (DEVICE_ID, list(slots), end, DEVICE_ID, start, start)).fetchall()
 
 
-def _counters(conn: psycopg.Connection, session_id: str) -> Counters:
+def _counters(conn: psycopg.Connection, session_id: str, slots: tuple[str, ...] = SLOTS) -> Counters:
     rows = conn.execute(
         "select selection, price_cents, lifetime_units from poll_selections"
-        " where session_id = %s and selection = any(%s)", (session_id, list(SLOTS)))
+        " where session_id = %s and selection = any(%s)", (session_id, list(slots)))
     return {selection: (price, units) for selection, price, units in rows}
