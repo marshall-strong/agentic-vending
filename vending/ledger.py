@@ -146,7 +146,7 @@ class Pnl:
     takings: Takings
     units_sold: int                         # every rise in our 20 slots' unit counters in the window
     units_costed: int                       # of those, the units whose cost the receipts know
-    cost_of_sales_cents: Fraction           # of the costed units; 0 when nothing sold
+    cost_of_sales_cents: Fraction           # of the costed units, and of unsplit swap windows (#112); 0 when nothing sold
     shrinkage_units: int                    # lost without a sale, written off or changed away
     shrinkage_cents: Fraction               # of the shrinkage whose cost is known
     shrinkage_complete: bool
@@ -198,7 +198,7 @@ class WeekPnl:
     tax_cents: int
     units_sold: int
     units_costed: int
-    cost_of_sales_cents: Fraction           # of the costed units
+    cost_of_sales_cents: Fraction           # of the costed units, and of unsplit swap windows (#112)
     shrinkage_units: int
     shrinkage_cents: Fraction               # of the shrinkage whose cost is known
     shrinkage_complete: bool
@@ -457,6 +457,11 @@ def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance 
                    tuple(notes))
 
 
+def _sale_cost(s: stock.SaleCost) -> Fraction:
+    """What a sale adds to cost of sales: its known cost, or the cost an unsplit window took (#112)."""
+    return s.cost_cents if s.cost_cents is not None else (s.unattributed_cost_cents or Fraction(0))
+
+
 def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     """Profit and loss between two moments, with inventory at cost as of `end`."""
     notes: list[str] = []
@@ -474,13 +479,20 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     # A rise is booked to the later poll, so the window's sales are the rises at polls after `start`.
     sales = [s for s in counted.sales if start < s.at <= end]
     units_costed = sum(s.costed_units for s in sales if s.cost_cents is not None)
-    cost = sum((s.cost_cents for s in sales if s.cost_cents is not None), Fraction(0))
+    cost = sum((_sale_cost(s) for s in sales), Fraction(0))
+    # Sold across a product change the counters can't split: costed at the new product's average (#112).
+    guessed = sum(s.costed_units for s in sales if s.unattributed_cost_cents is not None)
     if not units:
         notes.append("no sales in the window")
     elif units_costed < units:
-        notes.append(f"{units - units_costed} of {units} units sold have no known cost (sold from a slot before we "
-                     "first loaded it, past what we loaded, or across a product change the counters can't split), "
-                     "so cost of sales and margin leave their cost out")
+        unknown = units - units_costed - guessed
+        if guessed:
+            notes.append(f"{guessed} of {units} units sold across a product change the counters can't split; "
+                         "cost of sales includes them at the new product's average cost, which may be the wrong "
+                         "product's")
+        if unknown > 0:
+            notes.append(f"{unknown} of {units} units sold have no known cost (sold from a slot before we first "
+                         "loaded it, or past what we loaded), so cost of sales and margin leave their cost out")
     if sold.cents and not counted.slots:
         notes.append("the machine sold units but no receipts are stored, so nothing can be costed yet")
     lost = [s for s in counted.shrinkage if start < s.at <= end]
@@ -516,9 +528,10 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
     costed: dict[date, int] = defaultdict(int)
     cost: dict[date, Fraction] = defaultdict(Fraction)
     for s in counted.sales:
-        if start < s.at <= end and s.cost_cents is not None:
-            costed[week(s.at)] += s.costed_units
-            cost[week(s.at)] += s.cost_cents
+        if start < s.at <= end:
+            if s.cost_cents is not None:
+                costed[week(s.at)] += s.costed_units
+            cost[week(s.at)] += _sale_cost(s)
     lost_units: dict[date, int] = defaultdict(int)
     lost_cost: dict[date, Fraction] = defaultdict(Fraction)
     lost_unknown: set[date] = set()

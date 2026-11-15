@@ -1,5 +1,6 @@
 """Tests for turning receipts and polls into stock. Synthetic receipts only; no database."""
 
+import pytest
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 
@@ -219,16 +220,53 @@ def test_sales_across_a_product_change_are_split_by_the_cents_counter():
     assert stock.shrinkage == () and stock.warnings == ()
 
 
-def test_sales_across_a_change_the_counters_cannot_split_are_booked_with_no_cost():
+def test_sales_across_a_change_the_counters_cannot_split_keep_their_cost_unattributed():
     # Same price both sides: the counters can't say which product sold.
     same = book(swap(sku="COKE20", total_paid="8.00"),
                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20400, 200)])
     # Cents that fit no whole split (2 units, 500 cents, at $2.00 and $4.00).
     odd = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20500, 400)])
-    for stock in (same, odd):
+    # Their product is uncertain, so no cost_cents, but what they took from the new count stays booked (#112).
+    for stock, taken in ((same, 160), (odd, 300)):
         [sale] = stock.sales
-        assert (sale.at, sale.units, sale.cost_cents) == (hours(5), 2, None)
-        assert any("can't split" in w for w in stock.warnings)
+        assert (sale.at, sale.units, sale.cost_cents, sale.unattributed_cost_cents) == (hours(5), 2, None, taken)
+        assert any("can't split" in w and "may be the wrong product's" in w for w in stock.warnings)
+
+
+def test_an_unsplit_window_keeps_the_books_whole():
+    # Marshall's check on #112: 10 Arizona at 50c and 10 Red Bull at 150c bought (2000c);
+    # cost of sales + shrinkage + slot + closet must add back to 2000, as on main.
+    stock = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20500, 400)])
+    sold = sum((s.cost_cents if s.cost_cents is not None else s.unattributed_cost_cents) for s in stock.sales)
+    lost = sum(x.cost_cents for x in stock.shrinkage)
+    on_hand = sum(c.units * c.unit_cost for c in stock.slots) + sum(c.units * c.unit_cost for c in stock.closet)
+    assert (sold, lost, on_hand) == (300, 50, 1650)
+    assert sold + lost + on_hand == 2000
+
+
+def test_a_poll_during_the_visit_starts_a_window_of_only_the_new_product():
+    # Marshall's case: Arizona at $2.50 swapped for Red Bull at $3.50. The price is set during
+    # the visit, a poll lands at 2h45m with the new price, and the receipt resolves at 3h.
+    # The next poll shows 2 units and 700 cents: both Red Bull, from the new count.
+    counters = [("15", hours(1), 100, 20000, 250), ("15", hours(2.75), 100, 20000, 350),
+                ("15", hours(5), 102, 20700, 350)]
+    stock = book(swap(), counters=counters)
+    assert [(s.product, s.units, s.cost_cents) for s in stock.sales] == [("REDBULL", 2, 300)]
+    # No Arizona sold, so the 1 of 10 not pulled is a real write-off, and nothing is unsplit.
+    assert not any("can't split" in w for w in stock.warnings)
+    assert [(x.product, x.units) for x in stock.shrinkage] == [("ARIZONA", 1)]
+
+
+@pytest.mark.parametrize("counters", [
+    # No price change before the window: a same-price swap, still unsplittable (#110 item 7).
+    [("15", hours(1), 100, 20000, 350), ("15", hours(2.75), 100, 20000, 350), ("15", hours(5), 102, 20700, 350)],
+    # The price changed before the window, but the swap came long after its first poll.
+    [("15", hours(-2), 100, 20000, 250), ("15", hours(1), 100, 20000, 350), ("15", hours(5), 102, 20700, 350)],
+])
+def test_a_same_price_window_is_read_as_new_only_when_its_first_poll_was_in_the_visit(counters):
+    stock = book(swap(), counters=counters)
+    [sale] = [s for s in stock.sales if s.units]
+    assert sale.cost_cents is None and any("can't split" in w for w in stock.warnings)
 
 
 def test_sales_in_a_window_with_no_change_are_not_split():

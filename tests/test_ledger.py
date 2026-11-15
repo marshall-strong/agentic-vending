@@ -360,6 +360,25 @@ def test_a_period_that_ends_between_a_swap_and_the_next_poll_books_the_split_wit
         assert getattr(first, name) + getattr(second, name) == getattr(whole, name), name
 
 
+def test_an_unsplit_swap_window_stays_in_cost_of_sales_and_says_why(conn):
+    # #112: as above, but the 17:00 poll shows 2 units and 700 cents, which fits no split of
+    # $2.50 and $4.00. The 2 units' cost (2 Red Bull at 150c) stays in cost of sales, by week too.
+    open_ledger(conn)
+    deliver(conn, "r1")
+    record_request(conn, "r2", OPENED + timedelta(days=6), False, BODY)
+    store(conn, "r2", fulfilled("r2", receipt(
+        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid="15.00", unit_cost_paid="1.50",
+        units_loaded=10, units_lost=0, loss_note=None, units_to_back_stock=0, units_pulled=7, pulled_sku="COKE20",
+        slot_reassigned=True, resolved_at="2026-11-08T12:00:00Z"), fulfilled_at="2026-11-08T12:30:00Z"), NOW)
+    store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25700)})
+    p = ledger.pnl(conn, OPENED, NOW)
+    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 0, 300)
+    assert any("can't split" in n and "may be the wrong product's" in n for n in p.notes)
+    assert not any("have no known cost" in n for n in p.notes)
+    assert sum(w.cost_of_sales_cents for w in ledger.pnl_by_week(conn, OPENED, NOW)) == 300
+
+
 def test_purchases_and_the_stock_they_bring_go_by_the_same_clock(conn):
     open_ledger(conn)
     # Resolved on the 7th but the bridge marked the request fulfilled on the 9th.
