@@ -1,5 +1,5 @@
 {
- "about": "Ten undated team photos of machine vmc1 (Royal Vision Vender, 5 shelves x 8 selections), each read slot by slot and dated against the machine's poll history, plus the two dated reference photos, in chronological order. Photo ids keep the order in which the photos were received; chronological_rank gives the time order. Slot 'rc' = shelf r (1 = top), position c (1 = left). 'stock_seen' is the front of the rail only; 'visible_units' counts units visible down the rail where they could be counted (null = not countable). Products marked 'not legible', 'likely' or 'possibly' are uncertain. Prices are shelf tags as read (price_legible false = a guess or a blurred read); most tags below shelf 1 are unreadable at the 600x800 photo resolution. A rail holds at most 7-11 units (20oz PET 7, 16oz glass 7, 16oz PET 8, 12oz can 8, 240/250ml can 11).",
+ "about": "Ten undated team photos of machine vmc1 (Royal Vision Vender, 5 shelves x 8 selections), each read slot by slot and dated against the machine's poll history, plus the three dated reference photos (Oct 8, Nov 9, Nov 14), in chronological order. Photo ids keep the order in which the photos were received; chronological_rank gives the time order. Slot 'rc' = shelf r (1 = top), position c (1 = left). 'stock_seen' is the front of the rail only; 'visible_units' counts units visible down the rail where they could be counted (null = not countable). Products marked 'not legible', 'likely' or 'possibly' are uncertain. Prices are shelf tags as read (price_legible false = a guess or a blurred read); most tags below shelf 1 are unreadable at the 600x800 photo resolution. A rail holds at most 7-11 units (20oz PET 7, 16oz glass 7, 16oz PET 8, 12oz can 8, 240/250ml can 11).",
  "method": "Each photo was read at full size and in zoomed crops of each shelf and tag ledge. Dating used the machine's poll history (per-slot sales, per-slot DEX prices, door-open counter): (1) legible tags against the price schedule, which changed once on 2026-09-30 15:59 ET and not again through Nov 11; (2) rails shown empty must not sell between the photo and the next door visit, and rails shown stocked should still sell or still be stocked later; (3) layout continuity between photos and the Oct 8 / Nov 9 references; (4) door-counter rises as candidate visit times. A scoring script ranked candidate times and an independent skeptic tried to refute each date. Photos 6 and 7 were refuted; they were re-examined and kept at Sep 25 on shelf-1 layout continuity (see their evidence). Phone-gallery timestamps found later for photos 9, 3 and 2 (and the Oct 8 reference) were held out as a blind check: all three fall inside the poll-history windows, and those photos' best_guess uses the gallery time. Times are US Eastern.",
  "machine": "vmc1 (Royal Vision Vender, 5 shelves x 8 selections)",
  "price_schedule_note": "Our slots. Before 2026-09-30 15:59 ET (average realized prices from sales): 15-18 $4.50, 25-28 $3.50, 35-36 $3.00, 37/38 $3.50, 45-48 and 55-58 $3.00. After: 15-17 $4.50, 18 $5.00, 25-26 $4.00, 27-28 $3.00, 35-37 $2.00, 38 $3.00, 45-46 $2.00, 47 $3.50, 48 $4.00, 55-57 $1.00, 58 $1.50.",
@@ -3233,6 +3233,326 @@
    "empty": "all our other rails (15, 16, 17, 18, 26, 35, 37, 38, 45, 46, 48, 55, 56, 57, 58)",
    "tags": "15-17 $4.50, 18 $5.00, 25-26 $4.00, 27-28 $3.00, 35-37 $2.00, 38 $3.00, 45-46 $2.00, 47 $3.50, 48 $4.00, 55-57 $1.00, 58 $1.50 (the Sep 30 schedule)",
    "chronological_rank": 12
+  },
+  {
+   "id": "reference-2026-11-14",
+   "chronological_rank": 13,
+   "source": "dated reference photo (Sean, four photos of the machine front)",
+   "window": {
+    "earliest": "2026-11-14T00:00-05:00",
+    "latest": "2026-11-14T10:43-05:00",
+    "best_guess": "2026-11-14T10:43-05:00"
+   },
+   "confidence": "dated photo",
+   "evidence": [
+    "Taken Sat 14 Nov 2026, at or before 10:43 ET (when Sean sent the photos); best_guess uses 10:43.",
+    "Read twice, separately, by two readers; both reads agreed on every product and every legible tag.",
+    "Every legible tag on our slots matches the Sep 30 price schedule; 47 and 55 are hidden (glare, pickup cup).",
+    "19 of our 20 rails show product; only 18 is empty. The Nov 9 photo showed 5 stocked, so the machine was refilled between Nov 9 and Nov 14.",
+    "visible_units counts units seen down the rail (lower bounds); null = only the front unit was visible."
+   ],
+   "slots": [
+    {
+     "slot": "11",
+     "ours": false
+    },
+    {
+     "slot": "12",
+     "ours": false
+    },
+    {
+     "slot": "13",
+     "ours": false
+    },
+    {
+     "slot": "14",
+     "ours": false
+    },
+    {
+     "slot": "15",
+     "product": "Gorgie energy drink, blue can",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "16",
+     "product": "Gorgie energy drink, yellow can",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "17",
+     "product": "Gorgie energy drink, green can",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "18",
+     "product": null,
+     "category": null,
+     "caffeine": null,
+     "price": 5.0,
+     "price_legible": true,
+     "stock_seen": "empty",
+     "visible_units": 0,
+     "confidence": "high"
+    },
+    {
+     "slot": "21",
+     "ours": false
+    },
+    {
+     "slot": "22",
+     "ours": false
+    },
+    {
+     "slot": "23",
+     "ours": false
+    },
+    {
+     "slot": "24",
+     "ours": false
+    },
+    {
+     "slot": "25",
+     "product": "Premier Protein shake, Chocolate, 11 fl oz",
+     "category": "protein",
+     "caffeine": false,
+     "price": 4.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "high"
+    },
+    {
+     "slot": "26",
+     "product": "Starbucks Iced Energy, yellow and blue can",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "27",
+     "product": "Snapple Go Bananas, bottle",
+     "category": "juice",
+     "caffeine": false,
+     "price": 3.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 3,
+     "confidence": "medium"
+    },
+    {
+     "slot": "28",
+     "product": "Vita Coco coconut water, carton",
+     "category": "water",
+     "caffeine": false,
+     "price": 3.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "high"
+    },
+    {
+     "slot": "31",
+     "ours": false
+    },
+    {
+     "slot": "32",
+     "ours": false
+    },
+    {
+     "slot": "33",
+     "ours": false
+    },
+    {
+     "slot": "34",
+     "ours": false
+    },
+    {
+     "slot": "35",
+     "product": "Mountain Dew, 20 oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "high"
+    },
+    {
+     "slot": "36",
+     "product": "Minute Maid Lemonade (Zero Sugar?), can",
+     "category": "juice",
+     "caffeine": false,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "37",
+     "product": "Minute Maid Lemonade (Zero Sugar?), can",
+     "category": "juice",
+     "caffeine": false,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": null,
+     "confidence": "medium"
+    },
+    {
+     "slot": "38",
+     "product": "Snapple Pink Lemonade, bottle",
+     "category": "juice",
+     "caffeine": false,
+     "price": 3.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "high"
+    },
+    {
+     "slot": "41",
+     "ours": false
+    },
+    {
+     "slot": "42",
+     "ours": false
+    },
+    {
+     "slot": "43",
+     "ours": false
+    },
+    {
+     "slot": "44",
+     "ours": false
+    },
+    {
+     "slot": "45",
+     "product": "Fanta Orange, 20 oz bottle",
+     "category": "soda",
+     "caffeine": false,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "high"
+    },
+    {
+     "slot": "46",
+     "product": "Coca-Cola, 20 oz bottle",
+     "category": "soda",
+     "caffeine": true,
+     "price": 2.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 2,
+     "confidence": "high"
+    },
+    {
+     "slot": "47",
+     "product": "Something & Nothing sparkling, silver can with palm print",
+     "category": "sparkling water",
+     "caffeine": false,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 6,
+     "confidence": "medium"
+    },
+    {
+     "slot": "48",
+     "product": "Red Bull, can",
+     "category": "energy",
+     "caffeine": true,
+     "price": 4.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 4,
+     "confidence": "medium"
+    },
+    {
+     "slot": "51",
+     "ours": false
+    },
+    {
+     "slot": "52",
+     "ours": false
+    },
+    {
+     "slot": "53",
+     "ours": false
+    },
+    {
+     "slot": "54",
+     "ours": false
+    },
+    {
+     "slot": "55",
+     "product": "Pepsi, can",
+     "category": "soda",
+     "caffeine": true,
+     "price": null,
+     "price_legible": false,
+     "stock_seen": "stocked",
+     "visible_units": 6,
+     "confidence": "medium"
+    },
+    {
+     "slot": "56",
+     "product": "Dr Pepper, can",
+     "category": "soda",
+     "caffeine": true,
+     "price": 1.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 7,
+     "confidence": "high"
+    },
+    {
+     "slot": "57",
+     "product": "Diet Coke, can",
+     "category": "soda",
+     "caffeine": true,
+     "price": 1.0,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 6,
+     "confidence": "high"
+    },
+    {
+     "slot": "58",
+     "product": "Diet Coke Cherry?, can",
+     "category": "soda",
+     "caffeine": true,
+     "price": 1.5,
+     "price_legible": true,
+     "stock_seen": "stocked",
+     "visible_units": 5,
+     "confidence": "medium"
+    }
+   ]
   }
  ],
  "references": [
@@ -3244,6 +3564,11 @@
    "file": null,
    "taken": "2026-11-09T09:30:00-05:00",
    "note": "Nov 9 reference photo; summarized in 'photos' as reference-2026-11-09"
+  },
+  {
+   "file": null,
+   "taken": "2026-11-14T10:43:00-05:00",
+   "note": "Nov 14 reference photos; read slot by slot in 'photos' as reference-2026-11-14 (the whole machine is in db/counts/2026-11-14-photo.json)"
   }
  ],
  "scope": "Trimmed to our 20 slots (15-18, 25-28, 35-38, 45-48, 55-58). Other slots are listed as {\"slot\": ..., \"ours\": false} with no values, and evidence lines that cited other slots were removed or rewritten. Dating windows were re-checked against our slots and the door counter only; none changed."

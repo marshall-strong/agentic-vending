@@ -1718,6 +1718,8 @@ def main():
     # Brand keyword -> (brand, category, caffeine).  First match wins, so specific names come before general ones.
     BRANDS = [("diet coke", "Diet Coke", "soda", True), ("coke zero", "Coke Zero", "soda", True), ("black-label cola", "Coke Zero", "soda", True),
               ("coca-cola", "Coca-Cola", "soda", True), ("pepsi", "Pepsi", "soda", True),
+              ("mountain dew", "Mountain Dew", "soda", True), ("dr pepper", "Dr Pepper", "soda", True), ("fanta", "Fanta", "soda", False),
+              ("minute maid", "Minute Maid", "juice", False), ("iced energy", "Starbucks Iced Energy", "energy", True),
               ("monster", "Monster Energy", "energy", True), ("gorgie", "Gorgie", "energy", True), ("ghost", "Ghost Energy", "energy", True),
               ("red bull", "Red Bull", "energy", True), ("celsius", "Celsius", "energy", True),
               ("frappuccino", "Starbucks", "coffee", True), ("starbucks", "Starbucks", "coffee", True),

@@ -1,0 +1,277 @@
+{
+  "count_id": "2026-11-14-photo",
+  "counted_at": "2026-11-14T10:43:00-05:00",
+  "source": "photo",
+  "device_id": "vmc1",
+  "note": "Read from four photos of the machine front taken by Sean on Sat 14 Nov; 10:43 is when Sean sent them, so the time is approximate. Read twice, separately (two readers, one per model); the two reads agreed on every product and every legible tag. Units are the units seen down the rail, so they are lower bounds; null means only the front unit was visible (shelves 1 and 3 are shot straight on). Shelf 5 was shot from above, so its counts reach further back. Brands or flavors marked ? are uncertain.",
+  "selections": [
+    {
+      "selection": "11",
+      "product": "Recess sparkling water, orange/peach can",
+      "units": null,
+      "price_on_tag": "4.00",
+      "note": "flavor unread; only the front can is visible"
+    },
+    {
+      "selection": "12",
+      "product": "Recess sparkling water, lime/yellow-green can",
+      "units": null,
+      "price_on_tag": "4.00",
+      "note": "flavor unread; only the front can is visible"
+    },
+    {
+      "selection": "13",
+      "product": "Starbucks Iced Energy, Tropical Peach, can",
+      "units": null,
+      "price_on_tag": "4.00",
+      "note": "only the front can is visible"
+    },
+    {
+      "selection": "14",
+      "product": "Starbucks Iced Energy, Watermelon Lime?, can",
+      "units": null,
+      "price_on_tag": "4.00",
+      "note": "flavor partly read; only the front can is visible"
+    },
+    {
+      "selection": "15",
+      "product": "Gorgie energy drink, blue can",
+      "units": null,
+      "price_on_tag": "4.50",
+      "note": "flavor unread; only the front can is visible"
+    },
+    {
+      "selection": "16",
+      "product": "Gorgie energy drink, yellow can",
+      "units": null,
+      "price_on_tag": "4.50",
+      "note": "flavor unread; only the front can is visible"
+    },
+    {
+      "selection": "17",
+      "product": "Gorgie energy drink, green can",
+      "units": null,
+      "price_on_tag": "4.50",
+      "note": "flavor unread; a darker can behind the front one may be another flavor"
+    },
+    {
+      "selection": "18",
+      "product": null,
+      "units": 0,
+      "price_on_tag": "5.00"
+    },
+    {
+      "selection": "21",
+      "product": "Something & Nothing sparkling, silver can with palm print",
+      "units": 2,
+      "price_on_tag": null,
+      "note": "no tag on the ledge"
+    },
+    {
+      "selection": "22",
+      "product": "Something & Nothing sparkling, silver can with palm print",
+      "units": 2,
+      "price_on_tag": null,
+      "note": "no tag on the ledge"
+    },
+    {
+      "selection": "23",
+      "product": "vitaminwater, dark, bottle",
+      "units": 5,
+      "price_on_tag": null,
+      "note": "flavor unread; no tag on the ledge"
+    },
+    {
+      "selection": "24",
+      "product": "vitaminwater, dark, bottle",
+      "units": 4,
+      "price_on_tag": null,
+      "note": "flavor unread; no tag on the ledge"
+    },
+    {
+      "selection": "25",
+      "product": "Premier Protein shake, Chocolate, 11 fl oz",
+      "units": 4,
+      "price_on_tag": "4.00"
+    },
+    {
+      "selection": "26",
+      "product": "Starbucks Iced Energy, yellow and blue can",
+      "units": 3,
+      "price_on_tag": "4.00",
+      "note": "flavor unread"
+    },
+    {
+      "selection": "27",
+      "product": "Snapple Go Bananas, bottle",
+      "units": 3,
+      "price_on_tag": "3.00"
+    },
+    {
+      "selection": "28",
+      "product": "Vita Coco coconut water, carton",
+      "units": 4,
+      "price_on_tag": "3.00"
+    },
+    {
+      "selection": "31",
+      "product": "Pickle Potion? pickle-juice drink, small bottle, red cap",
+      "units": 2,
+      "price_on_tag": "4.00",
+      "note": "brand from a blurry label"
+    },
+    {
+      "selection": "32",
+      "product": "Spindrift sparkling water, Lime?, can",
+      "units": null,
+      "price_on_tag": "2.00",
+      "note": "flavor from the can color; only the front can is visible"
+    },
+    {
+      "selection": "33",
+      "product": "Spindrift sparkling water, Grapefruit?, can",
+      "units": null,
+      "price_on_tag": "2.00",
+      "note": "flavor from the can color; only the front can is visible"
+    },
+    {
+      "selection": "34",
+      "product": "Spindrift sparkling water, Raspberry Lime?, can",
+      "units": null,
+      "price_on_tag": "2.00",
+      "note": "flavor partly read; only the front can is visible"
+    },
+    {
+      "selection": "35",
+      "product": "Mountain Dew, 20 oz bottle",
+      "units": null,
+      "price_on_tag": "2.00",
+      "note": "only the front bottle is visible"
+    },
+    {
+      "selection": "36",
+      "product": "Minute Maid Lemonade (Zero Sugar?), can",
+      "units": null,
+      "price_on_tag": "2.00",
+      "note": "brand partly read; only the front can is visible"
+    },
+    {
+      "selection": "37",
+      "product": "Minute Maid Lemonade (Zero Sugar?), can",
+      "units": null,
+      "price_on_tag": "2.00",
+      "note": "brand partly read; only the front can is visible"
+    },
+    {
+      "selection": "38",
+      "product": "Snapple Pink Lemonade, bottle",
+      "units": 4,
+      "price_on_tag": "3.00"
+    },
+    {
+      "selection": "41",
+      "product": "Pickle Potion? pickle-juice drink, small bottle, red cap",
+      "units": 2,
+      "price_on_tag": "4.00",
+      "note": "brand from a blurry label"
+    },
+    {
+      "selection": "42",
+      "product": "Red Bull, original, can",
+      "units": 2,
+      "price_on_tag": "4.00"
+    },
+    {
+      "selection": "43",
+      "product": "S.Pellegrino sparkling water, glass bottle",
+      "units": 2,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "44",
+      "product": "S.Pellegrino sparkling water, glass bottle",
+      "units": 2,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "45",
+      "product": "Fanta Orange, 20 oz bottle",
+      "units": 2,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "46",
+      "product": "Coca-Cola, 20 oz bottle",
+      "units": 2,
+      "price_on_tag": "2.00"
+    },
+    {
+      "selection": "47",
+      "product": "Something & Nothing sparkling, silver can with palm print",
+      "units": 6,
+      "price_on_tag": null,
+      "note": "tag reads \"3.\" and glare hides the rest ($3.50 on Nov 9)"
+    },
+    {
+      "selection": "48",
+      "product": "Red Bull, can",
+      "units": 4,
+      "price_on_tag": "4.00",
+      "note": "the cans behind are darker blue, possibly another Red Bull edition"
+    },
+    {
+      "selection": "51",
+      "product": "bubly sparkling water, Strawberry, can",
+      "units": 6,
+      "price_on_tag": null,
+      "note": "no tag seen"
+    },
+    {
+      "selection": "52",
+      "product": "bubly sparkling water, purple can",
+      "units": 6,
+      "price_on_tag": "1.00",
+      "note": "flavor unread; the cans behind look red, possibly a second flavor"
+    },
+    {
+      "selection": "53",
+      "product": "bubly sparkling water, Paloma?, can",
+      "units": 5,
+      "price_on_tag": "1.00",
+      "note": "only \"...ly\" and \"paloma\" read"
+    },
+    {
+      "selection": "54",
+      "product": "Mountain Dew Baja Blast, can",
+      "units": 7,
+      "price_on_tag": null,
+      "note": "tag hidden by the pickup cup"
+    },
+    {
+      "selection": "55",
+      "product": "Pepsi, can",
+      "units": 6,
+      "price_on_tag": null,
+      "note": "tag hidden by the pickup cup ($1.00 on Nov 9)"
+    },
+    {
+      "selection": "56",
+      "product": "Dr Pepper, can",
+      "units": 7,
+      "price_on_tag": "1.00"
+    },
+    {
+      "selection": "57",
+      "product": "Diet Coke, can",
+      "units": 6,
+      "price_on_tag": "1.00"
+    },
+    {
+      "selection": "58",
+      "product": "Diet Coke Cherry?, can",
+      "units": 5,
+      "price_on_tag": "1.50",
+      "note": "silver can with \"Cherry\"; could be Coke Cherry"
+    }
+  ]
+}
