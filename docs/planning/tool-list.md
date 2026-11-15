@@ -52,7 +52,7 @@ The bridge covers reading the machine and restocking our slots. **It has no rout
 | `GET /api/v1/history?start=&end=` | Lists stored polls: every poll from anyone, back to 28 Aug, plus an hourly poll by David |
 | `GET /api/v1/history/{session_id}/raw` | Returns one stored poll as raw EVA-DTS text |
 | `GET /api/v1/products` | Lists orderable products: `sku`, `name`, `pack_size`. **No prices.** |
-| `GET /api/v1/slots` | Lists our 20 slots on `vmc1`: columns 5-8 of every row (15-18, 25-28, 35-38, 45-48, 55-58) |
+| `GET /api/v1/slots` | Lists the slots the server currently assigns us on `vmc1`. On 15 Nov: columns 5-8 of every row (15-18, 25-28, 35-38, 45-48, 55-58); it may change once before 3 Dec |
 | `POST /api/v1/purchase-requests` | Submits a restock request. Each line fills one slot. |
 | `GET /api/v1/purchase-requests/{id}` | Shows `pending`, `rejected` (with a `decision_note`), or the full receipts |
 

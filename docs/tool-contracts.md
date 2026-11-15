@@ -16,7 +16,7 @@ owns it" (Project Brief (Revised), section 5). Checked against the code at `ba14
 
 | Tool | Read or write | What it is for | Owner |
 | --- | --- | --- | --- |
-| `get_machine_state` | Read | Each of our 20 slots now: price, sales rate, stock on hand; and the closet at cost | Kevin Sykes, with Meaghan Gartland |
+| `get_machine_state` | Read | Each of our slots now: price, sales rate, stock on hand; and the closet at cost | Kevin Sykes, with Meaghan Gartland |
 | `get_sales_history` | Read | Units and revenue per slot between two times | Kevin Sykes |
 | `get_catalog` | Read | The products we are allowed to order | Sean Kelley |
 | `get_account_balance` | Read | How much money we have, and how much of it we may spend | Marshall Strong |
@@ -155,7 +155,7 @@ should do next.
 
 ## `preview_desired_state`
 
-- **Inputs**: `desired`, the state all 20 slots should be in after the next visit:
+- **Inputs**: `desired`, the state all our slots should be in after the next visit:
   - `slots`: each with `slot`, and either `keep: true` or a `product` (catalog SKU), a
     `sale_price` (shelf price including tax, such as `"2.50"`) and an optional `fill_to` (units on
     the rail after the visit; omitted means fill the column).

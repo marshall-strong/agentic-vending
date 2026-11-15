@@ -132,7 +132,7 @@ case knows stock, unit cost, the balance and the catalog, so every check gets ex
 | Case | From | The question |
 | --- | --- | --- |
 | `slow-seller` | Decide as a team; whiteboard | When do we pull a slot that sold nothing two weeks running? |
-| `fills-first` | Decide as a team | What goes in our 20 slots first? A cold start: not scoreable on outcome |
+| `fills-first` | Decide as a team | What goes in our slots first? A cold start: not scoreable on outcome |
 | `midweek-visit` | Whiteboard | Is a $25 midweek visit worth it after two sell-outs on Tuesday? |
 | `catalog-request` | Whiteboard | Can we stock a product whose catalog request is still pending? |
 | `holiday-drinks` | Decide as a team; whiteboard | Does a seasonal drink get a slot, and which slot gives way? |

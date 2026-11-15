@@ -30,7 +30,7 @@ flowchart TD
         A0{"Halt switch on?"}
         AH["Stop and record the run as halted:<br/>nothing read, called or sent"]
         A1["Read the week: get_machine_state, get_sales_history,<br/>get_account_balance, get_purchase_requests,<br/>get_catalog, get_project_rules"]
-        A2["The model decides the desired state<br/>for all 20 slots: product, price, fill"]
+        A2["The model decides the desired state<br/>for all our slots: product, price, fill"]
         A3["preview_desired_state:<br/>the planner checks every rule in code"]
         A4{"Refused?"}
         A5{"Submit or skip?"}
