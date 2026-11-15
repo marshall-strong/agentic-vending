@@ -38,7 +38,7 @@ from vending.replay import model
 from vending.replay.model import Budget, BudgetError
 from vending.replay.scoring import Score, score
 from vending.replay.state import EASTERN, NoData, WeekState, replay_week
-from vending.slots import SLOTS, SlotsNotRecorded, our_slots
+from vending.slots import SlotsNotRecorded, our_slots
 from vending.tools import machine_state as ms
 from vending.tools.sales_history import get_sales_history
 
@@ -62,7 +62,7 @@ tried, what you'd do differently.
 
 {model.PLAN_RULES}"""
 
-def answer_schema(slots: tuple[str, ...] = SLOTS) -> dict:
+def answer_schema(slots: tuple[str, ...]) -> dict:
     """The week's answer: a plan for `slots` (the week's own), the team update and the notes."""
     return {
         "type": "object",
@@ -76,10 +76,7 @@ def answer_schema(slots: tuple[str, ...] = SLOTS) -> dict:
     }
 
 
-ANSWER_SCHEMA = answer_schema()
-
-
-def tools(slots: tuple[str, ...] = SLOTS) -> list[dict]:
+def tools(slots: tuple[str, ...]) -> list[dict]:
     """The read tools, with get_sales_history's slot names limited to `slots`."""
     out = json.loads(json.dumps(TOOLS))
     history = next(t for t in out if t["name"] == "get_sales_history")
@@ -105,7 +102,8 @@ TOOLS = [
             "properties": {
                 "start": {"type": "string"},
                 "end": {"type": "string"},
-                "slots": {"anyOf": [{"type": "array", "items": {"type": "string", "enum": list(SLOTS)}},
+                # tools() fills in the enum: the week's own slots (ours, from `our_slots`).
+                "slots": {"anyOf": [{"type": "array", "items": {"type": "string"}},
                                     {"type": "null"}]},
             },
             "required": ["start", "end", "slots"],

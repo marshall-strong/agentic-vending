@@ -46,7 +46,7 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import counters, demand, slot_counts, stock
-from vending.slots import DEVICE_ID, SLOTS, SlotsNotRecorded, our_slots
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
 WINDOW = timedelta(days=7)
@@ -106,11 +106,12 @@ Counters = dict[str, tuple[int | None, int]]
 def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold: dict[str, int],
           counts: dict[str, stock.SlotCount] | None = None, last_loaded: dict[str, datetime] | None = None,
           sold_since_load: dict[str, int] | None = None, now: datetime | None = None,
-          seen: dict[str, dict] | None = None, slots: tuple[str, ...] = SLOTS,
+          seen: dict[str, dict] | None = None, *, slots: tuple[str, ...],
           demands: dict[str, demand.Demand] | None = None) -> list[SlotState]:
-    """Per-slot state for `slots` from the latest poll, the window's sales, the receipts, the latest
-    person's count (`seen`, from `vending.slot_counts.latest`) and each slot's own in-stock sales
-    (`demands`; a slot without one gets the fall prior for its price). Pure: no database, no clock."""
+    """Per-slot state for `slots` (ours, from `our_slots`) from the latest poll, the window's sales, the
+    receipts, the latest person's count (`seen`, from `vending.slot_counts.latest`) and each slot's own
+    in-stock sales (`demands`; a slot without one gets the fall prior for its price). Pure: no database,
+    no clock."""
     counts, last_loaded, sold_since_load, seen = counts or {}, last_loaded or {}, sold_since_load or {}, seen or {}
     demands = demands or {}
     days = Decimal((as_of - start).total_seconds()) / 86400 if start else Decimal(0)
@@ -225,7 +226,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     latest_counters = _counters(conn, latest[0], slots)
     demands = _demands(counts, _loads(conn), counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
-                   counts, last_loaded, sold_since_load, now, seen, slots, demands)
+                   counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     closet, closet_value = closet_items(counted.closet)
 
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
@@ -361,7 +362,7 @@ def _first_poll(conn: psycopg.Connection) -> tuple[str, datetime] | None:
 
 
 def _readings(conn: psycopg.Connection, start: datetime, end: datetime,
-              slots: tuple[str, ...] = SLOTS) -> list[tuple[str, datetime, int]]:
+              slots: tuple[str, ...]) -> list[tuple[str, datetime, int]]:
     """Every good poll's lifetime units for `slots` from the poll before `start` to `end`, inclusive."""
     return conn.execute(
         "select s.selection, p.started_at, s.lifetime_units from poll_selections s join polls p using (session_id)"
@@ -371,7 +372,7 @@ def _readings(conn: psycopg.Connection, start: datetime, end: datetime,
         (DEVICE_ID, list(slots), end, DEVICE_ID, start, start)).fetchall()
 
 
-def _counters(conn: psycopg.Connection, session_id: str, slots: tuple[str, ...] = SLOTS) -> Counters:
+def _counters(conn: psycopg.Connection, session_id: str, slots: tuple[str, ...]) -> Counters:
     rows = conn.execute(
         "select selection, price_cents, lifetime_units from poll_selections"
         " where session_id = %s and selection = any(%s)", (session_id, list(slots)))

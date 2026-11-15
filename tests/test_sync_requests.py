@@ -256,12 +256,10 @@ def test_main_runs_on_a_migrated_schema(schema_url, monkeypatch, capsys):
 
 
 def test_stock_counts_sales_for_a_receipt_slot_outside_the_slot_list(conn, monkeypatch):
-    # Which slots are ours is not settled (vending/slots.py is a placeholder), so the
-    # stock count follows our receipts, not the slot list.
-    from vending import slots
-    fewer = tuple(s for s in slots.SLOTS if s != "15")
-    monkeypatch.setattr(slots, "SLOTS", fewer)
-    monkeypatch.setattr("vending.stock.SLOTS", fewer, raising=False)   # in case stock imports it by name
+    # Our assignment may change before the start, so the stock count follows our receipts, not the
+    # assignment: here 15 has a receipt but is no longer in the stored assignment.
+    from tests.conftest import TEST_SLOTS
+    conn.execute("update slot_assignment set slots = %s", ([s for s in TEST_SLOTS if s != "15"] + ["11"],))
     submit(conn, "r1")
     sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(total_paid="12.00"))}), NOW, log=quiet)
     for session_id, started_at, lifetime in (("p1", "2026-11-07T15:00:00Z", 40), ("p2", "2026-11-08T15:00:00Z", 43)):

@@ -25,9 +25,10 @@ What this module computes, and what it only reads:
 Money is integer cents or an exact Fraction. A round-1 plan stored prices as JSON floats such as
 3.5; those are read through their decimal text and refused unless they are a whole number of cents.
 
-Only the 20 selections in our current assignment (`vending.slots.SLOTS`) may appear in a round; a file naming
-any other selection is refused. The split may be redrawn before the 3 Dec start; if it is, `SLOTS` changes first
-and the rounds are placed again. Standard library only.
+Only the selections in our current assignment (the inventory server's split, `vending.slots.our_slots`,
+passed in by the caller) may appear in a round; a file naming any other selection is refused, so the page
+can't show a value for it. The split may be redrawn before the 3 Dec start; if it is, the rounds are placed
+again. Standard library only.
 """
 
 from __future__ import annotations
@@ -43,7 +44,6 @@ from pathlib import Path
 from typing import Any
 
 from vending import capacity, pricing
-from vending.slots import SLOTS
 
 # Proposed in #113 ("Opening capital plan"), not yet agreed: the day-one fill's most-we-pay cap and the
 # starting money. Shown as reference lines only; nothing here enforces them.
@@ -147,6 +147,7 @@ class Round:
     assumptions: dict
     notes: dict[str, Any]                 # fallbacks, asks, checks, expect, note, problems, needs_* as given
     warnings: list[str]                   # disagreements between the plan, the projection and this module
+    ours: tuple[str, ...]                 # our slots it was checked against, shelf then column
 
     @property
     def projected(self) -> bool:
@@ -211,8 +212,9 @@ def _round_key(round_id: str) -> tuple[int, str]:
     return (int(m.group(1)), m.group(2)) if m else (0, round_id)
 
 
-def _slot_key(slot: str) -> int:
-    return SLOTS.index(slot)
+def _slot_key(slot: str) -> tuple[int, int]:
+    """Shelf, then column: the order the machine's face reads in."""
+    return int(slot[0]), int(slot[1:])
 
 
 def discover(root: Path) -> list[tuple[str, Path, Path | None]]:
@@ -266,26 +268,27 @@ def _projected(row: dict) -> Projected:
         weekly=tuple(weekly))
 
 
-def _check_slot(raw: Any, name: str) -> str:
+def _check_slot(raw: Any, name: str, ours: tuple[str, ...]) -> str:
     slot = str(raw)
-    if slot not in SLOTS:
-        raise RoundError(f"{name}: slot {slot} isn't in our current assignment (vending.slots.SLOTS); "
-                         "a round may only place products in those 20 slots")
+    if slot not in ours:
+        raise RoundError(f"{name}: slot {slot} isn't in our current assignment; "
+                         f"a round may only place products in those {len(ours)} slots")
     return slot
 
 
-def _check_note_slots(value: Any, name: str) -> None:
+def _check_note_slots(value: Any, name: str, ours: tuple[str, ...]) -> None:
     """Notes name slots in free text ("38, 45, 46"); every two-digit selection named must be ours."""
     for item in value if isinstance(value, list) else [value]:
         text = str(item.get("slot", "")) if isinstance(item, dict) else ""
         for slot in re.findall(r"\b\d{2}\b", text):
-            _check_slot(slot, name)
+            _check_slot(slot, name, ours)
 
 
-def load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> Round:
-    """One round, or RoundError naming the file when a plan or projection has an unexpected shape."""
+def load_round(round_id: str, plan_path: Path, projection_path: Path | None, ours: tuple[str, ...]) -> Round:
+    """One round, checked against `ours` (our slots, from `vending.slots.our_slots`), or RoundError
+    naming the file when a plan or projection has an unexpected shape."""
     try:
-        return _load_round(round_id, plan_path, projection_path)
+        return _load_round(round_id, plan_path, projection_path, ours)
     except RoundError:
         raise
     except (AttributeError, TypeError, KeyError, ValueError) as error:
@@ -293,7 +296,8 @@ def load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> 
                          f"({type(error).__name__}: {error})") from None
 
 
-def _load_round(round_id: str, plan_path: Path, projection_path: Path | None) -> Round:
+def _load_round(round_id: str, plan_path: Path, projection_path: Path | None, ours: tuple[str, ...]) -> Round:
+    ours = tuple(sorted(ours, key=_slot_key))
     plan = _load(plan_path)
     pname = f"{plan_path.parent.name}/{plan_path.name}"
     projection = _load(projection_path) if projection_path else {}
@@ -302,7 +306,7 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None) ->
 
     packs = _packs(projection, jname) if projection else {}
     # The projection's own view of each slot: sku, name, size, category, Interloper flag.
-    proj_slots = {_check_slot(s.get("slot"), jname): s for s in projection.get("slots") or []}
+    proj_slots = {_check_slot(s.get("slot"), jname, ours): s for s in projection.get("slots") or []}
     scen_rows: dict[str, dict[str, dict]] = {}
     totals: dict[str, Totals] = {}
     weeks: dict[str, list[tuple[date, int]]] = {}
@@ -310,7 +314,7 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None) ->
         block = (projection.get("scenarios") or {}).get(scen)
         if not block:
             continue
-        scen_rows[scen] = {_check_slot(r.get("slot"), jname): r for r in block.get("per_slot") or []}
+        scen_rows[scen] = {_check_slot(r.get("slot"), jname, ours): r for r in block.get("per_slot") or []}
         t = block.get("totals") or {}
         totals[scen] = Totals(_opt_num(t.get("units_sold")), _opt_int(t.get("gross_profit_cents")),
                               _opt_int(t.get("model_spend_cents")), _opt_int(t.get("profit_cents")),
@@ -326,7 +330,7 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None) ->
         raise RoundError(f"{pname}: no day_one list")
     slots: dict[str, Slot] = {}
     for entry in entries:
-        slot = _check_slot(entry.get("slot"), pname)
+        slot = _check_slot(entry.get("slot"), pname, ours)
         if slot in slots:
             raise RoundError(f"{pname}: slot {slot} is listed twice")
         ps = proj_slots.get(slot, {})
@@ -379,7 +383,7 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None) ->
             interloper=ps.get("interloper") if isinstance(ps.get("interloper"), bool) else None,
             floor_cents=floor, capacity=cap, capacity_assumed=assumed,
             most_cents=most, expected_cents=expected, refusals=tuple(problems), projected=projected)
-    missing = [s for s in SLOTS if s not in slots]
+    missing = [s for s in ours if s not in slots]
     if missing:
         warnings.append(f"no product for slot{'s' if len(missing) > 1 else ''} {', '.join(missing)}")
 
@@ -419,7 +423,7 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None) ->
                 warnings.append(f"{mine.product}: the projection buys {p['packs']} packs, this page counts {mine.packs}")
 
     notes = {k: plan[k] for k in ("fallbacks", "asks", "checks", "expect", "note", "truncated") if plan.get(k)}
-    _check_note_slots(notes.get("fallbacks"), pname)
+    _check_note_slots(notes.get("fallbacks"), pname, ours)
     for k in ("problems", "needs_hand_count", "needs_new_source"):
         if projection.get(k):
             notes[k] = projection[k]
@@ -432,11 +436,12 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None) ->
         catalog_requests=[r for r in plan.get("catalog_requests") or [] if isinstance(r, dict)],
         purchases=purchases, fill_expected_cents=fill_expected, fill_most_cents=fill_most,
         totals=totals, weeks=weeks, window=projection.get("window"),
-        assumptions=projection.get("assumptions") or {}, notes=notes, warnings=warnings)
+        assumptions=projection.get("assumptions") or {}, notes=notes, warnings=warnings, ours=ours)
 
 
-def load_all(root: Path) -> list[Round]:
-    return [load_round(rid, plan, projection) for rid, plan, projection in discover(root)]
+def load_all(root: Path, ours: tuple[str, ...]) -> list[Round]:
+    """Every round under `root`, each checked against `ours` (our slots, from `vending.slots.our_slots`)."""
+    return [load_round(rid, plan, projection, ours) for rid, plan, projection in discover(root)]
 
 
 @dataclass(frozen=True)
@@ -452,7 +457,7 @@ def changes(after: Round, before: Round | None) -> dict[str, Change]:
     if before is None:
         return {}
     out = {}
-    for slot in SLOTS:
+    for slot in after.ours:
         a, b = after.slots.get(slot), before.slots.get(slot)
         labels = []
         if (a is None) != (b is None):

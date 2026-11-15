@@ -10,10 +10,9 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from tests.conftest import open_in
+from tests.conftest import TEST_SLOTS, open_in
 from tests.test_plan_rounds import day_one, projection, write
 from vending import plan_page
-from vending.slots import SLOTS
 
 
 def interloper_dir(tmp_path, drinks=None):
@@ -40,7 +39,7 @@ def rounds(tmp_path, catalog_requests=None):
 
 
 def test_page_shows_every_round_and_hatches_the_other_teams_slots(tmp_path):
-    page = plan_page.build(rounds(tmp_path), None, interloper_dir(tmp_path))
+    page = plan_page.build(rounds(tmp_path), TEST_SLOTS, None, interloper_dir(tmp_path))
     html = plan_page.render(page)
     assert 'id="tab-1"' in html and 'id="tab-2" checked' in html     # the latest round opens first
     assert "Round 2" in html and "$300" in html                       # base GP 20 x $15.00
@@ -59,25 +58,25 @@ def test_round_text_is_escaped(tmp_path):
     write(root, "round1", "1", {"day_one": day_one(**{"15": {"why": "<img src=x onerror=alert(1)>"}}),
                                 "catalog_requests": [{"rank": 1, "name": "<b>bold</b>", "size": "12 oz can"}]},
           projection())
-    html = plan_page.render(plan_page.build(root, None, tmp_path / "none"))
+    html = plan_page.render(plan_page.build(root, TEST_SLOTS, None, tmp_path / "none"))
     assert "<img src=x" not in html and "&lt;img src=x" in html
     assert "<b>bold</b>" not in html
 
 
 def test_without_a_database_the_requests_show_as_wanted_and_unchecked(tmp_path):
-    page = plan_page.build(rounds(tmp_path), None, interloper_dir(tmp_path))
+    page = plan_page.build(rounds(tmp_path), TEST_SLOTS, None, interloper_dir(tmp_path))
     assert not page.pipeline.checked
     assert {q.stage for q in page.pipeline.by_round["2"]} == {"wanted"}
     assert "No database was read" in plan_page.render(page)
 
 
 def test_interloper_shows_only_drinks_we_also_sell(tmp_path):
-    page = plan_page.build(rounds(tmp_path), None, interloper_dir(tmp_path))
+    page = plan_page.build(rounds(tmp_path), TEST_SLOTS, None, interloper_dir(tmp_path))
     rows = plan_page.overlap(page.rounds[-1], page.interloper)
     # Our round sells Red Bull and Coke ("SIM-COKE" -> the projection names it Coca-Cola) but no Mountain Dew.
     names = [r["drink"]["name"] for r in rows]
     assert names == ["Coca-Cola"]
-    assert plan_page.overlapping_slots(page.rounds[-1], page.interloper) == set(SLOTS[10:])
+    assert plan_page.overlapping_slots(page.rounds[-1], page.interloper) == set(TEST_SLOTS[10:])
 
 
 def test_interloper_gap_only_when_sizes_match(tmp_path):
@@ -89,7 +88,7 @@ def test_interloper_gap_only_when_sizes_match(tmp_path):
     d = interloper_dir(tmp_path, [
         {"name": "Coca-Cola", "size": "12 oz can", "price_cents": 150, "match": ["coca", "cola"]},
         {"name": "Red Bull", "size": "16 oz can", "price_cents": 400, "match": ["red", "bull"]}])
-    html = plan_page.render(plan_page.build(root, None, d))
+    html = plan_page.render(plan_page.build(root, TEST_SLOTS, None, d))
     assert "$0.50 dearer" in html          # our $2.00 Coke can against its $1.50 can
     assert "different size" in html        # our 8.4 oz Red Bull against a 16 oz can
 
@@ -101,7 +100,7 @@ def test_pipeline_matches_requests_and_the_catalog(tmp_path, schema_url):
                      " ('Gatorade Cool Blue', '20 oz bottle', '{gatorade,cool,blue,20,oz}', 'rejected', 'b2')")
         conn.execute("insert into catalog_products (sku, name, size, last_response) values"
                      " ('COKE-12CAN', 'Coca-Cola', '12 oz can', '{}')")
-    page = plan_page.build(rounds(tmp_path), lambda: open_in(*schema_url), interloper_dir(tmp_path))
+    page = plan_page.build(rounds(tmp_path), TEST_SLOTS, lambda: open_in(*schema_url), interloper_dir(tmp_path))
     assert page.pipeline.checked and not page.errors
     by = {q.name: q for q in page.pipeline.by_round["2"]}
     assert by["Coca-Cola"].stage == "approved" and by["Coca-Cola"].status == "in catalog"
@@ -114,13 +113,15 @@ def test_a_database_error_is_shown_and_the_page_still_renders(tmp_path):
 
     def broken():
         raise psycopg.ProgrammingError("invalid dsn: postgresql//admin:S3cretPW@host/db")
-    page = plan_page.build(rounds(tmp_path), broken, interloper_dir(tmp_path))
+    page = plan_page.build(rounds(tmp_path), TEST_SLOTS, broken, interloper_dir(tmp_path))
     html = plan_page.render(page)
     assert "read (ProgrammingError)" in html
     assert "S3cretPW" not in html
 
 
-def test_server_answers_local_hosts_only_and_sends_a_strict_csp(tmp_path):
+def test_server_answers_local_hosts_only_and_sends_a_strict_csp(tmp_path, schema_url, monkeypatch):
+    # --no-db skips the catalog requests only: our slots still come from the database.
+    monkeypatch.setattr(plan_page, "connect", lambda: open_in(*schema_url))
     root = rounds(tmp_path)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), plan_page._handler(root, use_db=False))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -147,9 +148,9 @@ def test_server_answers_local_hosts_only_and_sends_a_strict_csp(tmp_path):
 
 
 def test_every_slot_row_is_one_of_ours(tmp_path):
-    html = plan_page.render(plan_page.build(rounds(tmp_path), None, interloper_dir(tmp_path)))
+    html = plan_page.render(plan_page.build(rounds(tmp_path), TEST_SLOTS, None, interloper_dir(tmp_path)))
     rows = re.findall(r'<tr id="2-s(\d\d)"', html)
-    assert rows == list(SLOTS)
+    assert rows == list(TEST_SLOTS)
 
 
 def test_size_unknown_is_not_compared(tmp_path):
@@ -159,21 +160,21 @@ def test_size_unknown_is_not_compared(tmp_path):
     proj["packs"][1]["name"] = "Coca-Cola"
     write(root, "round1", "1", {"day_one": day_one()}, proj)
     d = interloper_dir(tmp_path, [{"name": "Coca-Cola", "size": "bottle", "price_cents": 150, "match": ["coca", "cola"]}])
-    html = plan_page.render(plan_page.build(root, None, d))
+    html = plan_page.render(plan_page.build(root, TEST_SLOTS, None, d))
     assert "size unknown" in html and "dearer" not in html and "cheaper" not in html
 
 
 def test_a_rank_that_isnt_a_number_is_dropped(tmp_path):
     page = plan_page.build(rounds(tmp_path, [{"rank": "<img src=x onerror=alert(1)>", "name": "Coca-Cola", "size": "12 oz can"},
                                              {"rank": 2, "name": "Red Bull Sugarfree", "size": "8.4 oz can"}]),
-                           None, interloper_dir(tmp_path))
+                           TEST_SLOTS, None, interloper_dir(tmp_path))
     html = plan_page.render(page)
     assert "<img src=x" not in html and "onerror" not in html
     assert [q.rank for q in page.pipeline.by_round["2"]] == [None, 2]
 
 
 def test_round_tabs_and_the_changed_toggle_are_wired(tmp_path):
-    page = plan_page.build(rounds(tmp_path), None, interloper_dir(tmp_path))
+    page = plan_page.build(rounds(tmp_path), TEST_SLOTS, None, interloper_dir(tmp_path))
     html = plan_page.render(page)
     for rid in ("1", "2"):
         assert f"#tab-{rid}:checked ~ .rounds #round-{rid} {{ display:block }}" in html
@@ -183,4 +184,53 @@ def test_round_tabs_and_the_changed_toggle_are_wired(tmp_path):
     # The first round has nothing to compare with, so no toggle; round 2 changed slot 15 only.
     assert 'id="1-only"' not in html and 'id="2-only"' in html
     assert re.search(r'<tr id="2-s15" class="changed">', html)
-    assert all(re.search(rf'<tr id="2-s{s}" class="same">', html) for s in SLOTS if s != "15")
+    assert all(re.search(rf'<tr id="2-s{s}" class="same">', html) for s in TEST_SLOTS if s != "15")
+
+
+def test_our_slots_are_read_from_the_stored_assignment(schema_url, monkeypatch):
+    monkeypatch.setattr(plan_page, "connect", lambda: open_in(*schema_url))
+    assert plan_page.read_our_slots() == TEST_SLOTS
+    with open_in(*schema_url) as conn:
+        conn.execute("update slot_assignment set slots = %s", ([f"{r}{c}" for r in range(1, 6) for c in range(1, 5)],))
+    assert plan_page.read_our_slots()[:4] == ("11", "12", "13", "14")
+
+
+def test_a_round_naming_a_slot_outside_the_stored_assignment_is_refused(tmp_path):
+    import pytest
+
+    from vending import plan_rounds as pr
+    other = tuple(f"{r}{c}" for r in range(1, 6) for c in range(1, 5))    # the round names 15, which isn't in it
+    with pytest.raises(pr.RoundError, match="isn't in our current assignment"):
+        plan_page.build(rounds(tmp_path), other, None, interloper_dir(tmp_path))
+
+
+def test_the_page_refuses_with_nothing_stored(tmp_path, schema_url, monkeypatch, capsys):
+    with open_in(*schema_url) as conn:
+        conn.execute("delete from slot_assignment")
+    monkeypatch.setattr(plan_page, "connect", lambda: open_in(*schema_url))
+    root = rounds(tmp_path)
+    assert plan_page.main(["--rounds", str(root), "--no-db", "--write", str(tmp_path / "plan.html")]) == 1
+    assert "python -m vending.slots record" in capsys.readouterr().err
+    assert not (tmp_path / "plan.html").exists()
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), plan_page._handler(root, use_db=False))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/")
+            raise AssertionError("expected 500")
+        except urllib.error.HTTPError as error:
+            assert error.code == 500 and "python -m vending.slots record" in error.read().decode()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_page_refuses_when_the_database_is_unreachable(tmp_path, monkeypatch, capsys):
+    import psycopg
+
+    def broken():
+        raise psycopg.OperationalError("connection to postgresql://admin:S3cretPW@host/db failed")
+    monkeypatch.setattr(plan_page, "connect", broken)
+    assert plan_page.main(["--rounds", str(rounds(tmp_path)), "--write", str(tmp_path / "plan.html")]) == 1
+    err = capsys.readouterr().err
+    assert "Our slots weren't read (OperationalError)" in err and "S3cretPW" not in err

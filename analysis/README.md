@@ -1,6 +1,6 @@
 # Sales analysis
 
-What the machine's sales history says about demand for **our 20 slots** (15-18, 25-28, 35-38, 45-48, 55-58), the academic calendar, slot position, price, products, and when a slot is really a slow seller. It uses standard forecasting practice: seasonal naive as the bar to beat, walk-forward backtests, and MAE as the headline error.
+What the machine's sales history says about demand for **our 20 slots** (the inventory server's assignment), the academic calendar, slot position, price, products, and when a slot is really a slow seller. It uses standard forecasting practice: seasonal naive as the bar to beat, walk-forward backtests, and MAE as the headline error.
 
 **Read [REPORT.md](REPORT.md) first.** It has the findings, the forecast backtest, the products our slots held, the slow-seller rule simulation and the guideline we recommend for the agent. Its last section, **All 40 selections, fall**, gives starting rates by price band, shelf and half from every selection, so they don't depend on which 20 we get.
 
@@ -12,11 +12,10 @@ Anything per slot (products, prices, position, segments, stock-outs, refill evid
 
 ## Which slots are ours
 
-The assignment from the inventory server (`GET /api/v1/slots`) is team group-b on `vmc1`: slots 15-18, 25-28, 35-38, 45-48, 55-58, the same as `vending.slots.SLOTS`. The scripts take the slot list from the first of these that is set:
+Our slots are the inventory server's assignment (`GET /api/v1/slots`), stored by `python -m vending.slots record`. There is no fixed list in the code: the assignment may change before the start (#75). The scripts take the slot list from:
 
 1. `--slots` on the command line, comma or space separated. It can only narrow the list: a code outside our assignment is refused, so the export never writes another team's per-slot values.
-2. The assignment stored from the inventory server, read with `vending.slots.stored(conn)` and checked by shape only (20 different selections of the 40), not against `vending.slots.SLOTS`, because the split may be redrawn once before the start (#75). A malformed one stops the run.
-3. `vending.slots.SLOTS`, when nothing is stored.
+2. Otherwise all of the stored assignment, read with `vending.slots.stored(conn)` and checked by shape (20 different selections of the 40). A malformed one stops the run, and so does an empty table: the export says to run `python -m vending.slots record`.
 
 The export writes the list it used, and our assignment as `assigned_slots`, to `analysis/data/slots.json`; a file without `assigned_slots` is refused (re-export). The analysis reads it, and stops with a re-export message if it is asked for a different list. The labs take the list, the rails that are not ours and the source line in their footer from `lab_data.json`.
 
@@ -73,7 +72,7 @@ To look at only some of our slots, say shelves 1 and 2, narrow the list:
 analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe --slots 15,16,17,18,25,26,27,28
 ```
 
-`--slots` can only narrow our list, never add to it. A narrowed run leaves `REPORT.md` as it is (its report stays in `analysis/out/`), and the labs hatch the rest as "Not in this run", not "Not our turf". Run it again without `--slots` to go back to all our slots. If our assignment ever changes, change `vending.slots.SLOTS` (with #69) instead of passing `--slots`.
+`--slots` can only narrow our list, never add to it. A narrowed run leaves `REPORT.md` as it is (its report stays in `analysis/out/`), and the labs hatch the rest as "Not in this run", not "Not our turf". Run it again without `--slots` to go back to all our slots. If our assignment changes, record it (`python -m vending.slots record`, which the worker runs every round) and run `python analysis/rebuild.py` again: the export reads the stored assignment.
 
 The steps by hand:
 

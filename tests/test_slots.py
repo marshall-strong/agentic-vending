@@ -5,11 +5,12 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from tests.conftest import TEST_SLOTS
 from vending import settings, slots
 from vending.slots import BadAssignment, SlotsNotRecorded, parse
 
-# The bridge's answer on 12 Nov 2026.
-ANSWER = {"team": "group-b", "device_id": "vmc1", "slots": list(slots.SLOTS)}
+# An answer shaped like the bridge's, for the test assignment.
+ANSWER = {"team": "group-b", "device_id": "vmc1", "slots": list(TEST_SLOTS)}
 NOW = datetime(2026, 11, 12, 15, tzinfo=timezone.utc)
 LOCK = datetime.fromisoformat(slots.DEFAULT_LOCK_AT)
 AFTER = LOCK + timedelta(hours=1)
@@ -23,7 +24,7 @@ WHOLE_MACHINE = [f"{row}{col}" for row in range(1, 6) for col in range(1, 9)]
 
 def test_the_live_answer_parses_in_the_order_it_came():
     found = parse(ANSWER)
-    assert (found.team, found.device_id, found.slots) == ("group-b", "vmc1", slots.SLOTS)
+    assert (found.team, found.device_id, found.slots) == ("group-b", "vmc1", TEST_SLOTS)
 
 
 def test_any_twenty_selections_on_our_machine_parse():
@@ -41,16 +42,16 @@ MALFORMED = [
     ({**ANSWER, "slots": ["15", ""]}, "non-empty name"),
     ({**ANSWER, "slots": ["15", " 16"]}, "non-empty name"),
     ({**ANSWER, "slots": ["15", 16]}, "non-empty name"),
-    ({**ANSWER, "slots": [*slots.SLOTS[:-1], "15"]}, "listed twice: 15"),
-    ({**ANSWER, "slots": list(slots.SLOTS[:-1])}, "names 19 different selections, not 20"),
-    ({**ANSWER, "slots": [*slots.SLOTS, "11"]}, "names 21 different selections, not 20"),
+    ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "15"]}, "listed twice: 15"),
+    ({**ANSWER, "slots": list(TEST_SLOTS[:-1])}, "names 19 different selections, not 20"),
+    ({**ANSWER, "slots": [*TEST_SLOTS, "11"]}, "names 21 different selections, not 20"),
     ({**ANSWER, "slots": ["11", "12", "13", "14"]}, "names 4 different selections, not 20"),
     ({**ANSWER, "slots": WHOLE_MACHINE}, "names 40 different"),
-    ({**ANSWER, "slots": [*slots.SLOTS[:-1], "50"]}, "not a selection .*: 50"),
-    ({**ANSWER, "slots": [*slots.SLOTS[:-1], "19"]}, "not a selection .*: 19"),
-    ({**ANSWER, "slots": [*slots.SLOTS[:-1], "68"]}, "not a selection .*: 68"),
-    ({**ANSWER, "slots": [*slots.SLOTS[:-1], "A5"]}, "not a selection .*: A5"),
-    ({**ANSWER, "slots": [*slots.SLOTS[:-1], "155"]}, "not a selection .*: 155"),
+    ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "50"]}, "not a selection .*: 50"),
+    ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "19"]}, "not a selection .*: 19"),
+    ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "68"]}, "not a selection .*: 68"),
+    ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "A5"]}, "not a selection .*: A5"),
+    ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "155"]}, "not a selection .*: 155"),
 ]
 
 
@@ -97,14 +98,14 @@ def test_nothing_stored_refuses_and_says_what_to_run(empty):
 
 def test_the_first_read_is_recorded(empty):
     assert slots.record(empty, ANSWER, NOW) == "recorded"
-    assert slots.our_slots(empty) == slots.SLOTS
+    assert slots.our_slots(empty) == TEST_SLOTS
     row = empty.execute("select team, first_read_at, last_checked_at, response from slot_assignment").fetchone()
     assert row == ("group-b", NOW, NOW, ANSWER)
     assert [r[:2] for r in _log(empty)] == [("slots.record", "done")]
 
 
 def test_a_first_answer_other_than_slots_is_recorded(empty):
-    """SLOTS no longer bounds the first answer: any well-formed one is ours."""
+    """No fixed list bounds the first answer: any well-formed one is ours."""
     assert slots.record(empty, MOVED, NOW) == "recorded"
     assert slots.our_slots(empty) == LEFT
 
@@ -118,10 +119,10 @@ def test_a_first_read_after_the_lock_is_recorded_too(empty):
 def test_the_same_answer_again_only_moves_last_checked(empty):
     slots.record(empty, ANSWER, NOW)
     later = NOW + timedelta(days=3)
-    reordered = {**ANSWER, "slots": list(reversed(slots.SLOTS))}   # same set: not a change
+    reordered = {**ANSWER, "slots": list(reversed(TEST_SLOTS))}   # same set: not a change
     assert slots.record(empty, reordered, later) == "unchanged"
     assert empty.execute("select first_read_at, last_checked_at from slot_assignment").fetchone() == (NOW, later)
-    assert slots.our_slots(empty) == slots.SLOTS                    # the first order stays
+    assert slots.our_slots(empty) == TEST_SLOTS                    # the first order stays
     assert slots.record(empty, ANSWER, AFTER) == "unchanged"        # after the lock as well
     assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (AFTER,)
 
@@ -153,7 +154,7 @@ def test_a_change_from_the_lock_on_is_refused_and_changes_nothing(empty, at):
     logged = len(_log(empty))
     with pytest.raises(BadAssignment, match="different assignment, but ours locked at 2026-12-03T00:00:00-05:00"):
         slots.record(empty, MOVED, at)
-    assert slots.our_slots(empty) == slots.SLOTS
+    assert slots.our_slots(empty) == TEST_SLOTS
     assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (NOW,)
     assert len(_log(empty)) == logged
 
@@ -194,7 +195,7 @@ def test_a_change_that_waits_on_the_row_lock_past_the_deadline_is_refused(empty,
         time.sleep(1.0)            # the caller is now queued on the row, and the deadline has passed
     caller.join(timeout=10)
     assert isinstance(outcome.get("result"), BadAssignment), outcome
-    assert slots.our_slots(empty) == slots.SLOTS
+    assert slots.our_slots(empty) == TEST_SLOTS
 
 
 def test_a_new_team_label_alone_is_stored_not_refused(empty):
@@ -204,7 +205,7 @@ def test_a_new_team_label_alone_is_stored_not_refused(empty):
     assert slots.record(empty, renamed, AFTER) == "team renamed"        # after the lock too
     row = empty.execute("select team, first_read_at, last_checked_at, response from slot_assignment").fetchone()
     assert row == ("Group B", NOW, AFTER, renamed)
-    assert slots.our_slots(empty) == slots.SLOTS
+    assert slots.our_slots(empty) == TEST_SLOTS
     assert _log(empty)[-1][2].endswith("(team group-b -> Group B)")
 
 
@@ -217,13 +218,13 @@ def test_a_malformed_answer_changes_nothing_before_or_after_the_lock(empty, answ
     slots.record(empty, ANSWER, NOW)
     with pytest.raises(BadAssignment, match=why):
         slots.record(empty, answer, at)
-    assert slots.our_slots(empty) == slots.SLOTS
+    assert slots.our_slots(empty) == TEST_SLOTS
     assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (NOW,)
 
 
 @pytest.mark.parametrize("names, why", [
     (["15", "16", "11"], "names 3 different selections, not 20"),
-    ([*slots.SLOTS[:-1], "59"], "not a selection .*: 59"),
+    ([*TEST_SLOTS[:-1], "59"], "not a selection .*: 59"),
     (WHOLE_MACHINE, "names 40 different"),
 ])
 def test_a_malformed_stored_row_is_refused_by_every_tool(conn, names, why):
@@ -273,7 +274,7 @@ def test_every_tool_that_reads_slots_refuses_without_an_assignment(empty):
 
 
 def test_the_tools_use_the_stored_slots_not_the_list_in_the_code(empty):
-    """After a change before the lock, every tool follows the new assignment: columns 1-4, not SLOTS."""
+    """After a change before the lock, every tool follows the new assignment, whatever selections it names."""
     from tests.conftest import store_poll
     from vending.planning import planner_config
     from vending.tools.machine_state import get_machine_state

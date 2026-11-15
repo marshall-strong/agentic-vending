@@ -11,9 +11,10 @@ Usage:
 Defaults: inputs in analysis/data/*.csv (written by analysis/export_sales.py), the calendar and photo files in
 analysis/, outputs in analysis/out/ (both folders gitignored).
 
-Which slots are ours: --slots, else data/slots.json (written by the export with the list it used), else
-vending.slots.SLOTS. If the CSVs were exported for a different list than the one asked for, the script stops
-and says to re-export. See analysis/slots_config.py.
+Which slots are ours: data/slots.json, written by the export with the list it used and our assignment (the
+inventory server's, as stored); --slots can narrow it. With no data/slots.json the script stops and says to
+export. If the CSVs were exported for a different list than the one asked for, the script stops and says to
+re-export. See analysis/slots_config.py.
 
 Outputs (OUT_DIR):
     lab_data.json        compact data for the interactive labs
@@ -81,11 +82,11 @@ from statsmodels.tsa.seasonal import STL
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from slots_config import SOURCE_CLI, SOURCE_DEFAULT, SOURCE_FALL, check_before_start, is_default, resolve_run  # noqa: E402
+from slots_config import SOURCE_CLI, SOURCE_FALL, SOURCE_SERVER, check_before_start, resolve_run  # noqa: E402
 from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
-from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (defaults; configure() sets the ones this run uses)
+from vending.slots import DEVICE_ID  # noqa: E402  (configure() sets the device and slots this run uses)
 
 TZ = "America/New_York"
 SEED = 42
@@ -115,7 +116,8 @@ PHOTO_NOV9 = dict(date="2026-11-09", stocked=list(PHOTO_NOV9_SEEN))   # configur
 VISIT_NOTES = {"2026-11-09": "student team photographing the machine (not a refill)",
                "2026-11-11": "not the student team; probably course staff or the operator"}
 KNOWN_NOT_REFILL = {"2026-11-09"}  # visits known not to be refills (never end a stock-out window, never count as a refill)
-SLOT_SOURCE = SOURCE_DEFAULT
+RUN_SLOTS = ()                    # the slots this run covers, set by configure() from data/slots.json
+SLOT_SOURCE = SOURCE_SERVER
 SLOTS_RESOLVED_AT = None
 ASSIGNED = ()                     # our assignment (data/slots.json assigned_slots), set by configure(); none = no row may be from the start on
 OUR = "our slots"                 # set by configure(): "our N slots" for the slot list this run uses
@@ -124,16 +126,16 @@ SCOPE_NOTE = ""
 
 def configure(device, slots, source, resolved_at=None, assigned=()):
     """Set the slot list this run uses, our assignment (the date guard's exemption), and every text that names it."""
-    global DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT, ASSIGNED, OUR, SCOPE_NOTE, LIKELY_MIN
-    DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT = device, tuple(slots), source, resolved_at
+    global DEVICE_ID, RUN_SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT, ASSIGNED, OUR, SCOPE_NOTE, LIKELY_MIN
+    DEVICE_ID, RUN_SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT = device, tuple(slots), source, resolved_at
     ASSIGNED = tuple(assigned)
-    OUR = f"our {len(SLOTS)} slot" + ("" if len(SLOTS) == 1 else "s")
+    OUR = f"our {len(RUN_SLOTS)} slot" + ("" if len(RUN_SLOTS) == 1 else "s")
     if source == SOURCE_FALL:
-        OUR = f"all {len(SLOTS)} selections (fall, before the start)"
-    LIKELY_MIN = max(1, round(len(SLOTS) / 10))
-    PHOTO_NOV9["stocked"] = [s for s in PHOTO_NOV9_SEEN if s in SLOTS]
-    PHOTO_NOV9["note"] = (f"Student team photo of the machine at the Mon Nov 9 visit (door counter rise at 09:31). Of our {len(SLOTS)} "
-                          f"rail{'' if len(SLOTS) == 1 else 's'}, " + photo_note_tail(PHOTO_NOV9["stocked"], SLOTS))
+        OUR = f"all {len(RUN_SLOTS)} selections (fall, before the start)"
+    LIKELY_MIN = max(1, round(len(RUN_SLOTS) / 10))
+    PHOTO_NOV9["stocked"] = [s for s in PHOTO_NOV9_SEEN if s in RUN_SLOTS]
+    PHOTO_NOV9["note"] = (f"Student team photo of the machine at the Mon Nov 9 visit (door counter rise at 09:31). Of our {len(RUN_SLOTS)} "
+                          f"rail{'' if len(RUN_SLOTS) == 1 else 's'}, " + photo_note_tail(PHOTO_NOV9["stocked"], RUN_SLOTS))
     SCOPE_NOTE = ("Machine-wide data is used only as totals over the whole machine, for the calendar and day-off effects, "
                   "the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits: "
                   "that history is from before the competition, when course staff stocked every slot, so it reflects no rival "
@@ -167,8 +169,6 @@ def source_line():
     """One line for the labs and the report: where the slot list came from."""
     if SLOT_SOURCE == SOURCE_FALL:
         return "Slots: all 40 selections, polls before the competition start only (fall run)."
-    if is_default(SLOT_SOURCE):
-        return "Slots: the default list in vending/slots.py (not read from the inventory server on this run)."
     if SLOT_SOURCE == SOURCE_CLI:
         return "Slots: set on the command line for this run" + (f" ({SLOTS_RESOLVED_AT[:10]})." if SLOTS_RESOLVED_AT else ".")
     return "Slots: the assignment stored from the inventory server" + (f" (read {SLOTS_RESOLVED_AT[:10]})." if SLOTS_RESOLVED_AT else ".")
@@ -181,9 +181,6 @@ def resolve(args):
     exported = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else None
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     device, slots, source, at, assigned = resolve_run(args.slots, exported, str(manifest), now)
-    if exported is None:
-        print(f"WARNING: no {manifest.name} next to the CSVs, so it can't be checked which slots they were exported for; "
-              "the per-slot rows are still checked against the slot list below")
     configure(device, slots, source, at, assigned)
 
 
@@ -301,7 +298,7 @@ def counter_total(values):
 
 # ============================================================== load
 def load(args):
-    ours = set(SLOTS)
+    ours = set(RUN_SLOTS)
     sales = pd.read_csv(args.sales, dtype={"slot": str})
     reads = pd.read_csv(args.readings, dtype={"slot": str})
     extra = sorted((set(sales.slot) | set(reads.slot)) - ours)
@@ -345,8 +342,8 @@ def load(args):
 def main():
     root = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--slots", help='our slot codes, comma or space separated ("15,16,17,18"); default: data/slots.json, '
-                    "else vending.slots.SLOTS")
+    ap.add_argument("--slots", help='part of our slots, comma or space separated ("15,16,25,26"); default: all of '
+                    "data/slots.json")
     ap.add_argument("--slots-file", default=str(root / "data" / "slots.json"),
                     help="which slots the CSVs were exported for (written by export_sales.py)")
     ap.add_argument("--sales", default=str(root / "data" / "sales_events.csv"))
@@ -367,12 +364,12 @@ def main():
     warnings.filterwarnings("ignore")      # noisy library warnings; Holt-Winters warnings are counted where they matter
 
     resolve(args)
-    print(f"slots: {len(SLOTS)} on {DEVICE_ID} ({slot_ranges(SLOTS)}), from {SLOT_SOURCE}")
+    print(f"slots: {len(RUN_SLOTS)} on {DEVICE_ID} ({slot_ranges(RUN_SLOTS)}), from {SLOT_SOURCE}")
     sales, reads, polls, mach, cal, doors, photos, oct8 = load(args)
     P = polls.t
     Pv = P.values
     T0, T1 = P.iloc[0], P.iloc[-1]
-    slots = list(SLOTS)                                   # ours, in shelf order
+    slots = list(RUN_SLOTS)                               # ours, in shelf order
     rowcol = pd.DataFrame({"row": [int(s[0]) for s in slots], "col": [int(s[1]) for s in slots]}, index=slots)
     TOTAL_UNITS, TOTAL_CENTS = int(sales.units.sum()), int(sales.cents.sum())
     MACHINE_UNITS, MACHINE_CENTS = int(mach.units.sum()), int(mach.cents.sum())
@@ -2347,15 +2344,12 @@ def write_report(path, L):
     w("")
     w(f"**Slots.** {len(slots)} on {DEVICE_ID}: {L['slots_text']}. Source: {SLOT_SOURCE}.")
     w("")
-    cols = sorted({int(s[1]) for s in slots})
-    col_text = (f"columns {cols[0]}-{cols[-1]}" if cols == list(range(cols[0], cols[-1] + 1)) and len(cols) > 1
-                else "column" + ("s " if len(cols) > 1 else " ") + ", ".join(map(str, cols)))
     if SLOT_SOURCE != SOURCE_FALL:
-        w(f"**Which columns.** The per-slot findings in this report (segments, shelf and column effects, price changes, slow-seller "
-          f"flags, products) cover {col_text} only: the split the inventory server gave on 12 Nov. Before the start no selection is "
-          "either team's, and the split may be redrawn once before Thu 3 Dec (docs/integrity.md). For starting rates that don't "
-          "depend on the split, use the last section of REPORT.md, 'All 40 selections, fall', which `analysis/rebuild.py` adds "
-          "from `analysis/fall_rates.py`.")
+        w(f"**Which slots.** The per-slot findings in this report (segments, shelf and column effects, price changes, slow-seller "
+          f"flags, products) cover {OUR} only: the inventory server's assignment as the export recorded it. Before the start no "
+          "selection is either team's, and the assignment may change before Thu 3 Dec (docs/integrity.md). For starting rates "
+          "that don't depend on the assignment, use the last section of REPORT.md, 'All 40 selections, fall', which "
+          "`analysis/rebuild.py` adds from `analysis/fall_rates.py`.")
         w("")
     w("**Weeks.** Weeks run Saturday to Friday, as in the ledger and the P&L page (`vending/ledger.py`, `WEEK_STARTS = 5`).")
     w("")

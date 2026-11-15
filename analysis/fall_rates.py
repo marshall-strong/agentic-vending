@@ -3,11 +3,12 @@
     python -I analysis/fall_rates.py      # after the fall run (rebuild.py runs it)
 
 Before the competition starts no selection is either team's: course staff stocked the whole machine in the fall,
-and the inventory server may redraw the split before 3 Dec (docs/integrity.md). So our starting rates should not
-depend on which 20 selections we get. This reads the fall run's per-selection in-stock rates
+and the inventory server may change our assignment before 3 Dec (docs/integrity.md). So our starting rates should
+not depend on which 20 selections we get. This reads the fall run's per-selection in-stock rates
 (analysis/out/fall40/lab_data.json, written by sales_analysis.py on the export from export_sales.py --fall-all,
 which holds only polls before the start) and summarizes them. It also reads the normal run's lab_data.json
-(analysis/out/) for the columns 5-8 segment figures it is compared with.
+(analysis/out/), which covers our 20 selections (the server's assignment), for the segment figures it is compared
+with.
 
 The rate is the analysis's own: units per in-stock class day in the regular-polling era, with each selection's
 suspected-empty days taken out (sales_analysis.py). Nothing is re-estimated here. Uncertainty comes from
@@ -36,6 +37,7 @@ SHORT_DAYS = 11                  # fewer in-stock class days than this: a noisy 
 QUIET_RATE = 0.15                # in stock 30+ class days but under this rate: maybe an empty or jammed rail
 # Price bands by average price paid in the fall (dollars, tax included), lower bound inclusive.
 BANDS = [("Low (under $2.50)", 0.0, 2.50), ("Mid ($2.50 to $3.49)", 2.50, 3.50), ("Premium ($3.50 and up)", 3.50, 99.0)]
+# The machine's two halves, as a description of the machine (not of whose selections they are).
 HALVES = {"left": "columns 1-4", "right": "columns 5-8"}
 
 
@@ -122,7 +124,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--fall", default=str(ANALYSIS / "out" / "fall40" / "lab_data.json"))
     ap.add_argument("--ours", default=str(ANALYSIS / "out" / "lab_data.json"),
-                    help="the normal run's lab_data.json, for the columns 5-8 segment figures")
+                    help="the normal run's lab_data.json (our 20 selections), for its segment figures")
     ap.add_argument("--out", default=str(ANALYSIS / "out" / "fall40"))
     args = ap.parse_args()
 
@@ -151,7 +153,7 @@ def main():
     by_half = summarize(df, "half", ["left", "right"], rng)
     lr = left_right(df, rng)
 
-    # the same rates in the normal run (columns 5-8): the method is per selection, so they must match
+    # the same rates in the normal run (our 20 selections): the method is per selection, so they must match
     same = None
     if ours:
         o = {r["slot"]: r["rate"] for r in ours["slots"]}
@@ -172,7 +174,7 @@ def main():
                              last_poll=fall["meta"]["last_poll"], before=START.isoformat(), selections=len(df), dropped=dropped,
                              seed=SEED, bootstrap=B, permutations=PERMS),
                   bands=[dict(name=n, lo=lo, hi=hi) for n, lo, hi in BANDS], by_band=by_band, by_row=by_row, by_half=by_half,
-                  left_right=lr, columns_5_8_rates_match_normal_run=same, segments_columns_5_8=old_segments,
+                  left_right=lr, our_rates_match_normal_run=same, segments_ours=old_segments,
                   segments_all_40=new_segments,
                   per_selection=[dict(slot=r.slot, row=int(r.row), col=int(r.col), half=r.half, band=r.band, rate=float(r.rate),
                                       instock_class_days=float(r.days), avg_price=float(r.avg_price)) for r in df.itertuples()])
@@ -190,15 +192,15 @@ def report(r):
     w("## All 40 selections, fall (before the start)")
     w("")
     w("**Why.** Before the competition starts no selection is either team's: course staff stocked the whole machine in the fall, "
-      "and the inventory server may redraw the split once before Thu 3 Dec (docs/integrity.md, Kevin, 15 Nov). The sections above "
-      "use columns 5-8 only, the split as of 12 Nov. Starting rates should not depend on which 20 selections we get, so this "
+      "and the inventory server may change our assignment before Thu 3 Dec (docs/integrity.md, Kevin, 15 Nov). The sections above "
+      "use our 20 selections (the server's assignment) only. Starting rates should not depend on which 20 selections we get, so this "
       f"section uses the fall's per-selection sales from all 40, polls before {START:%Y-%m-%d %H:%M} Eastern only "
       f"(data {sc['first_poll'][:16]} to {sc['last_poll'][:16]}). From the start, nothing reads the other team's per-selection data "
       "(`analysis/slots_config.py`, `check_before_start`).")
     w("")
     w("**Method.** The rate is the analysis's own: units per in-stock class day in the regular-polling era, with each selection's "
-      "suspected-empty days taken out. It is estimated per selection, so columns 5-8 get exactly the rates above"
-      + (" (checked: they match the normal run)" if r["columns_5_8_rates_match_normal_run"] else "") + ". "
+      "suspected-empty days taken out. It is estimated per selection, so our 20 selections get exactly the rates above"
+      + (" (checked: they match the normal run)" if r["our_rates_match_normal_run"] else "") + ". "
       "'Mean' is the average of the selections' rates (as the segment table above); 'pooled' is units / in-stock days over the group, "
       f"which weights selections by how long they were in stock. 95% intervals resample selections ({sc['bootstrap']:,} bootstrap "
       f"draws, seed {sc['seed']}). Price band = the selection's average price paid in the fall. "
@@ -209,7 +211,7 @@ def report(r):
     w("")
     w("Units per in-stock class day per selection.")
     w("")
-    w("| Price band | All 40: n | Mean (95% CI) | Pooled (95% CI) | Columns 1-4: n, mean | Columns 5-8: n, mean |")
+    w("| Price band | All 40: n | Mean (95% CI) | Pooled (95% CI) | Left half (columns 1-4): n, mean | Right half (columns 5-8): n, mean |")
     w("|---|---|---|---|---|---|")
     side = {h: {x["level"]: x for x in r["by_band"][h]} for h in ("left", "right")}
     for x in r["by_band"]["all"]:
@@ -217,12 +219,12 @@ def report(r):
         w(f"| {x['level']} | {x['n']} | {x['mean_rate']:.3f} ({ci_text(x['ci'])}) | {x['pooled_rate']:.3f} ({ci_text(x['pooled_ci'])}) | "
           f"{lft['n'] if lft else 0}, {f3(lft['mean_rate']) if lft else 'n/a'} | {rgt['n'] if rgt else 0}, {f3(rgt['mean_rate']) if rgt else 'n/a'} |")
     w("")
-    if r["segments_columns_5_8"]:
-        w("For comparison, the segments above (columns 5-8, k = 4) and the same k-means on all 40 (same features and seed):")
+    if r["segments_ours"]:
+        w("For comparison, the segments above (our 20 selections, k = 4) and the same k-means on all 40 (same features and seed):")
         w("")
-        w("| Columns 5-8 segment | Slots | Mean rate | Avg price |")
+        w("| Our segment | Slots | Mean rate | Avg price |")
         w("|---|---|---|---|")
-        for s in r["segments_columns_5_8"]:
+        for s in r["segments_ours"]:
             w(f"| {s['name']} | {', '.join(s['slots'])} | {s['rate']:.3f} | ${s['avg_price']:.2f} |")
         w("")
     w("| All-40 segment (k = 4) | Selections | Left / right | Mean rate | Avg price |")

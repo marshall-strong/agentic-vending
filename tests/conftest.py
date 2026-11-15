@@ -25,6 +25,12 @@ CONNECT_TIMEOUT = 3
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
+# The slot assignment the tests use: what `schema_url` stores in `slot_assignment`, and what the pure
+# tests pass where code takes our slots. Test data only. Our real slots are whatever the inventory server
+# assigns (`vending.slots.our_slots`); no code outside the tests holds a list of them.
+TEST_SLOTS: tuple[str, ...] = ("15", "16", "17", "18", "25", "26", "27", "28", "35", "36",
+                               "37", "38", "45", "46", "47", "48", "55", "56", "57", "58")
+
 
 @pytest.fixture(autouse=True)
 def _no_password_gate(request, monkeypatch):
@@ -88,10 +94,10 @@ def schema_url(database_url):
     admin.execute(f"create schema {schema}")
     with open_in(url, schema) as conn:
         db.migrate(conn)
-        # Our slot assignment as the inventory server gives it, so tools that read it work as they
-        # will live. tests/test_slots.py deletes it to test the refusals.
+        # A slot assignment as the inventory server would give it (TEST_SLOTS), so tools that read it work
+        # as they will live. tests/test_slots.py deletes it to test the refusals.
         conn.execute("insert into slot_assignment (team, device_id, slots, response) values (%s, %s, %s, '{}')",
-                     ("group-b", slots.DEVICE_ID, list(slots.SLOTS)))
+                     ("group-b", slots.DEVICE_ID, list(TEST_SLOTS)))
     yield url, schema
     admin.execute(f"drop schema {schema} cascade")
     admin.close()

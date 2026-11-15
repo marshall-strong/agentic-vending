@@ -33,7 +33,6 @@ from typing import Protocol
 
 from vending.pricing import Refusal, to_cents
 from vending.replay.state import WeekState
-from vending.slots import SLOTS
 
 VISITS = ("scheduled", "midweek")
 # The baseline never plans an empty rail: leaving a slot empty waits on David.
@@ -128,7 +127,7 @@ def get_decider(name: str) -> Decider:
     raise ValueError(f"Unknown decider {name!r}. Use baseline, or file:PATH for a JSON plan.")
 
 
-def check_plan(answer: object, slots: tuple[str, ...] = SLOTS) -> tuple[Plan | None, list[Refusal]]:
+def check_plan(answer: object, slots: tuple[str, ...]) -> tuple[Plan | None, list[Refusal]]:
     """The plan, or every reason it isn't a valid one. Never raises on bad input.
 
     `slots` are the slots the plan must list once each; `score` passes the week's own.

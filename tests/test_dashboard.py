@@ -464,8 +464,8 @@ EVEN = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
 
 @pytest.fixture
 def even_columns(conn):
-    """Our slots on every other column, so nothing assumes columns 5 to 8. Only the stored
-    assignment moves: the dashboard reads that, never `SLOTS`."""
+    """Our slots on every other column, so nothing assumes any particular columns. Only the stored
+    assignment moves: the dashboard reads that, never a fixed list."""
     conn.execute("update slot_assignment set slots = %s", (list(EVEN),))
     return EVEN
 

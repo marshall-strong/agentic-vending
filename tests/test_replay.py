@@ -8,13 +8,12 @@ from decimal import Decimal
 import psycopg
 import pytest
 
-from tests.conftest import open_in, store_poll
+from tests.conftest import TEST_SLOTS, open_in, store_poll
 from vending.replay.__main__ import main, run_week
-from vending.replay.cases import all_cases
+from vending.replay.cases import CASE_SLOTS, all_cases
 from vending.replay.deciders import Baseline, Plan, SlotPlan, check_plan
 from vending.replay.scoring import FAIL, PASS, SKIP, score
 from vending.replay.state import NoData, replay_week
-from vending.slots import SLOTS
 
 WEEK = date(2026, 10, 2)   # a Friday; the week starts at 04:00 UTC (midnight Eastern)
 
@@ -151,11 +150,11 @@ def test_a_decider_that_writes_fails_no_writes(schema_url, conn):
 
 def plan_json(**slot_fields):
     return {"slots": [{"slot": s, "fill_to": 5, "sale_price": "2.50", "reason": "r", **slot_fields.get(s, {})}
-                      for s in SLOTS]}
+                      for s in TEST_SLOTS]}
 
 
 def test_a_good_json_plan_parses():
-    plan, refusals = check_plan(plan_json(**{"16": {"keep": True}}))
+    plan, refusals = check_plan(plan_json(**{"16": {"keep": True}}), TEST_SLOTS)
     assert refusals == [] and plan.slot("15").price_cents == 250 and plan.slot("16").keep
 
 
@@ -184,7 +183,7 @@ def test_a_good_json_plan_parses():
     ({"slots": plan_json()["slots"] + [{"slot": "15", "keep": True, "reason": "r"}]}, "slot_list"),
 ])
 def test_nonsense_plans_are_refused_not_crashed_on(answer, code):
-    plan, refusals = check_plan(answer)
+    plan, refusals = check_plan(answer, TEST_SLOTS)
     assert plan is None and code in {r.code for r in refusals}
 
 
@@ -287,7 +286,7 @@ def test_a_midweek_visit_is_worth_it_here():
     baseline = score(c.state, Baseline().decide(c.state), c.next_week)
     assert baseline.totals.stockout_units == 26
     visit = Plan(tuple(SlotPlan(s, "refill the sell-out", fill_to=13, price_cents=250) if s in ("15", "16")
-                       else SlotPlan(s, "enough until Friday", keep=True) for s in SLOTS), visit="midweek")
+                       else SlotPlan(s, "enough until Friday", keep=True) for s in CASE_SLOTS), visit="midweek")
     result = score(c.state, visit, c.next_week)
     assert result.passed and result.totals.stockout_units == 0 and result.totals.fee_cents == 2500
     assert result.totals.margin_cents - baseline.totals.margin_cents == 918   # $34.18 saved - $25 fee

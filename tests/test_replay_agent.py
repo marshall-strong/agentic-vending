@@ -47,7 +47,7 @@ def test_tools_see_nothing_after_the_replay_date(conn):
 
 
 def test_the_replayed_machine_state_reads_the_stored_assignment_not_slots(conn):
-    """A stored assignment of columns 1-4 replaces SLOTS for the replay's tool too, like the week's state."""
+    """The replay's tool reads the stored assignment, like the week's state: here one of other selections."""
     from tests.conftest import store_poll
 
     left = [f"{row}{col}" for row in range(1, 6) for col in range(1, 5)]
@@ -65,7 +65,7 @@ def test_the_replayed_machine_state_reads_the_stored_assignment_not_slots(conn):
 
 
 def test_the_requests_name_the_stored_slots_not_slots(conn, api):
-    """The answer schema and get_sales_history's slot list are the week's own slots, not SLOTS."""
+    """The answer schema and get_sales_history's slot list are the week's own slots (the stored assignment)."""
     from tests.conftest import store_poll
     from vending.replay import model
 
@@ -82,8 +82,9 @@ def test_the_requests_name_the_stored_slots_not_slots(conn, api):
     history = next(t for t in sent["tools"] if t["name"] == "get_sales_history")
     assert history["input_schema"]["properties"]["slots"]["anyOf"][0]["items"]["enum"] == left
     assert weeks[0].result.checks[0].status == "pass", weeks[0].result.checks[0]
-    # The bench's config hash reads PLAN_SCHEMA, which stays as it was.
-    assert model.PLAN_SCHEMA == model.plan_schema(agent.SLOTS)
+    # The bench's config hash reads PLAN_SCHEMA, the made-up cases' schema, which stays as it was.
+    from vending.replay.cases import CASE_SLOTS
+    assert model.PLAN_SCHEMA == model.plan_schema(CASE_SLOTS)
 
 
 def test_two_weeks_with_tools_notes_and_updates(conn, api, tmp_path):

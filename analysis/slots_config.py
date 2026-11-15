@@ -1,14 +1,13 @@
-"""Which slots the analysis covers: one setting, three sources, first one found wins.
+"""Which slots the analysis covers: our slots, the inventory server's assignment, or a part of them.
 
-    1. --slots on the command line ("15,16,17" or "15 16 17")
-    2. the assignment stored from the inventory server (GET /api/v1/slots), read with
-       vending.slots.stored(conn), when a row is stored
-    3. vending.slots.SLOTS, the default list, when none is
+    1. --slots on the command line ("15,16,17" or "15 16 17"), which can only narrow our slots
+    2. otherwise all of our slots: the assignment stored from the inventory server (GET /api/v1/slots,
+       recorded by `python -m vending.slots record`), read with vending.slots.stored(conn)
 
-Our assignment is whatever the inventory server gave, as stored (vending.slots.stored), not vending.slots.SLOTS:
-the split may be redrawn once before the start (#75). The stored answer is checked by its shape only
-(check_assignment: exactly 20 different selections of the 40-selection machine) and must be on our device;
-anything malformed stops the run. With nothing stored (no table or row yet) the assignment is vending.slots.SLOTS.
+Our slots are whatever the inventory server gave, as stored. There is no fixed list to fall back on: the
+assignment may change before the start (#75). With nothing stored (no table or row yet) the run stops and says
+to run `python -m vending.slots record`. The stored answer is checked by its shape (check_assignment: exactly
+20 different selections of the 40-selection machine) and must be on our device; anything malformed stops the run.
 The run's list is checked: 1 to 40 different codes, each a shelf digit 1-5 then a column digit 1-8, and every
 code must be in our assignment. --slots can only narrow the list, never add a slot that isn't ours
 (docs/integrity.md): the export writes per-slot prices and sales for every slot on the list.
@@ -29,11 +28,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (plain constants; no database needed)
+from vending.slots import DEVICE_ID, RECORD_HINT  # noqa: E402  (plain constants; no database needed)
 
 SOURCE_CLI = "command line"
 SOURCE_SERVER = "inventory server (stored)"
-SOURCE_DEFAULT = "default list in vending/slots.py"
+# Older exports were made from a fixed list the code no longer has. A scope recorded with it is refused.
+SOURCE_OLD_DEFAULT = "default list in vending/slots.py"
 SOURCE_FALL = "all 40 selections, polls before the start only (fall run)"
 
 # The competition starts Thu 3 Dec 2026 (Winter classes start; golisano_calendar_2026_27.json). From then on the
@@ -46,8 +46,8 @@ ASSIGNMENT_SIZE = len(ALL_SLOTS) // 2      # two teams split the machine: 20 sel
 def check_assignment(codes, where):
     """Our assignment in shelf order, checked by shape only, or exit. Missing counts as malformed.
 
-    Exactly ASSIGNMENT_SIZE different codes of the 40-selection machine. It is not bounded by vending.slots.SLOTS:
-    the inventory server may redraw the split before the start, and then SLOTS is out of date (#75).
+    Exactly ASSIGNMENT_SIZE different codes of the 40-selection machine. No particular codes are expected: the
+    inventory server may redraw the split before the start (#75).
     """
     if not isinstance(codes, (list, tuple)):
         raise SystemExit(f"{where}: no slot assignment recorded ({codes!r}): re-export (python analysis/rebuild.py)")
@@ -102,7 +102,7 @@ def check_before_start(rows, assigned=(), where="fall run"):
     return n
 
 
-def parse_slots(value, ours=SLOTS):
+def parse_slots(value, ours):
     """Slot codes from "15,16 17", checked against `ours`. Exits with a message on anything else."""
     codes = check([c for c in str(value).replace(",", " ").split() if c], "--slots", ours)
     if set(codes) != set(ours) and (len({c[0] for c in codes}) < 2 or len({c[1] for c in codes}) < 2):
@@ -111,12 +111,12 @@ def parse_slots(value, ours=SLOTS):
     return codes
 
 
-def is_default(source):
-    """True for the default-list source, including the longer wording older slots.json files carry."""
-    return str(source).startswith(SOURCE_DEFAULT)
+def is_old_default(source):
+    """True for a scope recorded from the old fixed list, in any of the wordings older files carry."""
+    return str(source).startswith(SOURCE_OLD_DEFAULT)
 
 
-def check(codes, where, ours=SLOTS):
+def check(codes, where, ours):
     """The codes in shelf order, or exit with every problem. `ours` is the list every code must belong to."""
     codes = [str(c).strip() for c in codes]
     problems = []
@@ -141,8 +141,8 @@ def check(codes, where, ours=SLOTS):
 def from_server(conn):
     """The stored server assignment, unchecked, or None when there is none (no function, no table, no row).
 
-    It reads the row itself (vending.slots.stored), not vending.slots.our_slots: our_slots refuses an assignment
-    outside SLOTS, and this code would then fall back to SLOTS, the old split. resolve_slots checks the shape.
+    It reads the row itself (vending.slots.stored) so that resolve_slots can say what is wrong with it: it checks
+    the shape, and refuses a run with nothing stored.
     """
     if conn is None:
         return None
@@ -174,22 +174,21 @@ def _rollback(conn):
 def resolve_slots(cli_value, conn=None, fall=False):
     """(device_id, slots, source, assigned) for this run. See the module docstring for the order.
 
-    `assigned` is our assignment: the stored server answer, checked by shape, else vending.slots.SLOTS.
+    `assigned` is our assignment: the stored server answer, checked by shape. With none stored the run stops.
     fall=True is the fall run: all 40 selections (or --slots narrowed within them). The caller must keep its data
     to polls before START and pass every per-selection row through check_before_start (exempt_from_start).
     """
     stored = from_server(conn)
-    if stored is not None:
-        assigned = check_assignment(stored, "stored server assignment")
-    else:
-        assigned = check_assignment(SLOTS, "vending.slots.SLOTS")
+    if stored is None:
+        raise SystemExit(f"no slot assignment stored in the database: {RECORD_HINT}")
+    assigned = check_assignment(stored, "stored server assignment")
     if fall:
         if cli_value is not None:
             return DEVICE_ID, parse_slots(cli_value, ALL_SLOTS), SOURCE_FALL, assigned
         return DEVICE_ID, ALL_SLOTS, SOURCE_FALL, assigned
     if cli_value is not None:
         return DEVICE_ID, parse_slots(cli_value, assigned), SOURCE_CLI, assigned   # only ever a part of our list
-    return DEVICE_ID, assigned, SOURCE_DEFAULT if stored is None else SOURCE_SERVER, assigned
+    return DEVICE_ID, assigned, SOURCE_SERVER, assigned
 
 
 def server_assignment_supported():
@@ -204,12 +203,15 @@ def server_assignment_supported():
 def ours_for(source, assigned):
     """The list a recorded scope (data/slots.json, lab_data.json) may cover: the assignment recorded with it.
 
-    A fall run may cover all 40 (it is bounded by date instead). Unknown sources are refused, and so is
-    a list recorded as the server's answer while this code can't read one (#69).
+    A fall run may cover all 40 (it is bounded by date instead). Unknown sources are refused, and so is a list
+    recorded from the old fixed list or recorded as the server's answer while this code can't read one (#69).
     """
     if source == SOURCE_FALL:
         return ALL_SLOTS                 # bounded by date instead: check_before_start
-    if not (source in (SOURCE_CLI, SOURCE_SERVER) or is_default(source)):
+    if is_old_default(source):
+        raise SystemExit("slot list recorded from the fixed list the code used to carry, not from the inventory "
+                         "server's assignment: re-export (python analysis/rebuild.py)")
+    if source not in (SOURCE_CLI, SOURCE_SERVER):
         raise SystemExit(f"slot list recorded with an unknown source {source!r}: re-export (python analysis/rebuild.py)")
     if source == SOURCE_SERVER and not server_assignment_supported():
         raise SystemExit("slot list recorded as the inventory server's answer, but this code can't read one yet (#69): "
@@ -223,9 +225,6 @@ def check_scope(device, slots, source, where, assigned):
     if device != DEVICE_ID:
         raise SystemExit(f"{where}: recorded for device {device!r}, but ours is {DEVICE_ID!r}")
     assigned = check_assignment(assigned, f"{where}: assigned_slots")
-    if is_default(source) and set(assigned) != set(SLOTS):
-        raise SystemExit(f"{where}: recorded as the default list, but its assignment isn't vending.slots.SLOTS: "
-                         "re-export (python analysis/rebuild.py)")
     return check(slots, where, ours_for(source, assigned)), assigned
 
 
@@ -234,28 +233,23 @@ def resolve_run(cli_value, exported, where, now):
 
     `exported` is that file's contents, or None. The CSVs must have been exported for the same list this run
     uses; otherwise it stops and says to re-export. `assigned` is the assignment recorded there (refused when
-    missing or malformed); with no file it is vending.slots.SLOTS.
+    missing or malformed). With no file the run stops: nothing says which slots are ours.
     """
-    recorded = None
-    if exported:
-        recorded, assigned = check_scope(exported["device"], exported["slots"], exported["source"], where,
-                                         exported.get("assigned_slots"))
-        if is_default(exported["source"]):
-            exported = {**exported, "source": SOURCE_DEFAULT}       # older files carry a longer wording
-    else:
-        assigned = check_assignment(SLOTS, "vending.slots.SLOTS")
-    ours = ours_for(exported["source"], assigned) if exported else assigned
+    if not exported:
+        raise SystemExit(f"{where}: not found, so nothing says which slots are ours (the inventory server's "
+                         "assignment, recorded by the export). Export first: python analysis/rebuild.py")
+    recorded, assigned = check_scope(exported["device"], exported["slots"], exported["source"], where,
+                                     exported.get("assigned_slots"))
+    ours = ours_for(exported["source"], assigned)
     if cli_value is not None:
         device, slots, source, at = DEVICE_ID, parse_slots(cli_value, ours), SOURCE_CLI, now
-        if recorded and set(recorded) == set(slots):
+        if set(recorded) == set(slots):
             source, at = exported["source"], exported.get("resolved_at")   # same list as exported: keep where it came from
-    elif exported:
-        device, slots, source, at = DEVICE_ID, recorded, exported["source"], exported.get("resolved_at")
     else:
-        device, slots, source, at = DEVICE_ID, assigned, SOURCE_DEFAULT, None
-    if recorded and set(recorded) != set(slots):
+        device, slots, source, at = DEVICE_ID, recorded, exported["source"], exported.get("resolved_at")
+    if set(recorded) != set(slots):
         raise SystemExit(
-            f"SLOTS: the CSVs were exported for {len(recorded)} slots on {DEVICE_ID} ({ranges(recorded)}), "
+            f"--slots: the CSVs were exported for {len(recorded)} slots on {DEVICE_ID} ({ranges(recorded)}), "
             f"but this run asks for {len(slots)} ({ranges(slots)}). Re-export first: "
             f"python analysis/export_sales.py --slots {','.join(slots)}  (or python analysis/rebuild.py --slots ...)")
     return device, slots, source, at, assigned

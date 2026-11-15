@@ -365,7 +365,7 @@ NOT_OURS = "NOT-OUR-SNACK"
 
 
 def _stored(conn) -> tuple[str, ...]:
-    """Our selections as the fixture stored them (`slot_assignment`), not the `SLOTS` default."""
+    """Our selections as the fixture stored them (`slot_assignment`)."""
     return tuple(conn.execute("select slots from slot_assignment where id = 1").fetchone()[0])
 
 
@@ -422,11 +422,11 @@ def test_the_public_explorer_shows_only_our_rows_of_the_selection_tables(site, s
 EVERY_OTHER = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
 
 
-def test_the_public_pages_follow_a_stored_assignment_that_is_not_columns_5_to_8(site, schema_url, conn):
-    """Our slots on every other column: the pages draw and show those, from the database, not `SLOTS`."""
+def test_the_public_pages_follow_a_changed_stored_assignment(site, schema_url, conn):
+    """Our slots on every other column: the pages draw and show those, from the database."""
     _, schema = schema_url
     conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
-    ours, theirs = _not_ours(conn, ours="12", theirs="15")    # 15 is in the SLOTS default, but not ours here
+    ours, theirs = _not_ours(conn, ours="12", theirs="15")    # 15 is in the test assignment, but not ours here
     page = _get(site, "/dashboard")[2]
     assert page.count('class="slot ours') == 20 and page.count('class="slot theirs"') == 20
     assert 'data-slot="12"' in page and 'data-slot="15"' not in page and 'title="15: not our selection"' in page
@@ -441,7 +441,7 @@ def test_the_public_pages_follow_a_stored_assignment_that_is_not_columns_5_to_8(
 
 def test_the_public_pages_degrade_when_no_assignment_is_stored(site, schema_url, conn):
     """Nothing stored: no selection is ours, so the pages light nothing, show no selection rows,
-    and say why, rather than fall back to `SLOTS`."""
+    and say why, rather than fall back to any list."""
     _, schema = schema_url
     _not_ours(conn)
     conn.execute("delete from slot_assignment")

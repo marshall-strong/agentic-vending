@@ -31,12 +31,12 @@ garbled answer can't widen what the tools read to the whole machine.
 Every tool that reads the database takes our slots from `our_slots(conn)`. With
 nothing stored it refuses and says to run `record`, rather than guessing.
 
-`SLOTS` is the assignment the bridge returned on 12 Nov 2026 (team `group-b`:
-columns 5-8 of every row on `vmc1`). Code with no database uses it directly: the
-planner's default, the week replayer's synthetic test cases and the pure
-helpers' defaults. It no longer bounds what `record` stores or what `our_slots`
-returns. The public pages (the dashboard and `/db`) read the stored assignment
-too. Only the sales analysis still checks against `SLOTS` (issue #75).
+There is no fixed list of our slots in the code: the assignment may change
+until the lock time, so a list written down would go stale. Code that takes
+slots as an argument is handed them from one call to `our_slots(conn)`. Only
+the week replayer's made-up cases name selections of their own
+(`vending.replay.cases.CASE_SLOTS`), and those are examples, not ours.
+
 `DEVICE_ID` is the machine we read polls from.
 
 `record` never migrates. On a database that is behind it refuses (exit 2), like
@@ -55,8 +55,6 @@ if TYPE_CHECKING:  # the constants are imported by pure code that runs without p
     import psycopg
 
 DEVICE_ID = "vmc1"
-
-SLOTS: tuple[str, ...] = tuple(f"{row}{col}" for row in range(1, 6) for col in range(5, 9))
 
 # Half of the machine's 5 shelves of 8: every assignment names exactly this many selections.
 SLOT_COUNT = 20

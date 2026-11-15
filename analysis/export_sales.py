@@ -6,8 +6,8 @@ Run from the repo root with the project's venv and a DATABASE_URL in .env:
     python analysis/export_sales.py --slots 15,16,...   # only part of our slots (see slots_config.py)
     python analysis/export_sales.py --fall-all analysis/data/fall40   # all 40 selections, polls before the start only
 
-Which slots are ours: --slots, else the assignment stored from the inventory server (vending.slots.our_slots),
-else vending.slots.SLOTS. See analysis/slots_config.py.
+Which slots are ours: the assignment stored from the inventory server (`python -m vending.slots record`), or the
+part of it --slots names. With nothing stored the export stops and says to record it. See analysis/slots_config.py.
 
 Scope: per-slot rows are written ONLY for our slots on `vending.slots.DEVICE_ID`, filtered
 the same way as `vending.ledger._counter_rows`. The other slots in the machine are read only to add them into
@@ -59,18 +59,18 @@ out.mkdir(parents=True, exist_ok=True)
 
 with db.connect() as c:
     c.execute("set default_transaction_read_only = on")
-    # ASSIGNED is our assignment (the stored server answer, else vending.slots.SLOTS), recorded in slots.json
-    DEVICE_ID, SLOTS, SOURCE, ASSIGNED = resolve_slots(args.slots, c, fall=args.fall_all)
+    # ASSIGNED is our assignment (the stored server answer), recorded in slots.json; RUN_SLOTS is what this run covers
+    DEVICE_ID, RUN_SLOTS, SOURCE, ASSIGNED = resolve_slots(args.slots, c, fall=args.fall_all)
     # a fall run reads only polls before the start; a normal run reads every poll (its slots are ours)
     before = START if args.fall_all else dt.datetime.max.replace(tzinfo=dt.timezone.utc)
-    print(f"slots: {len(SLOTS)} on {DEVICE_ID}, from {SOURCE}" + (f"; polls before {START.isoformat()}" if args.fall_all else ""))
+    print(f"slots: {len(RUN_SLOTS)} on {DEVICE_ID}, from {SOURCE}" + (f"; polls before {START.isoformat()}" if args.fall_all else ""))
     # our slots: same filter as vending.ledger._counter_rows
     rows = c.execute(
         "select ps.selection, p.started_at, ps.lifetime_units, ps.lifetime_sales_cents, ps.price_cents"
         " from poll_selections ps join polls p using (session_id)"
         " where p.device_id = %s and p.crc_ok and ps.selection = any(%s) and p.started_at < %s"
         " order by ps.selection, p.started_at",
-        (DEVICE_ID, list(SLOTS), before)).fetchall()
+        (DEVICE_ID, list(RUN_SLOTS), before)).fetchall()
     # every selection, for machine-wide totals only (never written per slot)
     machine_rows = c.execute(
         "select ps.selection, p.started_at, ps.lifetime_units, ps.lifetime_sales_cents"
@@ -85,7 +85,7 @@ with db.connect() as c:
         (DEVICE_ID, before)).fetchall()
 
 
-ours = set(SLOTS)
+ours = set(RUN_SLOTS)
 check_before_start(((sel, at) for sel, at, *_ in rows), exempt_from_start(SOURCE, ASSIGNED), "export")
 by_slot: dict[str, list] = {}
 for sel, at, units, cents, price in rows:
@@ -142,9 +142,9 @@ with open(out / "door_events.csv", "w", newline="") as f:
         w.writerow([at.astimezone(EASTERN).isoformat(), life, since, rise])
 
 (out / "slots.json").write_text(json.dumps(dict(
-    device=DEVICE_ID, slots=list(SLOTS), source=SOURCE, assigned_slots=list(ASSIGNED),
+    device=DEVICE_ID, slots=list(RUN_SLOTS), source=SOURCE, assigned_slots=list(ASSIGNED),
     **({"before": START.isoformat()} if args.fall_all else {}),
     resolved_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")), indent=1) + "\n", encoding="utf-8")
 
-print(f"{len(rows)} readings of {len(SLOTS)} {'selections (fall run)' if args.fall_all else 'of our slots'} on {DEVICE_ID}, {len(polls)} polls, "
+print(f"{len(rows)} readings of {len(RUN_SLOTS)} {'selections (fall run)' if args.fall_all else 'of our slots'} on {DEVICE_ID}, {len(polls)} polls, "
       f"machine total {sum(m_units.values())} units -> {out}")
