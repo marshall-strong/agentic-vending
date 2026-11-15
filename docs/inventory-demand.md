@@ -2,7 +2,7 @@
 
 ## What this is
 
-The project brief asks for a "separately documented inventory and demand estimation component" (section 5; issue #93). This is that document. It covers our 20 slots on machine `vmc1` (15-18, 25-28, 35-38, 45-48, 55-58; `vending/slots.py`).
+The project brief asks for a "separately documented inventory and demand estimation component" (section 5; issue #93). This is that document. It covers our 20 slots on machine `vmc1`, as the inventory server assigns them (`python -m vending.slots record`). On 15 Nov that is 15-18, 25-28, 35-38, 45-48 and 55-58. It may change once before the start on 3 Dec, and is fixed after (#75).
 
 Before each Friday restock the agent needs two answers:
 
@@ -100,7 +100,7 @@ Whole week: 23.3 units per class day (REPORT.md, "Next 4 weeks") × 5 = 116.5, a
 1. **In-stock rate** = units sold ÷ in-stock class days since the product last changed. In stock = `stock_on_hand` > 0 by receipts, or a newer count. Skip breaks and closures.
 2. **Expected demand** = in-stock rate × class days before the next Friday.
 3. **Compare with capacity.** At or above: fill to capacity and note the slot was censored. Well below: candidate for the slow-seller rule (PR #100) or a price test (PR #99); see swap-first under Open decisions.
-4. **Until a slot has 5 in-stock class days** (Proposed, #91), say so and use the fall segment rate for its price band: 1.701 (fast), 1.354 (mid, premium-priced), 0.767 or 0.722 (slow) (REPORT.md, "Our slots"; R3, Proposed). Category shares rank new slots only. An unused alternative: restocked scenario × share ÷ our slots in the category; for energy, 23.3 × 0.45 ÷ 9 slots (15-18, 25-28, 38) = 1.165.
+4. **Until a slot has 5 in-stock class days** (Proposed, #91), say so and use the fall segment rate for its price band: 1.701 (fast), 1.354 (mid, premium-priced), 0.767 or 0.722 (slow) (REPORT.md, "Our slots"; R3, Proposed). Category shares rank new slots only. An unused alternative: restocked scenario × share ÷ our slots in the category; for energy, 23.3 × 0.45 ÷ 9 slots (15-18, 25-28, 38) = 1.165. These fall rates were measured in our fall positions (columns 5-8). If our slots move before 3 Dec, use them by price band as written, and treat them as rougher, because a slot's row may change its rate.
 
 New products, swapped slots and the wildcard slot start at step 4.
 
