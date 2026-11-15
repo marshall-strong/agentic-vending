@@ -6,7 +6,7 @@
 
 ## When visits happen
 
-Measured with `analysis/visit_windows.py` from the door counter (`EA2*DO`) in every stored poll since hourly polling began on 21 Sep 2026, to 11 Nov. Sales are from columns 5-8, the selections the server assigned us on 15 Nov. Fall data for all 40 selections may be used, so this could be widened. The door counter is machine-wide and only dates visits.
+Measured with `analysis/visit_windows.py` from the door counter (`EA2*DO`) in every stored poll since hourly polling began on 21 Sep 2026, to 11 Nov. Sales are from our 20 selections (the server's assignment when this was measured). Fall data for all 40 selections may be used, so this could be widened. The door counter is machine-wide and only dates visits.
 
 | | |
 |---|---|

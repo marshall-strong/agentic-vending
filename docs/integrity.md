@@ -56,7 +56,7 @@ repo root points here.
   Eastern (`analysis/slots_config.py`, `START`). `check_before_start` refuses any row of the
   fall run from the start on, ours included, in the export and again when the analysis loads
   it. Normal runs may keep rows from the start on only for our assignment as stored from the
-  inventory server (recorded in each export as `assigned_slots`, not `vending.slots.SLOTS`),
+  inventory server (recorded in each export as `assigned_slots`; the code has no fixed list),
   and a time without a UTC offset is refused. `tests/test_analysis_slots.py` checks all of it.
 
 From 3 Dec the polls carry the full, raw DEX response (David, 17 Nov), so the other team's

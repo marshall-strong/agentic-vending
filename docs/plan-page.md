@@ -9,7 +9,7 @@ One page that shows the agent's day-one plan round by round:
 
 ```
 python -m vending.plan_page --rounds C:\Users\KevinSykes\vending-day1          # http://127.0.0.1:8768
-python -m vending.plan_page --rounds DIR --no-db                               # no catalog-request status
+python -m vending.plan_page --rounds DIR --no-db                               # no catalog-request status (our slots still from DATABASE_URL)
 python -m vending.plan_page --rounds DIR --write plan.html                      # one file, no server
 ```
 
@@ -43,13 +43,13 @@ A round is one plan file. If a projection file has the same suffix, it is that r
 - Round 1: the full plan, with floats for prices.
 - Round 2: `day_one` with `price_cents` and `sku`, plus `catalog_requests`.
 
-The page reads float prices through their decimal text and refuses any that isn't a whole number of cents. It refuses a file that names any slot outside our current assignment (`vending.slots.SLOTS`).
+The page reads float prices through their decimal text and refuses any that isn't a whole number of cents. It refuses a file that names any slot outside our current assignment, the inventory server's split read from the database (`vending.slots.our_slots`), so it can't show a value for any other selection. With nothing recorded, or no database, the page refuses and says to run `python -m vending.slots record`.
 
 **Projection files** use the `vending-day1/projection/v1` schema. Money is integer cents in every `*_cents` field, and the old float fields are ignored. Projection weeks run Thursday to Wednesday from 3 Dec, but the ledger's weeks run Saturday to Friday, so the weekly chart won't line up with the P&L report.
 
 ## Rules the page keeps
 
-- **Only our assigned slots have values.** The other 20 selections are drawn hatched with their number only. That is because the plan places products in our 20 slots, not because the rest belong to anyone yet: before the 3 Dec start no selection is either team's, and the inventory server may redraw the split once. If it does, `SLOTS` changes first and the rounds are placed again. Fall sales from all 40 selections may be used for planning (Kevin's decision, 15 Nov).
+- **Only our assigned slots have values.** The other 20 selections are drawn hatched with their number only. That is because the plan places products in our 20 slots, not because the rest belong to anyone yet: before the 3 Dec start no selection is either team's, and the inventory server may redraw the split once. If it does, `python -m vending.slots record` stores the new split and the rounds are placed again. Fall sales from all 40 selections may be used for planning (Kevin's decision, 15 Nov).
 - **No model calls.** Everything is computed in code or read from the files.
 - **No script.** The round tabs and the "Changed slots only" switch are HTML inputs styled with CSS. The server sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`.
 - **Local and read-only.** The server listens on 127.0.0.1 and answers only `localhost` or `127.0.0.1`. The database session is read-only, with a statement timeout. With no database, or if it can't be reached, the page still renders, and the catalog panel says the requests weren't checked.

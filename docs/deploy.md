@@ -83,7 +83,7 @@ same `DATABASE_URL`:
 python -m vending.slots record
 ```
 
-It should print `recorded: team group-b, device vmc1, 20 slots: 15, 16, ...`, and
+It should print `recorded: team ..., device vmc1, 20 slots: ...` with the server's answer, and
 `python -m vending.slots` shows what is stored. Running it again is safe: the same answer only
 updates when it was last checked. The worker also runs it first in every round (`slots_record`),
 so after a deploy it keeps the stored assignment in step with the server without anyone running it.
@@ -103,9 +103,9 @@ only if the start moves.
 
 The dashboard and `/db` read the stored assignment on every page, so they follow a change at
 once. With nothing stored, the dashboard lights no selection and says so, and `/db` shows no
-row of `poll_selections` or `slot_counts`. The sales analysis still checks
-against `vending.slots.SLOTS` (issue #75), so after a change it shows the old columns until that
-is fixed.
+row of `poll_selections` or `slot_counts`. The sales analysis reads the stored assignment when it
+exports, so after a change the next `python analysis/rebuild.py` follows it. No code holds a fixed
+list of our slots.
 
 ## The public pages
 

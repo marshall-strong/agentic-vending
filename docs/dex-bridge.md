@@ -31,7 +31,7 @@ the tailnet is down, not the bridge.
 | Command | Route | What you get |
 |---|---|---|
 | `health` | `GET /health` | Bridge status. The only route that needs no key |
-| `slots` | `GET /api/v1/slots` | The selections the server currently assigns us on `vmc1`. On 15 Nov: 15-18, 25-28, 35-38, 45-48, 55-58; it may change once before 3 Dec |
+| `slots` | `GET /api/v1/slots` | The selections the server currently assigns us on `vmc1`; it may change before 3 Dec |
 | `products` | `GET /api/v1/products` | What we can order, as single items: `sku`, `name`, `line`, `flavor`, `size`. No prices and no pack sizes. Three products on 29 Oct, one of them a test entry |
 | `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes`. **At most 500 per request**: a longer range comes back with `truncated: true`, so ask a day or a week at a time |
 | `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text |
