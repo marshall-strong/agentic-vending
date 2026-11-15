@@ -136,6 +136,16 @@ def test_an_alternate_needs_a_primary_and_a_primary_cant_leave_an_alternate_behi
     assert conn.execute("select count(*) from action_log where tool = 'sourcing.remove'").fetchone() == (2,)
 
 
+def test_a_delisted_product_cant_be_set_and_its_old_row_never_reaches_the_planner(conn):
+    add_catalog(conn, RED_BULL)
+    sourcing.set_option(conn, option(), NOW)
+    assert [s.product for s in sourcing.table(conn)] == [RED_BULL]
+    conn.execute("update catalog_products set delisted_at = now() where sku = %s", (RED_BULL,))
+    assert sourcing.table(conn) == ()
+    with pytest.raises(SourcingError, match="delisted"):
+        sourcing.set_option(conn, option(expected_cents=3599, max_cents=4150), NOW)
+
+
 def test_the_database_refuses_an_amazon_row_without_a_link(conn):
     import psycopg
     add_catalog(conn, RED_BULL)
@@ -199,9 +209,10 @@ def test_set_refuses_with_exit_1_and_changes_nothing(command, capsys):
 
 def test_a_bad_import_changes_nothing(command, tmp_path, capsys):
     bad = tmp_path / "bad.csv"
-    bad.write_text(SEED.read_text(encoding="utf-8") + "NOT-IN-CATALOG,primary,Costco,24,10.00,,,,2026-11-11,\n",
-                   encoding="utf-8")
+    bad.write_text(SEED.read_text(encoding="utf-8") + "NOT-IN-CATALOG,primary,Costco,24,10.00,,,,2026-11-11,\n"
+                   "ALSO-MISSING,primary,Costco,24,10.00,,,,2026-11-11,\n", encoding="utf-8")
     assert sourcing.main(["import", str(bad), "--by", "Meaghan"]) == 1
-    assert "not in our catalog" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Not in our catalog copy" in err and "ALSO-MISSING, NOT-IN-CATALOG" in err   # every one, not the first
     sourcing.main(["show"])
     assert "No sourcing rows yet" in capsys.readouterr().out

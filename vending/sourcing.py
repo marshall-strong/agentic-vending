@@ -149,10 +149,22 @@ def options(conn: psycopg.Connection) -> list[Option]:
     return [Option(*row) for row in rows]
 
 
+def in_catalog(conn: psycopg.Connection, skus: list[str]) -> set[str]:
+    """Which of `skus` are in our catalog copy and not delisted."""
+    return {sku for (sku,) in conn.execute(
+        "select sku from catalog_products where sku = any(%s) and delisted_at is null", (list(skus),))}
+
+
 def table(conn: psycopg.Connection) -> tuple[planner.Sourcing, ...]:
-    """The table in the planner's shape: one `Sourcing` per product that has a primary option."""
+    """The table in the planner's shape: one `Sourcing` per product that has a primary option.
+
+    A product the catalog has since delisted is left out, so the planner refuses it as unknown
+    rather than buying it from an old row (Kevin, #132).
+    """
     by_sku: dict[str, dict[str, Option]] = {}
-    for o in options(conn):
+    rows = options(conn)
+    listed = in_catalog(conn, [o.sku for o in rows])
+    for o in (o for o in rows if o.sku in listed):
         by_sku.setdefault(o.sku, {})[o.rank] = o
     return tuple(
         planner.Sourcing(product=sku, primary=_purchase_option(ranks["primary"]),
@@ -167,8 +179,8 @@ def set_option(conn: psycopg.Connection, o: Option, now: datetime | None = None)
     if found:
         raise SourcingError(f"{o.sku} {o.rank}: " + "; ".join(found))
     with conn.transaction():
-        if conn.execute("select 1 from catalog_products where sku = %s", (o.sku,)).fetchone() is None:
-            raise SourcingError(f"{o.sku} is not in our catalog copy; check the SKU, or run "
+        if o.sku not in in_catalog(conn, [o.sku]):
+            raise SourcingError(f"{o.sku} is not in our catalog copy, or has been delisted; check the SKU, or run "
                                 "python -m vending.sync_catalog if it was added recently")
         if o.rank == "alternate" and conn.execute(
                 "select 1 from sourcing_options where sku = %s and rank = 'primary'", (o.sku,)).fetchone() is None:
@@ -277,6 +289,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"removed: {args.sku} {rank}")
             elif args.action == "import":
                 rows = read_csv(args.file, args.by, now)
+                unknown = sorted({o.sku for o in rows} - in_catalog(conn, [o.sku for o in rows]))
+                if unknown:
+                    raise SourcingError(f"{args.file}: nothing imported. Not in our catalog copy, or delisted: "
+                                        f"{', '.join(unknown)}")
                 with conn.transaction():   # all or nothing
                     outcomes = [set_option(conn, o, now) for o in rows]
                 print(f"imported {len(rows)} rows from {args.file}: {outcomes.count('added')} added, "

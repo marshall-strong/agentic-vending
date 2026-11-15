@@ -558,7 +558,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 refusals.append(Refusal(code, (
                     f"slot {s.slot} needs {s.shortfall} {s.product}, the closet can't cover "
                     f"it, and there is no sourcing for it, given or in the table; "
-                    f"add sourcing or lower fill_to"), s.slot))
+                    f"add sourcing, ask a person to add it to the table (python -m vending.sourcing set), "
+                    f"or lower fill_to"), s.slot))
             continue
         extra = 0
         if s.product not in extras_placed:

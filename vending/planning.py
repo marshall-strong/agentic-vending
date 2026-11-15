@@ -30,7 +30,7 @@ from datetime import datetime
 
 import psycopg
 
-from vending import config, ledger, planner, stock
+from vending import config, ledger, planner, sourcing, stock
 from vending.bridge import Bridge, BridgeError
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import catalog as catalog_tool
@@ -120,7 +120,8 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
     products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))
                      for p in catalog if p.get("sku"))
-    current = planner.CurrentState(slots, closet, pending, products, (), spendable)
+    # The team's sourcing table, used for any product the agent gives no sourcing for.
+    current = planner.CurrentState(slots, closet, pending, products, sourcing.table(conn), spendable)
     return Gathered(current, settings, now, poll_at, tuple(notes))
 
 
@@ -198,7 +199,36 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
         raise
     gathered = gather(conn, catalog, now)
     gathered = replace(gathered, notes=(*catalog_notes, *gathered.notes))
-    return planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now), gathered
+    result = planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now)
+    stale = _stale_table_prices(conn, result, desired, gathered.now)
+    if stale:
+        result = replace(result, warnings=(*result.warnings, *stale))
+    return result, gathered
+
+
+def _stale_table_prices(conn: psycopg.Connection, result: planner.Plan, desired: schema.DesiredState,
+                        now: datetime) -> list[str]:
+    """A warning for each purchase the plan took from the sourcing table at a price over a week old.
+
+    Only rows the plan used are checked: an old row for a product nobody is
+    buying says nothing about this plan. The agent's own sourcing wins over the
+    table, so a product it gave sourcing for is skipped.
+    """
+    given = {s.product for s in desired.sourcing}
+    used: dict[str, set[str]] = {}
+    for line in result.lines:
+        if line.purchase is not None and line.product not in given:
+            used.setdefault(line.product, {"primary"})
+            if line.purchase.alternate is not None:
+                used[line.product].add("alternate")
+    warnings = []
+    for o in sourcing.options(conn):
+        if o.rank in used.get(o.sku, ()) and o.is_stale(now):
+            warnings.append(
+                f"{o.sku}: the sourcing table's {o.rank} price ({sourcing.describe(o)}) was checked "
+                f"{o.checked_at:%Y-%m-%d}, {(now - o.checked_at).days} days ago; it may have changed, so check it "
+                f"and update it with python -m vending.sourcing set {o.sku} ... --by NAME, or give sourcing yourself")
+    return warnings
 
 
 def _option(o: schema.PurchaseOption) -> planner.PurchaseOption:

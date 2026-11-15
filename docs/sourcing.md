@@ -47,9 +47,10 @@ already in the catalog.
 
 ## What reads it
 
-Nothing yet. Next:
-
-- `preview_desired_state` fills in a purchase line from this table when the agent gives no
-  sourcing of its own, and warns on a stale price (`vending.sourcing.table`, the planner's
-  `sourcing_table`).
-- `get_catalog` shows each product's stores and prices, and our last real cost from receipts.
+- **`preview_desired_state` and `submit_desired_state`.** A product the agent gives no
+  `sourcing` for is bought the way this table says: its primary, and its alternate if it has
+  one. The agent's own sourcing always wins. A table price the plan uses that was checked more
+  than 7 days ago is named in the plan's `warnings`, with the command to update it. A product
+  with no sourcing given or in the table is refused `no_sourcing`, as before.
+- **Next:** `get_catalog` shows each product's stores and prices, and our last real cost from
+  receipts.

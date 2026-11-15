@@ -360,6 +360,68 @@ def test_nothing_to_load_is_refused(db, fake):  # noqa: F811
     assert codes(reply) == ["nothing_to_load"]
 
 
+# --- The sourcing table (#132) ----------------------------------------------------------------
+
+def table_row(conn, fake, checked=NOW - timedelta(days=2), **changes):
+    """COKE20's primary in the sourcing table: Costco, 12 a pack, $11.49 (max $13.50)."""
+    from vending import sourcing
+    synced(conn, fake)
+    fields = dict(sku="COKE20", rank="primary", store="Costco", units_per_pack=12, expected_cents=1149,
+                  max_cents=1350, url=None, pack_description="12 x 20 oz bottles", checked_at=checked,
+                  checked_by="test")
+    sourcing.set_option(conn, sourcing.Option(**{**fields, **changes}), NOW)
+
+
+def test_with_no_sourcing_given_the_plan_buys_from_the_table(db, fake):  # noqa: F811
+    ready(db, capacity=15)
+    stocked(db)
+    table_row(db, fake)
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15)), fake.client(), NOW)
+    assert reply.success and reply.ok and reply.refusals == []
+    [line] = reply.lines
+    assert line.api["primary"] == {"sku": "COKE20", "store": "Costco", "packs": 1, "units_per_pack": 12,
+                                   "max_price_per_pack": "13.50", "sale_price": "2.50", "change_product": False,
+                                   "pack_description": "12 x 20 oz bottles"}
+    assert (reply.cost.expected, reply.cost.max) == ("11.49", "13.50")   # the table's expected price, not just the max
+    assert not any("sourcing table" in w for w in reply.warnings)       # checked 2 days ago: fresh
+
+
+def test_a_table_price_over_a_week_old_is_used_but_flagged(db, fake):  # noqa: F811
+    ready(db, capacity=15)
+    stocked(db)
+    table_row(db, fake, checked=NOW - timedelta(days=9))
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15)), fake.client(), NOW)
+    assert reply.ok
+    [stale] = [w for w in reply.warnings if "sourcing table" in w]
+    assert "COKE20" in stale and "9 days ago" in stale and "python -m vending.sourcing set COKE20" in stale
+
+
+def test_the_agents_own_sourcing_wins_and_an_old_table_row_says_nothing(db, fake):  # noqa: F811
+    ready(db, capacity=15)
+    stocked(db)
+    table_row(db, fake, checked=NOW - timedelta(days=30))
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.ok and reply.lines[0].api["primary"]["max_price_per_pack"] == "13.00"
+    assert not any("sourcing table" in w for w in reply.warnings)
+
+
+def test_an_old_row_for_a_product_the_plan_doesnt_buy_says_nothing(db, fake):  # noqa: F811
+    ready(db)
+    stocked(db)
+    table_row(db, fake, checked=NOW - timedelta(days=30))
+    reply = preview_desired_state(db, desired({"slot": "15", "keep": True, "sale_price": "2.75"}), fake.client(), NOW)
+    assert not any("sourcing table" in w for w in reply.warnings)
+
+
+def test_no_sourcing_anywhere_says_how_to_add_a_table_row(db, fake):  # noqa: F811
+    ready(db)
+    stocked(db)
+    reply = preview_desired_state(db, desired({"slot": "16", "product": "PICKLE", "sale_price": "3.00"}),
+                                  fake.client(), NOW)
+    [refusal] = [r for r in reply.refusals if r.code == "no_sourcing"]
+    assert "python -m vending.sourcing set" in refusal.message
+
+
 # --- Through the MCP client -------------------------------------------------------------------
 
 def test_preview_end_to_end(db, fake):  # noqa: F811
