@@ -178,3 +178,123 @@ def test_a_narrowed_run_needs_two_shelves_and_two_columns():
     with pytest.raises(SystemExit, match="one shelf or one column"):
         slots_config.parse_slots("15,25,35")                  # one column
     assert slots_config.parse_slots("15,16,25,26") == ("15", "16", "25", "26")
+
+
+# --- the fall run: all 40 selections, but only before the start (docs/integrity.md, "Before the start") ---
+
+import datetime as dt  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+EASTERN = ZoneInfo("America/New_York")
+BEFORE = dt.datetime(2026, 12, 2, 23, 59, 59, tzinfo=EASTERN)
+
+
+def test_the_start_is_3_december_midnight_eastern():
+    assert slots_config.START == dt.datetime(2026, 12, 3, 0, 0, tzinfo=EASTERN)
+    assert slots_config.START.utcoffset() == dt.timedelta(hours=-5)
+    assert len(slots_config.ALL_SLOTS) == 40 and set(SLOTS) < set(slots_config.ALL_SLOTS)
+
+
+def test_the_guard_allows_every_selection_before_the_start():
+    rows = [(s, BEFORE) for s in slots_config.ALL_SLOTS]
+    assert slots_config.check_before_start(rows) == 40
+
+
+def test_the_guard_refuses_another_teams_selection_from_the_start_on():
+    for at in (slots_config.START, slots_config.START + dt.timedelta(seconds=1),
+               dt.datetime(2026, 12, 3, 5, 0, tzinfo=dt.timezone.utc),       # the same instant, in UTC
+               dt.datetime(2027, 2, 1, 12, 0, tzinfo=EASTERN)):
+        for code in ("11", "24", "54"):
+            with pytest.raises(SystemExit, match="aren't ours"):
+                slots_config.check_before_start([("15", BEFORE), (code, at)])
+    # one second before the start, in UTC, is still the fall
+    assert slots_config.check_before_start([("11", dt.datetime(2026, 12, 3, 4, 59, 59, tzinfo=dt.timezone.utc))]) == 1
+
+
+def test_the_guard_lets_our_own_selections_through_after_the_start():
+    later = dt.datetime(2026, 12, 10, 9, 0, tzinfo=EASTERN)
+    assert slots_config.check_before_start([(s, later) for s in SLOTS]) == 20
+    # follows the assignment it is given: after a redraw, 15 may be theirs
+    with pytest.raises(SystemExit, match="aren't ours"):
+        slots_config.check_before_start([("15", later)], assigned=("11", "12"))
+
+
+def test_the_guard_refuses_a_time_without_a_zone():
+    with pytest.raises(SystemExit, match="no time zone"):
+        slots_config.check_before_start([("11", dt.datetime(2026, 11, 1, 12, 0))])
+
+
+def test_the_fall_run_covers_all_40_and_a_normal_run_still_cannot():
+    assert slots_config.resolve_slots(None, fall=True)[1:] == (slots_config.ALL_SLOTS, slots_config.SOURCE_FALL)
+    assert slots_config.resolve_slots("11,12,21,22", fall=True)[1] == ("11", "12", "21", "22")
+    with pytest.raises(SystemExit, match="not one of our slots"):
+        slots_config.resolve_slots(ALL_40)
+
+
+def test_a_fall_manifest_is_accepted_for_all_40():
+    fall = manifest(slots_config.ALL_SLOTS, slots_config.SOURCE_FALL)
+    got = slots_config.resolve_run(None, fall, "slots.json", NOW)
+    assert got[1:3] == (slots_config.ALL_SLOTS, slots_config.SOURCE_FALL)
+
+
+def test_sales_analysis_refuses_fall_rows_from_the_start_on(tmp_path):
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("statsmodels")
+    pytest.importorskip("sklearn")
+    import argparse
+
+    import sales_analysis
+    rows = [("15", "1", "5", "2026-11-02T09:00:00-05:00", 1, 250), ("11", "1", "1", "2026-12-03T00:00:00-05:00", 1, 250)]
+    pd.DataFrame(rows, columns=["slot", "row", "col", "at_eastern", "units", "cents"]).to_csv(tmp_path / "s.csv", index=False)
+    pd.DataFrame([(s, r, c, at, u, ct, 250) for s, r, c, at, u, ct in rows],
+                 columns=["slot", "row", "col", "at_eastern", "lifetime_units", "lifetime_sales_cents", "price_cents"]
+                 ).to_csv(tmp_path / "r.csv", index=False)
+    sales_analysis.configure(slots_config.DEVICE_ID, slots_config.ALL_SLOTS, slots_config.SOURCE_FALL)
+    args = argparse.Namespace(sales=tmp_path / "s.csv", readings=tmp_path / "r.csv")
+    with pytest.raises(SystemExit, match="aren't ours"):
+        sales_analysis.load(args)
+
+
+def _store(conn, session_id, started_at, selections):
+    conn.execute("insert into polls (session_id, device_id, started_at, raw, byte_count, crc_ok)"
+                 " values (%s, 'vmc1', %s, '', 0, true)", (session_id, started_at))
+    for sel, units in selections.items():
+        conn.execute("insert into poll_selections (session_id, selection, price_cents, lifetime_units, lifetime_sales_cents)"
+                     " values (%s, %s, 250, %s, %s)", (session_id, sel, units, units * 250))
+
+
+def _export(schema_url, out, *flags):
+    import csv
+    import json
+    import os
+    import subprocess
+
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    url, schema = schema_url
+    params = conninfo_to_dict(url)
+    params["options"] = " ".join(o for o in (params.get("options"), f"-c search_path={schema}") if o)
+    env = {**os.environ, "DATABASE_URL": make_conninfo(**params)}
+    repo = Path(__file__).resolve().parent.parent
+    p = subprocess.run([sys.executable, str(repo / "analysis" / "export_sales.py"), *flags, str(out)],
+                       cwd=repo, env=env, capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+    with open(out / "poll_readings.csv", newline="") as f:
+        readings = list(csv.DictReader(f))
+    with open(out / "polls.csv", newline="") as f:
+        polls = [r["at_eastern"] for r in csv.DictReader(f)]
+    return readings, polls, json.loads((out / "slots.json").read_text(encoding="utf-8"))
+
+
+def test_the_fall_export_stops_at_the_start(conn, schema_url, tmp_path):
+    _store(conn, "p1", "2026-11-20T15:00:00Z", {"11": 5, "15": 7})
+    _store(conn, "p2", "2026-12-03T04:59:59Z", {"11": 6, "15": 8})      # 23:59:59 Eastern on 2 Dec: still the fall
+    _store(conn, "p3", "2026-12-03T05:00:00Z", {"11": 9, "15": 9})      # midnight Eastern on 3 Dec: the start
+    _store(conn, "p4", "2026-12-10T15:00:00Z", {"11": 12, "15": 11})
+    readings, polls, manifest_ = _export(schema_url, tmp_path / "fall", "--fall-all")
+    assert manifest_["source"] == slots_config.SOURCE_FALL and manifest_["before"] == slots_config.START.isoformat()
+    assert sorted(manifest_["slots"]) == sorted(slots_config.ALL_SLOTS)
+    assert polls == ["2026-11-20T10:00:00-05:00", "2026-12-02T23:59:59-05:00"]
+    assert sorted((r["slot"], r["lifetime_units"]) for r in readings) == [("11", "5"), ("11", "6"), ("15", "7"), ("15", "8")]
+    # a normal export still writes no row for a selection that isn't ours, and keeps our later polls
+    readings, polls, _ = _export(schema_url, tmp_path / "ours")
+    assert {r["slot"] for r in readings} == {"15"} and len(polls) == 4

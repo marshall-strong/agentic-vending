@@ -11,9 +11,17 @@ widen it, so when the assignment changes (#69), SLOTS changes with it.
 --slots can only narrow the list, never add a slot that isn't ours (docs/integrity.md): the export writes
 per-slot prices and sales for every slot on the list.
 Slots come back in shelf order (shelf 1 first, then by column).
+
+The fall run (--fall-all) is the one exception, and it is bounded by date, not by slot. Before the competition
+starts (START, 3 Dec 2026 00:00 Eastern) no selection is either team's: course staff stocked the whole machine,
+and the inventory server may redraw the split before the start (docs/integrity.md). So a fall run may cover all
+40 selections, but only polls before START. check_before_start() refuses any per-selection row, for a selection
+outside our assignment, from START on; the export and the analysis both call it.
 """
+import datetime as dt
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (plain constants; no database needed)
@@ -21,6 +29,40 @@ from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (plain constants; no d
 SOURCE_CLI = "command line"
 SOURCE_SERVER = "inventory server (stored)"
 SOURCE_DEFAULT = "default list in vending/slots.py"
+SOURCE_FALL = "all 40 selections, polls before the start only (fall run)"
+
+# The competition starts Thu 3 Dec 2026 (Winter classes start; golisano_calendar_2026_27.json). From then on the
+# other team's selections are theirs: nothing reads their per-selection sales, prices or stock.
+START = dt.datetime(2026, 12, 3, tzinfo=ZoneInfo("America/New_York"))
+ALL_SLOTS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(1, 9))
+
+
+def check_before_start(rows, assigned=SLOTS, where="fall run"):
+    """Refuse per-selection data for a selection outside `assigned` from START on. Returns the rows' count.
+
+    `rows` gives (selection, time) pairs; each time must carry its time zone. Our own selections may have any
+    time. Every other selection's row must be from before START, or the whole run stops: no file and no figure
+    may carry the other team's per-selection sales, prices or stock from the competition.
+    """
+    assigned = {str(s) for s in assigned}
+    late, n = {}, 0
+    for sel, at in rows:
+        n += 1
+        sel = str(sel)
+        if sel in assigned:
+            continue
+        if getattr(at, "tzinfo", None) is None:
+            raise SystemExit(f"{where}: a row for selection {sel} has a time with no time zone ({at!r}); "
+                             "can't tell whether it is before the start")
+        if at >= START:
+            late[sel] = min(at, late.get(sel, at))
+    if late:
+        first = min(late.values())
+        raise SystemExit(f"{where}: per-selection data from the competition for selections that aren't ours "
+                         f"({ranges(tuple(sorted(late)))}; first at {first.isoformat()}). Before the start "
+                         f"({START:%Y-%m-%d %H:%M} Eastern) no selection is either team's; from it, the other team's "
+                         "selections are theirs (docs/integrity.md). Nothing was used.")
+    return n
 
 
 def parse_slots(value, ours=SLOTS):
@@ -90,8 +132,16 @@ def _rollback(conn):
         pass
 
 
-def resolve_slots(cli_value, conn=None):
-    """(device_id, slots, source) for this run. See the module docstring for the order."""
+def resolve_slots(cli_value, conn=None, fall=False):
+    """(device_id, slots, source) for this run. See the module docstring for the order.
+
+    fall=True is the fall run: all 40 selections (or --slots narrowed within them). The caller must keep its data
+    to polls before START and pass every per-selection row through check_before_start.
+    """
+    if fall:
+        if cli_value is not None:
+            return DEVICE_ID, parse_slots(cli_value, ALL_SLOTS), SOURCE_FALL
+        return DEVICE_ID, ALL_SLOTS, SOURCE_FALL
     stored = from_server(conn)
     # The stored answer is bounded by SLOTS as well: when #69 lands, SLOTS must be updated with it.
     ours = check(stored, "stored server assignment", SLOTS) if stored else SLOTS
@@ -119,6 +169,8 @@ def ours_for(source, slots):
     is held to SLOTS as well). Unknown sources are refused, and so is
     a list recorded as the server's answer while this code can't read one (#69).
     """
+    if source == SOURCE_FALL:
+        return ALL_SLOTS                 # bounded by date instead: check_before_start
     if not (source in (SOURCE_CLI, SOURCE_SERVER) or is_default(source)):
         raise SystemExit(f"slot list recorded with an unknown source {source!r}: re-export (python analysis/rebuild.py)")
     if source == SOURCE_SERVER and not server_assignment_supported():

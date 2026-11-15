@@ -81,10 +81,11 @@ from statsmodels.tsa.seasonal import STL
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from slots_config import SOURCE_CLI, SOURCE_DEFAULT, is_default, resolve_run  # noqa: E402
+from slots_config import SOURCE_CLI, SOURCE_DEFAULT, SOURCE_FALL, check_before_start, is_default, resolve_run  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (defaults; configure() sets the ones this run uses)
+from vending.slots import SLOTS as ASSIGNED  # noqa: E402  (our assignment: the bound for the fall run's date guard)
 
 TZ = "America/New_York"
 SEED = 42
@@ -125,6 +126,8 @@ def configure(device, slots, source, resolved_at=None):
     global DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT, OUR, SCOPE_NOTE, LIKELY_MIN
     DEVICE_ID, SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT = device, tuple(slots), source, resolved_at
     OUR = f"our {len(SLOTS)} slot" + ("" if len(SLOTS) == 1 else "s")
+    if source == SOURCE_FALL:
+        OUR = f"all {len(SLOTS)} selections (fall, before the start)"
     LIKELY_MIN = max(1, round(len(SLOTS) / 10))
     PHOTO_NOV9["stocked"] = [s for s in PHOTO_NOV9_SEEN if s in SLOTS]
     PHOTO_NOV9["note"] = (f"Student team photo of the machine at the Mon Nov 9 visit (door counter rise at 09:31). Of our {len(SLOTS)} "
@@ -134,6 +137,11 @@ def configure(device, slots, source, resolved_at=None):
                   "that history is from before the competition, when course staff stocked every slot, so it reflects no rival "
                   "strategy. Everything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller "
                   f"flags, experiments) uses only {OUR}, and no slot is judged by another slot's state.")
+    if source == SOURCE_FALL:
+        SCOPE_NOTE = ("Fall run: every selection, polls before the competition start (3 Dec 2026) only. Before the start no "
+                      "selection is either team's: course staff stocked the whole machine, and the inventory server may redraw "
+                      "the split before the start (docs/integrity.md). Where this report says 'our slots' it means every "
+                      "selection in this run. No slot is judged by another slot's state.")
 
 
 def _and(items):
@@ -155,6 +163,8 @@ def photo_note_tail(stocked, slots):
 
 def source_line():
     """One line for the labs and the report: where the slot list came from."""
+    if SLOT_SOURCE == SOURCE_FALL:
+        return "Slots: all 40 selections, polls before the competition start only (fall run)."
     if is_default(SLOT_SOURCE):
         return "Slots: the default list in vending/slots.py (not read from the inventory server on this run)."
     if SLOT_SOURCE == SOURCE_CLI:
@@ -282,6 +292,10 @@ def load(args):
                          "re-export with the same slot list (python analysis/export_sales.py --slots ...)")
     sales["t"] = to_et(sales.at_eastern)
     reads["t"] = to_et(reads.at_eastern)
+    # Per-selection rows outside our assignment are allowed only before the start (slots_config.check_before_start).
+    # A normal run never has any (the check above); a fall run must have none from the start on.
+    check_before_start(zip(sales.slot, sales.t), ASSIGNED, f"{args.sales}")
+    check_before_start(zip(reads.slot, reads.t), ASSIGNED, f"{args.readings}")
     polls = pd.read_csv(args.polls)
     polls["t"] = to_et(polls.at_eastern)
     polls = polls.sort_values("t").reset_index(drop=True)
@@ -2313,6 +2327,16 @@ def write_report(path, L):
     w("")
     w(f"**Slots.** {len(slots)} on {DEVICE_ID}: {L['slots_text']}. Source: {SLOT_SOURCE}.")
     w("")
+    cols = sorted({int(s[1]) for s in slots})
+    col_text = (f"columns {cols[0]}-{cols[-1]}" if cols == list(range(cols[0], cols[-1] + 1)) and len(cols) > 1
+                else "column" + ("s " if len(cols) > 1 else " ") + ", ".join(map(str, cols)))
+    if SLOT_SOURCE != SOURCE_FALL:
+        w(f"**Which columns.** The per-slot findings in this report (segments, shelf and column effects, price changes, slow-seller "
+          f"flags, products) cover {col_text} only: the split the inventory server gave on 12 Nov. Before the start no selection is "
+          "either team's, and the split may be redrawn once before Thu 3 Dec (docs/integrity.md). For starting rates that don't "
+          "depend on the split, use the last section of REPORT.md, 'All 40 selections, fall', which `analysis/rebuild.py` adds "
+          "from `analysis/fall_rates.py`.")
+        w("")
     w("**Weeks.** Weeks run Saturday to Friday, as in the ledger and the P&L page (`vending/ledger.py`, `WEEK_STARTS = 5`).")
     w("")
     w("## Headline findings")
@@ -2462,7 +2486,7 @@ def write_report(path, L):
     w("")
     coef_rows("B")
     w("")
-    w("## Our slots")
+    w("## Our slots" + ("" if SLOT_SOURCE == SOURCE_FALL else f" ({col_text})"))
     w("")
     bk = clusters["best_k_by_silhouette"]
     w(f"K-means on 5 standardized slot features, our {len(slots)} slots; k = 2..6 tried. Best silhouette at k = {bk} "

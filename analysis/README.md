@@ -2,11 +2,13 @@
 
 What the machine's sales history says about demand for **our 20 slots** (15-18, 25-28, 35-38, 45-48, 55-58), the academic calendar, slot position, price, products, and when a slot is really a slow seller. It uses standard forecasting practice: seasonal naive as the bar to beat, walk-forward backtests, and MAE as the headline error.
 
-**Read [REPORT.md](REPORT.md) first.** It has the findings, the forecast backtest, the products our slots held, the slow-seller rule simulation and the guideline we recommend for the agent.
+**Read [REPORT.md](REPORT.md) first.** It has the findings, the forecast backtest, the products our slots held, the slow-seller rule simulation and the guideline we recommend for the agent. Its last section, **All 40 selections, fall**, gives starting rates by price band, shelf and half from every selection, so they don't depend on which 20 we get.
 
 ## Scope
 
 Anything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller flags, experiments) uses only our slots on `vending.slots.DEVICE_ID` (see [Which slots are ours](#which-slots-are-ours)), and no slot is ever judged by another slot's state (`docs/integrity.md`). Machine-wide data is used only as totals over the whole machine, and only for the calendar and day-off effects, the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. That history is from before the competition, when course staff stocked every slot, so it reflects no rival strategy. The export never writes a per-slot value of another slot, and the analysis stops if its lab data would carry one.
+
+**The fall run is the one exception.** Before the start (Thu 3 Dec 2026) no selection is either team's: course staff stocked the whole machine, and the inventory server may redraw the split once before the start (`docs/integrity.md`). So `export_sales.py --fall-all` writes per-selection rows for all 40 selections, from polls before 3 Dec 2026 00:00 Eastern only, to `analysis/data/fall40/`. `slots_config.check_before_start` refuses a row for a selection outside our assignment from the start on, in the export and again when `sales_analysis.py` loads it. `fall_rates.py` summarizes that run.
 
 ## Which slots are ours
 
@@ -35,7 +37,8 @@ Three pages built on this analysis, as step-by-step labs: step tabs, toggles, sl
 | `export_sales.py` | Reads the database (read-only) and writes `analysis/data/*.csv`: our slots' poll readings and sales events (filtered like `vending.ledger._counter_rows`), every poll time, `machine_hourly.csv` (units and cents the whole machine sold since the previous poll; totals only) and `door_events.csv` (the EVA-DTS `EA2*DO` door-open counter at every poll and its rise). |
 | `door_events.py` | Reads the door-open counter out of a raw poll and finds its rises with `vending.counters.rises`, so a misread door reading isn't a visit. `export_sales.py` writes `door_events.csv` with it; `visit_windows.py` and `sales_analysis.py` recompute the rises from the lifetime column the same way, so an older export is safe too. |
 | `sales_analysis.py` | The whole analysis in one script with fixed seeds. It writes `analysis/out/lab_data.json` (the labs' data) and `analysis/out/analysis_report.md`. |
-| `slots_config.py` | Decides which slots are ours (see above) and checks the list. |
+| `slots_config.py` | Decides which slots are ours (see above) and checks the list. Holds the start date (`START`) and the date guard for the fall run (`check_before_start`). |
+| `fall_rates.py` | The fall run's summary: each selection's in-stock rate (from `sales_analysis.py` on the all-40 export) by price band, shelf and half, left vs right with bootstrap and permutation tests. Writes `analysis/out/fall40/fall_rates.md` and `.json`; `rebuild.py` adds the `.md` to `REPORT.md`. |
 | `rebuild.py` | Runs the export, the analysis and the three lab builds in one go, then prints a short summary. |
 | `labs/` | The three labs: one build script each (`forecast_lab.py`, `rhythm_lab.py`, `slot_lab.py`), their templates and scripts, and `labkit.py` (shared paths, the slot text filled into the templates, the two page forms). |
 | `visit_windows.py` | Dark periods: when the door opened, how long each visit window was, how often polls ran late, and how many of our sales fell inside a window. Reads the exported CSVs (and the visit grades in `lab_data.json` if present), standard library only, and writes `analysis/out/visit_windows.json`. See `docs/cutover.md`. |
@@ -62,7 +65,7 @@ Then one command does it all. Run it from the repo root with the analysis venv; 
 analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe
 ```
 
-When every check passes it copies the report to `REPORT.md`. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/`.
+It also runs the fall pass (all 40 selections, polls before the start only; see Scope). When every check passes in both runs it writes `REPORT.md`: the report plus the fall section. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/` and `analysis/data/fall40/`. `--no-fall` skips the fall pass and leaves `REPORT.md` as it is.
 
 To look at only some of our slots, say shelves 1 and 2, narrow the list:
 

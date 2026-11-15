@@ -6,6 +6,8 @@ Data: 2026-08-27 22:36 to 2026-11-11 18:00 ET. Our slots 15-18, 25-28, 35-38, 45
 
 **Slots.** 20 on vmc1: 15-18, 25-28, 35-38, 45-48, 55-58. Source: default list in vending/slots.py.
 
+**Which columns.** The per-slot findings in this report (segments, shelf and column effects, price changes, slow-seller flags, products) cover columns 5-8 only: the split the inventory server gave on 12 Nov. Before the start no selection is either team's, and the split may be redrawn once before Thu 3 Dec (docs/integrity.md). For starting rates that don't depend on the split, use the last section of REPORT.md, 'All 40 selections, fall', which `analysis/rebuild.py` adds from `analysis/fall_rates.py`.
+
 **Weeks.** Weeks run Saturday to Friday, as in the ledger and the P&L page (`vending/ledger.py`, `WEEK_STARTS = 5`).
 
 ## Headline findings
@@ -233,7 +235,7 @@ The current week (2026-11-07) is partial: 13 machine units in 5 days, about 23.3
 | week_of_term | -0.33 | -1.97 to 1.32 | 0.6975 | Change in daily units per extra week into the term (trend), holding weekday fixed. |
 | empty_slots | -0.79 | -1.69 to 0.1 | 0.0823 | Change in our daily units for each extra one of our slots suspected empty that day (supply control). |
 
-## Our slots
+## Our slots (columns 5-8)
 
 K-means on 5 standardized slot features, our 20 slots; k = 2..6 tried. Best silhouette at k = 4 (silhouette 0.2984, 65% of variation explained). Elbow and silhouette for every k are in lab_data.json so the team can choose. Smallest segment at k = 4: 4 slots; at k = 3 the segments are 4, 5, 11 slots (Fast seller, Friday-heavy, Fast seller, premium-priced, Slow seller, often silent). Tiny segments fail the segment-size test.
 
@@ -314,3 +316,60 @@ Flagged today by '5 class days + not suspected empty': 56, 57. No refill has bee
 - **Backtest once.** Models were scored once on the plan dates; dials (SES alpha, Holt-Winters) were fit only on data before each plan date.
 
 Checks: our units 562 by day, 562 by week, 562 by slot-day, 562 by slot (expected 562); takings 188150 cents (expected 188150); counters: 20 slots, last-minus-first of lifetime units and cents (restarts 0, misreads 0) equal the event totals: True; products 562; machine-wide 913 (expected 913). All OK: True.
+
+## All 40 selections, fall (before the start)
+
+**Why.** Before the competition starts no selection is either team's: course staff stocked the whole machine in the fall, and the inventory server may redraw the split once before Thu 3 Dec (docs/integrity.md, Kevin, 15 Nov). The sections above use columns 5-8 only, the split as of 12 Nov. Starting rates should not depend on which 20 selections we get, so this section uses the fall's per-selection sales from all 40, polls before 2026-12-03 00:00 Eastern only (data 2026-08-27T22:36 to 2026-11-11T18:00). From the start, nothing reads the other team's per-selection data (`analysis/slots_config.py`, `check_before_start`).
+
+**Method.** The rate is the analysis's own: units per in-stock class day in the regular-polling era, with each selection's suspected-empty days taken out. It is estimated per selection, so columns 5-8 get exactly the rates above (checked: they match the normal run). 'Mean' is the average of the selections' rates (as the segment table above); 'pooled' is units / in-stock days over the group, which weights selections by how long they were in stock. 95% intervals resample selections (10,000 bootstrap draws, seed 42). Price band = the selection's average price paid in the fall. 40 selections have at least 3 in-stock class days.
+
+### Starting rate by price band
+
+Units per in-stock class day per selection.
+
+| Price band | All 40: n | Mean (95% CI) | Pooled (95% CI) | Columns 1-4: n, mean | Columns 5-8: n, mean |
+|---|---|---|---|---|---|
+| Low (under $2.50) | 16 | 0.719 (0.52 to 0.93) | 0.687 (0.46 to 0.95) | 7, 0.491 | 9, 0.896 |
+| Mid ($2.50 to $3.49) | 6 | 1.044 (0.57 to 1.57) | 1.148 (0.70 to 1.61) | 2, 0.502 | 4, 1.315 |
+| Premium ($3.50 and up) | 18 | 1.285 (0.97 to 1.61) | 1.139 (0.81 to 1.52) | 11, 1.280 | 7, 1.294 |
+
+For comparison, the segments above (columns 5-8, k = 4) and the same k-means on all 40 (same features and seed):
+
+| Columns 5-8 segment | Slots | Mean rate | Avg price |
+|---|---|---|---|
+| Fast seller, Friday-heavy | 28, 38, 45, 46 | 1.701 | $2.63 |
+| Mid seller, premium-priced | 15, 16, 17, 18, 25, 26 | 1.354 | $4.33 |
+| Slow seller, low-priced | 35, 36, 37, 55, 58 | 0.767 | $2.17 |
+| Slow seller, erratic | 27, 47, 48, 56, 57 | 0.722 | $3.01 |
+
+| All-40 segment (k = 4) | Selections | Left / right | Mean rate | Avg price |
+|---|---|---|---|---|
+| Fast seller, sells every week | 11, 13, 14, 15, 16, 17, 18, 26, 28, 38, 45, 46 | 3 / 9 | 1.623 | $3.77 |
+| Fast seller, erratic | 21, 22, 23, 24, 34 | 5 / 0 | 1.417 | $3.20 |
+| Slow seller | 12, 25, 27, 31, 32, 33, 35, 36, 37, 41, 42, 43, 44, 47, 48, 52, 54, 55, 56, 57, 58 | 10 / 11 | 0.650 | $2.76 |
+| Slow seller, Friday-heavy | 51, 53 | 2 / 0 | 0.337 | $2.00 |
+
+### By shelf (row 1 = top shelf)
+
+| Shelf | n | Mean (95% CI) | Pooled (95% CI) | Avg price |
+|---|---|---|---|---|
+| 1 | 8 | 1.498 (1.06 to 1.98) | 1.435 (1.06 to 1.94) | $4.38 |
+| 2 | 8 | 1.498 (1.23 to 1.77) | 1.347 (1.11 to 1.66) | $3.49 |
+| 3 | 8 | 0.842 (0.45 to 1.28) | 0.694 (0.33 to 1.22) | $2.43 |
+| 4 | 8 | 0.793 (0.46 to 1.18) | 0.810 (0.46 to 1.21) | $3.03 |
+| 5 | 8 | 0.480 (0.38 to 0.57) | 0.507 (0.43 to 0.58) | $2.06 |
+
+### Left half vs right half
+
+| Half | n | Mean (95% CI) | Pooled (95% CI) | Avg price | In-stock class days |
+|---|---|---|---|---|---|
+| columns 1-4 | 20 | 0.926 (0.63 to 1.26) | 0.760 (0.47 to 1.16) | $3.04 | 304 |
+| columns 5-8 | 20 | 1.119 (0.89 to 1.38) | 1.094 (0.88 to 1.34) | $3.12 | 408 |
+
+Right minus left: mean +0.193 (95% CI -0.20 to +0.59); pooled +0.334 (-0.11 to +0.72). Swapping the half labels within each shelf (20,000 permutations): p = 0.262. With shelf held fixed (OLS, n = 40): +0.193 (-0.15 to +0.54, p = 0.265); with price held fixed as well: +0.203 (-0.15 to +0.55, p = 0.246).
+
+Per shelf, mean rate left / right: shelf 1 1.57 / 1.43; shelf 2 1.75 / 1.25; shelf 3 0.45 / 1.23; shelf 4 0.42 / 1.17; shelf 5 0.44 / 0.52.
+
+**Reading.** The interval includes zero, so the fall data shows no clear left/right difference. Shelf by shelf it goes both ways (left higher on shelf 1, 2, right higher on shelf 3, 4, 5), which points to the products on each rail more than to the side of the machine. The halves held different products (average price $3.04 left, $3.12 right), so a difference, or its absence, is about what was stocked as much as where. Use the all-40 band rates as starting rates; they don't depend on which 20 selections we get.
+
+**Cautions.** 8 selections were in stock fewer than 11 class days (21, 22, 23, 24, 51, 52, 53, 54), so their rates are noisy. A selection that sold almost nothing is never flagged as suspected empty, so it counts as in stock all fall (31, 34: under 0.15 a class day over 30+ class days): its low rate may be an empty or jammed rail, not low demand. Products and prices were the operators' choice, not ours.

@@ -51,6 +51,11 @@ repo root points here.
   adding a tool (a web fetcher, say) is a deliberate change that shows up in review.
 - **Our stock count reads only our machine's counters.** `vending/stock.py` reads poll
   counters only from `DEVICE_ID`, and only for the slots our own receipts name.
+- **The fall analysis stops at the start.** `analysis/export_sales.py --fall-all` writes
+  per-selection rows for all 40 selections, but only from polls before 3 Dec 2026 00:00
+  Eastern (`analysis/slots_config.py`, `START`). `check_before_start` refuses any row for a
+  selection outside our assignment from the start on, in the export and again when the
+  analysis loads it; `tests/test_analysis_slots.py` checks that it does.
 
 From 3 Dec the polls carry the full, raw DEX response (David, 17 Nov), so the other team's
 selections arrive with ours. From the start, everything that reads them for analysis, display or
