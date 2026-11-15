@@ -13,7 +13,6 @@ from psycopg.conninfo import make_conninfo
 
 from tests.conftest import CONNECT_TIMEOUT, open_in
 from vending import agent_runs, dashboard, db_explorer, pages, settings, worker
-from vending.slots import SLOTS
 from vending.write_gate import log
 
 SECRET = 'connection to server at "db.example.net", port 5432 failed: password authentication failed for user "g2_admin"'
@@ -360,62 +359,113 @@ def test_check_says_whether_the_login_is_fit_for_a_public_page(schema_url, reade
     assert "NOT read-only" in capsys.readouterr().out
 
 
-# --- The other team's selections ----------------------------------------------------------------
+# --- Selections not assigned to us ------------------------------------------------------------------
 
-RIVAL = "RIVAL-SNACK"
+NOT_OURS = "NOT-OUR-SNACK"
 
 
-def _rivals(conn):
-    """A machine where selections 11 and 25 are held by someone else's counts and polls, one more
-    machine's poll names our selection 25, and ours (15) is counted and polled too."""
+def _stored(conn) -> tuple[str, ...]:
+    """Our selections as the fixture stored them (`slot_assignment`), not the `SLOTS` default."""
+    return tuple(conn.execute("select slots from slot_assignment where id = 1").fetchone()[0])
+
+
+def _not_ours(conn, ours: str = "", theirs: str = ""):
+    """A machine where one selection not assigned to us is counted and polled, one more machine's
+    poll names our selection, and ours is counted and polled too. Returns (ours, not ours)."""
     from tests.conftest import store_poll
     from vending import slot_counts
-    store_poll(conn, "ours", "2026-11-10T15:00:00+00:00", {"15": (150, 31), "11": (1234, 987654)})
-    store_poll(conn, "elsewhere", "2026-11-10T15:00:00+00:00", {"15": (999, 424242)}, device_id="vmc2")
+    stored = _stored(conn)
+    ours = ours or stored[0]
+    theirs = theirs or next(f"{r}{c}" for r in range(1, 6) for c in range(1, 9) if f"{r}{c}" not in stored)
+    assert ours in stored and theirs not in stored
+    store_poll(conn, "ours", "2026-11-10T15:00:00+00:00", {ours: (150, 31), theirs: (1234, 987654)})
+    store_poll(conn, "elsewhere", "2026-11-10T15:00:00+00:00", {ours: (999, 424242)}, device_id="vmc2")
     slot_counts.record(conn, slot_counts.parse({
         "count_id": "p1", "counted_at": "2026-11-09T11:30:00-05:00", "source": "photo", "device_id": "vmc1",
-        "selections": [{"selection": "15", "product": "Our Chips", "units": 4, "price_on_tag": "1.50"},
-                       {"selection": "11", "product": RIVAL, "units": 9, "price_on_tag": "7.77"}]}), "kevin")
+        "selections": [{"selection": ours, "product": "Our Chips", "units": 4, "price_on_tag": "1.50"},
+                       {"selection": theirs, "product": NOT_OURS, "units": 9, "price_on_tag": "7.77"}]}), "kevin")
+    return ours, theirs
 
 
 def test_the_public_json_has_only_our_selections_in_its_counts(site, schema_url, conn):
-    _rivals(conn)
+    ours, theirs = _not_ours(conn)
     status, _, body = _get(site, "/dashboard/state.json")
     counts = json.loads(body)["counts"]["data"]
-    assert status == 200 and list(counts) == ["15"] and counts["15"]["product"] == "Our Chips"
-    assert RIVAL not in body and "7.77" not in body
+    assert status == 200 and list(counts) == [ours] and counts[ours]["product"] == "Our Chips"
+    assert NOT_OURS not in body and "7.77" not in body
     sales, stock = json.loads(body)["sales"]["data"]["slots"], json.loads(body)["stock"]["data"]["slots"]
-    assert "11" not in sales and "11" not in stock and set(sales) | set(stock) <= set(SLOTS)
+    assert theirs not in sales and theirs not in stock and set(sales) | set(stock) <= set(_stored(conn))
     # The local snapshot, for the team, still has the whole count.
     with open_in(*schema_url) as local:
-        assert sorted(dashboard.snapshot(local)["counts"]["data"]) == ["11", "15"]
+        assert sorted(dashboard.snapshot(local)["counts"]["data"]) == sorted([ours, theirs])
 
 
 def test_the_public_explorer_shows_only_our_rows_of_the_selection_tables(site, schema_url, conn):
     _, schema = schema_url
-    _rivals(conn)
+    _not_ours(conn)
     counts = _get(site, f"/db?schema={schema}&table=slot_counts")[2]
-    assert "Our Chips" in counts and RIVAL not in counts and "7.77" not in counts
+    assert "Our Chips" in counts and NOT_OURS not in counts and "7.77" not in counts
     polls = _get(site, f"/db?schema={schema}&table=poll_selections")[2]
-    # Our selection 15 on our machine, with its price and sales; not selection 11, not another machine.
+    # Our selection on our machine, with its price and sales; not the other one, not another machine.
     assert "31" in polls and "987654" not in polls and "1234" not in polls and "424242" not in polls
     # The page says how many rows it holds: only the ones it may show.
     with open_in(*schema_url) as local:
         for name, shown in (("slot_counts", 1), ("poll_selections", 1)):
             table = db_explorer.Table(schema, name, "table")
-            assert db_explorer.rows(local, table, only=pages.ONLY[name]).total == shown
+            assert db_explorer.rows(local, table, only=pages.only(_stored(local))[name]).total == shown
             assert db_explorer.rows(local, table).total == 2 + (name == "poll_selections")
     # The explorer run locally still shows everything.
     with open_in(*schema_url) as local:
-        assert RIVAL in db_explorer.render(local, db_explorer.Request(schema, "slot_counts", 0))[1]
+        assert NOT_OURS in db_explorer.render(local, db_explorer.Request(schema, "slot_counts", 0))[1]
+
+
+EVERY_OTHER = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
+
+
+def test_the_public_pages_follow_a_stored_assignment_that_is_not_columns_5_to_8(site, schema_url, conn):
+    """Our slots on every other column: the pages draw and show those, from the database, not `SLOTS`."""
+    _, schema = schema_url
+    conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
+    ours, theirs = _not_ours(conn, ours="12", theirs="15")    # 15 is in the SLOTS default, but not ours here
+    page = _get(site, "/dashboard")[2]
+    assert page.count('class="slot ours') == 20 and page.count('class="slot theirs"') == 20
+    assert 'data-slot="12"' in page and 'data-slot="15"' not in page and 'title="15: not our selection"' in page
+    assert NOT_OURS not in page and "7.77" not in page
+    body = _get(site, "/dashboard/state.json")[2]
+    assert list(json.loads(body)["counts"]["data"]) == ["12"] and json.loads(body)["ours"]["data"] == list(EVERY_OTHER)
+    counts = _get(site, f"/db?schema={schema}&table=slot_counts")[2]
+    assert "Our Chips" in counts and NOT_OURS not in counts and "7.77" not in counts
+    polls = _get(site, f"/db?schema={schema}&table=poll_selections")[2]
+    assert "31" in polls and "987654" not in polls and "1234" not in polls and "424242" not in polls
+
+
+def test_the_public_pages_degrade_when_no_assignment_is_stored(site, schema_url, conn):
+    """Nothing stored: no selection is ours, so the pages light nothing, show no selection rows,
+    and say why, rather than fall back to `SLOTS`."""
+    _, schema = schema_url
+    _not_ours(conn)
+    conn.execute("delete from slot_assignment")
+    status, _, page = _get(site, "/dashboard")
+    assert status == 200 and 'class="slot ours' not in page and 'class="slot theirs"' not in page
+    assert "Not available: Our slot assignment hasn" in page and "python -m vending.slots record" in page
+    assert "Which selections are ours isn" in page and "Our Chips" not in page and NOT_OURS not in page
+    assert "our slots aren't recorded" in page and "run the history sync" not in page   # not "no polls"
+    status, _, body = _get(site, "/dashboard/state.json")
+    snap = json.loads(body)
+    assert status == 200 and snap["ours"]["ok"] is False and snap["counts"]["data"] == {}
+    assert "Our Chips" not in body and NOT_OURS not in body
+    for table in ("slot_counts", "poll_selections"):
+        status, _, page = _get(site, f"/db?schema={schema}&table={table}")
+        assert status == 200 and "Our Chips" not in page and NOT_OURS not in page
+        assert "987654" not in page and "424242" not in page and ">31<" not in page
 
 
 def test_a_table_without_the_columns_a_row_filter_reads_shows_no_rows(schema_url, conn):
     _, schema = schema_url
-    _rivals(conn)
+    _not_ours(conn)
     conn.execute("create table slot_counts_copy as select count_id, selection, product from slot_counts")
     table = db_explorer.Table(schema, "slot_counts_copy", "table")
-    only = pages.ONLY["slot_counts"]   # reads device_id too, which the copy lacks
+    only = pages.only(_stored(conn))["slot_counts"]   # reads device_id too, which the copy lacks
     with open_in(*schema_url) as local:
         assert db_explorer.rows(local, table).total == 2
         shown = db_explorer.rows(local, table, only=only)

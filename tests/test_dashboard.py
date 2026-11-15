@@ -103,7 +103,7 @@ def test_plan_compares_with_the_run_before(conn, page_conn):
     page = dashboard.render(dashboard.snapshot(page_conn))
     assert "Swapping 16 to Mountain Dew." in page and "see if 16 sells" in page and "MTDEW-20OZ" in page
     assert "$2.25 &middot; fill to 4" in page and "was: keep as is" in page
-    assert f"1 of {len(dashboard.SLOTS)} slots changed</b> since run #{first}" in page
+    assert f"1 of 20 slots changed</b> since run #{first}" in page
     assert page.count('class="pc changed"') == 1
     assert '<a class="pill info" href="#slot-16">16 swap</a>' in page and 'id="slot-16"' in page
 
@@ -456,18 +456,16 @@ def test_optional_readers_roll_back_only_their_panel(conn, page_conn, table, col
     assert {k for k in panels if not snap[k]["ok"]} == broken
     page = dashboard.render(snap)
     assert "Not available" in page or "isn&#x27;t available" in page
-    assert page.count('class="slot ours') == len(dashboard.SLOTS)    # the machine still draws
+    assert page.count('class="slot ours') == len(dashboard.our_selections(snap)) == 20  # the machine still draws
 
 
 EVEN = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
 
 
 @pytest.fixture
-def even_columns(monkeypatch, conn):
-    """Our slots on every other column, so nothing assumes columns 5 to 8."""
-    from vending import slots
-    monkeypatch.setattr(dashboard, "SLOTS", EVEN)
-    monkeypatch.setattr(slots, "SLOTS", EVEN)         # the bound on the stored assignment moves with it
+def even_columns(conn):
+    """Our slots on every other column, so nothing assumes columns 5 to 8. Only the stored
+    assignment moves: the dashboard reads that, never `SLOTS`."""
     conn.execute("update slot_assignment set slots = %s", (list(EVEN),))
     return EVEN
 
@@ -567,7 +565,7 @@ def test_the_plan_agrees_with_the_machine_about_a_counted_slot(conn, page_conn):
 
 
 def _view(held, counted):
-    snap = {"plan": {"ok": False}, "sales": {"ok": False},
+    snap = {"ours": {"ok": True, "data": ("15",)}, "plan": {"ok": False}, "sales": {"ok": False},
             "stock": {"ok": True, "data": {"slots": {"15": held}}},
             "counts": {"ok": True, "data": {"15": counted}}}
     return dashboard.machine_view(snap)["15"]["now"]

@@ -35,8 +35,9 @@ nothing stored it refuses and says to run `record`, rather than guessing.
 columns 5-8 of every row on `vmc1`). Code with no database uses it directly: the
 planner's default, the week replayer's synthetic test cases and the pure
 helpers' defaults. It no longer bounds what `record` stores or what `our_slots`
-returns. Some readers still check against it (the dashboard, the DB explorer and
-the sales analysis; issue #75). `DEVICE_ID` is the machine we read polls from.
+returns. The public pages (the dashboard and `/db`) read the stored assignment
+too. Only the sales analysis still checks against `SLOTS` (issue #75).
+`DEVICE_ID` is the machine we read polls from.
 
 `record` never migrates. On a database that is behind it refuses (exit 2), like
 the syncs.
