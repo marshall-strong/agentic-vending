@@ -308,7 +308,8 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   - `already_in_catalog`: the same drink is in the catalog; order it by SKU instead.
   - `already_requested`: we already asked for it, including a request whose answer was lost.
   - `request_limit`: over our own limit on requests in any 7 days: 3, or 15 while the catalog has
-    fewer than 25 products. **These numbers are placeholders the team has not set yet**
+    fewer than 25 products. **No limit before the competition starts (3 Dec 2026).** After it,
+    **these numbers are placeholders the team has not set yet**
     (`WEEKLY_LIMIT`, `STARTUP_WEEKLY_LIMIT`, `SMALL_CATALOG` in
     `vending/tools/catalog_request.py`).
   - `too_many_open_requests`: the bridge answered `429`.
