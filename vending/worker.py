@@ -58,6 +58,8 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from zoneinfo import ZoneInfo
 
+from vending import gate
+
 Job = tuple[str, Callable[[], int]]
 
 
@@ -303,6 +305,18 @@ class _Health(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0].rstrip("/")
+        if path == gate.LOGIN:
+            if gate.signed_in(self.headers.get("Cookie")):
+                return self._redirect(gate.next_from_query(self.path))
+            return self._send(200, "text/html; charset=utf-8",
+                              gate.login_page(gate.next_from_query(self.path)).encode(), gate.CSP)
+        if path == gate.LOGOUT:
+            return self._redirect(gate.LOGIN, gate.cleared_cookie())
+        if gate.needs_password(path) and not gate.signed_in(self.headers.get("Cookie")):
+            if path == "/dashboard/state.json":
+                # The dashboard's own refresh asks for this; a redirect would only fail there.
+                return self._send(401, "application/json", b'{"error": "signed out: reload the page to sign in"}')
+            return self._redirect(gate.login_location(self.path))
         if path == "/health":
             body = json.dumps(self.state.public(), indent=2).encode()
             self._send(200 if self.state.healthy else 503, "application/json", body)
@@ -318,6 +332,36 @@ class _Health(BaseHTTPRequestHandler):
             self._send(reply.status, reply.content_type, reply.body.encode(), reply.csp)
         else:
             self._not_found()
+
+    def do_POST(self):
+        """Only the password page takes a POST."""
+        if self.path.split("?", 1)[0].rstrip("/") != gate.LOGIN:
+            return self._send(405, "text/plain; charset=utf-8", b"Only the password page takes a POST.")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if not 0 <= length <= gate.MAX_FORM_BYTES:
+            return self._send(413, "text/plain; charset=utf-8", b"That form is too large.")
+        password, next_path = gate.parse_form(self.rfile.read(length))
+        try:
+            right = gate.check(password)
+        except gate.Busy:
+            return self._send(503, "text/html; charset=utf-8",
+                              gate.login_page(next_path, "Busy. Try again in a few seconds.").encode(), gate.CSP)
+        if not right:
+            return self._send(401, "text/html; charset=utf-8",
+                              gate.login_page(next_path, "That password isn't right.").encode(), gate.CSP)
+        self._redirect(next_path, gate.session_cookie())
+
+    def _redirect(self, location: str, cookie: str | None = None) -> None:
+        self.send_response(303)
+        self.send_header("Location", location)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def _not_found(self) -> None:
         self.send_response(404)

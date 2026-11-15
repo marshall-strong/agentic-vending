@@ -7,8 +7,8 @@
     python -m vending.pages check                            # is the pages' login really read-only?
     python -m vending.pages grant vending_reader --by NAME   # as the tables' owner: let that role read them
 
-`vending.worker` serves these beside `/` and `/health` (issue #53). Anyone with
-the link can look, and nobody can change anything. There is no sign-in.
+`vending.worker` serves these beside `/` and `/health` (issue #53), behind one shared
+password (`vending.gate`). Anyone with it can look, and nobody can change anything.
 
 Read-only in three layers, so that a bug in our code still can't write:
 
@@ -21,7 +21,7 @@ Read-only in three layers, so that a bug in our code still can't write:
     answer "not set up yet".
  2. **A read-only session.** Every transaction on the connection is read-only,
     and each page is one `repeatable read, read only` transaction.
- 3. **Nothing to send.** GET only, no form, no SQL box. The only things a URL can
+ 3. **Nothing to send.** GET only, no SQL box (the password form is the worker's, `vending.gate`). The only things a URL can
     choose are a table Postgres already lists and a row offset.
 
 Load limits, because the address is public: at most `MAX_CONNECTIONS` page
