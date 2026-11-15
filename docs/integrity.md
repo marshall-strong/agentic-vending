@@ -20,6 +20,14 @@ third-party machine beside ours (#116) as a pricing input.
 Which selections are ours is not settled yet: the inventory server assigns them (brief,
 section 1). The machine is split evenly between the two teams.
 
+## Before the start
+
+**Before the start, no selection is either team's.** Course staff stocked the whole
+machine in the fall, and the inventory server may redraw the split once before 3 Dec to
+make it fairer. So the analysis may use the fall's per-selection sales from all 40
+selections. From the start, the other team's selections are theirs: nothing reads their
+per-selection sales, prices or stock. (Kevin, 15 Nov.)
+
 ## What it means
 
 **For the agent.** Its prices, products and restock plans never depend on the other
