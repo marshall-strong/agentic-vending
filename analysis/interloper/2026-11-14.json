@@ -1,0 +1,24 @@
+{
+  "machine": "interloper",
+  "about": "The third-party drink and snack machine beside ours (#116). An outside seller, not the other team. Display only: no pricing code reads this file (#102 question 14 asks whether we may use its prices).",
+  "observed": "2026-11-14",
+  "observed_time_et": "10:43",
+  "observed_by": "Sean, in person (the price tags aren't legible in the photos)",
+  "photos": [
+    "docs/images/interloper/2026-11-14-front.jpg",
+    "docs/images/interloper/2026-11-14-drink-row.jpg"
+  ],
+  "photos_note": "The photos are on branch add_nov14_photo_count (commit 370d95f), embedded in #116.",
+  "sizes_note": "Sizes for BodyArmor (16 oz bottle), Reign (16 oz can) and Spindrift (12 oz cans) are from the day-one planning brief of 14 Nov; #116 gives only the container.",
+  "drinks": [
+    {"position": "40", "name": "Starbucks Coffee & Protein, Caffè Mocha", "size": "carton", "price_cents": 450, "match": ["starbucks", "protein"]},
+    {"position": "43", "name": "Reign Total Body Fuel (flavour unread)", "size": "16 oz can", "price_cents": 400, "match": ["reign"]},
+    {"position": "45", "name": "BodyArmor Strawberry Banana", "size": "16 oz bottle", "price_cents": 350, "match": ["bodyarmor"]},
+    {"position": "50", "name": "Mountain Dew", "size": "12 oz can", "price_cents": 150, "match": ["mountain", "dew"]},
+    {"position": "54", "name": "fairlife Nutrition Plan, chocolate", "size": "bottle", "price_cents": 400, "match": ["fairlife"]},
+    {"position": "60", "name": "Pepsi", "size": "12 oz can", "price_cents": 150, "match": ["pepsi"]},
+    {"position": "62", "name": "Spindrift Lemon (flavour read from the photo)", "size": "12 oz can", "price_cents": 150, "match": ["spindrift"]},
+    {"position": "63", "name": "Spindrift Blood Orange Tangerine (flavour read from the photo)", "size": "12 oz can", "price_cents": 150, "match": ["spindrift"]},
+    {"position": "64", "name": "Spindrift Lime (flavour read from the photo)", "size": "12 oz can", "price_cents": 150, "match": ["spindrift"]}
+  ]
+}
