@@ -460,6 +460,74 @@ def test_the_public_pages_degrade_when_no_assignment_is_stored(site, schema_url,
         assert "987654" not in page and "424242" not in page and ">31<" not in page
 
 
+OLD_SLOT = "OLD-SLOT-SODA"
+
+
+def _stocked_then_reassigned(conn):
+    """We stocked 15 (in the fixture's assignment), the server then moved us to every other column,
+    and a poll after that shows 15 selling again. Also two live plans that name 15 and 12."""
+    from datetime import datetime, timedelta, timezone
+
+    from tests.conftest import store_poll
+    from tests.test_dashboard import fulfilled, plan
+    at = datetime(2026, 11, 9, 15, 0, tzinfo=timezone.utc)
+    assert "15" in _stored(conn)
+    fulfilled(conn, "pr-old", "15", OLD_SLOT, units_loaded=2, paid="2.40", at=at)
+    store_poll(conn, "before", (at - timedelta(hours=1)).isoformat(), {"15": (250, 100), "12": (200, 7)})
+    conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
+    # More sales than we loaded, so the receipts replay warns about slot 15.
+    store_poll(conn, "after", (at + timedelta(days=1)).isoformat(), {"15": (250, 105), "12": (200, 9)})
+    first = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "2.50"},
+                                                          {"slot": "12", "fill_to": 4}))
+    second = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, second, "submitted", plan=plan({"slot": "15", "fill_to": 8, "sale_price": "9.99"},
+                                                           {"slot": "12", "fill_to": 5}))
+    return second
+
+
+def test_after_a_reassignment_the_public_json_drops_the_old_slots_stock(site, schema_url, conn):
+    _stocked_then_reassigned(conn)
+    body = _get(site, "/dashboard/state.json")[2]
+    snap = json.loads(body)
+    assert set(snap["stock"]["data"]["slots"]) <= set(EVERY_OTHER) and "15" not in snap["stock"]["data"]["slots"]
+    assert not any("slot 15" in w for w in snap["stock"]["data"]["warnings"])
+    assert OLD_SLOT not in body
+    page = _get(site, "/dashboard")[2]
+    assert OLD_SLOT not in page and "slot 15" not in page
+    # The local snapshot, for the team, still has what the receipts say about 15.
+    with open_in(*schema_url) as local:
+        stock = dashboard.snapshot(local)["stock"]["data"]
+        assert stock["slots"]["15"]["product"] == OLD_SLOT
+        assert any("slot 15" in w for w in stock["warnings"])
+
+
+def test_after_a_reassignment_plans_list_only_our_slots(site, schema_url, conn):
+    newest = _stocked_then_reassigned(conn)
+    for snap in (json.loads(_get(site, "/dashboard/state.json")[2]),):
+        rows = snap["plan"]["data"]["slots"]
+        assert [r["slot"] for r in rows] == list(EVERY_OTHER)
+        assert next(r for r in rows if r["slot"] == "12")["changed"] is True
+        runs = {r["id"]: r for r in snap["runs"]["data"]}
+        assert [c["slot"] for c in runs[newest]["changes"]] == ["12"]
+    with open_in(*schema_url) as local:
+        snap = dashboard.snapshot(local)
+        assert [r["slot"] for r in snap["plan"]["data"]["slots"]] == list(EVERY_OTHER)
+        page = dashboard.render(snap)
+    assert "9.99" not in page and "15 $2.50" not in page and "1 of 20 slots changed" in page
+
+
+def test_with_no_assignment_the_public_json_has_no_slot_stock_or_plan_rows(site, conn):
+    _stocked_then_reassigned(conn)
+    conn.execute("delete from slot_assignment")
+    body = _get(site, "/dashboard/state.json")[2]
+    snap = json.loads(body)
+    assert snap["ours"]["ok"] is False and snap["stock"]["data"]["slots"] == {}
+    assert not any("slot " in w for w in snap["stock"]["data"]["warnings"])
+    assert snap["plan"]["data"]["slots"] == [] and all(r["changes"] == [] for r in snap["runs"]["data"])
+    assert OLD_SLOT not in body and "9.99" not in body
+
+
 def test_a_table_without_the_columns_a_row_filter_reads_shows_no_rows(schema_url, conn):
     _, schema = schema_url
     _not_ours(conn)

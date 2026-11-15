@@ -210,9 +210,11 @@ def _plan(conn: psycopg.Connection, ours: tuple[str, ...] = ()) -> dict | None:
                          (latest["mode"], latest["started_at"], latest["id"]))
     now_slots = _by_slot(latest["plan"])
     before = _by_slot(previous["plan"]) if previous else {}
+    # One row per selection assigned to us now, in the assignment's order. A stored plan can name
+    # selections that are no longer ours (or the assignment can be missing): those aren't drawn.
     slots = [{"slot": slot, "now": now_slots.get(slot), "before": before.get(slot),
               "changed": previous is not None and _what(now_slots.get(slot)) != _what(before.get(slot))}
-             for slot in sorted(set(ours) | now_slots.keys(), key=partial(_slot_order, ours=ours))]
+             for slot in ours]
     plan = latest["plan"] if isinstance(latest["plan"], dict) else {}
     return {"run": {k: latest[k] for k in ("id", "started_at", "finished_at", "mode", "model", "status")},
             "previous_run": previous and previous["id"],
@@ -271,21 +273,20 @@ def _steps(conn: psycopg.Connection, run_ids: list[int]) -> dict[int, list[dict]
 
 
 def _plan_changes(plan: Any, previous: Any, tags: dict | None = None, ours: tuple[str, ...] = ()) -> list[dict]:
-    """Each slot whose ask moved between two plans, with short labels for how, in `ours`' order."""
+    """Each of our slots whose ask moved between two plans, with short labels for how, in `ours`' order.
+
+    Only selections assigned to us now: a slot an older plan named but that isn't ours any more
+    isn't listed.
+    """
     tags = tags or {}
     now_slots, before = _by_slot(plan), _by_slot(previous)
     out = []
-    for slot in sorted(now_slots.keys() | before.keys(), key=partial(_slot_order, ours=ours)):
+    for slot in ours:
         if _what(now_slots.get(slot)) != _what(before.get(slot)):
             labels = (_changes(now_slots.get(slot), before.get(slot), tags.get(slot)) if slot in now_slots
                       else ["dropped"])
             out.append({"slot": slot, "labels": labels})
     return out
-
-
-def _slot_order(slot: str, ours: tuple[str, ...] = ()) -> tuple[int, str]:
-    """Our selections in the assignment's order, then any other slot by name."""
-    return (ours.index(slot), "") if slot in ours else (len(ours), slot)
 
 
 def _by_slot(plan: Any) -> dict[str, dict]:
@@ -409,15 +410,26 @@ def hide_errors(snap: dict) -> None:
 
 
 def only_ours(snap: dict) -> None:
-    """Drop every selection not assigned to us (the stored assignment) from the counts, in place.
+    """Drop every selection not assigned to us (the stored assignment) from the counts and stock, in place.
 
     `slot_counts.latest` returns every selection counted (a photo count covers the whole
-    machine), and the page only draws ours. The JSON would still carry the rest. With no
-    assignment stored, none is ours, so every count is dropped.
+    machine), and `vending.stock` every slot our fulfilled receipts name, which after a
+    reassignment includes slots that aren't ours any more. The page only draws ours; the JSON
+    would still carry the rest. With no assignment stored, none is ours, so every count, every
+    slot's stock and every warning that names a slot is dropped. The closet isn't a selection,
+    so it stays.
     """
+    ours = set(our_selections(snap))
     if snap["counts"]["ok"]:
-        ours = set(our_selections(snap))
         snap["counts"]["data"] = {s: c for s, c in snap["counts"]["data"].items() if s in ours}
+    if snap["stock"]["ok"]:
+        stock = snap["stock"]["data"]
+        stock["slots"] = {s: v for s, v in stock["slots"].items() if s in ours}
+        stock["warnings"] = [w for w in stock["warnings"] if set(_SLOT_NAMED.findall(w)) <= ours]
+
+
+# How `vending.stock` names a selection in a warning: "slot 15".
+_SLOT_NAMED = re.compile(r"\bslot (\w+)")
 
 
 def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:

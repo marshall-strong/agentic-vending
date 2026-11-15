@@ -395,9 +395,9 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 survivors = m.to_slot + m.to_closet
                 each = None if m.paid_cents is None or not survivors else m.paid_cents / survivors
                 if m.paid_cents is None:
-                    warnings.append(f"{m.ref}: bought {m.sku} with no total_paid; its cost is unknown")
+                    warnings.append(f"{m.ref}: bought {m.sku} for slot {m.slot} with no total_paid; its cost is unknown")
                 elif not survivors and m.lost:
-                    warnings.append(f"{m.ref}: every unit of {m.sku} was lost before loading; "
+                    warnings.append(f"{m.ref}: every unit of {m.sku} for slot {m.slot} was lost before loading; "
                                     "the whole line is written off as shrinkage")
                     shrinkage.append(Shrinkage(m.at, f"slot {m.slot}", m.sku, m.lost, m.paid_cents))
                 shelf(m.sku).add(m.to_closet, None if each is None else each * m.to_closet)

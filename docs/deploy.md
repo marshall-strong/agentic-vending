@@ -74,8 +74,8 @@ python -m vending.db migrate
 
 **After the migration that adds `slot_assignment` (013, from #69), record our slots once.** Every
 agent tool, `preview_desired_state` and the ledger CLI read which selections are ours from that
-table, and until it has a row they refuse and name this command (the dashboard's sales panel just
-shows no polls). It
+table, and until it has a row they refuse and name this command (the dashboard says our slots
+aren't recorded, names the same command and leaves the machine, prices and stock blank). It
 reads `GET /api/v1/slots` from the bridge, so run it from a laptop on the class tailnet, with the
 same `DATABASE_URL`:
 
