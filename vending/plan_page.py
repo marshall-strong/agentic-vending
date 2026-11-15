@@ -712,7 +712,7 @@ def _round(r: pr.Round, before: pr.Round | None, page: Page) -> str:
     next_door = overlapping_slots(r, page.interloper)
     return (f'<div class="round" id="round-{tid}">'
             + _tiles(r)
-            + f'<section><h2>The machine, round {_e(r.id)} <span class="hint">lit selections are ours</span></h2>'
+            + f'<section><h2>The machine, round {_e(r.id)} <span class="hint">lit selections are our current assignment</span></h2>'
               f'<div class="vm-wrap"><div>{_face(r, changed, next_door)}</div><div class="card">{_change_list(r, before, changed)}</div></div></section>'
             + f'<section><h2>Slot by slot <span class="hint">top shelf first &middot; forecast from the projection, base '
               f'scenario</span></h2>{_slot_table(r, changed, next_door)}</section>'
