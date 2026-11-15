@@ -44,6 +44,9 @@ def test_prices_are_exact_cents():
 def test_a_checked_date_is_noon_eastern_that_day():
     assert sourcing.checked_at("2026-11-11", NOW) == datetime(2026, 11, 11, 17, tzinfo=timezone.utc)
     assert sourcing.checked_at(None, NOW) == NOW
+    morning = datetime(2026, 11, 15, 14, tzinfo=timezone.utc)          # 9 AM Eastern
+    assert sourcing.checked_at("2026-11-15", morning) == morning        # today, before noon: now, not the future
+    assert sourcing.problems(option(checked_at=sourcing.checked_at("2026-11-15", morning)), morning) == []
     with pytest.raises(SourcingError, match="date like"):
         sourcing.checked_at("11/11/2026", NOW)
 

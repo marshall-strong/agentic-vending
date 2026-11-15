@@ -97,7 +97,8 @@ def default_max(expected_cents: int) -> int:
 
 
 def checked_at(text: str | None, now: datetime) -> datetime:
-    """When a price was seen: a date (noon Eastern that day), a full ISO time, or now."""
+    """When a price was seen: a date (noon Eastern that day, or now if that is still to come today),
+    a full ISO time, or now."""
     if not text:
         return now
     try:
@@ -108,7 +109,8 @@ def checked_at(text: str | None, now: datetime) -> datetime:
         except ValueError:
             raise SourcingError(f"checked must be a date like 2026-11-11, not {text!r}") from None
         return moment if moment.tzinfo else moment.replace(tzinfo=EASTERN)
-    return datetime.combine(day, time(12), EASTERN)
+    # Today's date before noon would otherwise land in the future and be refused (Kevin, #132).
+    return min(datetime.combine(day, time(12), EASTERN), now)
 
 
 def problems(o: Option, now: datetime) -> list[str]:
