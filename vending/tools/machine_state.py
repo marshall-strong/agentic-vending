@@ -250,7 +250,8 @@ def _count_note(states: list[SlotState]) -> str:
     photos = sum(s.count_source == "photo" for s in looked)
     doors = len(looked) - photos
     kinds = [f"{n} from {what}" for n, what in ((photos, "a photo, so units are estimates"), (doors, "the door open")) if n]
-    holding = [s.slot for s in looked if s.counted_on_hand]
+    # A product seen with its units uncounted (a photo shows only the front unit) is still holding stock.
+    holding = [s.slot for s in looked if s.counted_on_hand or (s.counted_on_hand is None and s.counted_product)]
     note = (f" A person's count ({dates}; {', '.join(kinds)}) shows what is in {len(looked)} slots: see "
             f"counted_product and counted_on_hand. Slots it saw holding stock: {', '.join(holding) or 'none'}.")
     old = [s for s in looked if (s.counted_days_ago or 0) > COUNT_STALE_DAYS]
