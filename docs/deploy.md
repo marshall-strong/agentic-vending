@@ -72,6 +72,24 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 python -m vending.db migrate
 ```
 
+**After the migration that adds `slot_assignment` (013, from #69), record our slots once.** Every
+agent tool, `preview_desired_state` and the ledger CLI read which selections are ours from that
+table, and until it has a row they refuse and name this command (the dashboard's sales panel just
+shows no polls). It
+reads `GET /api/v1/slots` from the bridge, so run it from a laptop on the class tailnet, with the
+same `DATABASE_URL`:
+
+```
+python -m vending.slots record
+```
+
+It should print `recorded: team group-b, device vmc1, 20 slots: 15, 16, ...`, and
+`python -m vending.slots` shows what is stored. Running it again is safe: the same answer only
+updates when it was last checked. It stores an answer only if it names exactly `vending.slots.SLOTS`,
+and once a row is stored it refuses a different answer and changes nothing (exit 1). If that
+happens, ask the instructors before anything else; a real change goes through a reviewed PR to
+`SLOTS` first (assumption A16).
+
 ## The public pages
 
 The same port serves two pages for anyone with the link (#53), so the team and the instructors
@@ -176,7 +194,7 @@ It builds only from a clean checkout of `main` that matches `origin/main` (it fe
 because the tag names the commit; `-SkipBuild` without `-Tag` checks the same, since the tag is
 then the current commit. `-Force` deploys anyway, and uncommitted changes then add `-dirty` to
 the tag. Untracked files count as changes only under the paths the `Dockerfile` copies
-(`requirements.txt`, `vending/`, `db/`, `docker/`), because nothing else reaches the image: a
+(`requirements.txt`, `vending/`, `db/`, `docs/agent/`, `docker/`), because nothing else reaches the image: a
 stray file at the repository root doesn't block a deploy, but a new `.py` file in `vending/` that
 isn't committed does. The list is `$ImagePaths` in the script; keep it in step with the
 `Dockerfile`'s `COPY` lines.
