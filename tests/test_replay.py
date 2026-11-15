@@ -69,20 +69,22 @@ def test_thin_coverage_is_noted(conn):
 
 
 def test_replay_uses_the_stored_slots_for_prices_and_the_plan_check(conn):
-    """A stored assignment narrower than the list in the code: 15 and 17 are ours here, 16 isn't."""
+    """A stored assignment other than the list in the code: 15 and 17 are ours here, 16 isn't."""
     from vending.replay.scoring import score
-    conn.execute("update slot_assignment set slots = '{17,15}'")
+    stored = ["17", "15", *(f"{r}{c}" for r in range(1, 6) for c in range(1, 5))][:20]   # 17, 15, 11-14, 21-24...
+    conn.execute("update slot_assignment set slots = %s", (stored,))
     store_poll(conn, "a", "2026-10-02T03:00:00+00:00", {"17": (200, 10), "15": (250, 100), "16": (300, 10)})
     store_poll(conn, "b", "2026-10-09T03:00:00+00:00", {"17": (225, 14), "15": (250, 107), "16": (300, 12)})
     state = replay_week(conn, WEEK)
     by = {s.slot: s for s in state.slots}
-    assert set(by) == {"17", "15"}
+    assert set(by) == set(stored) and "16" not in by
     assert (by["17"].units_sold, by["17"].price_cents, by["17"].price_changed) == (4, 225, True)
 
-    ours = {"slots": [{"slot": s, "fill_to": 5, "sale_price": "2.50", "reason": "r"} for s in ("17", "15")]}
+    ours = {"slots": [{"slot": s, "fill_to": 5, "sale_price": "2.50", "reason": "r"} for s in stored]}
     valid = checks(score(state, ours, None))["valid plan"]
-    assert valid.status == "pass" and "All 2 slots once" in valid.detail
-    wrong = {"slots": [{"slot": s, "fill_to": 5, "sale_price": "2.50", "reason": "r"} for s in ("15", "16")]}
+    assert valid.status == "pass" and "All 20 slots once" in valid.detail
+    wrong = {"slots": [{"slot": "16" if s == "17" else s, "fill_to": 5, "sale_price": "2.50", "reason": "r"}
+                       for s in stored]}
     refused = checks(score(state, wrong, None))["valid plan"]
     assert refused.status == "fail" and "Slots missing: 17" in refused.detail and "not ours: 16" in refused.detail
 

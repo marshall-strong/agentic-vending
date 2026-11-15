@@ -85,10 +85,24 @@ python -m vending.slots record
 
 It should print `recorded: team group-b, device vmc1, 20 slots: 15, 16, ...`, and
 `python -m vending.slots` shows what is stored. Running it again is safe: the same answer only
-updates when it was last checked. It stores an answer only if it names exactly `vending.slots.SLOTS`,
-and once a row is stored it refuses a different answer and changes nothing (exit 1). If that
-happens, ask the instructors before anything else; a real change goes through a reviewed PR to
-`SLOTS` first (assumption A16).
+updates when it was last checked. The worker also runs it first in every round (`slots_record`),
+so after a deploy it keeps the stored assignment in step with the server without anyone running it.
+
+The instructors may change our assignment until the competition starts, and it is fixed after
+(assumption A16). The lock time is the setting `SLOTS_LOCK_AT`, an ISO 8601 time with its offset;
+unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern, 3 Dec). Set it on the Container App
+only if the start moves.
+
+- **Before the lock time**, a different answer replaces the stored one. It prints `changed: ...`,
+  and `action_log` (tool `slots.record`) says what it was and what it is now.
+- **From the lock time**, a different answer is refused and nothing changes (exit 1). In the
+  worker that fails the round, so `/health` answers 503. Ask the instructors which is right; if
+  the new one is, clear `slot_assignment` and record again.
+- **Always refused**, before or after: an answer that isn't 20 different selections on `vmc1`,
+  each a shelf 1-5 then a column 1-8 (11 to 58).
+
+The dashboard, the DB explorer and the sales analysis still check against `vending.slots.SLOTS`
+(issue #75), so after a change they show the old columns until that is fixed.
 
 ## The public pages
 

@@ -3,10 +3,13 @@
     python -m vending.worker            # every SYNC_EVERY_MINUTES (60), forever
     python -m vending.worker --once     # one round, then exit with the worst exit code
 
-Each round runs, in order, `python -m vending.sync_history`,
-`python -m vending.sync_requests` and `python -m vending.sync_catalog`, in this
-process. None of them migrates: on a database that is behind each refuses
-(exit 2), the round is logged as failed, and the worker tries again next round,
+Each round runs, in order, `python -m vending.slots record`,
+`python -m vending.sync_history`, `python -m vending.sync_requests` and
+`python -m vending.sync_catalog`, in this process. `slots record` goes first, so
+a change to our slot assignment before the competition starts is picked up
+within a round, and a refused change after it fails the round (`vending.slots`).
+None of them migrates: on a database that is behind each refuses (exit 2), the
+round is logged as failed, and the worker tries again next round,
 so a deploy can never change the shared database's schema. A person runs
 `python -m vending.db migrate`.
 
@@ -64,9 +67,10 @@ Job = tuple[str, Callable[[], int]]
 
 
 def default_jobs() -> list[Job]:
-    from vending import sync_catalog, sync_history, sync_requests
+    from vending import slots, sync_catalog, sync_history, sync_requests
 
-    return [("sync_history", lambda: sync_history.main([])),
+    return [("slots_record", lambda: slots.main(["record"])),
+            ("sync_history", lambda: sync_history.main([])),
             ("sync_requests", lambda: sync_requests.main([])),
             ("sync_catalog", lambda: sync_catalog.main([]))]
 
@@ -154,8 +158,8 @@ REPO = "https://github.com/marshall-strong/agentic-vending"
 # pages are set up without importing them (and the database driver) to draw itself.
 PAGES_SETTING = "READONLY_DATABASE_URL"
 OUTCOMES = ("finished", "crashed", "timed out", "still running")
-JOB_NAMES = {"sync_history": "Machine readings (sales history)", "sync_requests": "Purchase requests and receipts",
-             "sync_catalog": "Product catalog"}
+JOB_NAMES = {"slots_record": "Our slot assignment", "sync_history": "Machine readings (sales history)",
+             "sync_requests": "Purchase requests and receipts", "sync_catalog": "Product catalog"}
 
 
 def _eastern(moment: str | None) -> str:
