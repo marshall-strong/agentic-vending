@@ -3,7 +3,7 @@
   "counted_at": "2026-11-14T10:43:00-05:00",
   "source": "photo",
   "device_id": "vmc1",
-  "note": "Read from four photos of the machine front taken by Sean on Sat 14 Nov; 10:43 is when Sean sent them, so the time is approximate. Read twice, separately (two readers, one per model); the two reads agreed on every product and every legible tag. Units are the units seen down the rail, so they are lower bounds; null means only the front unit was visible (shelves 1 and 3 are shot straight on). Shelf 5 was shot from above, so its counts reach further back. Brands or flavors marked ? are uncertain.",
+  "note": "Read from four photos of the machine front taken by Sean on Sat 14 Nov; 10:43 is when Sean sent them, so the time is approximate. Read twice, separately (two readers, one per model); the two reads agreed on every product and every legible tag. Units are the units seen down the rail, so they are lower bounds; null means only the front unit was visible (shelves 1 and 3 are shot straight on). Shelf 5 was shot from above, so its counts reach further back. Brands or flavors marked ? are uncertain. On 15 Nov Sean checked the uncertain names against his photos; selections 14, 21, 22, 31-34, 36, 37, 41, 47, 53 and 58 are corrected and confirmed, and 18 is confirmed empty.",
   "selections": [
     {
       "selection": "11",
@@ -28,10 +28,10 @@
     },
     {
       "selection": "14",
-      "product": "Starbucks Iced Energy, Watermelon Lime?, can",
+      "product": "Starbucks Iced Energy, Watermelon Twist, can",
       "units": null,
       "price_on_tag": "4.00",
-      "note": "flavor partly read; only the front can is visible"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "15",
@@ -58,21 +58,22 @@
       "selection": "18",
       "product": null,
       "units": 0,
-      "price_on_tag": "5.00"
+      "price_on_tag": "5.00",
+      "note": "confirmed empty by Sean, 15 Nov"
     },
     {
       "selection": "21",
-      "product": "Something & Nothing sparkling, silver can with palm print",
+      "product": "Something & Nothing Cucumber premium soda, can",
       "units": 2,
       "price_on_tag": null,
-      "note": "no tag on the ledge"
+      "note": "confirmed by Sean against his photos, 15 Nov; no tag on the ledge"
     },
     {
       "selection": "22",
-      "product": "Something & Nothing sparkling, silver can with palm print",
+      "product": "Something & Nothing Cucumber premium soda, can",
       "units": 2,
       "price_on_tag": null,
-      "note": "no tag on the ledge"
+      "note": "confirmed by Sean against his photos, 15 Nov; no tag on the ledge"
     },
     {
       "selection": "23",
@@ -115,31 +116,31 @@
     },
     {
       "selection": "31",
-      "product": "Pickle Potion? pickle-juice drink, small bottle, red cap",
+      "product": "Bob's Pickle Potion #9, Dill Pickle, small bottle",
       "units": 2,
       "price_on_tag": "4.00",
-      "note": "brand from a blurry label"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "32",
-      "product": "Spindrift sparkling water, Lime?, can",
+      "product": "Spindrift sparkling water, Lemon Lime, can",
       "units": null,
       "price_on_tag": "2.00",
-      "note": "flavor from the can color; only the front can is visible"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "33",
-      "product": "Spindrift sparkling water, Grapefruit?, can",
+      "product": "Spindrift sparkling water, Pink Lemonade, can",
       "units": null,
       "price_on_tag": "2.00",
-      "note": "flavor from the can color; only the front can is visible"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "34",
-      "product": "Spindrift sparkling water, Raspberry Lime?, can",
+      "product": "Spindrift sparkling water, Strawberry Lemonade, can",
       "units": null,
       "price_on_tag": "2.00",
-      "note": "flavor partly read; only the front can is visible"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "35",
@@ -150,17 +151,17 @@
     },
     {
       "selection": "36",
-      "product": "Minute Maid Lemonade (Zero Sugar?), can",
+      "product": "Minute Maid Lemonade, Zero Sugar, can",
       "units": null,
       "price_on_tag": "2.00",
-      "note": "brand partly read; only the front can is visible"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "37",
-      "product": "Minute Maid Lemonade (Zero Sugar?), can",
+      "product": "Minute Maid Lemonade, Zero Sugar, can",
       "units": null,
       "price_on_tag": "2.00",
-      "note": "brand partly read; only the front can is visible"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "38",
@@ -170,10 +171,10 @@
     },
     {
       "selection": "41",
-      "product": "Pickle Potion? pickle-juice drink, small bottle, red cap",
+      "product": "Bob's Pickle Potion #9, Dill Pickle, small bottle",
       "units": 2,
       "price_on_tag": "4.00",
-      "note": "brand from a blurry label"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "42",
@@ -207,10 +208,10 @@
     },
     {
       "selection": "47",
-      "product": "Something & Nothing sparkling, silver can with palm print",
+      "product": "Something & Nothing Cucumber premium soda, can",
       "units": 6,
-      "price_on_tag": null,
-      "note": "tag reads \"3.\" and glare hides the rest ($3.50 on Nov 9)"
+      "price_on_tag": "3.50",
+      "note": "confirmed by Sean against his photos, 15 Nov; tag $3.50"
     },
     {
       "selection": "48",
@@ -235,10 +236,10 @@
     },
     {
       "selection": "53",
-      "product": "bubly sparkling water, Paloma?, can",
+      "product": "bubly sparkling water, Paradise Paloma, can",
       "units": 5,
       "price_on_tag": "1.00",
-      "note": "only \"...ly\" and \"paloma\" read"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     },
     {
       "selection": "54",
@@ -268,10 +269,10 @@
     },
     {
       "selection": "58",
-      "product": "Diet Coke Cherry?, can",
+      "product": "Diet Cherry Coke, can",
       "units": 5,
       "price_on_tag": "1.50",
-      "note": "silver can with \"Cherry\"; could be Coke Cherry"
+      "note": "confirmed by Sean against his photos, 15 Nov"
     }
   ]
 }
