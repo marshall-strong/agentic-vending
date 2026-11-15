@@ -17,6 +17,7 @@ PASSWORD = "test-password-for-the-gate"
 def site(monkeypatch):
     monkeypatch.setattr(gate, "PASSWORD_HASH", gate.make_hash(PASSWORD, n=2**10))
     monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 0)
+    monkeypatch.setattr(gate, "_next_try", {})
     monkeypatch.setenv(gate.KEY_SETTING, "postgresql://reader:secret@example/db")
     server = worker.serve_health(worker.State(), 0)
     try:
@@ -136,14 +137,16 @@ def test_only_the_login_page_takes_a_post_and_never_a_large_one(site):
     assert ask(site, "POST", "/login", big, {"Content-Type": "application/x-www-form-urlencoded"})[0] == 413
 
 
-def test_password_checks_go_one_at_a_time(monkeypatch):
+def test_when_every_check_slot_stays_taken_the_page_says_busy(monkeypatch):
     monkeypatch.setattr(gate, "WAIT_SECONDS", 0.05)
-    gate._checking.acquire()
+    monkeypatch.setattr(gate, "_next_try", {})
+    held = [gate._checking.acquire() for _ in range(gate.CHECKS_AT_ONCE)]
     try:
         with pytest.raises(gate.Busy):
-            gate.check("anything")
+            gate.check("anything", "a")
     finally:
-        gate._checking.release()
+        for _ in held:
+            gate._checking.release()
 
 
 def test_the_login_page_escapes_where_it_sends_you():
@@ -156,12 +159,56 @@ def test_the_gate_is_on_by_default():
     assert gate.needs_password("/dashboard") and not gate.needs_password("/health")
 
 
-def test_a_wrong_password_is_slowed_down(monkeypatch):
+def test_a_wrong_guess_slows_only_that_client(monkeypatch):
     monkeypatch.setattr(gate, "PASSWORD_HASH", gate.make_hash(PASSWORD, n=2**10))
-    slept = []
-    monkeypatch.setattr(gate.time, "sleep", slept.append)
-    assert gate.check("wrong") is False and slept == [gate.WRONG_DELAY_SECONDS]
-    assert gate.check(PASSWORD) is True and slept == [gate.WRONG_DELAY_SECONDS]
+    monkeypatch.setattr(gate, "_next_try", {})
+    assert gate.check("wrong", "stranger") is False
+    with pytest.raises(gate.TooSoon):
+        gate.check(PASSWORD, "stranger")
+    # A teammate elsewhere isn't held up by the stranger's guesses.
+    assert gate.check(PASSWORD, "teammate") is True
+    monkeypatch.setattr(gate, "_next_try", {"stranger": 0.0})
+    assert gate.check(PASSWORD, "stranger") is True
+
+
+def test_the_client_is_the_last_forwarded_address():
+    assert gate.client_of("1.2.3.4, 5.6.7.8", "10.0.0.1") == "5.6.7.8"  # a client can only forge the first
+    assert gate.client_of("", "10.0.0.1") == "10.0.0.1"
+    assert gate.client_of(None, "127.0.0.1") == "127.0.0.1"
+
+
+def test_a_guess_right_after_a_wrong_one_is_told_to_wait(site, monkeypatch):
+    monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
+    assert sign_in(site, "not it")[0] == 401
+    status, headers, _ = sign_in(site)
+    assert status == 429 and "Set-Cookie" not in headers
+
+
+def test_next_with_line_breaks_or_non_ascii_never_reaches_a_header(site):
+    _, headers, _ = sign_in(site)
+    cookie = cookie_from(headers)
+    for target in ("/x%0d%0aSet-Cookie:%20pwn=1", "/x%0aX-Evil:%201", "/%E2%98%83", "/x%09y"):
+        status, headers, _ = ask(site, "GET", f"/login?next={target}", headers={"Cookie": cookie})
+        assert status == 303 and headers["Location"] == "/dashboard", target
+        assert "pwn" not in str(headers) and "X-Evil" not in headers
+    form = urlencode({"password": PASSWORD, "next": "/☃\r\nX-Evil: 1"}).encode()
+    status, headers, _ = ask(site, "POST", "/login", form, {"Content-Type": "application/x-www-form-urlencoded"})
+    assert status == 303 and headers["Location"] == "/dashboard" and "X-Evil" not in headers
+    assert gate.safe_next("/db?table=ledger") == "/db?table=ledger"
+
+
+def test_a_form_that_trickles_in_too_slowly_is_dropped(site, monkeypatch):
+    import socket
+    import time
+
+    monkeypatch.setattr(gate, "FORM_SECONDS", 0.5)
+    started = time.monotonic()
+    with socket.create_connection(("127.0.0.1", site), timeout=10) as s:
+        # Promise 100 bytes, send 9, then go quiet: the server answers 408 at the deadline.
+        s.sendall(b"POST /login HTTP/1.0\r\nContent-Length: 100\r\n\r\npassword=")
+        reply = s.recv(200)
+    assert reply.startswith(b"HTTP/1.0 408")
+    assert time.monotonic() - started < 5
 
 
 def test_the_cookie_lasts_the_stated_days():

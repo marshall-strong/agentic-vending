@@ -343,9 +343,16 @@ class _Health(BaseHTTPRequestHandler):
             length = -1
         if not 0 <= length <= gate.MAX_FORM_BYTES:
             return self._send(413, "text/plain; charset=utf-8", b"That form is too large.")
-        password, next_path = gate.parse_form(self.rfile.read(length))
+        body = self._read_body(length)
+        if body is None:
+            return self._send(408, "text/plain; charset=utf-8", b"That form took too long to arrive.")
+        password, next_path = gate.parse_form(body)
+        client = gate.client_of(self.headers.get("X-Forwarded-For"), self.client_address[0])
         try:
-            right = gate.check(password)
+            right = gate.check(password, client)
+        except gate.TooSoon:
+            return self._send(429, "text/html; charset=utf-8",
+                              gate.login_page(next_path, "Wait a second, then try again.").encode(), gate.CSP)
         except gate.Busy:
             return self._send(503, "text/html; charset=utf-8",
                               gate.login_page(next_path, "Busy. Try again in a few seconds.").encode(), gate.CSP)
@@ -353,6 +360,27 @@ class _Health(BaseHTTPRequestHandler):
             return self._send(401, "text/html; charset=utf-8",
                               gate.login_page(next_path, "That password isn't right.").encode(), gate.CSP)
         self._redirect(next_path, gate.session_cookie())
+
+    def _read_body(self, length: int) -> bytes | None:
+        """The request body, or None when it doesn't all arrive within `gate.FORM_SECONDS`. The
+        per-read `timeout` alone would let a client trickle a byte every few seconds for hours."""
+        deadline = time.monotonic() + gate.FORM_SECONDS
+        data = b""
+        try:
+            while len(data) < length:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return None
+                self.connection.settimeout(left)
+                chunk = self.rfile.read1(length - len(data))
+                if not chunk:
+                    return None
+                data += chunk
+        except (TimeoutError, OSError):
+            return None
+        finally:
+            self.connection.settimeout(self.timeout)
+        return data
 
     def _redirect(self, location: str, cookie: str | None = None) -> None:
         self.send_response(303)

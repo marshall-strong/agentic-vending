@@ -48,13 +48,21 @@ LOGIN, LOGOUT = "/login", "/logout"
 OPEN = ("/health", LOGIN, LOGOUT)
 # The pages' own database setting (`vending.pages.READER`); named here so the gate needs no driver.
 KEY_SETTING = "READONLY_DATABASE_URL"
-# A wrong password holds the one checking slot this long, so guesses come at most one a second.
+# After a wrong password, the same client waits this long before its next guess is even checked.
 WRONG_DELAY_SECONDS = 1.0
+# scrypt checks running at once (each takes ~32 MB for a moment), and how long one waits for a turn.
+CHECKS_AT_ONCE = 2
 WAIT_SECONDS = 5
+# Clients remembered for the per-client delay; past this, the oldest are forgotten.
+MAX_CLIENTS = 10_000
 MAX_FORM_BYTES = 2048
+# Seconds a client has to send the whole password form, however slowly it trickles in.
+FORM_SECONDS = 10
 CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
 
-_checking = threading.Lock()
+_checking = threading.BoundedSemaphore(CHECKS_AT_ONCE)
+_wrong_lock = threading.Lock()
+_next_try: dict[str, float] = {}
 # Used only when the database setting is missing (a local run): sign-ins then last until a restart.
 _fallback_key = os.urandom(32)
 
@@ -76,20 +84,43 @@ def password_matches(password: str, stored: str | None = None) -> bool:
 
 
 class Busy(Exception):
-    """Another password check holds the slot."""
+    """Every password-check slot is taken."""
 
 
-def check(password: str) -> bool:
-    """Whether `password` is right, one check at a time, a wrong one slowed down. Raises Busy."""
+class TooSoon(Exception):
+    """This client guessed wrong less than `WRONG_DELAY_SECONDS` ago."""
+
+
+def check(password: str, client: str = "") -> bool:
+    """Whether `password` is right. Raises TooSoon right after this client's wrong guess, and Busy
+    when every check slot stays taken. One client's wrong guesses slow only that client, so a
+    stranger guessing can't lock the team out."""
+    now = time.monotonic()
+    with _wrong_lock:
+        if _next_try.get(client, 0.0) > now:
+            raise TooSoon
     if not _checking.acquire(timeout=WAIT_SECONDS):
         raise Busy
     try:
-        if password and len(password) <= 256 and password_matches(password):
-            return True
-        time.sleep(WRONG_DELAY_SECONDS)
-        return False
+        right = bool(password) and len(password) <= 256 and password_matches(password)
     finally:
         _checking.release()
+    if not right:
+        with _wrong_lock:
+            if len(_next_try) >= MAX_CLIENTS:
+                _next_try.clear()
+            _next_try[client] = time.monotonic() + WRONG_DELAY_SECONDS
+    return right
+
+
+def client_of(forwarded_for: str | None, peer: str) -> str:
+    """Who is asking: the last address Azure's ingress put in X-Forwarded-For (a client can't
+    forge that one), or the socket's peer on a local run."""
+    if forwarded_for:
+        last = forwarded_for.rsplit(",", 1)[-1].strip()
+        if last:
+            return last
+    return peer
 
 
 def _key() -> bytes:
@@ -142,8 +173,12 @@ def cleared_cookie() -> str:
 
 
 def safe_next(value: str | None) -> str:
-    """Where to go after signing in: a path on this site, never another site."""
-    if not value or not value.startswith("/") or value.startswith("//") or "\\" in value:
+    """Where to go after signing in: a path on this site, never another site. Only printable ASCII,
+    because it goes into a Location header (urlsplit quietly drops tabs and line breaks, so a
+    check on its result alone would let `%0d%0a` add headers)."""
+    if not value or any(not 0x21 <= ord(c) <= 0x7E for c in value):
+        return "/dashboard"
+    if not value.startswith("/") or value.startswith("//") or "\\" in value:
         return "/dashboard"
     parts = urlsplit(value)
     if parts.scheme or parts.netloc:
