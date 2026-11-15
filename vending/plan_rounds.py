@@ -25,8 +25,9 @@ What this module computes, and what it only reads:
 Money is integer cents or an exact Fraction. A round-1 plan stored prices as JSON floats such as
 3.5; those are read through their decimal text and refused unless they are a whole number of cents.
 
-Only our 20 slots (`vending.slots.SLOTS`) may appear in a round; a file naming any other slot is
-refused, so the page can't show a value for a slot that isn't ours. Standard library only.
+Only the 20 selections in our current assignment (`vending.slots.SLOTS`) may appear in a round; a file naming
+any other selection is refused. The split may be redrawn before the 3 Dec start; if it is, `SLOTS` changes first
+and the rounds are placed again. Standard library only.
 """
 
 from __future__ import annotations
@@ -268,7 +269,8 @@ def _projected(row: dict) -> Projected:
 def _check_slot(raw: Any, name: str) -> str:
     slot = str(raw)
     if slot not in SLOTS:
-        raise RoundError(f"{name}: slot {slot} isn't one of ours; a round may only name our 20 slots")
+        raise RoundError(f"{name}: slot {slot} isn't in our current assignment (vending.slots.SLOTS); "
+                         "a round may only place products in those 20 slots")
     return slot
 
 

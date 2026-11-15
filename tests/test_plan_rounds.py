@@ -110,12 +110,12 @@ def test_a_slot_that_isnt_ours_is_refused(tmp_path):
     rows = day_one()
     rows[0]["slot"] = 11        # the other team's selection
     write(tmp_path, "round1", "1", {"day_one": rows})
-    with pytest.raises(pr.RoundError, match="isn't one of ours"):
+    with pytest.raises(pr.RoundError, match="isn't in our current assignment"):
         pr.load_all(tmp_path)
     proj = projection()
     proj["scenarios"]["base"]["per_slot"][0]["slot"] = 14
     write(tmp_path, "round1", "1", {"day_one": day_one()}, proj)
-    with pytest.raises(pr.RoundError, match="isn't one of ours"):
+    with pytest.raises(pr.RoundError, match="isn't in our current assignment"):
         pr.load_all(tmp_path)
 
 
@@ -217,5 +217,5 @@ def test_fallbacks_may_only_name_our_slots(tmp_path):
                                                                        {"slot": "all requested slots", "if": "x", "then": "y"}]})
     pr.load_all(tmp_path)
     write(tmp_path, "round1", "1", {"day_one": day_one(), "fallbacks": [{"slot": "38, 44", "if": "x", "then": "y"}]})
-    with pytest.raises(pr.RoundError, match="slot 44 isn't one of ours"):
+    with pytest.raises(pr.RoundError, match="slot 44 isn't in our current assignment"):
         pr.load_all(tmp_path)
