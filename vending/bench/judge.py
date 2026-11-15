@@ -39,7 +39,6 @@ from vending.replay.cases import Case
 from vending.replay.deciders import Plan
 from vending.replay.model import Budget, BudgetError, state_json
 from vending.replay.sweep import Purse
-from vending.slots import SLOTS
 
 # Cases the baseline (restock to last week's sales, same price, never switch) is built to fail.
 # From cases.py's good_answers and the first sweep (11 Nov): it fails the balance check on
@@ -139,7 +138,7 @@ def blind(case: str, entries: list[Entry]) -> dict[str, Entry]:
 def sold_next_week(c: Case) -> dict[str, int | None] | None:
     if c.next_week is None:
         return None
-    return {s: (None if c.next_week.slot(s) is None else c.next_week.slot(s).units_sold) for s in SLOTS}
+    return {s: (None if c.next_week.slot(s) is None else c.next_week.slot(s).units_sold) for s in (x.slot for x in c.state.slots)}
 
 
 def prompt(c: Case, labelled: dict[str, Entry]) -> str:

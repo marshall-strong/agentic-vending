@@ -181,10 +181,12 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
 
     new = parse(answer)
     lock = lock or lock_at()
-    at = now or datetime.now(timezone.utc)
     note = ""
     with conn.transaction():
         old = conn.execute("select team, device_id, slots from slot_assignment where id = 1 for update").fetchone()
+        # The time is read once the row is ours: a call that waited on another
+        # recorder's lock past the deadline is judged at the deadline's far side.
+        at = now or datetime.now(timezone.utc)
         if old is None:
             conn.execute(
                 "insert into slot_assignment (team, device_id, slots, first_read_at, last_checked_at, response)"

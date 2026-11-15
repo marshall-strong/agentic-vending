@@ -46,6 +46,46 @@ def test_tools_see_nothing_after_the_replay_date(conn):
     assert run_tool(conn, AS_OF, "set_price", {})[1]
 
 
+def test_the_replayed_machine_state_reads_the_stored_assignment_not_slots(conn):
+    """A stored assignment of columns 1-4 replaces SLOTS for the replay's tool too, like the week's state."""
+    from tests.conftest import store_poll
+
+    left = [f"{row}{col}" for row in range(1, 6) for col in range(1, 5)]
+    conn.execute("update slot_assignment set slots = %s", (left,))
+    store_poll(conn, "a", "2026-10-02T03:00:00+00:00", {"11": (250, 100), "15": (250, 500)})
+    store_poll(conn, "b", "2026-10-09T03:00:00+00:00", {"11": (250, 104), "15": (250, 530)})
+    state, failed = run_tool(conn, AS_OF, "get_machine_state", {})
+    data = json.loads(state)["data"]
+    assert not failed and [s["slot"] for s in data] == left
+    assert next(s for s in data if s["slot"] == "11")["lifetime_units"] == 104
+    assert replay_week(conn, datetime(2026, 10, 2).date()).slot("15") is None
+    conn.execute("delete from slot_assignment")
+    state, failed = run_tool(conn, AS_OF, "get_machine_state", {})
+    assert failed and "python -m vending.slots record" in json.loads(state)["message"]
+
+
+def test_the_requests_name_the_stored_slots_not_slots(conn, api):
+    """The answer schema and get_sales_history's slot list are the week's own slots, not SLOTS."""
+    from tests.conftest import store_poll
+    from vending.replay import model
+
+    left = [f"{row}{col}" for row in range(1, 6) for col in range(1, 5)]
+    conn.execute("update slot_assignment set slots = %s", (left,))
+    store_poll(conn, "a", "2026-10-02T03:00:00+00:00", {s: (250, 100) for s in left})
+    store_poll(conn, "b", "2026-10-09T03:00:00+00:00", {s: (250, 104) for s in left})
+    api.turns = [(200, "end_turn", answer(conn, WEEK))]
+    weeks = AgentReplay().run(conn, WEEK, 1)
+    assert len(weeks) == 1 and not weeks[0].error, weeks[0].error
+    sent = api.posts[0]
+    plan = sent["output_config"]["format"]["schema"]["properties"]["plan"]
+    assert plan["properties"]["slots"]["items"]["properties"]["slot"]["enum"] == left
+    history = next(t for t in sent["tools"] if t["name"] == "get_sales_history")
+    assert history["input_schema"]["properties"]["slots"]["anyOf"][0]["items"]["enum"] == left
+    assert weeks[0].result.checks[0].status == "pass", weeks[0].result.checks[0]
+    # The bench's config hash reads PLAN_SCHEMA, which stays as it was.
+    assert model.PLAN_SCHEMA == model.plan_schema(agent.SLOTS)
+
+
 def test_two_weeks_with_tools_notes_and_updates(conn, api, tmp_path):
     fill_week(conn)
     api.turns = [

@@ -165,6 +165,38 @@ def test_the_lock_can_be_moved(empty):
     assert slots.record(empty, MOVED, AFTER, lock=AFTER + timedelta(hours=1)) == "changed"
 
 
+def test_a_change_that_waits_on_the_row_lock_past_the_deadline_is_refused(empty, schema_url):
+    """The deadline is judged when the row is ours, not when the call began.
+
+    Another recorder holds the row past the lock; the waiting call then sees
+    the deadline gone and must change nothing.
+    """
+    import threading
+    import time
+
+    from tests.conftest import open_in
+
+    slots.record(empty, ANSWER, NOW)
+    lock = datetime.now(timezone.utc) + timedelta(seconds=0.5)
+    outcome = {}
+
+    def waiting():
+        with open_in(*schema_url) as other:
+            try:
+                outcome["result"] = slots.record(other, MOVED, lock=lock)
+            except BadAssignment as e:
+                outcome["result"] = e
+
+    with open_in(*schema_url) as holder, holder.transaction():
+        holder.execute("select 1 from slot_assignment where id = 1 for update")
+        caller = threading.Thread(target=waiting)
+        caller.start()
+        time.sleep(1.0)            # the caller is now queued on the row, and the deadline has passed
+    caller.join(timeout=10)
+    assert isinstance(outcome.get("result"), BadAssignment), outcome
+    assert slots.our_slots(empty) == slots.SLOTS
+
+
 def test_a_new_team_label_alone_is_stored_not_refused(empty):
     """Nothing reads `team`, so a renamed team with the same slots mustn't fail the hourly `record`."""
     slots.record(empty, ANSWER, NOW)

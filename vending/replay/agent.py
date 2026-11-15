@@ -38,7 +38,7 @@ from vending.replay import model
 from vending.replay.model import Budget, BudgetError
 from vending.replay.scoring import Score, score
 from vending.replay.state import EASTERN, NoData, WeekState, replay_week
-from vending.slots import SLOTS
+from vending.slots import SLOTS, SlotsNotRecorded, our_slots
 from vending.tools import machine_state as ms
 from vending.tools.sales_history import get_sales_history
 
@@ -62,16 +62,31 @@ tried, what you'd do differently.
 
 {model.PLAN_RULES}"""
 
-ANSWER_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "plan": model.PLAN_SCHEMA,
-        "update": {"type": "string"},
-        "notes": {"type": "string"},
-    },
-    "required": ["plan", "update", "notes"],
-    "additionalProperties": False,
-}
+def answer_schema(slots: tuple[str, ...] = SLOTS) -> dict:
+    """The week's answer: a plan for `slots` (the week's own), the team update and the notes."""
+    return {
+        "type": "object",
+        "properties": {
+            "plan": model.plan_schema(slots),
+            "update": {"type": "string"},
+            "notes": {"type": "string"},
+        },
+        "required": ["plan", "update", "notes"],
+        "additionalProperties": False,
+    }
+
+
+ANSWER_SCHEMA = answer_schema()
+
+
+def tools(slots: tuple[str, ...] = SLOTS) -> list[dict]:
+    """The read tools, with get_sales_history's slot names limited to `slots`."""
+    out = json.loads(json.dumps(TOOLS))
+    history = next(t for t in out if t["name"] == "get_sales_history")
+    history["input_schema"]["properties"]["slots"]["anyOf"][0]["items"]["enum"] = list(slots)
+    history["description"] = history["description"].replace("all 20", f"all {len(slots)}")
+    return out
+
 
 TOOLS = [
     {
@@ -107,6 +122,10 @@ NOT_BUILT = ("These tools aren't built yet, so you don't have them: get_catalog,
 
 def machine_state_as_of(conn: psycopg.Connection, as_of: datetime) -> ms.MachineState:
     """`get_machine_state` as it would have answered at `as_of`: the same build, on polls up to then."""
+    try:
+        slots = our_slots(conn)   # the stored assignment, as the live tool and the week's state read it
+    except SlotsNotRecorded as error:
+        return ms.MachineState(success=False, message=str(error))
     latest = ms._poll(conn, "started_at <= %s", as_of)
     if latest is None:
         return ms.MachineState(success=False, message="No polls are stored before this date.")
@@ -115,8 +134,8 @@ def machine_state_as_of(conn: psycopg.Connection, as_of: datetime) -> ms.Machine
         baseline = None
     start = baseline[1] if baseline else None
     # The same window count as the live tool, on readings that end at the replay's latest poll.
-    window_sold = ms.sold_in_window(ms._readings(conn, start, latest[1]), start) if start else {}
-    states = ms.build(latest[1], ms._counters(conn, latest[0]), start, window_sold)
+    window_sold = ms.sold_in_window(ms._readings(conn, start, latest[1], slots), start) if start else {}
+    states = ms.build(latest[1], ms._counters(conn, latest[0], slots), start, window_sold, slots=slots)
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
     return ms.MachineState(
         success=True, count=len(states), as_of=latest[1], window_start=baseline[1] if baseline else None,
@@ -221,14 +240,15 @@ class AgentReplay:
                  f"For this test, assume {'; '.join(assumed) or 'nothing about unit cost or balance: both are unknown'}.\n"
                  f"{NOT_BUILT}\n\nYour notes from last week:\n{notes}")
         messages = [{"role": "user", "content": facts}]
+        ours = tuple(s.slot for s in week.state.slots)   # the stored assignment, as the week was built
         # A fresh id per week, so its cost can't mix with another run's week of the same date.
         label = {"kind": "agent-week", "week_start": week.state.start.isoformat(), "week_run": uuid.uuid4().hex}
         for turn in range(MAX_TURNS + 1):
             # The tools stay defined (the history holds tool calls); on the last turn none may be called.
-            request = {"system": SYSTEM, "messages": messages, "tools": TOOLS,
+            request = {"system": SYSTEM, "messages": messages, "tools": tools(ours),
                        "tool_choice": {"type": "auto" if turn < MAX_TURNS else "none"},
                        "output_config": {"effort": self.budget.effort,
-                                         "format": {"type": "json_schema", "schema": ANSWER_SCHEMA}}}
+                                         "format": {"type": "json_schema", "schema": answer_schema(ours)}}}
             try:
                 response, _ = self.budget.send(client, request, spent=week.cost_usd,
                                                label={**label, "turn": turn + 1})
