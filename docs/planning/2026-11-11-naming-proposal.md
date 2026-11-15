@@ -60,9 +60,9 @@ These are from the first benchmark sweep on 11 Nov: 9 setups (3 models × 3 effo
 
 Graded blind against each case's good answer (out of 50), Opus at low effort scored 43, Sonnet at high 41, and Haiku at medium 40, at about a thirtieth of Opus's cost. That's one run of 10 made-up cases, so it's a hint, not a ranking. The standing benchmark (#66) is meant to firm it up.
 
-## The other team's slots
+## Slots not assigned to us
 
-We know which slots are **ours** (`vending/slots.py`, columns 5-8). `docs/agent/competition-and-integrity.md` says not to work out which other slots are a rival's, and the dashboard labels them neutrally ("not our selection"). The sales analysis uses whole-machine **totals** for the calendar, time of day, trend and door visits, but shows nothing per slot for the other 20. Label options with a bit of personality, none claiming who owns the rails:
+Our slots are the ones the inventory server assigns (stored with `python -m vending.slots record`): columns 5-8 on 15 Nov. The assignment may change once before the competition starts on Thu 3 Dec 2026, and before then no selection is either team's. `docs/agent/competition-and-integrity.md` says not to work out which other slots are a rival's, and the dashboard labels them neutrally ("not our selection"). The sales analysis uses whole-machine **totals** for the calendar, time of day, trend and door visits, but shows nothing per slot for the other 20. Label options with a bit of personality, for use from 3 Dec, none claiming who owns the rails:
 
 | Label | Hover text |
 |---|---|
