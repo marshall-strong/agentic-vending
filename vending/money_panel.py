@@ -155,7 +155,6 @@ def attention(data: dict) -> list[tuple[str, str]]:
     pending = data["committed"]
     if data.get("problem"):
         out.append(("warn", f"The ledger can't give a balance: {data['problem']}"))
-    if data.get("problem"):
         return out
     if not data["opened"]:
         if pending["requests"]:
