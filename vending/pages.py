@@ -3,6 +3,7 @@
     /dashboard               the agent dashboard (`vending.dashboard`)
     /dashboard/state.json    the same data as JSON
     /db                      the DB explorer (`vending.db_explorer`)
+    /simulations             simulated seasons, from files (`vending.simulate.history`)
 
     python -m vending.pages check                            # is the pages' login really read-only?
     python -m vending.pages grant vending_reader --by NAME   # as the tables' owner: let that role read them
@@ -227,6 +228,11 @@ def respond(target: str) -> Reply | None:
     """
     parts = urlsplit(target)
     path = parts.path.rstrip("/")
+    from vending.simulate import history     # simulated seasons, from files: no database
+    simulated = history.respond(target)
+    if simulated is not None:
+        status, kind, body = simulated
+        return Reply(status, kind, body, CSP_DASHBOARD)
     if path not in (DASHBOARD, STATE, EXPLORER):
         return None
     request = None
@@ -259,7 +265,8 @@ def respond(target: str) -> Reply | None:
         return _problem(path, 500, BROKEN)
     if path == STATE:
         return Reply(200, JSON, dashboard.to_json(snap))
-    page = dashboard.render(snap, json_href=STATE, nav=(("Home", "/"), ("Database", EXPLORER)))
+    page = dashboard.render(snap, json_href=STATE, nav=(("Home", "/"), ("Database", EXPLORER),
+                                                        ("Simulations", history.ROOT)))
     return Reply(200, HTML, page, CSP_DASHBOARD)
 
 

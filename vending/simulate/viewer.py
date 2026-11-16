@@ -256,12 +256,17 @@ def dashboard_page(name: str, url: str, moment: datetime) -> tuple[str, dict]:
     return page.replace("<body>", "<body>" + time_bar(name, url, moment, "./"), 1), snap
 
 
-def pnl_page(name: str, url: str, moment: datetime) -> str:
+def pnl_page_bare(url: str, moment: datetime) -> str:
+    """The P&L page as of `moment`, without the time bar."""
     from vending import pnl_report
     with as_of(url, moment) as conn:
         report = pnl_report.load(conn, None, moment.astimezone(EASTERN).date())
         _, body = pnl_report.render(report)
-    return body.replace("<body>", "<body>" + time_bar(name, url, moment, "pnl"), 1)
+    return body
+
+
+def pnl_page(name: str, url: str, moment: datetime) -> str:
+    return pnl_page_bare(url, moment).replace("<body>", "<body>" + time_bar(name, url, moment, "pnl"), 1)
 
 
 def _page(title: str, body: str) -> str:

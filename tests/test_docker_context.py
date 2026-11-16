@@ -1,6 +1,7 @@
-"""The container image carries `docs/agent/`, which `get_project_rules` reads at run time.
+"""The container image carries `docs/agent/`, which `get_project_rules` reads at run time, and
+`docs/simulations/data/`, the archived simulated seasons the dashboard's /simulations pages read.
 
-`.dockerignore` leaves out `docs/` and `*.md`, then lets `docs/agent/` back in. These
+`.dockerignore` leaves out `docs/` and `*.md`, then lets those two back in. These
 tests apply a simplified copy of Docker's rules (each pattern is a path glob from the
 context root, `*` does not cross `/`, a pattern also covers everything under a matched
 folder, and the last matching pattern wins), so a change that drops the notes from the
@@ -16,6 +17,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from vending.simulate.history import DATA as SIMULATIONS_DIR
 from vending.tools.project_rules import RULES_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,12 +58,21 @@ def test_the_rest_of_docs_and_other_markdown_stay_out():
     others = [
         p.relative_to(ROOT).as_posix()
         for p in (ROOT / "docs").rglob("*")
-        if p.is_file() and RULES_DIR not in p.parents
+        if p.is_file() and RULES_DIR not in p.parents and SIMULATIONS_DIR not in p.parents
     ]
     assert others, "expected other files under docs/"
     assert [p for p in others if in_context(p)] == []
     assert not in_context("README.md")
     assert not in_context(".env")
+
+
+def test_the_archived_simulations_are_in_the_build_context():
+    files = [p.relative_to(ROOT).as_posix() for p in SIMULATIONS_DIR.rglob("*") if p.is_file()]
+    assert any(f.endswith("archive.jsonl.xz") for f in files)
+    assert [f for f in files if not in_context(f)] == []
+    assert not in_context("docs/simulations/2026-11-16-full-competition.md")
+    lines = [line.split() for line in (ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()]
+    assert ["COPY", "docs/simulations/data/", "docs/simulations/data/"] in lines
 
 
 def test_the_dockerfile_copies_the_rules_notes_next_to_the_code():

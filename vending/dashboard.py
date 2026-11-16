@@ -1586,6 +1586,11 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
         if host not in LOCAL_HOSTS:
             return self._send(403, "text/plain; charset=utf-8", "open this page as 127.0.0.1 or localhost")
+        from vending.simulate import history     # simulated seasons, from files: no database
+        simulated = history.respond(self.path)
+        if simulated is not None:
+            status, kind, body = simulated
+            return self._send(status, kind, body)
         if path not in ("/", "/state.json"):
             return self._send(404, "text/plain; charset=utf-8", "not found")
         try:
@@ -1598,7 +1603,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(503, "text/html; charset=utf-8", _error_page(message))
         if path == "/state.json":
             return self._send(200, "application/json", to_json(snap))
-        self._send(200, "text/html; charset=utf-8", render(snap))
+        self._send(200, "text/html; charset=utf-8", render(snap, nav=(("Simulations", "/simulations"),)))
 
     def _send(self, code: int, content_type: str, body: str) -> None:
         data = body.encode("utf-8")

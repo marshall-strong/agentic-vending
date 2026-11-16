@@ -42,6 +42,8 @@ COPY vending/ vending/
 COPY db/ db/
 # get_project_rules reads these notes at run time (vending/tools/project_rules.py).
 COPY docs/agent/ docs/agent/
+# Archived simulated seasons for the dashboard's /simulations pages (vending.simulate.history).
+COPY docs/simulations/data/ docs/simulations/data/
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && useradd --system --uid 10001 --no-create-home vending
 

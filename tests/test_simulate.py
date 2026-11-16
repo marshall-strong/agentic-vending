@@ -194,3 +194,39 @@ def test_first_week_end_to_end(schema_url, monkeypatch, tmp_path):
         assert cut.execute("select count(*) from purchase_lines").fetchone()[0] == 0
     with open_in(url, schema) as conn:
         assert conn.execute("select count(*) from agent_runs").fetchone()[0] == len(st.runs)
+
+
+def test_history_serves_archived_seasons(tmp_path, monkeypatch):
+    """The dashboard's /simulations pages read only files: an index, a moment, the report, the JSON."""
+    import json
+    import lzma
+
+    from vending.simulate import history
+    season = tmp_path / "2026-11-16-test"
+    season.mkdir()
+    week = {"week": 1, "saturday": "2026-11-28", "class_days": 2, "units_sold": 3, "units_lost": 0.5,
+            "revenue_ex_tax": 9.0, "gross_profit": 4.0, "visit_fees": 0.0, "model_spend": 0.1, "profit": 3.9,
+            "cumulative_profit": 3.9, "spendable": 590.0, "runs": [], "visits_done": [],
+            "report_card": {"stock_outs": {"grade": "good", "why": "none lost"}}}
+    (season / "meta.json").write_text(json.dumps({"name": "Test season", "strategy": "a test"}))
+    (season / "season.json").write_text(json.dumps({"profit_after_model": 3.9, "units_sold": 3, "units_lost": 0.5,
+                                                    "model_spend": 0.1, "balance_end": 600.0, "inventory_at_cost_end": 1.0,
+                                                    "submitted": 1, "runs": 1, "model": "m", "effort": "medium"}))
+    (season / "weeks.json").write_text(json.dumps([week]))
+    (season / "runs.json").write_text("[]")
+    with lzma.open(season / "archive.jsonl.xz", "wt", encoding="utf-8") as f:
+        for at, label in (("2026-12-01T18:00:00-05:00", "first"), ("2026-12-02T18:00:00-05:00", "second")):
+            page = f'<html><body><a href="@PNL@">P&L</a> {label}<script>setInterval(refresh, REFRESH);</script></body></html>'
+            f.write(json.dumps({"at": at, "label": label, "dashboard": page, "pnl": f"<html><body>pnl {label}</body></html>"}) + "\n")
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    status, _, index = history.respond("/simulations")
+    assert status == 200 and "Test season" in index and "Simulated data" in index
+    status, _, page = history.respond("/simulations/2026-11-16-test/?at=2026-12-01T20:00")
+    assert status == 200 and " first" in page and "SIMULATION: Test season" in page
+    assert "/simulations/2026-11-16-test/pnl?at=" in page and "setInterval(refresh" not in page
+    assert "Date.now=function(){return 1796166000000;}" in page       # 18:00 ET 1 Dec 2026: ages count from it
+    assert "pnl second" in history.respond("/simulations/2026-11-16-test/pnl")[2]      # no time: the last moment
+    assert history.respond("/simulations/2026-11-16-test/report")[0] == 200
+    assert json.loads(history.respond("/simulations/2026-11-16-test/weeks.json")[2])[0]["profit"] == 3.9
+    assert history.respond("/simulations/nope/")[0] == 404
+    assert history.respond("/dashboard") is None

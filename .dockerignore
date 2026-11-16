@@ -31,4 +31,6 @@ scripts/
 # ...except the agent's rule notes, which get_project_rules reads at run time
 !docs/agent/
 !docs/agent/*.md
+# ...and the archived simulated seasons the /simulations pages read (about 1 MB)
+!docs/simulations/data/
 compose.yaml

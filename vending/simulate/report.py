@@ -343,6 +343,7 @@ def chart_svg(seasons: dict[str, dict]) -> str:
     y = lambda v: top + (high - v) * (height - top - bottom) / (high - low)
     band = (width - left - right) / n
     bar = band * 0.7 / len(seasons)
+    ends: list[tuple[float, str, str]] = []
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
            'font-family="system-ui, sans-serif" font-size="12">', '<rect width="100%" height="100%" fill="#fff"/>',
            f'<text x="{left}" y="20" font-size="14" font-weight="600" fill="#222">Simulated profit by week '
@@ -368,8 +369,7 @@ def chart_svg(seasons: dict[str, dict]) -> str:
         pts = " ".join(f"{left + band * (i + .5):.1f},{y(w['cumulative_profit']):.1f}" for i, w in enumerate(s["weeks"]))
         out.append(f'<polyline points="{pts}" fill="none" stroke="{c}" stroke-width="2.5"/>')
         last = s["weeks"][-1]
-        out.append(f'<text x="{width - right}" y="{y(last["cumulative_profit"]) - 6:.1f}" text-anchor="end" fill="{c}" '
-                   f'font-weight="600">{name}: ${last["cumulative_profit"]:,.0f}</text>')
+        ends.append((y(last["cumulative_profit"]), c, f'{name}: ${last["cumulative_profit"]:,.0f}'))
         out.append(f'<rect x="{left + 10 + 170 * k}" y="{height - 18}" width="12" height="12" fill="{c}"/>'
                    f'<text x="{left + 26 + 170 * k}" y="{height - 8}" fill="#333">{name}</text>')
     return "\n".join(out + ["</svg>"])

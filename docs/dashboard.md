@@ -12,6 +12,11 @@ It reads whatever database `DATABASE_URL` points at: your local one, or the team
 database. The page refreshes every 30 seconds. `/state.json` returns the same data as JSON, for a
 script or another agent.
 
+**Simulations.** `/simulations` lists every archived simulated season of our agent (from
+`docs/simulations/data/`, never the database): profit by week, report cards, and this dashboard and
+the P&L page as they looked at any moment of the season, with a time bar to step through it. See
+[`simulations/2026-11-16-full-competition.md`](simulations/2026-11-16-full-competition.md).
+
 ![The dashboard with sample data](dashboard/current.png)
 
 *Sample data from a throwaway database, not a real run. **The highlighted columns in this picture are not our real slots.** For the screenshot our slots were set to columns 2, 4, 6 and 8, to show the page follows `vending.slots`. Our real slots are the ones `vending/slots.py` lists.*

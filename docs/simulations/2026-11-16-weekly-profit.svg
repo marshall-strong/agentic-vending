@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 360" width="820" height="360" font-family="system-ui, sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="64" y="20" font-size="14" font-weight="600" fill="#222">Simulated profit by week (bars) and season to date (lines), after model spend</text>
+<line x1="64" x2="796" y1="299.4" y2="299.4" stroke="#e5e7eb"/>
+<text x="58" y="303.4" text-anchor="end" fill="#555">$0</text>
+<line x1="64" x2="796" y1="246.9" y2="246.9" stroke="#e5e7eb"/>
+<text x="58" y="250.9" text-anchor="end" fill="#555">$100</text>
+<line x1="64" x2="796" y1="194.5" y2="194.5" stroke="#e5e7eb"/>
+<text x="58" y="198.5" text-anchor="end" fill="#555">$200</text>
+<line x1="64" x2="796" y1="142.0" y2="142.0" stroke="#e5e7eb"/>
+<text x="58" y="146.0" text-anchor="end" fill="#555">$300</text>
+<line x1="64" x2="796" y1="89.5" y2="89.5" stroke="#e5e7eb"/>
+<text x="58" y="93.5" text-anchor="end" fill="#555">$400</text>
+<line x1="64" x2="796" y1="37.0" y2="37.0" stroke="#e5e7eb"/>
+<text x="58" y="41.0" text-anchor="end" fill="#555">$500</text>
+<line x1="64" x2="796" y1="299.4" y2="299.4" stroke="#888"/>
+<text x="100.6" y="328" text-anchor="middle" fill="#555">W1</text>
+<text x="173.8" y="328" text-anchor="middle" fill="#555">W2</text>
+<text x="247.0" y="328" text-anchor="middle" fill="#555">W3</text>
+<text x="320.2" y="328" text-anchor="middle" fill="#555">W4</text>
+<text x="393.4" y="328" text-anchor="middle" fill="#555">W5</text>
+<text x="466.6" y="328" text-anchor="middle" fill="#555">W6</text>
+<text x="539.8" y="328" text-anchor="middle" fill="#555">W7</text>
+<text x="613.0" y="328" text-anchor="middle" fill="#555">W8</text>
+<text x="686.2" y="328" text-anchor="middle" fill="#555">W9</text>
+<text x="759.4" y="328" text-anchor="middle" fill="#555">W10</text>
+<rect x="75.0" y="288.2" width="15.1" height="11.2" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W1: $21.41</title></rect>
+<rect x="148.2" y="269.0" width="15.1" height="30.4" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W2: $57.99</title></rect>
+<rect x="221.4" y="269.9" width="15.1" height="29.5" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W3: $56.26</title></rect>
+<rect x="294.6" y="298.6" width="15.1" height="1.0" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W4: $1.68</title></rect>
+<rect x="367.8" y="299.4" width="15.1" height="1.0" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W5: $0.05</title></rect>
+<rect x="441.0" y="259.1" width="15.1" height="40.3" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W6: $76.76</title></rect>
+<rect x="514.2" y="257.1" width="15.1" height="42.3" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W7: $80.64</title></rect>
+<rect x="587.4" y="251.6" width="15.1" height="47.9" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W8: $91.16</title></rect>
+<rect x="660.6" y="279.9" width="15.1" height="19.6" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W9: $37.29</title></rect>
+<rect x="733.8" y="277.7" width="15.1" height="21.7" fill="#2a6fdb" fill-opacity="0.45"><title>Baseline rule W10: $41.38</title></rect>
+<polyline points="100.6,288.2 173.8,257.8 247.0,228.2 320.2,227.3 393.4,227.3 466.6,187.0 539.8,144.7 613.0,96.8 686.2,77.3 759.4,55.5" fill="none" stroke="#2a6fdb" stroke-width="2.5"/>
+<rect x="74" y="342" width="12" height="12" fill="#2a6fdb"/><text x="90" y="352" fill="#333">Baseline rule</text>
+<rect x="92.1" y="299.4" width="15.1" height="1.0" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W1: $-0.65</title></rect>
+<rect x="165.3" y="279.1" width="15.1" height="20.4" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W2: $38.83</title></rect>
+<rect x="238.5" y="277.5" width="15.1" height="22.0" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W3: $41.85</title></rect>
+<rect x="311.7" y="296.5" width="15.1" height="3.0" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W4: $5.69</title></rect>
+<rect x="384.9" y="299.4" width="15.1" height="1.0" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W5: $-0.09</title></rect>
+<rect x="458.1" y="263.1" width="15.1" height="36.4" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W6: $69.33</title></rect>
+<rect x="531.3" y="275.8" width="15.1" height="23.7" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W7: $45.08</title></rect>
+<rect x="604.5" y="271.0" width="15.1" height="28.4" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W8: $54.14</title></rect>
+<rect x="677.7" y="278.6" width="15.1" height="20.8" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W9: $39.71</title></rect>
+<rect x="750.9" y="287.3" width="15.1" height="12.2" fill="#e07b1a" fill-opacity="0.45"><title>Opus 5.5 W10: $23.23</title></rect>
+<polyline points="100.6,299.8 173.8,279.4 247.0,257.4 320.2,254.4 393.4,254.5 466.6,218.1 539.8,194.4 613.0,166.0 686.2,145.2 759.4,133.0" fill="none" stroke="#e07b1a" stroke-width="2.5"/>
+<rect x="244" y="342" width="12" height="12" fill="#e07b1a"/><text x="260" y="352" fill="#333">Opus 5.5</text>
+<rect x="109.1" y="285.1" width="15.1" height="14.4" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W1: $27.36</title></rect>
+<rect x="182.3" y="274.0" width="15.1" height="25.5" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W2: $48.53</title></rect>
+<rect x="255.5" y="276.6" width="15.1" height="22.9" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W3: $43.54</title></rect>
+<rect x="328.7" y="296.1" width="15.1" height="3.3" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W4: $6.35</title></rect>
+<rect x="401.9" y="299.4" width="15.1" height="1.0" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W5: $-0.09</title></rect>
+<rect x="475.1" y="275.6" width="15.1" height="23.8" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W6: $45.33</title></rect>
+<rect x="548.3" y="276.8" width="15.1" height="22.7" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W7: $43.16</title></rect>
+<rect x="621.5" y="278.6" width="15.1" height="20.8" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W8: $39.66</title></rect>
+<rect x="694.7" y="273.7" width="15.1" height="25.8" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W9: $49.08</title></rect>
+<rect x="767.9" y="284.7" width="15.1" height="14.7" fill="#2f9e66" fill-opacity="0.45"><title>Sonnet 5.5 W10: $28.04</title></rect>
+<polyline points="100.6,285.1 173.8,259.6 247.0,236.7 320.2,233.4 393.4,233.5 466.6,209.7 539.8,187.0 613.0,166.2 686.2,140.4 759.4,125.7" fill="none" stroke="#2f9e66" stroke-width="2.5"/>
+<rect x="414" y="342" width="12" height="12" fill="#2f9e66"/><text x="430" y="352" fill="#333">Sonnet 5.5</text>
+</svg>

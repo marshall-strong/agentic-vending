@@ -180,6 +180,7 @@ def home_page(public: dict, pages: bool = False) -> str:
         look = ("""<ul>
       <li><a href="/dashboard">Agent dashboard</a>: is the agent OK, what is in our slots, what it plans for Friday and why</li>
       <li><a href="/db">Database explorer</a>: every table we keep, its columns and its rows</li>
+      <li><a href="/simulations">Simulations</a>: simulated seasons of our agent, to step through week by week</li>
     </ul>
     <p class="muted">Both only read. Nothing on them can change the machine, an order or our records.</p>""")
     else:
@@ -308,7 +309,7 @@ class _Health(BaseHTTPRequestHandler):
             self._send(200 if self.state.healthy else 503, "application/json", body)
         elif path == "":
             self._send(200, "text/html; charset=utf-8", home_page(self.state.public(), pages_ready()).encode())
-        elif path.startswith(("/dashboard", "/db")):
+        elif path.startswith(("/dashboard", "/db", "/simulations")):
             # Imported here, so the syncs and /health never depend on the pages' code.
             from vending import pages
 
