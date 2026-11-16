@@ -87,6 +87,9 @@ KNOWN: dict[str, Setting] = {
     "capacity_overrides": Setting("units per column for products a person counted; replaces the whole "
                                   "object, wins over the loading chart (default none)", _overrides),
     "price_ceiling_cents": Setting("highest sale price the planner allows (default 650)", _ceiling),
+    "wildcard_ceiling_cents": Setting("highest sale price for the one wildcard slot (default 800)", _ceiling),
+    "wildcard_purchase_cap_cents": Setting("most one purchase for the wildcard slot may cost at the worker's "
+                                           "maximum (default 8200)", lambda v: _whole(v, 100, 20000, "cents")),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
     "model_run_cap_cents": Setting("most one agent cycle or replay may spend on model calls (default 100)",

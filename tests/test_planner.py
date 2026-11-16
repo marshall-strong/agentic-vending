@@ -706,5 +706,59 @@ class Inputs(unittest.TestCase):
                                      "37", "38", "45", "46", "47", "48", "55", "56", "57", "58"))
 
 
+
+def wild(*changes, wildcard, off_cycle=False, sourcing=(), now=TUESDAY, config=CONFIG, **state):
+    d = replace(desired(*changes, off_cycle=off_cycle, sourcing=sourcing), wildcard=wildcard)
+    return plan_restock(current(**state), d, config, now)
+
+
+class TestWildcard(unittest.TestCase):
+    """One slot may sell up to the wildcard ceiling (Kevin, #100; #110 item 1)."""
+
+    def test_the_named_slot_may_go_above_the_ceiling_up_to_the_wildcard_ceiling(self):
+        p = wild(pickle_17(price="7.50"), wildcard="17")
+        self.assertTrue(p.ok, codes(p))
+        self.assertEqual(p.wildcard, "17")
+        self.assertTrue(wild(pickle_17(price="8.00"), wildcard="17").ok)
+        self.assertEqual(codes(wild(pickle_17(price="8.05"), wildcard="17")), ["above_ceiling"])
+
+    def test_any_other_slot_keeps_the_ceiling(self):
+        self.assertEqual(codes(plan(pickle_17(price="7.50"))), ["above_ceiling"])
+        self.assertEqual(codes(wild(pickle_17(price="7.50"), restock_15(price="6.55"), wildcard="17")),
+                         ["above_ceiling"])
+
+    def test_one_at_a_time(self):
+        # Slot 18 is already above the ceiling: it is the wildcard until it is named or repriced.
+        above = {"18": SlotState("18", COKE, 700, 10, 125)}
+        p = wild(pickle_17(price="7.50"), wildcard="17", slots=above)
+        self.assertEqual([(r.code, r.slot) for r in p.refusals], [("wildcard", "18")])
+        self.assertEqual(codes(plan(restock_15(), slots=above)), ["wildcard"])
+        self.assertTrue(wild(restock_15(), wildcard="18", slots=above).ok)
+
+    def test_it_moves_only_at_a_friday_visit(self):
+        self.assertEqual(codes(wild(pickle_17(price="7.50"), wildcard="17", off_cycle=True)), ["wildcard"])
+        # Restocking the wildcard it already is, midweek, is fine.
+        already = {"17": SlotState("17", PICKLE, 750, 2, 250)}
+        self.assertTrue(wild(pickle_17(price="7.50"), wildcard="17", off_cycle=True, slots=already).ok)
+
+    def test_one_purchase_costs_at_most_the_cap(self):
+        dear = Sourcing(PICKLE, PurchaseOption("Amazon", 12, "85.00", url=PICKLE_URL))
+        p = wild(pickle_17(price="8.00"), wildcard="17", sourcing=(dear,))
+        self.assertEqual(codes(p), ["wildcard"])
+        self.assertIn("$85.00", p.refusals[0].message)
+        # The same purchase in an ordinary slot has no cap (only the ceiling).
+        self.assertTrue(plan(pickle_17(price="6.50"), sourcing=(replace(dear, primary=replace(
+            dear.primary, max_price_per_pack="60.00")),)).ok)
+
+    def test_the_wildcard_must_be_one_of_ours(self):
+        self.assertEqual(codes(wild(restock_15(), wildcard="99")), ["wildcard"])
+
+    def test_the_wildcard_ceiling_is_between_the_ceiling_and_the_api_limit(self):
+        with self.assertRaises(ValueError):
+            Config(wildcard_ceiling_cents=1005)
+        with self.assertRaises(ValueError):
+            Config(price_ceiling_cents=650, wildcard_ceiling_cents=600)
+
+
 if __name__ == "__main__":
     unittest.main()

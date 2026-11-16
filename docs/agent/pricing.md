@@ -7,8 +7,18 @@ Prices stay within the floor and ceiling, must be explainable, may need delibera
 - **Floor:** the most we'd pay per unit, plus 8% tax, rounded up to the next 5 cents. Never guess it; `preview_desired_state` shows it for every slot.
 - **Ceiling:** $6.50, the team's decision on 12 Nov (`price_ceiling_cents`; the bridge refuses over $10.00). A10 in `docs/assumptions.md` is waiting on the instructional team to confirm it.
 - **Steps:** prices go in 5-cent steps.
+- **The wildcard slot:** one slot may go up to $8.00 (`wildcard_ceiling_cents`) instead of $6.50. See below.
 
 The preview refuses any price outside these bounds.
+
+**The wildcard slot** (Kevin's proposal, #100; the team decides on #110, item 1). One of our 20 slots is a riskier bet: a premium drink, a high-price test, a rotating feature, a seasonal bet or an anchor that makes the others look cheap. Name it in the plan's `wildcard` field and give the reason in `slot_reasons`.
+
+- **Ceiling $8.00**; the floor is every slot's floor. Every sale should still profit: no loss leaders.
+- **It moves only at a Friday visit.** A midweek plan can't take a new slot above $6.50.
+- **One at a time.** Any slot priced above $6.50 is the wildcard, so a plan that keeps one there must name it, or reprice it.
+- **One purchase for it costs at most $82.00** at the worker's maximum (`wildcard_purchase_cap_cents`, #90).
+- **Its product is in no other slot**, so step 1 below still holds.
+- **Judge it like any slot**: profit per stocked week, and the slow-seller rule. No fall drink sold above $5.00, so there is no rate to borrow; expect it to sell slower, and say so.
 
 **How to choose a price.** Work through these steps for every slot in the plan.
 
@@ -31,6 +41,7 @@ The preview refuses any price outside these bounds.
 **Outputs:**
 
 - a `sale_price` for every slot
+- `wildcard`: the wildcard slot, when one is above $6.50 or you're starting a bet there
 - a reason in `slot_reasons` that names the step used, for example "new, reference $4.50", "hold, week 1 of 2" or "test, up $0.25: ran out both weeks"
 
 **Assumptions** (A17 and A18 in `docs/assumptions.md`):

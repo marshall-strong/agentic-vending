@@ -44,3 +44,6 @@ class DesiredState(BaseModel):
     off_cycle: bool = Field(False, description="True asks for a midweek visit, which costs $25")
     sourcing: list[Sourcing] = Field([], description="How to buy a product; leave a product out to use the "
                                      "team's sourcing table, which the preview names in warnings when it is old")
+    wildcard: str | None = Field(None, description="The one slot that may sell above the ceiling, up to the wildcard "
+                                 "ceiling ($8.00 by default), for a riskier bet; it moves only at a Friday visit, and "
+                                 "one purchase for it costs at most $82.00. Name it whenever a slot is above the ceiling")

@@ -34,7 +34,7 @@ This plan owns the Summative 2 money numbers; the restock policy (`docs/restock-
 
 **Headroom.** At expected prices the example's 20 slots cost $315.94, $50.06 under the cap. After the fill at its most ($366) and one live run between the ledger's opening and 3 Dec ($1), $600 − $367 = $233 stays spendable.
 
-**The wildcard slot is an option, not part of this plan.** Kevin proposed it on #100, and the team decides on #110 (item 1). If it is adopted, the table changes as section 2 shows: the fill cap covers 19 slots ($360), the wildcard gets $82, and the safety margin falls to $31. Every other line stays the same.
+**The wildcard slot is an option, not part of this plan.** Kevin proposed it on #100, and the team decides on #110 (item 1). The planner enforces the $82.00 cap per purchase once `add_wildcard_slot` merges (`wildcard_purchase_cap_cents`). If it is adopted, the table changes as section 2 shows: the fill cap covers 19 slots ($360), the wildcard gets $82, and the safety margin falls to $31. Every other line stays the same.
 
 ## 1. The day-one fill
 
