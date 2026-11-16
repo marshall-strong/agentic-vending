@@ -103,8 +103,15 @@ def daily(conn: psycopg.Connection, start: date, end: date) -> list[Day]:
         raise ValueError("end must be on or after start")
     first = datetime.combine(start, time.min, EASTERN) - timedelta(microseconds=1)
     last = datetime.combine(end + timedelta(days=1), time.min, EASTERN) - timedelta(microseconds=1)
-    events = _events(conn, first + timedelta(microseconds=1), last)
     opened = ledger.opening(conn)
+    # This is competition money, so it counts from the ledger's opening, as the balance does.
+    # Anything earlier (development model calls, the staff's sales) is left out, so a chart or
+    # briefing built on it can't show the agent our testing spend.
+    if opened is not None and opened.at - timedelta(microseconds=1) > first:
+        first = opened.at - timedelta(microseconds=1)
+    unopened = () if opened is not None else (
+        "the ledger has no opening entry, so none of this is competition money yet",)
+    events = _events(conn, first + timedelta(microseconds=1), last)
     result = []
     # P&L includes entries and receipts at its start; subtract those in the
     # preceding microsecond while still counting polls exactly at midnight.
@@ -112,6 +119,13 @@ def daily(conn: psycopg.Connection, start: date, end: date) -> list[Day]:
     day = start
     while day <= end:
         finish = datetime.combine(day + timedelta(days=1), time.min, EASTERN) - timedelta(microseconds=1)
+        if finish <= first:
+            result.append(Day(day, 0, 0, 0, 0, 0, Fraction(0), True, Fraction(0), True, 0, Fraction(0),
+                              Fraction(0), Fraction(0), Fraction(0), Fraction(0), None, None, False, None, (),
+                              (f"before the ledger's opening on {opened.at.astimezone(EASTERN):%Y-%m-%d}, "
+                               "so not competition money",)))
+            day += timedelta(days=1)
+            continue
         p = ledger.pnl(conn, first, finish)
         def diff(value, old):
             return value - (old if previous is not None else 0)
@@ -130,14 +144,15 @@ def daily(conn: psycopg.Connection, start: date, end: date) -> list[Day]:
         inventory = p.inventory_cents
         # Partial inventory is useful with its flag, but a partial net worth is misleading.
         worth = cash + inventory if cash is not None and inventory is not None and p.inventory_complete else None
-        daily_pnl = ledger.pnl(conn, datetime.combine(day, time.min, EASTERN) - timedelta(microseconds=1), finish)
+        daily_pnl = ledger.pnl(conn, max(first, datetime.combine(day, time.min, EASTERN) - timedelta(microseconds=1)),
+                               finish)
         result.append(Day(day, takings - tax, takings, tax, units, costed, cost, units == costed,
                           shrink, daily_pnl.shrinkage_complete, fees, tokens, adjustments, gross,
                           gross - shrink - fees - tokens + adjustments,
                           diff(p.receipts_cents, previous.receipts_cents if previous else 0),
                           cash, inventory, p.inventory_complete, worth,
                           tuple(e for e in events if e.at.astimezone(EASTERN).date() == day),
-                          tuple(dict.fromkeys(p.notes + (balance.notes if balance else ())))))
+                          tuple(dict.fromkeys(unopened + p.notes + (balance.notes if balance else ())))))
         previous = p
         day += timedelta(days=1)
     return result
