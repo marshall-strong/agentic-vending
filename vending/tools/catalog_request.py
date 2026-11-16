@@ -146,15 +146,16 @@ def already_requested(conn: psycopg.Connection, wanted: list[str]) -> list[Refus
     Zero 20 oz". Compared in Python: the table holds one row per request, so
     it stays small.
     """
-    rows = [(row, bridge_id, name, size, status)
-            for row, bridge_id, name, size, status, stored in conn.execute(
-                "select id, bridge_id, name, size, status, words from product_requests order by id")
+    rows = [(row, bridge_id, name, size, status, sku)
+            for row, bridge_id, name, size, status, sku, stored in conn.execute(
+                "select id, bridge_id, name, size, status, sku, words from product_requests order by id")
             if same_drink(wanted, stored)]
     return [Refusal("already_requested",
                     f"we already asked for {name} ({size}): request {bridge_id or 'with no ID'}, status {status}"
+                    + (f"; order it by SKU {sku}" if status == "approved" and sku else "")
                     + (f" (sent, but no answer was stored; a person must check the bridge, then run "
                        f"`python -m vending.product_requests resolve {row}`)" if status in ("sending", "unknown") else ""))
-            for row, bridge_id, name, size, status in rows]
+            for row, bridge_id, name, size, status, sku in rows]
 
 
 def already_in_catalog(catalog: list[dict], wanted: list[str]) -> list[Refusal]:

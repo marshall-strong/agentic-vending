@@ -79,15 +79,37 @@ def test_a_decided_request_is_not_read_again(conn):
     assert bridge.asked == ["np_1"]
 
 
-def test_an_unusable_answer_or_a_404_is_counted_and_the_rest_go_on(conn):
+def test_an_unusable_answer_is_counted_kept_and_the_rest_go_on(conn):
     for b, name in [("np_1", "Sprite"), ("np_2", "Fanta"), ("np_3", "Pibb")]:
         add(conn, b, name)
-    bridge = FakeBridge({"np_1": BridgeError("404 from /api/v1/product-requests/np_1: b'not found'"),
-                         "np_2": view("np_2", "approved"),          # approved without a SKU
+    bridge = FakeBridge({"np_1": BridgeError("answer from /api/v1/product-requests/np_1 isn't JSON: b'<html>'"),
+                         "np_2": {**view("np_2", "approved"), "product": {"name": "x"}},   # a product with no SKU
                          "np_3": view("np_3", "rejected", note="no")})
     report = sync(conn, bridge, log=quiet)
     assert (report.failed, report.checked, report.rejected) == (2, 1, 1)
     assert row(conn, "np_2") == ("pending", None, None, False)   # kept what we had
+
+
+def test_a_request_the_bridge_doesnt_have_moves_to_unknown_and_isnt_read_again(conn):
+    add(conn, "np_typo", "Sprite")
+    bridge = FakeBridge({"np_typo": BridgeError("404 from /api/v1/product-requests/np_typo: b'not found'")})
+    report = sync(conn, bridge, log=quiet)
+    assert (report.not_found, report.failed) == (1, 0)
+    assert row(conn, "np_typo")[0] == "unknown"   # for a person: python -m vending.product_requests resolve
+    sync(conn, bridge, log=quiet)
+    assert bridge.asked == ["np_typo"]
+
+
+def test_approved_with_no_product_is_stored_without_a_sku(conn):
+    add(conn, "np_1", "Sprite")
+    report = sync(conn, FakeBridge({"np_1": view("np_1", "approved")}), log=quiet)
+    assert report.approved == 1 and row(conn, "np_1") == ("approved", None, None, True)
+
+
+def test_an_answer_for_another_request_is_refused(conn):
+    add(conn, "np_1", "Sprite")
+    report = sync(conn, FakeBridge({"np_1": view("np_9", "approved", sku="X")}), log=quiet)
+    assert report.failed == 1 and row(conn, "np_1")[0] == "pending"
 
 
 def test_rate_limited_stops_and_leaves_the_rest(conn):
@@ -106,12 +128,12 @@ def test_unreachable_stops_the_run(conn):
 
 
 @pytest.mark.parametrize("answer", [[], {"status": "maybe"}, {"status": "rejected", "decision_note": 5},
-                                    {"status": "approved", "product": {"sku": " "}}, {"status": "approved", "product": None}])
+                                    {"status": "approved", "product": {"sku": " "}}, {"status": "approved", "product": "x"}])
 def test_decision_refuses_what_it_cant_use(answer):
     with pytest.raises(ValueError):
         decision(answer)
 
 
 def test_decision_reads_the_sku_it_was_added_under():
-    assert decision(view("np_1", "approved", sku="FRESCA-12CAN", note="added as the 12-pack")) == (
+    assert decision(view("np_1", "approved", sku=" FRESCA-12CAN ", note="added as the 12-pack"), "np_1") == (
         "approved", "FRESCA-12CAN", "added as the 12-pack")
