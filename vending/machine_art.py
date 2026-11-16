@@ -505,6 +505,13 @@ class Lane:
             return None
         return max(self.fill - self.units, 0)
 
+    @property
+    def added(self) -> int | None:
+        """Units that go into the lane Friday: the refill, or all of a swap's or a new product's."""
+        if self.swap or self.new:
+            return self.next_units
+        return self.back
+
     def count_text(self, units: int | None, cap: int | None, item: Item | None, estimate: bool) -> str:
         if item is None and not units:
             return "<b>0</b> empty" if units == 0 else "<b>?</b> no record yet"
@@ -689,10 +696,13 @@ def lane_svg(lane: Lane) -> str:
     if item is None:
         out.append(f'<rect y="-24" width="{VBW}" height="200" fill="url(#ma-fog)"/>')
         words = ("EMPTY",) if lane.counted_empty else ("NO RECORD", "YET")
-        out += [f'<text x="50" y="{110 + 11 * k}" text-anchor="middle" font-size="9" font-weight="800" fill="#8a95a5" '
-                f'font-family="Arial,sans-serif">{w}</text>' for k, w in enumerate(words)]
+        text = "".join(f'<text x="50" y="{110 + 11 * k}" text-anchor="middle" font-size="9" font-weight="800" '
+                       f'fill="#8a95a5" font-family="Arial,sans-serif">{w}</text>' for k, w in enumerate(words))
         if lane.new and lane.next_item is not None:
-            out.append(f'<g class="v-next">{_layer(lane, lane.next_item, 0, lane.next_units, lane.next_cap, False, False)}</g>')
+            loaded = _layer(lane, lane.next_item, lane.next_units or 0, None, lane.next_cap, False, False)
+            out.append(f'<g class="v-now">{text}</g><g class="v-next">{loaded}</g>')
+        else:
+            out.append(text)
     elif lane.swap and lane.next_item is not None:
         old = _layer(lane, item, lane.units, None, lane.cap, estimate, False)
         new_units = lane.next_units if lane.next_units is not None else 0
@@ -894,12 +904,12 @@ def closeup_html(view: dict[str, dict], products: dict | None, linked: bool) -> 
         pos = f"top:{top:.2f}%;height:{100 * (PITCH - 2) / FH:.2f}%"
         where = {1: " (top)", SHELVES: " (bottom)"}.get(r, "")
         if mine:
-            seen = sum(lanes[s].units or 0 for s in mine)
-            unknown = sum(1 for s in mine if lanes[s].units is None)
-            back = sum(lanes[s].back or 0 for s in mine)
-            line = (f"{seen}{'+?' if unknown else ''} on hand &middot; <span class=\"ma-fr\">+{back}"
-                    f"{'+?' if any(lanes[s].fill is not None and lanes[s].units is None for s in mine) else ''}"
-                    "</span> Friday")
+            known = [lanes[s].units for s in mine if lanes[s].units is not None]
+            seen = f"{sum(known)}{'+?' if len(known) < len(mine) else ''}" if known else "?"
+            backs = [lanes[s].added for s in mine if lanes[s].added is not None]
+            open_ = any(lanes[s].fill is not None and lanes[s].added is None and not lanes[s].pulled for s in mine)
+            back = f"+{sum(backs)}{'+?' if open_ else ''}" if backs else "+?" if open_ else "+0"
+            line = f'{seen} on hand &middot; <span class="ma-fr">{back}</span> Friday'
             rows.append(f'<a class="ma-row ma-pick{r}" href="#shelf-{r}" data-shelf="{r}" style="{pos}" '
                         f'aria-label="Shelf {r}: {len(mine)} of {COLUMNS} selections ours">'
                         f'<b>Shelf {r}</b><small>{line}</small></a>')
@@ -943,7 +953,7 @@ def default_shelf(view: Mapping[str, Any]) -> int:
 # (it is a black machine); the text around it follows the page's theme variables.
 STYLE = """
 .ma-defs { position:absolute; width:0; height:0; overflow:hidden }
-.ma { display:grid; gap:14px; min-width:0 }
+.ma { display:grid; grid-template-columns:minmax(0, 1fr); gap:14px; min-width:0 } .ma > * { min-width:0 }
 .ma-fmgrid { display:grid; grid-template-columns:minmax(0, 46%) minmax(0, 1fr); gap:8px; max-width:440px }
 .ma-front { display:block; width:100%; height:auto }
 .ma-rows { position:relative }
@@ -1009,7 +1019,7 @@ STYLE = """
 @media (max-width:819px) {
   .ma-nav { display:flex; position:absolute; top:6px; left:4px; right:4px; justify-content:space-between; z-index:2; pointer-events:none }
   .ma-nav a, .ma-nav span { pointer-events:auto } .ma-nav span { width:44px }
-  .ma-hint { display:block } .ma-stage { margin:0 -16px; border-radius:0; border-left:0; border-right:0 } }
+  .ma-fmgrid { max-width:340px } .ma-hint { display:block } .ma-stage { margin:0 -16px; border-radius:0; border-left:0; border-right:0 } }
 @media (min-width:820px) {
   .ma-strip { overflow:visible; scroll-snap-type:none } .ma-lane, .ma-notours { flex:1 1 0; scroll-snap-align:none }
   .ma-ct b { font-size:22px } .ma-meta { padding:8px 6px 12px } }
