@@ -224,17 +224,16 @@ function mockDays() {
 function realDays(R) {
   const num = v => v == null ? null : parseFloat(v);
   const days = [];
-  let taxOwed = 0;
   const cum = { rev: 0, takings: 0, cogs: 0, visits: 0, tax: 0, api: 0 };
   for (const r of R.daily) {
     const [yy, mm, dd] = r.date.split("-").map(Number), d = new Date(yy, mm - 1, dd);
     const live = r.counted_from != null;
     const rev = num(r.revenue_ex_tax), cogs = num(r.cost_of_sales), fee = num(r.visit_fees), api = num(r.token_spend),
       tax = num(r.sales_tax), shrink = num(r.shrinkage), adj = num(r.adjustments);
-    taxOwed += tax - num(r.tax_remitted);
-    const cash = num(r.cash_balance), inv = num(r.inventory);
-    const spendable = cash == null ? null : cash - taxOwed;
-    const worth = spendable == null || inv == null || !r.inventory_complete ? null : spendable + inv;
+    // The series gives the tax still owed at the day's end, counted from the opening whatever the window.
+    const cash = num(r.cash_balance), owed = num(r.tax_owed), inv = num(r.inventory);
+    const spendable = cash == null || owed == null ? null : cash - owed;
+    const worth = num(r.net_worth);   // spendable + stock at cost; null when some stock has no known cost
     const ev = [], runs = [];
     for (const e of r.events) {
       if (e.kind === "restock_visit") ev.push({ k: "fri", txt: "Restock visit: " + e.detail });
