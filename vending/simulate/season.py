@@ -258,7 +258,8 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     agent.Harness = TestHarness
     try:
         run_id, out = anyio.run(lambda: agent.run(live=True, model=st.model, effort=st.effort, client=client,
-                                                  now=st.clock.now, open_tools=_open_tools))
+                                                  now=st.clock.now, open_tools=_open_tools,
+                                                  connect=db.connect))
     finally:
         agent.Harness = saved
     at = st.clock.now()
