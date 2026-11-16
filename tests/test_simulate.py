@@ -243,3 +243,13 @@ def test_history_serves_archived_seasons(tmp_path, monkeypatch):
     assert json.loads(history.respond("/simulations/2026-11-16-test/weeks.json")[2])[0]["profit"] == 3.9
     assert history.respond("/simulations/nope/")[0] == 404
     assert history.respond("/dashboard") is None
+
+
+def test_the_infographic_is_built_from_the_archived_seasons():
+    from vending.simulate import infographic
+    page = infographic.build()
+    hero, rule = infographic.load(infographic.HERO), infographic.load(infographic.RULES[infographic.load(infographic.HERO).day])
+    assert infographic.money(hero.profit) in page and infographic.money(rule.profit) in page
+    assert rule.day == hero.day                         # the rule it's compared with ran on the same day
+    assert "{" not in page.split("<script>")[0].split("<style>")[0]   # no unfilled template fields
+    assert "const top" not in page                      # window.top: a top-level const of that name breaks the chart
