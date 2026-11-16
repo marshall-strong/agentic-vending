@@ -111,7 +111,7 @@ def test_no_polls_is_zero_with_a_note():
 from tests.conftest import open_in, store_poll  # noqa: E402
 from tests.test_server import call, db  # noqa: E402,F401  (db is a fixture)
 from tests.test_sync_requests import BODY, fulfilled, later, receipt  # noqa: E402
-from vending import ledger  # noqa: E402
+from vending import ledger, stock  # noqa: E402
 from vending.purchase_requests import record as record_request, store  # noqa: E402
 from vending.tools.account_balance import get_account_balance  # noqa: E402
 
@@ -270,6 +270,25 @@ def test_entries_dated_before_the_opening_are_outside_the_balance_and_said_so(co
     assert not any("re-date" in n for n in b.notes)          # development spend isn't a mistake to fix
     ledger.record(conn, "adjustment", 300, "early fix", by="test", at=OPENED - timedelta(days=2))
     assert any("re-date" in n for n in ledger.balance(conn, NOW).notes)    # other early entries still are
+
+
+def test_receipts_before_the_opening_are_test_purchases_and_not_our_stock(conn):
+    """A purchase before the opening never came out of the $600: once the ledger is open it isn't
+    stock, it costs nothing, and its later losses don't count. Before the opening it all counts."""
+    deliver(conn, "test", resolved_at="2026-10-25T16:00:00Z")          # a test purchase, before the opening
+    assert sum(s.units for s in stock.stock(conn).slots) == 8          # no opening yet: it counts
+    open_ledger(conn)                                                   # 1 Nov
+    assert stock.opening_at(conn) == OPENED
+    counted = stock.stock(conn)
+    assert (counted.slots, counted.closet, counted.shrinkage) == ((), (), ())
+    p = ledger.pnl(conn, OPENED, NOW)
+    assert (p.inventory_cents, p.receipts_cents) == (None, 0)          # no receipts of ours yet: unknown, as ever
+    deliver(conn, "real")                                               # 7 Nov, after the opening
+    sell(conn)                                                          # 5 sold on 8 Nov
+    p = ledger.pnl(conn, OPENED, NOW)
+    assert (p.receipts_cents, p.units_sold, p.units_costed) == (1237, 5, 5)
+    assert p.cost_of_sales_cents == 5 * UNIT_COST
+    assert p.inventory_cents == (8 - 5 + 3) * UNIT_COST                 # only the real purchase is on hand
 
 
 def test_pnl_costs_sales_at_weighted_average_and_values_what_is_left(conn):
