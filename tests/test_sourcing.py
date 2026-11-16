@@ -1,6 +1,7 @@
 """Our sourcing table: where to buy each product, checked against the purchase API's limits and logged.
 The parsing and validation tests need no database."""
 
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -91,17 +92,36 @@ def test_the_seed_file_parses_and_matches_its_own_maxes():
     assert all(o.checked_at.date().isoformat() == "2026-11-11" for o in rows)
 
 
-def test_every_sourcing_file_parses_and_names_each_option_once():
-    """Each CSV in db/sourcing is importable on its own, and no SKU's primary or alternate is set twice across
-    files, so loading them in date order never silently replaces a row from an earlier file with the same day."""
+def test_every_sourcing_file_parses_and_only_a_newer_check_replaces_a_row():
+    """Each CSV in db/sourcing is importable on its own. A SKU's primary or alternate may appear in a later file only
+    with a later `checked` date, so importing the files in date order always leaves the newest price."""
     seen = {}
     for path in sorted((ROOT / "db" / "sourcing").glob("*.csv")):
         rows = sourcing.read_csv(path, "test", NOW)
         assert rows, path
+        in_file = set()
         for o in rows:
-            assert (o.sku, o.rank) not in seen, f"{o.sku} {o.rank} is in {seen.get((o.sku, o.rank))} and {path.name}"
-            seen[(o.sku, o.rank)] = path.name
+            key = (o.sku, o.rank)
+            assert key not in in_file, f"{path.name}: {o.sku} {o.rank} appears twice"
+            in_file.add(key)
+            if key in seen:
+                earlier, when = seen[key]
+                assert o.checked_at > when, f"{path.name} repeats {o.sku} {o.rank} from {earlier} without a newer check"
+            seen[key] = (path.name, o.checked_at)
             assert o.rank == "primary" or (o.sku, "primary") in seen, f"{path.name}: {o.sku} alternate before primary"
+
+
+def test_a_later_file_may_recheck_a_row_only_with_a_newer_date(tmp_path, monkeypatch):
+    first = "sku,rank,store,units_per_pack,price,url,checked\nX,primary,Costco,24,10.00,,2026-11-11\n"
+    folder = tmp_path / "db" / "sourcing"
+    folder.mkdir(parents=True)
+    (folder / "2026-11-11-a.csv").write_text(first, encoding="utf-8")
+    (folder / "2026-11-14-b.csv").write_text(first.replace("2026-11-11", "2026-11-14"), encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+    test_every_sourcing_file_parses_and_only_a_newer_check_replaces_a_row()
+    (folder / "2026-11-14-b.csv").write_text(first, encoding="utf-8")
+    with pytest.raises(AssertionError, match="without a newer check"):
+        test_every_sourcing_file_parses_and_only_a_newer_check_replaces_a_row()
 
 
 def test_a_bad_csv_reports_every_bad_line_and_imports_nothing(tmp_path):
