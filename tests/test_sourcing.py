@@ -47,6 +47,11 @@ def test_a_checked_date_is_noon_eastern_that_day():
     morning = datetime(2026, 11, 15, 14, tzinfo=timezone.utc)          # 9 AM Eastern
     assert sourcing.checked_at("2026-11-15", morning) == morning        # today, before noon: now, not the future
     assert sourcing.problems(option(checked_at=sourcing.checked_at("2026-11-15", morning)), morning) == []
+    evening = datetime(2026, 11, 15, 23, tzinfo=timezone.utc)          # 6 PM Eastern: today's noon has passed
+    assert sourcing.checked_at("2026-11-15", evening) == datetime(2026, 11, 15, 17, tzinfo=timezone.utc)
+    for later in ("2026-11-16", "2027-11-15"):                          # a later day, or a mistyped year, stays future
+        assert any("in the future" in p
+                   for p in sourcing.problems(option(checked_at=sourcing.checked_at(later, morning)), morning))
     with pytest.raises(SourcingError, match="date like"):
         sourcing.checked_at("11/11/2026", NOW)
 
