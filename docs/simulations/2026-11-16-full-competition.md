@@ -97,7 +97,8 @@ Three things changed, all from main or from round 2:
   gives the agent demand per class day while in stock.
 - **A top-up rule** (round 2's next fix). `restocking` and the rules card now say: at each weekly run,
   refill a slot when its class days of stock left are fewer than the class days until the visit after
-  this Friday's.
+  this Friday's. The season ran with that longer wording; it was cut to one line afterwards to fit
+  the rules card's 250-word limit (`tests/test_project_rules.py`), with the detail in `restocking`.
 - **A fairer bar.** The rule above can only stock its five drinks, so it can't show what more drinks
   are worth. `--decider scripted-wide` is the same rule, but day one stocks one sourced drink per slot,
   15 different ones, best expected profit first.
