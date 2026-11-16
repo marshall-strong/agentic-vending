@@ -34,7 +34,7 @@ what changed and why.
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
 
 A bottle's level is the units over the package's capacity from the machine's loading label
-(`PACKAGE_CAPACITY`: 20 oz PET 7, 16 oz glass 7, 16 oz PET 8, 12 oz can 8, 240/250 ml can 11,
+(`PACKAGE_CAPACITY`: 20 oz PET 7, 16 oz glass 7, 16 oz PET 8, 12 oz can 8, 16 oz can 8 (estimated), 240/250 ml can 11,
 14 oz PET 8; approximate), used only when the product name states the package. Otherwise it is
 drawn against the plan's fill, or the count itself. Bottle colours come from a hash of the product
 name, so there is no brand table to keep up.

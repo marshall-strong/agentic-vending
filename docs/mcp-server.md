@@ -240,7 +240,8 @@ ledger; and the planner's settings from `config`.
 packages in front of a pusher. `vending/capacity.py` matches each product's catalog `size` against
 the machine's Package Loading chart ([photographed 9 Nov](images/package-loading-chart-2026-11-09.jpg)): 20 oz bottle 7, 16 oz bottle 7 (the chart
 says glass 7, PET 8, and the catalog doesn't say which), 14 oz bottle 8, 12 oz can 8, 240/250 ml can
-11. A package the chart doesn't list (a 16 oz can, a 16.9 oz bottle, a carton) is refused as
+11. The chart doesn't list the 16 oz can; it gets 8, estimated from its width (the 12 oz can's, only
+taller; assumption A20). Any other package the chart doesn't list (a 16.9 oz bottle, a carton) is refused as
 `unknown_capacity` until a person counts how many fit and records it; a count also wins over the
 chart, which calls its own figures approximate:
 

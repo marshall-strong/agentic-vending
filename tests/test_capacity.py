@@ -12,6 +12,8 @@ from vending.capacity import for_product, from_size
     ("12 oz can", 8),
     ("12 OZ Can", 8),
     ("12 fl oz can", 8),
+    ("16 oz can", 8),           # not on the chart: the 12 oz can's width, taller (A20)
+    ("16 fl oz can", 8),
     ("250 ml can", 11),
     ("240ml can", 11),
     ("8.4 oz can", 11),         # Red Bull's 250 ml, as the US label puts it
@@ -29,7 +31,6 @@ def test_sizes_on_the_chart(size, units):
 
 
 @pytest.mark.parametrize("size", [
-    "16 oz can",                # Monster: taller and wider than anything on the chart
     "16.9 oz bottle",           # Pure Leaf
     "7.5 oz can",               # Pepsi mini can
     "11 oz carton",             # Premier Protein
