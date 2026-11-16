@@ -34,7 +34,7 @@ DAY_ONE_RUN = datetime(2026, 11, 30, 10, 0, tzinfo=EASTERN)
 DAY_ONE_FILL = datetime(2026, 12, 2, 15, 0, tzinfo=EASTERN)     # before the machine goes live
 COMPETITION_START = datetime(2026, 12, 3, 0, 0, tzinfo=EASTERN)
 COMPETITION_END = datetime(2027, 2, 4, 0, 0, tzinfo=EASTERN)    # end of Wed 3 Feb
-WEEKLY_RUN_AT = time(19, 0)          # Thursday evening, before the midnight cutoff (docs/agent.md)
+WEEKLY_RUN_AT = time(19, 0)          # the run day's evening (Thursday by default, docs/agent.md; or Wednesday)
 CHECK_IN_AT = time(7, 30)            # Monday morning, for a midweek visit (docs/restock-policy.md, rule 2)
 VISIT_AT = time(15, 0)               # Friday 3 PM target, "likely later" (david-answers row 14)
 OPENING_CAPITAL_CENTS = 60000

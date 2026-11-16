@@ -83,9 +83,10 @@ class State:
     days: dict = field(default_factory=dict)          # (date, slot) -> daily record
     runs: list[dict] = field(default_factory=list)
     done: bool = False
+    run_day: int = 3                                  # the weekly run's weekday, Monday 0 (Thursday by default)
 
 
-def _weekly_events(cal: Calendar, check_ins: bool) -> list[Event]:
+def _weekly_events(cal: Calendar, check_ins: bool, run_day: int = 3) -> list[Event]:
     events = [Event(world.LEDGER_OPENS, "ledger_open"), Event(world.DAY_ONE_RUN, "agent_run", {"kind": "day-one"})]
     day = world.SIM_START.date()
     while datetime.combine(day, time(0), EASTERN) < world.COMPETITION_END:
@@ -94,7 +95,7 @@ def _weekly_events(cal: Calendar, check_ins: bool) -> list[Event]:
         if day.weekday() == 2:
             events.append(Event(datetime.combine(day, time(12), EASTERN), "sourcing_check"))
         at = datetime.combine(day, world.WEEKLY_RUN_AT, EASTERN)
-        if day.weekday() == 3 and world.COMPETITION_START <= at < world.COMPETITION_END:
+        if day.weekday() == run_day and world.COMPETITION_START <= at < world.COMPETITION_END:
             events.append(Event(at, "agent_run", {"kind": "weekly"}))
         at = datetime.combine(day, world.CHECK_IN_AT, EASTERN)
         if check_ins and day.weekday() == 0 and cal.is_class_day(day) and world.COMPETITION_START <= at:
@@ -103,12 +104,13 @@ def _weekly_events(cal: Calendar, check_ins: bool) -> list[Event]:
     return events
 
 
-def new_state(seed: int, decider: str, model: str, effort: str, check_ins: bool) -> State:
+def new_state(seed: int, decider: str, model: str, effort: str, check_ins: bool, run_day: int = 3) -> State:
     clock = Clock(world.SIM_START)
     machine = Machine.empty()
     bridge = SimBridge(machine, clock.now)
-    return State(seed, decider, model, effort, machine, bridge, clock, _weekly_events(Calendar(), check_ins),
-                 world.SIM_START + timedelta(minutes=5))
+    return State(seed, decider, model, effort, machine, bridge, clock,
+                 _weekly_events(Calendar(), check_ins, run_day), world.SIM_START + timedelta(minutes=5),
+                 run_day=run_day)
 
 
 # --- setup ---------------------------------------------------------------------------------------------

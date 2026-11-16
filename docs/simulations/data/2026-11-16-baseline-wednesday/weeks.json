@@ -1,0 +1,2490 @@
+[
+ {
+  "week": 1,
+  "saturday": "2026-11-28",
+  "start": "2026-11-30T09:00:00-05:00",
+  "end": "2026-12-05T00:00:00-05:00",
+  "class_days": 2,
+  "units_sold": 12,
+  "units_lost": 0.0,
+  "revenue_ex_tax": 40.56,
+  "cost_of_sales": 19.15,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 297.07,
+  "gross_profit": 21.41,
+  "model_spend": 0.00012,
+  "profit": 21.41,
+  "cumulative_profit": 21.41,
+  "balance": 346.73,
+  "spendable": 343.49,
+  "inventory_at_cost": 277.92,
+  "runs": [
+   {
+    "run_id": 1,
+    "kind": "day-one",
+    "at": "2026-11-30T10:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_001",
+    "update": "Baseline rule: refilled to the column; request pr_sim_001",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor",
+       "insufficient_balance"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_001"
+   }
+  ],
+  "requests": [
+   "pr_sim_001"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_001",
+    "at": "2026-12-02T15:16:00-05:00",
+    "paid": "297.07",
+    "lines": 8,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "16": "4.00",
+     "17": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "35": "2.60",
+     "45": "2.90",
+     "55": "2.70"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 500
+   },
+   "25": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 260,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 260
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 290
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 350
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 270,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 270
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "good",
+    "why": "0 of 12 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "good",
+    "why": "0 stocked slots with no sale for 5 class days: none"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 53% on $40.56 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $343.49 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor, insufficient_balance"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 2,
+  "saturday": "2026-12-05",
+  "start": "2026-12-05T00:00:00-05:00",
+  "end": "2026-12-12T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 33,
+  "units_lost": 1.9,
+  "revenue_ex_tax": 102.22,
+  "cost_of_sales": 60.6,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 275.52,
+  "gross_profit": 41.62,
+  "model_spend": 0.00012,
+  "profit": 41.62,
+  "cumulative_profit": 63.03,
+  "balance": 181.61,
+  "spendable": 170.19,
+  "inventory_at_cost": 492.84,
+  "runs": [
+   {
+    "run_id": 2,
+    "kind": "weekly",
+    "at": "2026-12-09T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_002",
+    "update": "Baseline rule: refilled to the column; request pr_sim_002",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor",
+       "insufficient_balance"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_002"
+   }
+  ],
+  "requests": [
+   "pr_sim_002"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_002",
+    "at": "2026-12-11T17:15:00-05:00",
+    "paid": "275.52",
+    "lines": 18,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "16": "4.00",
+     "17": "4.00",
+     "18": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "27": "4.00",
+     "28": "4.00",
+     "35": "2.30",
+     "36": "4.00",
+     "37": "4.00",
+     "38": "4.00",
+     "45": "2.50",
+     "46": "4.00",
+     "47": "4.00",
+     "55": "2.35",
+     "56": "4.00",
+     "57": "4.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 6,
+    "lost": 0.0,
+    "revenue_cents": 2400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 6,
+    "lost": 0.0,
+    "revenue_cents": 2100,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 780,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 230
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 7,
+    "lost": 1.9,
+    "revenue_cents": 2030,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 250
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1080,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 235
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "watch",
+    "why": "2 of 35 units of demand lost to empty slots (5%); 19 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "good",
+    "why": "0 stocked slots with no sale for 5 class days: none"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 41% on $102.22 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $170.19 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor, insufficient_balance"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 3,
+  "saturday": "2026-12-12",
+  "start": "2026-12-12T00:00:00-05:00",
+  "end": "2026-12-19T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 39,
+  "units_lost": 1.8,
+  "revenue_ex_tax": 120.46,
+  "cost_of_sales": 68.74,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 41.98,
+  "gross_profit": 51.72,
+  "model_spend": 0.00012,
+  "profit": 51.72,
+  "cumulative_profit": 114.75,
+  "balance": 269.73,
+  "spendable": 248.67,
+  "inventory_at_cost": 466.08,
+  "runs": [
+   {
+    "run_id": 3,
+    "kind": "weekly",
+    "at": "2026-12-16T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_003",
+    "update": "Baseline rule: refilled to the column; request pr_sim_003",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_003"
+   }
+  ],
+  "requests": [
+   "pr_sim_003"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_003",
+    "at": "2026-12-18T16:47:00-05:00",
+    "paid": "41.98",
+    "lines": 14,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "16": "4.00",
+     "17": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "27": "4.00",
+     "35": "2.30",
+     "45": "2.50",
+     "47": "4.00",
+     "48": "4.00",
+     "55": "2.35",
+     "56": "4.00",
+     "57": "4.00",
+     "58": "4.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 6,
+    "lost": 0.5,
+    "revenue_cents": 2100,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 4,
+    "lost": 0.3,
+    "revenue_cents": 920,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 230
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 5,
+    "lost": 1.0,
+    "revenue_cents": 1250,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 250
+   },
+   "46": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 940,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 235
+   },
+   "56": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "good",
+    "why": "2 of 41 units of demand lost to empty slots (4%); 28 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "3 stocked slots with no sale for 5 class days: 18 (REDBULL-ORIGINAL-8_4CAN), 36 (REDBULL-ORIGINAL-8_4CAN), 38 (REDBULL-ORIGINAL-8_4CAN)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 43% on $120.46 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $248.67 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 4,
+  "saturday": "2026-12-19",
+  "start": "2026-12-19T00:00:00-05:00",
+  "end": "2026-12-26T00:00:00-05:00",
+  "class_days": 1,
+  "units_sold": 6,
+  "units_lost": 0.0,
+  "revenue_ex_tax": 14.35,
+  "cost_of_sales": 12.67,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 1.68,
+  "model_spend": 0.00012,
+  "profit": 1.68,
+  "cumulative_profit": 116.43,
+  "balance": 285.23,
+  "spendable": 263.02,
+  "inventory_at_cost": 453.41,
+  "runs": [
+   {
+    "run_id": 4,
+    "kind": "weekly",
+    "at": "2026-12-23T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_004",
+    "update": "Baseline rule: refilled to the column; request pr_sim_004",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_004"
+   }
+  ],
+  "requests": [
+   "pr_sim_004"
+  ],
+  "visits_done": [],
+  "slots": {
+   "15": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 350,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 230,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 230
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 500,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 250
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 470,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 235
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "good",
+    "why": "0 of 6 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "2 stocked slots with no sale for 5 class days: 17 (REDBULL-ORIGINAL-8_4CAN), 56 (REDBULL-ORIGINAL-8_4CAN)"
+   },
+   "margin": {
+    "grade": "bad",
+    "why": "gross margin 12% on $14.35 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $263.02 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 5,
+  "saturday": "2026-12-26",
+  "start": "2026-12-26T00:00:00-05:00",
+  "end": "2027-01-02T00:00:00-05:00",
+  "class_days": 0,
+  "units_sold": 1,
+  "units_lost": 0.0,
+  "revenue_ex_tax": 2.18,
+  "cost_of_sales": 2.13,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 0.05,
+  "model_spend": 0.00012,
+  "profit": 0.05,
+  "cumulative_profit": 116.48,
+  "balance": 287.58,
+  "spendable": 265.2,
+  "inventory_at_cost": 451.28,
+  "runs": [
+   {
+    "run_id": 5,
+    "kind": "weekly",
+    "at": "2026-12-30T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_005",
+    "update": "Baseline rule: refilled to the column; request pr_sim_005",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor"
+      ],
+      "max_cost": "0.00",
+      "warnings": 0
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "max_cost": "0.00",
+      "warnings": 0
+     }
+    ],
+    "request_id": "pr_sim_005"
+   }
+  ],
+  "requests": [
+   "pr_sim_005"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_004",
+    "at": "2026-12-29T16:36:00-05:00",
+    "paid": "0.00",
+    "lines": 12,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "27": "4.00",
+     "28": "4.00",
+     "35": "2.30",
+     "37": "4.00",
+     "45": "2.50",
+     "46": "4.00",
+     "47": "4.00",
+     "55": "2.35",
+     "57": "4.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 230
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 250
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 235,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 235
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   }
+  },
+  "report_card": {
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $265.20 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 6,
+  "saturday": "2027-01-02",
+  "start": "2027-01-02T00:00:00-05:00",
+  "end": "2027-01-09T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 49,
+  "units_lost": 1.0,
+  "revenue_ex_tax": 157.69,
+  "cost_of_sales": 83.0,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 74.69,
+  "model_spend": 0.00012,
+  "profit": 74.69,
+  "cumulative_profit": 191.16,
+  "balance": 457.88,
+  "spendable": 422.89,
+  "inventory_at_cost": 368.28,
+  "runs": [
+   {
+    "run_id": 6,
+    "kind": "weekly",
+    "at": "2027-01-06T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_006",
+    "update": "Baseline rule: refilled to the column; request pr_sim_006",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_006"
+   }
+  ],
+  "requests": [
+   "pr_sim_006"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_005",
+    "at": "2027-01-04T15:06:00-05:00",
+    "paid": "0.00",
+    "lines": 1,
+    "unavailable": 0,
+    "prices": {
+     "55": "2.35"
+    }
+   },
+   {
+    "request_id": "pr_sim_006",
+    "at": "2027-01-08T15:41:00-05:00",
+    "paid": "0.00",
+    "lines": 15,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "16": "4.00",
+     "17": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "27": "4.00",
+     "35": "2.30",
+     "36": "4.00",
+     "37": "4.00",
+     "45": "2.50",
+     "46": "4.00",
+     "48": "4.00",
+     "55": "2.35",
+     "56": "4.00",
+     "58": "4.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 690,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 230
+   },
+   "36": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1600,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 7,
+    "lost": 1.0,
+    "revenue_cents": 1750,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 250
+   },
+   "46": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 940,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 235
+   },
+   "56": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "good",
+    "why": "1 of 50 units of demand lost to empty slots (2%); 7 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "3 stocked slots with no sale for 5 class days: 16 (REDBULL-ORIGINAL-8_4CAN), 28 (REDBULL-ORIGINAL-8_4CAN), 47 (REDBULL-ORIGINAL-8_4CAN)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 47% on $157.69 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $422.89 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 7,
+  "saturday": "2027-01-09",
+  "start": "2027-01-09T00:00:00-05:00",
+  "end": "2027-01-16T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 49,
+  "units_lost": 4.9,
+  "revenue_ex_tax": 160.14,
+  "cost_of_sales": 80.92,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 126.59,
+  "gross_profit": 79.22,
+  "model_spend": 0.00012,
+  "profit": 79.22,
+  "cumulative_profit": 270.38,
+  "balance": 504.24,
+  "spendable": 456.44,
+  "inventory_at_cost": 413.95,
+  "runs": [
+   {
+    "run_id": 7,
+    "kind": "weekly",
+    "at": "2027-01-13T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_007",
+    "update": "Baseline rule: refilled to the column; request pr_sim_007",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_007"
+   }
+  ],
+  "requests": [
+   "pr_sim_007"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_007",
+    "at": "2027-01-15T15:35:00-05:00",
+    "paid": "126.59",
+    "lines": 17,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "18": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "28": "4.00",
+     "35": "2.30",
+     "36": "4.00",
+     "37": "4.00",
+     "38": "4.00",
+     "45": "2.95",
+     "46": "4.00",
+     "47": "4.00",
+     "48": "4.00",
+     "55": "2.55",
+     "56": "4.00",
+     "57": "4.00",
+     "58": "4.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 920,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 230
+   },
+   "36": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1600,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 3,
+    "lost": 3.2,
+    "revenue_cents": 750,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 295
+   },
+   "46": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1600,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 5,
+    "lost": 1.7,
+    "revenue_cents": 1175,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 255
+   },
+   "56": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1600,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "watch",
+    "why": "5 of 54 units of demand lost to empty slots (9%); 44 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "4 stocked slots with no sale for 5 class days: 16 (REDBULL-ORIGINAL-8_4CAN), 17 (REDBULL-ORIGINAL-8_4CAN), 27 (REDBULL-ORIGINAL-8_4CAN), 38 (REDBULL-ORIGINAL-8_4CAN)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 49% on $160.14 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $456.44 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 8,
+  "saturday": "2027-01-16",
+  "start": "2027-01-16T00:00:00-05:00",
+  "end": "2027-01-23T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 58,
+  "units_lost": 5.0,
+  "revenue_ex_tax": 190.56,
+  "cost_of_sales": 98.33,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 155.47,
+  "gross_profit": 92.23,
+  "model_spend": 0.00012,
+  "profit": 92.23,
+  "cumulative_profit": 362.62,
+  "balance": 554.57,
+  "spendable": 491.53,
+  "inventory_at_cost": 471.09,
+  "runs": [
+   {
+    "run_id": 8,
+    "kind": "weekly",
+    "at": "2027-01-20T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_008",
+    "update": "Baseline rule: refilled to the column; request pr_sim_008",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_008"
+   }
+  ],
+  "requests": [
+   "pr_sim_008"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_008",
+    "at": "2027-01-22T15:51:00-05:00",
+    "paid": "155.47",
+    "lines": 18,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "16": "4.00",
+     "18": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "27": "4.00",
+     "35": "2.30",
+     "36": "4.00",
+     "37": "4.00",
+     "38": "4.00",
+     "45": "2.55",
+     "46": "4.00",
+     "47": "4.00",
+     "48": "4.00",
+     "55": "2.25",
+     "56": "4.00",
+     "57": "4.00",
+     "58": "4.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 5,
+    "lost": 0.0,
+    "revenue_cents": 2000,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 6,
+    "lost": 1.8,
+    "revenue_cents": 2100,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 7,
+    "lost": 1.3,
+    "revenue_cents": 2450,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 690,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 230
+   },
+   "36": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 7,
+    "lost": 1.8,
+    "revenue_cents": 2065,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 255
+   },
+   "46": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 7,
+    "lost": 0.0,
+    "revenue_cents": 2800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 5,
+    "lost": 0.0,
+    "revenue_cents": 1275,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 225
+   },
+   "56": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "watch",
+    "why": "5 of 63 units of demand lost to empty slots (8%); 65 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "4 stocked slots with no sale for 5 class days: 15 (REDBULL-ORIGINAL-8_4CAN), 27 (REDBULL-ORIGINAL-8_4CAN), 28 (REDBULL-ORIGINAL-8_4CAN), 47 (REDBULL-ORIGINAL-8_4CAN)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 48% on $190.56 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $491.53 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 9,
+  "saturday": "2027-01-23",
+  "start": "2027-01-23T00:00:00-05:00",
+  "end": "2027-01-30T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 31,
+  "units_lost": 6.2,
+  "revenue_ex_tax": 92.73,
+  "cost_of_sales": 55.05,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 50.63,
+  "gross_profit": 37.68,
+  "model_spend": 0.00012,
+  "profit": 37.68,
+  "cumulative_profit": 400.29,
+  "balance": 604.09,
+  "spendable": 533.63,
+  "inventory_at_cost": 466.66,
+  "runs": [
+   {
+    "run_id": 9,
+    "kind": "weekly",
+    "at": "2027-01-27T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_009",
+    "update": "Baseline rule: refilled to the column; request pr_sim_009",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_009"
+   }
+  ],
+  "requests": [
+   "pr_sim_009"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_009",
+    "at": "2027-01-29T16:20:00-05:00",
+    "paid": "50.63",
+    "lines": 14,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "16": "4.00",
+     "17": "4.00",
+     "18": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "27": "4.00",
+     "35": "2.65",
+     "36": "4.00",
+     "37": "4.00",
+     "45": "2.55",
+     "47": "4.00",
+     "48": "4.00",
+     "55": "2.25"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 5,
+    "lost": 0.0,
+    "revenue_cents": 1750,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 5,
+    "lost": 1.7,
+    "revenue_cents": 1150,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 265
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 3,
+    "lost": 4.5,
+    "revenue_cents": 765,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 255
+   },
+   "46": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 900,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 225
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "bad",
+    "why": "6 of 37 units of demand lost to empty slots (17%); 57 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "7 stocked slots with no sale for 5 class days: 36 (REDBULL-ORIGINAL-8_4CAN), 38 (REDBULL-ORIGINAL-8_4CAN), 46 (REDBULL-ORIGINAL-8_4CAN), 48 (REDBULL-ORIGINAL-8_4CAN), 56 (REDBULL-ORIGINAL-8_4CAN), 57 (REDBULL-ORIGINAL-8_4CAN), 58 (REDBULL-ORIGINAL-8_4CAN)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 41% on $92.73 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $533.63 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 10,
+  "saturday": "2027-01-30",
+  "start": "2027-01-30T00:00:00-05:00",
+  "end": "2027-02-04T00:00:00-05:00",
+  "class_days": 3,
+  "units_sold": 31,
+  "units_lost": 0.0,
+  "revenue_ex_tax": 96.85,
+  "cost_of_sales": 54.06,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 42.79,
+  "model_spend": 0.00012,
+  "profit": 42.79,
+  "cumulative_profit": 443.08,
+  "balance": 708.69,
+  "spendable": 630.48,
+  "inventory_at_cost": 412.6,
+  "runs": [
+   {
+    "run_id": 10,
+    "kind": "weekly",
+    "at": "2027-02-03T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.00012,
+    "decision": "submit",
+    "reason": "refilled to the column; request pr_sim_010",
+    "update": "Baseline rule: refilled to the column; request pr_sim_010",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "below_floor"
+      ],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_010"
+   }
+  ],
+  "requests": [
+   "pr_sim_010"
+  ],
+  "visits_done": [],
+  "slots": {
+   "15": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "18": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 5,
+    "lost": 0.0,
+    "revenue_cents": 1750,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 795,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 265
+   },
+   "36": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "38": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "45": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 765,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 255
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "47": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "55": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 900,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 225
+   },
+   "56": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "58": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "good",
+    "why": "0 of 31 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "3 stocked slots with no sale for 5 class days: 17 (REDBULL-ORIGINAL-8_4CAN), 27 (REDBULL-ORIGINAL-8_4CAN), 37 (REDBULL-ORIGINAL-8_4CAN)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 44% on $96.85 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $630.48 at week end (floor $53); model $0.00 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: below_floor"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ }
+]

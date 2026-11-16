@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-run", type=Decimal, default=Decimal("0.30"),
                         help="skip a model run when less than this is left of the budget")
     parser.add_argument("--check-ins", action="store_true", help="Monday check-ins when 4+ slots are empty")
+    parser.add_argument("--run-day", choices=["wed", "thu"], default="thu",
+                        help="the weekly run's day, at 19:00 (Amazon's cutoff for Friday is Wednesday 23:59)")
     parser.add_argument("--elasticity", type=float, default=0.46)
     parser.add_argument("--facing-exponent", type=float, default=0.5)
     parser.add_argument("--stop-at", help="stop (and save) at this Eastern date, e.g. 2026-12-05")
@@ -62,7 +64,8 @@ def main(argv: list[str] | None = None) -> int:
             st = season.load(checkpoint)
         else:
             st = season.new_state(args.seed, args.decider, args.model or agent.DEFAULT_MODEL,
-                                  args.effort or agent.DEFAULT_EFFORT, args.check_ins)
+                                  args.effort or agent.DEFAULT_EFFORT, args.check_ins,
+                                  {"wed": 2, "thu": 3}[args.run_day])
             from vending.simulate.clock import patched
             with patched(st.clock):
                 season.setup(conn, st, args.budget, args.run_cap)

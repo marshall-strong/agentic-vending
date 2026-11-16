@@ -9,6 +9,9 @@ every Thursday run to the end of Wed 3 Feb. We did it three times: once with the
 scripted rule and no model at all. Each season is in the dashboard under **Simulations**, where you can
 step through the agent dashboard and the P&L as they looked at any moment.
 
+Then we fixed what the first round found and ran two more seasons (below, "Round 2"): the agent with
+the fixes and Wednesday runs, and the scripted rule with Wednesday runs.
+
 ![The Simulations page](images/simulations-index.png)
 
 ## Headline
@@ -33,10 +36,58 @@ step through the agent dashboard and the P&L as they looked at any moment.
 - **Sonnet earned slightly more for a third of the cost.** It did the day-one fill and stocked the
   sodas, so it sold more, but ran more slots empty between visits (41 units lost).
 
+## Round 2: after the fixes
+
+Fixed in this PR, from the lessons below:
+
+- **Lesson 1 and 5, the rules.** The rules card now says the season runs Thu 3 Dec to Wed 3 Feb, that
+  the machine starts empty and day one fills it (A9), and that end stock is valued at cost (A5).
+  `goal-and-scoring` says the same at length (end date not yet confirmed; A5 not yet confirmed, so
+  buy for the last weeks only what should sell), and `inventory-belief` names day one as the
+  exception to "no receipts means unknown".
+- **Lesson 2, the run day.** The prompt said "the main run is Thursday, before the midnight cutoff";
+  it now gives each store's cutoff (Amazon Wednesday 23:59, in-store Thursday 23:59). The run day
+  itself isn't decided (`docs/agent.md`), so the simulator gained `--run-day wed|thu` and these
+  seasons ran on Wednesdays at 19:00.
+- **Lesson 7, the key.** `model_client()` now pins `https://api.anthropic.com` unless
+  `VENDING_ANTHROPIC_BASE_URL` says otherwise, as the week replayer already did, so
+  `ANTHROPIC_BASE_URL` can't send the team key elsewhere. Tested.
+
+Not changed: the floor (lesson 3) is a course rule, the sourcing table (lesson 4) needs real prices,
+and one pack per slot (lesson 6) waits on David.
+
+| Season | Profit after model spend | Units sold | Units lost to empty slots | Model spend | Slots that sold | Stock left, at cost |
+|---|---|---|---|---|---|---|
+| Opus 5.5, medium, as built (Thursday runs) | $317.12 | 170 | 11 | $2.84 | 12 | $14.64 |
+| **Opus 5.5, medium, after the fixes (Wednesday runs)** | **$385.97** | **302** | 33 | $3.24 | 17 | $112.35 |
+| Baseline rule, Thursday runs | $464.62 | 324 | 16 | $0.00 | 20 | $487.90 |
+| Baseline rule, Wednesday runs | $443.09 | 309 | 21 | $0.00 | 20 | $412.60 |
+
+![Profit by week: round 1 and round 2](2026-11-16-weekly-profit-after-fixes.svg)
+
+- **The fixes were worth $69 and 132 more units.** The agent filled the machine on day one ("the
+  machine opens empty on Thu 3 Dec"), stocked all five drinks (the three sodas at prices above their
+  reference, which it accepted this time), sold from 17 slots instead of 12, and kept restocking to
+  the last visit, loading the whole closet on Fri 29 Jan "so stock sells instead of being left". On
+  Wed 3 Feb it skipped correctly: no visit was left.
+- **It ran its first price test**: Red Bull from $4.00 to $4.25 at the 1 Jan visit, one product at a
+  time, as `pricing` asks.
+- **It still trails the rule**: by $57 on the same Wednesday schedule, $79 against the Thursday one. Its weak spot moved from idle slots to empty ones: 7 slots
+  were empty by Wed 13 Jan, and 25 units were lost in weeks 7 and 8 (the rule lost 10). It skipped
+  Wed 16 Dec on "more than a week of stock" and refilled only after slots had emptied. A rule in
+  `restocking` for when to top up (days of stock left versus days to the next visit) is the next fix
+  to try.
+- **Wednesday didn't help the rule.** It cost the baseline $22, because a Wednesday schedule's first
+  weekly run is Wed 9 Dec, so it loses the Thu 3 Dec run that the Thursday schedule had (which the
+  budget-capped day-one fill needed). After week 3 the two schedules are within a few dollars a
+  week. If the team moves to Wednesday, keep a run on go-live day.
+- Still one seed each. The agent's $69 gain is bigger than any seed effect seen so far, but the
+  model-vs-rule gap still rests on the facing assumption (the sensitivity table below).
+
 ## What went wrong, and what to change
 
-These are the lessons for the prompt, rules and tools, most important first. Each is something the
-real competition would hit too.
+These are round 1's lessons for the prompt, rules and tools, most important first. Each is something
+the real competition would hit too. Lessons 1, 2, 5 and 7 are addressed in round 2, above.
 
 1. **The agent skipped the day-one fill, twice.** On Mon 30 Nov (in this season and in the pilot) it
    saw no receipts and no counts, read that as "contents unknown", and decided to wait for Thursday's
@@ -68,7 +119,7 @@ real competition would hit too.
    `ANTHROPIC_BASE_URL` to a local proxy, and `vending.agent.model_client()` doesn't pin the base URL,
    so the first pilot's requests (and the team key in their header) went to that proxy. It answered
    401 and nothing was spent. *Fix:* pin `base_url` in `model_client()`, and have the harness refuse a
-   client that doesn't point at `api.anthropic.com`. Not changed in this PR.
+   client that doesn't point at `api.anthropic.com`. *Done in round 2:* `model_client()` now pins it.
 
 ## The report cards
 
@@ -197,12 +248,14 @@ baseline rule (free) with other values.
 | Pilot (day one and week 1, before the Amazon rule; superseded) | 2 | $0.45 |
 | Opus 5.5 season | 11 | $2.84 |
 | Sonnet 5.5 season | 10 | $1.03 |
-| Baseline and sensitivity seasons | 60 | $0.00 |
-| **Total** | | **$4.32** of the $10 allowed |
+| Opus 5.5 season after the fixes (round 2) | 10 | $3.24 |
+| Baseline and sensitivity seasons | 70 | $0.00 |
+| **Total** | | **$7.56** of the $10 allowed |
 
 All calls were `test` spend through the harness, under `model_test_daily_cap_cents` and a run cap
 set so the total could not pass $9.50. The pilot found a run costs about $0.30, so the run cap was
-$2.00 for Opus and $1.00 for Sonnet; no run came close.
+$2.00 for Opus and $1.00 for Sonnet; no run came close. Round 2's Opus season had a $4.50 budget
+(so the total stayed under $9.50); its dearest run cost $0.53.
 
 ## See it in the dashboard
 
@@ -228,7 +281,7 @@ set DATABASE_URL to postgresql://postgres:sim@127.0.0.1:55999/sim, then: python 
 
 # free: the scripted rule
 python -m vending.simulate --database-url postgresql://postgres:sim@127.0.0.1:55999/sim \
-    --decider scripted --check-ins --out sim-out
+    --decider scripted --check-ins --out sim-out          # --run-day wed for Wednesday runs
 # the model: unset ANTHROPIC_BASE_URL first (lesson 7). Load the key as scripts/run_bench.ps1 does.
 python -m vending.simulate --database-url ... --decider model [--model claude-sonnet-5-5] \
     --budget 3.00 --check-ins --out sim-out          # --stop-at 2026-12-05 for a pilot, then --resume

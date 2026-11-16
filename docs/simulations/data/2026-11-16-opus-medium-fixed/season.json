@@ -1,0 +1,29 @@
+{
+ "decider": "model",
+ "model": "claude-opus-5-5",
+ "effort": "medium",
+ "seed": 20261203,
+ "run_day": "Wed",
+ "units_sold": 302,
+ "revenue_ex_tax": 941.63,
+ "gross_profit": 389.21,
+ "visit_fees": 0.0,
+ "model_spend": 3.2418622,
+ "profit_after_model": 385.97,
+ "inventory_at_cost_end": 112.35,
+ "balance_end": 952.18,
+ "units_lost": 33.3,
+ "runs": 10,
+ "submitted": 7,
+ "failed": 0,
+ "midweek_visits": 0,
+ "qualifying_units_directed": 370,
+ "price_problems": [],
+ "assumptions": {
+  "budget": "4.50",
+  "run_cap": "2.00",
+  "min_run": "0.30",
+  "elasticity": 0.46,
+  "facing_exponent": 0.5
+ }
+}

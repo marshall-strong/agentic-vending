@@ -280,6 +280,7 @@ def build(conn: psycopg.Connection, st) -> dict:
     season = {
         "decider": st.decider, "model": st.model if st.decider == "model" else None,
         "effort": st.effort if st.decider == "model" else None, "seed": st.seed,
+        "run_day": "Mon Tue Wed Thu Fri Sat Sun".split()[getattr(st, "run_day", 3)],
         "units_sold": total.units_sold, "revenue_ex_tax": _d(total.takings.cents - total.takings.tax_cents),
         "gross_profit": _d(total.gross_margin_cents), "visit_fees": _d(total.visit_fees_cents),
         "model_spend": float(total_model), "profit_after_model": round(sum(w["profit"] for w in weeks), 2),
@@ -334,7 +335,7 @@ def tables(data: dict) -> str:
 def chart_svg(seasons: dict[str, dict]) -> str:
     """Weekly profit as bars and cumulative profit as lines, one colour per season. Static SVG."""
     width, height, left, right, top, bottom = 820, 360, 64, 24, 36, 48
-    colors = ("#2a6fdb", "#e07b1a", "#2f9e66", "#8b5cf6")
+    colors = ("#2a6fdb", "#e07b1a", "#2f9e66", "#8b5cf6", "#c026d3", "#64748b")
     n = max(len(s["weeks"]) for s in seasons.values())
     values = [v for s in seasons.values() for w in s["weeks"] for v in (w["profit"], w["cumulative_profit"])] + [0]
     low, high = min(values), max(values)

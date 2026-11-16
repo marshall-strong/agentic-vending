@@ -1,0 +1,29 @@
+{
+ "decider": "scripted",
+ "model": null,
+ "effort": null,
+ "seed": 20261203,
+ "run_day": "Wed",
+ "units_sold": 309,
+ "revenue_ex_tax": 977.74,
+ "gross_profit": 443.08,
+ "visit_fees": 0.0,
+ "model_spend": 0.0012,
+ "profit_after_model": 443.09,
+ "inventory_at_cost_end": 412.6,
+ "balance_end": 708.69,
+ "units_lost": 20.8,
+ "runs": 10,
+ "submitted": 10,
+ "failed": 0,
+ "midweek_visits": 0,
+ "qualifying_units_directed": 471,
+ "price_problems": [],
+ "assumptions": {
+  "budget": "9.50",
+  "run_cap": "2.00",
+  "min_run": "0.30",
+  "elasticity": 0.46,
+  "facing_exponent": 0.5
+ }
+}

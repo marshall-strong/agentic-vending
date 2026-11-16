@@ -118,6 +118,19 @@ def test_worker_buys_loads_pulls_and_reprices():
     assert m.slots["16"].price_cents == world.OPENING_PRICES["16"]
 
 
+def test_the_weekly_run_can_move_to_wednesday():
+    from vending.simulate import season
+    runs = lambda st: [e.at for e in st.events if e.kind == "agent_run" and e.data["kind"] == "weekly"]
+    thu, wed = runs(season.new_state(1, "scripted", "m", "medium", False)),         runs(season.new_state(1, "scripted", "m", "medium", False, run_day=2))
+    assert {t.weekday() for t in thu} == {3} and {t.weekday() for t in wed} == {2}
+    assert thu[0].date() == date(2026, 12, 3) and wed[0].date() == date(2026, 12, 9)   # none before 3 Dec
+    assert wed[-1].date() == date(2027, 2, 3) and len(wed) == len(thu) == 9
+    # A Wednesday Amazon order lands Friday, in time for the free visit.
+    st = season.new_state(1, "scripted", "m", "medium", False, run_day=2)
+    at = season._visit_time(Calendar(), st, wed[1], {"lines": [_line("15")]}, "w")
+    assert at.astimezone(EASTERN).date() == date(2026, 12, 18)
+
+
 def test_visit_times():
     from vending.simulate import season
     st = season.new_state(1, "scripted", "m", "medium", False)

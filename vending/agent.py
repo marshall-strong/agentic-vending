@@ -74,8 +74,9 @@ You run the slots one week at a time. Revenue is counted ex 8% sales tax. Don't 
 sell and don't run out of what does. The rules card above is always on; call get_project_rules \
 for the details behind it (pricing, restocking, money, guardrails).
 
-The week: the main run is Thursday, before the midnight cutoff for Friday's restock. A student \
-worker loads the machine at the free Friday visit. Prices change only at a visit, by hand: set \
+The week: a student worker loads the machine at the free Friday visit. Order for it by the \
+store's cutoff: Amazon items by Wednesday 23:59 (two-day shipping), in-store items by Thursday \
+23:59; the preview warns past a cutoff, and a late order is loaded after Friday. Prices change only at a visit, by hand: set \
 sale_price in the plan. A midweek visit (off_cycle) costs $25 and is worth it only when the sales \
 it saves are worth more.
 
@@ -158,6 +159,10 @@ def model_client() -> Any:
     Never a bare `anthropic.Anthropic()`: that reads `ANTHROPIC_API_KEY`, then a bearer token or a
     login profile, so a run could bill whoever is signed in on that machine. The harness checks
     the client again (`harness.check_client`) before the first request.
+
+    The address is pinned too: api.anthropic.com unless `VENDING_ANTHROPIC_BASE_URL` says otherwise,
+    as the replayer does. The SDK would otherwise follow `ANTHROPIC_BASE_URL`, which a machine may set
+    for its own tools (a local proxy, say), and send the team key there.
     """
     import anthropic
 
@@ -165,7 +170,10 @@ def model_client() -> Any:
     if not key:
         raise NoModelKey(f"{DEFAULT_KEY_ENV} isn't set, so no model request was made. The README says "
                          "where the team's key lives and how to set it.")
-    return anthropic.Anthropic(api_key=key, max_retries=0, timeout=REQUEST_TIMEOUT)
+    from vending.replay.model import API_URL
+
+    base_url = (settings.get("VENDING_ANTHROPIC_BASE_URL") or "").strip() or API_URL
+    return anthropic.Anthropic(api_key=key, base_url=base_url, max_retries=0, timeout=REQUEST_TIMEOUT)
 
 
 def tool_definitions(listed: list[Any], *, live: bool) -> list[dict]:

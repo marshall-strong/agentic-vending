@@ -1,0 +1,6 @@
+{
+ "name": "Opus 5.5, medium, after the fixes",
+ "strategy": "The live agent after this PR's fixes (rules card: starts empty, season end, A5; prompt: store cutoffs), Wednesday 19:00 runs, Monday check-ins",
+ "built": "2026-11-16T06:50-05:00",
+ "moments": 180
+}
