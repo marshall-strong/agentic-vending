@@ -251,7 +251,7 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     config.set_value(conn, "model_run_cap_cents", int(cap * 100), BY)
     server.bridge = lambda: st.bridge
     server.connect = db.connect
-    client = Scripted() if st.decider == "scripted" else None
+    client = Scripted(wide=st.decider == "scripted-wide") if st.decider.startswith("scripted") else None
     requests_before = set(st.bridge.requests)
 
     class TestHarness(Harness):

@@ -24,7 +24,7 @@ from pathlib import Path
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vending.simulate", description=__doc__.splitlines()[0])
     parser.add_argument("--database-url", required=True)
-    parser.add_argument("--decider", choices=["scripted", "model"], default="scripted")
+    parser.add_argument("--decider", choices=["scripted", "scripted-wide", "model"], default="scripted")
     parser.add_argument("--model", default=None)
     parser.add_argument("--effort", default=None)
     parser.add_argument("--seed", type=int, default=20261203)

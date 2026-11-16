@@ -5,6 +5,9 @@ It answers `messages.create` the way the API would, with tool calls and then a f
 It costs nothing: its `usage` reports one token each way, so the harness records about $0.
 
 The rule (the bar the model should clear; deliberately simple):
+- `scripted-wide` differs only on day one: one sourced drink per slot, as many different drinks as
+  there are, best expected profit a class day first (see `wide_day_one`). It separates what having
+  more drinks is worth in the simulator from what the agent's choices are worth;
 - day one: the five products with a sourcing row, four slots each, round-robin, as many as fit the
   opening plan's $366 fill cap and $53 spendable floor (docs/opening-capital-plan.md);
 - every run after: if nothing is pending, refill every slot to its column with what is in it, and put
@@ -41,7 +44,8 @@ def _tool(i: int, name: str, args: dict | None = None) -> SimpleNamespace:
 class Scripted:
     """A fake Anthropic client. One instance per run."""
 
-    def __init__(self):
+    def __init__(self, wide: bool = False):
+        self.day_one_slots = wide_day_one() if wide else DAY_ONE
         self.messages = self
         self.step = 0
         self.desired: dict | None = None
@@ -99,7 +103,7 @@ class Scripted:
             refills, fills = [], []
             for name in ORDER:
                 s = state.get(name, {})
-                product = s.get("product") or (DAY_ONE[name] if self.day_one else self._closet_pick(seen))
+                product = s.get("product") or (self.day_one_slots[name] if self.day_one else self._closet_pick(seen))
                 if product is None:
                     continue
                 if s.get("product") and (s.get("stock_on_hand") or 0) >= world.BY_SKU[product].column:
@@ -154,6 +158,19 @@ class Scripted:
         if best and best["product"] in world.BY_SKU and best["units"] >= world.BY_SKU[best["product"]].column:
             return best["product"]
         return None
+
+
+def wide_day_one() -> dict[str, str]:
+    """Day one with as many different drinks as there are: every drink with a store price and a column
+    on the loading chart, ranked by expected profit a class day at its reference price (rate x (price
+    / 1.08 - cheapest unit cost)), one per slot in `ORDER`; the best repeat if there are fewer than 20."""
+    def profit(sku: str) -> float:
+        p = world.BY_SKU[sku]
+        cost = min(float(c) for (s, _), c in world.STORE_UNIT_PRICE.items() if s == sku)
+        return p.rate * (p.reference_cents / 1.08 - cost)
+    skus = sorted({s for s, _ in world.STORE_UNIT_PRICE if s in world.BY_SKU}, key=profit, reverse=True)
+    skus = [s for s in skus if profit(s) > 0]
+    return {slot: skus[i % len(skus)] for i, slot in enumerate(ORDER)}
 
 
 # Round-robin by product, so a day one cut short by money still carries every product.

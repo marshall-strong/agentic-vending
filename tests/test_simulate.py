@@ -253,3 +253,11 @@ def test_the_infographic_is_built_from_the_archived_seasons():
     assert rule.day == hero.day                         # the rule it's compared with ran on the same day
     assert "{" not in page.split("<script>")[0].split("<style>")[0]   # no unfilled template fields
     assert "const top" not in page                      # window.top: a top-level const of that name breaks the chart
+
+
+def test_the_wide_rule_stocks_one_sourced_drink_per_slot():
+    from vending.simulate import scripted, world
+    slots = scripted.wide_day_one()
+    assert sorted(slots, key=int) == sorted(scripted.ORDER, key=int)
+    assert len(set(slots.values())) >= 10
+    assert all(any(s == sku for s, _ in world.STORE_UNIT_PRICE) for sku in slots.values())
