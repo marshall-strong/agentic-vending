@@ -99,6 +99,8 @@ only if the start moves.
   change made just before the start. A later different answer is refused (exit 1). In the
   worker that fails the round, so `/health` answers 503. Ask the instructors which is right; if
   the new one is, clear `slot_assignment` and record again.
+- **Until that first post-start check**, readers refuse the old assignment. The dashboard shows
+  no assigned selections, and the analysis asks for `python -m vending.slots record`.
 - **Always refused**, before or after: an answer that isn't 20 different selections on `vmc1`,
   each a shelf 1-5 then a column 1-8 (11 to 58).
 

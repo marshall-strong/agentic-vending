@@ -106,6 +106,32 @@ def test_first_post_start_check_captures_the_servers_final_assignment(conn):
         slots.record(conn, {**answer, "slots": list(TEST_SLOTS)}, now=at)
 
 
+def test_readers_refuse_until_the_first_post_start_confirmation(conn, monkeypatch):
+    from vending import dashboard, pages
+    import slots_config
+
+    start = slots.lock_at()
+    conn.execute("update slot_assignment set last_checked_at = %s", (start.replace(year=start.year - 1),))
+
+    class AfterStart(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return start
+
+    monkeypatch.setattr(slots, "datetime", AfterStart)
+    for read in (slots.our_slots, stock.stock, slot_counts.latest):
+        with pytest.raises(slots.SlotsNotRecorded, match="final server assignment"):
+            read(conn)
+    with pytest.raises(SystemExit, match="final server assignment"):
+        slots_config.resolve_slots(None, conn)
+    assert pages.stored_slots(conn) == ()
+    snap = dashboard.snapshot(conn)
+    assert snap["ours"]["ok"] is False
+    assert snap["counts"]["data"] == {}
+    assert slots.record(conn, {"team": "group-b", "device_id": "vmc1", "slots": list(TEST_SLOTS)}, now=start) == "unchanged"
+    assert slots.our_slots(conn) == TEST_SLOTS
+
+
 def test_simultaneous_initial_records_both_succeed(conn, schema_url):
     import threading
     from concurrent.futures import ThreadPoolExecutor

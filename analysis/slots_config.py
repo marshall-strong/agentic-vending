@@ -147,7 +147,7 @@ def from_server(conn):
     if conn is None:
         return None
     try:
-        from vending.slots import stored
+        from vending.slots import stored, our_slots, SlotsNotRecorded
     except (ImportError, AttributeError):
         return None                       # vending.slots can't read a stored assignment yet
     try:
@@ -161,7 +161,10 @@ def from_server(conn):
         return None
     if found.device_id != DEVICE_ID:
         raise SystemExit(f"stored server assignment: recorded for device {found.device_id!r}, but ours is {DEVICE_ID!r}")
-    return tuple(found.slots)
+    try:
+        return our_slots(conn)
+    except SlotsNotRecorded as error:
+        raise SystemExit(str(error)) from error
 
 
 def _rollback(conn):

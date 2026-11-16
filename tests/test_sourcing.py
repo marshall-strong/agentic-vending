@@ -8,6 +8,7 @@ import pytest
 
 from vending import planner, sourcing
 from vending.sourcing import Option, SourcingError
+from tests.conftest import TEST_SLOTS
 
 ROOT = Path(__file__).resolve().parents[1]
 SEED = ROOT / "db" / "sourcing" / "2026-11-11-amazon.csv"
@@ -184,7 +185,7 @@ def test_the_table_is_what_the_planner_takes_and_it_refuses_nothing(conn):
     assert red_bull.primary.max_price_per_pack == 4050 and red_bull.alternate.store == "Costco"
 
     refusals: list[planner.Refusal] = []
-    sources = planner._Sources((), table, planner.Config(), refusals)
+    sources = planner._Sources((), table, planner.Config(slots=TEST_SLOTS), refusals)
     for s in table:
         assert sources.get(s.product) is not None
     assert refusals == []

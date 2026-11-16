@@ -62,6 +62,10 @@ repo root points here.
   inventory server (recorded in each export as `assigned_slots`; the code has no fixed list),
   and a time without a UTC offset is refused. `tests/test_analysis_slots.py` checks all of it.
 
+The fall rule applies to the poll timestamps, not the date an analysis runs. Historical fall
+data remains usable after the start. Our own historical purchase receipts and action logs also
+remain accounting and audit records after reassignment. They do not authorize counter reads.
+
 From 3 Dec the polls carry the full, raw DEX response (David, 17 Nov), so the other team's
 selections arrive with ours. From the start, everything that reads them for analysis, display or
 decisions must filter to our assignment, and nothing may show a machine-wide total that includes

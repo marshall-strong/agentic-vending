@@ -85,6 +85,7 @@ class Assignment:
     team: str | None
     device_id: str
     slots: tuple[str, ...]
+    last_checked_at: datetime | None = None
 
 
 def problems(device_id: Any, slots: Any) -> list[str]:
@@ -136,8 +137,8 @@ def lock_at() -> datetime:
 
 
 def stored(conn: psycopg.Connection) -> Assignment | None:
-    row = conn.execute("select team, device_id, slots from slot_assignment where id = 1").fetchone()
-    return None if row is None else Assignment(row[0], row[1], tuple(row[2]))
+    row = conn.execute("select team, device_id, slots, last_checked_at from slot_assignment where id = 1").fetchone()
+    return None if row is None else Assignment(row[0], row[1], tuple(row[2]), row[3])
 
 
 def our_slots(conn: psycopg.Connection) -> tuple[str, ...]:
@@ -157,6 +158,11 @@ def our_slots(conn: psycopg.Connection) -> tuple[str, ...]:
         raise SlotsNotRecorded(
             "The stored slot assignment can't be ours: " + "; ".join(wrong) + ". Nothing reads it until a person "
             "checks. Clear slot_assignment, then run: python -m vending.slots record")
+    lock = lock_at()
+    if datetime.now(timezone.utc) >= lock and (found.last_checked_at is None or found.last_checked_at < lock):
+        raise SlotsNotRecorded(
+            "The competition has started, but the final server assignment has not been confirmed. "
+            "Before reading selections, run: python -m vending.slots record")
     return found.slots
 
 
