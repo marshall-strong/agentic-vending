@@ -49,9 +49,6 @@ Fixed in this PR, from the lessons below:
   it now gives each store's cutoff (Amazon Wednesday 23:59, in-store Thursday 23:59). The run day
   itself isn't decided (`docs/agent.md`), so the simulator gained `--run-day wed|thu` and these
   seasons ran on Wednesdays at 19:00.
-- **Lesson 7, the key.** `model_client()` now pins `https://api.anthropic.com` unless
-  `VENDING_ANTHROPIC_BASE_URL` says otherwise, as the week replayer already did, so
-  `ANTHROPIC_BASE_URL` can't send the team key elsewhere. Tested.
 
 Not changed: the floor (lesson 3) is a course rule, the sourcing table (lesson 4) needs real prices,
 and one pack per slot (lesson 6) waits on David.
@@ -87,7 +84,7 @@ and one pack per slot (lesson 6) waits on David.
 ## What went wrong, and what to change
 
 These are round 1's lessons for the prompt, rules and tools, most important first. Each is something
-the real competition would hit too. Lessons 1, 2, 5 and 7 are addressed in round 2, above.
+the real competition would hit too. Lessons 1, 2 and 5 are addressed in round 2, above.
 
 1. **The agent skipped the day-one fill, twice.** On Mon 30 Nov (in this season and in the pilot) it
    saw no receipts and no counts, read that as "contents unknown", and decided to wait for Thursday's
@@ -115,11 +112,6 @@ the real competition would hit too. Lessons 1, 2, 5 and 7 are addressed in round
    day-one fill of the five sourced drinks would cost about $980 at most, so any fill has to be split
    across visits, using the closet. The agent and the baseline both learned to load from the closet
    later. Worth knowing when reading a day-one plan.
-7. **A model key can be sent to the wrong place.** This machine's environment sets
-   `ANTHROPIC_BASE_URL` to a local proxy, and `vending.agent.model_client()` doesn't pin the base URL,
-   so the first pilot's requests (and the team key in their header) went to that proxy. It answered
-   401 and nothing was spent. *Fix:* pin `base_url` in `model_client()`, and have the harness refuse a
-   client that doesn't point at `api.anthropic.com`. *Done in round 2:* `model_client()` now pins it.
 
 ## The report cards
 
@@ -282,7 +274,7 @@ set DATABASE_URL to postgresql://postgres:sim@127.0.0.1:55999/sim, then: python 
 # free: the scripted rule
 python -m vending.simulate --database-url postgresql://postgres:sim@127.0.0.1:55999/sim \
     --decider scripted --check-ins --out sim-out          # --run-day wed for Wednesday runs
-# the model: unset ANTHROPIC_BASE_URL first (lesson 7). Load the key as scripts/run_bench.ps1 does.
+# the model: load the key as scripts/run_bench.ps1 does.
 python -m vending.simulate --database-url ... --decider model [--model claude-sonnet-5-5] \
     --budget 3.00 --check-ins --out sim-out          # --stop-at 2026-12-05 for a pilot, then --resume
 

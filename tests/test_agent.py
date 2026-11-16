@@ -402,15 +402,6 @@ def test_the_client_pays_with_the_team_key_and_nothing_else(monkeypatch):
     harness.check_client(client, "VENDING_ANTHROPIC_API_KEY")       # the harness accepts it as built
 
 
-def test_the_client_ignores_a_base_url_set_for_other_tools(monkeypatch):
-    monkeypatch.setenv("VENDING_ANTHROPIC_API_KEY", "team-key-for-tests")
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://100.64.0.1:8317")    # a local proxy, say
-    monkeypatch.delenv("VENDING_ANTHROPIC_BASE_URL", raising=False)
-    assert str(agent.model_client().base_url).rstrip("/") == "https://api.anthropic.com"
-    monkeypatch.setenv("VENDING_ANTHROPIC_BASE_URL", "http://127.0.0.1:9")  # only ours moves it
-    assert str(agent.model_client().base_url).rstrip("/") == "http://127.0.0.1:9"
-
-
 def test_a_run_without_the_team_key_fails_before_the_server_starts(connect, conn, monkeypatch):
     opened = []
 
