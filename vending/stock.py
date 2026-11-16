@@ -24,6 +24,13 @@ turns receipts into stock movements and replays them in time order:
 A slot's count starts again whenever its product changes, so `loaded` and
 `sold` are since the last change, and on hand is loaded - sold - lost.
 
+**Receipts before the ledger's opening don't count once it exists.** Purchases
+made before the opening are tests: they never came out of the $600 (#104), so
+they are not our stock and cost nothing in the competition. Until the opening
+is recorded every receipt counts, so the planner and the tools can be tested
+on test purchases. Sales counters are read as before; a sale from a slot with
+no counted receipt is sold but not costed.
+
 The cost method is weighted average. The team hasn't chosen between that and
 FIFO, so the method lives in `weighted_average` and nowhere else: replace that
 one function to change it. Money is exact cents (`Fraction`), never a float.
@@ -336,15 +343,29 @@ def weighted_average(movements: list[Movement]) -> Stock:
     )
 
 
+def opening_at(conn: psycopg.Connection) -> datetime | None:
+    """When the ledger opened, or None. Read here, not from `vending.ledger`, which imports this module."""
+    if conn.execute("select to_regclass('ledger_entries')").fetchone()[0] is None:
+        return None
+    row = conn.execute("select at from ledger_entries where kind = 'opening'").fetchone()
+    return None if row is None else row[0]
+
+
 def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
-    """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
+    """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll.
+
+    Once the ledger has an opening entry, receipt lines resolved before it (test purchases) and their
+    later losses are left out: see the module docstring.
+    """
+    opened = opening_at(conn)
+    since, args = (" and l.resolved_at >= %s", (opened,)) if opened is not None else ("", ())
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
-        " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
+        " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + since, args)]
     losses = [dict(zip(_LOSS_COLUMNS, row)) for row in conn.execute(
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
-        " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
+        " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + since, args)]
     # Every slot our fulfilled receipts name: those are the slots we stocked.
     slots = sorted({line["slot"] for line in lines})
     # poll_selections only has rows for polls whose checksum passed. The sync
