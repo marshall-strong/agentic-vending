@@ -320,9 +320,9 @@ def _sales(conn: psycopg.Connection, now: datetime) -> dict:
                       for s in reply.data}}
 
 
-def _stock(conn: psycopg.Connection, selections: tuple[str, ...]) -> dict:
+def _stock(conn: psycopg.Connection) -> dict:
     """What each slot and the closet hold, from fulfilled receipts and polls (`vending.stock`)."""
-    found = _guarded(conn, lambda: stock_mod.stock(conn, selections=selections))
+    found = _guarded(conn, lambda: stock_mod.stock(conn))
     return {"slots": {s.slot: {"product": s.product, "on_hand": s.units, "loaded": s.loaded, "sold": s.sold,
                                "lost": s.lost, "since": s.since, "last_moved": s.last_moved,
                                "unit_cost": _dollars(s.unit_cost)}
@@ -465,8 +465,10 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
                   " order by at desc, id desc limit %s", (ACTIVITY_ROWS,))),
         "recent_calls": _panel(lambda: _recent_calls(conn, now)),
         "sales": _panel(lambda: _sales(conn, now)),
-        "stock": _panel(lambda: _stock(conn, slots)),
-        "counts": _panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn, selections=slots))),
+        "stock": (_panel(lambda: _stock(conn)) if ours["ok"] else
+                  {"ok": True, "data": {"slots": {}, "closet": [], "warnings": []}}),
+        "counts": (_panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))) if ours["ok"] else
+                   {"ok": True, "data": {}}),
         "spend": _panel(lambda: _spend(conn, now)),
         "purchase_requests": _panel(lambda: _rows(conn, """
             select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,

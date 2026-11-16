@@ -25,7 +25,7 @@ REDRAWN = tuple(f"{r}{c}" for r in "12345" for c in "1234")
 def stored(monkeypatch):
     """The stored server assignment the analysis reads (OURS unless a test sets another)."""
     def store(slots=OURS):
-        monkeypatch.setattr(slots_config, "from_server", lambda conn: slots)
+        monkeypatch.setattr(slots_config, "from_server", lambda conn, **kwargs: slots)
     store()
     return store
 
@@ -67,7 +67,7 @@ def test_resolve_checks_the_command_line_against_the_stored_server_assignment(st
 
 
 def test_with_nothing_stored_every_run_stops_and_says_to_record(monkeypatch):
-    monkeypatch.setattr(slots_config, "from_server", lambda conn: None)
+    monkeypatch.setattr(slots_config, "from_server", lambda conn, **kwargs: None)
     for cli, fall in ((None, False), ("15,16,25,26", False), (None, True), ("11,12,21,22", True)):
         with pytest.raises(SystemExit, match="python -m vending.slots record"):
             slots_config.resolve_slots(cli, fall=fall)
@@ -180,7 +180,7 @@ def test_labs_refuse_a_server_scope_beyond_our_slots(monkeypatch):
 def test_a_malformed_stored_server_answer_is_refused(monkeypatch):
     for bad in (("11", "15"), REDRAWN[:-1], (*REDRAWN[:-1], "11"), (*REDRAWN[:-1], "19"), (*REDRAWN[:-1], " 11"),
                 tuple(slots_config.ALL_SLOTS)):
-        monkeypatch.setattr(slots_config, "from_server", lambda conn, bad=bad: bad)
+        monkeypatch.setattr(slots_config, "from_server", lambda conn, bad=bad, **kwargs: bad)
         for fall in (False, True):
             with pytest.raises(SystemExit, match="malformed"):
                 slots_config.resolve_slots(None, fall=fall)
@@ -296,16 +296,19 @@ def test_a_redrawn_stored_assignment_is_ours(stored):
         slots_config.DEVICE_ID, slots_config.ALL_SLOTS, slots_config.SOURCE_FALL, REDRAWN)
 
 
-def test_from_server_reads_the_stored_row_itself(monkeypatch):
-    # from_server reads the row (vending.slots.stored), so resolve_slots can check its shape and say what is wrong
+def test_from_server_requires_confirmation_for_live_reads_but_not_historical_fall(monkeypatch):
     import vending.slots as vs
 
     def refuse(conn):
-        raise vs.SlotsNotRecorded("not used here")
+        raise vs.SlotsNotRecorded("final assignment not confirmed")
     monkeypatch.setattr(vs, "our_slots", refuse)
     monkeypatch.setattr(vs, "stored", lambda conn: vs.Assignment("group-b", slots_config.DEVICE_ID, REDRAWN))
-    assert slots_config.from_server(object()) == REDRAWN
-    assert slots_config.resolve_slots(None, object())[1:] == (REDRAWN, slots_config.SOURCE_SERVER, REDRAWN)
+    assert slots_config.from_server(object(), historical=True) == REDRAWN
+    with pytest.raises(SystemExit, match="not confirmed"):
+        slots_config.from_server(object())
+    with pytest.raises(SystemExit, match="not confirmed"):
+        slots_config.resolve_slots(None, object())
+    assert slots_config.resolve_slots(None, object(), fall=True)[1:] == (slots_config.ALL_SLOTS, slots_config.SOURCE_FALL, REDRAWN)
     monkeypatch.setattr(vs, "stored", lambda conn: None)
     assert slots_config.from_server(object()) is None
     monkeypatch.setattr(vs, "stored", lambda conn: vs.Assignment("group-b", "vmc2", REDRAWN))

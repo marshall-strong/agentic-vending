@@ -162,8 +162,7 @@ def record(conn: psycopg.Connection, count: Count, by: str) -> int:
     return len(count.selections)
 
 
-def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID, *,
-           selections: tuple[str, ...] | None = None) -> dict[str, dict]:
+def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID) -> dict[str, dict]:
     """Each selection's most recent count, with units sold since it from the polls.
 
     Sales since a count start at the first good poll at or after it (the count already
@@ -173,7 +172,7 @@ def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID, *,
     since the count, or the poll tables aren't there. Sales between the count and the
     first poll after it can't be seen, so on hand is an estimate, never below 0.
     """
-    assigned = list(our_slots(conn) if selections is None else selections)
+    assigned = list(our_slots(conn))
     rows = conn.execute(
         "select distinct on (selection) selection, count_id, counted_at, source, product, units, exact,"
         " price_on_tag, note from slot_counts where device_id = %s and selection = any(%s)"

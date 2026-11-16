@@ -106,8 +106,10 @@ def test_first_post_start_check_captures_the_servers_final_assignment(conn):
         slots.record(conn, {**answer, "slots": list(TEST_SLOTS)}, now=at)
 
 
-def test_readers_refuse_until_the_first_post_start_confirmation(conn, monkeypatch):
+def test_readers_refuse_until_the_first_post_start_confirmation(conn, schema_url, monkeypatch, capsys):
     from vending import dashboard, pages
+    from vending import db
+    from tests.conftest import open_in
     import slots_config
 
     start = slots.lock_at()
@@ -124,6 +126,10 @@ def test_readers_refuse_until_the_first_post_start_confirmation(conn, monkeypatc
             read(conn)
     with pytest.raises(SystemExit, match="final server assignment"):
         slots_config.resolve_slots(None, conn)
+    assert len(slots_config.resolve_slots(None, conn, fall=True)[1]) == 40
+    monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+    assert slots.main(["show"]) == 1
+    assert "final server assignment" in capsys.readouterr().err
     assert pages.stored_slots(conn) == ()
     snap = dashboard.snapshot(conn)
     assert snap["ours"]["ok"] is False

@@ -472,10 +472,9 @@ def weighted_average(movements: list[Movement]) -> Stock:
     )
 
 
-def stock(conn: psycopg.Connection, until: datetime | None = None, *,
-          selections: tuple[str, ...] | None = None) -> Stock:
+def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
-    assigned = set(our_slots(conn) if selections is None else selections)
+    assigned = set(our_slots(conn))
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]

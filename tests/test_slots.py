@@ -168,8 +168,8 @@ def test_the_lock_can_be_moved(empty):
     assert slots.record(empty, MOVED, AFTER, lock=AFTER + timedelta(hours=1)) == "changed"
 
 
-def test_a_waiting_first_post_start_check_records_the_final_assignment(empty, schema_url):
-    """A transaction begun before the start records the actual time after waiting."""
+def test_a_pre_start_observation_waiting_on_a_lock_does_not_confirm_the_final_assignment(empty, schema_url):
+    """A delayed write cannot turn a pre-start answer into a post-start observation."""
     import threading
     import time
 
@@ -182,7 +182,7 @@ def test_a_waiting_first_post_start_check_records_the_final_assignment(empty, sc
     def waiting():
         with open_in(*schema_url) as other:
             try:
-                outcome["result"] = slots.record(other, MOVED, lock=lock)
+                outcome["result"] = slots.record(other, MOVED, now=lock - timedelta(seconds=0.1), lock=lock)
             except BadAssignment as e:
                 outcome["result"] = e
 
@@ -195,9 +195,21 @@ def test_a_waiting_first_post_start_check_records_the_final_assignment(empty, sc
     assert not caller.is_alive()
     assert outcome.get("result") == "changed", outcome
     assert slots.our_slots(empty) == LEFT
-    assert empty.execute("select last_checked_at >= %s from slot_assignment", (lock,)).fetchone() == (True,)
+    assert empty.execute("select last_checked_at < %s from slot_assignment", (lock,)).fetchone() == (True,)
+    assert slots.record(empty, MOVED, now=lock, lock=lock) == "unchanged"
     with pytest.raises(BadAssignment):
         slots.record(empty, ANSWER, lock=lock)
+
+
+def test_a_delayed_observation_cannot_overwrite_a_newer_answer_or_unconfirm_it(empty):
+    slots.record(empty, ANSWER, NOW)
+    with pytest.raises(BadAssignment, match="older"):
+        slots.record(empty, MOVED, NOW - timedelta(seconds=1))
+    slots.record(empty, ANSWER, AFTER)
+    assert slots.record(empty, ANSWER, NOW) == "unchanged"
+    assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (AFTER,)
+    with pytest.raises(BadAssignment, match="locked at"):
+        slots.record(empty, MOVED, NOW)
 
 
 def test_a_new_team_label_alone_is_stored_not_refused(empty):

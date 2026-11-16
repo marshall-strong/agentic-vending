@@ -138,11 +138,11 @@ def check(codes, where, ours):
     return tuple(sorted(codes))
 
 
-def from_server(conn):
-    """The stored server assignment, unchecked, or None when there is none (no function, no table, no row).
+def from_server(conn, *, historical=False):
+    """The server assignment, or None when no row or table exists.
 
-    It reads the row itself (vending.slots.stored) so that resolve_slots can say what is wrong with it: it checks
-    the shape, and refuses a run with nothing stored.
+    Live runs require the shared reader's final confirmation after the start. Historical fall runs validate
+    the recorded assignment metadata without requiring a new observation: their data predates the start.
     """
     if conn is None:
         return None
@@ -161,6 +161,8 @@ def from_server(conn):
         return None
     if found.device_id != DEVICE_ID:
         raise SystemExit(f"stored server assignment: recorded for device {found.device_id!r}, but ours is {DEVICE_ID!r}")
+    if historical:
+        return tuple(found.slots)
     try:
         return our_slots(conn)
     except SlotsNotRecorded as error:
@@ -181,7 +183,7 @@ def resolve_slots(cli_value, conn=None, fall=False):
     fall=True is the fall run: all 40 selections (or --slots narrowed within them). The caller must keep its data
     to polls before START and pass every per-selection row through check_before_start (exempt_from_start).
     """
-    stored = from_server(conn)
+    stored = from_server(conn, historical=True) if fall else from_server(conn)
     if stored is None:
         raise SystemExit(f"no slot assignment stored in the database: {RECORD_HINT}")
     assigned = check_assignment(stored, "stored server assignment")

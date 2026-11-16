@@ -186,6 +186,8 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
     """
     from psycopg.types.json import Jsonb
 
+    # Observation time, not the time a delayed database write acquires its lock.
+    at = now or datetime.now(timezone.utc)
     new = parse(answer)
     lock = lock or lock_at()
     note = ""
@@ -194,9 +196,6 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
         conn.execute("select pg_advisory_xact_lock(hashtext('vending.slot_assignment'))")
         old = conn.execute("select team, device_id, slots, last_checked_at from slot_assignment"
                            " where id = 1 for update").fetchone()
-        # The time is read once the row is ours: a call that waited on another
-        # recorder's lock past the deadline is judged at the deadline's far side.
-        at = now or datetime.now(timezone.utc)
         if old is None:
             conn.execute(
                 "insert into slot_assignment (team, device_id, slots, first_read_at, last_checked_at, response)"
@@ -207,11 +206,13 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
             before = Assignment(old[0], old[1], tuple(old[2]))
             if (before.device_id, set(before.slots)) != (new.device_id, set(new.slots)):
                 # Locked once a check at or after the start has confirmed an assignment.
-                if at >= lock and old[3] is not None and old[3] >= lock:
+                if old[3] is not None and old[3] >= lock:
                     raise BadAssignment(
                         f"the inventory server now gives a different assignment, but ours locked at "
                         f"{lock.isoformat()} ({LOCK_SETTING}). Stored: {_describe(before)}. Now: {_describe(new)}. "
                         "Nothing was changed; ask the instructors which is right before anyone acts on it")
+                if old[3] is not None and at < old[3]:
+                    raise BadAssignment("This server observation is older than the recorded assignment. Nothing was changed")
                 # first_read_at becomes when this assignment was first read; the log keeps the old one.
                 conn.execute("update slot_assignment set team = %s, device_id = %s, slots = %s, response = %s,"
                              " first_read_at = %s, last_checked_at = %s"
@@ -222,10 +223,10 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
                         "so this is the assignment from now on)" if at >= lock
                         else f" (was {_describe(before)}; locks at {lock.isoformat()})")
             elif before.team == new.team:
-                conn.execute("update slot_assignment set last_checked_at = %s where id = 1", (at,))
+                conn.execute("update slot_assignment set last_checked_at = greatest(last_checked_at, %s) where id = 1", (at,))
                 outcome = "unchanged"
             else:
-                conn.execute("update slot_assignment set team = %s, response = %s, last_checked_at = %s"
+                conn.execute("update slot_assignment set team = %s, response = %s, last_checked_at = greatest(last_checked_at, %s)"
                              " where id = 1", (new.team, Jsonb(answer), at))
                 outcome = "team renamed"
                 note = f" (team {before.team} -> {new.team})"
@@ -253,6 +254,11 @@ def main(argv: list[str] | None = None) -> int:
             found = stored(conn)
             if found is None:
                 print(RECORD_HINT)
+                return 1
+            try:
+                our_slots(conn)
+            except SlotsNotRecorded as error:
+                print(str(error), file=sys.stderr)
                 return 1
             print(f"team {found.team}, device {found.device_id}, {len(found.slots)} slots: {', '.join(found.slots)}")
             return 0
