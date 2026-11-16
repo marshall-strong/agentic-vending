@@ -469,7 +469,7 @@ class Refusals(unittest.TestCase):
         self.assertEqual(ln.fill_to, 8)
 
     def test_a_package_off_the_chart_needs_a_count(self):
-        catalog = (CatalogProduct(MTDEW, size="16 oz can"),) + CATALOG[1:]
+        catalog = (CatalogProduct(MTDEW, size="16.9 oz bottle"),) + CATALOG[1:]
         state = replace(current(), catalog=catalog)
         p = plan_restock(state, desired(restock_15(fill_to=6)), Config(timezone=EDT), TUESDAY)
         self.assertEqual(codes(p), ["unknown_capacity"])
@@ -491,10 +491,10 @@ class Refusals(unittest.TestCase):
         p = plan_restock(current(), desired(restock_15(fill_to=6)), Config(timezone=EDT), TUESDAY)
         self.assertEqual(codes(p), ["unknown_capacity"])
         self.assertIn("catalog gives no size", p.refusals[0].message)
-        catalog = (CatalogProduct(MTDEW, size="16 oz can"),) + CATALOG[1:]
+        catalog = (CatalogProduct(MTDEW, size="16.9 oz bottle"),) + CATALOG[1:]
         p = plan_restock(replace(current(), catalog=catalog), desired(restock_15(fill_to=6)),
                          Config(timezone=EDT), TUESDAY)
-        self.assertIn("'16 oz can', isn't on the loading chart", p.refusals[0].message)
+        self.assertIn("'16.9 oz bottle', isn't on the loading chart", p.refusals[0].message)
 
     def test_over_capacity_names_where_the_limit_came_from_and_the_fix(self):
         catalog = (CatalogProduct(MTDEW, size="20 oz bottle"),) + CATALOG[1:]
@@ -513,7 +513,7 @@ class Refusals(unittest.TestCase):
 
     def test_a_package_off_the_chart_needs_no_count_when_nothing_is_loaded(self):
         # Slot 15 holds 4 Mountain Dew; nobody has counted how many fit.
-        catalog = (CatalogProduct(MTDEW, size="16 oz can"),) + CATALOG[1:]
+        catalog = (CatalogProduct(MTDEW, size="16.9 oz bottle"),) + CATALOG[1:]
         state = replace(current(), catalog=catalog)
         config = Config(timezone=EDT)
         p = plan_restock(state, desired(restock_15(fill_to=4)), config, TUESDAY)

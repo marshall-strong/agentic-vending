@@ -522,7 +522,7 @@ def test_now_and_next_friday(conn, page_conn, even_columns):
 
 @pytest.mark.parametrize("name, package", [
     ("COKE-20OZ", "20oz PET"), ("Sprite 20 oz bottle", "20oz PET"), ("Jarritos 16oz glass", "16oz glass"),
-    ("Water 16 oz PET", "16oz PET"), ("Snapple 16 oz", None), ("Coke 12 oz can", "12oz can"),
+    ("Water 16 oz PET", "16oz PET"), ("Monster 16 oz can", "16oz can"), ("Snapple 16 oz", None), ("Coke 12 oz can", "12oz can"),
     ("Coke 12 oz", None), ("Red Bull 250ml", "240/250ml can"), ("Starbucks 14 fl oz", "14oz PET"),
     ("Gatorade 28 oz", None), ("MTDEW", None), (None, None),
 ])
