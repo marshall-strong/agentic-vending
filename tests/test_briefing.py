@@ -316,7 +316,7 @@ def test_turnaround_median_longest_and_over_expected_by_kind(conn):
     assert (mid.count, mid.median_hours, mid.longest_hours, mid.over_expected) == (3, "30.0", "50.0", 1)
     assert (regular.count, regular.median_hours, regular.longest_hours, regular.over_expected) == (1, "44.0", "44.0", 0)
     text = briefing.render(b)
-    assert "expected 25-48h" in text and "off-cycle 3 done, median 30.0h, longest 50.0h, 1 over 48h" in text
+    assert "aims for 24h" in text and "plan on 48h" in text and "off-cycle 3 done, median 30.0h, longest 50.0h, 1 over 48h" in text
     assert "regular 1 done, median 44.0h" in text
 
 

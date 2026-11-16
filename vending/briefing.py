@@ -24,8 +24,11 @@ from vending.tools import catalog, machine_state, purchase_requests
 
 EASTERN = ZoneInfo(ledger.TIMEZONE)
 MISSING_SCHEMA = (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn)
-# How long the worker takes to get product, from our request to the load (Kevin, 16 Nov).
-EXPECTED_TURNAROUND_HOURS = (25, 48)
+# From our request to the product in the machine. The Project Brief (section 3.4) says
+# operations tries to fulfil within 24 hours where it can, but it may take longer;
+# docs/restock-policy.md plans a midweek visit on about two days, and Kevin expects
+# 25 to 48 hours (16 Nov). So: aim 24, plan on 48, and past 48 is late.
+EXPECTED_TURNAROUND_HOURS = (24, 48)
 # The most recent fulfilled requests of each kind that the measured turnaround uses.
 TURNAROUND_SAMPLE = 10
 
@@ -456,7 +459,8 @@ def render(b: Briefing) -> str:
               (" STALE" if x.stale else "") + (" OVERDUE" if x.request_id in r.overdue else "") for x in r.pending[:6]]
     if not r.unavailable:
         low, high = EXPECTED_TURNAROUND_HOURS
-        lines.append(f"Worker turnaround, request to load (expected {low}-{high}h; regular waits for Friday): " + "; ".join(
+        lines.append(f"Worker turnaround, request to load (brief aims for {low}h, may take longer; plan on {high}h; "
+                     "regular waits for Friday): " + "; ".join(
             f"{t.kind} {t.count} done, median {t.median_hours}h, longest {t.longest_hours}h"
             + (f", {t.over_expected} over {high}h" if t.over_expected else "")
             if t.count else f"{t.kind} none yet" for t in r.turnaround) + ".")
