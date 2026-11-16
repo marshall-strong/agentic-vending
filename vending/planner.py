@@ -738,6 +738,11 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
             refusals.append(Refusal("wildcard", (
                 f"slot {w.slot} can't go above {_dollars(ceiling)} while the price of slot {', '.join(unknown)} "
                 f"isn't known, since one of them may be above it already; wait for a poll with its price"), w.slot))
+        unsure = sorted(s.slot for s in slots if s.slot != w.slot and s.state.product is None and s.state.units > 0)
+        if unsure:
+            refusals.append(Refusal("wildcard", (
+                f"slot {w.slot} can't go above {_dollars(ceiling)} while we don't know what slot {', '.join(unsure)} "
+                f"holds, since it may hold the same product; have it counted first"), w.slot))
         if desired.off_cycle:
             refusals.append(Refusal("wildcard", (
                 f"the wildcard moves only at a Friday visit, so slot {w.slot} can't go above "
@@ -754,10 +759,13 @@ def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[
     lowers that slot: its line may come back unavailable, and the slot would still be the wildcard.
     """
     owners: dict[str, str] = {s.state.product: s.slot for s in slots if s.slot in above_now and s.state.product}
-    if w is not None and w.product is not None:
+    if w is not None and w.product is not None and w.price_cents is not None and w.price_cents > config.price_ceiling_cents:
         owners.setdefault(w.product, w.slot)
     refusals: list[Refusal] = []
-    unknown = sorted(s.slot for s in slots if s.slot in above_now and not s.state.product)
+    # A slot with stock we can't name, priced above the ceiling or at a price we don't know, may be the
+    # wildcard holding any product.
+    unknown = sorted(s.slot for s in slots if not s.state.product and s.state.units > 0
+                     and (s.slot in above_now or s.state.price_cents is None))
     if unknown:
         # It could hold anything, so every purchase is held to the cap until we know what it holds.
         for s in slots:
@@ -769,7 +777,8 @@ def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[
                     f"wildcard cap. Buy less, or have its contents counted first"), s.slot))
         # Nor can another slot switch to any product: it may be the one the wildcard holds.
         for s in slots:
-            if s.slot not in unknown and s.changes_product:
+            # A mystery slot may switch itself only if it is the only one: another may hold that product.
+            if s.changes_product and (s.slot not in unknown or len(unknown) > 1):
                 refusals.append(Refusal("wildcard", (
                     f"slot {', '.join(unknown)} is above {_dollars(config.price_ceiling_cents)} and we don't know what "
                     f"it holds, so slot {s.slot} can't switch to {s.product}, which it may hold; restock slots with "
