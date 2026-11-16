@@ -110,7 +110,7 @@ details[open] summary { margin-bottom: 10px; }
       <span class="seg"><label><input type="radio" name="split" value="purpose" checked><span>Purpose</span></label><label><input type="radio" name="split" value="model"><span>Model</span></label></span></div>
     <div><span class="ctl-name">Per</span>
       <span class="seg"><label><input type="radio" name="unit" value="weekly" checked><span>Week</span></label><label><input type="radio" name="unit" value="daily"><span>Day</span></label></span></div>
-    <label class="check"><input type="checkbox" id="after"> Test calls after the opening (open team question) <small id="after-note"></small></label>
+    <label class="check"><input type="checkbox" id="after"> Test calls after the opening (there should be none) <small id="after-note"></small></label>
   </div>
 
   <section class="tiles" id="tiles" aria-label="Headline figures"></section>
@@ -148,11 +148,8 @@ details[open] summary { margin-bottom: 10px; }
       <li>Weeks run Saturday to Friday in Eastern time, the ledger's week. Costs are list prices from
         <code>vending/model_prices.json</code>; the Claude Console's Usage and Cost pages are Anthropic's own record.</li>
       <li>Live calls after the opening are the competition's money and are not on this page.</li>
-    </ul>
-    <h2>Open questions for the team</h2>
-    <ul>
-      <li>Do test calls made after the opening (dry runs, sweeps, the bench) come out of the $600? The page keeps them
-        out of every figure and shows them only when the box above is ticked.</li>
+      <li>Testing finishes before the opening, so there should be no test calls after it. If one is recorded, the
+        box above says so; the page keeps it out of every figure and shows it only when the box is ticked.</li>
     </ul>
   </section>
 </div>
@@ -239,7 +236,7 @@ function series(r) {
     out.push({ name: "Unconfirmed (worst case, never corrected)", color: "--unconf", hatch: true, get: b => b.unconfirmed_usd });
   }
   if (state.after) {
-    out.push({ name: "Test, after the opening (open question)", color: "--s7", get: b => b.after_opening_test_usd - b.after_opening_test_unconfirmed_usd });
+    out.push({ name: "Test, after the opening (shouldn't happen)", color: "--s7", get: b => b.after_opening_test_usd - b.after_opening_test_unconfirmed_usd });
     if (r.buckets.some(b => b.after_opening_test_unconfirmed_usd))
       out.push({ name: "After opening: unconfirmed (worst case)", color: "--unconf", hatch: true, get: b => b.after_opening_test_unconfirmed_usd });
   }
@@ -521,7 +518,7 @@ function header() {
     : `No ledger opening yet, so every call so far is development spend, none of it from the $600. As of ${dateLabel(r.as_of, true)} ${r.as_of.slice(11, 16)} Eastern.`;
   const later = r.buckets.reduce((s, b) => s + b.after_opening_test_calls, 0);
   document.getElementById("after-note").textContent = later
-    ? `(${later} call${later === 1 ? "" : "s"}, ${usd(r.buckets.reduce((s, b) => s + b.after_opening_test_usd, 0))}, not in any development figure)`
+    ? `(warning: ${later} call${later === 1 ? "" : "s"}, ${usd(r.buckets.reduce((s, b) => s + b.after_opening_test_usd, 0))}; testing should finish before the opening)`
     : (r.opening_at ? "(none recorded)" : "(none: the ledger isn't open yet)");
 }
 function draw() { hideTip(); drawTiles(); drawBars(); drawCumulative(); drawRuns(); drawTable(); }

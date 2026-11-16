@@ -118,7 +118,7 @@ def test_before_the_opening_is_development_and_test_calls_after_it_are_kept_apar
     add(conn, et(12), purpose="live", cost="0.40", run="a")          # a live test before the opening: development
     add(conn, et(20), cost="0.25", run="b")
     opening(conn)
-    add(conn, et(1, month=12), cost="0.60", run="c")                 # test after the opening: the open question
+    add(conn, et(1, month=12), cost="0.60", run="c")                 # test after the opening: shouldn't happen, flagged
     add(conn, et(2, month=12), purpose="live", cost="5.00", run="d") # the competition's money: not here
     r = dev_spend.weekly(conn, NOW)
     assert r.opening_at == OPEN

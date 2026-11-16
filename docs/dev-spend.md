@@ -46,9 +46,11 @@ competition money starts".
 - Tokens are counted only where they are known. An unconfirmed call's tokens aren't known, and
   neither are the run notes'. The tables mark what is missing.
 
-**After the opening**, live calls are the competition's money and are not shown. Test calls after
-the opening are an open question (see below). They are kept out of every development figure. The
-page shows them as their own series only when you tick "Test calls after the opening".
+**After the opening**, live calls are the competition's money and are not shown. **There should be
+no test calls after the opening**: all testing (dry runs, sweeps, the bench) finishes before it
+(Kevin, 15 Nov). If one is recorded anyway, the page warns about it next to the "Test calls after
+the opening" box, keeps it out of every development figure, and shows it only when the box is
+ticked.
 
 ## The page
 
@@ -82,12 +84,8 @@ That makes $3.73 in all. Each sweep config's cost is its "$/decision" times ten.
 no time of day in the notes, so they are placed late on the day, in the order the notes list them.
 The sweep's answers were graded by Claude Code subagents, not on our key, so the grading isn't here.
 
-## Open questions
+## Open question
 
-- **Do test calls after the opening come out of the $600?** Migration 011 records Kevin's 4 Nov
-  rule: development spend is outside the $600. `vending/usage.py` counts only live calls from the
-  opening on as the competition's money. Neither says outright what a dry run, a sweep or a bench
-  run in December is. Until the team decides, this page keeps them apart and off by default.
 - **What the agent can see.** `get_account_balance` leaves pre-opening token entries out of the
   balance, but one of its notes gives their count and total ("development spend, not in the
   balance"). `get_pnl` with an explicit start before the opening counts them as token spend and

@@ -43,9 +43,10 @@ bench. A ledger entry has no run id, so its run is its label (without "turn N")
 on one Eastern day.
 
 After the opening, live calls are the competition's money and are not here.
-**Test calls after the opening are an open team question** (do they come out of
-the $600?), so they are kept out of every development figure and reported on
-their own as `after_opening_test`; the page shows them only when asked.
+**There should be no test calls after the opening:** testing finishes before it
+(Kevin, 15 Nov). If one is recorded anyway, it is kept out of every development
+figure and reported on its own as `after_opening_test`, and the page warns about
+it, so a stray dry run or sweep in December is seen rather than hidden.
 
 Money is exact (`Fraction` cents) until it is shown, to four decimal places,
 since a call can cost a tenth of a cent. The demo data is the runs the team
@@ -156,7 +157,7 @@ class Run:
     tokens_out: int | None
     confirmed_cents: Fraction
     unconfirmed_cents: Fraction
-    after_opening: bool             # a test run after the opening: the open question, not development
+    after_opening: bool             # a test run after the opening: shouldn't happen, so flagged, not development
 
     @property
     def total_cents(self) -> Fraction:
@@ -452,8 +453,8 @@ def render(report: Report) -> str:
     later = [r for r in report.runs if r.after_opening]
     if later:
         cost = sum((r.total_cents for r in later), Fraction(0))
-        out += ["", f"Also {len(later)} test runs after the opening, {usd(cost)}: not in any figure above. "
-                "Whether they come out of the $600 is still a team question."]
+        out += ["", f"Warning: {len(later)} test runs after the opening, {usd(cost)}. Testing should finish "
+                "before the opening; these are not in any figure above."]
     if t.unconfirmed_cents:
         out += ["", "Unconfirmed: calls never corrected from their worst case. They may have cost less, or nothing."]
     return "\n".join(out)
