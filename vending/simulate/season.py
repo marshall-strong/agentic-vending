@@ -35,6 +35,22 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 BY = "simulation"
 
 
+# Columns the database stamps with its own clock (`default now()`). Our code fills them in while the
+# season runs, so they hold wall time from before the season starts; `restamp` moves each new one to the
+# simulated moment it belongs to, which lets the viewer cut the database at any simulated time.
+WALL_STAMPED = (("polls", "synced_at"), ("config", "updated_at"), ("action_log", "at"),
+                ("product_requests", "requested_at"), ("ledger_entries", "recorded_at"),
+                ("purchase_submissions", "at"), ("purchase_submissions", "resolved_at"),
+                ("agent_runs", "started_at"), ("agent_runs", "finished_at"), ("model_calls", "finished_at"),
+                ("slot_assignment", "first_read_at"), ("slot_assignment", "last_checked_at"),
+                ("agent_steps", "at"), ("sourcing_options", "updated_at"))
+
+
+def restamp(conn: psycopg.Connection, at: datetime) -> None:
+    for table, column in WALL_STAMPED:
+        conn.execute(f"update {table} set {column} = %s where {column} < %s", (at, world.SIM_START))
+
+
 def check_scratch(url: str) -> None:
     """Refuse any database that isn't on this machine: the simulation writes freely."""
     from psycopg.conninfo import conninfo_to_dict
@@ -112,6 +128,7 @@ def setup(conn: psycopg.Connection, st: State, budget_usd: Decimal, run_cap_usd:
         sourcing.set_option(conn, o, now)
     config.set_value(conn, "model_test_daily_cap_cents", int(budget_usd * 100), BY)
     config.set_value(conn, "model_run_cap_cents", int(run_cap_usd * 100), BY)
+    restamp(conn, now)
 
 
 # --- the hours -----------------------------------------------------------------------------------------
@@ -158,21 +175,38 @@ def poll(conn: psycopg.Connection, st: State, at: datetime) -> None:
 
 # --- events --------------------------------------------------------------------------------------------
 
-def _visit_time(cal: Calendar, st: State, submitted: datetime, off_cycle: bool, request_id: str) -> datetime:
+AMAZON_DAYS = 2      # Amazon ships in two days (assumed); in-store items are bought on the visit day
+
+
+def _uses_amazon(body: dict) -> bool:
+    return any((line.get(k) or {}).get("store") == "Amazon" for line in body.get("lines") or []
+               for k in ("primary", "alternate"))
+
+
+def _visit_time(cal: Calendar, st: State, submitted: datetime, body: dict, request_id: str) -> datetime:
+    """When the worker loads a request. One visit per request, so it waits for the slowest goods."""
     r = world.rng(st.seed, "visit", request_id)
     local = submitted.astimezone(EASTERN)
-    if submitted < world.COMPETITION_START:
-        return world.DAY_ONE_FILL          # the day-one fill is loaded before the machine goes live
-    if off_cycle:
+    landed = local + timedelta(days=AMAZON_DAYS) if _uses_amazon(body) else local
+    if body.get("off_cycle"):
         # "May take longer than 24 hours" (restocking.md): one or two open weekdays later, in the afternoon.
         day = local.date()
         for _ in range(1 if r.random() < 0.6 else 2):
             day = cal.next_open_weekday(day + timedelta(days=1))
+        day = max(day, cal.next_open_weekday(landed.date()))
         return datetime.combine(day, time(13), EASTERN) + timedelta(minutes=r.randrange(0, 240))
+    if submitted < world.COMPETITION_START:
+        # The day-one fill is loaded before the machine goes live, if the goods are in by then.
+        if landed <= world.DAY_ONE_FILL:
+            return world.DAY_ONE_FILL
+        day = cal.next_open_weekday(landed.date())
+        return datetime.combine(day, world.VISIT_AT, EASTERN)
     day = local.date() + timedelta(days=(4 - local.weekday()) % 7)
     if day == local.date() and local.time() >= world.VISIT_AT:
         day += timedelta(days=7)
-    day = cal.next_open_weekday(day)     # a closed Friday (25 Dec, 1 Jan) moves to the next open weekday
+    # Goods that land after Friday's visit are loaded at the next open weekday they're in, at no fee:
+    # the worker loads "as soon as it lands" (assumed). A closed Friday moves to the next open weekday.
+    day = cal.next_open_weekday(max(day, landed.date()))
     return datetime.combine(day, world.VISIT_AT, EASTERN) + timedelta(minutes=r.randrange(0, 120))
 
 
@@ -228,17 +262,15 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     finally:
         agent.Harness = saved
     at = st.clock.now()
-    conn.execute("update agent_runs set started_at = %s, finished_at = %s where id = %s",
-                 (at, at + timedelta(minutes=3), run_id))
-    # Rows stamped by the database's own clock (wall time, before the season) take the simulated time.
-    conn.execute("update purchase_submissions set at = %s where at < %s", (at, world.SIM_START))
+    restamp(conn, at)
+    conn.execute("update agent_runs set finished_at = %s where id = %s", (at + timedelta(minutes=3), run_id))
     record.update(run_id=run_id, status=out.status, detail=out.detail, request_id=out.request_id,
                   tool_calls=out.tool_calls, turns=out.turn + 1, answer=out.answer,
                   cost_usd=str(_spent(conn) - spent), run_cap=str(cap))
     st.runs.append(record)
     for request_id in sorted(set(st.bridge.requests) - requests_before):
         filed = st.bridge.requests[request_id]
-        when = _visit_time(Calendar(), st, filed.submitted_at, bool(filed.body.get("off_cycle")), request_id)
+        when = _visit_time(Calendar(), st, filed.submitted_at, filed.body, request_id)
         st.events.append(Event(when, "visit", {"request_id": request_id}))
         st.log.append({"at": at.isoformat(), "kind": "request_filed", "request_id": request_id,
                        "off_cycle": bool(filed.body.get("off_cycle")), "visit_at": when.isoformat()})
@@ -311,13 +343,15 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
             due = sorted((e for e in st.events if t <= e.at < nxt), key=lambda e: (e.at, e.kind))
             a = t
             for ev in due:
+                runs_before = len(st.runs)
                 sell(st, cal, demand, a, ev.at)
                 a = ev.at
                 st.clock.set(ev.at)
                 st.events.remove(ev)
                 handle(conn, st, ev, opts)
-                if ev.kind in ("agent_run", "check_in"):
-                    r = st.runs[-1] if st.runs else {}
+                restamp(conn, ev.at)
+                if len(st.runs) > runs_before:
+                    r = st.runs[-1]
                     say(f"{ev.at.astimezone(EASTERN):%a %d %b %H:%M} {r.get('kind')}: {r.get('status')}, "
                         f"${r.get('cost_usd', '0')} ({r.get('detail', '')[:140]})")
                     st.poll_at = nxt     # resume after this hour's events would re-sell the start of it
@@ -327,6 +361,7 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
             st.clock.set(nxt)
             poll(conn, st, nxt)
             sync_requests.sync(conn, st.bridge, now=nxt, log=lambda *_: None)
+            restamp(conn, nxt)
             st.poll_at = t = nxt
         st.done = True
         save(st, checkpoint)

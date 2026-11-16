@@ -20,7 +20,8 @@ from typing import Iterator
 # Every module that calls `datetime.now(...)` on a path the agent, the tools or the syncs can reach.
 NOW_MODULES = ("vending.tools.machine_state", "vending.tools.purchase_requests", "vending.tools.catalog",
                "vending.tools.pnl", "vending.sync_catalog", "vending.sync_requests", "vending.sourcing",
-               "vending.submissions", "vending.agent", "vending.tools.catalog_request", "vending.product_requests")
+               "vending.submissions", "vending.agent", "vending.tools.catalog_request", "vending.product_requests",
+               "vending.dashboard", "vending.pnl_report")
 
 
 class Clock:
