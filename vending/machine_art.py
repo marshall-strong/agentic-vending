@@ -910,8 +910,10 @@ def closeup_html(view: dict[str, dict], products: dict | None, linked: bool) -> 
             seen = f"{sum(known)}{'+?' if len(known) < len(mine) else ''}" if known else "?"
             backs = [lanes[s].added for s in mine if lanes[s].added is not None]
             open_ = any(lanes[s].fill is not None and lanes[s].added is None and not lanes[s].pulled for s in mine)
-            back = f"+{sum(backs)}{'+?' if open_ else ''}" if backs else "+?" if open_ else "+0"
-            line = f'{seen} on hand &middot; <span class="ma-fr">{back}</span> Friday'
+            planned = any(lanes[s].fill is not None or lanes[s].swap or lanes[s].new or lanes[s].pulled for s in mine)
+            back = f"+{sum(backs)}{'+?' if open_ else ''}" if backs else "+?" if open_ else "+0" if planned else ""
+            friday = f'<span class="ma-fr">{back}</span> Friday' if back else "no Friday plan"
+            line = f'{seen} on hand &middot; {friday}'
             rows.append(f'<a class="ma-row ma-pick{r}" href="#shelf-{r}" data-shelf="{r}" style="{pos}" '
                         f'aria-label="Shelf {r}: {len(mine)} of {COLUMNS} selections ours">'
                         f'<b>Shelf {r}</b><small>{line}</small></a>')

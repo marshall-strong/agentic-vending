@@ -871,6 +871,21 @@ def test_the_close_up_escapes_everything_it_prints():
     assert "&lt;img src=x&gt;" in html and "&lt;script&gt;" in html and "named from a photo count" in html
 
 
+def test_a_shelf_with_nothing_planned_says_so_rather_than_plus_zero():
+    from vending import machine_art
+    lane = {"product": "COKE", "units": None, "price": None, "source": "receipt", "counted_at": None}
+    view = {"41": {"now": lane, "next": None, "change": None, "fill_to": None},
+            "51": {"now": dict(lane, units=3), "next": {"in_plan": True, "product": "COKE", "units": 3,
+                                                        "price": None, "old_price": None, "pulled": False,
+                                                        "fill_to": 3},
+                   "change": None, "fill_to": 3}}
+    html = machine_art.closeup_html(view, {"catalog": {}, "overrides": {}}, True)
+    shelf4 = html[html.index('href="#shelf-4"'):html.index("</a>", html.index('href="#shelf-4"'))]
+    shelf5 = html[html.index('href="#shelf-5"'):html.index("</a>", html.index('href="#shelf-5"'))]
+    assert "? on hand &middot; no Friday plan" in shelf4 and "+0" not in shelf4
+    assert '<span class="ma-fr">+0</span> Friday' in shelf5      # planned, and already full
+
+
 @pytest.mark.parametrize("size, key", [
     ("12 oz can", "can-12"), ("12 fl oz sleek can", "can-12-sleek"), ("16 oz can", "can-16"),
     ("250 ml can", "can-250ml"), ("8.4 oz can", "can-250ml"), ("7.5 oz can", "can-7.5"),
