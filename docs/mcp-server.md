@@ -240,7 +240,8 @@ ledger; and the planner's settings from `config`.
 packages in front of a pusher. `vending/capacity.py` matches each product's catalog `size` against
 the machine's Package Loading chart ([photographed 9 Nov](images/package-loading-chart-2026-11-09.jpg)): 20 oz bottle 7, 16 oz bottle 7 (the chart
 says glass 7, PET 8, and the catalog doesn't say which), 14 oz bottle 8, 12 oz can 8, 240/250 ml can
-11. A package the chart doesn't list (a 16 oz can, a 16.9 oz bottle, a carton) is refused as
+11. The chart doesn't list the 16 oz can; it gets 8, estimated from its width (the 12 oz can's, only
+taller; assumption A20). Any other package the chart doesn't list (a 16.9 oz bottle, a carton) is refused as
 `unknown_capacity` until a person counts how many fit and records it; a count also wins over the
 chart, which calls its own figures approximate:
 
@@ -277,9 +278,12 @@ bridge down says to stop, not to check Tailscale. A poll older
 than 3 hours adds a `STALE` note, since stock on the rails is overstated by whatever sold since.
 A refused plan comes back with every refusal and everything that could still be worked out, so the
 agent fixes the whole plan in one turn. In `cost`, `spendable` and `spendable_left_at_max` are the
-ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. There is no
-sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
-purchase without it is refused `no_sourcing`.
+ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. A product the agent
+gives no `sourcing` for is bought the way the team's sourcing table says ([`sourcing.md`](sourcing.md)),
+and a table price checked over 7 days ago is named in `warnings`. When the agent gives sourcing
+with no `expected_price_per_pack`, the cost borrows the table's expected price for the same store
+and pack, and an old borrowed price is named the same way. A slot that needs a purchase with
+no sourcing given or in the table is refused `no_sourcing`.
 
 ### `submit_desired_state`: the only way to buy
 

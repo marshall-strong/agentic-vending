@@ -59,7 +59,7 @@ The fast segment (slots 28, 38, 45, 46) sold 1.701 units per in-stock class day 
 | 12 oz can | 8 | 8 ÷ 1.701 = 4.7 |
 | 240/250 ml can | 11 | 11 ÷ 1.701 = 6.5 |
 
-A Friday-afternoon fill faces 5 class days (restock policy R2, #91). So a fast slot in bottles or 12 oz cans sells out before the next visit, and its week's sales are a floor. Packages not on the chart (for example a 16 oz can) need a counted `config.capacity_overrides` entry before 27 Nov.
+A Friday-afternoon fill faces 5 class days (restock policy R2, #91). So a fast slot in bottles or 12 oz cans sells out before the next visit, and its week's sales are a floor. Packages not on the chart (for example a 16.9 oz bottle or a carton) need a counted `config.capacity_overrides` entry before 27 Nov; the 16 oz can gets 8, estimated from its width (A20).
 
 Whole week: 23.3 units per class day (REPORT.md, "Next 4 weeks") × 5 = 116.5, about 117 units. Rough: the REPORT's weekly figures give 26.0 (52 ÷ 2), 22.5 (44.9 ÷ 2) and 21.5 (64.6 ÷ 3) per class day; the REPORT doesn't say why they differ, so read 23.3 as within 21.5 to 26.0. (The REPORT's other "23.3", a machine-wide partial week scaled up, is unrelated.) Our slots hold 20 × 7 = 140 to 20 × 11 = 220 units, so a week's demand is 116.5 ÷ 220 = 53% to 116.5 ÷ 140 = 83% of capacity, spread unevenly.
 

@@ -9,10 +9,17 @@ numbers, which it calls approximate:
 
     20oz PET 7, 16oz glass 7, 16oz PET 8, 12oz can 8, 240/250ml can 11, 14oz PET 8
 
+One package is added that the chart doesn't list: **the 16 oz can, 8**. It has
+the same 66 mm body as a 12 oz can, only taller, and how many fit depends on the
+width, not the height. The chart's own figures put a column at about 585 mm
+(eleven 53 mm cans fit, eight 66 mm cans fit), and a 16 oz Ghost can sold from
+selection 18 in October. Worked out from the can's size on 11 Nov 2026, not
+counted in the machine (assumption A20), so a person's count replaces it.
+
 The catalog's `size` ("20 oz bottle", "12 oz can") is matched against that.
 The catalog says only "bottle", never glass or PET, so a 16 oz bottle gets the
-glass figure, 7, which fits either way. Anything not on the chart (a 16 oz can,
-a 16.9 oz bottle, a carton) has no capacity until a person counts it and
+glass figure, 7, which fits either way. Anything not on the chart or added to it (a
+16.9 oz bottle, a 7.5 oz can, a carton) has no capacity until a person counts it and
 records it in `config.capacity_overrides`, which also wins over the chart:
 
     python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 8}' --by NAME
@@ -32,6 +39,7 @@ CHART: tuple[tuple[str, Fraction, Fraction, int], ...] = (
     ("bottle", Fraction(16), Fraction(16), 7),
     ("bottle", Fraction(14), Fraction(14), 8),
     ("can", Fraction(12), Fraction(12), 8),
+    ("can", Fraction(16), Fraction(16), 8),     # not on the chart: estimated from its width (A20)
     ("can", 240 / ML_PER_OZ, 250 / ML_PER_OZ, 11),
 )
 

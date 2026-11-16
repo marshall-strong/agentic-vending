@@ -3401,7 +3401,7 @@
     },
     {
      "slot": "36",
-     "product": "Minute Maid Lemonade (Zero Sugar?), can",
+     "product": "Minute Maid Lemonade, Zero Sugar, can",
      "category": "juice",
      "caffeine": false,
      "price": 2.0,
@@ -3412,7 +3412,7 @@
     },
     {
      "slot": "37",
-     "product": "Minute Maid Lemonade (Zero Sugar?), can",
+     "product": "Minute Maid Lemonade, Zero Sugar, can",
      "category": "juice",
      "caffeine": false,
      "price": 2.0,
@@ -3472,11 +3472,11 @@
     },
     {
      "slot": "47",
-     "product": "Something & Nothing sparkling, silver can with palm print",
+     "product": "Something & Nothing Cucumber premium soda, can",
      "category": "sparkling water",
      "caffeine": false,
-     "price": null,
-     "price_legible": false,
+     "price": 3.5,
+     "price_legible": true,
      "stock_seen": "stocked",
      "visible_units": 6,
      "confidence": "medium"
@@ -3543,7 +3543,7 @@
     },
     {
      "slot": "58",
-     "product": "Diet Coke Cherry?, can",
+     "product": "Diet Cherry Coke, can",
      "category": "soda",
      "caffeine": true,
      "price": 1.5,

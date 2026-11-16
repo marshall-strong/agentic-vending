@@ -193,7 +193,7 @@ def test_slot_cost_shares_add_up_to_the_fill(tmp_path):
 
 def test_an_off_chart_size_is_assumed_only_when_the_projection_says_so(tmp_path):
     proj = projection()
-    proj["packs"][1].update(size="16 oz can", column_capacity=8, capacity_assumed=False)
+    proj["packs"][1].update(size="16.9 oz bottle", column_capacity=8, capacity_assumed=False)
     write(tmp_path, "round1", "1", {"day_one": day_one()}, proj)
     assert pr.load_all(tmp_path)[0].slots["58"].capacity_assumed is False
     proj["packs"][1]["capacity_assumed"] = True

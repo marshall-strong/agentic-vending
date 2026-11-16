@@ -157,7 +157,10 @@ should do next.
   - `sourcing`: per product to buy, a `primary` and optional `alternate` purchase option (`store`,
     one of `Walmart`, `Costco`, `Amazon`, `BJs`; `units_per_pack` 1 to 60; `max_price_per_pack`;
     `url`, required for Amazon; optional `expected_price_per_pack` and `pack_description`), and
-    `extra_units_to_closet`.
+    `extra_units_to_closet`. Optional per product: one left out is bought the way the team's
+    sourcing table says (`docs/sourcing.md`), with a warning when that price is over 7 days old.
+    An option given without `expected_price_per_pack` borrows the table's expected price for the
+    same store and pack, for cost and for the max check, with the same warning when it is old.
 - **Outputs**: `success` (whether the plan could be submitted as it stands); `plan_hash` (only for
   a plan with no refusals); `lines`, one per slot that changes, with the exact request body in
   `api`; `directive`, the instructions the worker will read; `cost` (`expected`, `max`,
@@ -198,8 +201,8 @@ Both `preview_desired_state` and `submit_desired_state` return these.
 | `unknown_capacity` | Nobody knows how many of this package fit in a column. |
 | `over_capacity` | `fill_to` is more than fit in a column. |
 | `bad_sourcing` | A purchase option is invalid (store, Amazon link, pack size, max price below expected). |
-| `no_sourcing` | A slot needs buying and no sourcing was given. |
-| `insufficient_stock` | The closet holds some of the product but not enough, and no sourcing was given. |
+| `no_sourcing` | A slot needs buying and there is no sourcing for it, given or in the sourcing table. |
+| `insufficient_stock` | The closet holds some of the product but not enough, and there is no sourcing for it, given or in the table. |
 | `too_many_packs` | One line would need more than 20 packs. |
 | `past_cutoff` | Past an in-store order cutoff (Thursday 23:59 Eastern) for this Friday's visit. |
 | `request_pending` | An earlier purchase request is still pending. |
