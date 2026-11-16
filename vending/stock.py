@@ -472,9 +472,8 @@ def weighted_average(movements: list[Movement]) -> Stock:
     )
 
 
-def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
-    """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
-    assigned = set(our_slots(conn))
+def _receipts(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
+    """Every fulfilled line and every loss recorded against one: our own purchases, whatever the assignment."""
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
@@ -482,6 +481,31 @@ def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
+    return lines, losses
+
+
+def closet(conn: psycopg.Connection) -> tuple[ClosetCount, ...]:
+    """The closet now, from the receipts alone: no slot assignment and no counters needed.
+
+    The closet isn't a selection, so it can be counted when no assignment is stored. The units are
+    exactly what `stock` counts: only purchases, loads, pulls and closet losses move them, never a sale.
+    A product pulled from a slot came out at that slot's cost, and sales between its loads change
+    that cost, so its unit cost here is unknown (None) rather than a figure that skipped the sales.
+    """
+    return closet_from_receipts(*_receipts(conn))
+
+
+def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetCount, ...]:
+    """`closet` without the database: the same receipt fields as `movements_from_receipts`."""
+    pulled = {line["pulled_sku"] for line in lines if line["units_pulled"]}
+    return tuple(ClosetCount(c.product, c.units, None if c.product in pulled else c.unit_cost)
+                 for c in weighted_average(movements_from_receipts(lines, losses)).closet)
+
+
+def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
+    """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
+    assigned = set(our_slots(conn))
+    lines, losses = _receipts(conn)
     # Receipts preserve our purchases, but cannot authorize counter reads after reassignment.
     slots = sorted({line["slot"] for line in lines} & assigned)
     # poll_selections only has rows for polls whose checksum passed. The sync

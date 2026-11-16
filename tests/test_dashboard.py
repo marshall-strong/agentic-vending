@@ -350,6 +350,23 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
     assert '"paid": "9.60"' in dashboard.to_json(snap)
 
 
+def test_without_an_assignment_the_closet_still_counts_from_the_receipts(conn, page_conn):
+    """No slot is ours without an assignment, but the closet isn't a slot: its 4 units are still there."""
+    fulfilled(conn, "pr-1", "15", "COKE-20OZ", units_loaded=8, paid="9.60", to_back_stock=4,
+              at=MONDAY - timedelta(days=3))
+    store_poll(conn, "p1", (MONDAY - timedelta(days=4)).isoformat(), {"15": (250, 100)})
+    store_poll(conn, "p2", (MONDAY - timedelta(days=2)).isoformat(), {"15": (250, 103)})
+    conn.execute("delete from slot_assignment")
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["ours"]["ok"] is False
+    assert snap["stock"]["ok"] is True
+    assert snap["stock"]["data"]["slots"] == {}
+    assert snap["stock"]["data"]["closet"] == [{"product": "COKE-20OZ", "units": 4, "unit_cost": "0.80"}]
+    page = dashboard.render(snap)
+    assert "Nothing in back stock" not in page
+    assert "4 units of 1 product" in page
+
+
 def test_a_fresh_database_is_ok_but_explains_every_empty_panel(page_conn):
     snap = dashboard.snapshot(page_conn, MONDAY)
     assert dashboard.verdict(snap["attention"]) == "ok"   # halted, no polls: worth knowing, not wrong

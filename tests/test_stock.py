@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 
-from vending.stock import movements_from_receipts, replay, sales_from_counters, weighted_average
+from vending.stock import closet_from_receipts, movements_from_receipts, replay, sales_from_counters, weighted_average
 
 T0 = datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
 
@@ -70,6 +70,21 @@ def test_pulled_units_go_to_the_closet_at_their_slot_cost():
     assert slot.since == hours(48)
     assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("COKE20", 6, 50)]
     assert stock.warnings == ()
+
+
+def test_the_closet_from_receipts_alone_has_every_unit_but_no_guessed_pull_cost():
+    """Without counters (no assignment to read them by) the closet's units are exact. A pulled product's cost
+    depended on the slot's sales, so it is unknown; a product only bought into the closet keeps its cost."""
+    lines = [
+        line(units_loaded=10, total_paid="5.00"),                                   # 50 cents each
+        line(slot="16", sku="WATER", units_loaded=0, units_to_back_stock=4, total_paid="2.00", request_id="r3"),
+        line(sku="PEPSI20", units_loaded=10, total_paid="8.00", units_pulled=6, pulled_sku="COKE20",
+             slot_reassigned=True, at=48, request_id="r2"),
+    ]
+    sold = book(lines, counters=[("15", hours(-1), 100), ("15", hours(24), 104)])
+    alone = closet_from_receipts(lines, [])
+    assert [(c.product, c.units) for c in alone] == [(c.product, c.units) for c in sold.closet]
+    assert [(c.product, c.units, c.unit_cost) for c in alone] == [("COKE20", 6, None), ("WATER", 4, 50)]
 
 
 def test_a_top_up_blends_old_and_new_cost():

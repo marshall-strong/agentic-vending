@@ -332,6 +332,15 @@ def _stock(conn: psycopg.Connection) -> dict:
             "warnings": list(found.warnings)}
 
 
+def _closet_only(conn: psycopg.Connection) -> dict:
+    """The stock panel when no assignment is readable: no slot is ours, but the closet isn't a selection,
+    so it is still counted from the receipts (`vending.stock.closet`), never shown as empty."""
+    found = _guarded(conn, lambda: stock_mod.closet(conn))
+    return {"slots": {}, "closet": [{"product": c.product, "units": c.units, "unit_cost": _dollars(c.unit_cost)}
+                                    for c in found],
+            "warnings": []}
+
+
 def _dollars(cents: Fraction | None) -> str | None:
     """Exact cents as dollars text, rounded half up to the cent. Never a float."""
     if cents is None:
@@ -465,8 +474,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
                   " order by at desc, id desc limit %s", (ACTIVITY_ROWS,))),
         "recent_calls": _panel(lambda: _recent_calls(conn, now)),
         "sales": _panel(lambda: _sales(conn, now)),
-        "stock": (_panel(lambda: _stock(conn)) if ours["ok"] else
-                  {"ok": True, "data": {"slots": {}, "closet": [], "warnings": []}}),
+        "stock": _panel(lambda: _stock(conn) if ours["ok"] else _closet_only(conn)),
         "counts": (_panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))) if ours["ok"] else
                    {"ok": True, "data": {}}),
         "spend": _panel(lambda: _spend(conn, now)),
