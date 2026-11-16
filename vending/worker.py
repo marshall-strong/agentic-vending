@@ -343,7 +343,7 @@ class _Health(BaseHTTPRequestHandler):
             reply = pages.respond(self.path)
             if reply is None:
                 return self._not_found()
-            cookies = self._count_view(path) if reply.status == 200 else ()
+            cookies = self._count_view(path, self.path) if reply.status == 200 else ()
             self._send(reply.status, reply.content_type, reply.body.encode(), reply.csp, cookies)
         else:
             self._not_found()
@@ -379,13 +379,13 @@ class _Health(BaseHTTPRequestHandler):
             visits.sign_in(browser)
         self._redirect(next_path, gate.session_cookie(), *cookies)
 
-    def _count_view(self, path: str) -> tuple[str, ...]:
-        """Count a signed-in browser opening `path` (`vending.visits`); the cookies to set, if it
-        has no id yet. Only queues the count, so the page never waits on it."""
+    def _count_view(self, path: str, target: str) -> tuple[str, ...]:
+        """Count a signed-in browser opening `path` (`target` is it with its query; `vending.visits`);
+        the cookies to set, if it has no id yet. Only queues the count, so the page never waits on it."""
         if path not in visits.PAGES:
             return ()
         browser, cookies = visits.identify(self.headers.get("Cookie"))
-        if browser is not None and not visits.is_refresh(self.headers):
+        if browser is not None and not visits.is_refresh(self.headers, target):
             visits.view(path, browser)
         return cookies
 

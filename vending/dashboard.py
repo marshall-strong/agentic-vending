@@ -113,6 +113,35 @@ def _guarded(conn: psycopg.Connection, read: Callable[[], Any]) -> Any:
         raise Missing(str(error).splitlines()[0]) from error
 
 
+class Unavailable(Exception):
+    """An optional panel's read failed; the rest of the page carries on without it."""
+
+
+# Milliseconds an optional panel may wait, on a statement or a lock, before it gives up.
+OPTIONAL_TIMEOUT_MS = 1_000
+
+
+def _isolated(conn: psycopg.Connection, read: Callable[[], Any], timeout_ms: int = OPTIONAL_TIMEOUT_MS) -> Any:
+    """Run an optional panel's `read` in a savepoint with its own short statement and lock
+    timeouts, so a slow, locked or broken table costs the page at most `timeout_ms` and that panel.
+
+    A missing table is still `Missing` (the fix is a migration); any other failure is `Unavailable`.
+    The error's own text is left out: on a public page it would name the host and the user."""
+    try:
+        with conn.transaction():
+            old = conn.execute("select current_setting('statement_timeout'), current_setting('lock_timeout')").fetchone()
+            conn.execute("select set_config('statement_timeout', %s, true), set_config('lock_timeout', %s, true)",
+                         (str(timeout_ms), str(timeout_ms)))
+            data = read()
+            # Put the snapshot's own limits back; on a failure the rollback to the savepoint does.
+            conn.execute("select set_config('statement_timeout', %s, true), set_config('lock_timeout', %s, true)", old)
+            return data
+    except _NOT_THERE as error:
+        raise Missing(str(error).splitlines()[0]) from error
+    except Exception as error:  # noqa: BLE001 - an optional panel never takes the page down
+        raise Unavailable(type(error).__name__) from error
+
+
 def _rows(conn: psycopg.Connection, sql: str, params: tuple = ()) -> list[dict]:
     return _guarded(conn, lambda: conn.cursor(row_factory=dict_row).execute(sql, params).fetchall())
 
@@ -132,6 +161,8 @@ def _panel(build: Callable[[], Any]) -> dict:
         return {"ok": True, "data": build()}
     except Missing as error:
         return {"ok": False, "why": f"{error}. Run `python -m vending.db migrate` on this database."}
+    except Unavailable as error:
+        return {"ok": False, "why": f"couldn't be read just now ({error})"}
 
 
 # --- Data ---------------------------------------------------------------------------------------
@@ -491,7 +522,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         "counts": (_panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))) if ours["ok"] else
                    {"ok": True, "data": {}}),
         "spend": _panel(lambda: _spend(conn, now)),
-        "visits": _panel(lambda: _guarded(conn, lambda: visits.counts(conn, now))),
+        "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
         "purchase_requests": _panel(lambda: _rows(conn, """
             select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,
                    count(l.line_no) as lines,
@@ -1037,11 +1068,14 @@ def _tiles(snap: dict) -> str:
                       f'model {_money(m["total"])} over {_plural(m["runs"], "run")} '
                       f'({_money(m["last_7_days"])} this week){unpriced}'))
     seen = snap.get("visits")
-    if seen and seen["ok"]:
+    if seen and not seen["ok"]:
+        tiles.append(("Visitors", '<span class="big dim">Unavailable</span>',
+                      "the visit counts couldn't be read just now; the rest of the page could"))
+    elif seen:
         v = seen["data"]
         if not v["browsers"]:
             tiles.append(("Visitors", '<span class="big dim">None yet</span>',
-                          "browsers that sign in to these pages are counted here"))
+                          "browsers that open these pages are counted here"))
         else:
             tiles.append(("Visitors", f'<span class="big">{_plural(v["browsers"], "browser")}</span>',
                           f'{_plural(v["visits"], "visit")} &middot; {_plural(v["sign_ins"], "sign-in")} '
@@ -1559,7 +1593,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
               '<br>No balance or profit shown yet: the ledger (#35) has landed, and its panel is the next step.</footer>')
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<noscript><meta http-equiv="refresh" content="{int(refresh)}"></noscript>'
+            # The query marks the reload as one, so the visit counter doesn't count it (`vending.visits`).
+            f'<noscript><meta http-equiv="refresh" content="{int(refresh)}; url=?{visits.REFRESH_QUERY}"></noscript>'
             f'<title>{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
             f'<style>{STYLE}{machine_art.STYLE}</style></head><body><main>{body}</main>'
             f'<script>{SCRIPT % (int(refresh), visits.REFRESH_HEADER)}</script></body></html>')
