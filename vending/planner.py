@@ -711,7 +711,7 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
                 s.slot))
     w = next((s for s in slots if s.slot == wildcard), None)
     if w is None:
-        return refusals
+        return refusals + _check_wildcard_product(slots, None, above_now, config)
     if w.action == NO_CHANGE and w.price_cents is not None and w.price_cents > config.wildcard_ceiling_cents:
         refusals.append(Refusal("wildcard", (
             f"slot {w.slot} is the wildcard and stays at {_dollars(w.price_cents)}, above the wildcard ceiling of "
@@ -733,20 +733,39 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
             refusals.append(Refusal("wildcard", (
                 f"the wildcard moves only at a Friday visit, so slot {w.slot} can't go above "
                 f"{_dollars(ceiling)} on a midweek one; wait for Friday"), w.slot))
-    if w.product is not None:
-        shared = sorted(s.slot for s in slots if s.slot != w.slot and s.product == w.product)
+    refusals.extend(_check_wildcard_product(slots, w, above_now, config))
+    return refusals
+
+
+def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[str],
+                            config: Config) -> list[Refusal]:
+    """The wildcard's product is in no other slot, and a purchase of it stays under the cap.
+
+    The product of a slot above the ceiling *now* is protected too, even if this plan switches or
+    lowers that slot: its line may come back unavailable, and the slot would still be the wildcard.
+    """
+    owners: dict[str, str] = {s.state.product: s.slot for s in slots if s.slot in above_now and s.state.product}
+    if w is not None and w.product is not None:
+        owners.setdefault(w.product, w.slot)
+    refusals: list[Refusal] = []
+    for product, owner in sorted(owners.items()):
+        shared = sorted(s.slot for s in slots if s.slot != owner and s.product == product)
         if shared:
             refusals.append(Refusal("wildcard", (
-                f"slot {w.slot} is the wildcard, and its product {w.product} is also in slot {', '.join(shared)}; "
-                f"the wildcard's product is in no other slot, so its purchases stay under the cap"), w.slot))
-    if w.purchase is not None:
-        options = [o for o in (w.purchase.primary, w.purchase.alternate) if o is not None]
-        most = max(o.packs * o.max_price_per_pack_cents for o in options)
-        if most > config.wildcard_purchase_cap_cents:
-            refusals.append(Refusal("wildcard", (
-                f"slot {w.slot} is the wildcard, and its purchase could cost {_dollars(most)} at the worker's "
-                f"maximum, over the {_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a "
-                f"cheaper pack"), w.slot))
+                f"{product} is the wildcard's product (slot {owner}), so it can't be in slot {', '.join(shared)}; "
+                f"the wildcard's product is in no other slot, so its purchases stay under the cap. A slot that "
+                f"was the wildcard keeps that product to itself until a visit has brought it back under "
+                f"{_dollars(config.price_ceiling_cents)}"), owner))
+        for s in slots:
+            if s.product != product or s.purchase is None:
+                continue
+            options = [o for o in (s.purchase.primary, s.purchase.alternate) if o is not None]
+            most = max(o.packs * o.max_price_per_pack_cents for o in options)
+            if most > config.wildcard_purchase_cap_cents:
+                refusals.append(Refusal("wildcard", (
+                    f"slot {s.slot} buys {product}, the wildcard's product, and its purchase could cost "
+                    f"{_dollars(most)} at the worker's maximum, over the "
+                    f"{_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a cheaper pack"), s.slot))
     return refusals
 
 
