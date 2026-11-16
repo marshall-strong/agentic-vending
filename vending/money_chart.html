@@ -221,6 +221,17 @@ function mockDays() {
 // cent; display only). Cash is the ledger balance less the sales tax still owed, and net worth is that cash
 // plus stock at cost, so a restock moves cash into stock and net worth holds.
 // A day whose costs aren't all known has no gross or net profit: the chart leaves a gap, never a guess.
+// Preserve the exact fractions supplied by money_series until a value is displayed.
+const rat = t => t == null ? null : String(t).split("/").map(BigInt);
+const addRat = (a, b) => {
+  if (a == null || b == null) return null;
+  const ad = a[1] || 1n, bd = b[1] || 1n;
+  let x = ad, y = bd; while (y) [x, y] = [y, x % y];
+  return [a[0] * (bd / x) + b[0] * (ad / x), ad * (bd / x)];
+};
+const negRat = a => a == null ? null : [-a[0], a[1] || 1n];
+const dollars = a => a == null ? null : Number(a[0]) / Number(a[1] || 1n) / 100;
+const sumRat = xs => xs.reduce(addRat, [0n, 1n]);
 function realDays(R) {
   const num = v => v == null ? null : parseFloat(v);
   const days = [];
@@ -228,25 +239,28 @@ function realDays(R) {
   for (const r of R.daily) {
     const [yy, mm, dd] = r.date.split("-").map(Number), d = new Date(yy, mm - 1, dd);
     const live = r.counted_from != null;
-    const rev = num(r.revenue_ex_tax), cogs = num(r.cost_of_sales), fee = num(r.visit_fees), api = num(r.token_spend),
-      tax = num(r.sales_tax), shrink = num(r.shrinkage), adj = num(r.adjustments);
+    const exact = Object.fromEntries(Object.entries(r.exact_cents).map(([k, v]) => [k, rat(v)]));
+    const get = k => dollars(exact[k]);
+    const rev = get("revenue_ex_tax"), cogs = get("cost_of_sales"), fee = get("visit_fees"), api = get("token_spend"),
+      tax = get("sales_tax"), shrink = get("shrinkage"), adj = get("adjustments");
     // The series gives the tax still owed at the day's end, counted from the opening whatever the window.
-    const cash = num(r.cash_balance), owed = num(r.tax_owed), inv = num(r.inventory);
-    const spendable = cash == null || owed == null ? null : cash - owed;
-    const worth = num(r.net_worth);   // spendable + stock at cost; null when some stock has no known cost
+    const inv = get("inventory");
+    exact.spendable = addRat(exact.cash_balance, negRat(exact.tax_owed));
+    const spendable = dollars(exact.spendable);
+    const worth = get("net_worth");   // spendable + stock at cost; null when some stock has no known cost
     const ev = [], runs = [];
     for (const e of r.events) {
       if (e.kind === "restock_visit") ev.push({ k: "fri", txt: "Restock visit: " + e.detail });
       else if (e.kind === "midweek_visit") ev.push({ k: "mid", txt: "Midweek visit ($25): " + e.detail });
       else if (e.kind === "price_change") ev.push({ k: "price", txt: "Price change: " + e.detail });
-      else if (e.kind === "tokens") runs.push({ p: e.detail, c: num(e.amount) || 0 });
+      else if (e.kind === "tokens") runs.push({ p: e.detail, c: dollars(rat(e.exact_cents)) ?? 0 });
     }
     if (runs.length) ev.push({ k: "plan", txt: `${runs.length} AI call${runs.length > 1 ? "s" : ""}: $${api.toFixed(3)}` });
     for (const n of r.notes) ev.push({ k: "note", txt: n });
-    cum.rev += rev; cum.takings += num(r.takings); cum.cogs += cogs; cum.visits += fee; cum.tax += tax; cum.api += api;
+    cum.rev += rev; cum.takings += get("takings"); cum.cogs += cogs; cum.visits += fee; cum.tax += tax; cum.api += api;
     days.push({ d, key: r.date, live, units: r.units_sold, rev, cogs, fee, api, tax, shrink, adj,
-      unknownGross: live && !r.cost_of_sales_complete, unknownNet: live && !r.costs_complete,
-      runs, ev, spendable, inv, worth, cum: { ...cum }, profit: num(r.net_known) });
+      unknownGross: live && !r.cost_of_sales_complete, unknownNet: live && !r.costs_complete, unknownShrink: live && !r.shrinkage_complete,
+      partial: !r.whole, runs, ev, spendable, inv, worth, exact, cum: { ...cum }, profit: get("net") });
   }
   const opened = new Date(R.opening.at);
   const firstLive = days.find(r => r.live);
@@ -264,19 +278,26 @@ for (const r of days.filter(r => r.live)) {
   const wk = new Date(r.d.getFullYear(), r.d.getMonth(), r.d.getDate() - (r.d.getDay() + 1) % 7);
   const k = iso(wk);
   let w = weeks.find(x => x.k === k);
-  if (!w) weeks.push(w = { k, start: wk, rev: 0, cogs: 0, fee: 0, api: 0, tax: 0, ia: days.indexOf(r), ib: 0 });
-  w.rev += r.rev; w.cogs += r.cogs; w.fee += r.fee; w.api += r.api; w.tax += r.tax; w.ib = days.indexOf(r);
+  if (!w) weeks.push(w = { k, start: wk, rows: [], ia: days.indexOf(r), ib: 0 });
+  w.rows.push(r); w.ib = days.indexOf(r);
 }
 // Ledger weeks run Sat–Fri (ledger.py WEEK_STARTS = 5). The competition starts on a Thursday, so Week 1 is
 // Thu–Fri (2 days) and the last week is cut short by the end date: both are "partial".
-weeks.forEach((w, i) => { w.i = i + 1; w.nd = w.ib - w.ia + 1; w.partial = w.nd < 7; w.profit = w.rev - w.cogs - w.fee - w.api; });
+weeks.forEach((w, i) => {
+  w.i = i + 1; w.nd = w.rows.length; w.partial = w.nd < 7 || w.rows.some(r => r.partial);
+  for (const [k, field] of Object.entries({rev:"revenue_ex_tax", cogs:"cost_of_sales", fee:"visit_fees", api:"token_spend", tax:"sales_tax", shrink:"shrinkage", adj:"adjustments", profit:"net"})) {
+    const unknown = (k === "cogs" && w.rows.some(r => r.unknownGross)) || (k === "profit" && w.rows.some(r => r.unknownNet)) || (k === "shrink" && w.rows.some(r => r.unknownShrink));
+    w[k] = unknown ? null : MOCK ? w.rows.reduce((a, r) => a + (k === "profit" ? r.rev-r.cogs-r.fee-r.api-r.shrink+r.adj : r[k]), 0) : dollars(sumRat(w.rows.map(r => r.exact[field])));
+  }
+});
 const weekTag = w => `Week ${w.i}` + (w.partial ? ` · ${w.nd} days` : "");
 
 // Payback: the first day cash (after the sales-tax set-aside) is back to at least the $600 starting money,
 // counted from launch, after the day-one fill took cash below it. Net profit crossing $0 says nothing here
 // (it is positive from the first sale, because stock is only a cost once it sells).
 const OPEN_CASH = openCash;
-const PB = days.findIndex(r => r.live && r.spendable != null && r.spendable >= OPEN_CASH);   // -1 = not yet
+let invested = false;
+const PB = days.findIndex(r => { if (!r.live || r.spendable == null) return false; if (r.spendable < OPEN_CASH) invested = true; return invested && r.spendable >= OPEN_CASH; });   // -1 = not yet
 if (PB >= 0) days[PB].ev.push({ k: "pay", txt: `Paid back: cash back to $${OPEN_CASH} (${"$" + days[PB].spendable.toFixed(2)} after the sales-tax set-aside)` });
 
 if (!MOCK) { document.getElementById("banner").hidden = true; document.getElementById("mockTag").hidden = true; }
@@ -294,6 +315,7 @@ function h(tag, attrs = {}, kids = []) {
   return e;
 }
 function niceTicks(lo, hi, n = 5) {
+  if (hi <= lo) hi = lo + 1;
   const span = hi - lo, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0));
   const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= step0);
   const out = [], end = Math.ceil(hi / step - 1e-9) * step; for (let v = Math.floor(lo / step) * step; v <= end + 1e-9; v += step) out.push(+v.toFixed(6));
@@ -321,16 +343,18 @@ function showTip(evt, content) {
   tip.style.left = x + "px"; tip.style.top = yy + "px";
 }
 const hideTip = () => (tip.style.display = "none");
-const row = (label, v, color) => `<div class="row"><span>${color ? `<i class="sw" style="background:${color}"></i>` : ""}${label}</span><span>${v}</span></div>`;
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"})[c]);
+const row = (label, v, color) => `<div class="row"><span>${color ? `<i class="sw" style="background:${color}"></i>` : ""}${esc(label)}</span><span>${esc(v)}</span></div>`;
 function legend(items) {
   const lg = document.getElementById("legend"); lg.className = "legend";
-  lg.innerHTML = items.map(([c, t, line]) => `<span><i class="${line ? "line" : ""}" style="background:${c}"></i>${t}</span>`).join("");
+  lg.innerHTML = items.map(([c, t, line]) => `<span><i class="${line ? "line" : ""}" style="background:${c}"></i>${esc(t)}</span>`).join("");
 }
 function table(head, rows) {
-  document.getElementById("table").innerHTML = `<table><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr>${rows.map(r => `<tr>${r.map((c, i) => `<td${i === r.length - 1 && head[i] === "Events" ? ' class="evc"' : ""}>${c}</td>`).join("")}</tr>`).join("")}</table>`;
+  document.getElementById("table").innerHTML = `<table><tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr>${rows.map(r => `<tr>${r.map((c, i) => `<td${i === r.length - 1 && head[i] === "Events" ? ' class="evc"' : ""}>${esc(c)}</td>`).join("")}</tr>`).join("")}</table>`;
 }
 function tiles(list) {
-  document.getElementById("tiles").innerHTML = list.map(([k, v, n]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${n || ""}</div></div>`).join("");
+  document.getElementById("tiles").replaceChildren(...list.map(([k, v, n]) =>
+    h("div", {cls: "tile"}, [h("div", {cls: "k", text: k}), h("div", {cls: "v", text: v}), h("div", {cls: "n", text: n || ""})])));
 }
 const avgCost = 0.92;
 // Payback tile: as of day index `upTo` (inclusive). Says "not yet paid back" rather than inventing a date.
@@ -339,18 +363,18 @@ function paybackTile(upTo) {
   return ["Paid back", "Not yet", `cash ${$(days[upTo].spendable)} of $${OPEN_CASH} after tax set-aside`];
 }
 const commonTiles = () => tiles([
-  ["Net worth", $(last.worth), `cash after tax + unsold stock at cost · started $600`],
+  ["Net worth", $(last.worth), `cash after tax + unsold stock at cost · started $${OPEN_CASH}`],
   paybackTile(N_DAYS_LAST),
-  ["Profit to date", $(last.profit), "sales ex-tax − drinks sold − visits − AI"],
-  ["Sales (ex tax)", $(last.cum.rev), `${days.reduce((a, r) => a + r.units, 0)} units`],
-  ["AI spend", $(last.cum.api), `${(100 * last.cum.api / last.cum.rev).toFixed(1)}¢ per $1 of sales`],
-  ["The brain in cans", Math.round(last.cum.api / avgCost) + " cans", `AI spend ÷ $${avgCost.toFixed(2)} avg can cost`],
+  ["Profit to date", $(sumFlow("net", 0, N_DAYS_LAST)), "exported days; includes shrinkage and adjustments; the last day may be in progress"],
+  ["Sales (ex tax)", $(sumFlow("rev", 0, N_DAYS_LAST)), `${days.reduce((a, r) => a + r.units, 0)} units`],
+  ["AI spend", $(sumFlow("api", 0, N_DAYS_LAST)), `${(100 * sumFlow("api", 0, N_DAYS_LAST) / sumFlow("rev", 0, N_DAYS_LAST)).toFixed(1)}¢ per $1 of sales`],
+  ["The brain in cans", Math.round(sumFlow("api", 0, N_DAYS_LAST) / avgCost) + " cans", `AI spend ÷ $${avgCost.toFixed(2)} avg can cost`],
 ]);
-function xDays(W, m) { const n = days.length; return i => m.l + (W - m.l - m.r) * (i / (n - 1)); }
+function xDays(W, m) { const n = days.length; return i => m.l + (W - m.l - m.r) * (n === 1 ? 0.5 : i / (n - 1)); }
 function dayAxis(svg, x, H, m) {
   days.forEach((r, i) => {
     // ticks on Saturdays (the first day of each ledger week), plus the first day unless a Saturday is right next to it
-    if (r.d.getDay() === 6 || (i === 0 && days[1].d.getDay() !== 6)) {
+    if (r.d.getDay() === 6 || (i === 0 && (days.length === 1 || days[1].d.getDay() !== 6))) {
       el("line", { x1: x(i), x2: x(i), y1: H - m.b, y2: H - m.b + 4, stroke: "var(--axis)" }, svg);
       el("text", { x: x(i), y: H - m.b + 16, "text-anchor": "middle" }, svg).textContent = fmtD(r.d);
     }
@@ -373,6 +397,7 @@ function crosshair(svg, x, H, m, W, html) {
 }
 function eventMarks(svg, x, yAt) {
   days.forEach((r, i) => r.ev.forEach(ev => {
+    if (yAt(r) == null) return;
     if (ev.k === "mid") {
       const cx = x(i), cy = yAt(r) - 14;
       el("path", { d: `M${cx} ${cy - 6} L${cx + 6} ${cy} L${cx} ${cy + 6} L${cx - 6} ${cy} Z`, fill: "var(--s3)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
@@ -385,7 +410,7 @@ function eventMarks(svg, x, yAt) {
 const dayTip = r => `<b>${r.d.toDateString()}</b>` +
   row("Net worth", $(r.worth)) + row("· spendable cash", $(r.spendable), "var(--s7)") + row("· stock at cost", $(r.inv), "var(--s2)") + "<hr>" +
   row("Sales today (ex tax)", $(r.rev)) + row("AI today", $(r.api, 3), "var(--s5)") + (r.fee ? row("Visit fee", $(r.fee), "var(--s3)") : "") +
-  (r.ev.length ? "<hr>" + r.ev.map(e => `<div>${e.txt}</div>`).join("") : "");
+  (r.ev.length ? "<hr>" + r.ev.map(e => `<div>${esc(e.txt)}</div>`).join("") : "");
 
 // =====================================================================
 // D v2: everything, with toggles
@@ -393,26 +418,34 @@ const dayTip = r => `<b>${r.d.toDateString()}</b>` +
 const N = days.length;
 const DF = { rev: days.map(r => r.rev), cogs: days.map(r => r.cogs), fee: days.map(r => r.fee), api: days.map(r => r.api) };
 // Shrinkage (units lost at a known cost) is a cost and adjustments go into net, as in the ledger.
-DF.costs = DF.cogs.map((v, i) => v + DF.fee[i] + DF.api[i] + days[i].shrink);
-DF.gross = DF.rev.map((v, i) => days[i].unknownGross ? null : v - DF.cogs[i]);
-DF.net = DF.rev.map((v, i) => days[i].unknownNet ? null : v - DF.cogs[i] - DF.fee[i] - DF.api[i] - days[i].shrink + days[i].adj);
-// A running total is unknown from the first unknown day on: one of its parts isn't known.
-const CUMS = {};
-for (const k in DF) { let s = 0; CUMS[k] = DF[k].map(v => (s = s == null || v == null ? null : s + v)); }
+DF.cogs = DF.cogs.map((v, i) => days[i].unknownGross ? null : v);
+DF.costs = DF.cogs.map((v, i) => days[i].unknownNet ? null : MOCK ? v + DF.fee[i] + DF.api[i] + days[i].shrink : dollars(sumRat([days[i].exact.cost_of_sales, days[i].exact.visit_fees, days[i].exact.token_spend, days[i].exact.shrinkage])));
+DF.gross = DF.rev.map((v, i) => days[i].unknownGross ? null : MOCK ? v - DF.cogs[i] : dollars(days[i].exact.gross_profit));
+DF.net = DF.rev.map((v, i) => days[i].unknownNet ? null : MOCK ? v - DF.cogs[i] - DF.fee[i] - DF.api[i] - days[i].shrink + days[i].adj : dollars(days[i].exact.net));
+// Sum the requested window directly, so a later clean window can recover.
+const exactFields = {rev:"revenue_ex_tax", cogs:"cost_of_sales", fee:"visit_fees", api:"token_spend", gross:"gross_profit", net:"net"};
+function sumFlow(k, a, b) {
+  const values = DF[k].slice(a, b + 1);
+  if (values.some(v => v == null)) return null;
+  if (MOCK) return values.reduce((x, y) => x + y, 0);
+  const rows = days.slice(a, b + 1);
+  if (k === "costs") return dollars(sumRat(rows.flatMap(r => [r.exact.cost_of_sales, r.exact.visit_fees, r.exact.token_spend, r.exact.shrinkage])));
+  return dollars(sumRat(rows.map(r => r.exact[exactFields[k]])));
+}
 const LV = { cash: days.map(r => r.spendable), worth: days.map(r => r.worth) };
 const OPEN = openCash;   // starting money: capital, not income
 
 // Series: colour follows the entity (fixed slot), never its position in the visible set.
 const SER = [
   { k: "rev",   name: "Revenue (ex tax)",  short: "Revenue",     c: "var(--s1)", g: "In",       desc: "Sales with the 8% sales tax taken out" },
-  { k: "costs", name: "Total costs",       short: "Total costs", c: "var(--s4)", g: "Costs",    desc: "Drinks sold at cost + visit fees + AI spend" },
+  { k: "costs", name: "Total costs",       short: "Total costs", c: "var(--s4)", g: "Costs",    desc: "Drinks sold at cost + shrinkage + visit fees + AI spend" },
   { k: "cogs",  name: "Drinks sold",       short: "Drinks sold", c: "var(--s2)", g: "Costs",    desc: "Cost of the drinks that sold (cost of sales), not of drinks bought" },
   { k: "fee",   name: "Visit fees",        short: "Visit fees",  c: "var(--s3)", g: "Costs",    desc: "$25 per midweek visit; Friday visits are free" },
   { k: "api",   name: "AI / API spend",    short: "AI spend",    c: "var(--s5)", g: "Costs",    desc: "Claude API spend on agent runs" },
   { k: "gross", name: "Gross profit",      short: "Gross profit",c: "var(--s6)", g: "Profit",   desc: "Revenue − drinks sold" },
   { k: "net",   name: "Net profit",        short: "Net profit",  c: "var(--ink)", w: 2.5, g: "Profit", desc: "Revenue − drinks sold − visit fees − AI" },
   { k: "cash",  name: "Cash",              short: "Cash",        c: "var(--s7)", dash: "6 4", g: "Balances", lvl: true, desc: "Cash in the account, after setting aside sales tax owed" },
-  { k: "worth", name: "Net worth",         short: "Net worth",   c: "var(--s8)", dash: "6 4", g: "Balances", lvl: true, desc: "Cash + unsold stock at cost. Always $600 + net profit" },
+  { k: "worth", name: "Net worth",         short: "Net worth",   c: "var(--s8)", dash: "6 4", g: "Balances", lvl: true, desc: "Cash + unsold stock at cost; capital movements also affect net worth" },
 ];
 const SK = Object.fromEntries(SER.map(s => [s.k, s]));
 const MODES = {
@@ -431,19 +464,23 @@ const S = { view: "overlay", s: new Set(DEF.s), m: DEF.m, a: 0, b: N - 1, rk: "a
 
 const isRebased = () => S.m === "cum" && S.rb;
 const isDelta = s => s.lvl && !(S.m === "cum" && !S.rb);         // balances shown as a change
-const avail = s => s.k !== "worth" || (S.m === "cum" && !S.rb);  // Δ net worth would just repeat net profit
+const avail = s => true;  // Δ net worth would just repeat net profit
 const sName = s => isDelta(s) ? s.short + " (change)" : s.name;
 function val(k, i) {
   const s = SK[k];
   if (s.lvl) {
-    const L = LV[k], p = j => (j < 0 ? OPEN : L[j]), sub = (u, w) => u == null || w == null ? null : u - w;
-    if (S.m === "cum") return S.rb ? sub(L[i], p(S.a - 1)) : L[i];
-    return sub(L[i], p(i - (S.m === "day" ? 1 : 7)));
+    const L = LV[k], p = j => (j < 0 ? OPEN : L[j]);
+    const subAt = (i, j) => {
+      if (MOCK) return L[i] == null || p(j) == null ? null : L[i] - p(j);
+      const field = k === "cash" ? "spendable" : "net_worth";
+      const before = j < 0 ? rat(String(Math.round(OPEN * 100))) : days[j].exact[field];
+      return dollars(addRat(days[i].exact[field], negRat(before)));
+    };
+    if (S.m === "cum") return S.rb ? subAt(i, S.a - 1) : L[i];
+    return subAt(i, i - (S.m === "day" ? 1 : 7));
   }
-  const C = CUMS[k], p = j => (j < 0 ? 0 : C[j]), sub = (u, w) => u == null || w == null ? null : u - w;
-  if (S.m === "cum") return sub(C[i], S.rb ? p(S.a - 1) : 0);
   if (S.m === "day") return DF[k][i];
-  return sub(C[i], p(i - 7));
+  return sumFlow(k, S.m === "r7" ? Math.max(0, i - 6) : S.rb ? S.a : 0, i);
 }
 // AI as a share of gross profit, in the same mode as the main chart. Null when gross profit is under $1.
 function aiShare(i) { const g = val("gross", i); return g != null && g >= 1 ? 100 * val("api", i) / g : null; }
@@ -454,7 +491,7 @@ const keyIdx = Object.fromEntries(days.map((r, i) => [r.key, i]));
 function setRange(a, b, rk) {
   a = Math.max(0, Math.min(N - 1, a)); b = Math.max(0, Math.min(N - 1, b));
   if (a > b) [a, b] = [b, a];
-  if (a === b) { if (b < N - 1) b++; else a--; }
+  if (a === b && N > 1) { if (b < N - 1) b++; else a--; }
   S.a = a; S.b = b; S.rk = (a === 0 && b === N - 1) ? "all" : rk;
 }
 function applyRangeKey(r) {
@@ -512,7 +549,7 @@ function buildControls() {
     modeSeg.append(b); return b;
   });
   const rangeSeg = document.getElementById("rangeSeg");
-  const rk = [["all", "All", "Whole run, from the $600 opening entry"], ...weeks.map(w => [`w${w.i}`, `W${w.i}`,
+  const rk = [["all", "All", `Whole export, from ${$(openCash)} opening capital`], ...weeks.map(w => [`w${w.i}`, `W${w.i}`,
     `${weekTag(w)}: ${fmtD(days[w.ia].d)} – ${fmtD(days[w.ib].d)} (Sat–Fri ledger week${w.partial ? ", partial week" : ""})`])];
   ctl.range = rk.map(([k, t, title]) => {
     const b = h("button", { type: "button", text: t, "data-k": k, title, "aria-label": title });
@@ -586,11 +623,11 @@ function rangeLabel() {
     (w ? ` (Week ${w.i}${w.partial ? ", partial week" : ""})` : S.rk === "all" ? " (whole run)" : "") + ` · ${S.b - S.a + 1} days`;
 }
 function tilesD() {
-  const a = S.a, b = S.b, sum = k => { const hi = CUMS[k][b], lo = a ? CUMS[k][a - 1] : 0; return hi == null || lo == null ? null : hi - lo; };
+  const a = S.a, b = S.b, sum = k => sumFlow(k, a, b);
   const wEnd = LV.worth[b], wStart = a ? LV.worth[a - 1] : OPEN, dw = wEnd == null || wStart == null ? null : wEnd - wStart;
   let units = 0; for (let i = a; i <= b; i++) units += days[i].units;
   const rev = sum("rev"), gross = sum("gross"), api = sum("api");
-  const delta = dw == null ? "unknown: some stock has no known cost" : `<span class="d ${dw >= 0 ? "up" : "down"}">${dw >= 0 ? "▲" : "▼"} ${$(Math.abs(dw))}</span> ${a ? "over the range" : `vs the $${OPEN} start`}`;
+  const delta = dw == null ? "unknown: some stock has no known cost" : `${dw >= 0 ? "+" : "-"}${$(Math.abs(dw))} ${a ? "over the range" : `vs the $${OPEN} start`}`;
   tiles([
     [`Net worth on ${fmtD(days[b].d)}`, $(wEnd), delta],
     paybackTile(b),
@@ -628,7 +665,7 @@ function drawD() {
   const railH = rows.length ? rows.length * 15 + 6 : 0;
   const m = { l: 62, r: 150, t: 24 + railH, b: 28 }, H = 340 + railH;
   const PW = W - m.l - m.r;
-  const x = i => m.l + PW * (i - a) / span;
+  const x = i => m.l + PW * (span ? (i - a) / span : 0.5);
   const vis = SER.filter(s => S.s.has(s.k) && avail(s));
   let lo = 0, hi = 0;
   for (const s of vis) for (let i = a; i <= b; i++) { const v = val(s.k, i); if (v == null) continue; if (v < lo) lo = v; if (v > hi) hi = v; }
@@ -779,7 +816,7 @@ function drawD() {
 function drawStrip() {
   const a = S.a, b = S.b, span = b - a;
   const m = { l: 62, r: 150, t: 24, b: 22 }, H = 120, PW = W - m.l - m.r;
-  const x = i => m.l + PW * (i - a) / span;
+  const x = i => m.l + PW * (span ? (i - a) / span : 0.5);
   const vals = []; for (let i = a; i <= b; i++) vals.push(aiShare(i));
   const finite = vals.filter(v => v != null);
   const hi = Math.max(5, ...finite) * 1.1;
@@ -880,7 +917,7 @@ const V = {
     notes: [
       (MOCK ? "Mock data, seeded. " : "From the ledger, competition money only (from the opening). ") + "The money model is real: profit counts drinks when they sell, at average cost (cost of sales), not when we buy them. A restock moves cash into stock, so profit and net worth hold flat on restock day while cash drops.",
       "Revenue is ex sales tax (8%). Tax is set aside the day we take it, so it counts as neither revenue nor a cost. “Cash” is after that set-aside.",
-      "The $600 is starting money, not income. Net worth is always $600 + net profit, so in Daily and 7-day modes it is hidden (it would repeat net profit) and Cash shows as a change.",
+      "Starting capital is not income. Capital movements also change net worth. Daily and rolling balances show their change over the period.",
       "Paid back is the first day cash (after the sales-tax set-aside) is back to at least the $600 starting money, after the day-one fill took it below. It is not “net profit crosses $0”: profit is above $0 from the first sale, because drinks only count as a cost when they sell. The $0 line is just a reference.",
       "Weeks are the ledger's Saturday–Friday weeks. The free Friday restock is the natural weekly reset. Competition starts on a Thursday, so Week 1 is only Thu–Fri (2 days) and the last week is cut short by the end date: compare partial weeks per day, not in total.",
       "Markers: prices only change at a visit (Friday, or a $25 midweek visit), because the tags are physical. " + (MOCK ? "AI planning runs are on Thursdays in this mock, but a run can fall on any day." : "The AI lane marks each day with model calls; hover it for the cost."),
@@ -895,22 +932,28 @@ const V = {
     why: "Inspired by Project Vend's “net value over time” and Vending-Bench's money-balance line. Dots = restocks; diamonds = paid visits.",
     draw() {
       const W = 900, H = 340, m = { l: 52, r: 16, t: 34, b: 28 };
-      const hi = Math.max(...days.map(r => r.worth)) * 1.08;
+      const hi = Math.max(1, openCash, ...days.flatMap(r => [r.worth, r.spendable].filter(v => v != null))) * 1.08;
       const { svg, y } = frame(W, H, m, 0, hi, v => "$" + v);
       const x = xDays(W, m);
-      const area = (top, bot) => days.map((r, i) => `${i ? "L" : "M"}${x(i)} ${y(top(r))}`).join("") + days.slice().reverse().map((r, j) => `L${x(days.length - 1 - j)} ${y(bot(r))}`).join("") + "Z";
+      const segments = (top, bot) => {
+        const groups = []; let g = [];
+        days.forEach((r, i) => { if (top(r) == null || (bot && bot(r) == null)) { if (g.length) groups.push(g); g = []; } else g.push(i); });
+        if (g.length) groups.push(g); return groups;
+      };
+      const area = (top, bot) => segments(top, bot).map(g => g.map((i, j) => `${j ? "L" : "M"}${x(i)} ${y(top(days[i]))}`).join("") + g.slice().reverse().map(i => `L${x(i)} ${y(bot(days[i]))}`).join("") + "Z").join("");
+      const line = top => segments(top).map(g => g.map((i, j) => `${j ? "L" : "M"}${x(i)} ${y(top(days[i]))}`).join("")).join("");
       el("path", { d: area(r => r.spendable, () => 0), fill: "var(--s7-soft)" }, svg);
       el("path", { d: area(r => r.worth, r => r.spendable), fill: "var(--s2-soft)" }, svg);
-      el("path", { d: days.map((r, i) => `${i ? "L" : "M"}${x(i)} ${y(r.spendable)}`).join(""), fill: "none", stroke: "var(--s7)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
-      el("line", { x1: m.l, x2: W - m.r, y1: y(600), y2: y(600), stroke: "var(--ink2)", "stroke-dasharray": "2 4" }, svg);
-      el("text", { x: W - m.r - 4, y: y(600) + 15, "text-anchor": "end", class: "lbl" }, svg).textContent = "Started with $600";
-      el("path", { d: days.map((r, i) => `${i ? "L" : "M"}${x(i)} ${y(r.worth)}`).join(""), fill: "none", stroke: "var(--ink)", "stroke-width": 2.5, "stroke-linejoin": "round" }, svg);
+      el("path", { d: line(r => r.spendable), fill: "none", stroke: "var(--s7)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+      el("line", { x1: m.l, x2: W - m.r, y1: y(openCash), y2: y(openCash), stroke: "var(--ink2)", "stroke-dasharray": "2 4" }, svg);
+      el("text", { x: W - m.r - 4, y: y(openCash) + 15, "text-anchor": "end", class: "lbl" }, svg).textContent = `Started with $${openCash}`;
+      el("path", { d: line(r => r.worth), fill: "none", stroke: "var(--ink)", "stroke-width": 2.5, "stroke-linejoin": "round" }, svg);
       dayAxis(svg, x, H, m);
-      eventMarks(svg, x, r => y(r.worth));
+      eventMarks(svg, x, r => r.worth == null ? null : y(r.worth));
       const li = days.length - 1;
-      el("text", { x: x(li) - 4, y: y(last.worth) - 8, "text-anchor": "end", class: "lbl" }, svg).textContent = "Net worth " + $(last.worth, 0);
-      el("text", { x: x(li) - 4, y: y(last.spendable * 0.3), "text-anchor": "end", class: "lbl" }, svg).textContent = "Spendable cash";
-      el("text", { x: x(li) - 4, y: y((last.worth + last.spendable) / 2) + 4, "text-anchor": "end", class: "lbl" }, svg).textContent = "Stock at cost";
+      if (last.worth != null) el("text", { x: x(li) - 4, y: y(last.worth) - 8, "text-anchor": "end", class: "lbl" }, svg).textContent = "Net worth " + $(last.worth, 0);
+      if (last.spendable != null) el("text", { x: x(li) - 4, y: y(last.spendable * 0.3), "text-anchor": "end", class: "lbl" }, svg).textContent = "Spendable cash";
+      if (last.worth != null && last.spendable != null) el("text", { x: x(li) - 4, y: y((last.worth + last.spendable) / 2) + 4, "text-anchor": "end", class: "lbl" }, svg).textContent = "Stock at cost";
       crosshair(svg, x, H, m, W, dayTip);
       legend([["var(--ink)", "Net worth", 1], ["var(--s7)", "Spendable cash (after sales tax set aside)"], ["var(--s2)", "Unsold stock at cost"], ["var(--s3)", "$25 midweek visit"]]);
       table(["Day", "Net worth", "Cash", "Stock", "AI"], days.map(r => [fmtD(r.d), $(r.worth), $(r.spendable), $(r.inv), $(r.api, 3)]));
@@ -926,32 +969,32 @@ const V = {
     why: "Like Project Vend 2's profit-over-time chart, with the cost split Datawrapper recommends for several weeks at once.",
     draw() {
       const W = 900, H = 372, m = { l: 52, r: 16, t: 20, b: 42 };
-      const hi = Math.max(...weeks.map(w => w.rev)) * 1.1, lo = -Math.max(...weeks.map(w => w.cogs + w.fee + w.api + w.tax)) * 1.1;
+      const hi = Math.max(1, ...weeks.map(w => Math.max(w.rev, w.profit ?? 0))) * 1.1, lo = Math.min(0, ...weeks.map(w => Math.min(-((w.cogs ?? 0) + w.fee + w.api + w.tax + (w.shrink ?? 0)), w.profit ?? 0))) * 1.1;
       const { svg, y } = frame(W, H, m, lo, hi, v => (v < 0 ? "−$" : "$") + Math.abs(v));
       const bw = (W - m.l - m.r) / weeks.length, pad = bw * 0.22;
-      const parts = [["cogs", "var(--s2)", "Drinks sold (at cost)"], ["tax", "var(--muted)", "Sales tax (not our money)"], ["fee", "var(--s3)", "Visit fees"], ["api", "var(--s5)", "AI spend"]];
+      const parts = [["cogs", "var(--s2)", "Drinks sold (at cost)"], ["tax", "var(--muted)", "Sales tax (not our money)"], ["shrink", "var(--s8)", "Shrinkage"], ["fee", "var(--s3)", "Visit fees"], ["api", "var(--s5)", "AI spend"]];
       weeks.forEach((w, i) => {
         const x0 = m.l + i * bw + pad, wd = bw - 2 * pad;
         const g = el("g", {}, svg);
         el("rect", { x: x0, y: y(w.rev), width: wd, height: y(0) - y(w.rev) - 1, rx: 4, fill: "var(--s1)" }, g);
         let acc = 0;
         for (const [k, c] of parts) {
-          if (w[k] <= 0) continue;
+          if (w[k] == null || w[k] <= 0) continue;
           const top = y(-acc) + 1, hh = y(-(acc + w[k])) - y(-acc) - (w[k] > 0.4 ? 2 : 0);
           el("rect", { x: x0, y: top, width: wd, height: Math.max(hh, 1.5), fill: c }, g);
           acc += w[k];
         }
-        el("circle", { cx: x0 + wd / 2, cy: y(w.profit), r: 5, fill: "var(--ink)", stroke: "var(--surface)", "stroke-width": 2 }, g);
+        if (w.profit != null) el("circle", { cx: x0 + wd / 2, cy: y(w.profit), r: 5, fill: "var(--ink)", stroke: "var(--surface)", "stroke-width": 2 }, g);
         el("text", { x: x0 + wd / 2, y: H - m.b + 16, "text-anchor": "middle" }, svg).textContent = "Wk " + w.i;
         if (w.partial) el("text", { x: x0 + wd / 2, y: H - m.b + 29, "text-anchor": "middle" }, svg).textContent = `${w.nd} days`;
-        el("text", { x: x0 + wd / 2 + 9, y: y(w.profit) + 4, class: "lbl" }, g).textContent = $(w.profit, 0);
+        if (w.profit != null) el("text", { x: x0 + wd / 2 + 9, y: y(w.profit) + 4, class: "lbl" }, g).textContent = $(w.profit, 0);
         const hit = el("rect", { x: m.l + i * bw, y: m.t, width: bw, height: H - m.t - m.b, fill: "transparent" }, g);
         hit.addEventListener("mousemove", e => showTip(e, `<b>${weekTag(w)} · from ${fmtD(days[w.ia].d)}</b>` + (w.partial ? `<div class="ev">Partial week: not comparable with a full week's total.</div>` : "") + row("Sales (ex tax)", $(w.rev), "var(--s1)") +
-          parts.map(([k, c, n]) => row(n, "−" + $(w[k]), c)).join("") + "<hr>" + row("Profit", $(w.profit)) + row("AI as share of sales", (100 * w.api / w.rev).toFixed(1) + "%")));
+          parts.map(([k, c, n]) => row(n, "−" + $(w[k]), c)).join("") + "<hr>" + row("Adjustments", $(w.adj)) + row("Profit", $(w.profit)) + row("AI as share of sales", (100 * w.api / w.rev).toFixed(1) + "%")));
         hit.addEventListener("mouseleave", hideTip);
       });
       legend([["var(--s1)", "Sales (ex tax)"], ...parts.map(([, c, n]) => [c, n]), ["var(--ink)", "Profit", 1]]);
-      table(["Week", "Sales", "Drinks", "Tax", "Visits", "AI", "Profit"], weeks.map(w => ["Wk " + w.i + (w.partial ? ` (${w.nd} days)` : ""), $(w.rev), $(w.cogs), $(w.tax), $(w.fee), $(w.api), $(w.profit)]));
+      table(["Week", "Sales", "Drinks", "Tax", "Shrinkage", "Visits", "AI", "Adjustments", "Profit"], weeks.map(w => ["Wk " + w.i + (w.partial ? ` (${w.nd} days)` : ""), $(w.rev), $(w.cogs), $(w.tax), $(w.shrink), $(w.fee), $(w.api), $(w.adj), $(w.profit)]));
       return svg;
     },
     notes: ["Answers “was this a good week, and why?” at a glance.", "Shows that AI is the thin pink sliver. That's the honest picture, and the story too.", "v2: sales tax is grey here (it's not our money), so yellow can mean Total costs in D."],
@@ -978,8 +1021,8 @@ const V = {
         hit.addEventListener("mouseleave", hideTip);
       });
       dayAxis(svg, x, H, m);
-      const thu = days.findIndex(r => r.live && r.d.getDay() === 4);
-      el("text", { x: x(thu) + 6, y: y(days[thu].api) - 6, class: "lbl" }, svg).textContent = MOCK ? "Weekly plan runs (Thursdays in this mock)" : "AI runs";
+      const runDay = days.findIndex(r => r.runs.length);
+      if (runDay >= 0) el("text", { x: x(runDay) + 6, y: y(days[runDay].api) - 6, class: "lbl" }, svg).textContent = "AI runs";
       legend([["var(--s5)", "AI spend that day (all live runs)"], ["var(--crit)", "Daily cap", 1]]);
       table(["Day", "Runs", "AI", "Sales"], days.map(r => [fmtD(r.d), r.runs.length, $(r.api, 3), $(r.rev)]));
       return svg;
@@ -995,7 +1038,7 @@ function render(key) {
   document.getElementById("title").textContent = v.title;
   document.getElementById("sub").textContent = v.sub;
   document.querySelectorAll(".bar button").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === S.view));
-  document.getElementById("notes").innerHTML = v.notes.map(n => `<li>${n}</li>`).join("");
+  document.getElementById("notes").replaceChildren(...v.notes.map(n => h("li", {text: n})));
   for (const id of ["dctl", "layers", "hint"]) document.getElementById(id).hidden = !v.d;
   hideTip(); hov = null;
   if (v.d) {
