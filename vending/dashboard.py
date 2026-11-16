@@ -15,9 +15,13 @@ read and hides the error text of failures (`snapshot(conn, public=True)`).
 
 The page, top to bottom:
  - Verdict and tiles: OK / check / problem, the halt switch, the latest run,
-   the order cutoff countdown, the machine's last poll, what has been spent, and
-   who has looked at the pages (`vending.visits`).
+   the order cutoff countdown, the machine's last poll, what has been spent
+   (from the ledger once it has opened; before that, development and test spend),
+   and who has looked at the pages (`vending.visits`).
  - Needs attention: each thing that is wrong or about to be, in a sentence.
+ - Money (`vending.money_panel`, #48): the balance, spendable and profit since the
+   ledger's opening, where the money has gone, what pending requests could still
+   cost, and the proposed budget (#113). Before the opening it says how to record it.
  - In the machine: a close-up of our selections (the stored assignment,
    `vending.slots.our_slots`), one shelf at a time, each lane drawn from above
    (`vending.machine_art`), beside the machine's front for picking the shelf; with
@@ -1076,8 +1080,16 @@ def _tiles(snap: dict) -> str:
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
         unpriced = f' &middot; {m["unpriced"]} without a cost' if m["unpriced"] else ""
         visits = f' &middot; {_plural(dr["midweek"], "midweek visit")}' if dr["midweek"] else ""
-        tiles.append(("Spent so far", f'<span class="big">{_money(dr["paid"])}</span>',
-                      f'drinks, {_plural(dr["fulfilled"], "fulfilled request")}{visits}<br>'
+        label, period = "Spent so far", ""
+        if money and money["ok"] and not money["data"].get("problem"):
+            # No opening yet (or one dated ahead): all of this is development and test spend (#104).
+            # A ledger that can't answer says nothing about the period, so the tile claims none.
+            opens = money["data"].get("opens_at")
+            label = "Spent before the opening"
+            period = ("development and test, not from the $600"
+                      + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else "") + "<br>")
+        tiles.append((label, f'<span class="big">{_money(dr["paid"])}</span>',
+                      f'{period}drinks, {_plural(dr["fulfilled"], "fulfilled request")}{visits}<br>'
                       f'model {_money(m["total"])} over {_plural(m["runs"], "run")} '
                       f'({_money(m["last_7_days"])} this week){unpriced}'))
     seen = snap.get("visits")
@@ -1592,6 +1604,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
             f'refreshes every {int(refresh)} s</span> &middot; <a href="{_e(json_href)}">JSON</a>{links}</span></header>')
     money = (f'<section id="money"><h2>Money <span class="hint">from the ledger &middot; exact to the cent'
+             " &middot; the competition counts from the ledger's opening; spend before it is development"
              f'</span></h2>{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
     body = (head + _tiles(snap) + _attention_html(items) + money + _cabinet_html(snap)
             + f'<section id="plan"><h2>The plan <span class="hint">{plan_hint}</span></h2>'

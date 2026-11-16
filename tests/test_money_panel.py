@@ -174,6 +174,7 @@ def test_without_our_slot_assignment_the_panel_says_so_and_the_page_still_render
     assert any(a["level"] == "warn" and "can't give a balance" in a["text"] for a in snap["attention"])
     page = dashboard.render(snap)
     assert "No balance:" in page and 'id="vm"' in page
+    assert "Spent so far" in page and "Spent before the opening" not in page    # the period is unknown
 
 
 def test_once_the_ledger_is_open_the_spent_tile_reads_it(conn, page_conn):
@@ -182,3 +183,66 @@ def test_once_the_ledger_is_open_the_spent_tile_reads_it(conn, page_conn):
     ledger.record_tokens(conn, "0.5100", "claude-opus-5-5", 1, 1, "msg_7", at=OPENED + timedelta(days=2))
     page = dashboard.render(dashboard.snapshot(page_conn, NOW))
     assert "Spent since the opening" in page and "$35.50" in page and "model $0.51" in page
+
+
+# --- The competition counts from the opening (#104) ------------------------------------------------
+
+def test_before_the_opening_the_spent_tile_says_it_is_development_spend(conn, page_conn):
+    fulfilled(conn, "pr-test", "15", "RB", units_loaded=11, paid="34.99", at=OPENED - timedelta(days=15))
+    page = dashboard.render(dashboard.snapshot(page_conn, NOW))
+    assert "Spent before the opening" in page and "development and test, not from the $600" in page
+    assert "Spent so far" not in page and "Spent since the opening" not in page
+    assert "the competition counts from the ledger's opening" in page
+
+
+def test_an_opening_dated_ahead_keeps_the_pre_opening_view(conn, page_conn):
+    opens = NOW + timedelta(days=3)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=opens)
+    pending(conn, "pr-9", body(line(1, "40.50")))
+    snap = dashboard.snapshot(page_conn, NOW)
+    data = snap["money"]["data"]
+    assert data["opened"] is False and data["opens_at"] == opens and "balance" not in data
+    assert any(a["level"] == "warn" and "doesn't open until 2026-12-12 17:00 UTC" in a["text"]
+               for a in snap["attention"])
+    page = dashboard.render(snap)
+    assert "The ledger opens" in page and '<time datetime="2026-12-12T17:00:00+00:00" data-f="day"' in page
+    assert "Spent before the opening" in page and "the ledger opens" in page
+    money = page.split('<section id="money">')[1].split("</section>")[0]
+    assert "Spent since the opening" not in page and "since the opening" not in money
+    # Once that moment passes, the ledger is open.
+    assert dashboard.snapshot(page_conn, opens + timedelta(hours=1))["money"]["data"]["opened"] is True
+
+
+def test_receipts_from_before_the_opening_are_noted_on_the_stock_line(conn, page_conn):
+    # A test purchase on 12 Nov, then the opening: the balance leaves it out, but stock replays it.
+    fulfilled(conn, "pr-12nov", "15", "RB", units_loaded=0, to_back_stock=71, paid="252.45",
+              at=datetime(2026, 11, 12, 18, 0, tzinfo=timezone.utc))
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
+    snap = dashboard.snapshot(page_conn, NOW)
+    data = snap["money"]["data"]
+    assert data["balance"] == "600.00" and data["receipts"] == "0.00"
+    assert data["early_receipts"] == {"lines": 1, "paid": "252.45"}
+    assert any("1 receipt line totalling $252.45 dated before the opening on 2026-11-27" in n for n in data["notes"])
+    page = dashboard.render(snap)
+    assert "all receipts, including $252.45 dated before the opening" in page
+
+
+def test_no_note_when_every_receipt_is_after_the_opening(conn, page_conn):
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
+    fulfilled(conn, "pr-after", "15", "RB", units_loaded=11, paid="34.99", at=OPENED + timedelta(days=1))
+    data = dashboard.snapshot(page_conn, NOW)["money"]["data"]
+    assert data["early_receipts"] == {"lines": 0, "paid": "0.00"}
+    assert "dated before the opening" not in dashboard.render(dashboard.snapshot(page_conn, NOW))
+
+
+def test_a_missing_ledger_table_blanks_only_the_money_panel(conn, page_conn):
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
+    conn.execute("drop table ledger_entries cascade")
+    snap = dashboard.snapshot(page_conn, NOW)
+    panels = {k: v for k, v in snap.items() if isinstance(v, dict) and "ok" in v}
+    assert "money" in panels and [k for k, v in panels.items() if not v["ok"]] == ["money"]
+    assert "ledger_entries" in snap["money"]["why"]
+    page = dashboard.render(snap)
+    assert "Not available" in page and 'id="vm"' in page
+    # The Spent tile can't tell the period without the ledger, so it doesn't claim one.
+    assert "Spent so far" in page and "Spent before the opening" not in page
