@@ -73,3 +73,27 @@ def test_cli_json_and_invalid_range(conn, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)[0]["date"] == "2026-11-07"
     with pytest.raises(ValueError):
         money_series.daily(conn, date(2026, 11, 8), date(2026, 11, 7))
+
+
+def test_spend_before_the_opening_is_left_out(conn):
+    """Development model calls before the opening aren't competition money, so no day shows them."""
+    ledger.record_tokens(conn, "0.80", "model", 10, 5, "test dry run",
+                         at=datetime(2026, 10, 30, 12, tzinfo=EASTERN))
+    open_ledger(conn)                       # 1 Nov 00:00 UTC, the evening of 31 Oct in Eastern time
+    ledger.record_tokens(conn, "0.40", "model", 10, 5, "live run",
+                         at=datetime(2026, 11, 1, 12, tzinfo=EASTERN))
+    days = money_series.daily(conn, date(2026, 10, 30), date(2026, 11, 1))
+    before, opening_day, after = days
+    assert before.token_spend_cents == 0 and before.events == () and before.cash_balance_cents is None
+    assert any("before the ledger's opening" in note for note in before.notes)
+    assert opening_day.token_spend_cents == 0
+    assert after.token_spend_cents == 40 and [e.reference for e in after.events] == ["live run"]
+    assert money_series.cumulative(days, "token_spend_cents")[-1] == 40
+
+
+def test_no_opening_says_nothing_is_competition_money(conn):
+    ledger.record_tokens(conn, "0.08", "model", 10, 5, "test dry run",
+                         at=datetime(2026, 11, 8, 12, tzinfo=EASTERN))
+    day = money_series.daily(conn, date(2026, 11, 8), date(2026, 11, 8))[0]
+    assert day.cash_balance_cents is None
+    assert any("no opening entry" in note for note in day.notes)
