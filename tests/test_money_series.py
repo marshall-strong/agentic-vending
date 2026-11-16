@@ -14,10 +14,11 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 
 from tests.conftest import store_poll  # noqa: E402
-from tests.test_ledger import EASTERN, OPENED, UNIT_COST, deliver, open_ledger, sell  # noqa: E402
-from tests.test_sync_requests import later  # noqa: E402
+from tests.test_ledger import EASTERN, NOW, OPENED, UNIT_COST, deliver, open_ledger, sell  # noqa: E402
+from tests.test_sync_requests import BODY, fulfilled, later, receipt  # noqa: E402
 from vending import ledger, money_series  # noqa: E402
 from vending.money_series import as_json, by_week, cumulative, daily, weekly  # noqa: E402
+from vending.purchase_requests import record as record_request, store  # noqa: E402
 
 # Every day in these tests is over by then, so none of them is "so far" whatever today is.
 AFTER = datetime(2027, 1, 31, tzinfo=timezone.utc)
@@ -105,7 +106,10 @@ def test_a_restock_a_sale_and_spend_add_up_to_pnl_by_day_and_by_week(conn):
     weeks = by_week(days, date(2026, 10, 31))
     assert [(w.week, w.number, w.days, w.partial) for w in weeks] == [
         (date(2026, 10, 31), 1, 1, True), (date(2026, 11, 7), 2, 7, False), (date(2026, 11, 14), 3, 1, True)]
-    assert weeks[0].notes == ("partial week: 1 of 7 days counted, Fri 06 Nov to Fri 06 Nov",)
+    assert weeks[0].notes == ("partial week: 1 of 7 days counted, Fri 06 Nov to Fri 06 Nov",
+                              "no poll at or before 2026-11-06T04:59:59.999999+00:00, so takings start at the "
+                              "first poll after it",
+                              "1 of its days had no good poll, so their sales show on the next day that has one")
     assert_adds_up_to_pnl(conn, weeks, first, last)
     whole = weeks[1]
     assert whole.sales_tax_cents == ledger.pnl(conn, *window(date(2026, 11, 7), date(2026, 11, 13))).takings.tax_cents
@@ -248,6 +252,52 @@ def test_missing_costs_make_gross_profit_and_net_unknown(conn):
     assert by_week([day], date(2026, 10, 31))[0].net_cents is None
 
 
+def test_a_receipt_with_no_total_paid_leaves_purchases_and_cash_incomplete_from_its_day_on(conn):
+    open_ledger(conn)                                                       # $600.00
+    record_request(conn, "r1", OPENED + timedelta(days=5), False, BODY)
+    store(conn, "r1", fulfilled("r1", receipt(total_paid=None, unit_cost_paid=None)), NOW)   # Sat 7 Nov
+    days = daily(conn, date(2026, 11, 7), date(2026, 11, 14), now=AFTER)
+    bought, after = days[0], days[1]
+    # The known figures stay, as `ledger.balance` gives them, but say they leave the line out.
+    assert (bought.purchases_cents, bought.unpaid_lines, bought.purchases_complete) == (0, 1, False)
+    assert (bought.cash_balance_cents, bought.cash_unpaid_lines, bought.cash_complete) == (60000, 1, False)
+    assert bought.net_worth_cents is None
+    assert any("1 receipt lines have no total_paid, so purchases leave them out" in n for n in bought.notes)
+    # The next day bought nothing, but its cash still leaves the line out.
+    assert after.purchases_complete and not after.cash_complete and after.net_worth_cents is None
+    assert any("the cash balance leaves them out and net worth is unknown" in n for n in after.notes)
+    assert_cash_is_the_balance(conn, days)
+
+    first, second = by_week(days, date(2026, 10, 31))
+    assert (first.unpaid_lines, first.purchases_complete, first.cash_complete) == (1, False, False)
+    assert (second.unpaid_lines, second.purchases_complete, second.cash_complete) == (0, True, False)
+    assert first.net_worth_cents is None and second.net_worth_cents is None
+    assert any("purchases leave them out" in n for n in first.notes)
+    assert any("the cash balance leaves them out" in n for n in second.notes)
+
+    day = as_json(bought)
+    assert (day["purchases"], day["purchases_complete"], day["unpaid_lines"]) == ("0.00", False, 1)
+    assert (day["cash_balance"], day["cash_complete"], day["cash_unpaid_lines"]) == ("600.00", False, 1)
+    assert day["net_worth"] is None and day["exact_cents"]["net_worth"] is None
+    week = as_json(second)
+    assert (week["cash_complete"], week["net_worth"]) == (False, None)
+    table = money_series.table(days).splitlines()
+    assert "purchases leave out 1 receipt lines with no total_paid" in table[1]
+    assert "cash leaves out 1 receipt lines with no total_paid" in table[2]
+
+
+def test_the_table_says_when_takings_have_no_poll_behind_them(conn):
+    open_ledger(conn)                                                       # no polls at all
+    days = daily(conn, date(2026, 11, 6), date(2026, 11, 8), now=AFTER)
+    lines = money_series.table(days).splitlines()
+    assert lines[1].split()[1] == "0.00"                                    # revenue reads 0.00...
+    assert "no polls in the window, so takings are unknown and counted as 0" in lines[1]    # ...and says why
+    assert all(money_series.NO_GOOD_POLL in line for line in lines[1:])
+    weeks = money_series.table(by_week(days, date(2026, 10, 31))).splitlines()
+    assert "no polls in the window" in weeks[1] and "1 of its days had no good poll" in weeks[1]
+    assert "2 of its days had no good poll" in weeks[2]
+
+
 def test_a_day_without_a_poll_and_a_day_not_over_say_so(conn):
     open_ledger(conn)
     store_poll(conn, "a", "2026-11-07T17:00:00Z", {"15": (250, 100)})
@@ -334,9 +384,9 @@ def test_cli_without_an_opening_asks_for_one_or_a_start(conn, monkeypatch, capsy
 def made(on: date, **lines) -> money_series.Day:
     """A whole, counted day with the given lines and zeros elsewhere."""
     blank = money_series._not_counted(on, "", AFTER)
-    return replace(blank, counted_from=money_series._midnight(on), notes=(), cash_balance_cents=Fraction(0),
-                   tax_owed_cents=Fraction(0),
-                   inventory_cents=Fraction(0), inventory_complete=True, **lines)
+    return replace(blank, **{"counted_from": money_series._midnight(on), "notes": (),
+                             "cash_balance_cents": Fraction(0), "tax_owed_cents": Fraction(0),
+                             "inventory_cents": Fraction(0), "inventory_complete": True, **lines})
 
 
 def test_an_unknown_cost_makes_net_unknown_and_every_running_total_after_it():
@@ -353,6 +403,17 @@ def test_an_unknown_cost_makes_net_unknown_and_every_running_total_after_it():
     assert (week.number, week.days, week.partial, week.net_cents, week.net_known_cents) == (1, 3, True, None, 150)
     with pytest.raises(ValueError, match="not a flow"):
         cumulative(days, "cash_balance_cents")
+
+
+def test_an_unpriced_receipt_makes_net_worth_unknown_even_with_inventory_all_costed():
+    priced = made(date(2026, 11, 7), cash_balance_cents=Fraction(60000))
+    unpriced = replace(priced, unpaid_lines=1, cash_unpaid_lines=1)
+    later_day = made(date(2026, 11, 8), cash_balance_cents=Fraction(60000), cash_unpaid_lines=1)
+    assert priced.net_worth_cents == 60000 and priced.inventory_complete
+    assert unpriced.net_worth_cents is None and later_day.net_worth_cents is None
+    week = by_week([unpriced, later_day], date(2026, 11, 7))[0]
+    assert (week.unpaid_lines, week.purchases_complete, week.cash_complete, week.net_worth_cents) == (
+        1, False, False, None)
 
 
 def test_a_week_of_seven_whole_days_is_not_partial_and_weeks_number_from_the_opening():
