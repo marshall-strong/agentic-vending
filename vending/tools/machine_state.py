@@ -206,7 +206,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
         slots = our_slots(conn)
     except SlotsNotRecorded as error:
         return MachineState(success=False, message=str(error))
-    latest = _poll(conn, "true")
+    latest = _poll(conn, "started_at <= %s", now)
     if latest is None:
         return MachineState(success=False, message=(
             f"No valid polls for {DEVICE_ID} are stored yet. "
@@ -220,11 +220,11 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
 
     counted = stock.stock(conn, until=now)
     counts = {c.slot: c for c in counted.slots if c.slot in slots}
-    last_loaded = _last_loaded(conn)
+    last_loaded = _last_loaded(conn, now)
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
-    seen = _seen(conn)
+    seen = _seen(conn, now)
     latest_counters = _counters(conn, latest[0], slots)
-    demands = _demands(counts, _loads(conn), counted.sales, latest_counters, now)
+    demands = _demands(counts, _loads(conn, now), counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     closet, closet_value = closet_items(counted.closet)
@@ -288,34 +288,36 @@ def _count_note(states: list[SlotState]) -> str:
     return note
 
 
-def _seen(conn: psycopg.Connection) -> dict[str, dict]:
+def _seen(conn: psycopg.Connection, until: datetime | None = None) -> dict[str, dict]:
     """The latest count per selection, or nothing when `slot_counts` isn't there yet.
 
     A savepoint keeps the caller's transaction usable if the table is missing.
     """
     try:
         with conn.transaction():
-            return slot_counts.latest(conn, DEVICE_ID)
+            return slot_counts.latest(conn, DEVICE_ID, until=until)
     except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         return {}
 
 
-def _last_loaded(conn: psycopg.Connection) -> dict[str, datetime]:
+def _last_loaded(conn: psycopg.Connection, until: datetime | None = None) -> dict[str, datetime]:
     """When each slot last had units put in it, from fulfilled receipts."""
     rows = conn.execute(
         "select l.slot, max(l.resolved_at) from purchase_lines l join purchase_requests r using (request_id)"
         " where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded') and l.units_loaded > 0"
-        " group by l.slot")
+        " and (%s::timestamptz is null or l.resolved_at <= %s)"
+        " group by l.slot", (until, until))
     return dict(rows)
 
 
-def _loads(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
-    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`."""
+def _loads(conn: psycopg.Connection, until: datetime | None = None) -> dict[str, list[tuple[datetime, int]]]:
+    """Every time each slot had units put in it up to `until`, from fulfilled receipts, as `(at, units)`."""
     loads: dict[str, list[tuple[datetime, int]]] = {}
     for slot, at, units in conn.execute(
             "select l.slot, l.resolved_at, l.units_loaded from purchase_lines l join purchase_requests r"
             " using (request_id) where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded')"
-            " and l.units_loaded > 0 and l.resolved_at is not null"):
+            " and l.units_loaded > 0 and l.resolved_at is not null"
+            " and (%s::timestamptz is null or l.resolved_at <= %s)", (until, until)):
         loads.setdefault(slot, []).append((at, units))
     return loads
 
