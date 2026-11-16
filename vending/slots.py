@@ -225,6 +225,12 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
             elif before.team == new.team:
                 conn.execute("update slot_assignment set last_checked_at = greatest(last_checked_at, %s) where id = 1", (at,))
                 outcome = "unchanged"
+                # The worker checks every hour; logging each one would push the agent's own tool calls off
+                # the dashboard. last_checked_at records the check. The first check at or after the start
+                # confirms the assignment for good, so that one is logged.
+                if not ((old[3] is None or old[3] < lock) and at >= lock):
+                    return outcome
+                note = f" (confirmed by the first check since the start at {lock.isoformat()})"
             else:
                 conn.execute("update slot_assignment set team = %s, response = %s, last_checked_at = greatest(last_checked_at, %s)"
                              " where id = 1", (new.team, Jsonb(answer), at))

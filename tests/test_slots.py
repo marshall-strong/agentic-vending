@@ -127,6 +127,18 @@ def test_the_same_answer_again_only_moves_last_checked(empty):
     assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (AFTER,)
 
 
+def test_an_unchanged_check_is_logged_only_when_it_confirms_the_assignment(empty):
+    """The worker checks every hour; only the first check since the start says something new."""
+    slots.record(empty, ANSWER, NOW)
+    logged = len(_log(empty))
+    slots.record(empty, ANSWER, NOW + timedelta(hours=1))
+    assert len(_log(empty)) == logged                                # before the start: no row
+    slots.record(empty, ANSWER, AFTER)
+    assert len(_log(empty)) == logged + 1 and "confirmed" in _log(empty)[-1][2]
+    slots.record(empty, ANSWER, AFTER + timedelta(hours=1))
+    assert len(_log(empty)) == logged + 1                            # confirmed already: no row
+
+
 def test_a_change_before_the_lock_replaces_it_and_is_logged(empty):
     slots.record(empty, ANSWER, NOW)
     later = NOW + timedelta(days=5)
