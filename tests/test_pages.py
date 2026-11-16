@@ -122,7 +122,7 @@ def test_nothing_can_be_sent(site):
     request = urllib.request.Request(f"http://127.0.0.1:{site.server_address[1]}/db", data=b"x=1", method="POST")
     with pytest.raises(urllib.error.HTTPError) as refused:
         urllib.request.urlopen(request, timeout=20)
-    assert refused.value.code == 501
+    assert refused.value.code == 405  # only /login takes a POST (vending.gate)
 
 
 def test_the_home_page_links_to_the_pages_only_when_they_are_set_up(monkeypatch):
