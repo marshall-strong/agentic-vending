@@ -44,17 +44,17 @@ Dates: Sep 4, Sep 21, Sep 24, Sep 25a (photos 6/7), Sep 25b (photos 4/5), Oct 1,
 | 27 | Sep 4 Celsius mango/tropical · Sep 21 Celsius blue/teal · Sep 24 Celsius iridescent? · Sep 25 Celsius, backward, pink band · Oct 1 silver/white can (Red Bull?) · Oct 8 Red Bull Pink Edition sugar-free · Oct 13 empty · Oct 27 empty · Nov 9-14 Snapple Go Bananas (Nov 9 read as yellow label, banana?) |
 | 28 | Sep 4 Celsius peach · Sep 21 Celsius Peach Vibe · Sep 24 Celsius (Tropical Vibe?) · Sep 25 Premier Protein carton · Oct 1 silver/white can with pink-red accents? · Oct 8-13 empty · Oct 27 - Nov 14 Vita Coco coconut water |
 | 35 | Sep 4 - Sep 25 Pure Leaf lemon · Oct 1-13 Pure Leaf sweet tea (blue band) · Oct 27 empty · Nov 9 empty · Nov 14 Mountain Dew 20oz |
-| 36 | Sep 4 - Sep 25 Pure Leaf peach · Oct 1-8 checkered lemonade-style bottle? · Oct 13 empty · Oct 27 - Nov 9 Something & Nothing green sparkling can · Nov 14 Minute Maid Lemonade can? |
-| 37 | Sep 4 white-cap bottle, silver/brown label? · Sep 21-25 AriZona Arnold Palmer (Sep 24 read as "bottle with figure") · Oct 1 clear bottled water? · Oct 8-13 empty · Oct 27 vitaminwater (dark red) · Nov 9 empty · Nov 14 Minute Maid Lemonade can? |
+| 36 | Sep 4 - Sep 25 Pure Leaf peach · Oct 1-8 checkered lemonade-style bottle? · Oct 13 empty · Oct 27 - Nov 9 Something & Nothing green sparkling can · Nov 14 Minute Maid Lemonade Zero Sugar can |
+| 37 | Sep 4 white-cap bottle, silver/brown label? · Sep 21-25 AriZona Arnold Palmer (Sep 24 read as "bottle with figure") · Oct 1 clear bottled water? · Oct 8-13 empty · Oct 27 vitaminwater (dark red) · Nov 9 empty · Nov 14 Minute Maid Lemonade Zero Sugar can |
 | 38 | Sep 4 empty · Sep 21 Starbucks Frappuccino · Sep 24 orange/yellow drink in glass jar? · Sep 25 Starbucks Frappuccino · Oct 1 small glass bottle, beige (Frappuccino?) · Oct 8 empty · Oct 13 Red Bull Pink Edition? · Oct 27 Snapple · Nov 9 empty · Nov 14 Snapple Pink Lemonade |
 | 45 | Sep 4 - Sep 25 Coca-Cola 20oz · Oct 1 - Oct 27 Diet Coke 20oz · Nov 9 empty · Nov 14 Fanta Orange 20oz |
 | 46 | Sep 4 vitaminwater yellow · Sep 21-25 Coca-Cola 20oz · Oct 1 Coke Zero? (black label) · Oct 8 empty · Oct 13-27 Coca-Cola · Nov 9 empty · Nov 14 Coca-Cola 20oz |
-| 47 | Sep 4 vitaminwater XXX (dark) · Sep 21-25 Diet Coke 20oz · Oct 1-8 Snapple Fruit Punch · Oct 13 Snapple orange/yellow? · Oct 27 - Nov 14 Something & Nothing coconut can |
+| 47 | Sep 4 vitaminwater XXX (dark) · Sep 21-25 Diet Coke 20oz · Oct 1-8 Snapple Fruit Punch · Oct 13 Snapple orange/yellow? · Oct 27 - Nov 9 Something & Nothing coconut can · Nov 14 Something & Nothing Cucumber can |
 | 48 | Sep 4 vitaminwater pink · Sep 21-25 empty · Oct 1-8 Snapple Mango Madness · Oct 13 - Nov 9 empty · Nov 14 Red Bull |
 | 55 | Sep 4 Diet Coke 20oz · Sep 21-24 Gatorade blue · Sep 25 Snapple orange (Mango Madness?) · Oct 1-13 bubly blackberry · Oct 27 bubly purple · Nov 9 empty · Nov 14 Pepsi can |
 | 56 | Sep 4 Gatorade blue · Sep 21 Gatorade red · Sep 24-25 empty · Oct 1-13 bubly mango · Oct 27 bubly yellow · Nov 9 empty · Nov 14 Dr Pepper can |
 | 57 | Sep 4 Gatorade red · Sep 21-25 vitaminwater dark red · Oct 1-13 bubly lime · Oct 27 bubly green · Nov 9 empty · Nov 14 Diet Coke can |
-| 58 | Sep 4 pink/red bottle, red cap? · Sep 21-24 vitaminwater pink · Sep 25 orange slim can? · Oct 1-13 Pepsi Real Sugar · Oct 27 silver/white can? · Nov 9 empty · Nov 14 Diet Coke Cherry? can |
+| 58 | Sep 4 pink/red bottle, red cap? · Sep 21-24 vitaminwater pink · Sep 25 orange slim can? · Oct 1-13 Pepsi Real Sugar · Oct 27 silver/white can? · Nov 9 empty · Nov 14 Diet Cherry Coke can |
 
 ## Notable changes on our rails
 
@@ -63,7 +63,7 @@ Dates: Sep 4, Sep 21, Sep 24, Sep 25a (photos 6/7), Sep 25b (photos 4/5), Oct 1,
 - **Oct 9 swaps.** Premier Protein moved into 25 in place of the pickle drink, Red Bull Pink moved from 27 to 38, and Red Bull original appeared in 26. Red Bull Pink's last sale from 27 was on Oct 8 at 11-12, and its first from 38 on Oct 9 at 16:00.
 - **Late October.** By Oct 27 there were Something & Nothing cans in 36 and 47, Vita Coco in 28, vitaminwater in 37 and Snapple in 38.
 - **Run-down.** On Nov 9 only 25 (Premier Protein), 27 (Snapple), 28 (Vita Coco), 36 and 47 (Something & Nothing) showed product; shelves 1 and 5 were empty.
-- **Refilled by Nov 14.** Sean's photos on Sat Nov 14 show product on 19 of our 20 rails; only 18 is empty. New on our rails: Gorgie back on 15-17, Starbucks Iced Energy in 26, Mountain Dew 20oz in 35, Minute Maid Lemonade cans? in 36-37, Snapple Pink Lemonade in 38, Fanta 20oz in 45, Red Bull in 48, and Pepsi, Dr Pepper, Diet Coke and Diet Coke Cherry? cans in 55-58 (bubly is no longer on 55-57). Coca-Cola 20oz is back in 46. Every legible tag still matches the Sep 30 schedule. The whole machine is in `db/counts/2026-11-14-photo.json`.
+- **Refilled by Nov 14.** Sean's photos on Sat Nov 14 show product on 19 of our 20 rails; only 18 is empty. New on our rails: Gorgie back on 15-17, Starbucks Iced Energy in 26, Mountain Dew 20oz in 35, Minute Maid Lemonade Zero Sugar cans in 36-37, Snapple Pink Lemonade in 38, Fanta 20oz in 45, Red Bull in 48, and Pepsi, Dr Pepper, Diet Coke and Diet Cherry Coke cans in 55-58 (bubly is no longer on 55-57). Coca-Cola 20oz is back in 46. Every legible tag still matches the Sep 30 schedule. The whole machine is in `db/counts/2026-11-14-photo.json`.
 
 ## Slots that were unknown on Oct 8 (26, 28, 37, 38, 46)
 

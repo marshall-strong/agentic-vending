@@ -81,7 +81,8 @@ How to read it:
 - **Our records change only when a receipt arrives**, not when a request is sent. A request is what
   we asked for; the receipt is what happened.
 - **The halt switch** stops the run before every model request, and makes every write tool refuse.
-  An instructor can turn it on without us (`docs/halt-for-instructors.md`).
+  Any of us can turn it on without the agent's cooperation, and so can the instructors
+  (`docs/halt-for-instructors.md`, our halt card).
 
 ## 2. The life of one purchase request
 
