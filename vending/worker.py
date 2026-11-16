@@ -35,11 +35,13 @@ error names the host and user; the errors are in the log. The page is built
 only from `State.public()`, the same dict as `/health`, so it can't show more.
 
 `GET /dashboard` (with `/dashboard/state.json`) and `GET /db` are the agent
-dashboard and the DB explorer, for anyone with the link. They are
+dashboard and the DB explorer, for anyone with the shared password. They are
 `vending.pages`: a database login of their own that can only read, a few
 connections at most, and no error text. Until that login is set
 (`READONLY_DATABASE_URL`) they answer "not set up yet" and the home page says
 so. The syncs never use that login, and the pages never use the syncs'.
+Sign-ins and visits to them are counted by `vending.visits`, which writes in
+the background with the syncs' login and never makes a page wait.
 
 SIGTERM, which Azure sends before stopping a replica, ends the loop like
 Ctrl+C: the health check closes and the process exits 0, and a job in flight
@@ -67,7 +69,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from zoneinfo import ZoneInfo
 
-from vending import gate
+from vending import gate, visits
 
 Job = tuple[str, Callable[[], int]]
 
@@ -341,7 +343,8 @@ class _Health(BaseHTTPRequestHandler):
             reply = pages.respond(self.path)
             if reply is None:
                 return self._not_found()
-            self._send(reply.status, reply.content_type, reply.body.encode(), reply.csp)
+            cookies = self._count_view(path) if reply.status == 200 else ()
+            self._send(reply.status, reply.content_type, reply.body.encode(), reply.csp, cookies)
         else:
             self._not_found()
 
@@ -371,7 +374,20 @@ class _Health(BaseHTTPRequestHandler):
         if not right:
             return self._send(401, "text/html; charset=utf-8",
                               gate.login_page(next_path, "That password isn't right.").encode(), gate.CSP)
-        self._redirect(next_path, gate.session_cookie())
+        browser, cookies = visits.identify(self.headers.get("Cookie"))
+        if browser is not None:
+            visits.sign_in(browser)
+        self._redirect(next_path, gate.session_cookie(), *cookies)
+
+    def _count_view(self, path: str) -> tuple[str, ...]:
+        """Count a signed-in browser opening `path` (`vending.visits`); the cookies to set, if it
+        has no id yet. Only queues the count, so the page never waits on it."""
+        if path not in visits.PAGES:
+            return ()
+        browser, cookies = visits.identify(self.headers.get("Cookie"))
+        if browser is not None and not visits.is_refresh(self.headers):
+            visits.view(path, browser)
+        return cookies
 
     def _read_body(self, length: int) -> bytes | None:
         """The request body, or None when it doesn't all arrive within `gate.FORM_SECONDS`. The
@@ -394,10 +410,10 @@ class _Health(BaseHTTPRequestHandler):
             self.connection.settimeout(self.timeout)
         return data
 
-    def _redirect(self, location: str, cookie: str | None = None) -> None:
+    def _redirect(self, location: str, *cookies: str) -> None:
         self.send_response(303)
         self.send_header("Location", location)
-        if cookie:
+        for cookie in cookies:
             self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", "0")
         self.send_header("Cache-Control", "no-store")
@@ -408,9 +424,11 @@ class _Health(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _send(self, status: int, content_type: str, body: bytes,
-              csp: str = "default-src 'none'; style-src 'unsafe-inline'") -> None:
+              csp: str = "default-src 'none'; style-src 'unsafe-inline'", cookies: tuple[str, ...] = ()) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        for cookie in cookies:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         # The home page has no scripts and loads nothing from anywhere else; a page from
