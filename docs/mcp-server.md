@@ -278,9 +278,12 @@ bridge down says to stop, not to check Tailscale. A poll older
 than 3 hours adds a `STALE` note, since stock on the rails is overstated by whatever sold since.
 A refused plan comes back with every refusal and everything that could still be worked out, so the
 agent fixes the whole plan in one turn. In `cost`, `spendable` and `spendable_left_at_max` are the
-ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. There is no
-sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
-purchase without it is refused `no_sourcing`.
+ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. A product the agent
+gives no `sourcing` for is bought the way the team's sourcing table says ([`sourcing.md`](sourcing.md)),
+and a table price checked over 7 days ago is named in `warnings`. When the agent gives sourcing
+with no `expected_price_per_pack`, the cost borrows the table's expected price for the same store
+and pack, and an old borrowed price is named the same way. A slot that needs a purchase with
+no sourcing given or in the table is refused `no_sourcing`.
 
 ### `submit_desired_state`: the only way to buy
 

@@ -42,4 +42,5 @@ class Sourcing(BaseModel):
 class DesiredState(BaseModel):
     slots: list[DesiredSlot]
     off_cycle: bool = Field(False, description="True asks for a midweek visit, which costs $25")
-    sourcing: list[Sourcing] = []
+    sourcing: list[Sourcing] = Field([], description="How to buy a product; leave a product out to use the "
+                                     "team's sourcing table, which the preview names in warnings when it is old")
