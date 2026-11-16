@@ -1,11 +1,11 @@
-# Naming proposal: the business, Rocco and the crew
+# Naming proposal: the business, Honcho and the crew
 
 **Status: a proposal for the team, 11 Nov 2026, revised 12 Nov after Marshall's review.** Nothing here is decided. Every name is a suggestion, and so is the "crew" way of describing the system. Change anything; comment on any line of this PR.
-Visual version: [Meet Rocco and the Crew](https://claude.ai/artifact/2zci11rMobPqXMddJGxXyc).
+Visual version: [Meet Rocco and the Crew](https://claude.ai/artifact/2zci11rMobPqXMddJGxXyc) (made before the agent's proposed name changed from Rocco to Honcho, so it still says Rocco).
 
 ## Why name things
 
-We run 20 of the machine's 40 selections as a small business for nine weeks, and we present it in Summative 2. Names make the slides, the dashboard and the agent's logs easier to follow: "Rocco switched slot 36 to Celsius" reads better than "the planner returned action=switch". They can also help explain the design we have: one agent that decides, and the code around it that checks, sizes and writes things down.
+We run 20 of the machine's 40 selections as a small business for nine weeks, and we present it in Summative 2. Names make the slides, the dashboard and the agent's logs easier to follow: "Honcho switched slot 36 to Celsius" reads better than "the planner returned action=switch". They can also help explain the design we have: one agent that decides, and the code around it that checks, sizes and writes things down.
 
 ## The business
 
@@ -18,22 +18,22 @@ Each option comes from something real about our setup: Rochester (the "ROC"), th
 | **Cold Call Beverage Co.** | A business-school pun: every sale is a cold call. |
 | **Thirst Quarter** | The competition runs one quarter. Cheeky, but still fine in front of David. |
 
-## The agent: Rocco
+## The agent: Honcho
 
-**Rocco**, as in ROC-co: a name for the agent the team already built (#39, #58), the one model that makes the weekly call. It decides what goes in each of our 20 slots, at what price, whether to pull a slow seller, and whether a $25 midweek visit is worth it. It signs every weekly plan ("Rocco's call for Friday") and appears by name on the dashboard and in the logs.
+**Honcho**, as in head honcho, the one in charge: a name for the agent the team already built (#39, #58), the one model that makes the weekly call. It decides what goes in each of our 20 slots, at what price, whether to pull a slow seller, and whether a $25 midweek visit is worth it. It signs every weekly plan ("Honcho's call for Friday") and appears by name on the dashboard and in the logs.
 
-## The crew: names for the parts around Rocco (proposed)
+## The crew: names for the parts around Honcho (proposed)
 
 The team hasn't agreed on a "head agent with a crew" design. As built (#39, #58), the system is **one agent calling MCP tools, with the arithmetic in plain code**. Most of the "crew" below is code that already exists, so most of these would just be names for existing parts. Four would be new: Scout, the catalog-drafting half of The Buyer, The Doorman and The Oracle. Whether to build them, and whether any should be a model call, is the team's call.
 
 | Name | The part it names | Exists today? |
 |---|---|---|
-| **Rocco** | The agent: reads the tools, decides the Friday plan within the guardrails, and explains every change in one line. | Yes: `vending/agent.py` (#58), every call through `vending/harness.py`. Model and effort are the `--model`/`--effort` flags, defaulting to Opus 5.5 pending a team decision. |
+| **Honcho** | The agent: reads the tools, decides the Friday plan within the guardrails, and explains every change in one line. | Yes: `vending/agent.py` (#58), every call through `vending/harness.py`. Model and effort are the `--model`/`--effort` flags, defaulting to Opus 5.5 pending a team decision. |
 | **The Doorman** | Would watch the door-open counter (EVA-DTS `EA2*DO`) in every poll and flag a visit nobody planned. The counter dates **door openings**, not refills: refills are inferred from our slots' sales, and 11 of the 23 visits in the sales analysis show no sign of one. | No. Offline only, in `analysis/sales_analysis.py` and `analysis/visit_windows.py` (#105); nothing in `vending/` reads `EA2*DO` yet. |
 | **Tally** | Matches sales against stock, catches counter misreads, keeps the stock estimate honest. | Yes: `vending/stock.py`, `vending/counters.py`. |
-| **Scout** | Would write a weekly digest for Rocco: what sold, what ran empty, what's coming on the calendar (breaks, Thanksgiving). | Partly: `get_sales_history` and `get_machine_state` give the data. There's no calendar tool (the calendar is `analysis/golisano_calendar_2026_27.json`), and a model-written digest would be new. |
-| **Tagger** | The pricing gate. It checks every price **Rocco proposes**, after him: between the floor and the ceiling, in 5-cent steps. It refuses a price; it doesn't write the physical tag. | Yes: `vending/pricing.py`, applied by `plan_restock` on every `preview_desired_state` and `submit_desired_state`. |
-| **The Buyer** | The purchase lines on a request. Neither code nor the agent buys anything: the student worker shops on Friday. | Yes for the lines: `plan_restock` (`vending/planner.py`) sizes every purchase. Rocco files catalog requests himself with `request_catalog_product`; drafting them separately would be new. |
+| **Scout** | Would write a weekly digest for Honcho: what sold, what ran empty, what's coming on the calendar (breaks, Thanksgiving). | Partly: `get_sales_history` and `get_machine_state` give the data. There's no calendar tool (the calendar is `analysis/golisano_calendar_2026_27.json`), and a model-written digest would be new. |
+| **Tagger** | The pricing gate. It checks every price **Honcho proposes**, after him: between the floor and the ceiling, in 5-cent steps. It refuses a price; it doesn't write the physical tag. | Yes: `vending/pricing.py`, applied by `plan_restock` on every `preview_desired_state` and `submit_desired_state`. |
+| **The Buyer** | The purchase lines on a request. Neither code nor the agent buys anything: the student worker shops on Friday. | Yes for the lines: `plan_restock` (`vending/planner.py`) sizes every purchase. Honcho files catalog requests himself with `request_catalog_product`; drafting them separately would be new. |
 | **The Loader** | The worker's directive: what to load, pull and price in each slot. | Yes: `_directive` in `vending/planner.py`, written by `preview_desired_state`. |
 | **The Oracle** | Would forecast next week's demand. | No. The sales analysis (#68) backtested 13 models on **daily units for the whole machine before the competition**, not on our slots: Holt-Winters was narrowly ahead of seasonal naive (MAE 5.78 against 5.89). During the competition a whole-machine model would take in the other selections' sales, which `docs/agent/competition-and-integrity.md` rules out for any decision, and #84 is to cut those totals off at the start. A forecast for our slots would be new work. |
 
@@ -67,13 +67,13 @@ We know which slots are **ours** (`vending/slots.py`, columns 5-8). `docs/agent/
 | Label | Hover text |
 |---|---|
 | **Not our turf** | "Not one of our selections." |
-| **Behind the velvet rope** | "Not ours. Rocco doesn't look." |
+| **Behind the velvet rope** | "Not ours. Honcho doesn't look." |
 | **No peeking** | "Not our slot. Integrity rule." |
 
 ## What we need from the team
 
 1. **A business name.** Pick one or suggest your own. It goes on the slides and in Summative 2.
-2. **Rocco, or another name** for the agent.
+2. **Honcho, or another name** for the agent.
 3. **A label** for the selections that aren't ours.
 4. **The parts.** Keep these names, merge some, or drop the crew framing. Which new parts (if any) to build, and whether any should be a model call.
 5. **Which model and effort** for the agent. The default is Opus 5.5, pending this decision.
