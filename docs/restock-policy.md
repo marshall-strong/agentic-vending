@@ -185,7 +185,7 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - **Order of cuts when the floor binds** (rule 4). Proposed here.
 - **Slot plus closet in rule 1**, and **no purchase for a flagged slot; swaps priced by PR #99 under $6.50** (rule 3). Proposed here.
 - **Swap first at a slow-seller flag** (rule 3). Proposed by Kevin, 12 Nov; depends on R6 (#102, P2).
-- **The wildcard slot** (rule 3; ceiling about $8.00, same floor). Proposed by Kevin on #100; built in `add_wildcard_slot` (rules in `docs/agent/pricing.md`), and the team decides on #110 (item 1) by merging it or not. Its $82 cap is an option in #90, not part of the plan.
+- **The wildcard slot** (rule 3; ceiling about $8.00, same floor). Proposed by Kevin on #100; built in `add_wildcard_slot` (rules in `docs/agent/wildcard.md`), and the team decides on #110 (item 1) by merging it or not. Its $82 cap is an option in #90, not part of the plan.
 - **The floor: break-even or profit.** Today's breaks even after tax. Kevin proposed (unit cost + $0.25) × 1.08, rounded up to 5 cents, with a setting `min_margin_cents` (#100). Not decided.
 - **Day-one stock from the $600.** David to confirm (#106 row 3).
 - **First regular restock:** Fri 4 Dec or Fri 11 Dec (#102).
