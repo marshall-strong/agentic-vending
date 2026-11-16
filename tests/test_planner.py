@@ -856,6 +856,28 @@ class TestWildcard(unittest.TestCase):
         # Restocking it modestly is fine.
         self.assertTrue(wild(restock_15(), wildcard=None, slots=unknown).ok)
 
+    def test_a_new_wildcard_needs_every_other_slots_contents_known(self):
+        # 16 holds something we can't name; it may be MTDEW, so 15 can't go above the ceiling with MTDEW.
+        state = {"15": SlotState("15", MTDEW, 650, 4, 50), "16": SlotState("16", None, 650, 2, None)}
+        p = wild(restock_15(price="7.50"), wildcard="15", slots=state)
+        self.assertEqual([(r.code, r.slot) for r in p.refusals], [("wildcard", "15")])
+
+    def test_unknown_contents_and_price_count_as_a_possible_wildcard(self):
+        state = {"15": SlotState("15", None, None, 2, None), "16": SlotState("16", SPRITE, 650, 2, 50)}
+        p = wild(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=3), wildcard=None, slots=state)
+        self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals])
+
+    def test_two_mystery_slots_cant_switch_either(self):
+        state = {"15": SlotState("15", None, 750, 2, None), "16": SlotState("16", None, 750, 2, None)}
+        p = wild(DesiredSlot("16", product=PICKLE, sale_price="6.50", fill_to=3), wildcard="15", slots=state)
+        self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals])
+
+    def test_a_named_wildcard_under_the_ceiling_protects_nothing(self):
+        # Named but at $2.50: other slots may hold and buy its product as usual.
+        state = {"16": SlotState("16", MTDEW, 250, 2, 50)}
+        self.assertTrue(wild(restock_15(), DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10),
+                             wildcard="15", slots=state).ok)
+
     def test_the_wildcard_must_be_one_of_ours(self):
         self.assertEqual(codes(wild(restock_15(), wildcard="99")), ["wildcard"])
 
