@@ -428,8 +428,9 @@ def test_the_public_pages_follow_a_changed_stored_assignment(site, schema_url, c
     conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
     ours, theirs = _not_ours(conn, ours="12", theirs="15")    # 15 is in the test assignment, but not ours here
     page = _get(site, "/dashboard")[2]
-    assert page.count('class="slot ours') == 20 and page.count('class="slot theirs"') == 20
-    assert 'data-slot="12"' in page and 'data-slot="15"' not in page and 'title="15: not our selection"' in page
+    assert page.count('<article class="ma-lane" id="lane-') + page.count('<article class="ma-lane ma-changed"') == 20
+    assert page.count('class="ma-lane ma-notours"') == 20 and 'id="lane-12" role="group"' in page
+    assert '<article class="ma-lane ma-notours" id="lane-15" aria-label="Selection 15: not ours">' in page
     assert NOT_OURS not in page and "7.77" not in page
     body = _get(site, "/dashboard/state.json")[2]
     assert list(json.loads(body)["counts"]["data"]) == ["12"] and json.loads(body)["ours"]["data"] == list(EVERY_OTHER)
@@ -446,7 +447,7 @@ def test_the_public_pages_degrade_when_no_assignment_is_stored(site, schema_url,
     _not_ours(conn)
     conn.execute("delete from slot_assignment")
     status, _, page = _get(site, "/dashboard")
-    assert status == 200 and 'class="slot ours' not in page and 'class="slot theirs"' not in page
+    assert status == 200 and '<article class="ma-lane' not in page
     assert "Not available: Our slot assignment hasn" in page and "python -m vending.slots record" in page
     assert "Which selections are ours isn" in page and "Our Chips" not in page and NOT_OURS not in page
     assert "our slots aren't recorded" in page and "run the history sync" not in page   # not "no polls"

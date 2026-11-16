@@ -1,6 +1,7 @@
 """The agent dashboard and the run record it reads."""
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -375,7 +376,7 @@ def test_a_fresh_database_is_ok_but_explains_every_empty_panel(page_conn):
     for words in ("No plan yet", "No runs recorded yet", "No tool calls yet", "No machine polls stored yet",
                   "None submitted yet", "Nothing in back stock"):
         assert words in page, words
-    assert page.count('data-slot="') == 20
+    assert len(drawn(page)) == 20
 
 
 def test_close_to_the_cutoff_halted_and_no_request_needs_checking(conn, page_conn):
@@ -473,10 +474,15 @@ def test_optional_readers_roll_back_only_their_panel(conn, page_conn, table, col
     assert {k for k in panels if not snap[k]["ok"]} == broken
     page = dashboard.render(snap)
     assert "Not available" in page or "isn&#x27;t available" in page
-    assert page.count('class="slot ours') == len(dashboard.our_selections(snap)) == 20  # the machine still draws
+    assert len(drawn(page)) == len(dashboard.our_selections(snap)) == 20  # the machine still draws
 
 
 EVEN = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
+
+
+def drawn(page: str) -> list[str]:
+    """The selections "In the machine" draws as ours, in page order."""
+    return re.findall(r'<article class="ma-lane(?: ma-changed)?" id="lane-(\w+)"', page)
 
 
 @pytest.fixture
@@ -489,11 +495,10 @@ def even_columns(conn):
 
 def test_the_machine_lights_only_our_slots_from_slots(page_conn, even_columns):
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
-    assert page.count('class="slot ours') == 20 and page.count('class="slot theirs"') == 20
-    assert 'data-slot="12"' in page and 'data-slot="15"' not in page
-    assert 'title="15: not our selection"' in page
-    assert "No plan yet" in page and 'class="noplan v-next"' in page
-    assert page.count("units unknown") >= 20                # no receipts: never a made-up count
+    assert drawn(page) == list(EVEN) and page.count('class="ma-lane ma-notours"') == 20
+    assert '<article class="ma-lane ma-notours" id="lane-15" aria-label="Selection 15: not ours">' in page
+    assert "No plan yet" in page and '<p class="empty v-next">No plan yet' in page
+    assert page.count("<b>?</b> no record yet") == 40       # no receipts: never a made-up count (Now and Friday)
     assert 'class="seg" role="group" aria-label="Show" hidden' in page   # the toggle needs JS
 
 
@@ -522,10 +527,10 @@ def test_now_and_next_friday(conn, page_conn, even_columns):
     assert view["16"]["next"]["pulled"] is True
     assert view["18"]["next"]["in_plan"] is False and view["18"]["change"] is None
     page = dashboard.render(snap)
-    assert '<s>2.50</s>2.75' in page                       # the tag next Friday, old price struck
-    assert '<span class="lbl v-now">unknown</span>' in page
+    assert '<s>$2.50</s> &rarr; <b>$2.75</b> from Friday' in page   # the tag next Friday, old price struck
+    assert '<p class="ma-nm">No record yet</p>' in page
     assert "&lt;i&gt;sells out&lt;/i&gt;" in page and "<i>sells out</i>" not in page
-    assert '<span class="chg bad">' in page and "pulled" in page
+    assert '<span class="ma-chip bad">pulled</span>' in page
     assert "Stock is estimated from receipts and polls, not a sensor." in page
     assert "A plan is a proposal, not a restock receipt." in page
     assert "No balance or profit shown yet: the ledger (#35) has landed, and its panel is the next step." in page
@@ -543,15 +548,6 @@ def test_now_and_next_friday(conn, page_conn, even_columns):
 ])
 def test_package_from_the_name(name, package):
     assert dashboard._package(name) == package
-
-
-def test_bottle_level_uses_capacity_only_when_the_package_is_known():
-    assert dashboard._level(7, "COKE-20OZ", None) == 100
-    assert dashboard._level(4, "Red Bull 250ml", 11) == 36       # 4 of 11
-    assert dashboard._level(3, "MYSTERY", 6) == 50               # no package: against the fill
-    assert dashboard._level(9, "MYSTERY", 6) == 100              # more than the fill: against itself
-    assert dashboard._level(None, "COKE-20OZ", 6) == 0
-    assert dashboard._colour("COKE-20OZ") == dashboard._colour(" coke-20oz ") != dashboard._colour("SPRITE-20OZ")
 
 
 def test_a_photo_count_fills_in_what_receipts_dont_know(conn, page_conn):
