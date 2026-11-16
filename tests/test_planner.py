@@ -877,6 +877,23 @@ class TestWildcard(unittest.TestCase):
         self.assertTrue(wild(restock_15(), DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10),
                              wildcard="15", slots=state).ok)
 
+    def test_a_running_wildcard_cant_switch_while_another_slots_contents_are_unknown(self):
+        # 16 holds something we can't name (maybe SPRITE): the wildcard 15 can't switch to SPRITE.
+        state = {"15": SlotState("15", MTDEW, 750, 1, 50), "16": SlotState("16", None, 650, 1, None)}
+        sprite_15 = DesiredSlot("15", product=SPRITE, sale_price="7.50", fill_to=2)
+        for closet in ((), (ClosetStock(SPRITE, 5, 50),)):
+            p = wild(sprite_15, wildcard="15", slots=state, closet=closet, sourcing=(SPRITE_SOURCING,))
+            self.assertIn(("wildcard", "15"), [(r.code, r.slot) for r in p.refusals])
+
+    def test_a_named_slot_under_the_ceiling_may_switch_like_any_other(self):
+        state = {"16": SlotState("16", SPRITE, 300, 2, 50)}
+        sprite_15 = DesiredSlot("15", product=SPRITE, sale_price="3.00", fill_to=10)
+        self.assertTrue(wild(sprite_15, wildcard="15", slots=state, sourcing=(SPRITE_SOURCING,)).ok)
+
+    def test_an_old_duplicate_of_the_wildcard_product_doesnt_block_unrelated_restocks(self):
+        dup = {"16": SlotState("16", PICKLE, 650, 2, 250), "17": SlotState("17", PICKLE, 750, 2, 250)}
+        self.assertTrue(wild(restock_15(), wildcard="17", slots=dup).ok)
+
     def test_the_wildcard_must_be_one_of_ours(self):
         self.assertEqual(codes(wild(restock_15(), wildcard="99")), ["wildcard"])
 
