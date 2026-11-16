@@ -26,6 +26,15 @@ CONNECT_TIMEOUT = 3
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
+@pytest.fixture(autouse=True)
+def _no_password_gate(request, monkeypatch):
+    """The pages' password gate is off except in the tests about it (tests/test_gate.py)."""
+    if request.module.__name__.rsplit(".", 1)[-1] != "test_gate":
+        from vending import gate
+
+        monkeypatch.setattr(gate, "ENABLED", False)
+
+
 def local_database_url() -> str:
     """`DATABASE_URL`, or skip the test unless every host it names is this machine.
 
