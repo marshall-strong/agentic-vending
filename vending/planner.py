@@ -763,6 +763,31 @@ def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[
                     f"it holds, so it may be this product; slot {s.slot}'s purchase could cost "
                     f"{_dollars(_most(s.purchase))}, over the {_dollars(config.wildcard_purchase_cap_cents)} "
                     f"wildcard cap. Buy less, or have its contents counted first"), s.slot))
+        # Nor can another slot switch to any product: it may be the one the wildcard holds.
+        for s in slots:
+            if s.slot not in unknown and s.changes_product:
+                refusals.append(Refusal("wildcard", (
+                    f"slot {', '.join(unknown)} is above {_dollars(config.price_ceiling_cents)} and we don't know what "
+                    f"it holds, so slot {s.slot} can't switch to {s.product}, which it may hold; restock slots with "
+                    f"what they hold, switch slot {', '.join(unknown)} itself, or have its contents counted first"),
+                    s.slot))
+    # A slot whose price we don't know may be above the ceiling already: its product is protected
+    # from new placements and its purchases are capped, but slots that already hold it may stay.
+    maybe = {s.state.product: s.slot for s in slots
+             if s.state.price_cents is None and s.state.product and s.state.product not in owners}
+    for product, owner in sorted(maybe.items()):
+        into = sorted(s.slot for s in slots if s.slot != owner and s.changes_product and s.product == product)
+        if into:
+            refusals.append(Refusal("wildcard", (
+                f"we don't know slot {owner}'s price, so it may be the wildcard, and its product {product} can't "
+                f"go into slot {', '.join(into)}; wait for a poll with its price"), owner))
+        for s in slots:
+            if s.product == product and s.purchase is not None and _most(s.purchase) > config.wildcard_purchase_cap_cents:
+                refusals.append(Refusal("wildcard", (
+                    f"we don't know slot {owner}'s price, so it may be the wildcard, and slot {s.slot}'s purchase of "
+                    f"{product} could cost {_dollars(_most(s.purchase))}, over the "
+                    f"{_dollars(config.wildcard_purchase_cap_cents)} cap; buy less, or wait for a poll with its "
+                    f"price"), s.slot))
     for product, owner in sorted(owners.items()):
         buys = [s for s in slots if s.product == product and s.purchase is not None]
         held = sorted(s.slot for s in slots if s.slot != owner and s.state.product == product)

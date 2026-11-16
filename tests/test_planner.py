@@ -802,7 +802,10 @@ class TestWildcard(unittest.TestCase):
         into_16 = DesiredSlot("16", product=PICKLE, sale_price="6.50", fill_to=1)
         p = wild(into_16, wildcard="17", slots=mystery, sourcing=(extras,))
         self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals])
-        self.assertTrue(wild(into_16, wildcard="17", slots=mystery).ok)      # one $29.99 pack is under the cap
+        # A modest restock of what a slot holds is under the cap, and allowed.
+        low_16 = {**mystery, "16": SlotState("16", PICKLE, 300, 2, 250)}
+        self.assertTrue(wild(DesiredSlot("16", product=PICKLE, sale_price="3.00", fill_to=6), wildcard="17",
+                             slots=low_16).ok)
 
     def test_a_wildcard_cant_start_while_its_product_is_in_another_slot_now(self):
         # 16 and 17 both hold PICKLE. Moving 16 away while raising 17: if 16's line failed, PICKLE would be
@@ -829,6 +832,29 @@ class TestWildcard(unittest.TestCase):
         p = wild(sprite_17, mtdew_16, wildcard="17", slots=state, closet=closet)
         self.assertIn(("wildcard", "17"), [(r.code, r.slot) for r in p.refusals])
         self.assertTrue(wild(mtdew_16, wildcard="17", slots=state).ok)     # the way out: move 16 first
+
+    def test_unknown_contents_above_the_ceiling_block_switches_elsewhere(self):
+        # 15 is above the ceiling with unknown contents: it may hold PICKLE, so 17 can't switch to it.
+        mystery = {"15": SlotState("15", None, 750, 2, None)}
+        p = wild(pickle_17(price="6.50", fill_to=3), wildcard="15", slots=mystery)
+        self.assertIn(("wildcard", "17"), [(r.code, r.slot) for r in p.refusals])
+        # Restocking a slot with what it holds is still fine.
+        self.assertTrue(wild(DesiredSlot("16", product=COKE, sale_price="2.00", fill_to=10), wildcard="15",
+                             slots={**mystery, "16": SlotState("16", COKE, 200, 2, 125)}).ok)
+
+    def test_an_unknown_price_protects_that_slots_product(self):
+        # 15 holds MTDEW at an unknown price, maybe $7.50: no other slot takes MTDEW, and buying it is capped.
+        unknown = {"15": SlotState("15", MTDEW, None, 2, 50)}
+        into_17 = DesiredSlot("17", product=MTDEW, sale_price="2.50", fill_to=3)
+        p = wild(into_17, wildcard=None, slots=unknown)
+        self.assertIn(("wildcard", "15"), [(r.code, r.slot) for r in p.refusals])
+        dear = Sourcing(MTDEW, PurchaseOption("BJs", 24, "41.00"), PurchaseOption("BJs", 24, "43.00"),
+                        extra_units_to_closet=60)
+        p = wild(DesiredSlot("15", product=MTDEW, sale_price="2.50", fill_to=10), wildcard=None, slots=unknown,
+                 sourcing=(dear,))
+        self.assertIn(("wildcard", "15"), [(r.code, r.slot) for r in p.refusals])
+        # Restocking it modestly is fine.
+        self.assertTrue(wild(restock_15(), wildcard=None, slots=unknown).ok)
 
     def test_the_wildcard_must_be_one_of_ours(self):
         self.assertEqual(codes(wild(restock_15(), wildcard="99")), ["wildcard"])
