@@ -780,6 +780,22 @@ class TestWildcard(unittest.TestCase):
         p = wild(into_16, wildcard="17", slots=already)
         self.assertEqual([(r.code, r.slot) for r in p.refusals], [("wildcard", "17")])
 
+    def test_the_old_wildcard_product_stays_protected_until_the_slot_is_back_under(self):
+        # 17 is the PICKLE wildcard. Switching it away while 16 buys PICKLE with extras would leave a
+        # $180 purchase and a PICKLE wildcard if 17's switch came back unavailable.
+        already = {"17": SlotState("17", PICKLE, 750, 2, 250)}
+        sprite_17 = DesiredSlot("17", product=SPRITE, sale_price="3.00", fill_to=10)
+        into_16 = DesiredSlot("16", product=PICKLE, sale_price="6.50", fill_to=1)
+        extras = replace(TABLE[2], extra_units_to_closet=60)
+        for wildcard in ("17", None):
+            p = wild(sprite_17, into_16, wildcard=wildcard, slots=already, sourcing=(extras, SPRITE_SOURCING))
+            self.assertIn(("wildcard", "17"), [(r.code, r.slot) for r in p.refusals], wildcard)
+            self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals], wildcard)
+        # Lowering it with wildcard=None still caps its own purchase.
+        lower = DesiredSlot("17", product=PICKLE, sale_price="6.50", fill_to=10)
+        self.assertEqual(codes(wild(lower, wildcard=None, slots=already, sourcing=(extras,))), ["wildcard"])
+        self.assertTrue(wild(lower, wildcard=None, slots=already).ok)
+
     def test_the_wildcard_must_be_one_of_ours(self):
         self.assertEqual(codes(wild(restock_15(), wildcard="99")), ["wildcard"])
 
