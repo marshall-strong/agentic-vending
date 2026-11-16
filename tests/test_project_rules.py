@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from datetime import date
+
 import pytest
 
 from vending.tools.project_rules import RULES_DIR, get_project_rules, topics
@@ -59,3 +62,14 @@ def test_the_rules_card_is_short_and_covers_the_guardrails():
                    "get_project_rules", "never from memory", "skip"):
         assert phrase in card, phrase
 
+
+
+def test_interloper_topic_matches_the_latest_observation():
+    """The agent can't read analysis/ (it isn't in the image), so the topic carries the newest file's prices."""
+    latest = sorted((RULES_DIR.parent.parent / "analysis" / "interloper").glob("*.json"))[-1]
+    data = json.loads(latest.read_text(encoding="utf-8"))
+    topic = (RULES_DIR / "interloper.md").read_text(encoding="utf-8")
+    day = date.fromisoformat(data["observed"])
+    assert f"{day:%a} {day.day} {day:%b}" in topic, "the topic names an older observation"
+    for d in data["drinks"]:
+        assert f"| {d['position']} | {d['name']} | {d['size']} | ${d['price_cents'] / 100:.2f} |" in topic, d["name"]
