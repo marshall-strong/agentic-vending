@@ -219,7 +219,6 @@ def test_the_cookie_lasts_the_stated_days():
 
 
 
-
 def test_guesses_sent_all_at_once_get_one_check_between_them(site, monkeypatch):
     """Marshall's #136 review: a burst used to slip past the delay while the first check ran."""
     monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
@@ -229,15 +228,29 @@ def test_guesses_sent_all_at_once_get_one_check_between_them(site, monkeypatch):
     assert statuses.count(401) == 1 and statuses.count(429) == 19
 
 
-
 def test_a_double_submitted_right_password_signs_in_twice(monkeypatch):
     """A double-click sends the form twice; the second waits for the first check, then passes."""
     monkeypatch.setattr(gate, "PASSWORD_HASH", gate.make_hash(PASSWORD, n=2**14))
     monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
     monkeypatch.setattr(gate, "_next_try", {})
+    import threading
+    running, most, lock = [0], [0], threading.Lock()
+    real = gate.password_matches
+    def counted(password, stored=None):
+        with lock:
+            running[0] += 1
+            most[0] = max(most[0], running[0])
+        try:
+            gate.time.sleep(0.2)
+            return real(password, stored)
+        finally:
+            with lock:
+                running[0] -= 1
+    monkeypatch.setattr(gate, "password_matches", counted)
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert list(pool.map(lambda _: gate.check(PASSWORD, "teammate"), range(2))) == [True, True]
+    assert most[0] == 1  # one check at a time for the same client
 
 
 def test_guesses_queued_while_busy_still_wait_out_the_delay(monkeypatch):

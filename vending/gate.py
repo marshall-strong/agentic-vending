@@ -86,7 +86,8 @@ def password_matches(password: str, stored: str | None = None) -> bool:
 
 
 class Busy(Exception):
-    """Every password-check slot is taken."""
+    """This check couldn't start within `WAIT_SECONDS`: every slot stayed taken, or this client's
+    earlier check was still running."""
 
 
 class TooSoon(Exception):
@@ -97,8 +98,8 @@ def check(password: str, client: str = "") -> bool:
     """Whether `password` is right. Each client has at most one check at a time: a request that
     arrives while the same client's check runs waits for it to finish. After a wrong guess the
     client gets TooSoon until `WRONG_DELAY_SECONDS` have passed, so guesses sent all at once, or
-    queued while the server is busy, still get one check per delay. Busy when no check slot frees
-    up within `WAIT_SECONDS`; that doesn't count as a guess. The delay is per client address, so a
+    queued while the server is busy, still get one check per delay. Busy when this check can't
+    start within `WAIT_SECONDS`; that doesn't count as a guess. The delay is per client address, so a
     stranger elsewhere can't slow the team, but one behind the same address (a shared NAT) can."""
     deadline = time.monotonic() + WAIT_SECONDS
     with _wrong_lock:
