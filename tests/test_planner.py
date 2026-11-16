@@ -818,6 +818,17 @@ class TestWildcard(unittest.TestCase):
         self.assertIn(("wildcard", "17"), [(r.code, r.slot) for r in p.refusals])
         self.assertTrue(wild(sprite_16, wildcard="17", slots=dup, sourcing=(SPRITE_SOURCING,)).ok)
 
+    def test_the_wildcard_cant_switch_to_a_product_in_another_slot_now_even_from_the_closet(self):
+        # 17 is the PICKLE wildcard, 16 holds SPRITE. 17 to SPRITE from the closet while 16 moves to MTDEW:
+        # if only 17's line went through, SPRITE would be in both.
+        state = {"17": SlotState("17", PICKLE, 750, 2, 250), "16": SlotState("16", SPRITE, 300, 2, 50)}
+        sprite_17 = DesiredSlot("17", product=SPRITE, sale_price="7.50", fill_to=10)
+        mtdew_16 = DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10)
+        closet = (ClosetStock(SPRITE, 20, 50),)
+        p = wild(sprite_17, mtdew_16, wildcard="17", slots=state, closet=closet)
+        self.assertIn(("wildcard", "17"), [(r.code, r.slot) for r in p.refusals])
+        self.assertTrue(wild(mtdew_16, wildcard="17", slots=state).ok)     # the way out: move 16 first
+
     def test_the_wildcard_must_be_one_of_ours(self):
         self.assertEqual(codes(wild(restock_15(), wildcard="99")), ["wildcard"])
 

@@ -717,6 +717,15 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
             f"slot {w.slot} is the wildcard and stays at {_dollars(w.price_cents)}, above the wildcard ceiling of "
             f"{_dollars(config.wildcard_ceiling_cents)}; price it at or under that at this visit"), w.slot))
     starting = w.price_cents is not None and w.price_cents > ceiling and w.slot not in above_now
+    if starting or w.changes_product:
+        # Whatever the source, closet or purchase: if the line that moves the other slot came back
+        # unavailable, the wildcard's product would be in two slots.
+        held = sorted(s.slot for s in slots if s.slot != w.slot and w.product and s.state.product == w.product)
+        if held:
+            refusals.append(Refusal("wildcard", (
+                f"{w.product} is in slot {', '.join(held)} now, so slot {w.slot} can't take it as the wildcard "
+                f"at this visit; if the line that moves {', '.join(held)} came back unavailable, the wildcard's "
+                f"product would be in two slots. Move {', '.join(held)} to another product first"), w.slot))
     if starting:
         others = sorted(above_now - {w.slot})
         if others:
@@ -729,12 +738,6 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
             refusals.append(Refusal("wildcard", (
                 f"slot {w.slot} can't go above {_dollars(ceiling)} while the price of slot {', '.join(unknown)} "
                 f"isn't known, since one of them may be above it already; wait for a poll with its price"), w.slot))
-        held = sorted(s.slot for s in slots if s.slot != w.slot and w.product and s.state.product == w.product)
-        if held:
-            refusals.append(Refusal("wildcard", (
-                f"{w.product} is in slot {', '.join(held)} now, so slot {w.slot} can't start as the wildcard with it "
-                f"at this visit; if the line that moves {', '.join(held)} came back unavailable, the wildcard's "
-                f"product would be in two slots. Move {', '.join(held)} to another product first"), w.slot))
         if desired.off_cycle:
             refusals.append(Refusal("wildcard", (
                 f"the wildcard moves only at a Friday visit, so slot {w.slot} can't go above "
