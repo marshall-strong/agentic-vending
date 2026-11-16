@@ -532,8 +532,10 @@ def load_movements(conn: psycopg.Connection) -> list[Movement]:
     """Every stock movement on record, unsorted: what `stock()` replays.
 
     Separate so a caller that needs the stock at many moments (the daily money
-    series) can read the history once and replay a prefix of it for each, which
-    is exactly `stock(conn, until=moment)` without a query per moment.
+    series) can read the history once and pass it to `replay(movements, moment)`
+    for each, which is exactly `stock(conn, until=moment)` without a query per
+    moment. Don't cut a prefix yourself: `replay` must split product changes
+    (#97) before it cuts.
     """
     assigned = set(our_slots(conn))
     lines, losses = _receipts(conn)
