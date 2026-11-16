@@ -12,7 +12,9 @@ so the container joins it with Tailscale in userspace mode.
 
 `Dockerfile` builds one image with the package and the Tailscale binaries. Its default command
 is `python -m vending.worker`: every hour it runs `python -m vending.sync_history`,
-`python -m vending.sync_requests` and `python -m vending.sync_catalog`, each with a 30-minute
+`python -m vending.sync_requests`, `python -m vending.sync_catalog` and
+`python -m vending.sync_product_requests` (which catalog requests were approved or rejected),
+each with a 30-minute
 limit (`JOB_TIMEOUT_MINUTES`), and it answers `GET /health` on port 8080 with the last round's
 outcome per job (a `503` means the last round failed). Its root, `GET /`, is the same status as a
 page for people: whether the last round passed, each job's outcome, when the last and next rounds

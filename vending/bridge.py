@@ -216,6 +216,16 @@ class Bridge:
         """
         return json.loads(self._get(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}"))
 
+    def product_request(self, request_id: str) -> dict:
+        """One of our catalog requests, as the bridge sees it now (`ProductRequestView`).
+
+        `{id, status, created_at, requested, decision_note, product}`: `status` is
+        `pending`, `approved` (with `product: {sku, name}`, which may differ from
+        what we asked for) or `rejected` (with `decision_note`). A GET only:
+        `request_catalog_product` files requests, through `post`.
+        """
+        return json.loads(self._get(f"/api/v1/product-requests/{urllib.parse.quote(request_id, safe='')}"))
+
 
 def _is_listing(body: object) -> bool:
     """Whether `body` is a day's listing, with what the sync needs from every poll."""

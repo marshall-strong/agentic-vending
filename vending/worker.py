@@ -4,8 +4,8 @@
     python -m vending.worker --once     # one round, then exit with the worst exit code
 
 Each round runs, in order, `python -m vending.slots check`,
-`python -m vending.sync_history`, `python -m vending.sync_requests` and
-`python -m vending.sync_catalog`, in this process. `slots check` goes first. It
+`python -m vending.sync_history`, `python -m vending.sync_requests`,
+`python -m vending.sync_catalog` and `python -m vending.sync_product_requests`, in this process. `slots check` goes first. It
 only confirms our slot assignment: if the server gives a different one, or none
 is stored, it changes nothing and fails the round until a person runs
 `python -m vending.slots record` (`vending.slots`). Besides the hourly rounds,
@@ -73,12 +73,13 @@ Job = tuple[str, Callable[[], int]]
 
 
 def default_jobs() -> list[Job]:
-    from vending import slots, sync_catalog, sync_history, sync_requests
+    from vending import slots, sync_catalog, sync_history, sync_product_requests, sync_requests
 
     return [("slots_check", lambda: slots.main(["check"])),
             ("sync_history", lambda: sync_history.main([])),
             ("sync_requests", lambda: sync_requests.main([])),
-            ("sync_catalog", lambda: sync_catalog.main([]))]
+            ("sync_catalog", lambda: sync_catalog.main([])),
+            ("sync_product_requests", lambda: sync_product_requests.main([]))]
 
 
 @dataclass
@@ -165,7 +166,8 @@ REPO = "https://github.com/marshall-strong/agentic-vending"
 PAGES_SETTING = "READONLY_DATABASE_URL"
 OUTCOMES = ("finished", "crashed", "timed out", "still running")
 JOB_NAMES = {"slots_check": "Our slot assignment", "sync_history": "Machine readings (sales history)",
-             "sync_requests": "Purchase requests and receipts", "sync_catalog": "Product catalog"}
+             "sync_requests": "Purchase requests and receipts", "sync_catalog": "Product catalog",
+             "sync_product_requests": "Catalog requests: approved or rejected"}
 
 
 def _eastern(moment: str | None) -> str:
