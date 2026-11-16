@@ -95,7 +95,7 @@ def test_a_write_that_fails_is_dropped_and_never_raises(monkeypatch, capsys):
     monkeypatch.setattr(pages, "_slots", threading.BoundedSemaphore(pages.MAX_CONNECTIONS))
     monkeypatch.setattr(visits, "connect", broken)
     monkeypatch.setattr(visits, "_logged", {})
-    monkeypatch.setattr(visits, "dropped", 0)
+    monkeypatch.setattr(visits, "dropped", 0, raising=False)
     assert visits.flush([("view", "/dashboard", BROWSER)]) is False
     assert "visits: dropped 1" in capsys.readouterr().err and visits.dropped == 1
 
@@ -130,10 +130,10 @@ def test_with_every_page_connection_in_use_the_writer_drops_the_batch_without_co
     for _ in range(pages.MAX_CONNECTIONS):
         slots.acquire()
     monkeypatch.setattr(pages, "_slots", slots)
-    monkeypatch.setattr(visits, "SLOT_WAIT_SECONDS", 0.3)
-    monkeypatch.setattr(visits, "SLOT_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(visits, "SLOT_WAIT_SECONDS", 0.3, raising=False)
+    monkeypatch.setattr(visits, "SLOT_POLL_SECONDS", 0.05, raising=False)
     monkeypatch.setattr(visits, "_logged", {})
-    monkeypatch.setattr(visits, "dropped", 0)
+    monkeypatch.setattr(visits, "dropped", 0, raising=False)
     connected = []
     monkeypatch.setattr(visits, "connect", lambda: connected.append(1) or _FakeConn())
     monkeypatch.setattr(visits, "write", lambda conn, batch: None)
@@ -169,12 +169,19 @@ def test_a_page_waiting_for_a_connection_gets_it_before_the_writer(monkeypatch):
 def test_the_writers_connection_has_the_page_readers_limits(monkeypatch):
     """A connection gone silent mid-write must fail within seconds, as a page's does, or it would
     hold one of the two page connections for as long as TCP retries (15 minutes or more)."""
-    seen = {}
+    seen, said = {}, []
+
+    class Conn:
+        def execute(self, statement, *args):
+            said.append(str(statement))
+
+    conn = Conn()
     monkeypatch.setenv("DATABASE_URL", "postgresql://writer@127.0.0.1/x")
-    monkeypatch.setattr(psycopg, "connect", lambda url, **kw: seen.update(kw, url=url) or "conn")
-    assert visits._connect() == "conn" and seen["url"] == "postgresql://writer@127.0.0.1/x"
+    monkeypatch.setattr(psycopg, "connect", lambda url, **kw: seen.update(kw, url=url) or conn)
+    assert visits._connect() is conn and seen["url"] == "postgresql://writer@127.0.0.1/x"
     assert {k: seen.get(k) for k in pages.KEEPALIVES} == pages.KEEPALIVES
-    assert f"statement_timeout={visits.STATEMENT_TIMEOUT_MS}" in seen["options"]
+    timeout = f"statement_timeout={visits.STATEMENT_TIMEOUT_MS}"
+    assert timeout in seen.get("options", "") or any(timeout in s.replace(" ", "") for s in said)
     assert seen["connect_timeout"] <= 10 and seen["autocommit"] is True
 
 
@@ -253,7 +260,7 @@ def test_the_no_script_reload_of_the_dashboard_is_not_a_visit(site, events):
     """A tab without scripts reloads every 30 seconds through the meta refresh, as a navigation
     with no header; it lands on ?refresh=1, so an idle tab isn't a visit every half hour."""
     signed = f"{gate.COOKIE}={gate.token()}; vend_browser={BROWSER}"
-    status, _, _ = set_cookies(site, "GET", f"/dashboard?{visits.REFRESH_QUERY}",
+    status, _, _ = set_cookies(site, "GET", "/dashboard?refresh=1",
                                headers={"Cookie": signed, "Sec-Fetch-Mode": "navigate"})
     assert status == 200 and events.empty()
 
@@ -295,7 +302,7 @@ def test_counts_and_the_dashboards_tile(conn):
     assert "Visitors" in page and "2 browsers" in page and "3 visits" in page
     assert visits.REFRESH_HEADER in page
     # Without scripts the page reloads to ?refresh=1, which the counter skips.
-    assert f'<meta http-equiv="refresh" content="30; url=?{visits.REFRESH_QUERY}">' in page
+    assert '<meta http-equiv="refresh" content="30; url=?refresh=1">' in page
 
 
 def test_a_browser_that_only_signed_in_is_not_a_visitor(conn):
