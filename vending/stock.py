@@ -338,6 +338,19 @@ def weighted_average(movements: list[Movement]) -> Stock:
 
 def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
+    movements = load_movements(conn)
+    if until is not None:
+        movements = [m for m in movements if m.at <= until]
+    return weighted_average(movements)
+
+
+def load_movements(conn: psycopg.Connection) -> list[Movement]:
+    """Every stock movement on record, unsorted: what `stock()` replays.
+
+    Separate so a caller that needs the stock at many moments (the daily money
+    series) can read the history once and replay a prefix of it for each, which
+    is exactly `stock(conn, until=moment)` without a query per moment.
+    """
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
@@ -354,10 +367,7 @@ def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
         " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)",
         (DEVICE_ID, slots),
     ).fetchall()
-    movements = movements_from_receipts(lines, losses) + sales_from_counters(counters)
-    if until is not None:
-        movements = [m for m in movements if m.at <= until]
-    return weighted_average(movements)
+    return movements_from_receipts(lines, losses) + sales_from_counters(counters)
 
 
 _LINE_COLUMNS = ("request_id", "line_no", "slot", "outcome", "sku", "total_paid", "units_loaded",
