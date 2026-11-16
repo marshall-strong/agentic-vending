@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 import zlib
 from collections.abc import Iterable, Mapping
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from fractions import Fraction
 from html import escape
 from typing import Any
@@ -274,7 +274,15 @@ class Item:
         self.spec = SHAPES[self.key]
 
     def same(self, other: Item | None) -> bool:
-        return other is not None and (self.product == other.product or _norm(self.name) == _norm(other.name))
+        """The same product: same SKU. Names only decide when one side is free text from a count,
+        since two catalog SKUs can share a name (flavours of one line)."""
+        if other is None:
+            return False
+        if self.product == other.product:
+            return True
+        if self.from_count or other.from_count:
+            return _norm(self.name) == _norm(other.name)
+        return False
 
     def pitch(self, cap: int | None) -> float:
         return max(self.spec["d"], RAIL / cap) if cap else float(self.spec["d"])
@@ -440,7 +448,14 @@ def money(value: Any) -> str | None:
     if value is None:
         return None
     try:
-        amount = Decimal(str(value))
+        if isinstance(value, Fraction):
+            with localcontext() as ctx:
+                ctx.prec = 40
+                amount = Decimal(value.numerator) / Decimal(value.denominator)
+            if amount != amount.quantize(Decimal("0.01")):
+                amount = amount.quantize(Decimal("0.01"), ROUND_HALF_UP)
+        else:
+            amount = Decimal(str(value))
     except InvalidOperation:
         return f"${value}"
     if not amount.is_finite():
@@ -867,16 +882,22 @@ def _front(lanes: dict[str, Lane], ours: set[str]) -> str:
                 else:
                     out.append(f'<use class="{cls}" href="#ma-f-{item.key}" style="{_style(item)}" transform="{at}"/>')
             gx, gw, gy = x + 3, width - 6, base + 10
-            denom = max(lane.cap or 0, lane.fill or 0, lane.units or 0, 1)
+            # A bar needs a known size: the capacity, else the plan's fill. Without either, the
+            # lane draws an outlined, empty gauge rather than a bar that would read as full.
+            denom = max(lane.cap or 0, lane.fill or 0)
+            sized = denom > 0
+            denom = max(denom, lane.units or 0, 1)
             out.append(f'<rect x="{gx:.1f}" y="{gy}" width="{gw:.1f}" height="5" rx="2" '
                        + ('fill="url(#ma-hatch)" stroke="#f3bb52" stroke-width=".8"/>' if lane.units is None
-                          else 'fill="#fff" fill-opacity=".14"/>'))
-            if lane.units:
+                          else 'fill="#fff" fill-opacity=".14"/>' if sized
+                          else 'fill="none" stroke="#fff" stroke-opacity=".35" stroke-dasharray="2 2"/>'))
+            if lane.units and sized:
                 out.append(f'<rect class="v-now" x="{gx:.1f}" y="{gy}" width="{gw * min(lane.units, denom) / denom:.1f}" '
                            f'height="5" rx="2" fill="#e3e9f0"/>')
             after = lane.next_units
-            if after:
-                after_denom = max(lane.next_cap or 0, after, 1)
+            after_size = max(lane.next_cap or 0, lane.fill or 0)
+            if after and after_size:
+                after_denom = max(after_size, after, 1)
                 out.append(f'<rect class="v-next" x="{gx:.1f}" y="{gy}" width="{gw * after / after_denom:.1f}" '
                            f'height="5" rx="2" fill="#52d6a4"/>')
         out.append(f'<rect class="ma-hl ma-hl{r}" x="{GX - 3}" y="{y_top - 3}" width="{GW + 6}" height="{PITCH - 2}" rx="5"/>')

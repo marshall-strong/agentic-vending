@@ -8,6 +8,7 @@ import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from fractions import Fraction
 from http.server import ThreadingHTTPServer
 
 import psycopg
@@ -869,6 +870,41 @@ def test_the_close_up_escapes_everything_it_prints():
     for raw in ("<img src=x>", "<script>", "<b>1</b>", "<svg onload", "<l>", "<f>", "<i>"):
         assert raw not in html, raw
     assert "&lt;img src=x&gt;" in html and "&lt;script&gt;" in html and "named from a photo count" in html
+
+
+def test_two_skus_with_one_name_are_a_swap_not_a_refill():
+    from vending import machine_art
+    view = {"55": {"now": {"product": "BUBLY-STRAW", "units": 3, "price": "1.00", "source": "receipt",
+                           "counted_at": None},
+                   "next": {"in_plan": True, "product": "BUBLY-MANGO", "units": 8, "price": "1.00",
+                            "old_price": None, "pulled": False, "fill_to": 8},
+                   "change": {"labels": ["swap"], "kind": "info", "reason": None}, "fill_to": 8}}
+    catalog = {sku: {"name": "Bubly", "line": "bubly", "flavor": flavor, "size": "12 oz can"}
+               for sku, flavor in (("BUBLY-STRAW", "Strawberry"), ("BUBLY-MANGO", "Mango"))}
+    lane = machine_art.Lane("55", view["55"], {"catalog": catalog, "overrides": {}})
+    assert lane.swap and lane.back is None and lane.added == 8
+
+
+def test_a_lane_with_no_known_size_draws_no_full_looking_gauge():
+    from vending import machine_art
+    view = {"55": {"now": {"product": "MILK-CARTON", "units": 3, "price": None, "source": "receipt",
+                           "counted_at": None},
+                   "next": None, "change": None, "fill_to": None}}
+    products = {"catalog": {"MILK-CARTON": {"name": "Milk", "line": None, "flavor": None, "size": "11 oz carton"}},
+                "overrides": {}}
+    lanes = {"55": machine_art.Lane("55", view["55"], products)}
+    front = machine_art._front(lanes, {"55"})
+    assert lanes["55"].cap is None
+    assert 'fill="#e3e9f0"' not in front and 'stroke-dasharray="2 2"' in front
+
+
+@pytest.mark.parametrize("value, shown", [
+    (Fraction(5, 4), "$1.25"), (Fraction(1, 3), "$0.33"), (Fraction(5, 2), "$2.50"), ("2.5", "$2.50"),
+    (Decimal("1.255"), "$1.255"),
+])
+def test_close_up_prices_are_exact_dollars(value, shown):
+    from vending import machine_art
+    assert machine_art.money(value) == shown
 
 
 def test_a_shelf_with_nothing_planned_says_so_rather_than_plus_zero():
