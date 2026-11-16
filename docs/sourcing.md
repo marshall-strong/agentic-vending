@@ -44,6 +44,18 @@ Columns: `sku, rank, store, units_per_pack, price, max, url, pack_description, c
 An import is all or nothing: one bad line and nothing is stored, with every bad line listed.
 `db/sourcing/2026-11-11-amazon.csv` is the team's 11 Nov Amazon list for the five products
 already in the catalog.
+`db/sourcing/2026-11-15-catalog.csv` adds 18 more catalog products (20 rows, with two alternates), from the
+15 Nov price checks and the rest of the 11 Nov list. Load it after the first file:
+
+```
+python -m vending.sourcing import db/sourcing/2026-11-15-catalog.csv --by NAME
+```
+
+Together they cover 23 of the 34 catalog products. **Still without a price:** the six bubly 12 oz cans
+(no single-flavour link checked), Mountain Dew Baja Blast 20 oz (no Amazon offer on 15 Nov) and the four Pure
+Leaf 16.9 oz bottles (no price at an allowed store). Walmart pages blocked the 15 Nov checks, so Walmart
+prices aren't in either file. Coke and Pepsi 12 oz cans are cheapest at BJ's, which needs a membership; each
+has an Amazon alternate. A few rows note that their price came from search results, or that stock was low.
 
 ## What reads it
 

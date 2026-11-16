@@ -90,6 +90,19 @@ def test_the_seed_file_parses_and_matches_its_own_maxes():
     assert all(o.checked_at.date().isoformat() == "2026-11-11" for o in rows)
 
 
+def test_every_sourcing_file_parses_and_names_each_option_once():
+    """Each CSV in db/sourcing is importable on its own, and no SKU's primary or alternate is set twice across
+    files, so loading them in date order never silently replaces a row from an earlier file with the same day."""
+    seen = {}
+    for path in sorted((ROOT / "db" / "sourcing").glob("*.csv")):
+        rows = sourcing.read_csv(path, "test", NOW)
+        assert rows, path
+        for o in rows:
+            assert (o.sku, o.rank) not in seen, f"{o.sku} {o.rank} is in {seen.get((o.sku, o.rank))} and {path.name}"
+            seen[(o.sku, o.rank)] = path.name
+            assert o.rank == "primary" or (o.sku, "primary") in seen, f"{path.name}: {o.sku} alternate before primary"
+
+
 def test_a_bad_csv_reports_every_bad_line_and_imports_nothing(tmp_path):
     path = tmp_path / "bad.csv"
     path.write_text("sku,store,units_per_pack,price,url\n"
