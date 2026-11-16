@@ -677,21 +677,27 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 # keeps no record of which slot it is: the slot priced above the ceiling is the
 # wildcard, so the rules can be checked from the slots alone.
 #
-# - At most one slot is above the ceiling after the visit, and it is the one the
-#   plan names as `wildcard`.
+# - At most one slot is above the ceiling, and it is the one the plan names.
+#   A kept slot above the ceiling must be named; a named one, kept or not, stays
+#   under the wildcard ceiling.
+# - A new slot goes above the ceiling only when no other slot is above it now, and
+#   every other slot's price is known. Retiring the old wildcard and starting a new
+#   one in the same visit could leave two above it if the retiring line comes back
+#   unavailable, so the new one starts at the next visit.
 # - It moves only at a Friday visit: a midweek plan can't take a new slot above
 #   the ceiling.
-# - One purchase for it costs at most the purchase cap at the worker's maximum
-#   (packs x max per pack, for the primary and for the alternate).
+# - Its product is in no other slot after the visit, so only its own line buys that
+#   product, and one purchase (extras to the closet included) costs at most the
+#   purchase cap at the worker's maximum, for the primary and for the alternate.
 
 def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -> list[Refusal]:
-    refusals: list[Refusal] = []
     wildcard = desired.wildcard
     if wildcard is not None and wildcard not in config.slots:
         return [Refusal("wildcard", f"wildcard slot {wildcard} is not one of ours", wildcard)]
+    refusals: list[Refusal] = []
     ceiling = config.price_ceiling_cents
+    above_now = {s.slot for s in slots if s.state.price_cents is not None and s.state.price_cents > ceiling}
     for s in slots:
-        above_now = s.state.price_cents is not None and s.state.price_cents > ceiling
         above_after = s.price_cents is not None and s.price_cents > ceiling
         if s.slot != wildcard and above_after and s.action == NO_CHANGE:
             # A changed slot above the ceiling is already refused by check_price.
@@ -699,18 +705,44 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
                 f"slot {s.slot} stays at {_dollars(s.price_cents)}, above the {_dollars(ceiling)} ceiling, so it is "
                 f"the wildcard; name it as the wildcard, or price it at or under {_dollars(ceiling)} at this visit"),
                 s.slot))
-        if s.slot == wildcard and desired.off_cycle and above_after and not above_now:
+    w = next((s for s in slots if s.slot == wildcard), None)
+    if w is None:
+        return refusals
+    if w.action == NO_CHANGE and w.price_cents is not None and w.price_cents > config.wildcard_ceiling_cents:
+        refusals.append(Refusal("wildcard", (
+            f"slot {w.slot} is the wildcard and stays at {_dollars(w.price_cents)}, above the wildcard ceiling of "
+            f"{_dollars(config.wildcard_ceiling_cents)}; price it at or under that at this visit"), w.slot))
+    starting = w.price_cents is not None and w.price_cents > ceiling and w.slot not in above_now
+    if starting:
+        others = sorted(above_now - {w.slot})
+        if others:
             refusals.append(Refusal("wildcard", (
-                f"the wildcard moves only at a Friday visit, so slot {s.slot} can't go above "
-                f"{_dollars(ceiling)} on a midweek one; wait for Friday"), s.slot))
-        if s.slot == wildcard and s.purchase is not None:
-            options = [o for o in (s.purchase.primary, s.purchase.alternate) if o is not None]
-            most = max(o.packs * o.max_price_per_pack_cents for o in options)
-            if most > config.wildcard_purchase_cap_cents:
-                refusals.append(Refusal("wildcard", (
-                    f"slot {s.slot} is the wildcard, and its purchase could cost {_dollars(most)} at the worker's "
-                    f"maximum, over the {_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a "
-                    f"cheaper pack"), s.slot))
+                f"slot {', '.join(others)} is above {_dollars(ceiling)} now, so slot {w.slot} can't go above it "
+                f"until that one is back under it; if a line comes back unavailable both would be above it. "
+                f"Lower {', '.join(others)} at this visit and start the new wildcard at the next"), w.slot))
+        unknown = sorted(s.slot for s in slots if s.slot != w.slot and s.state.price_cents is None)
+        if unknown:
+            refusals.append(Refusal("wildcard", (
+                f"slot {w.slot} can't go above {_dollars(ceiling)} while the price of slot {', '.join(unknown)} "
+                f"isn't known, since one of them may be above it already; wait for a poll with its price"), w.slot))
+        if desired.off_cycle:
+            refusals.append(Refusal("wildcard", (
+                f"the wildcard moves only at a Friday visit, so slot {w.slot} can't go above "
+                f"{_dollars(ceiling)} on a midweek one; wait for Friday"), w.slot))
+    if w.product is not None:
+        shared = sorted(s.slot for s in slots if s.slot != w.slot and s.product == w.product)
+        if shared:
+            refusals.append(Refusal("wildcard", (
+                f"slot {w.slot} is the wildcard, and its product {w.product} is also in slot {', '.join(shared)}; "
+                f"the wildcard's product is in no other slot, so its purchases stay under the cap"), w.slot))
+    if w.purchase is not None:
+        options = [o for o in (w.purchase.primary, w.purchase.alternate) if o is not None]
+        most = max(o.packs * o.max_price_per_pack_cents for o in options)
+        if most > config.wildcard_purchase_cap_cents:
+            refusals.append(Refusal("wildcard", (
+                f"slot {w.slot} is the wildcard, and its purchase could cost {_dollars(most)} at the worker's "
+                f"maximum, over the {_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a "
+                f"cheaper pack"), w.slot))
     return refusals
 
 

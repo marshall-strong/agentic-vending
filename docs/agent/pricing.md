@@ -13,9 +13,9 @@ Prices stay within the floor and ceiling, must be explainable, may need delibera
 
 - **Ceiling $8.00**; the floor is every slot's floor. Every sale should still profit: no loss leaders.
 - **It moves only at a Friday visit.** A midweek plan can't take a new slot above $6.50.
-- **One at a time.** Any slot priced above $6.50 is the wildcard, so a plan that keeps one there must name it, or reprice it.
+- **One at a time.** Any slot priced above $6.50 is the wildcard, so a plan that keeps one there must name it, or reprice it. To move it, lower the old slot at one visit and start the new one at the next: if both changed in one visit and the old slot's line came back unavailable, two slots would be above $6.50. A new wildcard also waits until every slot's price is known.
 - **One purchase for it costs at most $82.00** at the worker's maximum (`wildcard_purchase_cap_cents`, #90).
-- **Its product is in no other slot**, so step 1 below still holds.
+- **Its product is in no other slot**, so step 1 below still holds, and only its own line buys that product: extras to the closet count toward the $82.00.
 - **Judge it like any slot**: profit per stocked week, and the slow-seller rule. No fall drink sold above $5.00, so there is no rate to borrow; expect it to sell slower, and say so.
 
 **How to choose a price.** Work through these steps for every slot.
