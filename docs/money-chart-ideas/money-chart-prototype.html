@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Money Chart Prototype v2</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --s7-soft: rgba(98,80,214,0.20); --s2-soft: rgba(235,104,52,0.25);
+  --crit: #d03b3b; --good: #006300; --banner: #fff4d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
+    --s7-soft: rgba(144,133,233,0.28); --s2-soft: rgba(217,89,38,0.32);
+    --crit: #e66767; --good: #0ca30c; --banner: #3a2f10;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
+  --s7-soft: rgba(144,133,233,0.28); --s2-soft: rgba(217,89,38,0.32);
+  --crit: #e66767; --good: #0ca30c; --banner: #3a2f10;
+}
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 1080px; padding: 16px; color: var(--ink); background: var(--page);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.banner { color: var(--ink2); font-size: 12.5px; margin-bottom: 10px; }
+h1 { font-size: 20px; margin: 0 0 2px; }
+.sub { color: var(--ink2); margin: 0 0 14px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 10px 12px; }
+.tile .k { color: var(--ink2); font-size: 12px; }
+.tile .v { font-size: 22px; font-weight: 650; }
+.tile .n { color: var(--muted); font-size: 12px; }
+.tile .d { font-weight: 600; }
+.tile .d.up { color: var(--good); } .tile .d.down { color: var(--crit); }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 14px; position: relative; }
+.card h2 { font-size: 16px; margin: 0; }
+.card .why { color: var(--ink2); font-size: 13px; margin: 2px 0 8px; }
+.mock { font-size: 10.5px; font-weight: 650; letter-spacing: .05em; color: var(--ink2); border: 1px solid var(--axis);
+  border-radius: 4px; padding: 1px 5px; margin-left: 8px; vertical-align: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--ink2); margin-bottom: 6px; align-items: center; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; }
+.legend i.line { height: 3px; border-radius: 2px; vertical-align: 3px; }
+.legend.lg { gap: 6px; }
+.gl { color: var(--muted); font-size: 12px; margin: 0 2px 0 6px; }
+.gl:first-child { margin-left: 0; }
+.chip { border: 1px solid var(--ring); background: transparent; color: var(--ink2); font: inherit; font-size: 12.5px;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.chip svg { width: 18px; height: 10px; overflow: visible; display: inline-block; }
+.chip[aria-pressed="true"] { color: var(--ink); border-color: var(--axis); background: var(--page); }
+.chip[aria-pressed="false"] { color: var(--muted); }
+.chip[aria-pressed="false"] svg { opacity: .3; }
+.chip[aria-disabled="true"] { opacity: .5; cursor: not-allowed; text-decoration: line-through; }
+.link { border: 0; background: transparent; color: var(--ink2); font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; padding: 4px; }
+.layers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px; }
+.ctl { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 8px; }
+.grp { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; background: var(--surface); border: 1px solid var(--ring); border-radius: 16px; padding: 3px; }
+.seg button { border: 0; background: transparent; color: var(--ink2); font: inherit; font-size: 12.5px; padding: 5px 10px; border-radius: 999px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.ctl label { color: var(--muted); font-size: 12px; display: inline-flex; gap: 4px; align-items: center; }
+.ctl input[type=date] { font: inherit; font-size: 12.5px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--ring); border-radius: 8px; padding: 3px 6px; }
+.ctl .plain { border: 1px solid var(--ring); background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
+.ctl .plain:disabled { color: var(--muted); cursor: default; }
+.rangecap { color: var(--ink2); font-size: 12.5px; margin: 0 0 8px; }
+button:focus-visible, input:focus-visible, svg:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .lbl { fill: var(--ink2); font-size: 11.5px; font-weight: 600; }
+svg .halo { paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+svg .rl { font-size: 10.5px; }
+#chart svg.main { touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+#strip { margin-top: 4px; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--ring); box-shadow: 0 4px 16px rgba(0,0,0,.18); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; min-width: 210px; max-width: 320px; display: none; z-index: 5; }
+.tip b { display: block; margin-bottom: 4px; }
+.tip .tm { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.tip .row { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; align-items: center; }
+.tip .row span:first-child { color: var(--ink2); }
+.tip .row strong { font-weight: 650; }
+.tip .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.tip .key { display: inline-block; width: 12px; margin-right: 6px; vertical-align: 3px; border-top: 2px solid; }
+.tip .key.dash { border-top-style: dashed; }
+.tip hr { border: 0; border-top: 1px solid var(--grid); margin: 5px 0; }
+.tip .ev { color: var(--ink2); margin-top: 2px; }
+.notes { color: var(--ink2); font-size: 13px; margin-top: 12px; }
+.notes li { margin: 3px 0; }
+.bar { display: inline-flex; gap: 4px; margin-bottom: 14px;
+  background: var(--surface); border: 1px solid var(--ring);
+  border-radius: 999px; padding: 4px; max-width: 100%; overflow-x: auto; }
+.bar button { border: 0; background: transparent; color: var(--ink2); font: inherit; font-size: 13px;
+  padding: 7px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.bar button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+details { margin-top: 10px; font-size: 12px; }
+.tablewrap { max-height: 360px; overflow: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--grid); }
+th:first-child, td:first-child { text-align: left; }
+td.evc { text-align: left; color: var(--ink2); }
+[hidden] { display: none !important; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="banner"><strong>PROTOTYPE v2, throwaway. MOCK DATA:</strong> every number here is <strong>made up</strong> (seeded random data) to show the chart shapes. Switch views with the buttons below.</div>
+<nav class="bar" id="bar" aria-label="Chart view"></nav>
+<h1 id="title"></h1>
+<p class="sub" id="sub"></p>
+<div class="ctl" id="dctl" hidden>
+  <div class="grp" role="group" aria-label="How values add up">
+    <span class="gl">Values</span><div class="seg" id="modeSeg"></div>
+  </div>
+  <div class="grp" role="group" aria-label="Date range">
+    <span class="gl">Range</span><div class="seg" id="rangeSeg"></div>
+    <label>From <input type="date" id="from"></label>
+    <label>to <input type="date" id="to"></label>
+    <button type="button" class="plain" id="reset">Reset zoom</button>
+  </div>
+</div>
+<p class="rangecap" id="rangecap" hidden></p>
+<div class="tiles" id="tiles"></div>
+<div class="card">
+  <h2><span id="ctitle"></span><span class="mock">MOCK</span></h2>
+  <p class="why" id="cwhy"></p>
+  <div class="legend" id="legend"></div>
+  <div class="layers" id="layers" hidden></div>
+  <div id="chart"></div>
+  <div id="strip"></div>
+  <p class="hint" id="hint" hidden>Drag across the chart to zoom in. Double-click it or press Reset zoom to go back. Tab to the chart, then use ←/→ to step through days (Shift jumps a week). Shift-click a series to show only that one.</p>
+  <div class="tip" id="tip"></div>
+  <div class="sr" id="sr" aria-live="polite"></div>
+  <details><summary>Table view</summary><div id="table" class="tablewrap"></div></details>
+</div>
+<ul class="notes" id="notes"></ul>
+
+<script>
+// ---------- synthetic data (seeded, MOCK) ----------
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const DAY = 864e5;
+const opening = new Date(2026, 10, 27);          // Fri 27 Nov: $600 opening entry
+const start = new Date(2026, 11, 3);             // Thu 3 Dec: competition starts
+const end = new Date(2026, 11, 3 + 62);          // 9 weeks = 63 live days: Thu 3 Dec to Wed 3 Feb
+const days = [];
+let cash = 600, inv = 0, invUnits = 0, taxOwed = 0;
+let cum = { rev: 0, takings: 0, cogs: 0, visits: 0, tax: 0, api: 0 };
+const UNIT_COST = 0.92;
+let price = 2.05;                                 // average shelf price, tax included
+const midweek = new Set(["2026-12-16", "2027-01-13"]);
+// Prices are physical tags, so they only change at a visit (Friday or a $25 midweek one).
+const priceChanges = {
+  "2026-12-18": [2.15, "Raised the five best sellers by 25¢ at the Friday visit."],
+  "2027-01-13": [2.10, "Cut two slow lines by 25¢ while the worker was there for the midweek top-up."],
+  "2027-01-29": [2.20, "Raised the cold-weather lines (hot-chocolate cans, energy drinks) at the Friday visit."],
+};
+// Local-date key (toISOString would shift the day east of UTC).
+const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+for (let d = new Date(opening); d <= end; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+  const key = iso(d), dow = d.getDay();
+  const ev = [];
+  let buy = 0, fee = 0, units = 0;
+  if (key === "2026-12-02") { buy = 165.6; ev.push({ k: "fill", txt: "Day-one fill: $165.60 of drinks" }); }
+  const live = d >= start;
+  if (live) {
+    const base = [3, 6, 7, 7, 8, 8, 3][dow];  // weekends quiet
+    units = Math.min(invUnits, Math.round(base * (0.7 + rnd() * 0.6)));
+  }
+  if (live && dow === 5 && +d > +start) {          // Friday free restock
+    buy = Math.round((180 - invUnits) * UNIT_COST * 100) / 100;
+    ev.push({ k: "fri", txt: `Friday restock: $${buy.toFixed(2)} of drinks (free visit)` });
+  }
+  if (midweek.has(key)) { fee = 25; buy += 27.6; ev.push({ k: "mid", txt: "Midweek visit: $25 fee + $27.60 top-up (two sell-outs)" }); }
+  if (priceChanges[key]) {
+    const [p, why] = priceChanges[key];
+    ev.push({ k: "price", txt: `Price change: average price $${price.toFixed(2)} → $${p.toFixed(2)}. ${why}` });
+    price = p;
+  }
+  if (buy) { invUnits += Math.round(buy / UNIT_COST); inv += buy; cash -= buy; }
+  // API: daily check-ins, a bigger Thursday planning run
+  let api = 0;
+  const runs = [];
+  {
+    const n = live ? 3 : 1;
+    for (let i = 0; i < n; i++) { const c = +(0.03 + rnd() * 0.09).toFixed(3); api += c; runs.push({ p: "check-in", c }); }
+    if (dow === 4) { const c = +(0.55 + rnd() * 0.7).toFixed(3); api += c; runs.push({ p: "weekly plan", c }); ev.push({ k: "plan", txt: `Weekly planning run: $${c.toFixed(3)} of AI` }); }
+    if (midweek.has(key)) { const c = 0.41; api += c; runs.push({ p: "midweek decision", c }); }
+  }
+  const takings = units * price, tax = takings * 8 / 108, rev = takings - tax, cogs = units * (invUnits ? inv / invUnits : UNIT_COST);
+  inv -= cogs; invUnits -= units; cash += takings - fee - api; taxOwed += tax;
+  cum.takings += takings; cum.rev += rev; cum.cogs += cogs; cum.visits += fee; cum.tax += tax; cum.api += api;
+  const spendable = cash - taxOwed;
+  days.push({ d, key, live, units, rev, cogs, fee, api, tax, runs, ev,
+    spendable, inv, worth: spendable + inv, cum: { ...cum },
+    profit: cum.rev - cum.cogs - cum.visits - cum.api });
+}
+const last = days[days.length - 1];
+const N_DAYS_LAST = days.length - 1;
+
+// weekly rollup (Sat–Fri, like the ledger)
+const weeks = [];
+for (const r of days.filter(r => r.live)) {
+  const wk = new Date(r.d.getFullYear(), r.d.getMonth(), r.d.getDate() - (r.d.getDay() + 1) % 7);
+  const k = iso(wk);
+  let w = weeks.find(x => x.k === k);
+  if (!w) weeks.push(w = { k, start: wk, rev: 0, cogs: 0, fee: 0, api: 0, tax: 0, ia: days.indexOf(r), ib: 0 });
+  w.rev += r.rev; w.cogs += r.cogs; w.fee += r.fee; w.api += r.api; w.tax += r.tax; w.ib = days.indexOf(r);
+}
+// Ledger weeks run Sat–Fri (ledger.py WEEK_STARTS = 5). The competition starts on a Thursday, so Week 1 is
+// Thu–Fri (2 days) and the last week is cut short by the end date: both are "partial".
+weeks.forEach((w, i) => { w.i = i + 1; w.nd = w.ib - w.ia + 1; w.partial = w.nd < 7; w.profit = w.rev - w.cogs - w.fee - w.api; });
+const weekTag = w => `Week ${w.i}` + (w.partial ? ` · ${w.nd} days` : "");
+
+// Payback: the first day cash (after the sales-tax set-aside) is back to at least the $600 starting money,
+// counted from launch, after the day-one fill took cash below it. Net profit crossing $0 says nothing here
+// (it is positive from the first sale, because stock is only a cost once it sells).
+const OPEN_CASH = 600;
+const PB = days.findIndex(r => r.live && r.spendable >= OPEN_CASH);   // -1 = not yet
+if (PB >= 0) days[PB].ev.push({ k: "pay", txt: `Paid back: cash back to $${OPEN_CASH} (${"$" + days[PB].spendable.toFixed(2)} after the sales-tax set-aside)` });
+
+// ---------- helpers ----------
+const $ = (v, dp = 2) => (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const $auto = v => $(v, Math.abs(v) >= 100 ? 0 : 2);
+const fmtD = d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const fmtDow = d => d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs = {}, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function h(tag, attrs = {}, kids = []) {
+  const e = document.createElement(tag);
+  for (const k in attrs) { if (k === "text") e.textContent = attrs[k]; else if (k === "cls") e.className = attrs[k]; else e.setAttribute(k, attrs[k]); }
+  for (const c of [].concat(kids)) if (c != null) e.append(c);
+  return e;
+}
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= step0);
+  const out = [], end = Math.ceil(hi / step - 1e-9) * step; for (let v = Math.floor(lo / step) * step; v <= end + 1e-9; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+function frame(W, H, m, yLo, yHi, fmtY, n = 5) {
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  const ticks = niceTicks(yLo, yHi, n);
+  const y0 = ticks[0], y1 = ticks[ticks.length - 1];
+  const y = v => m.t + (H - m.t - m.b) * (1 - (v - y0) / (y1 - y0));
+  for (const tv of ticks) {
+    el("line", { x1: m.l, x2: W - m.r, y1: y(tv), y2: y(tv), stroke: tv === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": tv === 0 ? 1.5 : 1 }, svg);
+    el("text", { x: m.l - 6, y: y(tv) + 4, "text-anchor": "end" }, svg).textContent = fmtY(tv);
+  }
+  return { svg, y, ticks };
+}
+const tip = document.getElementById("tip");
+function showTip(evt, content) {
+  const card = tip.parentElement.getBoundingClientRect();
+  if (typeof content === "string") tip.innerHTML = content; else { tip.replaceChildren(content); }
+  tip.style.display = "block";
+  let x = evt.clientX - card.left + 14, yy = evt.clientY - card.top + 14;
+  if (x + tip.offsetWidth > card.width - 8) x = evt.clientX - card.left - tip.offsetWidth - 14;
+  if (x < 4) x = 4;
+  tip.style.left = x + "px"; tip.style.top = yy + "px";
+}
+const hideTip = () => (tip.style.display = "none");
+const row = (label, v, color) => `<div class="row"><span>${color ? `<i class="sw" style="background:${color}"></i>` : ""}${label}</span><span>${v}</span></div>`;
+function legend(items) {
+  const lg = document.getElementById("legend"); lg.className = "legend";
+  lg.innerHTML = items.map(([c, t, line]) => `<span><i class="${line ? "line" : ""}" style="background:${c}"></i>${t}</span>`).join("");
+}
+function table(head, rows) {
+  document.getElementById("table").innerHTML = `<table><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr>${rows.map(r => `<tr>${r.map((c, i) => `<td${i === r.length - 1 && head[i] === "Events" ? ' class="evc"' : ""}>${c}</td>`).join("")}</tr>`).join("")}</table>`;
+}
+function tiles(list) {
+  document.getElementById("tiles").innerHTML = list.map(([k, v, n]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${n || ""}</div></div>`).join("");
+}
+const avgCost = 0.92;
+// Payback tile: as of day index `upTo` (inclusive). Says "not yet paid back" rather than inventing a date.
+function paybackTile(upTo) {
+  if (PB >= 0 && PB <= upTo) return ["Paid back", fmtD(days[PB].d), `cash (after tax set-aside) back to $${OPEN_CASH}`];
+  return ["Paid back", "Not yet", `cash ${$(days[upTo].spendable)} of $${OPEN_CASH} after tax set-aside`];
+}
+const commonTiles = () => tiles([
+  ["Net worth", $(last.worth), `cash after tax + unsold stock at cost · started $600`],
+  paybackTile(N_DAYS_LAST),
+  ["Profit to date", $(last.profit), "sales ex-tax − drinks sold − visits − AI"],
+  ["Sales (ex tax)", $(last.cum.rev), `${days.reduce((a, r) => a + r.units, 0)} units`],
+  ["AI spend", $(last.cum.api), `${(100 * last.cum.api / last.cum.rev).toFixed(1)}¢ per $1 of sales`],
+  ["The brain in cans", Math.round(last.cum.api / avgCost) + " cans", `AI spend ÷ $${avgCost.toFixed(2)} avg can cost`],
+]);
+function xDays(W, m) { const n = days.length; return i => m.l + (W - m.l - m.r) * (i / (n - 1)); }
+function dayAxis(svg, x, H, m) {
+  days.forEach((r, i) => {
+    // ticks on Saturdays (the first day of each ledger week), plus the first day unless a Saturday is right next to it
+    if (r.d.getDay() === 6 || (i === 0 && days[1].d.getDay() !== 6)) {
+      el("line", { x1: x(i), x2: x(i), y1: H - m.b, y2: H - m.b + 4, stroke: "var(--axis)" }, svg);
+      el("text", { x: x(i), y: H - m.b + 16, "text-anchor": "middle" }, svg).textContent = fmtD(r.d);
+    }
+  });
+  const si = days.findIndex(r => r.live);
+  el("line", { x1: x(si), x2: x(si), y1: m.t - 6, y2: H - m.b, stroke: "var(--ink2)", "stroke-dasharray": "3 3" }, svg);
+  el("text", { x: x(si) + 4, y: m.t - 8, class: "lbl" }, svg).textContent = "Competition starts";
+}
+function crosshair(svg, x, H, m, W, html) {
+  const line = el("line", { y1: m.t, y2: H - m.b, stroke: "var(--ink2)", "stroke-width": 1, opacity: 0 }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" }, svg);
+  hit.addEventListener("mousemove", e => {
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const i = Math.max(0, Math.min(days.length - 1, Math.round((p.x - m.l) / (W - m.l - m.r) * (days.length - 1))));
+    line.setAttribute("x1", x(i)); line.setAttribute("x2", x(i)); line.setAttribute("opacity", 0.5);
+    showTip(e, html(days[i]));
+  });
+  hit.addEventListener("mouseleave", () => { line.setAttribute("opacity", 0); hideTip(); });
+}
+function eventMarks(svg, x, yAt) {
+  days.forEach((r, i) => r.ev.forEach(ev => {
+    if (ev.k === "mid") {
+      const cx = x(i), cy = yAt(r) - 14;
+      el("path", { d: `M${cx} ${cy - 6} L${cx + 6} ${cy} L${cx} ${cy + 6} L${cx - 6} ${cy} Z`, fill: "var(--s3)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+      el("text", { x: cx, y: cy - 10, "text-anchor": "middle", class: "lbl" }, svg).textContent = "$25 visit";
+    } else if (ev.k === "fri" || ev.k === "fill") {
+      el("circle", { cx: x(i), cy: yAt(r), r: 4, fill: "var(--surface)", stroke: "var(--ink)", "stroke-width": 2 }, svg);
+    }
+  }));
+}
+const dayTip = r => `<b>${r.d.toDateString()}</b>` +
+  row("Net worth", $(r.worth)) + row("· spendable cash", $(r.spendable), "var(--s7)") + row("· stock at cost", $(r.inv), "var(--s2)") + "<hr>" +
+  row("Sales today (ex tax)", $(r.rev)) + row("AI today", $(r.api, 3), "var(--s5)") + (r.fee ? row("Visit fee", $(r.fee), "var(--s3)") : "") +
+  (r.ev.length ? "<hr>" + r.ev.map(e => `<div>${e.txt}</div>`).join("") : "");
+
+// =====================================================================
+// D v2: everything, with toggles
+// =====================================================================
+const N = days.length;
+const DF = { rev: days.map(r => r.rev), cogs: days.map(r => r.cogs), fee: days.map(r => r.fee), api: days.map(r => r.api) };
+DF.costs = DF.cogs.map((v, i) => v + DF.fee[i] + DF.api[i]);
+DF.gross = DF.rev.map((v, i) => v - DF.cogs[i]);
+DF.net = DF.gross.map((v, i) => v - DF.fee[i] - DF.api[i]);
+const CUMS = {};
+for (const k in DF) { let s = 0; CUMS[k] = DF[k].map(v => (s += v)); }
+const LV = { cash: days.map(r => r.spendable), worth: days.map(r => r.worth) };
+const OPEN = 600;   // starting money: capital, not income
+
+// Series: colour follows the entity (fixed slot), never its position in the visible set.
+const SER = [
+  { k: "rev",   name: "Revenue (ex tax)",  short: "Revenue",     c: "var(--s1)", g: "In",       desc: "Sales with the 8% sales tax taken out" },
+  { k: "costs", name: "Total costs",       short: "Total costs", c: "var(--s4)", g: "Costs",    desc: "Drinks sold at cost + visit fees + AI spend" },
+  { k: "cogs",  name: "Drinks sold",       short: "Drinks sold", c: "var(--s2)", g: "Costs",    desc: "Cost of the drinks that sold (cost of sales), not of drinks bought" },
+  { k: "fee",   name: "Visit fees",        short: "Visit fees",  c: "var(--s3)", g: "Costs",    desc: "$25 per midweek visit; Friday visits are free" },
+  { k: "api",   name: "AI / API spend",    short: "AI spend",    c: "var(--s5)", g: "Costs",    desc: "Claude API spend on agent runs" },
+  { k: "gross", name: "Gross profit",      short: "Gross profit",c: "var(--s6)", g: "Profit",   desc: "Revenue − drinks sold" },
+  { k: "net",   name: "Net profit",        short: "Net profit",  c: "var(--ink)", w: 2.5, g: "Profit", desc: "Revenue − drinks sold − visit fees − AI" },
+  { k: "cash",  name: "Cash",              short: "Cash",        c: "var(--s7)", dash: "6 4", g: "Balances", lvl: true, desc: "Cash in the account, after setting aside sales tax owed" },
+  { k: "worth", name: "Net worth",         short: "Net worth",   c: "var(--s8)", dash: "6 4", g: "Balances", lvl: true, desc: "Cash + unsold stock at cost. Always $600 + net profit" },
+];
+const SK = Object.fromEntries(SER.map(s => [s.k, s]));
+const MODES = {
+  cum: { name: "Running total", title: "Running totals" },
+  day: { name: "Daily",         title: "Each day's amount" },
+  r7:  { name: "7-day rolling", title: "Trailing 7-day totals" },
+};
+const EVK = [
+  { k: "restock", name: "Restocks",       row: "Restock", match: ["fill", "fri"], shape: "circle",   c: "var(--ink2)" },
+  { k: "mid",     name: "Midweek visits", row: "Midweek", match: ["mid"],         shape: "diamond",  c: "var(--s3)" },
+  { k: "price",   name: "Price changes",  row: "Price",   match: ["price"],       shape: "triangle", c: "var(--ink2)" },
+  { k: "plan",    name: "Weekly plans",   row: "AI plan", match: ["plan"],        shape: "square",   c: "var(--s5)" },
+];
+const DEF = { s: ["rev", "costs", "net", "api"], m: "cum", ev: EVK.map(e => e.k) };
+const S = { view: "overlay", s: new Set(DEF.s), m: DEF.m, a: 0, b: N - 1, rk: "all", ev: new Set(DEF.ev), rb: false, strip: true, hover: null };
+
+const isRebased = () => S.m === "cum" && S.rb;
+const isDelta = s => s.lvl && !(S.m === "cum" && !S.rb);         // balances shown as a change
+const avail = s => s.k !== "worth" || (S.m === "cum" && !S.rb);  // Δ net worth would just repeat net profit
+const sName = s => isDelta(s) ? s.short + " (change)" : s.name;
+function val(k, i) {
+  const s = SK[k];
+  if (s.lvl) {
+    const L = LV[k], p = j => (j < 0 ? OPEN : L[j]);
+    if (S.m === "cum") return S.rb ? L[i] - p(S.a - 1) : L[i];
+    return L[i] - p(i - (S.m === "day" ? 1 : 7));
+  }
+  const C = CUMS[k], p = j => (j < 0 ? 0 : C[j]);
+  if (S.m === "cum") return C[i] - (S.rb ? p(S.a - 1) : 0);
+  if (S.m === "day") return DF[k][i];
+  return C[i] - p(i - 7);
+}
+// AI as a share of gross profit, in the same mode as the main chart. Null when gross profit is under $1.
+function aiShare(i) { const g = val("gross", i); return g >= 1 ? 100 * val("api", i) / g : null; }
+const evOn = (r, kinds = S.ev) => r.ev.filter(e => e.k === "pay" || EVK.some(k => kinds.has(k.k) && k.match.includes(e.k)));   // the payback day is always noted
+
+// ---------- range ----------
+const keyIdx = Object.fromEntries(days.map((r, i) => [r.key, i]));
+function setRange(a, b, rk) {
+  a = Math.max(0, Math.min(N - 1, a)); b = Math.max(0, Math.min(N - 1, b));
+  if (a > b) [a, b] = [b, a];
+  if (a === b) { if (b < N - 1) b++; else a--; }
+  S.a = a; S.b = b; S.rk = (a === 0 && b === N - 1) ? "all" : rk;
+}
+function applyRangeKey(r) {
+  if (!r || r === "all") return setRange(0, N - 1, "all");
+  const wm = /^w(\d+)$/.exec(r);
+  if (wm) { const w = weeks[+wm[1] - 1]; if (w) return setRange(w.ia, w.ib, r); return; }
+  const cm = /^(\d{4}-\d\d-\d\d)_(\d{4}-\d\d-\d\d)$/.exec(r);
+  if (cm) {
+    const near = k => keyIdx[k] ?? (k < days[0].key ? 0 : N - 1);
+    setRange(near(cm[1]), near(cm[2]), "custom");
+  }
+}
+const rangeParam = () => S.rk === "custom" ? `${days[S.a].key}_${days[S.b].key}` : S.rk;
+
+// ---------- URL state ----------
+function readURL() {
+  let q; try { q = new URL(location).searchParams; } catch (e) { return; }
+  if (q.get("v") && V[q.get("v")]) S.view = q.get("v");
+  if (q.has("s")) S.s = new Set(q.get("s").split(",").filter(k => SK[k]));
+  if (MODES[q.get("m")]) S.m = q.get("m");
+  if (q.has("ev")) S.ev = new Set(q.get("ev").split(",").filter(k => EVK.some(e => e.k === k)));
+  S.rb = q.get("rb") === "1";
+  if (q.has("strip")) S.strip = q.get("strip") !== "0";
+  applyRangeKey(q.get("r"));
+}
+function writeURL() {
+  try {
+    // Built by hand so the commas stay readable in a shared link (all values are from fixed lists).
+    const parts = [["v", S.view], ["s", SER.filter(s => S.s.has(s.k)).map(s => s.k).join(",")], ["m", S.m], ["r", rangeParam()],
+      ["ev", EVK.filter(e => S.ev.has(e.k)).map(e => e.k).join(",")], ...(S.rb ? [["rb", "1"]] : []), ["strip", S.strip ? "1" : "0"]];
+    history.replaceState(null, "", "?" + parts.map(([k, v]) => k + "=" + v).join("&") + location.hash);
+  } catch (e) {}
+}
+
+// ---------- controls (built once so keyboard focus survives redraws) ----------
+function swatch(s) {
+  const svg = el("svg", { viewBox: "0 0 18 10", "aria-hidden": "true" });
+  el("line", { x1: 1, x2: 17, y1: 5, y2: 5, stroke: s.c, "stroke-width": s.w || 2.5, "stroke-linecap": "round", ...(s.dash ? { "stroke-dasharray": "4 3" } : {}) }, svg);
+  return svg;
+}
+function shape(kind, cx, cy, fill, parent, r = 4.5) {
+  const a = { fill, stroke: "var(--surface)", "stroke-width": 2 };
+  if (kind === "circle") return el("circle", { cx, cy, r, ...a }, parent);
+  if (kind === "square") return el("rect", { x: cx - r + 0.5, y: cy - r + 0.5, width: 2 * r - 1, height: 2 * r - 1, rx: 1.5, ...a }, parent);
+  if (kind === "diamond") return el("path", { d: `M${cx} ${cy - r - 1}L${cx + r + 1} ${cy}L${cx} ${cy + r + 1}L${cx - r - 1} ${cy}Z`, ...a }, parent);
+  return el("path", { d: `M${cx} ${cy - r - 0.5}L${cx + r + 0.5} ${cy + r - 0.5}L${cx - r - 0.5} ${cy + r - 0.5}Z`, ...a }, parent);
+}
+function shapeIcon(e) { const svg = el("svg", { viewBox: "0 0 18 10", "aria-hidden": "true" }); shape(e.shape, 9, 5, e.c, svg, 4); return svg; }
+const ctl = {};
+function buildControls() {
+  const modeSeg = document.getElementById("modeSeg");
+  ctl.mode = Object.entries(MODES).map(([k, mo]) => {
+    const b = h("button", { type: "button", text: mo.name, "data-k": k });
+    b.onclick = () => { S.m = k; renderD(); };
+    modeSeg.append(b); return b;
+  });
+  const rangeSeg = document.getElementById("rangeSeg");
+  const rk = [["all", "All", "Whole run, from the $600 opening entry"], ...weeks.map(w => [`w${w.i}`, `W${w.i}`,
+    `${weekTag(w)}: ${fmtD(days[w.ia].d)} – ${fmtD(days[w.ib].d)} (Sat–Fri ledger week${w.partial ? ", partial week" : ""})`])];
+  ctl.range = rk.map(([k, t, title]) => {
+    const b = h("button", { type: "button", text: t, "data-k": k, title, "aria-label": title });
+    b.onclick = () => { applyRangeKey(k); renderD(); };
+    rangeSeg.append(b); return b;
+  });
+  const from = document.getElementById("from"), to = document.getElementById("to");
+  for (const inp of [from, to]) { inp.min = days[0].key; inp.max = days[N - 1].key; }
+  const onDate = () => { if (from.value && to.value) { applyRangeKey(`${from.value}_${to.value}`); renderD(); } };
+  from.onchange = onDate; to.onchange = onDate;
+  document.getElementById("reset").onclick = () => { applyRangeKey("all"); renderD(); };
+
+  // legend-as-toggle
+  const lg = document.getElementById("legend");
+  ctl.legend = lg; lg.replaceChildren(); lg.className = "legend lg"; lg.setAttribute("role", "group"); lg.setAttribute("aria-label", "Series shown");
+  ctl.ser = []; let g = null;
+  for (const s of SER) {
+    if (s.g !== g) { g = s.g; lg.append(h("span", { cls: "gl", text: g })); }
+    const b = h("button", { type: "button", cls: "chip", "data-k": s.k }, [swatch(s), h("span", { text: s.name })]);
+    b.onclick = e => {
+      if (b.getAttribute("aria-disabled") === "true") return;
+      if (e.shiftKey) S.s = new Set([s.k]); else if (S.s.has(s.k)) S.s.delete(s.k); else S.s.add(s.k);
+      renderD();
+    };
+    ctl.ser.push([s, b]); lg.append(b);
+  }
+  const defB = h("button", { type: "button", cls: "link", text: "Defaults" }); defB.onclick = () => { S.s = new Set(DEF.s); renderD(); };
+  const allB = h("button", { type: "button", cls: "link", text: "All" }); allB.onclick = () => { S.s = new Set(SER.map(s => s.k)); renderD(); };
+  ctl.legendExtra = [defB, allB];
+
+  // layers: event markers, strip, rebase
+  const layers = document.getElementById("layers");
+  layers.append(h("span", { cls: "gl", text: "Markers" }));
+  ctl.ev = EVK.map(e => {
+    const b = h("button", { type: "button", cls: "chip" }, [shapeIcon(e), h("span", { text: e.name })]);
+    b.onclick = () => { S.ev.has(e.k) ? S.ev.delete(e.k) : S.ev.add(e.k); renderD(); };
+    layers.append(b); return [e, b];
+  });
+  layers.append(h("span", { cls: "gl", text: "Extras" }));
+  ctl.strip = h("button", { type: "button", cls: "chip", title: "A small linked chart under the main one: AI spend as a % of gross profit" }, [h("span", { text: "AI ÷ gross profit strip" })]);
+  ctl.strip.onclick = () => { S.strip = !S.strip; renderD(); };
+  ctl.rb = h("button", { type: "button", cls: "chip" }, [h("span", { text: "Restart totals at range start" })]);
+  ctl.rb.onclick = () => { if (S.m !== "cum") return; S.rb = !S.rb; renderD(); };
+  layers.append(ctl.strip, ctl.rb);
+}
+function syncControls() {
+  ctl.mode.forEach(b => b.setAttribute("aria-pressed", b.dataset.k === S.m));
+  ctl.range.forEach(b => b.setAttribute("aria-pressed", b.dataset.k === S.rk));
+  document.getElementById("from").value = days[S.a].key;
+  document.getElementById("to").value = days[S.b].key;
+  document.getElementById("reset").disabled = S.rk === "all";
+  for (const [s, b] of ctl.ser) {
+    b.setAttribute("aria-pressed", S.s.has(s.k));
+    const ok = avail(s);
+    b.setAttribute("aria-disabled", !ok);
+    b.title = ok ? s.desc + (isDelta(s) ? " (shown as a change over each period)" : "") :
+      "Hidden in this mode: a change in net worth equals net profit, because drinks count at cost until sold. Switch to Running total (without restart) to see it.";
+    b.lastChild.textContent = s.name;
+  }
+  for (const [e, b] of ctl.ev) b.setAttribute("aria-pressed", S.ev.has(e.k));
+  ctl.strip.setAttribute("aria-pressed", S.strip);
+  ctl.rb.setAttribute("aria-pressed", S.rb);
+  ctl.rb.setAttribute("aria-disabled", S.m !== "cum");
+  ctl.rb.title = S.m === "cum" ? "Count running totals from the first day of the selected range instead of from day one" : "Only applies to Running total";
+}
+
+// ---------- D tiles, caption, table ----------
+function rangeLabel() {
+  const wk = /^w(\d+)$/.exec(S.rk), w = wk && weeks[+wk[1] - 1];
+  return `${fmtD(days[S.a].d)} – ${fmtD(days[S.b].d)}, ${days[S.b].d.getFullYear()}` +
+    (w ? ` (Week ${w.i}${w.partial ? ", partial week" : ""})` : S.rk === "all" ? " (whole run)" : "") + ` · ${S.b - S.a + 1} days`;
+}
+function tilesD() {
+  const a = S.a, b = S.b, sum = k => CUMS[k][b] - (a ? CUMS[k][a - 1] : 0);
+  const wEnd = LV.worth[b], wStart = a ? LV.worth[a - 1] : OPEN, dw = wEnd - wStart;
+  let units = 0; for (let i = a; i <= b; i++) units += days[i].units;
+  const rev = sum("rev"), gross = sum("gross"), api = sum("api");
+  const delta = `<span class="d ${dw >= 0 ? "up" : "down"}">${dw >= 0 ? "▲" : "▼"} ${$(Math.abs(dw))}</span> ${a ? "over the range" : "vs the $600 start"}`;
+  tiles([
+    [`Net worth on ${fmtD(days[b].d)}`, $(wEnd), delta],
+    paybackTile(b),
+    ["Net profit", $(sum("net")), "revenue − drinks sold − visits − AI"],
+    ["Revenue (ex tax)", $(rev), `${units} units · gross margin ${rev ? (100 * gross / rev).toFixed(0) + "%" : "n/a"}`],
+    ["Total costs", $(sum("costs")), `drinks ${$(sum("cogs"), 0)} · visits ${$(sum("fee"), 0)} · AI ${$(api, 0)}`],
+    ["AI spend", $(api), `${gross >= 1 ? (100 * api / gross).toFixed(1) + "% of gross profit" : "no gross profit yet"} · ≈${Math.round(api / avgCost)} cans`],
+  ]);
+  const cap = document.getElementById("rangecap");
+  const wk = /^w(\d+)$/.exec(S.rk), pw = wk && weeks[+wk[1] - 1];
+  cap.hidden = false; cap.textContent = "Tiles and table cover " + rangeLabel() + ". " +
+    (pw && pw.partial ? `Partial week (${pw.nd} days), so its totals are not comparable with a full week's. ` : "") +
+    (PB >= 0 && PB <= b ? `Paid back ${fmtD(days[PB].d)}. ` : "Not yet paid back by the end of this range. ") + "Mock data.";
+}
+function tableD(vis) {
+  const rows = [];
+  for (let i = S.a; i <= S.b; i++) {
+    const r = days[i];
+    rows.push([fmtDow(r.d), ...vis.map(s => $(val(s.k, i), s.k === "api" && S.m === "day" ? 3 : 2)),
+      ...(S.strip ? [aiShare(i) == null ? "n/a" : aiShare(i).toFixed(1) + "%"] : []),
+      evOn(r, new Set(EVK.map(e => e.k))).map(e => e.txt).join("; ")]);
+  }
+  table(["Day", ...vis.map(sName), ...(S.strip ? ["AI ÷ gross profit"] : []), "Events"], rows);
+}
+
+// ---------- D chart ----------
+const W = 900;
+function svgX(svg, e) { const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; return pt.matrixTransform(svg.getScreenCTM().inverse()).x; }
+const fmtAxis = v => (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 2 });
+let hov = null;   // per-render hover handles
+
+function drawD() {
+  const a = S.a, b = S.b, span = b - a;
+  const rows = EVK.filter(e => S.ev.has(e.k));
+  const railH = rows.length ? rows.length * 15 + 6 : 0;
+  const m = { l: 62, r: 150, t: 24 + railH, b: 28 }, H = 340 + railH;
+  const PW = W - m.l - m.r;
+  const x = i => m.l + PW * (i - a) / span;
+  const vis = SER.filter(s => S.s.has(s.k) && avail(s));
+  let lo = 0, hi = 0;
+  for (const s of vis) for (let i = a; i <= b; i++) { const v = val(s.k, i); if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (S.m === "cum" && !S.rb && vis.some(s => s.lvl)) hi = Math.max(hi, OPEN);
+  if (hi - lo < 1e-9) hi = 1;
+  if (lo < 0 && -lo < 0.015 * hi) lo = 0;   // a few cents below $0 shouldn't add a whole tick band
+  const pad = (hi - lo) * 0.06; hi += pad; if (lo < 0) lo -= pad;
+  const XA = H - 28;                     // x-axis line; with no negatives, leave a band under $0 for the paid-back label
+  if (lo === 0) m.b = 50;
+  const { svg, y } = frame(W, H, m, lo, hi, fmtAxis, 6);
+  svg.setAttribute("class", "main");
+
+  // event rail (one lane per kind, above the plot)
+  const railG = el("g", {}, svg);
+  rows.forEach((e, ri) => {
+    const cy = 8 + ri * 15;
+    el("line", { x1: m.l, x2: W - m.r, y1: cy, y2: cy, stroke: "var(--grid)" }, railG);
+    el("text", { x: m.l - 8, y: cy + 3.5, "text-anchor": "end", class: "rl" }, railG).textContent = e.row;
+    for (let i = a; i <= b; i++) {
+      const hits = days[i].ev.filter(ev => e.match.includes(ev.k));
+      if (!hits.length) continue;
+      const g = el("g", {}, railG);
+      shape(e.shape, x(i), cy, e.c, g);
+      const ht = el("circle", { cx: x(i), cy, r: 12, fill: "transparent" }, g);
+      ht.addEventListener("pointermove", ev => {
+        guide.setAttribute("x1", x(i)); guide.setAttribute("x2", x(i)); guide.setAttribute("opacity", 0.45);
+        const f = document.createDocumentFragment();
+        f.append(h("b", { text: fmtDow(days[i].d) }), ...hits.map(t => h("div", { cls: "ev", text: t.txt })));
+        showTip(ev, f);
+      });
+      ht.addEventListener("pointerleave", () => { guide.setAttribute("opacity", 0); hideTip(); });
+    }
+  });
+  const guide = el("line", { y1: 4, y2: H - m.b, stroke: "var(--ink2)", "stroke-width": 1, opacity: 0, "pointer-events": "none" }, svg);
+
+  // x axis
+  const tickAt = i => span <= 12 || days[i].d.getDay() === 6 || i === a;
+  for (let i = a; i <= b; i++) {
+    if (!tickAt(i)) continue;
+    if (i === a && span > 12 && days[i].d.getDay() !== 6 && [1, 2, 3].some(k => a + k <= b && days[a + k].d.getDay() === 6)) continue;
+    el("line", { x1: x(i), x2: x(i), y1: XA, y2: XA + 4, stroke: "var(--axis)" }, svg);
+    el("text", { x: x(i), y: XA + 16, "text-anchor": "middle" }, svg).textContent = fmtD(days[i].d);
+  }
+
+  // reference lines
+  // the $0 line is the heavier gridline from frame(): a plain reference, with its own axis tick label
+  const si = days.findIndex(r => r.live);
+  if (si > a && si <= b) {
+    el("line", { x1: x(si), x2: x(si), y1: m.t, y2: H - m.b, stroke: "var(--ink2)", "stroke-dasharray": "3 3" }, svg);
+    el("text", { x: x(si) + 4, y: m.t + 12, class: "lbl halo" }, svg).textContent = "Competition starts";
+  }
+  if (S.m === "cum" && !S.rb && vis.some(s => s.lvl)) {
+    el("line", { x1: m.l, x2: W - m.r, y1: y(OPEN), y2: y(OPEN), stroke: "var(--ink2)", "stroke-dasharray": "2 4" }, svg);
+    el("text", { x: m.l + 4, y: y(OPEN) - 5, class: "lbl halo" }, svg).textContent = "Started with $600";
+  }
+
+  // lines (net profit drawn last, on top)
+  const order = vis.filter(s => s.k !== "net").concat(vis.filter(s => s.k === "net"));
+  for (const s of order) {
+    let d = "";
+    for (let i = a; i <= b; i++) d += `${i === a ? "M" : "L"}${x(i).toFixed(2)} ${y(val(s.k, i)).toFixed(2)}`;
+    el("path", { d, fill: "none", stroke: s.c, "stroke-width": s.w || 2, "stroke-linejoin": "round", "stroke-linecap": "round", ...(s.dash ? { "stroke-dasharray": s.dash } : {}) }, svg);
+  }
+
+  // payback marker: the first day cash (after tax set-aside) is back to the $600 start. A date, so it shows in
+  // every mode when it falls inside the range; the ring sits on the Cash line when that line is showing.
+  if (PB >= a && PB <= b) {
+    const px = x(PB), cashShown = S.m === "cum" && !S.rb && S.s.has("cash");
+    el("line", { x1: px, x2: px, y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1, "stroke-dasharray": "1 3", opacity: 0.7 }, svg);
+    if (cashShown) el("circle", { cx: px, cy: y(LV.cash[PB]), r: 5, fill: "var(--surface)", stroke: "var(--ink)", "stroke-width": 2 }, svg);
+    const left = px < m.l + 270;
+    const below = XA - y(0) >= 20;
+    el("text", { x: px + (left ? 7 : -7), y: below ? y(0) + 17 : y(0) - 9, "text-anchor": left ? "start" : "end", class: "lbl halo" }, svg)
+      .textContent = `Paid back: cash back to $${OPEN_CASH}, ${fmtD(days[PB].d)}`;
+  }
+
+  // direct end labels with leader lines
+  const ends = vis.map(s => ({ s, v: val(s.k, b), yy: y(val(s.k, b)) })).sort((p, q) => p.yy - q.yy);
+  const gap = 14, top = m.t + 4, bot = H - m.b;
+  ends.forEach((e, j) => { e.ly = Math.max(e.yy, j ? ends[j - 1].ly + gap : top); });
+  for (let j = ends.length - 1; j >= 0; j--) { const lim = j === ends.length - 1 ? bot : ends[j + 1].ly - gap; if (ends[j].ly > lim) ends[j].ly = lim; }
+  for (const e of ends) {
+    if (Math.abs(e.ly - e.yy) > 2) el("path", { d: `M${x(b) + 3} ${e.yy}L${W - m.r + 6} ${e.yy}L${W - m.r + 12} ${e.ly}`, fill: "none", stroke: e.s.c, "stroke-width": 1 }, svg);
+    else el("line", { x1: x(b) + 3, x2: W - m.r + 12, y1: e.yy, y2: e.yy, stroke: e.s.c, "stroke-width": 1 }, svg);
+    el("text", { x: W - m.r + 16, y: e.ly + 4, class: "lbl" }, svg).textContent = `${isDelta(e.s) ? e.s.short + " Δ" : e.s.short} ${$auto(e.v)}`;
+  }
+  if (!vis.length) el("text", { x: m.l + PW / 2, y: (m.t + H - m.b) / 2, "text-anchor": "middle", class: "lbl" }, svg).textContent = "No series on. Pick one in the legend above.";
+
+  // crosshair + dots
+  const cross = el("line", { y1: m.t, y2: H - m.b, stroke: "var(--ink2)", "stroke-width": 1, opacity: 0, "pointer-events": "none" }, svg);
+  const dots = vis.map(s => el("circle", { r: 4, fill: s.c, stroke: "var(--surface)", "stroke-width": 2, opacity: 0, "pointer-events": "none" }, svg));
+  const sel = el("rect", { y: m.t, height: H - m.t - m.b, fill: "var(--ink)", opacity: 0, "pointer-events": "none" }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: PW, height: H - m.t - m.b, fill: "transparent", style: "cursor: crosshair" }, svg);
+  svg.setAttribute("tabindex", "0");
+  svg.setAttribute("role", "application");
+  svg.setAttribute("aria-roledescription", "chart");
+  svg.setAttribute("aria-label", `${MODES[S.m].title}, ${rangeLabel()}. Series: ${vis.map(sName).join(", ") || "none"}. Use left and right arrows to read each day.`);
+
+  const toI = e => Math.max(a, Math.min(b, a + Math.round((svgX(svg, e) - m.l) / PW * span)));
+  hov = { svg, x, y, m, H, cross, dots, vis, strip: null };
+  let drag = null;
+  hit.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    drag = { px: svgX(svg, e), i0: toI(e), moved: false };
+    try { hit.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  hit.addEventListener("pointermove", e => {
+    if (drag) {
+      const px = svgX(svg, e);
+      if (Math.abs(px - drag.px) > 6) drag.moved = true;
+      if (drag.moved) {
+        const x0 = Math.max(m.l, Math.min(drag.px, px)), x1 = Math.min(W - m.r, Math.max(drag.px, px));
+        sel.setAttribute("x", x0); sel.setAttribute("width", x1 - x0); sel.setAttribute("opacity", 0.08);
+        hideTip(); return;
+      }
+    }
+    setHover(toI(e), e);
+  });
+  hit.addEventListener("pointerup", e => {
+    if (!drag) return;
+    const d0 = drag; drag = null; sel.setAttribute("opacity", 0);
+    if (d0.moved) { const i1 = toI(e); if (i1 !== d0.i0) { setRange(d0.i0, i1, "custom"); renderD(); } }
+  });
+  hit.addEventListener("pointercancel", () => { drag = null; sel.setAttribute("opacity", 0); });
+  hit.addEventListener("pointerleave", () => { if (!drag) clearHover(); });
+  hit.addEventListener("dblclick", () => { if (S.rk !== "all") { applyRangeKey("all"); renderD(); } });
+  svg.addEventListener("keydown", e => {
+    const cur = S.hover ?? b, step = e.shiftKey ? 7 : 1;
+    let i = null;
+    if (e.key === "ArrowLeft") i = cur - step; else if (e.key === "ArrowRight") i = cur + step;
+    else if (e.key === "Home") i = a; else if (e.key === "End") i = b;
+    else if (e.key === "Escape") { clearHover(); return; }
+    if (i == null) return;
+    e.preventDefault(); setHover(Math.max(a, Math.min(b, i)));
+  });
+  svg.addEventListener("focus", () => setHover(S.hover ?? b));
+  svg.addEventListener("blur", clearHover);
+  return svg;
+}
+
+function drawStrip() {
+  const a = S.a, b = S.b, span = b - a;
+  const m = { l: 62, r: 150, t: 24, b: 22 }, H = 120, PW = W - m.l - m.r;
+  const x = i => m.l + PW * (i - a) / span;
+  const vals = []; for (let i = a; i <= b; i++) vals.push(aiShare(i));
+  const finite = vals.filter(v => v != null);
+  const hi = Math.max(5, ...finite) * 1.1;
+  const { svg, y } = frame(W, H, m, 0, hi, v => v + "%", 3);
+  svg.setAttribute("aria-label", `AI spend as a percent of gross profit, ${MODES[S.m].name.toLowerCase()}`);
+  el("text", { x: m.l, y: 12, class: "lbl" }, svg).textContent =
+    `AI spend as % of gross profit · ${S.m === "cum" ? (S.rb ? "since range start" : "since day one") : S.m === "day" ? "each day" : "trailing 7 days"}`;
+  // area wash + line, broken where gross profit is under $1
+  let d = "", area = "", seg = [];
+  const flush = () => { if (seg.length > 1) area += `M${x(seg[0][0])} ${y(0)}` + seg.map(([i, v]) => `L${x(i)} ${y(v)}`).join("") + `L${x(seg[seg.length - 1][0])} ${y(0)}Z`; seg = []; };
+  vals.forEach((v, j) => {
+    const i = a + j;
+    if (v == null) { flush(); return; }
+    d += `${seg.length ? "L" : "M"}${x(i).toFixed(2)} ${y(v).toFixed(2)}`; seg.push([i, v]);
+  });
+  flush();
+  el("path", { d: area, fill: "var(--s5)", "fill-opacity": 0.1 }, svg);
+  el("path", { d, fill: "none", stroke: "var(--s5)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+  const lv = vals[vals.length - 1];
+  el("text", { x: W - m.r + 16, y: (lv == null ? y(0) : y(lv)) + 4, class: "lbl" }, svg).textContent = lv == null ? "n/a" : lv.toFixed(1) + "%";
+  if (finite.length < vals.length) el("text", { x: W - m.r - 4, y: 12, "text-anchor": "end" }, svg).textContent = "gaps = gross profit under $1";
+  const cross = el("line", { y1: m.t, y2: H - m.b, stroke: "var(--ink2)", "stroke-width": 1, opacity: 0, "pointer-events": "none" }, svg);
+  const dot = el("circle", { r: 4, fill: "var(--s5)", stroke: "var(--surface)", "stroke-width": 2, opacity: 0, "pointer-events": "none" }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: PW, height: H - m.t - m.b, fill: "transparent" }, svg);
+  hit.addEventListener("pointermove", e => setHover(Math.max(a, Math.min(b, a + Math.round((svgX(svg, e) - m.l) / PW * span))), e));
+  hit.addEventListener("pointerleave", clearHover);
+  return { svg, x, y, cross, dot };
+}
+
+function tipD(i) {
+  const r = days[i], f = document.createDocumentFragment();
+  f.append(h("b", {}, [fmtDow(r.d), h("span", { cls: "tm", text: MODES[S.m].name + (isRebased() ? " since " + fmtD(days[S.a].d) : "") })]));
+  for (const s of hov.vis) {
+    const v = val(s.k, i);
+    f.append(h("div", { cls: "row" }, [
+      h("span", {}, [h("i", { cls: "key" + (s.dash ? " dash" : ""), style: `border-color:${s.c}` }), sName(s)]),
+      h("strong", { text: $(v, s.k === "api" && Math.abs(v) < 1 ? 3 : 2) })]));
+  }
+  if (S.strip) {
+    const p = aiShare(i);
+    f.append(h("hr"), h("div", { cls: "row" }, [h("span", { text: "AI ÷ gross profit" }), h("strong", { text: p == null ? "n/a" : p.toFixed(1) + "%" })]));
+  }
+  const evs = evOn(r);
+  if (evs.length) { f.append(h("hr")); for (const e of evs) f.append(h("div", { cls: "ev", text: e.txt })); }
+  return f;
+}
+function setHover(i, evt) {
+  if (!hov) return;
+  S.hover = i;
+  const { svg, x, y, cross, dots, vis, strip } = hov;
+  cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 0.5);
+  vis.forEach((s, j) => { dots[j].setAttribute("cx", x(i)); dots[j].setAttribute("cy", y(val(s.k, i))); dots[j].setAttribute("opacity", 1); });
+  if (strip) {
+    strip.cross.setAttribute("x1", strip.x(i)); strip.cross.setAttribute("x2", strip.x(i)); strip.cross.setAttribute("opacity", 0.5);
+    const p = aiShare(i);
+    if (p != null) { strip.dot.setAttribute("cx", strip.x(i)); strip.dot.setAttribute("cy", strip.y(p)); strip.dot.setAttribute("opacity", 1); }
+    else strip.dot.setAttribute("opacity", 0);
+  }
+  if (!evt) {
+    document.getElementById("sr").textContent = fmtDow(days[i].d) + ": " +
+      hov.vis.map(s => `${sName(s)} ${$(val(s.k, i))}`).join(", ") + (evOn(days[i]).length ? ". " + evOn(days[i]).map(e => e.txt).join(" ") : "");
+    const rc = svg.getBoundingClientRect(), k = rc.width / W;
+    evt = { clientX: rc.left + x(i) * k, clientY: rc.top + hov.m.t * k + 10 };
+  }
+  showTip(evt, tipD(i));
+}
+function clearHover() {
+  if (!hov) return;
+  hov.cross.setAttribute("opacity", 0); hov.dots.forEach(d => d.setAttribute("opacity", 0));
+  if (hov.strip) { hov.strip.cross.setAttribute("opacity", 0); hov.strip.dot.setAttribute("opacity", 0); }
+  hideTip();
+}
+
+function renderD() {
+  syncControls();
+  S.hover = null; hideTip();
+  const vis = SER.filter(s => S.s.has(s.k) && avail(s));
+  document.getElementById("ctitle").textContent = `${MODES[S.m].title}${isRebased() ? " since " + fmtD(days[S.a].d) : S.m === "cum" ? " since day one" : ""}: revenue, costs and profit`;
+  document.getElementById("cwhy").textContent = S.m === "cum"
+    ? "Profit counts drinks when they sell (cost of sales), not when we buy them, so it doesn't dip on restock day. Cash does."
+    : S.m === "day" ? "Each day on its own. Spiky, because weekends are quiet and costs land on visit days. Try 7-day rolling."
+    : "Each point is the total of the 7 days up to and including that day. Smooths out the weekend dip.";
+  tilesD();
+  const host = document.getElementById("chart"); host.replaceChildren(drawD());
+  const sh = document.getElementById("strip");
+  if (S.strip) { const st = drawStrip(); hov.strip = st; sh.replaceChildren(st.svg); } else sh.replaceChildren();
+  tableD(vis);
+  writeURL();
+}
+
+// ---------- variants ----------
+const V = {
+  overlay: {
+    name: "D · Everything (main)",
+    title: "Money in, money out, since day one",
+    sub: "The main view. Pick the lines, the way they add up, and the dates. Everything on one dollar scale; the scale fits whatever is showing.",
+    d: true,
+    notes: [
+      "Mock data, seeded. The money model is real: profit counts drinks when they sell, at average cost (cost of sales), not when we buy them. A restock moves cash into stock, so profit and net worth hold flat on restock day while cash drops.",
+      "Revenue is ex sales tax (8%). Tax is set aside the day we take it, so it counts as neither revenue nor a cost. “Cash” is after that set-aside.",
+      "The $600 is starting money, not income. Net worth is always $600 + net profit, so in Daily and 7-day modes it is hidden (it would repeat net profit) and Cash shows as a change.",
+      "Paid back is the first day cash (after the sales-tax set-aside) is back to at least the $600 starting money, after the day-one fill took it below. It is not “net profit crosses $0”: profit is above $0 from the first sale, because drinks only count as a cost when they sell. The $0 line is just a reference.",
+      "Weeks are the ledger's Saturday–Friday weeks. The free Friday restock is the natural weekly reset. Competition starts on a Thursday, so Week 1 is only Thu–Fri (2 days) and the last week is cut short by the end date: compare partial weeks per day, not in total.",
+      "Markers: prices only change at a visit (Friday, or a $25 midweek visit), because the tags are physical. AI planning runs are on Thursdays in this mock, but a run can fall on any day.",
+      "No second y-axis by design. AI spend is small next to revenue, so its share of gross profit gets its own linked strip and a tile.",
+    ],
+  },
+  worth: {
+    name: "A · Net worth",
+    title: "What the business is worth",
+    sub: "Cash plus unsold drinks at what we paid. A restock moves money from cash into stock, so the total holds flat. Only margin, visits, tax and AI move it.",
+    ctitle: "Net worth by day, split into spendable cash and stock",
+    why: "Inspired by Project Vend's “net value over time” and Vending-Bench's money-balance line. Dots = restocks; diamonds = paid visits.",
+    draw() {
+      const W = 900, H = 340, m = { l: 52, r: 16, t: 34, b: 28 };
+      const hi = Math.max(...days.map(r => r.worth)) * 1.08;
+      const { svg, y } = frame(W, H, m, 0, hi, v => "$" + v);
+      const x = xDays(W, m);
+      const area = (top, bot) => days.map((r, i) => `${i ? "L" : "M"}${x(i)} ${y(top(r))}`).join("") + days.slice().reverse().map((r, j) => `L${x(days.length - 1 - j)} ${y(bot(r))}`).join("") + "Z";
+      el("path", { d: area(r => r.spendable, () => 0), fill: "var(--s7-soft)" }, svg);
+      el("path", { d: area(r => r.worth, r => r.spendable), fill: "var(--s2-soft)" }, svg);
+      el("path", { d: days.map((r, i) => `${i ? "L" : "M"}${x(i)} ${y(r.spendable)}`).join(""), fill: "none", stroke: "var(--s7)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+      el("line", { x1: m.l, x2: W - m.r, y1: y(600), y2: y(600), stroke: "var(--ink2)", "stroke-dasharray": "2 4" }, svg);
+      el("text", { x: W - m.r - 4, y: y(600) + 15, "text-anchor": "end", class: "lbl" }, svg).textContent = "Started with $600";
+      el("path", { d: days.map((r, i) => `${i ? "L" : "M"}${x(i)} ${y(r.worth)}`).join(""), fill: "none", stroke: "var(--ink)", "stroke-width": 2.5, "stroke-linejoin": "round" }, svg);
+      dayAxis(svg, x, H, m);
+      eventMarks(svg, x, r => y(r.worth));
+      const li = days.length - 1;
+      el("text", { x: x(li) - 4, y: y(last.worth) - 8, "text-anchor": "end", class: "lbl" }, svg).textContent = "Net worth " + $(last.worth, 0);
+      el("text", { x: x(li) - 4, y: y(last.spendable * 0.3), "text-anchor": "end", class: "lbl" }, svg).textContent = "Spendable cash";
+      el("text", { x: x(li) - 4, y: y((last.worth + last.spendable) / 2) + 4, "text-anchor": "end", class: "lbl" }, svg).textContent = "Stock at cost";
+      crosshair(svg, x, H, m, W, dayTip);
+      legend([["var(--ink)", "Net worth", 1], ["var(--s7)", "Spendable cash (after sales tax set aside)"], ["var(--s2)", "Unsold stock at cost"], ["var(--s3)", "$25 midweek visit"]]);
+      table(["Day", "Net worth", "Cash", "Stock", "AI"], days.map(r => [fmtD(r.d), $(r.worth), $(r.spendable), $(r.inv), $(r.api, 3)]));
+      return svg;
+    },
+    notes: ["Best headline line: it doesn't lurch on restock day the way cash does.", "Weak spot: AI spend is invisible at this scale. It needs its own view (C) or a tile."],
+  },
+  weekly: {
+    name: "B · Weekly P&L",
+    title: "Where each week's money went",
+    sub: "Sales above the line. Every cost stacked below it. The dot is that week's profit.",
+    ctitle: "Weekly sales vs costs (Sat–Fri weeks, like the ledger)",
+    why: "Like Project Vend 2's profit-over-time chart, with the cost split Datawrapper recommends for several weeks at once.",
+    draw() {
+      const W = 900, H = 372, m = { l: 52, r: 16, t: 20, b: 42 };
+      const hi = Math.max(...weeks.map(w => w.rev)) * 1.1, lo = -Math.max(...weeks.map(w => w.cogs + w.fee + w.api + w.tax)) * 1.1;
+      const { svg, y } = frame(W, H, m, lo, hi, v => (v < 0 ? "−$" : "$") + Math.abs(v));
+      const bw = (W - m.l - m.r) / weeks.length, pad = bw * 0.22;
+      const parts = [["cogs", "var(--s2)", "Drinks sold (at cost)"], ["tax", "var(--muted)", "Sales tax (not our money)"], ["fee", "var(--s3)", "Visit fees"], ["api", "var(--s5)", "AI spend"]];
+      weeks.forEach((w, i) => {
+        const x0 = m.l + i * bw + pad, wd = bw - 2 * pad;
+        const g = el("g", {}, svg);
+        el("rect", { x: x0, y: y(w.rev), width: wd, height: y(0) - y(w.rev) - 1, rx: 4, fill: "var(--s1)" }, g);
+        let acc = 0;
+        for (const [k, c] of parts) {
+          if (w[k] <= 0) continue;
+          const top = y(-acc) + 1, hh = y(-(acc + w[k])) - y(-acc) - (w[k] > 0.4 ? 2 : 0);
+          el("rect", { x: x0, y: top, width: wd, height: Math.max(hh, 1.5), fill: c }, g);
+          acc += w[k];
+        }
+        el("circle", { cx: x0 + wd / 2, cy: y(w.profit), r: 5, fill: "var(--ink)", stroke: "var(--surface)", "stroke-width": 2 }, g);
+        el("text", { x: x0 + wd / 2, y: H - m.b + 16, "text-anchor": "middle" }, svg).textContent = "Wk " + w.i;
+        if (w.partial) el("text", { x: x0 + wd / 2, y: H - m.b + 29, "text-anchor": "middle" }, svg).textContent = `${w.nd} days`;
+        el("text", { x: x0 + wd / 2 + 9, y: y(w.profit) + 4, class: "lbl" }, g).textContent = $(w.profit, 0);
+        const hit = el("rect", { x: m.l + i * bw, y: m.t, width: bw, height: H - m.t - m.b, fill: "transparent" }, g);
+        hit.addEventListener("mousemove", e => showTip(e, `<b>${weekTag(w)} · from ${fmtD(days[w.ia].d)}</b>` + (w.partial ? `<div class="ev">Partial week: not comparable with a full week's total.</div>` : "") + row("Sales (ex tax)", $(w.rev), "var(--s1)") +
+          parts.map(([k, c, n]) => row(n, "−" + $(w[k]), c)).join("") + "<hr>" + row("Profit", $(w.profit)) + row("AI as share of sales", (100 * w.api / w.rev).toFixed(1) + "%")));
+        hit.addEventListener("mouseleave", hideTip);
+      });
+      legend([["var(--s1)", "Sales (ex tax)"], ...parts.map(([, c, n]) => [c, n]), ["var(--ink)", "Profit", 1]]);
+      table(["Week", "Sales", "Drinks", "Tax", "Visits", "AI", "Profit"], weeks.map(w => ["Wk " + w.i + (w.partial ? ` (${w.nd} days)` : ""), $(w.rev), $(w.cogs), $(w.tax), $(w.fee), $(w.api), $(w.profit)]));
+      return svg;
+    },
+    notes: ["Answers “was this a good week, and why?” at a glance.", "Shows that AI is the thin pink sliver. That's the honest picture, and the story too.", "v2: sales tax is grey here (it's not our money), so yellow can mean Total costs in D."],
+  },
+  brain: {
+    name: "C · The brain bill",
+    title: "The brain bill",
+    sub: "Every dollar the agent spends thinking is a dollar not spent on drinks.",
+    ctitle: "AI spend per day, against the $4 daily cap",
+    why: "Our twist. Vending-Bench plots cost per run against score; we show it day by day, with each run on hover.",
+    draw() {
+      const W = 900, H = 300, m = { l: 52, r: 16, t: 34, b: 28 };
+      const CAP = 4, hi = Math.max(1.5, ...days.map(r => r.api)) * 1.15;
+      const { svg, y } = frame(W, H, m, 0, hi, v => "$" + v.toFixed(2));
+      const x = xDays(W, m), bw = (W - m.l - m.r) / days.length * 0.62;
+      if (CAP <= hi) el("line", { x1: m.l, x2: W - m.r, y1: y(CAP), y2: y(CAP), stroke: "var(--crit)", "stroke-dasharray": "4 3" }, svg);
+      el("text", { x: W - m.r, y: m.t - 8, "text-anchor": "end", class: "lbl" }, svg).textContent = `Daily cap $${CAP} (off the top of this scale)`;
+      days.forEach((r, i) => {
+        const hh = y(0) - y(r.api);
+        el("rect", { x: x(i) - bw / 2, y: y(r.api), width: bw, height: Math.max(hh - 1, 1), rx: Math.min(3, bw / 2), fill: "var(--s5)" }, svg);
+        const hit = el("rect", { x: x(i) - bw, y: m.t, width: bw * 2, height: H - m.t - m.b, fill: "transparent" }, svg);
+        hit.addEventListener("mousemove", e => showTip(e, `<b>${r.d.toDateString()}</b>` + r.runs.map(u => row(u.p, $(u.c, 3), "var(--s5)")).join("") + "<hr>" +
+          row("Total", $(r.api, 3)) + row("Sales that day", $(r.rev)) + (r.rev ? row("AI per $1 of sales", (100 * r.api / r.rev).toFixed(1) + "¢") : "")));
+        hit.addEventListener("mouseleave", hideTip);
+      });
+      dayAxis(svg, x, H, m);
+      const thu = days.findIndex(r => r.live && r.d.getDay() === 4);
+      el("text", { x: x(thu) + 6, y: y(days[thu].api) - 6, class: "lbl" }, svg).textContent = "Weekly plan runs (Thursdays in this mock)";
+      legend([["var(--s5)", "AI spend that day (all live runs)"], ["var(--crit)", "Daily cap", 1]]);
+      table(["Day", "Runs", "AI", "Sales"], days.map(r => [fmtD(r.d), r.runs.length, $(r.api, 3), $(r.rev)]));
+      return svg;
+    },
+    notes: ["Hover shows each run that day. The real build can show the agent's one-line reason for the run too.", "Real data: ledger `tokens` rows (competition books), or `model_calls` where purpose = live."],
+  },
+};
+
+// ---------- switcher ----------
+function render(key) {
+  const v = V[key] || V.overlay;
+  S.view = V[key] ? key : "overlay";
+  document.getElementById("title").textContent = v.title;
+  document.getElementById("sub").textContent = v.sub;
+  document.querySelectorAll(".bar button").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === S.view));
+  document.getElementById("notes").innerHTML = v.notes.map(n => `<li>${n}</li>`).join("");
+  for (const id of ["dctl", "layers", "hint"]) document.getElementById(id).hidden = !v.d;
+  hideTip(); hov = null;
+  if (v.d) {
+    const lg = document.getElementById("legend");
+    lg.className = "legend lg"; lg.replaceChildren();
+    let g = null;
+    for (const [s, b] of ctl.ser) { if (s.g !== g) { g = s.g; lg.append(h("span", { cls: "gl", text: g })); } lg.append(b); }
+    lg.append(...ctl.legendExtra);
+    renderD();
+    return;
+  }
+  document.getElementById("rangecap").hidden = true;
+  document.getElementById("strip").replaceChildren();
+  document.getElementById("ctitle").textContent = v.ctitle;
+  document.getElementById("cwhy").textContent = v.why;
+  commonTiles();
+  document.getElementById("chart").replaceChildren(v.draw());
+  writeURL();
+}
+const bar = document.getElementById("bar");
+for (const k in V) { const b = document.createElement("button"); b.type = "button"; b.textContent = V[k].name; b.dataset.k = k; b.onclick = () => render(k); bar.appendChild(b); }
+buildControls();
+readURL();
+render(S.view);
+</script>
+</body>
+</html>

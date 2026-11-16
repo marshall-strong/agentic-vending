@@ -1,0 +1,1017 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Weekly Vend · mock report</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --paper: #fffdf5; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --ctx: #c3c2b7; --spark: #898781;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6;
+  --crit: #d03b3b; --good: #006300; --warn: #fab219; --banner: #fff4d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --paper: #211f19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --ctx: #4a4a47; --spark: #898781;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9;
+    --crit: #e66767; --good: #0ca30c; --banner: #3a2f10;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --paper: #211f19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --ctx: #4a4a47; --spark: #898781;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9;
+  --crit: #e66767; --good: #0ca30c; --banner: #3a2f10;
+}
+* { box-sizing: border-box; }
+html { background: var(--page); }
+body { margin: 0; color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 14px 16px 40px; }
+main { max-width: 1060px; margin: 0 auto; }
+h1, h2, h3, p { margin: 0; }
+button { font: inherit; color: inherit; }
+button:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 4px; }
+
+.banner { background: var(--banner); color: var(--ink); border-radius: 8px; padding: 7px 12px; font-size: 12.5px; margin-bottom: 14px; }
+.mast { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 10px 20px; margin-bottom: 10px; }
+.mast h1 { font-size: 15px; letter-spacing: .22em; text-transform: uppercase; font-weight: 750; }
+.mast .tag { color: var(--ink2); font-size: 12.5px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.seg { display: inline-flex; gap: 3px; background: var(--surface); border: 1px solid var(--ring); border-radius: 999px; padding: 3px; max-width: 100%; overflow-x: auto; }
+.seg button { border: 0; background: transparent; color: var(--ink2); font-size: 13px; padding: 6px 11px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.seg button:hover { background: var(--grid); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.seg.small button { font-size: 12px; padding: 4px 9px; }
+
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 14px 16px; position: relative; min-width: 0; }
+.card > h2 { font-size: 15px; font-weight: 650; }
+.card > .why { color: var(--ink2); font-size: 12.5px; margin: 1px 0 8px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 14px; margin-bottom: 14px; }
+.stack { margin-bottom: 14px; }
+
+/* newspaper */
+.paper { background: var(--paper); border: 1px solid var(--ring); border-radius: 12px; padding: 14px 18px 16px; margin-bottom: 14px; }
+.paper .dateline { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink2);
+  border-top: 3px double var(--ink); border-bottom: 1px solid var(--ink); padding: 4px 0; }
+.paper h2 { font-size: clamp(24px, 4.2vw, 36px); line-height: 1.12; font-weight: 800; margin: 12px 0 6px; letter-spacing: -.01em; text-wrap: balance; }
+.paper .deck { color: var(--ink2); font-size: 15px; max-width: 70ch; }
+
+/* figures */
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.hero { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: end; justify-content: space-between; }
+.hero .v { font-size: 56px; line-height: 1; font-weight: 750; letter-spacing: -.02em; }
+.hero .acct { color: var(--ink2); font-size: 13px; max-width: 46ch; }
+.hero .acct b { color: var(--ink); font-weight: 650; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+.tile .k { color: var(--ink2); font-size: 12px; }
+.tile .v { font-size: 26px; font-weight: 700; line-height: 1.15; }
+.delta { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.delta.good { color: var(--good); } .delta.bad { color: var(--crit); } .delta.flat { color: var(--ink2); }
+.delta i { font-style: normal; font-weight: 400; color: var(--muted); }
+.tile .n { color: var(--muted); font-size: 11.5px; min-height: 16px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg.spark { display: inline-block; width: auto; max-width: 100%; }
+svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .lbl { fill: var(--ink2); font-size: 11.5px; font-weight: 600; }
+svg .val { fill: var(--ink); font-size: 12px; font-weight: 650; }
+svg .hit { fill: transparent; cursor: default; }
+svg .bar:hover, svg .hit:hover + .bar { opacity: .85; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink2); margin: 2px 0 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { display: inline-block; width: 12px; height: 10px; border-radius: 3px; }
+.legend i.line { height: 3px; width: 14px; border-radius: 2px; }
+.legend i.dot { width: 9px; height: 9px; border-radius: 50%; }
+.legend i.dia { width: 8px; height: 8px; border-radius: 1px; transform: rotate(45deg); }
+.tip { position: fixed; pointer-events: none; z-index: 20; background: var(--surface); color: var(--ink); border: 1px solid var(--ring);
+  box-shadow: 0 4px 16px rgba(0,0,0,.18); border-radius: 8px; padding: 8px 10px; font-size: 12px; min-width: 180px; max-width: 260px; display: none; }
+.tip b.t { display: block; margin-bottom: 4px; }
+.tip .row { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
+.tip .row .a { color: var(--ink2); display: inline-flex; gap: 5px; align-items: center; }
+.tip .row .b { font-weight: 650; }
+.tip .sw { display: inline-block; width: 10px; height: 3px; border-radius: 2px; }
+.tip hr { border: 0; border-top: 1px solid var(--grid); margin: 5px 0; }
+.tip .note { color: var(--ink2); margin-top: 3px; }
+
+details { margin-top: 10px; font-size: 12.5px; }
+summary { cursor: pointer; color: var(--ink2); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--ink2); font-size: 12px; }
+.tablewrap { overflow-x: auto; }
+
+/* awards */
+.awards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-top: 8px; }
+.award { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; }
+.badge { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: var(--ink);
+  background: color-mix(in srgb, var(--hue) 24%, transparent); box-shadow: inset 0 0 0 2px var(--hue); }
+.badge svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.award.locked .badge { background: transparent; box-shadow: inset 0 0 0 2px var(--axis); color: var(--muted); }
+.award.locked .a-t { color: var(--muted); }
+.a-k { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink2); }
+.a-t { font-weight: 650; line-height: 1.25; }
+.a-d { color: var(--ink2); font-size: 12px; }
+
+/* advisor */
+.advice { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; }
+.advice li { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: start; }
+.chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase;
+  border-radius: 999px; padding: 2px 8px 2px 6px; box-shadow: inset 0 0 0 1px var(--axis); color: var(--ink); white-space: nowrap; justify-content: center; }
+.chip .g { font-size: 10px; }
+.chip.act .g { color: var(--crit); } .chip.watch .g { color: var(--warn); } .chip.good .g { color: var(--good); } .chip.note .g { color: var(--muted); }
+.advice .a-title { font-weight: 650; }
+.advice .a-body { color: var(--ink2); font-size: 13px; }
+
+/* shelf */
+.shelf th button { background: none; border: 0; padding: 0; cursor: pointer; font-weight: 600; color: inherit; font-size: 12px; }
+.shelf th button[aria-pressed="true"] { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.shelf td.name { min-width: 150px; }
+.shelf .id { color: var(--muted); font-size: 11.5px; margin-right: 6px; }
+.shelf .barcell { width: 190px; min-width: 120px; }
+.barcell .b { display: flex; align-items: center; gap: 8px; }
+.barcell .track { flex: 1; height: 8px; position: relative; }
+.barcell .fill { height: 8px; border-radius: 0 4px 4px 0; background: var(--s1); min-width: 0; }
+.shelf .chips { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.chip.sm { font-size: 10.5px; padding: 1px 7px 1px 5px; text-transform: none; letter-spacing: 0; }
+
+/* goals */
+.goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px 22px; margin-top: 8px; }
+.goal .gh { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.goal .gt { font-weight: 650; }
+.goal .gs { font-size: 12px; color: var(--ink2); white-space: nowrap; }
+.goal .gs b { color: var(--ink); }
+.goal .gd { font-size: 12px; color: var(--muted); }
+.meter { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--s1) 22%, transparent); margin: 5px 0 3px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--s1); border-radius: 4px; }
+.meter.done i { background: var(--s1); }
+.new { font-size: 10px; font-weight: 750; letter-spacing: .08em; background: var(--ink); color: var(--surface); border-radius: 4px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
+
+/* digest */
+.digest pre { margin: 8px 0 0; padding: 10px 12px; background: var(--page); border: 1px solid var(--ring); border-radius: 8px; overflow: auto; max-height: 460px;
+  font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--ink); white-space: pre; }
+.digest .bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 8px; }
+.digest .meta { color: var(--ink2); font-size: 12px; }
+.digest .copy { border: 1px solid var(--ring); background: var(--surface); border-radius: 999px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+.digest > summary { font-size: 15px; font-weight: 650; color: var(--ink); }
+.foot { color: var(--muted); font-size: 12px; margin-top: 16px; }
+@media (prefers-reduced-motion: no-preference) { .new { animation: pop .5s ease-out; } @keyframes pop { from { transform: scale(.6); opacity: 0; } } }
+@media (max-width: 560px) { .hero .v { font-size: 44px; } .advice li { grid-template-columns: 1fr; gap: 4px; } }
+</style>
+</head>
+<body>
+<main id="app">
+<noscript>This report needs JavaScript to build its tables and charts.</noscript>
+</main>
+
+<script>
+"use strict";
+/* =====================================================================
+   MODEL  (pure data + rules; no DOM). Everything below is MOCK data.
+   The money model follows the earlier money_chart_prototype: sales tax
+   8% inside the price, drinks costed when sold, $25 midweek visits,
+   API spend per run, same seeded stream for daily demand and API runs.
+   New here: 20 slots, per-slot price/cost/stock, so sales have a shelf.
+   ===================================================================== */
+const DAY = 864e5;
+const mkRng = seed => { let s = seed; return () => (s = (s * 16807) % 2147483647) / 2147483647; };
+// Weeks are the ledger's Saturday-Friday weeks (vending/ledger.py WEEK_STARTS = 5; the free Friday restock is the
+// weekly reset). The competition starts Thu 3 Dec and runs 9 weeks (63 days, to Wed 3 Feb), so it spans 10 ledger
+// weeks: Week 1 is Thu-Fri (2 days) and Week 10 is Sat-Wed (5 days). Both are "partial" weeks.
+const OPENING = Date.UTC(2026, 10, 27), START = Date.UTC(2026, 11, 3), SEASON_DAYS = 63, WEEKS = 10;
+const OPEN_CASH = 600, TAX = 0.08;
+const isoOf = t => new Date(t).toISOString().slice(0, 10);
+const dowOf = t => new Date(t).getUTCDay();
+const weekStartOf = t => t - ((dowOf(t) + 1) % 7) * DAY;                       // the Saturday on or before t
+const weekNo = t => Math.round((weekStartOf(t) - weekStartOf(START)) / (7 * DAY)) + 1;
+
+// id = row*10 + column on the real machine. Names, prices, costs and popularity are invented.
+const SLOTS = [
+  { id: "11", name: "Fizz Cola",        price: 1.75, cost: 0.62, w: 12,  g: -0.2 },
+  { id: "12", name: "Diet Fizz",        price: 1.75, cost: 0.62, w: 8,   g: 0.1 },
+  { id: "13", name: "Lemon-Lime Spark", price: 1.75, cost: 0.62, w: 7,   g: 0 },
+  { id: "14", name: "Root Beer Rumble", price: 1.75, cost: 0.65, w: 4,   g: -0.4 },
+  { id: "21", name: "Orange Burst",     price: 1.75, cost: 0.62, w: 4,   g: 0 },
+  { id: "22", name: "Ginger Snap Ale",  price: 2.05, cost: 0.80, w: 2,   g: 0.2 },
+  { id: "23", name: "Peach Iced Tea",   price: 2.05, cost: 0.85, w: 5,   g: 0.6 },
+  { id: "24", name: "Lemon Iced Tea",   price: 2.05, cost: 0.85, w: 4,   g: 0 },
+  { id: "31", name: "Spring Water",     price: 1.50, cost: 0.35, w: 9,   g: 0.1 },
+  { id: "32", name: "Sparkling Water",  price: 1.75, cost: 0.55, w: 5,   g: 0.9 },
+  { id: "33", name: "Berry Sparkler",   price: 2.05, cost: 0.90, w: 2.5, g: -0.3 },
+  { id: "34", name: "Grape Fizz",       price: 1.75, cost: 0.62, w: 2.5, g: -0.3 },
+  { id: "41", name: "Blue Cooler",      price: 2.25, cost: 1.00, w: 6,   g: 0 },
+  { id: "42", name: "Red Cooler",       price: 2.25, cost: 1.00, w: 4,   g: -0.2 },
+  { id: "43", name: "Cold Brew Can",    price: 2.75, cost: 1.40, w: 4,   g: 1.3 },
+  { id: "44", name: "Energy Zap",       price: 2.75, cost: 1.35, w: 6,   g: 0.4 },
+  { id: "51", name: "Apple Juice",      price: 2.05, cost: 1.00, w: 2,   g: -0.3 },
+  { id: "52", name: "Orange Juice",     price: 2.25, cost: 1.10, w: 2.5, g: 0.3 },
+  { id: "53", name: "Coconut Water",    price: 2.75, cost: 1.50, w: 1,   g: -0.6 },
+  { id: "54", name: "Cream Soda",       price: 1.75, cost: 0.65, w: 1.5, g: 0 },
+];
+const NS = SLOTS.length;
+const BASE_DEMAND = [3, 6, 7, 7, 8, 8, 3];                 // by weekday, Sun..Sat: weekends quiet
+const MIDWEEK = new Set(["2026-12-08", "2026-12-16", "2027-01-13"]);
+// Mock demand shape: launch ramp, then a winter-break dip, then classes resume.
+function demandMult(key) {
+  if (key < "2026-12-06") return 0.5;
+  if (key < "2026-12-10") return 0.7;
+  if (key >= "2026-12-19" && key <= "2026-12-23") return 0.75;
+  if (key >= "2026-12-24" && key <= "2027-01-02") return 0.3;
+  if (key >= "2027-01-03" && key <= "2027-01-10") return 0.6;
+  return 1;
+}
+
+const DAYS = [];
+(function build() {
+  const rnd = mkRng(7), rnd2 = mkRng(4242);                // rnd: same stream as the money prototype
+  const stock = SLOTS.map(() => 0), par = SLOTS.map(() => 0);
+  const totW = SLOTS.reduce((a, s) => a + s.w, 0);
+  SLOTS.forEach((s, i) => { par[i] = Math.max(3, Math.round(1.8 * 42 * s.w / totW)); });
+  let cash = OPEN_CASH, taxOwed = 0;
+  const cum = { rev: 0, takings: 0, cogs: 0, visits: 0, tax: 0, api: 0 };
+  const fillTo = want => {
+    let cost = 0, n = 0, slots = 0;
+    SLOTS.forEach((s, i) => { if (want(i) && stock[i] < par[i]) { const q = par[i] - stock[i]; stock[i] += q; cost += q * s.cost; n += q; slots++; } });
+    return { cost, n, slots };
+  };
+  for (let t = OPENING; t < START + SEASON_DAYS * DAY; t += DAY) {
+    const key = isoOf(t), dow = dowOf(t), live = t >= START;
+    const week = live ? weekNo(t) : 0;
+    const ev = [], runs = [];
+    const stockStart = stock.map(q => q > 0);
+    const sold = SLOTS.map(() => 0);
+    let buy = 0, fee = 0, api = 0;
+    if (key === "2026-12-02") { const r = fillTo(() => true); buy += r.cost; ev.push({ k: "fill", txt: `Day-one fill: ${r.n} drinks, $${r.cost.toFixed(2)}` }); }
+    if (live) {
+      const f = (t - START) / (62 * DAY);
+      const n = Math.round(BASE_DEMAND[dow] * (0.7 + rnd() * 0.6) * demandMult(key));
+      for (let k = 0; k < n; k++) {
+        const ws = SLOTS.map((s, i) => (stock[i] > 0 ? s.w * Math.max(0.1, 1 + s.g * f) : 0));
+        const tot = ws.reduce((a, b) => a + b, 0);
+        if (!tot) break;
+        let x = rnd2() * tot, i = 0;
+        for (; i < NS; i++) { if (ws[i] > 0) { x -= ws[i]; if (x <= 0) break; } }
+        if (i >= NS) i = ws.lastIndexOf(Math.max(...ws));
+        stock[i]--; sold[i]++;
+      }
+    }
+    const emptyEnd = stock.map(q => q === 0);               // empty at close of trading, before any restock
+    if (live && dow === 5 && t > START) {                   // Friday: free visit, order-up-to par from the last 7 days
+      const lastWeek = DAYS.filter(d => d.live && d.t >= t - 7 * DAY);
+      if (lastWeek.length >= 7) SLOTS.forEach((s, i) => { par[i] = Math.max(3, Math.min(12, Math.ceil(1.6 * lastWeek.reduce((a, d) => a + d.sold[i], 0)))); });
+      const r = fillTo(() => true); buy += r.cost;
+      ev.push({ k: "fri", txt: `Friday restock: ${r.n} drinks, $${r.cost.toFixed(2)} (free visit)` });
+    }
+    if (MIDWEEK.has(key)) {
+      fee = 25;
+      const r = fillTo(i => stock[i] <= 1); buy += r.cost;
+      ev.push({ k: "mid", txt: r.n ? `Midweek visit: $25 fee + ${r.slots} slot${r.slots === 1 ? "" : "s"} topped up ($${r.cost.toFixed(2)})` : "Midweek visit: $25 fee, no restock needed" });
+    }
+    if (t >= OPENING) {                                     // API: same shape as the money prototype
+      const n = live ? 3 : 1;
+      for (let i = 0; i < n; i++) { const c = +(0.03 + rnd() * 0.09).toFixed(3); api += c; runs.push({ p: "check-in", c }); }
+      if (dow === 4) { const c = +(0.55 + rnd() * 0.7).toFixed(3); api += c; runs.push({ p: "weekly plan", c }); }
+      if (MIDWEEK.has(key)) { api += 0.41; runs.push({ p: "midweek decision", c: 0.41 }); }
+    }
+    const units = sold.reduce((a, b) => a + b, 0);
+    const takings = sold.reduce((a, q, i) => a + q * SLOTS[i].price, 0);
+    const tax = takings * 8 / 108, rev = takings - tax;
+    const cogs = sold.reduce((a, q, i) => a + q * SLOTS[i].cost, 0);
+    cash += takings - fee - api - buy; taxOwed += tax;
+    cum.takings += takings; cum.rev += rev; cum.cogs += cogs; cum.visits += fee; cum.tax += tax; cum.api += api;
+    const inv = stock.reduce((a, q, i) => a + q * SLOTS[i].cost, 0);
+    const spendable = cash - taxOwed;
+    DAYS.push({ t, key, dow, live, week, sold, stockStart, emptyEnd, units, takings, tax, rev, cogs, fee, api, buy, runs, ev,
+      spendable, inv, worth: spendable + inv, profit: cum.rev - cum.cogs - cum.visits - cum.api, cum: { ...cum } });
+  }
+})();
+
+// ---- roll-ups --------------------------------------------------------
+// SETUP = AI spend from the ledger opening (27 Nov) to launch. It is competition money (the ledger is open), so it
+// counts against the season. Pre-competition dev/test API spend is NOT in this file at all.
+const SETUP = (() => { const d = DAYS.filter(x => !x.live); return { api: d.reduce((a, x) => a + x.api, 0), buy: d.reduce((a, x) => a + x.buy, 0), runs: d.reduce((a, x) => a + x.runs.length, 0) }; })();
+function rollup(days, wk) {
+  const sum = k => days.reduce((a, d) => a + d[k], 0);
+  const p = { n: wk, days, nd: days.length, partial: days.length < 7, start: days[0].t, end: days[days.length - 1].t,
+    units: sum("units"), takings: sum("takings"), tax: sum("tax"), rev: sum("rev"), cogs: sum("cogs"), fee: sum("fee"), api: sum("api"), buy: sum("buy") };
+  p.profit = p.rev - p.cogs - p.fee - p.api;
+  p.slot = SLOTS.map((s, i) => {
+    const u = days.reduce((a, d) => a + d.sold[i], 0), rv = u * s.price * 100 / 108;
+    return { units: u, rev: rv, profit: rv - u * s.cost, emptyDays: days.filter(d => d.emptyEnd[i]).length };
+  });
+  const last = days[days.length - 1];
+  Object.assign(p, { cumProfit: last.profit, spendable: last.spendable, inv: last.inv, worth: last.worth });
+  return p;
+}
+const P = [null];
+for (let w = 1; w <= WEEKS; w++) P.push(rollup(DAYS.filter(d => d.week === w), w));
+// season = weeks 1..upto; AI spend from the ledger opening to launch counts against the season, as in the ledger
+function seasonOf(upto) {
+  const p = rollup(DAYS.filter(d => d.live && d.week <= upto), 0);
+  p.api += SETUP.api; p.profit -= SETUP.api; p.setupApi = SETUP.api; p.cumProfit = P[upto].cumProfit;
+  return p;
+}
+const isFull = p => p.nd === 7;                               // a whole Sat-Fri week
+const weekName = p => `Week ${p.n}` + (p.partial ? ` · ${p.nd} days` : "");
+
+// Payback: the first day cash (after the sales-tax set-aside) is back to at least the $600 starting money, after
+// the day-one fill took it below. (Net profit crossing $0 would say nothing: it is positive from the first sale.)
+const PAYBACK = (() => { const d = DAYS.find(x => x.live && x.spendable >= OPEN_CASH); return d ? { t: d.t, week: d.week, cash: d.spendable } : null; })();
+const paidBackBy = endT => (PAYBACK && PAYBACK.t <= endT ? PAYBACK : null);
+
+// Fair week-over-week comparison. Two full weeks: compare totals. Otherwise compare only the weekdays both weeks
+// have ("like for like"), and when fewer than 3 weekdays are shared say "partial week" instead of a % change.
+function compareWeeks(p, prev) {
+  if (!prev) return { kind: "none" };
+  if (isFull(p) && isFull(prev)) return { kind: "full", cur: p, prev, n: 7, label: "last week" };
+  const shared = [0, 1, 2, 3, 4, 5, 6].filter(dw => p.days.some(d => d.dow === dw) && prev.days.some(d => d.dow === dw));
+  if (shared.length < 3) {
+    const short = p.nd <= prev.nd ? p : prev;
+    return { kind: "partial", n: shared.length, note: `${weekName(short).replace(" · ", ", ")} is too short to compare` };
+  }
+  const cd = p.days.filter(d => shared.includes(d.dow)), pd = prev.days.filter(d => shared.includes(d.dow));
+  return { kind: "like", cur: rollup(cd, p.n), prev: rollup(pd, prev.n), n: shared.length, label: `the same ${shared.length} days last week` };
+}
+function zeroStreak(i, endT) {                               // trailing live days with stock on the shelf and no sale
+  let n = 0;
+  for (let k = DAYS.length - 1; k >= 0; k--) {
+    const d = DAYS[k];
+    if (d.t > endT) continue;
+    if (!d.live || d.sold[i] > 0 || !d.stockStart[i]) break;
+    n++;
+  }
+  return n;
+}
+
+// ---- views --------------------------------------------------------
+// sel = 1..10 for a ledger week, 0 for "season so far" (all 10 ledger weeks = the 9-week season)
+function viewFor(sel) {
+  const season = sel === 0, upto = season ? WEEKS : sel;
+  const weeks = P.slice(1, upto + 1);
+  const p = season ? seasonOf(upto) : P[sel];
+  const prev = season ? null : (P[sel - 1] || null);
+  const endT = P[upto].end;
+  const streak = SLOTS.map((s, i) => zeroStreak(i, endT));
+  const cmp = season ? { kind: "none" } : compareWeeks(p, prev);
+  return { sel, season, upto, weeks, p, prev, cmp, n: sel, streak, last: P[upto], paid: paidBackBy(endT) };
+}
+const ratio = (a, b) => (b > 0 ? a / b : null);
+const profitPerApi = p => ratio(p.profit, p.api);
+const slotsRanked = (p, key = "units") => SLOTS.map((s, i) => ({ s, i, ...p.slot[i] })).sort((a, b) => b[key] - a[key] || b.rev - a.rev || a.i - b.i);
+const bestDayOf = p => p.days.reduce((b, d) => (d.rev > b.rev ? d : b), p.days[0]);
+const quietDayOf = p => p.days.reduce((b, d) => (d.rev < b.rev ? d : b), p.days[0]);
+const avgMargin = p => (p.units ? (p.rev - p.cogs) / p.units : 0);
+const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], WDL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const LEDGER_ORDER = [6, 0, 1, 2, 3, 4, 5];                  // Sat..Fri
+const money = (v, dp = 2) => { const r = Math.round(v * 10 ** dp); return (r < 0 ? "−$" : "$") + (Math.abs(r) / 10 ** dp).toFixed(dp); };
+const dShort = t => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const dLong = t => new Date(t).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+const dRange = (a, b) => `${dShort(a)} – ${dShort(b)}, ${new Date(b).getUTCFullYear()}`;
+const plural = (n, one, many) => (n === 1 ? one : many);
+const names = (arr, k = 2) => arr.slice(0, k).join(", ") + (arr.length > k ? ` and ${arr.length - k} more` : "");
+const r2 = v => Math.round(v * 100) / 100;
+
+// ---- the newspaper headline: first matching rule wins -------------------------------
+function makeHeadline(v) {
+  const { p, prev } = v, n = v.n;
+  const top = slotsRanked(p)[0], empties = p.slot.filter(x => x.emptyDays > 0).length;
+  const deckBits = [];
+  if (top && top.units > 0) deckBits.push(`${top.s.name} led the shelf with ${top.units} ${plural(top.units, "drink", "drinks")}.`);
+  if (empties) deckBits.push(`${empties} ${plural(empties, "slot", "slots")} sold out.`);
+  deckBits.push(`The AI cost ${money(p.api)} to run.`);
+  const deck = deckBits.join(" ");
+  if (v.season) {
+    // best / toughest compare whole weeks only: a 2-day week would always look like the toughest
+    const fw = v.weeks.filter(isFull);
+    const best = fw.reduce((b, w) => (w.profit > b.profit ? w : b)), worst = fw.reduce((b, w) => (w.profit < b.profit ? w : b));
+    const fp = fw.find(w => w.profit > 0);
+    return { h: `Season wrap: ${money(p.profit)} profit from ${p.units} drinks`,
+      deck: `Best full week was Week ${best.n} (${money(best.profit)}); toughest was Week ${worst.n} (${money(worst.profit)}). ` + (fp ? `First profitable full week: Week ${fp.n}. ` : "") +
+        (v.paid ? `Paid back on ${dLong(v.paid.t)}. ` : "Not yet paid back. ") + `The AI cost ${money(p.api)} in total, ${money(SETUP.api)} of it from the ledger opening (27 Nov) to launch.` };
+  }
+  // Week-over-week % only on a fair basis (see compareWeeks): full vs full, or the same weekdays; never 2 days vs 7.
+  const c = v.cmp, comparable = c.kind === "full" || c.kind === "like";
+  const chg = comparable && c.prev.rev > 0 ? (c.cur.rev - c.prev.rev) / c.prev.rev : null;
+  const vsTxt = c.kind === "like" ? `the same ${c.n} days last week` : "last week";
+  const prevFull = P.slice(1, n).filter(isFull);
+  const firstProfit = isFull(p) && p.profit > 0 && prevFull.every(q => q.profit <= 0);   // a 2-day week doesn't count
+  const paidNow = !!(PAYBACK && PAYBACK.week === n);
+  // why did sales fall? compare weekend and weekday revenue over the same weekdays last week
+  let dipWhy = "";
+  if (comparable && chg !== null && chg < 0) {
+    const sumBy = (days, wkend) => days.filter(d => (d.dow === 0 || d.dow === 6) === wkend).reduce((a, d) => a + d.rev, 0);
+    const cd = c.cur.days, pd = c.prev.days;
+    const wkndChg = sumBy(pd, true) > 0 && sumBy(cd, true) > 0 ? sumBy(cd, true) / sumBy(pd, true) - 1 : null, wkdyChg = sumBy(pd, false) > 0 && sumBy(cd, false) > 0 ? sumBy(cd, false) / sumBy(pd, false) - 1 : null;
+    const pairs = cd.map(d => ({ d, drop: pd.find(x => x.dow === d.dow).rev - d.rev }));
+    const daysDown = pairs.filter(x => x.drop > 0).length;
+    const worstDay = pairs.sort((a, b) => b.drop - a.drop)[0].d;
+    dipWhy = wkndChg !== null && wkdyChg !== null && wkndChg <= wkdyChg - 0.15 ? "the weekend goes quiet" : daysDown >= Math.max(3, c.n - 1) ? "nearly every day slows" : `${WDL[worstDay.dow]} falls flat`;
+  }
+  const qd = quietDayOf(p);
+  const prevBest = prevFull.reduce((m, q) => Math.max(m, q.profit), -Infinity);
+  const partialNote = p.partial ? ` (${p.nd}-day week)` : "";
+  if (firstProfit) return { h: `First profit! Week ${n} lands ${money(p.profit)} in the black`, deck: (prev && isFull(prev) ? `Last week: ${money(prev.profit)}. ` : "") + deck };
+  if (paidNow) return { h: `Paid back! Cash is back to $${OPEN_CASH} on ${dLong(PAYBACK.t)}`, deck: `After the sales-tax set-aside, spendable cash is ${money(PAYBACK.cash)}. Week profit ${money(p.profit)}${partialNote}. ` + deck };
+  if (p.profit < 0) {
+    const cause = p.fee > 0 ? `the ${money(p.fee, 0)} visit fee outweighed ${money(p.rev - p.cogs)} of margin` : `margin of ${money(p.rev - p.cogs)} did not cover costs`;
+    return { h: `In the red: Week ${n}${partialNote} ends ${money(Math.abs(p.profit))} short`, deck: `Why: ${cause}. ` + deck };
+  }
+  if (chg !== null && chg <= -0.15) return { h: `Sales dip ${Math.round(-chg * 100)}% as ${dipWhy}`, deck: `${money(c.cur.rev)} in sales vs ${money(c.prev.rev)} over ${vsTxt}${c.kind === "like" ? " (a like-for-like check, because this is a partial week)" : ""}; quietest day ${dLong(qd.t)}. ` + deck };
+  if (chg !== null && chg >= 0.15) return { h: `Sales jump ${Math.round(chg * 100)}% ${c.kind === "like" ? `on ${vsTxt}` : `to ${money(p.rev)}`}`, deck: `Best day: ${dLong(bestDayOf(p).t)} at ${money(bestDayOf(p).rev)}. ` + (c.kind === "like" ? `${money(c.cur.rev)} vs ${money(c.prev.rev)} over the same days; partial week. ` : "") + deck };
+  if (n >= 3 && isFull(p) && p.profit > prevBest) return { h: `Best week yet: ${money(p.profit)} profit`, deck };
+  if (n === 1) return { h: `Doors open: ${p.units} drinks sold in ${p.nd} days, ${money(p.profit)} profit`, deck: `Week 1 is a short week (Thu–Fri); the ledger week runs Saturday to Friday. ` + deck };
+  if (p.partial) return { h: `Short week (${p.nd} days): ${p.units} drinks sold, ${money(p.profit)} profit`, deck: `Not comparable with a full week's total. ` + deck };
+  return { h: `Steady week: ${p.units} drinks sold, ${money(p.profit)} profit`, deck };
+}
+
+// ---- awards -------------------------------------------------------
+function makeAwards(v) {
+  const { p, prev, n } = v, out = [];
+  const ranked = slotsRanked(p);
+  const top = ranked[0];
+  out.push(top.units > 0
+    ? { code: "best_seller", icon: "star", hue: "--s4", kind: "Best seller", state: "earned", title: top.s.name, detail: `${top.units} ${plural(top.units, "drink", "drinks")} · slot ${top.s.id}` }
+    : { code: "best_seller", icon: "star", hue: "--s4", kind: "Best seller", state: "locked", title: "Nothing sold", detail: "" });
+  const earner = slotsRanked(p, "profit")[0];
+  out.push({ code: "top_earner", icon: "coin", hue: "--s6", kind: "Top earner", state: "earned", title: earner.s.name, detail: `${money(earner.profit)} profit${earner.i !== top.i ? " (not the best seller)" : ""}` });
+  // most improved: week = vs last week on a fair basis (full vs full, or the same weekdays);
+  // season = last 3 full weeks vs first 3 full weeks (per-week average)
+  let gains;
+  const mi = (state, title, detail = "") => ({ code: "most_improved", icon: "trend", hue: "--s3", kind: "Most improved", state, title, detail });
+  const c = v.cmp;
+  if (v.season) {
+    const fw = P.slice(1).filter(isFull), a = fw.slice(0, 3), b = fw.slice(-3);
+    gains = SLOTS.map((s, i) => ({ s, d: b.reduce((x, q) => x + q.slot[i].units, 0) / 3 - a.reduce((x, q) => x + q.slot[i].units, 0) / 3 })).sort((x, y) => y.d - x.d);
+    const g = gains[0];
+    out.push(g.d >= 0.5 ? mi("earned", g.s.name, `+${g.d.toFixed(1)} drinks/wk, last 3 full wks vs first 3`) : mi("locked", "No big climbers"));
+  } else if (c.kind === "full" || c.kind === "like") {
+    gains = SLOTS.map((s, i) => ({ s, i, d: c.cur.slot[i].units - c.prev.slot[i].units })).sort((x, y) => y.d - x.d);
+    const g = gains[0], need = Math.max(1, Math.round(2 * c.n / 7));
+    out.push(g.d >= need ? mi("earned", g.s.name, `+${g.d} vs ${c.label} (${c.prev.slot[g.i].units} → ${c.cur.slot[g.i].units})`) : mi("locked", `No slot gained ${need}+`));
+  } else if (c.kind === "partial") out.push(mi("locked", "Partial week", "Too few shared days to compare"));
+  else out.push(mi("locked", "Needs a prior week"));
+  if (v.season) {                                           // season: which slot ran dry in the most weeks
+    const cnt = SLOTS.map((s, i) => ({ s, k: v.weeks.filter(w => w.slot[i].emptyDays > 0).length })).sort((a, b) => b.k - a.k)[0];
+    out.push(cnt.k > 0 ? { code: "sold_out", icon: "box", hue: "--s2", kind: "Sell-out", state: "earned", title: cnt.s.name, detail: `ran dry in ${cnt.k} of ${WEEKS} ledger weeks` }
+      : { code: "sold_out", icon: "box", hue: "--s2", kind: "Sell-out", state: "locked", title: "No slot ran dry", detail: "" });
+  } else {
+    const so = p.slot.map((x, i) => ({ i, d: x.emptyDays })).filter(x => x.d > 0).sort((a, b) => b.d - a.d);
+    out.push(so.length ? { code: "sold_out", icon: "box", hue: "--s2", kind: "Sell-out", state: "earned", title: names(so.map(x => SLOTS[x.i].name), 2), detail: `empty up to ${so[0].d} ${plural(so[0].d, "day", "days")}` }
+      : { code: "sold_out", icon: "box", hue: "--s2", kind: "Sell-out", state: "locked", title: "No slot ran dry", detail: "" });
+  }
+  // brain bill and first profit compare whole weeks only: a 2-day week is trivially cheap and easy to win
+  const cb = (state, title, detail = "") => ({ code: "cheap_brain", icon: "coin", hue: "--s5", kind: "Cheapest brain bill", state, title, detail });
+  if (v.season) {
+    const c = v.weeks.filter(isFull).reduce((b, w) => (w.api < b.api ? w : b));
+    out.push(cb("earned", `Week ${c.n}: ${money(c.api)}`, "lowest AI spend of a full week"));
+  } else {
+    const so_far = P.slice(1, n + 1).filter(isFull), c = so_far.length ? so_far.reduce((b, w) => (w.api < b.api ? w : b)) : null;
+    out.push(!isFull(p) ? cb("locked", "Partial week", "Needs a full week")
+      : so_far.length < 2 ? cb("locked", "Needs 2 full weeks")
+      : c.n === n ? cb("earned", money(p.api), `lowest of ${so_far.length} full weeks so far`)
+      : cb("locked", `Week ${c.n} holds it`, `${money(c.api)} vs ${money(p.api)} now`));
+  }
+  const fp = v.weeks.filter(isFull).find(w => w.profit > 0);
+  out.push(!fp ? { code: "first_profit", icon: "ribbon", hue: "--s1", kind: "First profitable week", state: "locked", title: "Not yet", detail: p.partial && !v.season ? "Full weeks only" : "" }
+    : { code: "first_profit", icon: "ribbon", hue: "--s1", kind: "First profitable week", state: "earned", title: `Week ${fp.n}`, detail: `${money(fp.profit)}${!v.season && fp.n === n ? " · won this week" : !v.season ? " · won earlier" : ""}` });
+  const bd = bestDayOf(v.season ? { days: DAYS.filter(d => d.live) } : p);
+  out.push({ code: "best_day", icon: "bolt", hue: "--s7", kind: "Best day", state: "earned", title: dLong(bd.t), detail: `${money(bd.rev)} · ${bd.units} drinks` });
+  const worst = ranked[ranked.length - 1];
+  out.push({ code: "wallflower", icon: "snow", hue: "--s1", kind: "Wallflower", state: "earned", title: worst.s.name, detail: `${worst.units} ${plural(worst.units, "drink", "drinks")} · slot ${worst.s.id}` });
+  return out;
+}
+
+// ---- advisor: each rule looks at the numbers and may fire; code + data go into the digest too --------
+function makeAdvice(v) {
+  const { p, prev, n } = v, out = [];
+  const cold = SLOTS.map((s, i) => ({ s, d: v.streak[i] })).filter(x => x.d >= 5).sort((a, b) => b.d - a.d);
+  if (cold.length) out.push({ code: "slot_cold", level: "watch", title: `${cold.length} ${plural(cold.length, "slot has", "slots have")} not sold in 5+ days`,
+    body: `${names(cold.map(x => `${x.s.name} (${x.d} days)`), 3)}. They sit on the shelf tying up stock; a free Friday visit is the place to swap them.`,
+    data: { slots: cold.map(x => x.s.id), max_days: cold[0].d } });
+  const dry = p.slot.map((x, i) => ({ s: SLOTS[i], d: x.emptyDays })).filter(x => x.d >= 2).sort((a, b) => b.d - a.d);
+  if (dry.length) out.push({ code: "slot_empty", level: dry[0].d >= 3 ? "act" : "watch", title: `${dry.length} ${plural(dry.length, "slot", "slots")} sat empty for 2+ days`,
+    body: `${names(dry.map(x => `${x.s.name} (${x.d} days)`), 3)}. A sold-out slot cannot sell. Order-up-to levels for these should go up.`,
+    data: { slots: dry.map(x => ({ slot: x.s.id, days: x.d })) } });
+  if (p.api > 0) {
+    const share = p.profit > 0 ? p.api / p.profit : null;
+    // A short week still carries a whole planning run, so its AI share is not comparable: soften the level and say so.
+    const short = !v.season && p.partial, shortNote = short ? ` This is a ${p.nd}-day week that still holds a planning run, so it overstates the share.` : "";
+    if (share === null) out.push({ code: "api_no_profit", level: short ? "watch" : "act", title: "AI spend with no profit behind it", body: `The AI cost ${money(p.api)} and the ${short ? `${p.nd} days` : "week"} made ${money(p.profit)}.${shortNote}`, data: { api: r2(p.api), profit: r2(p.profit), partial_week: short } });
+    else if (share > 0.15) out.push({ code: "api_share_high", level: short ? "note" : "watch", title: `The AI took ${Math.round(share * 100)}% of the profit`, body: `${money(p.api)} on AI against ${money(p.profit)} profit. ${short ? "" : "Fewer or shorter runs would keep more of it."}${shortNote}`.replace(/\s+/g, " ").trim(), data: { api_pct_of_profit: Math.round(share * 100), partial_week: short } });
+    else out.push({ code: "api_share_ok", level: "good", title: `Every AI dollar returned ${money(p.profit / p.api, 0)}`, body: `${money(p.api)} of AI spend against ${money(p.profit)} profit (${Math.round(share * 100)}% of it).`, data: { profit_per_api: r2(p.profit / p.api) } });
+  }
+  if (p.fee > 0) {
+    const m = avgMargin(p), k = m > 0 ? Math.ceil(p.fee / m) : null;
+    out.push({ code: "visit_fee", level: "note", title: `Visit fees cost ${money(p.fee, 0)} this ${v.season ? "season" : "week"}`,
+      body: k ? `At ${money(m)} margin per drink, that is ${k} drinks just to pay for the visits. Free Friday visits are cheaper.` : `No margin to set it against.`, data: { fee: p.fee, drinks_to_cover: k } });
+  }
+  const avgM = avgMargin(p);
+  if (avgM > 0 && (v.season || p.nd >= 4)) {                // a 2-3 day week is too little sales to call a slot slow
+    const med = [...p.slot.map(x => x.units)].sort((a, b) => a - b)[NS >> 1];
+    const gem = SLOTS.map((s, i) => ({ s, m: p.slot[i].units ? p.slot[i].profit / p.slot[i].units : s.price * 100 / 108 - s.cost, u: p.slot[i].units }))
+      .filter(x => x.m >= 1.3 * avgM && x.u <= med).sort((a, b) => b.m - a.m)[0];
+    if (gem) out.push({ code: "high_margin_slow", level: "note", title: `${gem.s.name} earns well but sells slowly`, body: `${money(gem.m)} profit per drink against ${money(avgM)} on average, with only ${gem.u} sold. A better spot or price might lift it.`, data: { slot: gem.s.id, margin: r2(gem.m), avg_margin: r2(avgM), units: gem.u } });
+  }
+  if (!v.season && n >= 3 && n < WEEKS) {
+    // per-day pace over the last 21 days up to this week's end, run forward over the days left (not "weeks left"):
+    // the season is 63 days and does not end on a week boundary
+    const live = DAYS.filter(d => d.live && d.t <= p.end), recent = live.slice(-21), left = SEASON_DAYS - live.length;
+    const perDay = recent.reduce((a, d) => a + d.rev - d.cogs - d.fee - d.api, 0) / recent.length, proj = p.cumProfit + perDay * left;
+    out.push({ code: "pace", level: "note", title: `Pace: about ${money(proj, 0)} by the end of the season`, body: `Straight-line from the last ${recent.length} days (${money(perDay)} a day, ${money(perDay * 7)} a week) over the ${left} days left. A rough guide: it ignores breaks and visits.`, data: { per_day: r2(perDay), days_left: left, projected_season_profit: Math.round(proj) } });
+  }
+  if (!cold.length && !dry.length) out.push({ code: "shelves_ok", level: "good", title: "Shelves in good shape", body: "No slot sat empty for 2+ days and none went cold for 5.", data: {} });
+  const rank = { act: 0, watch: 1, good: 2, note: 3 };
+  out.sort((a, b) => rank[a.level] - rank[b.level]);
+  return out.slice(0, 4);
+}
+
+// ---- goals ------------------------------------------------------------
+const GOAL_DEFS = [
+  { code: "paid_back", title: "Paid back", desc: `Cash, after the sales-tax set-aside, is back to the $${OPEN_CASH} starting money`, target: OPEN_CASH, kind: "cash" },
+  { code: "profit_50", title: "$50 club", desc: "Season profit reaches $50", target: 50, kind: "profit" },
+  { code: "profit_100", title: "$100 club", desc: "Season profit reaches $100", target: 100, kind: "profit" },
+  { code: "profit_150", title: "$150 club", desc: "Season profit reaches $150", target: 150, kind: "profit" },
+  { code: "profit_200", title: "$200 club", desc: "Season profit reaches $200", target: 200, kind: "profit" },
+  // The weekly flags look at whole (7-day) weeks only: Week 1 (2 days) and Week 10 (5 days) are too short to win them.
+  { code: "first_profit", title: "First profitable week", desc: "A full week that ends above $0", kind: "flag", test: w => w.profit > 0 },
+  { code: "streak3", title: "Three in the black", desc: "Three full profitable weeks in a row", kind: "flag", testAt: (ws, i) => i >= 2 && ws.slice(i - 2, i + 1).every(w => w.profit > 0) },
+  { code: "lean_brain", title: "Lean brain", desc: "AI under 3% of a full week's sales", kind: "flag", test: w => w.api / w.rev < 0.03 },
+  { code: "full_shelf", title: "Full house", desc: "A full week where all 20 slots sold something", kind: "flag", test: w => w.slot.every(x => x.units > 0) },
+];
+function makeGoals(v) {
+  const ws = v.weeks, fw = ws.filter(isFull);
+  return GOAL_DEFS.map(g => {
+    let reached = null, prog = 0, now = null, on = null;
+    if (g.kind === "cash") {                                  // payback is a day, not a week total
+      now = v.last.spendable; const pb = v.paid;
+      reached = pb ? pb.week : null; on = pb ? pb.t : null; prog = pb ? 1 : Math.max(0, Math.min(1, now / g.target));
+    } else if (g.kind === "profit") {
+      const w = ws.find(x => x.cumProfit >= g.target); reached = w ? w.n : null;
+      now = v.last.cumProfit; prog = Math.max(0, Math.min(1, now / g.target));
+    } else {
+      const idx = fw.findIndex((w, i) => (g.test ? g.test(w) : g.testAt(fw, i))); reached = idx >= 0 ? fw[idx].n : null;
+      prog = reached ? 1 : 0;
+    }
+    return { ...g, reached, on, prog, now, isNew: !v.season && reached === v.n };
+  });
+}
+
+/* =====================================================================
+   DIGEST: what the agent would be handed instead of raw tables.
+   ===================================================================== */
+// Only competition money is in here: the ledger opening (27 Nov) onwards. No pre-competition dev/test API spend.
+// Weeks are Sat-Fri ledger weeks; a partial week says so, and is only compared on a fair basis (see compareWeeks).
+function makeDigest(v) {
+  const { p } = v, c = v.cmp, flags = makeAdvice(v), best = bestDayOf(p), q = quietDayOf(p);
+  const pct = (a, b) => (b ? Math.round(1000 * (a - b) / Math.abs(b)) / 10 : null);
+  const cmpOk = c.kind === "full" || c.kind === "like";
+  const d = {
+    mock: true,
+    report: v.season ? "season_to_date" : `week_${v.n}`,
+    period: [isoOf(p.start), isoOf(p.end)],
+    ...(v.season ? { weeks: v.weeks.map(w => ({ week: w.n, days: w.nd })) } : { week_days: p.nd, partial_week: p.partial }),
+    money: { sales_ex_tax: r2(p.rev), tax_set_aside: r2(p.tax), drinks_cost: r2(p.cogs), visit_fees: p.fee, api_spend: r2(p.api), net_profit: r2(p.profit),
+      drinks_sold: p.units, api_pct_of_sales: p.rev ? r2(100 * p.api / p.rev) : null, profit_per_api_dollar: profitPerApi(p) === null ? null : r2(profitPerApi(p)) },
+    vs_prev_week: cmpOk ? { basis: c.kind === "full" ? "full_weeks" : `same_${c.n}_weekdays`, sales_pct: pct(c.cur.rev, c.prev.rev), drinks_pct: pct(c.cur.units, c.prev.units), api_pct: pct(c.cur.api, c.prev.api), profit_delta: r2(c.cur.profit - c.prev.profit) }
+      : c.kind === "partial" ? { basis: "none", note: "partial week: too few shared weekdays for a fair comparison" } : null,
+    account: { cash_spendable: r2(v.last.spendable), stock_at_cost: r2(v.last.inv), net_worth: r2(v.last.worth), season_profit: r2(v.last.cumProfit), started_with: OPEN_CASH,
+      paid_back_on: v.paid ? isoOf(v.paid.t) : null, payback_note: v.paid ? "first day cash after the sales-tax set-aside was back to the starting money" : "not yet paid back" },
+    days: { best: { date: isoOf(best.t), sales: r2(best.rev) }, quietest: { date: isoOf(q.t), sales: r2(q.rev) } },
+    slots: slotsRanked(p).map(x => ({ slot: x.s.id, name: x.s.name, price: x.s.price, units: x.units, profit: r2(x.profit), empty_days: x.emptyDays,
+      no_sale_streak_days: v.streak[x.i], units_prev_week: cmpOk ? c.prev.slot[x.i].units : null,
+      by_week: v.weeks.map(w => w.slot[x.i].units) })),
+    flags: flags.map(f => ({ code: f.code, level: f.level, ...f.data })),
+    goals: { reached: makeGoals(v).filter(g => g.reached).map(g => ({ goal: g.code, week: g.reached })), open: makeGoals(v).filter(g => !g.reached).map(g => g.code) },
+  };
+  if (v.season) d.money.api_spend_ledger_opening_to_launch = r2(SETUP.api);   // already inside api_spend and net_profit
+  return d;
+}
+function digestJson(d) {
+  const line = o => JSON.stringify(o);
+  const parts = Object.keys(d).map(k => {
+    const val = d[k];
+    if (Array.isArray(val)) return `  ${line(k)}: [\n${val.map(x => "    " + line(x)).join(",\n")}\n  ]`;
+    return `  ${line(k)}: ${line(val)}`;
+  });
+  return "{\n" + parts.join(",\n") + "\n}";
+}
+function digestMd(d) {
+  const m = d.money, L = [];
+  L.push(`# ${d.report.replace("_", " ")} (${d.period[0]} to ${d.period[1]}) [MOCK DATA]`, "");
+  L.push(`- sales ex tax ${m.sales_ex_tax}; drinks cost ${m.drinks_cost}; visit fees ${m.visit_fees}; api ${m.api_spend}; **net profit ${m.net_profit}**`);
+  L.push(`- drinks sold ${m.drinks_sold}; api ${m.api_pct_of_sales}% of sales; profit per api dollar ${m.profit_per_api_dollar}`);
+  if (d.partial_week) L.push(`- partial week: ${d.week_days} days (ledger weeks run Sat-Fri), so totals are not comparable with a full week`);
+  const vw = d.vs_prev_week;
+  if (vw && vw.basis === "none") L.push(`- vs prev week: none (${vw.note})`);
+  else if (vw) L.push(`- vs prev week (${vw.basis}): sales ${vw.sales_pct}%, drinks ${vw.drinks_pct}%, api ${vw.api_pct}%, profit ${vw.profit_delta >= 0 ? "+" : ""}${vw.profit_delta}`);
+  const a = d.account; L.push(`- account: cash ${a.cash_spendable} + stock ${a.stock_at_cost} = ${a.net_worth} (started ${a.started_with}); season profit ${a.season_profit}; ${a.paid_back_on ? `paid back on ${a.paid_back_on}` : "not yet paid back"}`);
+  L.push(`- best day ${d.days.best.date} (${d.days.best.sales}); quietest ${d.days.quietest.date} (${d.days.quietest.sales})`, "", "## flags");
+  if (!d.flags.length) L.push("- none");
+  d.flags.forEach(f => { const { code, level, ...rest } = f; L.push(`- [${level}] ${code} ${JSON.stringify(rest)}`); });
+  L.push("", "## slots", "| slot | name | price | units | profit | empty d | no-sale d | prev |", "|---|---|---|---|---|---|---|---|");
+  d.slots.forEach(s => L.push(`| ${s.slot} | ${s.name} | ${s.price} | ${s.units} | ${s.profit} | ${s.empty_days} | ${s.no_sale_streak_days} | ${s.units_prev_week ?? "-"} |`));
+  L.push("", "## goals", `- reached: ${d.goals.reached.map(g => `${g.goal} (wk ${g.week})`).join(", ") || "none"}`, `- open: ${d.goals.open.join(", ") || "none"}`);
+  return L.join("\n");
+}
+// ==== END OF MODEL ====
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+const SVGNS = "http://www.w3.org/2000/svg";
+function node(ns, tag, props, kids) {
+  const e = ns ? document.createElementNS(SVGNS, tag) : document.createElement(tag);
+  for (const k in props || {}) {
+    const v = props[k];
+    if (v == null || v === false) continue;
+    if (k === "class") e.setAttribute("class", v);
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "text") e.textContent = v;
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat(Infinity)) { if (c == null || c === false) continue; e.append(c.nodeType ? c : document.createTextNode(String(c))); }
+  return e;
+}
+const h = (tag, props, ...kids) => node(false, tag, props, kids);
+const sv = (tag, props, ...kids) => node(true, tag, props, kids);
+
+const ICONS = {
+  star: ["M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"],
+  trend: ["M3 17l6-6 4 4 8-8", "M15 7h6v6"],
+  box: ["M4 7l8-4 8 4v10l-8 4-8-4z", "M4 7l8 4 8-4", "M12 11v10"],
+  coin: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M9.5 10c0-1.1 1.1-2 2.5-2s2.5.9 2.5 2-1.1 1.8-2.5 2-2.5.9-2.5 2 1.1 2 2.5 2 2.5-.9 2.5-2", "M12 6.5V8M12 16v1.5"],
+  ribbon: ["M12 3a6 6 0 1 0 0 12 6 6 0 0 0 0-12z", "M8.5 14l-1.5 7 5-3 5 3-1.5-7"],
+  bolt: ["M13 2L4 14h7l-1 8 9-12h-7z"],
+  snow: ["M12 3v18", "M4.2 7.5l15.6 9", "M4.2 16.5l15.6-9"],
+  check: ["M5 12.5l4.5 4.5L19 7.5"],
+};
+const icon = name => sv("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" }, ICONS[name].map(d => sv("path", { d })));
+
+// ---- tooltip (one shared element; fed by hover and by keyboard focus) ----
+const tipEl = h("div", { class: "tip", role: "status" });
+document.body.append(tipEl);
+function tipBody(title, rows, notes) {
+  return [h("b", { class: "t", text: title }),
+    ...rows.map(r => r === "-" ? h("hr") : h("div", { class: "row" }, h("span", { class: "a" }, r[2] ? h("i", { class: "sw", style: `background:${r[2]}` }) : null, r[0]), h("span", { class: "b", text: r[1] }))),
+    ...(notes || []).map(t => h("div", { class: "note", text: t }))];
+}
+function showTip(x, y, content) {
+  tipEl.replaceChildren(...content); tipEl.style.display = "block";
+  let L = x + 14, T = y + 14;
+  if (L + tipEl.offsetWidth > innerWidth - 8) L = x - tipEl.offsetWidth - 14;
+  if (T + tipEl.offsetHeight > innerHeight - 8) T = Math.max(8, y - tipEl.offsetHeight - 14);
+  tipEl.style.left = Math.max(8, L) + "px"; tipEl.style.top = T + "px";
+}
+const hideTip = () => { tipEl.style.display = "none"; };
+function bindTip(el, build) {
+  el.addEventListener("pointermove", e => showTip(e.clientX, e.clientY, build()));
+  el.addEventListener("pointerleave", hideTip);
+  el.addEventListener("focus", () => { const r = el.getBoundingClientRect(); showTip(r.left + r.width / 2, r.top, build()); });
+  el.addEventListener("blur", hideTip);
+}
+
+// ---- small helpers ---------------------------------------------------------
+function niceTicks(lo, hi, n = 4) {
+  if (hi - lo < 1e-9) hi = lo + 1;
+  const span = hi - lo, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= step0);
+  const out = [];
+  for (let v = Math.floor(lo / step + 1e-9) * step; v <= Math.ceil(hi / step - 1e-9) * step + 1e-9; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+function legend(items) {
+  return h("div", { class: "legend" }, items.map(([c, t, shape]) => h("span", {}, h("i", { class: shape || "", style: `background:${c}` }), t)));
+}
+function tableView(head, rows, label = "Table view") {
+  return h("details", {}, h("summary", { text: label }),
+    h("div", { class: "tablewrap" }, h("table", {}, h("thead", {}, h("tr", {}, head.map(x => h("th", { text: x })))), h("tbody", {}, rows.map(r => h("tr", {}, r.map(c => h("td", { text: c }))))))));
+}
+function sparkline(vals, { w = 110, h: ht = 28, hi = vals.length - 1, label = "" } = {}) {
+  const pad = 5, lo = Math.min(...vals), mx = Math.max(...vals);
+  const x = i => pad + (w - 2 * pad) * (vals.length === 1 ? 0.5 : i / (vals.length - 1));
+  const y = v => (mx === lo ? ht / 2 : ht - pad - (ht - 2 * pad) * ((v - lo) / (mx - lo)));
+  return sv("svg", { class: "spark", viewBox: `0 0 ${w} ${ht}`, width: w, height: ht, role: "img", "aria-label": label },
+    sv("path", { d: vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(""), fill: "none", stroke: "var(--spark)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }),
+    sv("circle", { cx: x(hi), cy: y(vals[hi]), r: 4, fill: "var(--s1)", stroke: "var(--surface)", "stroke-width": 2 }));
+}
+
+// delta = direction × whether up is good; arrow + sign + words, never colour alone
+// Week-over-week deltas go through v.cmp (see compareWeeks): full vs full, the same weekdays for a partial week,
+// or just "partial week" when fewer than 3 weekdays are shared. Never a 2-day week against a 7-day one.
+function deltaEl(v, get, opts = {}) {
+  const c = v.cmp;
+  if (c.kind === "none") return h("span", { class: "delta flat", text: "no earlier week" });
+  if (c.kind === "partial") return h("span", { class: "delta flat", title: c.note, text: "partial week · no % change" });
+  return deltaVals(get(c.cur), get(c.prev), { ...opts, vs: c.label });
+}
+function deltaVals(cur, prev, { upGood = true, mode = "pct", fmt = money, vs = "last week" }) {
+  if (prev == null || cur == null) return h("span", { class: "delta flat", text: "no earlier week" });
+  const diff = cur - prev;
+  const flat = mode === "pct" ? (prev === 0 ? diff === 0 : Math.abs(diff / Math.abs(prev)) < 0.02) : Math.abs(diff) < 0.005;
+  if (flat) return h("span", { class: "delta flat" }, "▬ flat ", h("i", { text: "vs " + vs }));
+  const up = diff > 0, good = up === upGood;
+  const txt = mode === "pct" ? (prev === 0 ? "new" : `${Math.round(Math.abs(diff / Math.abs(prev)) * 100)}%`) : (diff > 0 ? "+" : "−") + fmt(Math.abs(diff));
+  return h("span", { class: "delta " + (good ? "good" : "bad") }, (up ? "▲ " : "▼ ") + txt + " ", h("i", { text: "vs " + vs }));
+}
+
+// ---- charts ---------------------------------------------------------------------
+function dailyChart(v) {
+  const p = v.p, W = 560, H = 250, m = { l: 44, r: 8, t: 16, b: 52 };
+  // week view: always the seven Sat..Fri slots of the ledger week, so a partial week shows as a partial week
+  // (days outside the competition are greyed, not drawn as zero sales); season view: average per weekday
+  let cols;
+  if (!v.season) cols = LEDGER_ORDER.map(dw => {
+    const d = p.days.find(x => x.dow === dw);
+    if (!d) return { d: null, rev: 0, label: WD[dw], sub: weekStartOf(p.start) === p.start ? "after the end" : "before launch", ev: [], runs: [], off: true };
+    const pd = v.prev ? v.prev.days.find(x => x.dow === dw) : null;      // same weekday last week, when it was played
+    return { d, rev: d.rev, units: d.units, api: d.api, prev: pd ? pd.rev : null, label: WD[dw], sub: dShort(d.t).replace(/^\w+ /, ""), ev: d.ev, runs: d.runs };
+  });
+  else cols = LEDGER_ORDER.map(dw => {
+    const ds = DAYS.filter(d => d.live && d.dow === dw);
+    return { d: ds[0], rev: ds.reduce((a, d) => a + d.rev, 0) / ds.length, units: ds.reduce((a, d) => a + d.units, 0) / ds.length, api: ds.reduce((a, d) => a + d.api, 0) / ds.length, prev: null, label: WD[dw], sub: "avg", ev: [], runs: [] };
+  });
+  const hi = Math.max(...cols.map(c => Math.max(c.rev, c.prev || 0)), 1) * 1.1;
+  const ticks = niceTicks(0, hi), y1 = ticks[ticks.length - 1];
+  const y = val => m.t + (H - m.t - m.b) * (1 - val / y1), bw = (W - m.l - m.r) / cols.length;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": v.season ? "Average sales by weekday over the season" : "Sales by day this week" });
+  ticks.forEach(tv => svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(tv), y2: y(tv), stroke: tv === 0 ? "var(--axis)" : "var(--grid)" }), sv("text", { x: m.l - 6, y: y(tv) + 4, "text-anchor": "end", text: "$" + tv })));
+  const bestI = cols.reduce((b, c, i) => (c.rev > cols[b].rev ? i : b), 0);
+  cols.forEach((c, i) => {
+    const cx = m.l + bw * (i + 0.5), g = sv("g", {});
+    if (c.off) {
+      svg.append(sv("text", { x: cx, y: H - m.b + 15, "text-anchor": "middle", opacity: 0.55, text: c.label }), sv("text", { x: cx, y: H - m.b + 28, "text-anchor": "middle", opacity: 0.55, text: c.sub }));
+      return;
+    }
+    const bar = sv("path", { class: "bar", fill: "var(--s1)", d: c.rev > 0.005 ? `M${cx - 11} ${y(0)} V${y(c.rev) + 4} Q${cx - 11} ${y(c.rev)} ${cx - 7} ${y(c.rev)} H${cx + 7} Q${cx + 11} ${y(c.rev)} ${cx + 11} ${y(c.rev) + 4} V${y(0)} Z` : "" });
+    g.append(bar);
+    if (c.prev != null) g.append(sv("line", { x1: cx - 17, x2: cx + 17, y1: y(c.prev), y2: y(c.prev), stroke: "var(--ink2)", "stroke-width": 2, "stroke-linecap": "round" }));
+    if (i === bestI && c.rev > 0) g.append(sv("text", { class: "val", x: cx, y: y(c.rev) - 6, "text-anchor": "middle", text: money(c.rev, 0) }));
+    svg.append(g);
+    svg.append(sv("text", { x: cx, y: H - m.b + 15, "text-anchor": "middle", class: "lbl", text: c.label }), sv("text", { x: cx, y: H - m.b + 28, "text-anchor": "middle", text: c.sub }));
+    c.ev.forEach(e => {
+      const my = H - m.b + 42;
+      if (e.k === "mid") svg.append(sv("path", { d: `M${cx} ${my - 5} l5 5 -5 5 -5 -5z`, fill: "var(--s3)", stroke: "var(--surface)", "stroke-width": 2 }));
+      else if (e.k === "fri") svg.append(sv("circle", { cx, cy: my, r: 4.5, fill: "var(--ink)", stroke: "var(--surface)", "stroke-width": 2 }));
+    });
+    const hit = sv("rect", { class: "hit", x: cx - bw / 2, y: m.t, width: bw, height: H - m.t, tabindex: 0, "aria-label": `${c.label}: ${money(c.rev)} sales, ${Math.round(c.units * 10) / 10} drinks` });
+    bindTip(hit, () => tipBody(v.season ? `${WDL[c.d.dow]} average` : dLong(c.d.t), [
+      [v.season ? "Sales per day" : "Sales (ex tax)", money(c.rev), "var(--s1)"], ["Drinks sold", v.season ? c.units.toFixed(1) : c.units],
+      ...(c.prev != null ? [["Same day last week", money(c.prev), "var(--ink2)"]] : []), "-", ["AI that day", money(c.api, 3)],
+    ], c.ev.map(e => e.txt)));
+    svg.append(hit);
+  });
+  const card = h("div", { class: "card" }, h("h2", { text: v.season ? "Sales by weekday, whole season" : "Day by day" }),
+    h("p", { class: "why", text: v.season ? `Average sales on each weekday, all ${SEASON_DAYS} days of the season. Weeks run Saturday to Friday.` : `Sales ex tax per day, Saturday to Friday. The bar is this week; the tick is the same weekday last week.${p.partial ? ` Week ${p.n} is a partial week (${p.nd} days); days outside the competition are greyed.` : ""}` }),
+    legend(v.season ? [["var(--s1)", "Average sales per day"]] : [["var(--s1)", "This week"], ...(v.prev ? [["var(--ink2)", "Same day last week", "line"]] : []), ["var(--ink)", "Friday restock (free)", "dot"], ["var(--s3)", "$25 midweek visit", "dia"]]),
+    svg,
+    tableView(["Day", "Sales", "Drinks", "AI", "Events"], cols.filter(c => !c.off).map(c => [v.season ? WDL[c.d.dow] : dLong(c.d.t), money(c.rev), (Math.round(c.units * 10) / 10).toString(), money(c.api, 3), c.ev.map(e => e.txt).join("; ") || "-"])));
+  return card;
+}
+
+function moneyChart(v) {
+  const p = v.p;
+  const rows = [
+    { n: "Takings at the machine", a: 0, b: p.takings, c: "var(--s1)", sign: "", k: "in" },
+    { n: "Sales tax set aside", a: p.takings - p.tax, b: p.takings, c: "var(--s2)", sign: "−", k: "out" },
+    { n: "Drinks sold, at cost", a: p.takings - p.tax - p.cogs, b: p.takings - p.tax, c: "var(--s2)", sign: "−", k: "out" },
+    { n: "Visit fees", a: p.takings - p.tax - p.cogs - p.fee, b: p.takings - p.tax - p.cogs, c: "var(--s2)", sign: "−", k: "out" },
+    { n: v.season ? "AI brain bill (from 27 Nov)" : "AI brain bill", a: p.profit, b: p.profit + p.api, c: "var(--s5)", sign: "−", k: "ai" },
+    { n: v.season ? "Season profit" : "Net profit", a: 0, b: p.profit, c: "var(--ink)", sign: "", k: "net" },
+  ];
+  rows[1].v = p.tax; rows[2].v = p.cogs; rows[3].v = p.fee; rows[4].v = p.api; rows[0].v = p.takings; rows[5].v = p.profit;
+  const W = 560, rowH = 34, H = rows.length * rowH + 14, lx = 150, rx = 8;
+  const lo = Math.min(0, p.profit, ...rows.map(r => Math.min(r.a, r.b))), hi = p.takings * 1.22;
+  const x = val => lx + (W - lx - rx - 56) * ((val - lo) / (hi - lo));
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Money waterfall: ${money(p.takings)} takings down to ${money(p.profit)} profit` });
+  svg.append(sv("line", { x1: x(0), x2: x(0), y1: 0, y2: H - 8, stroke: "var(--axis)" }));
+  rows.forEach((r, i) => {
+    const cy = 8 + i * rowH + rowH / 2, x0 = x(Math.min(r.a, r.b)), x1 = x(Math.max(r.a, r.b)), w = Math.max(2, x1 - x0);
+    svg.append(sv("text", { class: "lbl", x: 0, y: cy + 4, text: r.n }));
+    const g = sv("g", {});
+    g.append(sv("rect", { class: "bar", x: x0, y: cy - 8, width: w, height: 16, rx: 4, fill: r.k === "net" && r.v < 0 ? "var(--crit)" : r.c }));
+    g.append(sv("text", { class: "val", x: x0 + w + 6, y: cy + 4, text: (r.k === "net" ? "" : r.sign) + money(Math.abs(r.v)).replace("−", "").replace(/^/, r.k === "net" && r.v < 0 ? "−" : "") }));
+    svg.append(g);
+    const hit = sv("rect", { class: "hit", x: 0, y: cy - rowH / 2, width: W, height: rowH, tabindex: 0, "aria-label": `${r.n}: ${r.sign}${money(Math.abs(r.v))}` });
+    bindTip(hit, () => tipBody(r.n, [[r.k === "net" ? "Profit" : r.k === "in" ? "Takings" : "Amount", r.sign + money(Math.abs(r.v)), r.c], ["Share of takings", p.takings ? Math.round(100 * Math.abs(r.v) / p.takings) + "%" : "-"]],
+      r.k === "ai" && p.rev ? [`${(100 * p.api / p.rev).toFixed(1)}¢ of AI per $1 of sales ex tax`] : r.k === "out" && r.n.startsWith("Sales tax") ? ["8% of the price, owed to the state"] : []));
+    svg.append(hit);
+  });
+  return h("div", { class: "card" }, h("h2", { text: "Where the money went" }),
+    h("p", { class: "why", text: v.season ? "Whole season, from takings down to profit." : "This week, from takings down to profit." }),
+    legend([["var(--s1)", "Money in"], ["var(--s2)", "Money out"], ["var(--s5)", "AI brain bill"], ["var(--ink)", "Profit"]]),
+    svg,
+    tableView(["Line", "Amount"], rows.map(r => [r.n, (r.k === "net" ? "" : r.sign) + money(Math.abs(r.v))])));
+}
+
+function seasonChart(v) {
+  // Layout rules (the old chart was cramped in Weeks 1-2): the ten ledger-week columns are always laid out, so the
+  // chart does not jump between weeks; bars are wide (up to 40px) and get a value label only for the selected week;
+  // the value/season labels are placed with collision checks; weekly detail sits in a two-line x-axis band
+  // (week, then "N days" for partial weeks) with a payback tag under its week; the y-scale never collapses to a sliver.
+  const ws = v.weeks, W = 1000, m = { l: 52, r: 24, t: 30, b: 66 }, H = 300;
+  const vals = ws.map(w => w.profit), cums = ws.map(w => w.cumProfit);
+  let lo = Math.min(0, ...vals, ...cums), hi = Math.max(0, ...vals, ...cums);
+  if (hi - lo < 20) hi = lo + 20;                              // week 1 alone is a few dollars: keep a readable scale
+  const ticks = niceTicks(lo, hi + (hi - lo) * 0.12, 5), y0 = ticks[0], y1 = ticks[ticks.length - 1];
+  const y = val => m.t + (H - m.t - m.b) * (1 - (val - y0) / (y1 - y0)), bw = (W - m.l - m.r) / WEEKS, BAR = Math.min(40, bw * 0.5);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Weekly profit and running season profit" });
+  const fmtT = tv => (tv < 0 ? "−$" : "$") + Math.abs(tv);
+  ticks.forEach(tv => svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(tv), y2: y(tv), stroke: tv === 0 ? "var(--axis)" : "var(--grid)" }), sv("text", { x: m.l - 6, y: y(tv) + 4, "text-anchor": "end", text: fmtT(tv) })));
+  const cx = i => m.l + bw * (i + 0.5), li = ws.length - 1, XA = H - m.b;
+  const halo = { "paint-order": "stroke", stroke: "var(--surface)", "stroke-width": 3, "stroke-linejoin": "round" };
+  const labels = [];                                           // text drawn last, on top of bars and line
+  ws.forEach((w, i) => {
+    const sel = v.season || w.n === v.n, top = Math.min(y(0), y(w.profit)), ht = Math.max(1.5, Math.abs(y(w.profit) - y(0)));
+    // partial weeks are drawn lighter and labelled "N days": their totals are not comparable with a full week's
+    svg.append(sv("path", { class: "bar", fill: sel ? "var(--s1)" : "var(--ctx)", "fill-opacity": w.partial ? 0.55 : 1,
+      d: `M${cx(i) - BAR / 2} ${w.profit >= 0 ? top + ht : top} V${w.profit >= 0 ? top + 4 : top + ht - 4} Q${cx(i) - BAR / 2} ${w.profit >= 0 ? top : top + ht} ${cx(i) - BAR / 2 + 4} ${w.profit >= 0 ? top : top + ht} H${cx(i) + BAR / 2 - 4} Q${cx(i) + BAR / 2} ${w.profit >= 0 ? top : top + ht} ${cx(i) + BAR / 2} ${w.profit >= 0 ? top + 4 : top + ht - 4} V${w.profit >= 0 ? top + ht : top} Z` }));
+    svg.append(sv("text", { x: cx(i), y: XA + 16, "text-anchor": "middle", class: sel && !v.season ? "lbl" : "", text: "Wk " + w.n }));
+    if (w.partial) svg.append(sv("text", { x: cx(i), y: XA + 30, "text-anchor": "middle", text: `${w.nd} days` }));
+  });
+  for (let i = ws.length; i < WEEKS; i++) svg.append(sv("text", { x: cx(i), y: XA + 16, "text-anchor": "middle", text: "Wk " + (i + 1), opacity: 0.45 }));
+  svg.append(sv("path", { d: ws.map((w, i) => `${i ? "L" : "M"}${cx(i)} ${y(w.cumProfit)}`).join(""), fill: "none", stroke: "var(--ink)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  // markers on the running line: ringed so they never merge with a bar
+  const pb = v.paid && v.paid.week <= v.upto ? v.paid : null, pbi = pb ? pb.week - 1 : -1;
+  ws.forEach((w, i) => { if (i !== li && i !== pbi) return; svg.append(sv("circle", { cx: cx(i), cy: y(w.cumProfit), r: i === li ? 4.5 : 5, fill: i === li ? "var(--ink)" : "var(--surface)", stroke: i === li ? "var(--surface)" : "var(--ink)", "stroke-width": 2 })); });
+  // labels sit above the last point of the line (clear of it, since the line arrives from the left and below);
+  // when the selected week's bar top is within 28px of that point they merge into one label so nothing overlaps
+  const lastY = y(cums[li]), W0 = ws[li];
+  if (v.season) labels.push({ x: cx(li), y: lastY - 10, anchor: "middle", cls: "val", text: `Season ${money(cums[li], 0)}` });
+  else {
+    const barY = y(W0.profit);
+    if (Math.abs(barY - lastY) < 28) labels.push({ x: cx(li), y: Math.min(barY, lastY) - 10, anchor: "middle", cls: "val", text: `Week ${money(W0.profit, 0)} · Season ${money(cums[li], 0)}` });
+    else {
+      labels.push({ x: cx(li), y: lastY - 10, anchor: "middle", cls: "val", text: `Season ${money(cums[li], 0)}` });
+      labels.push({ x: cx(li), y: W0.profit >= 0 ? barY - 8 : barY + 16, anchor: "middle", cls: "val", text: money(W0.profit, 0) });
+    }
+  }
+  for (const t of labels) svg.append(sv("text", { class: t.cls, x: t.x, y: t.y, "text-anchor": t.anchor, text: t.text, ...halo }));
+  // payback tag: its own row under the week's axis label, so it cannot collide with bars or values
+  if (pb) svg.append(sv("path", { d: `M${cx(pbi) - 38} ${XA + 44} l4 -4.5 4 4.5 -4 4.5z`, fill: "var(--surface)", stroke: "var(--ink)", "stroke-width": 1.8 }),
+    sv("text", { class: "lbl", x: cx(pbi) - 29, y: XA + 48, text: `Paid back ${dShort(pb.t)}` }));
+  ws.forEach((w, i) => {
+    const hit = sv("rect", { class: "hit", x: m.l + bw * i, y: m.t, width: bw, height: H - m.t, tabindex: 0, "aria-label": `${weekName(w)}: profit ${money(w.profit)}, season ${money(w.cumProfit)}` });
+    bindTip(hit, () => tipBody(`${weekName(w)} · ${dRange(w.start, w.end).split(",")[0]}`, [
+      ["Week profit", money(w.profit), "var(--s1)"], ["Season profit so far", money(w.cumProfit), "var(--ink)"], "-",
+      ["Sales (ex tax)", money(w.rev)], ["Visit fees", money(w.fee)], ["AI", money(w.api)]],
+      [...(w.partial ? [`Partial week (${w.nd} days): not comparable with a full week's total.`] : []), ...(pb && pb.week === w.n ? [`Paid back ${dLong(pb.t)}: cash back to $${OPEN_CASH}.`] : [])]));
+    svg.append(hit);
+  });
+  const anyPartial = ws.some(w => w.partial);
+  return h("div", { class: "card stack" }, h("h2", { text: v.season ? "Season so far" : `Season so far, through week ${v.n}` }),
+    h("p", { class: "why", text: "Weekly profit as bars; the line is the running season total, including AI spend from the ledger opening (27 Nov) to launch. Weeks run Saturday to Friday, like the ledger." + (v.paid ? "" : " Not yet paid back.") }),
+    legend([["var(--s1)", v.season ? "Weekly profit" : "This week's profit"], ...(v.season ? [] : [["var(--ctx)", "Earlier weeks"]]), ...(anyPartial ? [["color-mix(in srgb, var(--s1) 55%, var(--surface))", "Partial week (fewer than 7 days): not comparable"]] : []), ["var(--ink)", "Running season profit", "line"], ...(pb ? [["var(--ink)", "Paid back: cash after tax back to $600", "dia"]] : [])]),
+    svg,
+    tableView(["Week", "Days", "Dates", "Sales", "Drinks", "Visit fees", "AI", "Week profit", "Season profit"], ws.map(w => ["Wk " + w.n + (pb && pb.week === w.n ? " (paid back " + dShort(pb.t) + ")" : ""), w.nd + (w.partial ? " (partial)" : ""), dRange(w.start, w.end).split(",")[0], money(w.rev), w.units, money(w.fee), money(w.api), money(w.profit), money(w.cumProfit)])));
+}
+
+// ---- sections -------------------------------------------------------------------
+function paperSection(v) {
+  const hd = makeHeadline(v), p = v.p;
+  return h("section", { class: "paper", "aria-label": "Headline" },
+    h("div", { class: "dateline" }, h("span", { text: v.season ? "Season report · 9 weeks · 63 days" : `${weekName(p)} of ${WEEKS} (Sat–Fri)` }), h("span", { text: v.season ? dRange(P[1].start, P[WEEKS].end) : dRange(p.start, p.end) }), h("span", { text: "Mock data" })),
+    h("h2", { text: hd.h }), h("p", { class: "deck", text: hd.deck }));
+}
+function figures(v) {
+  const { p, prev } = v, ws = v.weeks;
+  const upto = v.upto;
+  const hero = h("div", { class: "tile hero" },
+    h("div", {}, h("div", { class: "k", text: v.season ? "Season profit" : "Net profit this week" }),
+      h("div", { class: "v", text: money(v.season ? v.last.cumProfit : p.profit) }),
+      v.season ? h("span", { class: "delta flat", text: `incl. ${money(SETUP.api)} AI spend from the ledger opening (27 Nov) to launch` }) : deltaEl(v, q => q.profit, { mode: "abs" })),
+    h("p", { class: "acct" }, "Account: ", h("b", { text: money(v.last.spendable) }), " spendable cash + ", h("b", { text: money(v.last.inv) }), " of drinks on the shelf at cost = ", h("b", { text: money(v.last.worth) }),
+      ` (started with $${OPEN_CASH}). Sales tax is set aside, not counted as cash.`),
+    sparkline(ws.map(w => w.cumProfit), { w: 150, h: 34, hi: ws.length - 1, label: "Season profit by week: " + ws.map(w => Math.round(w.cumProfit)).join(", ") }));
+  const defs = [
+    ["Sales (ex tax)", q => q.rev, money, true, "pct"], ["Drinks sold", q => q.units, x => String(x), true, "pct"],
+    ["AI brain bill", q => q.api, money, false, "pct"], ["Profit per AI $1", q => profitPerApi(q), money, true, "abs"],
+  ];
+  // Trend lines use a per-day rate for the additive tiles, so a 2-day Week 1 does not plot as a crash.
+  const tiles = defs.map(([label, get, f, upGood, mode]) => {
+    const add = mode === "pct", per = w => (add ? w.nd : 1);
+    const series = ws.map(w => get(w)).map((x, i) => (x == null ? 0 : x / per(ws[i])));
+    const val = get(p);
+    return h("div", { class: "tile" }, h("div", { class: "k", text: label }),
+      h("div", { class: "v", text: val == null ? "—" : f(val) }),
+      v.season ? h("div", { class: "delta flat", text: add ? `avg ${f(val / SEASON_DAYS)} a day` : "whole season" }) : deltaEl(v, get, { upGood, mode, fmt: f }),
+      h("div", { class: "n" }, sparkline(series, { w: 120, h: 26, hi: series.length - 1, label: `${label} by week${add ? ", per day" : ""}: ${series.map(x => Math.round(x * 100) / 100).join(", ")}` })));
+  });
+  return h("section", { class: "figs", "aria-label": "Headline figures" }, hero, ...tiles);
+}
+function awardsCard(v) {
+  const aw = makeAwards(v);
+  return h("div", { class: "card" }, h("h2", { text: "Awards" }), h("p", { class: "why", text: v.season ? "Season highlights." : "Handed out for this week. Greyed badges were not earned." }),
+    h("div", { class: "awards" }, aw.map(a => h("div", { class: "award " + (a.state === "locked" ? "locked" : ""), style: `--hue:var(${a.hue})` },
+      h("div", { class: "badge" }, icon(a.icon)),
+      h("div", {}, h("div", { class: "a-k", text: a.kind }), h("div", { class: "a-t", text: a.title }), a.detail ? h("div", { class: "a-d", text: a.detail }) : null)))));
+}
+function advisorCard(v) {
+  const adv = makeAdvice(v), G = { act: ["▲", "Act"], watch: ["◆", "Watch"], good: ["✓", "Good"], note: ["●", "Note"] };
+  return h("div", { class: "card" }, h("h2", { text: "Advisor" }), h("p", { class: "why", text: "Plain rules run on this week's numbers. Nothing here is typed by hand." }),
+    h("ul", { class: "advice" }, adv.map(a => h("li", {}, h("span", { class: "chip " + a.level }, h("span", { class: "g", text: G[a.level][0] }), G[a.level][1]),
+      h("div", {}, h("div", { class: "a-title", text: a.title }), h("div", { class: "a-body", text: a.body }))))));
+}
+let sortKey = "units";
+function shelfCard(v) {
+  const { p } = v, c = v.cmp, cmpOk = c.kind === "full" || c.kind === "like";
+  // trend = drinks per day by ledger week (a 2-day week would otherwise plot as a crash); the "+N" chip uses the fair comparison
+  const rows = SLOTS.map((s, i) => ({ s, i, ...p.slot[i], streak: v.streak[i], series: v.weeks.map(w => w.slot[i].units / w.nd), prevU: cmpOk ? c.prev.slot[i].units : null, curU: cmpOk ? c.cur.slot[i].units : null }));
+  rows.sort(sortKey === "slot" ? (a, b) => a.i - b.i : (a, b) => b[sortKey] - a[sortKey] || b.units - a.units || a.i - b.i);
+  const mx = Math.max(1, ...rows.map(r => r.units)), best = slotsRanked(p)[0];
+  const sortBtn = (k, label) => h("button", { "aria-pressed": String(sortKey === k), onclick: () => { sortKey = k; render(); }, text: label });
+  const chip = (cls, g, t) => h("span", { class: "chip sm " + cls }, h("span", { class: "g", text: g }), t);
+  const body = rows.map(r => {
+    const chips = [];
+    if (r.units > 0 && r.i === best.i) chips.push(chip("good", "★", "Best seller"));
+    if (r.emptyDays > 0) chips.push(chip("watch", "◆", `Empty ${r.emptyDays}d`));
+    if (r.streak >= 5) chips.push(chip("act", "▲", `Cold ${r.streak}d`));
+    if (r.prevU != null && r.curU - r.prevU >= Math.max(1, Math.round(2 * c.n / 7))) chips.push(chip("good", "▲", `+${r.curU - r.prevU}`));
+    return h("tr", {}, h("td", { class: "name" }, h("span", { class: "id", text: r.s.id }), r.s.name),
+      h("td", { text: `$${r.s.price.toFixed(2)}` }),
+      h("td", { class: "barcell" }, h("div", { class: "b" }, h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(100 * r.units / mx).toFixed(1)}%` })), h("span", { text: r.units }))),
+      h("td", { text: money(r.profit) }),
+      h("td", {}, sparkline(r.series, { w: 96, h: 24, hi: r.series.length - 1, label: `${r.s.name} drinks per day by week: ${r.series.map(x => x.toFixed(1)).join(", ")}` })),
+      h("td", {}, h("div", { class: "chips" }, chips)));
+  });
+  return h("div", { class: "card stack shelf" }, h("h2", { text: "The shelf: every slot" }),
+    h("p", { class: "why", text: `Drinks sold ${v.season ? "this season" : "this week"} by slot (selection numbers and drinks are made up). The trend line is drinks per day by ledger week (so short weeks compare fairly), through ${v.season ? "all 10 ledger weeks" : `week ${v.n}`}; the blue dot is the latest.${p.partial && !v.season ? ` This is a ${p.nd}-day week, so counts are small.` : ""}` }),
+    h("div", { class: "tablewrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, sortBtn("slot", "Slot")), h("th", { text: "Price" }), h("th", { style: "text-align:left" }, sortBtn("units", "Drinks sold")), h("th", {}, sortBtn("profit", "Profit")), h("th", { text: "Weekly trend" }), h("th", { text: "Flags" }))), h("tbody", {}, body))));
+}
+function goalsCard(v) {
+  const gs = makeGoals(v);
+  return h("div", { class: "card stack" }, h("h2", { text: "Milestones" }), h("p", { class: "why", text: `Where the season stands ${v.season ? "at the end (Wed 3 Feb)" : `at the end of ${weekName(v.p).replace(" · ", ", ")}`}.` }),
+    h("div", { class: "goals" }, gs.map(g => h("div", { class: "goal" },
+      h("div", { class: "gh" }, h("span", { class: "gt" }, (g.reached ? "✓ " : "○ "), g.title, g.isNew ? h("span", { class: "new", text: "NEW" }) : null),
+        h("span", { class: "gs" }, g.reached ? h("b", { text: g.on ? `Reached ${dShort(g.on)} (week ${g.reached})` : `Reached week ${g.reached}` })
+          : g.kind === "cash" ? `Not yet paid back · ${money(g.now, 0)} of ${money(g.target, 0)}` : g.kind === "profit" ? `${money(g.now, 0)} of ${money(g.target, 0)}` : "Not yet")),
+      h("div", { class: "meter", role: "img", "aria-label": `${g.title}: ${Math.round(g.prog * 100)}%` }, h("i", { style: `width:${Math.round(g.prog * 100)}%` })),
+      h("div", { class: "gd", text: g.desc })))));
+}
+let digestFmt = "json";
+function digestCard(v) {
+  const d = makeDigest(v), text = digestFmt === "json" ? digestJson(d) : digestMd(d);
+  const copy = h("button", { class: "copy", text: "Copy", onclick: () => {
+    const done = () => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy"), 1200); };
+    try { navigator.clipboard.writeText(text).then(done, () => {}); } catch (e) { /* clipboard blocked on file:// in some browsers */ }
+  } });
+  const toggle = h("div", { class: "seg small", role: "group", "aria-label": "Digest format" },
+    ["json", "markdown"].map(f => h("button", { "aria-pressed": String(digestFmt === f), text: f === "json" ? "JSON" : "Markdown", onclick: () => { digestFmt = f; const open = det.open; render(); document.querySelector("details.digest").open = open; } })));
+  const det = h("details", { class: "card digest" }, h("summary", { text: "What the AI would read" }),
+    h("p", { class: "why", text: "The same report as numbers and flags only. This is what we would hand the agent instead of raw tables." }),
+    h("div", { class: "bar" }, toggle, copy, h("span", { class: "meta", text: `${text.length.toLocaleString()} characters ≈ ${Math.round(text.length / 4).toLocaleString()} tokens (rough: characters ÷ 4)` })),
+    h("pre", { tabindex: 0 }, h("code", { text })));
+  return det;
+}
+
+// ---- page -----------------------------------------------------------------------
+let sel = 2, theme = "auto";
+function setTheme(t) {
+  theme = t;
+  if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
+}
+function render() {
+  const v = viewFor(sel), app = document.getElementById("app");
+  hideTip();
+  const pick = h("div", { class: "seg", role: "group", "aria-label": "Choose a week" },
+    [...Array(WEEKS)].map((_, i) => h("button", { "aria-pressed": String(sel === i + 1), text: "Wk " + (i + 1) + (P[i + 1].partial ? " · " + P[i + 1].nd + "d" : ""),
+      title: `Week ${i + 1}: ${dRange(P[i + 1].start, P[i + 1].end).split(",")[0]}${P[i + 1].partial ? ` (partial week, ${P[i + 1].nd} days)` : ""}`, onclick: () => go(i + 1) })),
+    h("button", { "aria-pressed": String(sel === 0), text: "Season", onclick: () => go(0) }));
+  pick.addEventListener("keydown", e => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const order = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0], at = order.indexOf(sel), nx = order[(at + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length];
+    go(nx); document.querySelectorAll(".controls .seg button")[order.indexOf(nx)].focus();
+  });
+  const themeSeg = h("div", { class: "seg small", role: "group", "aria-label": "Colour theme" },
+    ["auto", "light", "dark"].map(t => h("button", { "aria-pressed": String(theme === t), text: t[0].toUpperCase() + t.slice(1), onclick: () => { setTheme(t); render(); } })));
+  const keepOpen = document.querySelector("details.digest")?.open;
+  app.replaceChildren(
+    h("div", { class: "banner", role: "note" }, h("strong", { text: "MOCK DATA. " }), "Seeded random numbers and invented drinks, not the real machine. The money rules are real; the sales are not."),
+    h("div", { class: "mast" }, h("h1", { text: "The Weekly Vend" }), h("span", { class: "tag", text: "Team B · drinks machine · 9-week season from 3 Dec 2026" })),
+    h("div", { class: "controls" }, pick, themeSeg),
+    paperSection(v), figures(v),
+    h("div", { class: "grid2" }, dailyChart(v), moneyChart(v)),
+    seasonChart(v),
+    h("div", { class: "grid2" }, awardsCard(v), advisorCard(v)),
+    shelfCard(v), goalsCard(v), digestCard(v),
+    h("p", { class: "foot", text: "Weeks are the ledger's Saturday–Friday weeks; the free Friday restock is the weekly reset. The competition starts on a Thursday, so Week 1 (2 days) and the last week (5 days) are partial: they are compared like-for-like or not at all, and never win a whole-week award. A planning run can fall on any day (Thursdays in this mock). Paid back = the first day cash after the sales-tax set-aside is back to the $600 starting money. Profit = sales ex tax − drinks sold − visit fees − AI spend. Season totals also carry the AI spend from the ledger opening (27 Nov) to launch. Winter break and the launch ramp are baked into the mock demand." }));
+  if (keepOpen) document.querySelector("details.digest").open = true;
+}
+function go(n) {
+  sel = n; render();
+  try { const u = new URL(location.href); u.searchParams.set("w", n === 0 ? "season" : n); history.replaceState(null, "", u); } catch (e) { /* file:// may refuse */ }
+}
+(function init() {
+  try {
+    const q = new URL(location.href).searchParams, w = q.get("w"), t = q.get("theme");
+    if (w === "season") sel = 0; else if (w && +w >= 1 && +w <= WEEKS) sel = +w;
+    if (t === "light" || t === "dark") setTheme(t);
+  } catch (e) { /* keep defaults */ }
+  render();
+})();
+</script>
+</body>
+</html>
