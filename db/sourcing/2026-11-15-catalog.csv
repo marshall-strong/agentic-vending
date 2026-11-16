@@ -1,0 +1,21 @@
+sku,rank,store,units_per_pack,price,max,url,pack_description,checked,note
+REDBULL-SUGARFRE-8_4CAN,primary,Amazon,24,34.99,,https://www.amazon.com/dp/B001E14104,24 x 8.4 oz cans,2026-11-11,From the team's 11 Nov Amazon price list (add_price_list)
+GORGIE-MANGO-12CAN,primary,Amazon,12,31.08,,https://www.amazon.com/dp/B0C5KDCPDM,12 x 12 oz cans Mango Burst,2026-11-15,Sold by GET GORGIE; one-time price
+GORGIE-PEACH-12CAN,primary,Amazon,12,31.99,,https://www.amazon.com/dp/B0BXMWVS4B,12 x 12 oz cans Peach Tea,2026-11-15,Sold by GET GORGIE; one-time price
+STARBUCKS-BLUE_LEMON-12CAN,primary,Amazon,12,23.98,,https://www.amazon.com/dp/B0DW9P95NR,12 x 12 oz cans Blueberry Lemonade,2026-11-15,Single flavour; sold by Amazon.com
+SNAPPLE-FRUIT_PUNCH-16BOT,primary,Amazon,12,18.84,,https://www.amazon.com/dp/B0D3WLN63F,12 x 16 oz bottles Fruit Punch,2026-11-15,Sold by Amazon.com
+SNAPPLE-MANGO_MADNESS-16BOT,primary,Amazon,12,21.45,,https://www.amazon.com/dp/B0D3W9JXLB,12 x 16 oz bottles Mango Madness,2026-11-15,Third-party seller with 7 left on 15 Nov; re-check stock before ordering
+HINT-GEORGIA_PEACH-16BOT,primary,Amazon,12,13.46,,https://www.amazon.com/dp/B01NBOEODU,12 x 16 oz bottles Georgia Peach,2026-11-15,Sold by Amazon.com
+HINT-GRAPE-16BOT,primary,Amazon,12,13.46,,https://www.amazon.com/dp/B0C6FKV2PR,12 x 16 oz bottles Grape,2026-11-15,Sold by Amazon.com
+ARIZONA-ICED_LEMON-16BOT,primary,Amazon,12,8.19,,https://www.amazon.com/dp/B004UKHAF4,12 x 16 oz bottles Iced Tea with Lemon,2026-11-15,Sold by Amazon.com
+COCA-ORIGINAL-12CAN,primary,BJs,35,19.49,,https://www.bjs.com/product/coca-cola-soda-soft-drink-cans-35-pk12-fl-oz/3000000000000322043/,35 x 12 oz cans,2026-11-15,BJ's Rochester; membership needed; $1.00 instant savings included
+COCA-ORIGINAL-12CAN,alternate,Amazon,12,7.68,,https://www.amazon.com/dp/B000T9WLTK,12 x 12 oz cans,2026-11-11,From the team's 11 Nov Amazon price list (add_price_list)
+PEPSI-ORIGINAL-12CAN,primary,BJs,36,20.99,,https://www.bjs.com/product/pepsi-cola-cans-36-ct12-oz/3000000000000146349/,36 x 12 oz cans,2026-11-15,BJ's Rochester; membership needed
+PEPSI-ORIGINAL-12CAN,alternate,Amazon,12,6.97,,https://www.amazon.com/dp/B000R9AK5O,12 x 12 oz cans,2026-11-15,Price from amazon.com search results
+PEPSI-ORIGINAL-20BOT,primary,Amazon,12,29.99,,https://www.amazon.com/dp/B0BMT2LF9P,12 x 20 oz bottles,2026-11-11,From the 11 Nov list; on 15 Nov no in-stock 20 oz Pepsi was found at an allowed store
+PEPSI-DIET-20BOT,primary,Amazon,24,57.45,,https://www.amazon.com/dp/B0H37DLF2S,24 x 20 oz bottles,2026-11-11,From the team's 11 Nov Amazon price list (add_price_list)
+MOUNTAIN-CODE_RED-20BOT,primary,Amazon,24,57.45,,https://www.amazon.com/dp/B0CG9ZQ4GX,24 x 20 oz bottles,2026-11-11,From the team's 11 Nov Amazon price list (add_price_list)
+MOUNTAIN-DIET-20BOT,primary,Amazon,24,55.21,,https://www.amazon.com/dp/B0CG2CVN7T,24 x 20 oz bottles,2026-11-11,From the team's 11 Nov Amazon price list (add_price_list)
+MONSTER-WHITE-16CAN,primary,Amazon,15,29.89,,https://www.amazon.com/dp/B0BL7316GD,15 x 16 oz cans Zero Ultra (white),2026-11-15,Price from amazon.com search results
+PEPSI-REAL_SUGAR-7_5CAN,primary,Amazon,10,6.52,,https://www.amazon.com/dp/B0BRQR3HV8,10 x 7.5 oz cans Real Sugar,2026-11-15,Price from amazon.com search results; the 7.5 oz can still needs a column count
+PREMIER-CHOCOLAT-11CAR,primary,Costco,18,39.99,,https://www.costco.com/p/-/premier-30g-protein-plus-energy-and-immune-support-shakes-chocolate-11-fl-oz-18-pack/4000430710,18 x 11 oz cartons Chocolate,2026-11-15,costco.com online price; this is the PLUS Energy and Immune Support version; the carton still needs a column count

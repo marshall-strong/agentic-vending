@@ -72,7 +72,7 @@ The fix is product choice, not visits: high-capacity packages, or two columns fo
 
 **Edge cases.**
 
-- **Sold out in the window:** `units_per_day` counts empty days as zero, so it understates demand (A1). No tool gives the in-stock rate yet, so buy.
+- **Sold out in the window:** `units_per_day` counts empty days as zero, so it understates demand (A1). Use `units_per_class_day` from `get_machine_state`, which leaves empty days out, and buy.
 - **Holiday in the window:** use the last full class week's rate, or the segment prior.
 - **No rate yet** (new product, day one): segment prior.
 - **Stock, zero sales:** `days_of_stock_left` is null, and null never triggers a purchase (`_days_left`). Go to rule 3. That field also ignores the closet, so it is not the rule's figure.

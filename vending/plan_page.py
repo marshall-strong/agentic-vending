@@ -17,8 +17,10 @@ What the page computes and what it only shows:
   round's projection file as written by the projection script, and shown next to that file's
   `assumptions`. The page has no demand model and makes no model calls.
 
-Only our 20 slots have values; the other team's selections are drawn hatched with their number only
-(docs/integrity.md). The Interloper is an outside seller, so its prices may be shown; nothing here
+Only the 20 selections in our current assignment (`vending.slots.SLOTS`, the inventory server's split) have values;
+the rest are drawn hatched with their number only. Before the 3 Dec start no selection is either team's and the
+split may be redrawn once; if it is, a round's products must be placed again.
+The Interloper is an outside seller, so its prices may be shown; nothing here
 feeds them to pricing.
 
 The page runs no script (CSP `default-src 'none'`): the round tabs and the "changed slots only"
@@ -450,7 +452,7 @@ def _face(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str]) -> st
             slot = f"{row}{col}"
             s = r.slots.get(slot)
             if slot not in SLOTS:
-                cells.append(f'<span class="cell theirs" title="{slot}: not our selection"><span class="num">{slot}</span></span>')
+                cells.append(f'<span class="cell theirs" title="{slot}: not in our current assignment"><span class="num">{slot}</span></span>')
                 continue
             if s is None:
                 cells.append(f'<span class="cell ours empty"><span class="num">{slot}</span><span class="lbl">empty</span></span>')
@@ -476,7 +478,7 @@ def _face(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str]) -> st
     return (f'<div class="pcab"><div class="brand">{_e(DEVICE_ID.upper())} &middot; ROUND {_e(r.id.upper())}</div>'
             f'<div class="glass">{"".join(shelves)}</div></div>'
             f'<div class="legend">{legend}</div>'
-            '<p class="sub">Striped selections aren\'t ours. Each lit slot shows units loaded, the product, the '
+            '<p class="sub">Striped selections aren\'t in our current assignment, which the inventory server may redraw before the 3 Dec start; the day-one products would then move to the new slots. Each lit slot shows units loaded, the product, the '
             'shelf price and, struck through, its floor. <b class="flag req">R</b> needs a catalog request, '
             '<b class="flag int">I</b> the Interloper sells the same drink, <b class="flag bad">!</b> a price or '
             'column problem. A blue dot: changed since the round before.</p>')
@@ -710,7 +712,7 @@ def _round(r: pr.Round, before: pr.Round | None, page: Page) -> str:
     next_door = overlapping_slots(r, page.interloper)
     return (f'<div class="round" id="round-{tid}">'
             + _tiles(r)
-            + f'<section><h2>The machine, round {_e(r.id)} <span class="hint">lit selections are ours</span></h2>'
+            + f'<section><h2>The machine, round {_e(r.id)} <span class="hint">lit selections are our current assignment</span></h2>'
               f'<div class="vm-wrap"><div>{_face(r, changed, next_door)}</div><div class="card">{_change_list(r, before, changed)}</div></div></section>'
             + f'<section><h2>Slot by slot <span class="hint">top shelf first &middot; forecast from the projection, base '
               f'scenario</span></h2>{_slot_table(r, changed, next_door)}</section>'
