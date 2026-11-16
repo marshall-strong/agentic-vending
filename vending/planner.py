@@ -729,6 +729,12 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
             refusals.append(Refusal("wildcard", (
                 f"slot {w.slot} can't go above {_dollars(ceiling)} while the price of slot {', '.join(unknown)} "
                 f"isn't known, since one of them may be above it already; wait for a poll with its price"), w.slot))
+        held = sorted(s.slot for s in slots if s.slot != w.slot and w.product and s.state.product == w.product)
+        if held:
+            refusals.append(Refusal("wildcard", (
+                f"{w.product} is in slot {', '.join(held)} now, so slot {w.slot} can't start as the wildcard with it "
+                f"at this visit; if the line that moves {', '.join(held)} came back unavailable, the wildcard's "
+                f"product would be in two slots. Move {', '.join(held)} to another product first"), w.slot))
         if desired.off_cycle:
             refusals.append(Refusal("wildcard", (
                 f"the wildcard moves only at a Friday visit, so slot {w.slot} can't go above "
@@ -748,7 +754,23 @@ def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[
     if w is not None and w.product is not None:
         owners.setdefault(w.product, w.slot)
     refusals: list[Refusal] = []
+    unknown = sorted(s.slot for s in slots if s.slot in above_now and not s.state.product)
+    if unknown:
+        # It could hold anything, so every purchase is held to the cap until we know what it holds.
+        for s in slots:
+            if s.purchase is not None and _most(s.purchase) > config.wildcard_purchase_cap_cents:
+                refusals.append(Refusal("wildcard", (
+                    f"slot {', '.join(unknown)} is above {_dollars(config.price_ceiling_cents)} and we don't know what "
+                    f"it holds, so it may be this product; slot {s.slot}'s purchase could cost "
+                    f"{_dollars(_most(s.purchase))}, over the {_dollars(config.wildcard_purchase_cap_cents)} "
+                    f"wildcard cap. Buy less, or have its contents counted first"), s.slot))
     for product, owner in sorted(owners.items()):
+        buys = [s for s in slots if s.product == product and s.purchase is not None]
+        held = sorted(s.slot for s in slots if s.slot != owner and s.state.product == product)
+        if buys and held:
+            refusals.append(Refusal("wildcard", (
+                f"{product} is the wildcard's product (slot {owner}) and is in slot {', '.join(held)} now, so it "
+                f"can't be bought at this visit; move {', '.join(held)} to another product first"), owner))
         shared = sorted(s.slot for s in slots if s.slot != owner and s.product == product)
         if shared:
             refusals.append(Refusal("wildcard", (
@@ -756,17 +778,19 @@ def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[
                 f"the wildcard's product is in no other slot, so its purchases stay under the cap. A slot that "
                 f"was the wildcard keeps that product to itself until a visit has brought it back under "
                 f"{_dollars(config.price_ceiling_cents)}"), owner))
-        for s in slots:
-            if s.product != product or s.purchase is None:
-                continue
-            options = [o for o in (s.purchase.primary, s.purchase.alternate) if o is not None]
-            most = max(o.packs * o.max_price_per_pack_cents for o in options)
+        for s in buys:
+            most = _most(s.purchase)
             if most > config.wildcard_purchase_cap_cents:
                 refusals.append(Refusal("wildcard", (
                     f"slot {s.slot} buys {product}, the wildcard's product, and its purchase could cost "
                     f"{_dollars(most)} at the worker's maximum, over the "
                     f"{_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a cheaper pack"), s.slot))
     return refusals
+
+
+def _most(purchase: Purchase) -> int:
+    """The most one line's purchase could cost at the worker's maximum, primary or alternate."""
+    return max(o.packs * o.max_price_per_pack_cents for o in (purchase.primary, purchase.alternate) if o is not None)
 
 
 # --- Step 1 helpers ----------------------------------------------------------
