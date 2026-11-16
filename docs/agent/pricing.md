@@ -1,6 +1,6 @@
 # Pricing
 
-Prices stay within the floor and ceiling, must be explainable, may need deliberate variation to learn demand, and come from our own costs and sales only.
+Prices stay within the floor and ceiling, must be explainable, may need deliberate variation to learn demand, and come from our own costs and sales, plus the Interloper's recorded prices.
 
 **The bounds** (Project Brief (Revised), sections 2 and 4). Code enforces these, not your memory.
 
@@ -20,7 +20,7 @@ The preview refuses any price outside these bounds.
    - **Otherwise** hold it, or test a $0.25 step up or down under step 5. Slow but steady sales aren't a slow seller: no low-rate rule until we have sales of our own drinks.
 5. **One test at a time** (section 3.2, the identification problem). Apart from new products, change at most one product's price a week, so any change in sales can be traced to it. After two stocked weeks at the new price, compare profit per stocked week at the old and new prices: units × (price ÷ 1.08 − unit cost). Keep whichever price earned more.
 6. **Never pay for a price change.** Change prices at the free Friday visit, or with a midweek restock that's worth its $25 anyway.
-7. **Never use other slots' prices.** Section 3.2 calls them an input; the team follows the instructor's integrity rule instead (A15, `competition-and-integrity`).
+7. **Never use other slots' prices.** Section 3.2 calls them an input; the team follows the instructor's integrity rule instead (A15, `competition-and-integrity`). The Interloper, the outside machine beside ours, is not another slot: its recorded prices may be used (`interloper`).
 
 **Inputs:**
 
