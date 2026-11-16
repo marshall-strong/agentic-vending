@@ -48,12 +48,12 @@ LOGIN, LOGOUT = "/login", "/logout"
 OPEN = ("/health", LOGIN, LOGOUT)
 # The pages' own database setting (`vending.pages.READER`); named here so the gate needs no driver.
 KEY_SETTING = "READONLY_DATABASE_URL"
-# After a wrong password, the same client waits this long before its next guess is even checked.
+# After a wrong password is checked, the same client waits this long before its next guess is.
 WRONG_DELAY_SECONDS = 1.0
 # scrypt checks running at once (each takes ~32 MB for a moment), and how long one waits for a turn.
 CHECKS_AT_ONCE = 2
 WAIT_SECONDS = 5
-# Clients remembered for the per-client delay; past this, the oldest are forgotten.
+# Clients remembered for the per-client delay; past this, finished delays are dropped first.
 MAX_CLIENTS = 10_000
 MAX_FORM_BYTES = 2048
 # Seconds a client has to send the whole password form, however slowly it trickles in.
@@ -61,8 +61,10 @@ FORM_SECONDS = 10
 CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
 
 _checking = threading.BoundedSemaphore(CHECKS_AT_ONCE)
-_wrong_lock = threading.Lock()
+_wrong_lock = threading.Condition()
 _next_try: dict[str, float] = {}
+# Clients whose password is being checked right now: each client has at most one check at a time.
+_in_flight: set[str] = set()
 # Used only when the database setting is missing (a local run): sign-ins then last until a restart.
 _fallback_key = os.urandom(32)
 
@@ -88,31 +90,43 @@ class Busy(Exception):
 
 
 class TooSoon(Exception):
-    """This client guessed wrong less than `WRONG_DELAY_SECONDS` ago."""
+    """This client's last guess was checked and wrong less than `WRONG_DELAY_SECONDS` ago."""
 
 
 def check(password: str, client: str = "") -> bool:
-    """Whether `password` is right. Raises TooSoon while this client's turn is taken, and Busy
-    when every check slot stays taken. A client's turn is claimed before its check starts, so
-    however many guesses it sends at once, it gets at most one check per `WRONG_DELAY_SECONDS`.
-    One client's guesses slow only that client, so a stranger guessing can't lock the team out."""
-    now = time.monotonic()
-    turn = now + WRONG_DELAY_SECONDS
+    """Whether `password` is right. Each client has at most one check at a time: a request that
+    arrives while the same client's check runs waits for it to finish. After a wrong guess the
+    client gets TooSoon until `WRONG_DELAY_SECONDS` have passed, so guesses sent all at once, or
+    queued while the server is busy, still get one check per delay. Busy when no check slot frees
+    up within `WAIT_SECONDS`; that doesn't count as a guess. The delay is per client address, so a
+    stranger elsewhere can't slow the team, but one behind the same address (a shared NAT) can."""
+    deadline = time.monotonic() + WAIT_SECONDS
     with _wrong_lock:
-        if _next_try.get(client, 0.0) > now:
+        while client in _in_flight:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise Busy
+            _wrong_lock.wait(left)
+        if _next_try.get(client, 0.0) > time.monotonic():
             raise TooSoon
-        if len(_next_try) >= MAX_CLIENTS:
-            _forget_expired(now)
-        _next_try[client] = turn
-    if not _checking.acquire(timeout=WAIT_SECONDS):
-        _give_back(client, turn)  # never checked, so this didn't use the client's turn
-        raise Busy
+        _in_flight.add(client)
+    checked = right = False
     try:
-        right = bool(password) and len(password) <= 256 and password_matches(password)
+        if not _checking.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise Busy
+        try:
+            checked = True
+            right = bool(password) and len(password) <= 256 and password_matches(password)
+        finally:
+            _checking.release()
     finally:
-        _checking.release()
-    if right:
-        _give_back(client, turn)
+        with _wrong_lock:
+            _in_flight.discard(client)
+            if checked and not right:  # a check that raised counts as a wrong guess
+                if len(_next_try) >= MAX_CLIENTS:
+                    _forget_expired(time.monotonic())
+                _next_try[client] = time.monotonic() + WRONG_DELAY_SECONDS
+            _wrong_lock.notify_all()
     return right
 
 
@@ -122,12 +136,6 @@ def _forget_expired(now: float) -> None:
         del _next_try[key]
     if len(_next_try) >= MAX_CLIENTS:
         _next_try.clear()
-
-
-def _give_back(client: str, turn: float) -> None:
-    with _wrong_lock:
-        if _next_try.get(client) == turn:
-            del _next_try[client]
 
 
 def client_of(forwarded_for: str | None, peer: str) -> str:

@@ -229,21 +229,56 @@ def test_guesses_sent_all_at_once_get_one_check_between_them(site, monkeypatch):
     assert statuses.count(401) == 1 and statuses.count(429) == 19
 
 
-def test_a_right_password_or_a_busy_page_doesnt_use_up_the_turn(monkeypatch):
+
+def test_a_double_submitted_right_password_signs_in_twice(monkeypatch):
+    """A double-click sends the form twice; the second waits for the first check, then passes."""
+    monkeypatch.setattr(gate, "PASSWORD_HASH", gate.make_hash(PASSWORD, n=2**14))
+    monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
+    monkeypatch.setattr(gate, "_next_try", {})
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(lambda _: gate.check(PASSWORD, "teammate"), range(2))) == [True, True]
+
+
+def test_guesses_queued_while_busy_still_wait_out_the_delay(monkeypatch):
+    """Two guesses that queue behind other clients' checks are checked one at a time, not together."""
+    import threading
+    monkeypatch.setattr(gate, "PASSWORD_HASH", gate.make_hash(PASSWORD, n=2**10))
+    monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
+    monkeypatch.setattr(gate, "_next_try", {})
+    results = []
+    def guess():
+        try:
+            results.append(gate.check("wrong", "stranger"))
+        except gate.TooSoon:
+            results.append("too soon")
+    held = [gate._checking.acquire() for _ in range(gate.CHECKS_AT_ONCE)]
+    first = threading.Thread(target=guess)
+    first.start()
+    gate.time.sleep(0.3)
+    second = threading.Thread(target=guess)
+    second.start()
+    gate.time.sleep(0.3)
+    for _ in held:
+        gate._checking.release()
+    first.join(); second.join()
+    assert sorted(results, key=str) == [False, "too soon"]
+
+
+def test_a_busy_page_doesnt_count_as_a_guess(monkeypatch):
     monkeypatch.setattr(gate, "PASSWORD_HASH", gate.make_hash(PASSWORD, n=2**10))
     monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
     monkeypatch.setattr(gate, "WAIT_SECONDS", 0.05)
     monkeypatch.setattr(gate, "_next_try", {})
-    assert gate.check(PASSWORD, "teammate") is True
-    assert gate.check(PASSWORD, "teammate") is True  # signing in again isn't held up
     held = [gate._checking.acquire() for _ in range(gate.CHECKS_AT_ONCE)]
     try:
         with pytest.raises(gate.Busy):
-            gate.check(PASSWORD, "teammate")
+            gate.check("wrong", "teammate")
     finally:
         for _ in held:
             gate._checking.release()
-    assert gate.check(PASSWORD, "teammate") is True  # the busy page didn't count as a guess
+    assert gate.check(PASSWORD, "teammate") is True
+    assert "teammate" not in gate._in_flight
 
 
 def test_a_full_list_drops_finished_delays_before_anyone_waiting(monkeypatch):
@@ -255,3 +290,7 @@ def test_a_full_list_drops_finished_delays_before_anyone_waiting(monkeypatch):
     assert set(gate._next_try) == {"stranger", "new"}
     with pytest.raises(gate.TooSoon):
         gate.check(PASSWORD, "stranger")
+    # Only when every remembered client is still waiting does the list start over.
+    monkeypatch.setattr(gate, "MAX_CLIENTS", 2)
+    assert gate.check("wrong", "newest") is False
+    assert set(gate._next_try) == {"newest"}

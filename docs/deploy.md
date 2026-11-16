@@ -107,11 +107,13 @@ home page links to both once they are set up. They are `vending/pages.py`.
 **One shared password** (`vending/gate.py`, since 15 Nov 2026). Every page except `/health`
 asks for it first, at `/login`; a browser that gives it stays signed in for 30 days, and
 `/logout` forgets it in that browser only. The sign-in is a signed cookie the server keeps
-no list of, so a copied cookie works until it expires; changing the password is the only way to
-sign a browser out remotely. Kevin has the password and shares it with the team and the instructors.
+no list of, so a copied cookie works until it expires; the only ways to sign a browser out
+remotely are a new password or a new `READONLY_DATABASE_URL` (the cookie key is made from both). Kevin has the password and shares it with the team and the instructors.
 The code holds only its scrypt hash, so nobody has to store a secret in Azure, and after a
-wrong guess the same client waits a second before its next one is checked. The client's turn is
-claimed before the check starts, so guesses sent all at once still get one check a second. To change it, run `python -m vending.gate hash`, paste the
+wrong guess the same client waits a second before its next one is checked. A client has one check
+at a time, so guesses sent all at once, or queued while the server is busy, still get one check a
+second. The delay is per address: someone behind the same shared network address as a teammate
+could keep that teammate waiting. To change it, run `python -m vending.gate hash`, paste the
 line it prints into `vending/gate.py` and deploy; that signs every browser out. Microsoft
 sign-in (Container Apps' built-in one) was tried first, but the institute's tenant makes an
 administrator approve each app, so it would need IT.
