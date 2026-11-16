@@ -13,6 +13,7 @@ Nothing here imports `psycopg` at module level, so the pure tests (`test_evadts`
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -53,6 +54,11 @@ def _slots_before_the_start(monkeypatch):
     for name in names:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(settings, "_FILE", {k: v for k, v in settings._FILE.items() if k not in names})
+
+
+# Test schemas are thrown away, so their commits needn't wait for the disk. Changes what a crash
+# could lose, never what another connection sees.
+FAST_COMMIT = "-c synchronous_commit=off"
 
 
 @pytest.fixture(autouse=True)
@@ -105,14 +111,22 @@ def database_url():
 
 
 @pytest.fixture
-def schema_url(database_url):
+def schema_url(database_url, monkeypatch):
     """(url, schema) for a fresh, migrated schema, dropped after the test."""
     import psycopg
 
     from vending import db, slots
 
+    # `migrate` takes one advisory lock for the whole database, so under pytest-xdist every
+    # worker's migrations would queue behind every other's. Each test migrates its own schema,
+    # so a lock per worker keeps what the lock is for (one migrate at a time in a schema).
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    if worker.startswith("gw"):
+        monkeypatch.setattr(db, "MIGRATION_LOCK", db.MIGRATION_LOCK + 1 + int(worker[2:]))
+
     url = database_url
-    admin = psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT)
+    admin = psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
+                            options=db.session_options(url, FAST_COMMIT))
     schema = f"test_{uuid.uuid4().hex[:8]}"
     admin.execute(f"create schema {schema}")
     with open_in(url, schema) as conn:
@@ -134,7 +148,7 @@ def open_in(url: str, schema: str):
     from vending import db
 
     return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
-                           options=db.session_options(url, f"-c search_path={schema}"))
+                           options=db.session_options(url, f"-c search_path={schema}", FAST_COMMIT))
 
 
 @pytest.fixture
