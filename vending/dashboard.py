@@ -1496,6 +1496,8 @@ SCRIPT = """(function () {
   function refresh() {
     if (document.hidden) return;
     fetch(location.pathname, {cache: 'no-store'}).then(function (r) {
+      // Signed out (the password's cookie ran out): reload, so the password page shows.
+      if (r.redirected && new URL(r.url).pathname === '/login') { location.reload(); throw new Error('signed out'); }
       if (!r.ok) throw new Error(r.status);
       return r.text();
     }).then(function (html) {

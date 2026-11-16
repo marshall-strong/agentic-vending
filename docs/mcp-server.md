@@ -127,11 +127,13 @@ Each request goes to an instructor, and too many open ones get a `429`, so befor
 refuses, all at once: a field the bridge would reject, a size that isn't a liquid volume (`20 oz
 bottle`, `12 fl oz can`, `500 mL`), alcohol or THC (root beer and ginger ale are fine), a product
 already in the catalog, a product we already asked for, and a request over our weekly limit.
-The limit counts every request filed in the last 7 days, with a higher limit while the bridge
-catalog is small, so the first big ask can happen without anyone flipping a switch. **The numbers
-are placeholders the team still has to set:** for now 3 per week normally, 15 while the catalog has
-fewer than 25 products (`WEEKLY_LIMIT`, `STARTUP_WEEKLY_LIMIT` and `SMALL_CATALOG` in
-`vending/tools/catalog_request.py`). A request is a duplicate of an
+**Before the machine goes live (midnight Eastern, Thu 3 Dec 2026, `MACHINE_LIVE`) there is
+none**, so the team can ask for as many drinks as it wants; the bridge still refuses once about 24
+of ours are open. From go-live the limit is per competition week, Thursday to Wednesday: 20 in the
+first week, then 15, 10 and 5, and 3 a week after that (Kevin, 15 Nov; `WEEKLY_LIMITS` and
+`FINAL_WEEKLY_LIMIT` in `vending/tools/catalog_request.py`, a starting point the team can tune).
+Only requests filed since the current week began count, so requests made before go-live, or late in
+the week before, never use up a later week's share. A request is a duplicate of an
 earlier one, or of a catalog product, when its name, flavor and size have exactly the same words.
 Before comparing, units are normalised ("20oz", "20 ounce" and "20 fl oz" are all "20 oz"), and
 words that don't tell drinks apart are dropped: containers (bottle, can, pack) and default-flavor
@@ -222,7 +224,8 @@ day one. Every entry is logged in `action_log` with who recorded it.
 Friday. `units_sold` counts every rise in our 20 slots' unit counters; cost of sales covers the
 units the receipts can cost (weighted average, `vending.stock`), and `units_costed`,
 `cost_of_sales_complete: false` and a note say how many could not be (sold before we first loaded
-the slot, or past what we loaded). Cost of sales is never "unknown": a quiet week with a $25 visit
+the slot, or past what we loaded). Units sold across a product change that the counters can't split
+(#112) count as costed, at the new product's average cost; a note says the product may be wrong. Cost of sales is never "unknown": a quiet week with a $25 visit
 and 40 cents of tokens nets -25.40. **Shrinkage** is the cost of units lost without a sale: later
 losses, units still counted in a slot when its product changed, and a purchase line that lost
 every unit. It is its own line, taken out of net, so a lost unit's cost never silently disappears.

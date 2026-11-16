@@ -147,7 +147,9 @@ should do next.
   - No `start` and the ledger not opened: `success: false`, naming the command.
   - `end` before `start`: `success: false`.
   - Units sold that no receipt can cost: `cost_of_sales_complete: false` and a note saying how
-    many. Cost of sales is never "unknown" as a whole.
+    many. Cost of sales is never "unknown" as a whole. Units sold across a product change the
+    counters can't split (#112) count as costed, at the new product's average cost, with a note
+    that it may be the wrong product's.
   - Stock whose cost is unknown: `inventory_complete: false` and a note.
 - **Owner**: Marshall Strong (issue #23, PR #35).
 
@@ -314,10 +316,11 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   - `alcohol_or_thc`: the description names alcohol or THC (root beer and ginger ale are fine).
   - `already_in_catalog`: the same drink is in the catalog; order it by SKU instead.
   - `already_requested`: we already asked for it, including a request whose answer was lost.
-  - `request_limit`: over our own limit on requests in any 7 days: 3, or 15 while the catalog has
-    fewer than 25 products. **These numbers are placeholders the team has not set yet**
-    (`WEEKLY_LIMIT`, `STARTUP_WEEKLY_LIMIT`, `SMALL_CATALOG` in
-    `vending/tools/catalog_request.py`).
+  - `request_limit`: over our own limit on requests filed in the current competition week
+    (Thursday to Wednesday, from midnight Eastern). **None before the machine goes live (3 Dec
+    2026)**; then 20 in week 1, 15, 10, 5, and 3 a week after that (`WEEKLY_LIMITS`,
+    `FINAL_WEEKLY_LIMIT` in `vending/tools/catalog_request.py`). Requests filed before the week
+    began don't count.
   - `too_many_open_requests`: the bridge answered `429`.
   - `halted`: the halt switch is on.
   - Bridge unreachable when reading the catalog: `success: false`, "nothing was sent".

@@ -200,6 +200,22 @@ def test_sold_since_load_follows_the_counter_misread_rule():
     assert sold(1000, 1002, 1010) == 8
 
 
+def test_the_old_products_share_of_a_split_window_is_not_sold_since_the_swap():
+    # #97: Arizona at $2.00 swapped for Red Bull at $4.00 at hour 3; the hour-5 poll shows
+    # 2 units and 600 cents, so 1 Arizona sold before the swap and 1 Red Bull after it.
+    from vending import stock
+    from vending.tools.machine_state import _sold_since_load
+    t0, h = datetime(2026, 11, 2, 12, tzinfo=timezone.utc), timedelta(hours=1)
+    base = dict(request_id="r1", line_no=0, slot="15", outcome="primary", sku="ARIZONA", total_paid="5.00",
+                units_loaded=10, units_lost=0, units_to_back_stock=0, units_from_back_stock=0,
+                units_pulled=0, pulled_sku=None, slot_reassigned=False, resolved_at=t0)
+    lines = [base, {**base, "request_id": "r2", "sku": "REDBULL", "total_paid": "15.00", "units_pulled": 9,
+                    "pulled_sku": "ARIZONA", "slot_reassigned": True, "resolved_at": t0 + 3 * h}]
+    polls = [("15", t0 + h, 100, 20000, 200), ("15", t0 + 5 * h, 102, 20600, 400)]
+    replay = stock.weighted_average(stock.movements_from_receipts(lines, []) + stock.sales_from_counters(polls))
+    assert _sold_since_load(replay.sales, {"15": t0 + 3 * h})["15"] == 1
+
+
 def test_a_misread_poll_moves_no_sales(conn):
     store_poll(conn, "p0", "2026-10-22T12:00:00+00:00", {"15": (250, 1000)})
     store_poll(conn, "p1", "2026-10-24T12:00:00+00:00", {"15": (250, 5)})      # misread, just before the load
