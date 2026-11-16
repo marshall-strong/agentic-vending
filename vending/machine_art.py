@@ -617,7 +617,7 @@ def _style(item: Item) -> str:
 
 
 def _badge(x: float, y: float, text: str, cls: str, fill: str, ink: str) -> str:
-    r = 7.5 if len(text) < 3 else 9.5
+    r = 7.5 if len(text) < 2 else 9.5
     return (f'<g class="{cls}"><circle cx="{x:.0f}" cy="{y:.1f}" r="{r}" fill="{fill}" stroke="#05070a"/>'
             f'<text x="{x:.0f}" y="{y + 3.6:.1f}" class="ma-tx" font-size="10.5" fill="{ink}">{_e(text)}</text></g>')
 
