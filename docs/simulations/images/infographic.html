@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulated Season Results</title>
+<style>
+  :root {
+    --surface: #fcfcfb; --card: #ffffff; --line: #e6e5e0;
+    --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #7a7975;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --ref: #52514e;
+    --good: #0a7a3d; --warn: #9a5b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--ink);
+         font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .page { width: 1200px; padding: 40px 48px 36px; }
+  .kicker { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 8px; font-weight: 700; }
+  .sub { color: var(--ink-2); margin: 0 0 28px; font-size: 16px; max-width: 900px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .tile .label { font-size: 13px; color: var(--ink-2); }
+  .tile .num { font-size: 32px; font-weight: 700; margin: 2px 0; font-variant-numeric: tabular-nums; }
+  .tile .note { font-size: 13px; color: var(--ink-3); }
+  .grid2 { display: grid; grid-template-columns: 1.55fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .card h2 { font-size: 17px; margin: 0 0 2px; }
+  .card .cap { font-size: 13px; color: var(--ink-3); margin: 0 0 10px; }
+  .legend { display: flex; gap: 18px; font-size: 13px; color: var(--ink-2); margin: 0 0 6px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 18px; height: 3px; border-radius: 2px; display: inline-block; }
+  .sw.dash { background: repeating-linear-gradient(90deg, var(--ref) 0 5px, transparent 5px 9px); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 0 6px 6px; border-bottom: 1px solid var(--line); }
+  td { padding: 7px 6px; border-bottom: 1px solid var(--line); }
+  td.r, th.r { text-align: right; }
+  tr.hero td { font-weight: 700; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+  .lessons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .lesson { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: #fafaf8; }
+  .lesson b { display: block; font-size: 14px; margin-bottom: 3px; }
+  .lesson p { margin: 0; font-size: 13px; color: var(--ink-2); }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; margin-bottom: 6px; }
+  .tag.fixed { color: var(--good); background: #e5f4ea; }
+  .tag.open { color: var(--warn); background: #fbf0dc; }
+  .next { margin-top: 16px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .next .card p { margin: 4px 0 0; font-size: 14px; color: var(--ink-2); }
+  .foot { margin-top: 18px; font-size: 12px; color: var(--ink-3); }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="kicker">Simulated data · Thu 3 Dec 2026 – Wed 3 Feb 2027 · 20 slots · one seed per season</p>
+  <h1>Our agent ran a full simulated season. After the fixes it gained $69, but the simple refill rule still won.</h1>
+  <p class="sub">We ran the real agent, tools, planner and ledger against a simulated machine, customers and student worker. Nothing touched the DEX bridge or the team's database.</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="label">Opus, after the fixes</div><div class="num">$385.97</div><div class="note">profit after model spend, up from $317.12</div></div>
+    <div class="tile"><div class="label">Simple refill rule</div><div class="num">$464.62</div><div class="note">no model, Thursday runs</div></div>
+    <div class="tile"><div class="label">Units sold, Opus</div><div class="num">170 → 302</div><div class="note">slots that sold: 12 → 17 of 20</div></div>
+    <div class="tile"><div class="label">Total API spend</div><div class="num">$7.56</div><div class="note">of the $10 budget, five seasons</div></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Profit so far, by ledger week</h2>
+      <p class="cap">Cumulative profit after model spend. Weeks run Saturday to Friday. Weeks 4 and 5 are Winter Break.</p>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--s1)"></i>Opus, after the fixes (Wed)</span>
+        <span><i class="sw" style="background:var(--s2)"></i>Opus, as built (Thu)</span>
+        <span><i class="sw" style="background:var(--s3)"></i>Sonnet (Thu)</span>
+        <span><i class="sw dash"></i>Simple rule (Thu)</span>
+      </div>
+      <svg id="chart" width="640" height="300" role="img" aria-label="Cumulative profit by week for four seasons"></svg>
+    </div>
+    <div class="card">
+      <h2>All five seasons</h2>
+      <p class="cap">Profit after model spend, units sold, units lost to empty slots, model spend.</p>
+      <table>
+        <tr><th>Season</th><th class="r">Profit</th><th class="r">Units</th><th class="r">Lost</th><th class="r">Spend</th></tr>
+        <tr class="hero"><td><i class="dot" style="background:var(--s1)"></i>Opus, fixed (Wed)</td><td class="r">$385.97</td><td class="r">302</td><td class="r">33</td><td class="r">$3.24</td></tr>
+        <tr><td><i class="dot" style="background:var(--s2)"></i>Opus, as built</td><td class="r">$317.12</td><td class="r">170</td><td class="r">11</td><td class="r">$2.84</td></tr>
+        <tr><td><i class="dot" style="background:var(--s3)"></i>Sonnet</td><td class="r">$330.96</td><td class="r">244</td><td class="r">41</td><td class="r">$1.03</td></tr>
+        <tr><td><i class="dot" style="background:var(--ref)"></i>Rule (Thu)</td><td class="r">$464.62</td><td class="r">324</td><td class="r">16</td><td class="r">$0</td></tr>
+        <tr><td><i class="dot" style="background:#b4b3ad"></i>Rule (Wed)</td><td class="r">$443.09</td><td class="r">309</td><td class="r">21</td><td class="r">$0</td></tr>
+      </table>
+      <p class="cap" style="margin-top:10px">The $7.56 includes a $0.45 pilot. The model-vs-rule gap depends on one assumption: how much a second slot of the same drink adds to demand.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>What round 1 taught us, and what we changed</h2>
+    <p class="cap">Round 1 lessons for the prompt, rules and tools.</p>
+    <div class="lessons">
+      <div class="lesson"><span class="tag fixed">Fixed</span><b>1. It skipped the day-one fill</b><p>No receipts looked like "contents unknown", so week 1 sold nothing. The rules card now says the machine starts empty.</p></div>
+      <div class="lesson"><span class="tag fixed">Fixed</span><b>2. Thursday misses Amazon's cutoff</b><p>Restocks landed Monday. The prompt now gives each store's cutoff, and the simulator can run on Wednesdays.</p></div>
+      <div class="lesson"><span class="tag fixed">Fixed</span><b>5. Wrong end date and end-stock value</b><p>It planned for 31 Jan and treated leftover stock as a loss. The card now says Wed 3 Feb and that leftover stock is valued at cost (still unconfirmed).</p></div>
+      <div class="lesson"><span class="tag open">Open · course rule</span><b>3. The price floor priced sodas out</b><p>Opus used 2 drinks in 12 slots all season and ended with $900 idle.</p></div>
+      <div class="lesson"><span class="tag open">Open · needs prices</span><b>4. Only five drinks are sourced</b><p>Four catalog drinks had no sourcing row, so they couldn't be bought.</p></div>
+      <div class="lesson"><span class="tag open">Open · waiting on David</span><b>6. One pack per slot</b><p>A 20-slot day-one fill of five drinks costs up to about $980, so the fill gets split across visits.</p></div>
+    </div>
+  </div>
+
+  <div class="next">
+    <div class="card"><h2>New weak spot: empty slots</h2><p>The agent refills only after a slot runs out. Seven slots were empty by 13 Jan, and it lost 25 units in weeks 7–8. The rule lost 10.</p></div>
+    <div class="card"><h2>Next fix to try</h2><p>Top up a slot when its days of stock left are fewer than the days until the next visit.</p></div>
+    <div class="card"><h2>For the team to decide</h2><p>Run day: Wednesday, or Thursday plus in-store sourcing. Either way, keep a run on go-live day, Thu 3 Dec.</p></div>
+  </div>
+
+  <p class="foot">Source: docs/simulations/2026-11-16-full-competition.md and docs/simulations/data/. Simulated seasons, one seed each; don't pick a model on these alone.</p>
+</div>
+<script>
+  const weeks = [1,2,3,4,5,6,7,8,9,10];
+  const series = [
+    { name: "Simple rule", color: "var(--ref)", dash: "6 5", v: [21,79,136,137,137,214,295,386,423,465], end: "$465" },
+    { name: "Sonnet", color: "var(--s3)", v: [27,76,119,126,126,171,214,254,303,331], end: "$331" },
+    { name: "Opus, as built", color: "var(--s2)", v: [-1,38,80,86,86,155,200,254,294,317], end: "$317" },
+    { name: "Opus, fixed", color: "var(--s1)", v: [23,68,120,130,129,185,242,299,346,386], end: "$386", w: 3 },
+  ];
+  const W = 640, H = 300, m = { l: 44, r: 54, t: 10, b: 30 };
+  const x = i => m.l + (i) * (W - m.l - m.r) / 9;
+  const y = v => m.t + (500 - v) * (H - m.t - m.b) / 520;
+  const ns = "http://www.w3.org/2000/svg", svg = document.getElementById("chart");
+  const el = (t, a, txt) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; svg.appendChild(e); return e; };
+  el("rect", { x: x(3) - 14, y: m.t, width: x(4) - x(3) + 28, height: H - m.t - m.b, fill: "#f2f1ec" });
+  el("text", { x: (x(3) + x(4)) / 2, y: m.t + 14, "text-anchor": "middle", "font-size": 11, fill: "#7a7975" }, "Winter Break");
+  for (let v = 0; v <= 500; v += 100) {
+    el("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: v === 0 ? "#b4b3ad" : "#ecebe6", "stroke-width": 1 });
+    el("text", { x: m.l - 8, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "#7a7975" }, "$" + v);
+  }
+  weeks.forEach((w, i) => el("text", { x: x(i), y: H - 10, "text-anchor": "middle", "font-size": 11, fill: "#7a7975" }, "W" + w));
+  const ends = [];
+  for (const s of series) {
+    el("polyline", { points: s.v.map((v, i) => x(i) + "," + y(v)).join(" "), fill: "none", stroke: s.color, "stroke-width": s.w || 2, "stroke-dasharray": s.dash || "", "stroke-linejoin": "round", "stroke-linecap": "round" });
+    el("circle", { cx: x(9), cy: y(s.v[9]), r: 4, fill: s.color, stroke: "#fff", "stroke-width": 2 });
+    ends.push({ y: y(s.v[9]), t: s.end });
+  }
+  ends.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 14) ends[i].y = ends[i - 1].y + 14;
+  ends.forEach(e => el("text", { x: x(9) + 9, y: e.y + 4, "font-size": 12, "font-weight": 600, fill: "#0b0b0b" }, e.t));
+</script>
+</body>
+</html>

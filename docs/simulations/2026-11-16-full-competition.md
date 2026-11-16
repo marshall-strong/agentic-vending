@@ -16,6 +16,11 @@ the fixes and Wednesday runs, and the scripted rule with Wednesday runs.
 
 ## Headline
 
+The whole story on one page (its source is `images/infographic.html`; rerender it with headless Chrome at 1200 px wide):
+
+![Five simulated seasons on one page](images/infographic.png)
+
+
 | Season | Profit after model spend | Units sold | Units lost to empty slots | Model spend | Spendable at the end | Stock left, at cost |
 |---|---|---|---|---|---|---|
 | Opus 5.5, medium (the agent as built) | **$317.12** | 170 | 11 | $2.84 | $905.32 | $14.64 |
