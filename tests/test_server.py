@@ -40,9 +40,9 @@ def db(schema_url, monkeypatch):
         server._conn.close()
 
 
-def test_lists_all_eleven_tools():
+def test_lists_all_twelve_tools():
     tools = {t.name: t for t in call(None).tools}
-    assert len(tools) == 11
+    assert len(tools) == 12
     assert server.WRITE_TOOLS <= tools.keys()
     assert set(WRITE_ARGS) == server.WRITE_TOOLS
     assert tools["get_machine_state"].outputSchema is not None
@@ -54,7 +54,7 @@ def test_lists_all_eleven_tools():
 TOOL_NAMES = {
     "get_machine_state", "get_sales_history", "get_catalog", "get_account_balance",
     "preview_desired_state", "submit_desired_state", "get_purchase_requests", "set_price",
-    "get_pnl", "request_catalog_product", "get_project_rules",
+    "get_pnl", "request_catalog_product", "get_project_rules", "get_briefing",
 }
 
 
@@ -70,6 +70,17 @@ def test_machine_state_end_to_end(db):
     assert not result.isError
     slot = result.structuredContent["data"][0]
     assert (slot["slot"], slot["price"], slot["units_per_day"]) == ("15", "2.50", "3.00")
+
+
+def test_briefing_is_a_built_read_logged_after_its_readonly_snapshot(db):
+    result = call("get_briefing")
+    assert not result.isError
+    reply = result.structuredContent
+    assert reply["success"] and reply["snapshot_id"] and reply["computed_at"]
+    assert reply["count"] == 20 and "Money ($" in reply["text"]
+    row = db.execute("select kind, tool, outcome, result from action_log").fetchone()
+    assert row[:3] == ("read", "get_briefing", "done")
+    assert row[3]["snapshot_id"] == reply["snapshot_id"]
 
 
 @pytest.mark.parametrize("tool", sorted(WRITE_ARGS))
@@ -172,14 +183,14 @@ def test_built_only_hides_the_stubs(monkeypatch):
     monkeypatch.setenv("VENDING_TOOLS", "built")
     try:
         importlib.reload(server)
-        assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history", "get_catalog",
+        assert [t.name for t in call(None).tools] == ["get_briefing", "get_machine_state", "get_sales_history", "get_catalog",
                                                       "get_account_balance", "preview_desired_state",
                                                       "submit_desired_state", "get_purchase_requests",
                                                       "get_pnl", "get_project_rules", "request_catalog_product"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)
-    assert len(call(None).tools) == 11
+    assert len(call(None).tools) == 12
 
 
 def test_parallel_calls_do_not_collide(db):
