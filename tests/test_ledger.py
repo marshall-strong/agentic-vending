@@ -337,6 +337,53 @@ def test_pnl_window_cuts_sales_and_inventory_at_its_end(conn):
     assert (after.units_sold, after.inventory_machine_cents) == (5, 3 * UNIT_COST)
 
 
+def test_a_period_that_ends_between_a_swap_and_the_next_poll_books_the_split_with_its_takings(conn):
+    # #97: Coke at $2.50 until a swap to Red Bull at $4.00 at 12:00 on the 8th. The 17:00 poll
+    # shows 2 units and 650 cents: 1 Coke before the swap and 1 Red Bull after it.
+    open_ledger(conn)
+    deliver(conn, "r1")                                   # 8 Coke in slot 15 at UNIT_COST each
+    record_request(conn, "r2", OPENED + timedelta(days=6), False, BODY)
+    store(conn, "r2", fulfilled("r2", receipt(
+        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid="15.00", unit_cost_paid="1.50",
+        units_loaded=10, units_lost=0, loss_note=None, units_to_back_stock=0, units_pulled=7, pulled_sku="COKE20",
+        slot_reassigned=True, resolved_at="2026-11-08T12:00:00Z"), fulfilled_at="2026-11-08T12:30:00Z"), NOW)
+    store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25650)})
+    middle = datetime(2026, 11, 8, 14, 0, tzinfo=timezone.utc)
+    first, second, whole = (ledger.pnl(conn, OPENED, middle), ledger.pnl(conn, middle, NOW),
+                            ledger.pnl(conn, OPENED, NOW))
+    # The 7 Coke pulled are all that was left, so nothing is shrinkage in either period.
+    assert (first.units_sold, first.cost_of_sales_cents, first.shrinkage_units) == (0, 0, 0)
+    assert (second.units_sold, second.units_costed, second.takings.cents) == (2, 2, 650)
+    assert second.cost_of_sales_cents == UNIT_COST + 150 and second.shrinkage_units == 0
+    for name in ("units_sold", "units_costed", "cost_of_sales_cents", "shrinkage_units", "shrinkage_cents"):
+        assert getattr(first, name) + getattr(second, name) == getattr(whole, name), name
+
+
+def test_an_unsplit_swap_window_stays_in_cost_of_sales_and_says_why(conn):
+    # #112: as above, but the 17:00 poll shows 2 units and 700 cents, which fits no split of
+    # $2.50 and $4.00. The 2 units' cost (2 Red Bull at 150c) stays in cost of sales, by week too.
+    open_ledger(conn)
+    deliver(conn, "r1")
+    record_request(conn, "r2", OPENED + timedelta(days=6), False, BODY)
+    store(conn, "r2", fulfilled("r2", receipt(
+        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid="15.00", unit_cost_paid="1.50",
+        units_loaded=10, units_lost=0, loss_note=None, units_to_back_stock=0, units_pulled=7, pulled_sku="COKE20",
+        slot_reassigned=True, resolved_at="2026-11-08T12:00:00Z"), fulfilled_at="2026-11-08T12:30:00Z"), NOW)
+    store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25700)})
+    p = ledger.pnl(conn, OPENED, NOW)
+    # Their cost is in cost of sales, so they count as costed: the P&L page and get_pnl show a
+    # known figure instead of "unknown", and the note says the product may be wrong.
+    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 2, 300)
+    assert p.cost_of_sales_complete
+    assert any("can't split" in n and "may be the wrong product's" in n for n in p.notes)
+    assert not any("have no known cost" in n for n in p.notes)
+    weeks = ledger.pnl_by_week(conn, OPENED, NOW)
+    assert sum(w.cost_of_sales_cents for w in weeks) == 300
+    assert all(w.cost_of_sales_complete for w in weeks)
+
+
 def test_purchases_and_the_stock_they_bring_go_by_the_same_clock(conn):
     open_ledger(conn)
     # Resolved on the 7th but the bridge marked the request fulfilled on the 9th.
