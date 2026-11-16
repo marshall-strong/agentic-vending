@@ -96,11 +96,13 @@ only if the start moves.
 - **Before the lock time**, a different answer replaces the stored one. It prints `changed: ...`,
   and `action_log` (tool `slots.record`) says what it was and what it is now.
 - **The first check at or after the lock** records the server's final assignment, including a
-  change made just before the start. A later different answer is refused (exit 1). In the
+  change made just before the start. A check counts from when it asked the server, so one that
+  asked before the lock and got its answer after it confirms nothing. A later different answer is refused (exit 1). In the
   worker that fails the round, so `/health` answers 503. Ask the instructors which is right; if
   the new one is, clear `slot_assignment` and record again.
 - **Until that first post-start check**, readers refuse the old assignment. The dashboard shows
-  no assigned selections, and the analysis asks for `python -m vending.slots record`.
+  no assigned selections (back stock still shows, from the receipts), and the analysis asks for
+  `python -m vending.slots record`.
 - **Always refused**, before or after: an answer that isn't 20 different selections on `vmc1`,
   each a shelf 1-5 then a column 1-8 (11 to 58).
 

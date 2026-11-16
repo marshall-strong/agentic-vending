@@ -15,7 +15,10 @@ the server until the lock time, `SLOTS_LOCK_AT`, and holds what it has from then
  - Before the lock time, a well-formed answer that differs from the stored one
    replaces it, and `action_log` says what it was and what it is now.
  - The first check at or after the lock records the server's final assignment.
-   Later changes are refused (exit 1), so a person checks before anything switches.
+   A check counts from when its request to the server started, so an answer
+   asked for before the lock and delivered after it is still a pre-start answer
+   and confirms nothing. Later changes are refused (exit 1), so a person checks
+   before anything switches.
  - At any time, the same answer only moves `last_checked_at`, and a new team
    label alone is stored.
 
@@ -176,7 +179,8 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
 
     Returns "recorded", "unchanged", "team renamed" or "changed". Before `lock`
     (default `lock_at()`, the start), an answer whose device or slots differ from
-    the stored ones replaces them ("changed"), and the log says old -> new. The
+    the stored ones replaces them ("changed"), and the log says old -> new.
+    `now` is when the request for `answer` started (default: this call). The
     first check at or after `lock` takes whatever the server says then: that is
     the assignment at the start, even if it changed just before and no check
     ran in between. From then on a different answer raises `BadAssignment` and
@@ -186,7 +190,8 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
     """
     from psycopg.types.json import Jsonb
 
-    # Observation time, not the time a delayed database write acquires its lock.
+    # Observation time: when the request for `answer` started, not when it returned or when a delayed
+    # database write acquires its lock. A caller that fetched the answer passes it (`main` does).
     at = now or datetime.now(timezone.utc)
     new = parse(answer)
     lock = lock or lock_at()
@@ -273,13 +278,17 @@ def main(argv: list[str] | None = None) -> int:
         except settings.SettingsError as error:
             print(f"refused: {error}", file=sys.stderr)
             return 1
+        # The answer is what the server said when we asked, so it is observed when the request starts. Taken
+        # after it returns, an answer asked for before the lock and delivered after it would confirm a
+        # pre-start assignment for good.
+        asked_at = datetime.now(timezone.utc)
         try:
             answer = Bridge().slots()
         except BridgeError as error:
             print(f"bridge error: {error}", file=sys.stderr)
             return 3
         try:
-            outcome = record(conn, answer, lock=lock)
+            outcome = record(conn, answer, now=asked_at, lock=lock)
         except BadAssignment as error:
             print(f"refused: {error}", file=sys.stderr)
             return 1

@@ -388,6 +388,46 @@ def test_record_refuses_a_change_after_the_lock_with_exit_1(command, monkeypatch
     assert "different assignment, but ours locked at 2026-01-01T00:00:00-05:00" in capsys.readouterr().err
 
 
+def test_an_answer_asked_for_before_the_lock_and_delivered_after_it_confirms_nothing(command, schema_url,
+                                                                                      monkeypatch, capsys):
+    """The clock crosses the lock while the bridge answers. That answer is the server's pre-start one: it
+    mustn't become readable after the start, and the final assignment asked for after the lock still lands."""
+    from tests.conftest import open_in
+
+    lock = datetime(2026, 12, 3, 5, tzinfo=timezone.utc)
+    monkeypatch.setenv(slots.LOCK_SETTING, lock.isoformat())
+    clock = {"now": lock - timedelta(days=1)}
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock["now"]
+
+    monkeypatch.setattr(slots, "datetime", Clock)
+    assert slots.main(["record"]) == 0                       # the day before: ANSWER stored
+
+    class SlowBridge:
+        def slots(self):
+            clock["now"] = lock + timedelta(seconds=1)       # asked a second before the lock, answered after
+            return command["answer"]
+
+    from vending import bridge
+    clock["now"] = lock - timedelta(seconds=1)
+    monkeypatch.setattr(bridge, "Bridge", SlowBridge)
+    assert slots.main(["record"]) == 0
+    with open_in(*schema_url) as conn:
+        with pytest.raises(SlotsNotRecorded, match="final server assignment has not been confirmed"):
+            slots.our_slots(conn)
+
+    command["answer"] = MOVED                                 # the final assignment, asked for after the lock
+    clock["now"] = lock + timedelta(minutes=5)
+    monkeypatch.setattr(bridge, "Bridge", lambda: FakeBridge(command["answer"]))
+    capsys.readouterr()
+    assert slots.main(["record"]) == 0, capsys.readouterr().err
+    with open_in(*schema_url) as conn:
+        assert slots.our_slots(conn) == LEFT
+
+
 def test_record_refuses_a_malformed_answer_with_exit_1(command, capsys):
     command["answer"] = {**ANSWER, "slots": ["11"]}
     assert slots.main(["record"]) == 1
