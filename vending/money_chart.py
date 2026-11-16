@@ -38,6 +38,7 @@ from vending import db, ledger, money_series
 from vending.slots import SlotsNotRecorded
 
 PAGE = Path(__file__).with_name("money_chart.html")
+_SCRIPT_SAFE = {ord(c): f"\\u{ord(c):04x}" for c in "<>&\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}"}
 
 
 def data(conn: psycopg.Connection, start: date | None = None, end: date | None = None,
@@ -57,7 +58,10 @@ def data(conn: psycopg.Connection, start: date | None = None, end: date | None =
         raise ValueError(f"end ({end}) is before start ({start})")
     days = money_series.daily(conn, start, end, now)
     return {
-        "opening": {"at": opened.at.astimezone(timezone.utc).isoformat(), "amount": ledger.money(opened.amount_cents)},
+        # "day" lets the page tell an export that starts at the opening from one that starts later,
+        # whose first day has no balance before it in the data.
+        "opening": {"at": opened.at.astimezone(timezone.utc).isoformat(), "day": money_series._day(opened.at).isoformat(),
+                    "amount": ledger.money(opened.amount_cents), "exact_cents": money_series._exact(opened.amount_cents)},
         "generated_at": now.astimezone(timezone.utc).isoformat(),
         "daily": [money_series.as_json(d) for d in days],
     }
@@ -67,9 +71,10 @@ def page(payload: dict | None) -> str:
     """The page with `payload` inlined; with None, the page keeps its MOCK data."""
     if payload is None:
         return PAGE.read_text(encoding="utf-8")
-    text = json.dumps(payload, separators=(",", ":"))
-    # Inside <script>, "</" could end the element early; JSON allows the escaped slash.
-    text = text.replace("</", "<\\/")
+    # Inside <script>, "</script" ends the element and "<!--" changes how the rest parses, so no "<",
+    # ">" or "&" goes in as itself. U+2028 and U+2029 end lines in older JavaScript. Each becomes its
+    # \u escape, which JSON reads back as the same character.
+    text = json.dumps(payload, separators=(",", ":")).translate(_SCRIPT_SAFE)
     html = PAGE.read_text(encoding="utf-8")
     if "/*DATA*/null" not in html:
         raise RuntimeError(f"{PAGE.name} has lost its /*DATA*/null placeholder")
