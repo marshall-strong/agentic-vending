@@ -47,10 +47,27 @@ Competition money only: counting starts at the ledger's opening, so model calls 
 (development spend, #104) are in no figure.
 
 **Unknown stays unknown.** A missing cost makes the affected profit and cost totals unknown.
-The net worth view leaves a gap when stock value is unknown. Rolling totals and selected ranges
-recover when their own days have complete costs. Weekly profit includes shrinkage and adjustments.
-The page sums exact cents before it rounds values for display. A profit tile covers the exported
-period, which can start after the ledger opening or end during an unfinished day.
+Lines leave a gap on any day a value is unknown (cash and net worth too), and a known day between
+unknown ones shows as a dot. Rolling totals and selected ranges recover when their own days have
+complete costs. In the weekly view a week with an unknown cost gets a dashed "?" box, the label
+"incomplete" and no profit dot.
+
+**Exact money.** The page sums exact cents before it rounds values for display, and every value
+label keeps its cents; only axis ticks are rounded.
+
+**Exports that start late.** A profit tile covers the exported period, which can start after the
+ledger opening or end during an unfinished day. When it starts after the opening, the balance
+before its first day isn't in the data, so a daily, rolling or restarted change in cash or net
+worth that reaches back past it is unknown, not a change from the opening capital. Paid back is
+always against the ledger's own opening capital; if cash is already there on the first exported
+day, the page says "paid back by" that day.
+
+**Weekly view.** The bars are the terms of profit: sales (and any positive adjustment) above the
+line; drinks sold, shrinkage, visit fees, AI and any negative adjustment below. The profit dot is
+where they net out. Sales tax is set aside, so it is in the tooltip and table but not the bars.
+
+**Phones.** The charts are drawn at the screen's width, so text stays readable at 390 px; margins,
+tick counts and end labels (value only) shrink to fit. The range can be a single day.
 
 ## Not yet
 
