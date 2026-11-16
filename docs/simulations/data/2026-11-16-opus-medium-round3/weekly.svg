@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 360" width="820" height="360" font-family="system-ui, sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="64" y="20" font-size="14" font-weight="600" fill="#222">Simulated profit by week (bars) and season to date (lines), after model spend</text>
+<line x1="64" x2="796" y1="299.8" y2="299.8" stroke="#e5e7eb"/>
+<text x="58" y="303.8" text-anchor="end" fill="#555">$0</text>
+<line x1="64" x2="796" y1="274.4" y2="274.4" stroke="#e5e7eb"/>
+<text x="58" y="278.4" text-anchor="end" fill="#555">$100</text>
+<line x1="64" x2="796" y1="249.1" y2="249.1" stroke="#e5e7eb"/>
+<text x="58" y="253.1" text-anchor="end" fill="#555">$200</text>
+<line x1="64" x2="796" y1="223.8" y2="223.8" stroke="#e5e7eb"/>
+<text x="58" y="227.8" text-anchor="end" fill="#555">$300</text>
+<line x1="64" x2="796" y1="198.4" y2="198.4" stroke="#e5e7eb"/>
+<text x="58" y="202.4" text-anchor="end" fill="#555">$400</text>
+<line x1="64" x2="796" y1="173.1" y2="173.1" stroke="#e5e7eb"/>
+<text x="58" y="177.1" text-anchor="end" fill="#555">$500</text>
+<line x1="64" x2="796" y1="147.7" y2="147.7" stroke="#e5e7eb"/>
+<text x="58" y="151.7" text-anchor="end" fill="#555">$600</text>
+<line x1="64" x2="796" y1="122.4" y2="122.4" stroke="#e5e7eb"/>
+<text x="58" y="126.4" text-anchor="end" fill="#555">$700</text>
+<line x1="64" x2="796" y1="97.0" y2="97.0" stroke="#e5e7eb"/>
+<text x="58" y="101.0" text-anchor="end" fill="#555">$800</text>
+<line x1="64" x2="796" y1="71.7" y2="71.7" stroke="#e5e7eb"/>
+<text x="58" y="75.7" text-anchor="end" fill="#555">$900</text>
+<line x1="64" x2="796" y1="46.3" y2="46.3" stroke="#e5e7eb"/>
+<text x="58" y="50.3" text-anchor="end" fill="#555">$1,000</text>
+<line x1="64" x2="796" y1="299.8" y2="299.8" stroke="#888"/>
+<text x="100.6" y="328" text-anchor="middle" fill="#555">W1</text>
+<text x="173.8" y="328" text-anchor="middle" fill="#555">W2</text>
+<text x="247.0" y="328" text-anchor="middle" fill="#555">W3</text>
+<text x="320.2" y="328" text-anchor="middle" fill="#555">W4</text>
+<text x="393.4" y="328" text-anchor="middle" fill="#555">W5</text>
+<text x="466.6" y="328" text-anchor="middle" fill="#555">W6</text>
+<text x="539.8" y="328" text-anchor="middle" fill="#555">W7</text>
+<text x="613.0" y="328" text-anchor="middle" fill="#555">W8</text>
+<text x="686.2" y="328" text-anchor="middle" fill="#555">W9</text>
+<text x="759.4" y="328" text-anchor="middle" fill="#555">W10</text>
+<rect x="75.0" y="285.1" width="49.2" height="14.7" fill="#2a6fdb" fill-opacity="0.45"><title>model W1: $57.97</title></rect>
+<rect x="148.2" y="271.5" width="49.2" height="28.3" fill="#2a6fdb" fill-opacity="0.45"><title>model W2: $111.61</title></rect>
+<rect x="221.4" y="268.6" width="49.2" height="31.2" fill="#2a6fdb" fill-opacity="0.45"><title>model W3: $123.08</title></rect>
+<rect x="294.6" y="293.7" width="49.2" height="6.1" fill="#2a6fdb" fill-opacity="0.45"><title>model W4: $24.11</title></rect>
+<rect x="367.8" y="299.6" width="49.2" height="1.0" fill="#2a6fdb" fill-opacity="0.45"><title>model W5: $0.77</title></rect>
+<rect x="441.0" y="261.5" width="49.2" height="38.3" fill="#2a6fdb" fill-opacity="0.45"><title>model W6: $151.21</title></rect>
+<rect x="514.2" y="264.6" width="49.2" height="35.2" fill="#2a6fdb" fill-opacity="0.45"><title>model W7: $138.77</title></rect>
+<rect x="587.4" y="263.5" width="49.2" height="36.3" fill="#2a6fdb" fill-opacity="0.45"><title>model W8: $143.08</title></rect>
+<rect x="660.6" y="269.2" width="49.2" height="30.6" fill="#2a6fdb" fill-opacity="0.45"><title>model W9: $120.55</title></rect>
+<rect x="733.8" y="276.3" width="49.2" height="23.5" fill="#2a6fdb" fill-opacity="0.45"><title>model W10: $92.54</title></rect>
+<polyline points="100.6,285.1 173.8,256.8 247.0,225.6 320.2,219.5 393.4,219.3 466.6,181.0 539.8,145.8 613.0,109.5 686.2,79.0 759.4,55.5" fill="none" stroke="#2a6fdb" stroke-width="2.5"/>
+<rect x="74" y="342" width="12" height="12" fill="#2a6fdb"/><text x="90" y="352" fill="#333">model</text>
+</svg>

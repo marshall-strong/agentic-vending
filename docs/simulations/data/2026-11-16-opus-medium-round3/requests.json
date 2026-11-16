@@ -1,0 +1,3997 @@
+[
+ {
+  "request_id": "pr_sim_001",
+  "submitted_at": "2026-11-30T10:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "407.61",
+  "fulfilled_at": "2026-12-02T15:32:00-05:00",
+  "sale_prices": {
+   "15": "4.50",
+   "16": "4.50",
+   "17": "4.50",
+   "18": "4.00",
+   "25": "3.50",
+   "26": "4.00",
+   "27": "4.00",
+   "28": "4.50",
+   "35": "3.00",
+   "36": "2.00",
+   "37": "2.30",
+   "38": "4.00",
+   "47": "3.00",
+   "48": "3.50",
+   "55": "2.35",
+   "56": "2.65"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 15,
+    "paid": "29.72",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 7,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "GORGIE-MANGO-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "31.21",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "GORGIE-PEACH-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "31.36",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "32.82",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.58",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "32.82",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "35.77",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 15,
+    "paid": "29.72",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 8,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.49",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 5,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": "BJs",
+    "packs": 1,
+    "units_bought": 35,
+    "paid": "18.66",
+    "loaded": 8,
+    "lost": 1,
+    "to_closet": 26,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": "BJs",
+    "packs": 1,
+    "units_bought": 36,
+    "paid": "21.92",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 28,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "38",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "35.77",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "19.52",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 5,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "23.73",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "55",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "ARIZONA-ICED_LEMON-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "7.88",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 5,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "56",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "HINT-GEORGIA_PEACH-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "13.64",
+    "loaded": 7,
+    "lost": 1,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "slot": "15",
+     "source": "purchase",
+     "primary": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "url": "https://www.amazon.com/dp/B0BL7316GD",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": true,
+      "units_per_pack": 15,
+      "pack_description": "15 x 16 oz cans Zero Ultra (white)",
+      "max_price_per_pack": "34.50"
+     }
+    },
+    {
+     "slot": "16",
+     "source": "purchase",
+     "primary": {
+      "sku": "GORGIE-MANGO-12CAN",
+      "url": "https://www.amazon.com/dp/B0C5KDCPDM",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Mango Burst",
+      "max_price_per_pack": "36.00"
+     }
+    },
+    {
+     "slot": "17",
+     "source": "purchase",
+     "primary": {
+      "sku": "GORGIE-PEACH-12CAN",
+      "url": "https://www.amazon.com/dp/B0BXMWVS4B",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Peach Tea",
+      "max_price_per_pack": "37.00"
+     }
+    },
+    {
+     "slot": "18",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.50"
+     }
+    },
+    {
+     "slot": "25",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "26",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.50"
+     }
+    },
+    {
+     "slot": "27",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "url": "https://www.amazon.com/dp/B001E14104",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.50"
+     }
+    },
+    {
+     "slot": "28",
+     "source": "purchase",
+     "primary": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "url": "https://www.amazon.com/dp/B0BL7316GD",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": true,
+      "units_per_pack": 15,
+      "pack_description": "15 x 16 oz cans Zero Ultra (white)",
+      "max_price_per_pack": "34.50"
+     }
+    },
+    {
+     "slot": "35",
+     "source": "purchase",
+     "primary": {
+      "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+      "url": "https://www.amazon.com/dp/B0D3W9JXLB",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Mango Madness",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "36",
+     "source": "purchase",
+     "primary": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "url": "https://www.bjs.com/product/coca-cola-soda-soft-drink-cans-35-pk12-fl-oz/3000000000000322043/",
+      "packs": 1,
+      "store": "BJs",
+      "sale_price": "2.00",
+      "change_product": true,
+      "units_per_pack": 35,
+      "pack_description": "35 x 12 oz cans",
+      "max_price_per_pack": "22.50"
+     },
+     "alternate": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "url": "https://www.amazon.com/dp/B000T9WLTK",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.00",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "9.00"
+     }
+    },
+    {
+     "slot": "37",
+     "source": "purchase",
+     "primary": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "url": "https://www.bjs.com/product/pepsi-cola-cans-36-ct12-oz/3000000000000146349/",
+      "packs": 1,
+      "store": "BJs",
+      "sale_price": "2.30",
+      "change_product": true,
+      "units_per_pack": 36,
+      "pack_description": "36 x 12 oz cans",
+      "max_price_per_pack": "24.50"
+     },
+     "alternate": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "url": "https://www.amazon.com/dp/B000R9AK5O",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.30",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "8.50"
+     }
+    },
+    {
+     "slot": "38",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "url": "https://www.amazon.com/dp/B001E14104",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.50"
+     }
+    },
+    {
+     "slot": "47",
+     "source": "purchase",
+     "primary": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "url": "https://www.amazon.com/dp/B0D3WLN63F",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Fruit Punch",
+      "max_price_per_pack": "22.00"
+     }
+    },
+    {
+     "slot": "48",
+     "source": "purchase",
+     "primary": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "url": "https://www.amazon.com/dp/B0DW9P95NR",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Blueberry Lemonade",
+      "max_price_per_pack": "28.00"
+     }
+    },
+    {
+     "slot": "55",
+     "source": "purchase",
+     "primary": {
+      "sku": "ARIZONA-ICED_LEMON-16BOT",
+      "url": "https://www.amazon.com/dp/B004UKHAF4",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.35",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Iced Tea with Lemon",
+      "max_price_per_pack": "9.50"
+     }
+    },
+    {
+     "slot": "56",
+     "source": "purchase",
+     "primary": {
+      "sku": "HINT-GEORGIA_PEACH-16BOT",
+      "url": "https://www.amazon.com/dp/B01NBOEODU",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.65",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Georgia Peach",
+      "max_price_per_pack": "15.50"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_002",
+  "submitted_at": "2026-12-09T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "96.10",
+  "fulfilled_at": "2026-12-11T17:09:00-05:00",
+  "sale_prices": {
+   "15": "4.50",
+   "17": "4.50",
+   "18": "4.00",
+   "25": "3.50",
+   "28": "4.50",
+   "36": "2.00",
+   "37": "2.30",
+   "45": "2.00",
+   "46": "2.30",
+   "47": "3.00",
+   "48": "3.50",
+   "55": "2.35",
+   "56": "2.65",
+   "57": "3.50",
+   "58": "3.50"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "GORGIE-PEACH-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "32.96",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "45",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 8,
+    "pulled": 0
+   },
+   {
+    "slot": "46",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 8,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "19.29",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 5,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "55",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "ARIZONA-ICED_LEMON-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "56",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "HINT-GEORGIA_PEACH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "57",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "20.90",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "58",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "22.95",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "units": 5,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "15",
+     "source": "back_stock"
+    },
+    {
+     "slot": "17",
+     "source": "purchase",
+     "primary": {
+      "sku": "GORGIE-PEACH-12CAN",
+      "url": "https://www.amazon.com/dp/B0BXMWVS4B",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Peach Tea",
+      "max_price_per_pack": "38.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 5,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 4,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "25",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "units": 7,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "28",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 4,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "36",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 7,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "37",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 8,
+      "sale_price": "2.00",
+      "change_product": true
+     },
+     "slot": "45",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 8,
+      "sale_price": "2.30",
+      "change_product": true
+     },
+     "slot": "46",
+     "source": "back_stock"
+    },
+    {
+     "slot": "47",
+     "source": "purchase",
+     "primary": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "url": "https://www.amazon.com/dp/B0D3WLN63F",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Fruit Punch",
+      "max_price_per_pack": "22.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "units": 4,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "48",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "ARIZONA-ICED_LEMON-16BOT",
+      "units": 3,
+      "sale_price": "2.35",
+      "change_product": false
+     },
+     "slot": "55",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "HINT-GEORGIA_PEACH-16BOT",
+      "units": 4,
+      "sale_price": "2.65",
+      "change_product": false
+     },
+     "slot": "56",
+     "source": "back_stock"
+    },
+    {
+     "slot": "57",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "24.50"
+     }
+    },
+    {
+     "slot": "58",
+     "source": "purchase",
+     "primary": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "url": "https://www.amazon.com/dp/B0DW9P95NR",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Blueberry Lemonade",
+      "max_price_per_pack": "26.50"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_003",
+  "submitted_at": "2026-12-16T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "13.28",
+  "fulfilled_at": "2026-12-18T16:51:00-05:00",
+  "sale_prices": {
+   "16": "4.50",
+   "17": "4.50",
+   "18": "4.00",
+   "25": "3.50",
+   "26": "4.00",
+   "27": "4.00",
+   "28": "4.50",
+   "35": "3.00",
+   "36": "2.00",
+   "37": "2.30",
+   "38": "4.00",
+   "45": "2.00",
+   "47": "3.00",
+   "48": "3.50",
+   "55": "2.35",
+   "56": "2.65"
+  },
+  "lines": [
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-MANGO-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-PEACH-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 8,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "38",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "45",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 6,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "55",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "ARIZONA-ICED_LEMON-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "56",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "HINT-GEORGIA_PEACH-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "13.28",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 8,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "GORGIE-MANGO-12CAN",
+      "units": 4,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "GORGIE-PEACH-12CAN",
+      "units": 1,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "17",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 4,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "25",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 7,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "units": 8,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "units": 3,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "28",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+      "units": 5,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 4,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "36",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 1,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "37",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "units": 4,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "38",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 2,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "45",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "units": 6,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "47",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "units": 4,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "48",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "ARIZONA-ICED_LEMON-16BOT",
+      "units": 2,
+      "sale_price": "2.35",
+      "change_product": false
+     },
+     "slot": "55",
+     "source": "back_stock"
+    },
+    {
+     "slot": "56",
+     "source": "purchase",
+     "primary": {
+      "sku": "HINT-GEORGIA_PEACH-16BOT",
+      "url": "https://www.amazon.com/dp/B01NBOEODU",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.65",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Georgia Peach",
+      "max_price_per_pack": "15.50"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_004",
+  "submitted_at": "2026-12-23T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "212.99",
+  "fulfilled_at": "2026-12-29T16:52:00-05:00",
+  "sale_prices": {
+   "15": "4.50",
+   "16": "4.50",
+   "17": "4.50",
+   "18": "4.00",
+   "25": "3.50",
+   "26": "4.00",
+   "27": "4.00",
+   "28": "4.50",
+   "35": "3.00",
+   "36": "2.00",
+   "37": "2.30",
+   "38": "4.00",
+   "45": "2.00",
+   "46": "2.30",
+   "47": "3.00",
+   "48": "3.75",
+   "55": "2.35",
+   "56": "2.65",
+   "57": "3.50",
+   "58": "3.75"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 15,
+    "paid": "30.01",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 9,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "GORGIE-MANGO-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "30.55",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 8,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-PEACH-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.75",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 8,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 15,
+    "paid": "30.01",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 12,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.37",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 10,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "38",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "45",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "46",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "24.55",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 6,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "55",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "ARIZONA-ICED_LEMON-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "8.45",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 9,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "56",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "HINT-GEORGIA_PEACH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "57",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.75",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 7,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "58",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "24.55",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 5,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "slot": "15",
+     "source": "purchase",
+     "primary": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "url": "https://www.amazon.com/dp/B0BL7316GD",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": false,
+      "units_per_pack": 15,
+      "pack_description": "15 x 16 oz cans Zero Ultra (white)",
+      "max_price_per_pack": "35.50"
+     }
+    },
+    {
+     "slot": "16",
+     "source": "purchase",
+     "primary": {
+      "sku": "GORGIE-MANGO-12CAN",
+      "url": "https://www.amazon.com/dp/B0C5KDCPDM",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Mango Burst",
+      "max_price_per_pack": "35.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "GORGIE-PEACH-12CAN",
+      "units": 1,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "17",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 3,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "slot": "25",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 4,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "units": 4,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "slot": "28",
+     "source": "purchase",
+     "primary": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "url": "https://www.amazon.com/dp/B0BL7316GD",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": false,
+      "units_per_pack": 15,
+      "pack_description": "15 x 16 oz cans Zero Ultra (white)",
+      "max_price_per_pack": "35.50"
+     }
+    },
+    {
+     "slot": "35",
+     "source": "purchase",
+     "primary": {
+      "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+      "url": "https://www.amazon.com/dp/B0D3W9JXLB",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Mango Madness",
+      "max_price_per_pack": "25.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 1,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "36",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 3,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "37",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "units": 4,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "38",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 5,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "45",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 5,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "46",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "units": 1,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "47",
+     "source": "back_stock"
+    },
+    {
+     "slot": "48",
+     "source": "purchase",
+     "primary": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "url": "https://www.amazon.com/dp/B0DW9P95NR",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.75",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Blueberry Lemonade",
+      "max_price_per_pack": "27.00"
+     }
+    },
+    {
+     "slot": "55",
+     "source": "purchase",
+     "primary": {
+      "sku": "ARIZONA-ICED_LEMON-16BOT",
+      "url": "https://www.amazon.com/dp/B004UKHAF4",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.35",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Iced Tea with Lemon",
+      "max_price_per_pack": "9.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "HINT-GEORGIA_PEACH-16BOT",
+      "units": 3,
+      "sale_price": "2.65",
+      "change_product": false
+     },
+     "slot": "56",
+     "source": "back_stock"
+    },
+    {
+     "slot": "57",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.50"
+     }
+    },
+    {
+     "slot": "58",
+     "source": "purchase",
+     "primary": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "url": "https://www.amazon.com/dp/B0DW9P95NR",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.75",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Blueberry Lemonade",
+      "max_price_per_pack": "27.00"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_005",
+  "submitted_at": "2026-12-30T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2027-01-04T15:08:00-05:00",
+  "sale_prices": {
+   "16": "4.50",
+   "47": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-MANGO-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "GORGIE-MANGO-12CAN",
+      "units": 1,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "units": 1,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "47",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_006",
+  "submitted_at": "2027-01-06T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "37.69",
+  "fulfilled_at": "2027-01-08T15:51:00-05:00",
+  "sale_prices": {
+   "15": "4.50",
+   "16": "4.50",
+   "17": "4.50",
+   "18": "4.00",
+   "25": "3.50",
+   "26": "4.00",
+   "27": "4.00",
+   "28": "4.50",
+   "35": "3.00",
+   "36": "2.00",
+   "37": "2.30",
+   "38": "4.00",
+   "45": "2.00",
+   "46": "2.30",
+   "47": "3.00",
+   "48": "3.75",
+   "55": "2.35",
+   "56": "2.65",
+   "57": "3.50",
+   "58": "3.75"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-MANGO-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-PEACH-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": "BJs",
+    "packs": 1,
+    "units_bought": 35,
+    "paid": "19.13",
+    "loaded": 5,
+    "lost": 1,
+    "to_closet": 29,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "38",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "45",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "46",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "18.56",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 8,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 6,
+    "pulled": 0
+   },
+   {
+    "slot": "55",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "ARIZONA-ICED_LEMON-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "56",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "HINT-GEORGIA_PEACH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "57",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "58",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "units": 3,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "15",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "GORGIE-MANGO-12CAN",
+      "units": 3,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "GORGIE-PEACH-12CAN",
+      "units": 3,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "17",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 1,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 3,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "25",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "units": 1,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "units": 3,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "28",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+      "units": 1,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    },
+    {
+     "slot": "36",
+     "source": "purchase",
+     "primary": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "url": "https://www.bjs.com/product/coca-cola-soda-soft-drink-cans-35-pk12-fl-oz/3000000000000322043/",
+      "packs": 1,
+      "store": "BJs",
+      "sale_price": "2.00",
+      "change_product": false,
+      "units_per_pack": 35,
+      "pack_description": "35 x 12 oz cans",
+      "max_price_per_pack": "22.00"
+     },
+     "alternate": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "url": "https://www.amazon.com/dp/B000T9WLTK",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.00",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "9.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 3,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "37",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "38",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 1,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "45",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 1,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "46",
+     "source": "back_stock"
+    },
+    {
+     "slot": "47",
+     "source": "purchase",
+     "primary": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "url": "https://www.amazon.com/dp/B0D3WLN63F",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Fruit Punch",
+      "max_price_per_pack": "21.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "units": 6,
+      "sale_price": "3.75",
+      "change_product": false
+     },
+     "slot": "48",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "ARIZONA-ICED_LEMON-16BOT",
+      "units": 2,
+      "sale_price": "2.35",
+      "change_product": false
+     },
+     "slot": "55",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "HINT-GEORGIA_PEACH-16BOT",
+      "units": 1,
+      "sale_price": "2.65",
+      "change_product": false
+     },
+     "slot": "56",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 2,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "57",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "units": 2,
+      "sale_price": "3.75",
+      "change_product": false
+     },
+     "slot": "58",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_007",
+  "submitted_at": "2027-01-13T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "166.80",
+  "fulfilled_at": "2027-01-15T15:39:00-05:00",
+  "sale_prices": {
+   "15": "4.50",
+   "16": "4.50",
+   "17": "4.50",
+   "18": "4.00",
+   "25": "3.75",
+   "26": "4.00",
+   "28": "4.50",
+   "35": "3.00",
+   "36": "2.00",
+   "37": "2.30",
+   "38": "4.00",
+   "45": "2.00",
+   "46": "2.30",
+   "47": "3.00",
+   "48": "3.75",
+   "55": "2.35",
+   "56": "2.65",
+   "57": "3.75",
+   "58": "3.75"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "GORGIE-MANGO-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "30.57",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 7,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-PEACH-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "34.79",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 18,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 8,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": "BJs",
+    "packs": 1,
+    "units_bought": 36,
+    "paid": "20.78",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 28,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "38",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "45",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "46",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": "BJs",
+    "packs": 1,
+    "units_bought": 36,
+    "paid": "20.78",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 31,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "23.37",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 7,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "55",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "ARIZONA-ICED_LEMON-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 6,
+    "pulled": 0
+   },
+   {
+    "slot": "56",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "HINT-GEORGIA_PEACH-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "13.14",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 7,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "57",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "58",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "23.37",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "units": 5,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "15",
+     "source": "back_stock"
+    },
+    {
+     "slot": "16",
+     "source": "purchase",
+     "primary": {
+      "sku": "GORGIE-MANGO-12CAN",
+      "url": "https://www.amazon.com/dp/B0C5KDCPDM",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Mango Burst",
+      "max_price_per_pack": "35.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "GORGIE-PEACH-12CAN",
+      "units": 3,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "17",
+     "source": "back_stock"
+    },
+    {
+     "slot": "18",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": false,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 2,
+      "sale_price": "3.75",
+      "change_product": false
+     },
+     "slot": "25",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "units": 8,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "28",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+      "units": 4,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 4,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "36",
+     "source": "back_stock"
+    },
+    {
+     "slot": "37",
+     "source": "purchase",
+     "primary": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "url": "https://www.bjs.com/product/pepsi-cola-cans-36-ct12-oz/3000000000000146349/",
+      "packs": 1,
+      "store": "BJs",
+      "sale_price": "2.30",
+      "change_product": false,
+      "units_per_pack": 36,
+      "pack_description": "36 x 12 oz cans",
+      "max_price_per_pack": "24.00"
+     },
+     "alternate": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "url": "https://www.amazon.com/dp/B000R9AK5O",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.30",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "8.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "units": 3,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "38",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 4,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "45",
+     "source": "back_stock"
+    },
+    {
+     "slot": "46",
+     "source": "purchase",
+     "primary": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "url": "https://www.bjs.com/product/pepsi-cola-cans-36-ct12-oz/3000000000000146349/",
+      "packs": 1,
+      "store": "BJs",
+      "sale_price": "2.30",
+      "change_product": false,
+      "units_per_pack": 36,
+      "pack_description": "36 x 12 oz cans",
+      "max_price_per_pack": "24.00"
+     },
+     "alternate": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "url": "https://www.amazon.com/dp/B000R9AK5O",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.30",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "8.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "units": 4,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "47",
+     "source": "back_stock"
+    },
+    {
+     "slot": "48",
+     "source": "purchase",
+     "primary": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "url": "https://www.amazon.com/dp/B0DW9P95NR",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.75",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Blueberry Lemonade",
+      "max_price_per_pack": "27.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "ARIZONA-ICED_LEMON-16BOT",
+      "units": 6,
+      "sale_price": "2.35",
+      "change_product": false
+     },
+     "slot": "55",
+     "source": "back_stock"
+    },
+    {
+     "slot": "56",
+     "source": "purchase",
+     "primary": {
+      "sku": "HINT-GEORGIA_PEACH-16BOT",
+      "url": "https://www.amazon.com/dp/B01NBOEODU",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.65",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Georgia Peach",
+      "max_price_per_pack": "15.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 3,
+      "sale_price": "3.75",
+      "change_product": false
+     },
+     "slot": "57",
+     "source": "back_stock"
+    },
+    {
+     "slot": "58",
+     "source": "purchase",
+     "primary": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "url": "https://www.amazon.com/dp/B0DW9P95NR",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.75",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Blueberry Lemonade",
+      "max_price_per_pack": "27.00"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_008",
+  "submitted_at": "2027-01-20T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "96.53",
+  "fulfilled_at": "2027-01-22T15:49:00-05:00",
+  "sale_prices": {
+   "15": "4.50",
+   "16": "4.50",
+   "17": "4.50",
+   "18": "4.00",
+   "25": "3.75",
+   "26": "4.00",
+   "36": "2.00",
+   "37": "2.30",
+   "38": "4.00",
+   "45": "2.00",
+   "46": "2.30",
+   "47": "3.00",
+   "48": "3.75",
+   "55": "2.35",
+   "56": "2.65",
+   "57": "3.75",
+   "58": "3.75"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-MANGO-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "GORGIE-PEACH-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "32.41",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 7,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 8,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "20.71",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 8,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "38",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "34.59",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 16,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "45",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "46",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "55",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "ARIZONA-ICED_LEMON-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "8.82",
+    "loaded": 5,
+    "lost": 1,
+    "to_closet": 6,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "56",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "HINT-GEORGIA_PEACH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 6,
+    "pulled": 0
+   },
+   {
+    "slot": "57",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "58",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "units": 2,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "15",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "GORGIE-MANGO-12CAN",
+      "units": 7,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "slot": "17",
+     "source": "purchase",
+     "primary": {
+      "sku": "GORGIE-PEACH-12CAN",
+      "url": "https://www.amazon.com/dp/B0BXMWVS4B",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans Peach Tea",
+      "max_price_per_pack": "37.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 8,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "slot": "25",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.75",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "24.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 8,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 4,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "36",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 2,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "37",
+     "source": "back_stock"
+    },
+    {
+     "slot": "38",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "url": "https://www.amazon.com/dp/B001E14104",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": false,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 3,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "45",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 3,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "46",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "units": 4,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "47",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "units": 7,
+      "sale_price": "3.75",
+      "change_product": false
+     },
+     "slot": "48",
+     "source": "back_stock"
+    },
+    {
+     "slot": "55",
+     "source": "purchase",
+     "primary": {
+      "sku": "ARIZONA-ICED_LEMON-16BOT",
+      "url": "https://www.amazon.com/dp/B004UKHAF4",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "2.35",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Iced Tea with Lemon",
+      "max_price_per_pack": "10.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "HINT-GEORGIA_PEACH-16BOT",
+      "units": 6,
+      "sale_price": "2.65",
+      "change_product": false
+     },
+     "slot": "56",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 3,
+      "sale_price": "3.75",
+      "change_product": false
+     },
+     "slot": "57",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "units": 3,
+      "sale_price": "3.75",
+      "change_product": false
+     },
+     "slot": "58",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_009",
+  "submitted_at": "2027-01-27T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "48.39",
+  "fulfilled_at": "2027-01-29T16:16:00-05:00",
+  "sale_prices": {
+   "15": "4.50",
+   "16": "4.50",
+   "17": "4.50",
+   "27": "4.00",
+   "35": "3.00",
+   "36": "2.00",
+   "37": "2.30",
+   "45": "2.00",
+   "47": "3.00",
+   "48": "3.75",
+   "55": "2.35",
+   "56": "2.65"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "MONSTER-WHITE-16CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 15,
+    "paid": "28.80",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 11,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-MANGO-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "GORGIE-PEACH-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-SUGARFRE-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "PEPSI-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "45",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "19.59",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 5,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "55",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "ARIZONA-ICED_LEMON-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "56",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "HINT-GEORGIA_PEACH-16BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "slot": "15",
+     "source": "purchase",
+     "primary": {
+      "sku": "MONSTER-WHITE-16CAN",
+      "url": "https://www.amazon.com/dp/B0BL7316GD",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.50",
+      "change_product": false,
+      "units_per_pack": 15,
+      "pack_description": "15 x 16 oz cans Zero Ultra (white)",
+      "max_price_per_pack": "33.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "GORGIE-MANGO-12CAN",
+      "units": 3,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "GORGIE-PEACH-12CAN",
+      "units": 3,
+      "sale_price": "4.50",
+      "change_product": false
+     },
+     "slot": "17",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-SUGARFRE-8_4CAN",
+      "units": 3,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "SNAPPLE-MANGO_MADNESS-16BOT",
+      "units": 5,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 2,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "36",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "PEPSI-ORIGINAL-12CAN",
+      "units": 4,
+      "sale_price": "2.30",
+      "change_product": false
+     },
+     "slot": "37",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-12CAN",
+      "units": 5,
+      "sale_price": "2.00",
+      "change_product": false
+     },
+     "slot": "45",
+     "source": "back_stock"
+    },
+    {
+     "slot": "47",
+     "source": "purchase",
+     "primary": {
+      "sku": "SNAPPLE-FRUIT_PUNCH-16BOT",
+      "url": "https://www.amazon.com/dp/B0D3WLN63F",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 16 oz bottles Fruit Punch",
+      "max_price_per_pack": "23.00"
+     }
+    },
+    {
+     "load": {
+      "sku": "STARBUCKS-BLUE_LEMON-12CAN",
+      "units": 3,
+      "sale_price": "3.75",
+      "change_product": false
+     },
+     "slot": "48",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "ARIZONA-ICED_LEMON-16BOT",
+      "units": 3,
+      "sale_price": "2.35",
+      "change_product": false
+     },
+     "slot": "55",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "HINT-GEORGIA_PEACH-16BOT",
+      "units": 2,
+      "sale_price": "2.65",
+      "change_product": false
+     },
+     "slot": "56",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ }
+]

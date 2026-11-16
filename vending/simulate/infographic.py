@@ -32,46 +32,53 @@ DATA = REPO / "docs" / "simulations" / "data"
 OUT = REPO / "docs" / "simulations" / "images"
 
 # --- What to show (edit these) --------------------------------------------------------------------
-HERO = "2026-11-16-opus-medium-fixed"          # the agent as it stands now
-AS_BUILT = "2026-11-16-opus-medium"            # the agent before round 1's fixes
-OTHER = "2026-11-16-sonnet-medium"             # one more model season for the chart
-RULES = {"Wed": "2026-11-16-baseline-wednesday", "Thu": "2026-11-16-baseline"}   # the rule, by run day
-TABLE = [HERO, AS_BUILT, OTHER, RULES["Wed"], RULES["Thu"]]                       # five rows fit
-PILOT_SPEND = 0.45            # the first one-week pilot, not archived as a season
+HERO = "2026-11-16-opus-medium-round3"         # the agent as it stands now
+BEFORE = "2026-11-16-opus-medium"              # the agent as first built (round 1)
+RULE = "2026-11-16-baseline-wide"              # the fair bar: the rule with the hero's drinks and run day
+RULE_NOTE = "the same 15 drinks"               # what makes RULE a fair comparison, for the tiles and notes
+# (season, label in the chart and table, colour, dashed). The chart draws the first four; the table all five.
+SHOW = [
+    (HERO, "Opus, round 3 (Wed)", "var(--s1)", False),
+    ("2026-11-16-opus-medium-fixed", "Opus, round 2 (Wed)", "var(--s2)", False),
+    (BEFORE, "Opus, as built (Thu)", "var(--s3)", False),
+    (RULE, "Rule, 15 drinks (Wed)", "var(--ref)", True),
+    ("2026-11-16-baseline-wednesday", "Rule, 5 drinks (Wed)", "#b4b3ad", True),
+]
+PILOT_SPEND = 0.45 + 4.32     # not archived: round 1's one-week pilot, and round 3's first Opus season,
+                              # which ran out of its $4.50 cap on 20 Jan (kept in the write-up)
 APPROVED_BUDGET = 25          # dollars: $10 for rounds 1-2, $15 more for round 3 (Kevin, 16 Nov)
 
 LESSONS = [  # (status, tag, title, text); six fit, three a row
-    ("fixed", "Fixed", "1. It skipped the day-one fill",
+    ("fixed", "Fixed · round 2", "It skipped the day-one fill",
      'No receipts looked like "contents unknown", so week 1 sold nothing. The rules card now says the '
-     "machine starts empty."),
-    ("fixed", "Fixed", "2. Thursday misses Amazon's cutoff",
-     "Restocks landed Monday. The prompt now gives each store's cutoff, and the simulator can run on "
-     "Wednesdays."),
-    ("fixed", "Fixed", "5. Wrong end date and end-stock value",
-     "It planned for 31 Jan and treated leftover stock as a loss. The card now says Wed 3 Feb and that "
-     "leftover stock is valued at cost (still unconfirmed)."),
-    ("open", "Open · course rule", "3. The price floor priced sodas out",
-     "Opus used 2 drinks in 12 slots all season and ended with $900 idle."),
-    ("open", "Open · needs prices", "4. Only five drinks are sourced",
-     "Four catalog drinks had no sourcing row, so they couldn't be bought."),
-    ("open", "Open · waiting on David", "6. One pack per slot",
-     "A 20-slot day-one fill of five drinks costs up to about $980, so the fill gets split across visits."),
+     "machine starts empty, and the season ends Wed 3 Feb."),
+    ("fixed", "Fixed · round 2", "Thursday missed Amazon's cutoff",
+     "Restocks landed Monday. The prompt now gives each store's cutoff, and the runs moved to Wednesday."),
+    ("fixed", "Fixed · round 3", "It refilled only once slots were empty",
+     "The new top-up rule refills a slot before it would run out by the visit after next. Every slot sold."),
+    ("fixed", "Fixed · round 3 (#137)", "Only five drinks could be bought",
+     "With the team's 15 Nov sourcing it stocked 13 drinks in 20 slots, at most 2 slots of any one."),
+    ("open", "Open · budget", "Runs cost more with more drinks",
+     "$0.31 to $0.77 a run. A $4.50 season cap ran out on 20 Jan and lost 121 units; a season needs about $5."),
+    ("open", "Open · team decision", "The wildcard slot",
+     "One slot up to $8.00 for a riskier bet. Built and reviewed on add_wildcard_slot; #110 item 1."),
 ]
 NEXT = [  # (title, text); three cards
-    ("New weak spot: empty slots",
-     "The agent refills only after a slot runs out. Seven slots were empty by 13 Jan, and it lost 25 units "
-     "in weeks 7–8. The rule lost 10."),
-    ("Next fix to try", "Top up a slot when its days of stock left are fewer than the days until the next visit."),
+    ("Why the agent won",
+     "Same drinks as the rule, but it topped up before slots ran out, tested two $0.25 rises, and "
+     "skipped buying on the last day."),
+    ("The caveat",
+     "Each new drink's demand is borrowed from the fall. More drinks may help less than the simulator says, "
+     "so read the gap over the rule, not the total."),
     ("For the team to decide",
-     "Run day: Wednesday, or Thursday plus in-store sourcing. Either way, keep a run on go-live day, Thu 3 Dec."),
+     "The wildcard slot (#110 item 1), and the run day: Wednesday meets Amazon's cutoff; keep a run on "
+     "go-live day, Thu 3 Dec."),
 ]
 
 # CSS pixel [top, bottom] of each section at 1200 px wide; the PNG is 2x. The deck's crops depend on these.
 SECTIONS = {"tiles": (225, 366), "grid2": (390, 814), "lessons": (830, 1183), "next": (1199, 1326)}
 WIDTH, HEIGHT = 1200, 1365
 DAY_NAMES = {"Wed": "Wednesday", "Thu": "Thursday"}
-COLORS = {"hero": "var(--s1)", "built": "var(--s2)", "other": "var(--s3)", "rule": "var(--ref)",
-          "rule2": "#b4b3ad"}
 
 
 # --- The data -------------------------------------------------------------------------------------
@@ -124,70 +131,56 @@ def total_spend() -> float:
 
 # --- The page -------------------------------------------------------------------------------------
 def build() -> str:
-    hero, built, other = load(HERO), load(AS_BUILT), load(OTHER)
-    rule = load(RULES[hero.day])                 # the rule on the hero's own schedule
+    hero, before, rule = load(HERO), load(BEFORE), load(RULE)
     gap = hero.profit - rule.profit
-    gain = hero.profit - built.profit
     e = html.escape
 
     if gap >= 0:
-        headline = (f"After the fixes our agent beat the simple refill rule by {money(gap, False)} "
+        headline = (f"With the same drinks, our agent beat the simple refill rule by {money(gap, False)} "
                     f"in a full simulated season.")
     else:
-        headline = (f"After the fixes our agent gained {money(gain, False)}, but the simple refill rule "
-                    f"still won by {money(-gap, False)}.")
-
-    def label(s: Season) -> str:
-        if s.id == hero.id:
-            return f"{s.model_name}, after the fixes ({s.day})"
-        if s.id == built.id:
-            return f"{s.model_name}, as built ({s.day})"
-        return f"Simple rule ({s.day})" if not s.is_model else f"{s.model_name} ({s.day})"
+        headline = (f"Our agent made {money(hero.profit, False)}, but the simple refill rule with the same "
+                    f"drinks still won by {money(-gap, False)}.")
 
     tiles = [
-        (f"{hero.model_name}, after the fixes", money(hero.profit),
-         f"profit after model spend, {hero.day} runs; up from {money(built.profit)}"),
-        (f"Simple rule, same {hero.day} runs", money(rule.profit),
-         f"no model; the agent is {money(abs(gap))} {'ahead' if gap >= 0 else 'behind'}"),
-        (f"Units sold, {hero.model_name}", f"{built.season['units_sold']} → {hero.season['units_sold']}",
-         f"slots that sold: {built.slots_sold} → {hero.slots_sold} of 20"),
+        (f"{hero.model_name}, round 3", money(hero.profit),
+         f"profit after model spend, {hero.day} runs; {money(before.profit)} as first built"),
+        (f"Simple rule, {RULE_NOTE}", money(rule.profit),
+         f"no model, {rule.day} runs; the agent is {money(abs(gap))} {'ahead' if gap >= 0 else 'behind'}"),
+        (f"Units sold, {hero.model_name}", f"{before.season['units_sold']} → {hero.season['units_sold']}",
+         f"slots that sold: {before.slots_sold} → {hero.slots_sold} of 20"),
         ("Total API spend", money(total_spend()), f"of ${APPROVED_BUDGET} approved, all seasons and the pilot"),
     ]
     tiles_html = "".join(f'<div class="tile"><div class="label">{e(a)}</div><div class="num">{e(b)}</div>'
                          f'<div class="note">{e(c)}</div></div>' for a, b, c in tiles)
 
-    chart = [(rule, COLORS["rule"], "6 5", 2), (other, COLORS["other"], "", 2), (built, COLORS["built"], "", 2),
-             (hero, COLORS["hero"], "", 3)]
+    shown = [(load(sid), name, color, dashed) for sid, name, color, dashed in SHOW]
+    drawn = shown[:4]
     legend = "".join(
-        f'<span><i class="sw{" dash" if dash else ""}" style="{"" if dash else f"background:{c}"}"></i>{e(label(s))}</span>'
-        for s, c, dash, _ in [chart[3], chart[2], chart[1], chart[0]])
-    series = [{"v": s.cumulative, "color": c, "dash": dash, "w": w, "end": money(s.cumulative[-1], False)}
-              for s, c, dash, w in chart]
-
-    color_of = {hero.id: COLORS["hero"], built.id: COLORS["built"], other.id: COLORS["other"], rule.id: COLORS["rule"]}
+        f'<span><i class="sw{" dash" if dashed else ""}" style="{"" if dashed else f"background:{c}"}"></i>'
+        f'{e(n.rsplit(" (", 1)[0])}</span>' for _, n, c, dashed in drawn)
+    series = [{"v": s.cumulative, "color": c, "dash": "6 5" if dashed else "", "w": 3 if s.id == hero.id else 2,
+               "end": money(s.cumulative[-1], False)} for s, _, c, dashed in reversed(drawn)]
     rows = []
-    for sid in TABLE:
-        s = load(sid)
-        name = (f"{s.model_name}, fixed ({s.day})" if sid == hero.id else f"{s.model_name}, as built"
-                if sid == built.id else s.model_name if s.is_model else f"Rule ({s.day})")
+    for s, name, color, _ in shown:
         spend = float(s.season["model_spend"])
         rows.append(
-            f'<tr{" class=\"hero\"" if sid == hero.id else ""}><td><i class="dot" style="background:'
-            f'{color_of.get(sid, COLORS["rule2"])}"></i>{e(name)}</td><td class="r">{money(s.profit)}</td>'
-            f'<td class="r">{s.season["units_sold"]}</td><td class="r">{round(float(s.season["units_lost"]))}</td>'
+            f'<tr{" class=\"hero\"" if s.id == hero.id else ""}><td><i class="dot" style="background:{color}"></i>'
+            f'{e(name)}</td><td class="r">{money(s.profit)}</td><td class="r">{s.season["units_sold"]}</td>'
+            f'<td class="r">{round(float(s.season["units_lost"]))}</td>'
             f'<td class="r">{money(spend) if spend >= 0.005 else "$0"}</td></tr>')
     seasons_n = sum(1 for d in DATA.iterdir() if (d / "season.json").exists())
 
     lessons_html = "".join(f'<div class="lesson"><span class="tag {st}">{e(tag)}</span><b>{e(t)}</b><p>{e(x)}</p></div>'
                            for st, tag, t, x in LESSONS)
     next_html = "".join(f'<div class="card"><h2>{e(t)}</h2><p>{e(x)}</p></div>' for t, x in NEXT)
-    rule_note = (f"The fair comparison is the rule on the same schedule: {money(rule.profit)} with {DAY_NAMES[rule.day]} runs. "
-                 f"The model-vs-rule gap depends on one assumption: how much a second slot of the same drink adds to demand.")
-
+    rule_note = (f"The fair comparison is the rule with {RULE_NOTE} and {DAY_NAMES[rule.day]} runs: "
+                 f"{money(rule.profit)}. With only the first five drinks, the rule made "
+                 f"{money(shown[4][0].profit)}.")
     return TEMPLATE.format(
-        headline=e(headline), tiles=tiles_html, legend=legend, rows="".join(rows), table_title=(f"All {seasons_n} seasons" if len(TABLE) >= seasons_n else f"{len(TABLE)} of {seasons_n} seasons"),
-        rule_note=e(rule_note), lessons=lessons_html, next=next_html, series=json.dumps(series),
-        w=WIDTH, h=HEIGHT)
+        headline=e(headline), tiles=tiles_html, legend=legend, rows="".join(rows),
+        table_title=f"{len(SHOW)} of {seasons_n} seasons", rule_note=e(rule_note), lessons=lessons_html,
+        next=next_html, series=json.dumps(series), w=WIDTH, h=HEIGHT)
 
 
 TEMPLATE = """<!doctype html>

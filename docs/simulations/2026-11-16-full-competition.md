@@ -16,7 +16,7 @@ the fixes and Wednesday runs, and the scripted rule with Wednesday runs.
 
 ## Headline
 
-The whole story on one page (its source is `images/infographic.html`; rerender it with headless Chrome at 1200 px wide):
+The whole story on one page. `python -m vending.simulate.infographic` rebuilds it from `data/`; the deck crops it, so keep its layout:
 
 ![Five simulated seasons on one page](images/infographic.png)
 
@@ -85,6 +85,45 @@ and one pack per slot (lesson 6) waits on David.
   week. If the team moves to Wednesday, keep a run on go-live day.
 - Still one seed each. The agent's $69 gain is bigger than any seed effect seen so far, but the
   model-vs-rule gap still rests on the facing assumption (the sensitivity table below).
+
+## Round 3: more drinks and a top-up rule
+
+Three things changed, all from main or from round 2:
+
+- **Main's approved PRs.** #137 priced 18 more catalog drinks (`db/sourcing/2026-11-15-catalog.csv`).
+  The simulator added the 13 whose size the loading chart covers. It left out Pepsi Real Sugar 7.5 oz
+  cans and Premier Protein cartons. Each new drink's demand is its product line's fall rate, else its
+  category's (`vending/simulate/world.py`), and it's bought at the store price the team found. #135
+  gives the agent demand per class day while in stock.
+- **A top-up rule** (round 2's next fix). `restocking` and the rules card now say: at each weekly run,
+  refill a slot when its class days of stock left are fewer than the class days until the visit after
+  this Friday's.
+- **A fairer bar.** The rule above can only stock its five drinks, so it can't show what more drinks
+  are worth. `--decider scripted-wide` is the same rule, but day one stocks one sourced drink per slot,
+  15 different ones, best expected profit first.
+
+| Season (Wednesday runs) | Profit after model spend | Units sold | Units lost to empty slots | Model spend | Stock left, at cost |
+|---|---|---|---|---|---|
+| **Opus 5.5 medium, round 3** | **$963.69** | **586** | 53 | $4.62 | $179.93 |
+| Rule, 15 drinks (`scripted-wide`) | $837.99 | 523 | 65 | $0.00 | $201.78 |
+| Opus 5.5 medium, round 3, $4.50 cap (ran out 20 Jan) | $829.24 | 486 | 121 | $4.32 | $157.54 |
+| Rule, 5 drinks | $443.09 | 309 | 21 | $0.00 | $412.60 |
+| Opus 5.5 medium, round 2 | $385.97 | 302 | 33 | $3.24 | $112.35 |
+
+- **With the same drinks, the agent beat the rule by $126.** It stocked 13 drinks in all 20 slots,
+  at most two slots of any one, and every slot sold. It topped up before slots ran out ("eleven slots
+  ... have less stock than the 7 class days until the 18 Dec visit"), tested two $0.25 rises (Celsius
+  and Starbucks), and on Wed 3 Feb bought nothing: "no Friday visit is left to load stock".
+- **Most of the jump from round 2 is the drinks, not the agent.** The 5-drink rule makes $443; the
+  15-drink rule makes $838. That gain rests on an assumption: each new drink gets its own fall rate,
+  so spreading out adds demand. Real customers may split the same demand across more drinks. Read the
+  gap over the wide rule, not the total.
+- **Runs cost more with more drinks.** $0.31 to $0.77 a run, $4.62 a season, against about $0.30 in
+  round 1: the machine state and catalog it reads are longer. The first round-3 season had a $4.50
+  cap; it ran out on Wed 20 Jan, skipped the last three runs and lost 121 units. Give a season about
+  $6.50 of cap.
+- **The wildcard slot isn't in these seasons.** It's built and reviewed on its own branch,
+  `add_wildcard_slot` (#110 item 1), not merged.
 
 ## What went wrong, and what to change
 
