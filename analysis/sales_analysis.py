@@ -83,6 +83,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from slots_config import SOURCE_CLI, SOURCE_DEFAULT, is_default, resolve_run  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
+from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID, SLOTS  # noqa: E402  (defaults; configure() sets the ones this run uses)
 
 TZ = "America/New_York"
@@ -294,6 +295,10 @@ def load(args):
         doors = pd.read_csv(args.doors)
         doors["t"] = to_et(doors.at_eastern)
         doors = doors.sort_values("t").reset_index(drop=True)
+        # Rises from the lifetime count with vending.counters.rises (a lone low reading is a misread), not the file's
+        # `rise` column: exports written before export_sales.py used that rule turned (1000, 5, 1000) into a rise of 995.
+        up = dict(counter_rises(zip(doors.t, doors.door_open_lifetime.astype(int))))
+        doors["rise"] = [up.get(t, 0) for t in doors.t]
     else:
         print(f"WARNING: no door-event file at {args.doors}; visits fall back to the old assumption of a Friday "
               f"{VISIT_HOUR:02d}:00 visit every week (rerun export_sales.py to get door_events.csv)")
@@ -1713,6 +1718,8 @@ def main():
     # Brand keyword -> (brand, category, caffeine).  First match wins, so specific names come before general ones.
     BRANDS = [("diet coke", "Diet Coke", "soda", True), ("coke zero", "Coke Zero", "soda", True), ("black-label cola", "Coke Zero", "soda", True),
               ("coca-cola", "Coca-Cola", "soda", True), ("pepsi", "Pepsi", "soda", True),
+              ("mountain dew", "Mountain Dew", "soda", True), ("dr pepper", "Dr Pepper", "soda", True), ("fanta", "Fanta", "soda", False),
+              ("minute maid", "Minute Maid", "juice", False), ("iced energy", "Starbucks Iced Energy", "energy", True),
               ("monster", "Monster Energy", "energy", True), ("gorgie", "Gorgie", "energy", True), ("ghost", "Ghost Energy", "energy", True),
               ("red bull", "Red Bull", "energy", True), ("celsius", "Celsius", "energy", True),
               ("frappuccino", "Starbucks", "coffee", True), ("starbucks", "Starbucks", "coffee", True),

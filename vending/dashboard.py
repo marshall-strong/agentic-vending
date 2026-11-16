@@ -76,10 +76,11 @@ STALE_RUN = timedelta(hours=2)
 RECENT = timedelta(hours=24)
 # Halted this close to the cutoff means no request can go out in time.
 CUTOFF_SOON = timedelta(hours=24)
-# Units a selection holds, by package, from the machine's loading label. Approximate: it only
-# scales the bottle drawn in "In the machine", and only when the product name says the package.
+# Units a selection holds, by package, from the machine's loading label, plus the 16 oz can,
+# estimated from its width (`vending/capacity.py`, A20). Approximate: it only scales the bottle
+# drawn in "In the machine", and only when the product name says the package.
 PACKAGE_CAPACITY = {"20oz PET": 7, "16oz glass": 7, "16oz PET": 8, "12oz can": 8, "240/250ml can": 11,
-                    "14oz PET": 8}
+                    "14oz PET": 8, "16oz can": 8}
 # The machine's face: 5 shelves of 8 selections. Row r, column c is selection "rc".
 SHELVES, COLUMNS = 5, 8
 
@@ -87,7 +88,7 @@ SHELVES, COLUMNS = 5, 8
 def _connect() -> psycopg.Connection:
     url = settings.require("DATABASE_URL", "Copy the DATABASE_URL line from .env.example into .env.")
     return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT,
-                           options=READ_ONLY)
+                           options=db.session_options(url, READ_ONLY))
 
 
 # Tests swap this to point at a throwaway schema.
@@ -658,6 +659,8 @@ def _package(product: str | None) -> str | None:
     if size == 14 and not glass and not can:
         return "14oz PET"
     if size == 16:
+        if can and not glass and not pet:
+            return "16oz can"
         return "16oz glass" if glass and not pet else "16oz PET" if pet and not glass else None
     if size == 12 and can:
         return "12oz can"

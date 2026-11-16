@@ -30,9 +30,9 @@ from datetime import datetime
 
 import psycopg
 
-from vending import config, ledger, planner, stock
+from vending import config, ledger, planner, sourcing, stock
 from vending.bridge import Bridge, BridgeError
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import catalog as catalog_tool
 from vending.tools import desired_state as schema
 from vending.tools.machine_state import STALE_AFTER
@@ -53,19 +53,25 @@ class Gathered:
     now: datetime
     price_poll_at: datetime | None
     notes: tuple[str, ...]
+    sourcing_rows: tuple[sourcing.Option, ...] = ()   # the table rows the planner was given
 
 
 def planner_config(conn: psycopg.Connection) -> planner.Config:
-    """The planner's settings from `config`, each with its default when unset."""
+    """The planner's settings from `config`, each with its default when unset. Our slots must be recorded."""
     overrides = config.get_value(conn, "capacity_overrides", {})
     problem = config.KNOWN["capacity_overrides"].check(overrides)
     if problem:
         # Only a hand edit of the table gets here; `config set` checks first.
         raise NotReady(f"config capacity_overrides {problem}; set it again with "
                        "python -m vending.config set capacity_overrides '{\"SKU\": 8}' --by NAME")
+    try:
+        slots = our_slots(conn)
+    except SlotsNotRecorded as error:
+        raise NotReady(str(error)) from None
     return planner.Config(
         capacity_overrides=overrides,
-        price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 600),
+        slots=slots,
+        price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 650),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
         halted=config.is_halted(conn),
@@ -88,7 +94,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     counted = stock.stock(conn, until=now)
     notes.extend(counted.warnings)
     by_slot = {s.slot: s for s in counted.slots}
-    prices, poll_at = _latest_prices(conn)
+    prices, poll_at = _latest_prices(conn, settings.slots)
     if poll_at is None:
         notes.append("no good poll is stored, so current prices are unknown; every slot's price change "
                      "will look like a change")
@@ -104,9 +110,9 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
             units=by_slot[slot].units if slot in by_slot else 0,
             unit_cost=by_slot[slot].unit_cost if slot in by_slot else None,
         )
-        for slot in SLOTS
+        for slot in settings.slots
     )
-    without_receipts = [s for s in SLOTS if s not in by_slot]
+    without_receipts = [s for s in settings.slots if s not in by_slot]
     if without_receipts:
         notes.append(f"no receipts yet for slots {', '.join(without_receipts)}, so their product and stock "
                      "are unknown and counted as empty")
@@ -115,8 +121,12 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
     products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))
                      for p in catalog if p.get("sku"))
-    current = planner.CurrentState(slots, closet, pending, products, (), spendable)
-    return Gathered(current, settings, now, poll_at, tuple(notes))
+    # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
+    # so the stale-price warnings describe the same rows the planner used.
+    table_rows = tuple(sourcing.listed_options(conn))
+    current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
+                                   spendable)
+    return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
 
 
 def read_catalog(conn: psycopg.Connection, bridge: Bridge, now: datetime) -> tuple[list[dict], list[str]]:
@@ -193,7 +203,59 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
         raise
     gathered = gather(conn, catalog, now)
     gathered = replace(gathered, notes=(*catalog_notes, *gathered.notes))
-    return planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now), gathered
+    result = planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now)
+    stale = _stale_table_prices(gathered.sourcing_rows, result, desired, gathered.now)
+    if stale:
+        result = replace(result, warnings=(*result.warnings, *stale))
+    return result, gathered
+
+
+def _stale_table_prices(rows: tuple[sourcing.Option, ...], result: planner.Plan, desired: schema.DesiredState,
+                        now: datetime) -> list[str]:
+    """A warning for each sourcing-table price over a week old that this plan uses.
+
+    The plan uses a row in two ways:
+    - a product the agent gave no sourcing for is bought as the table says: its primary, and its
+      alternate when the line has one;
+    - for the agent's own option with no expected price, the planner borrows the expected price of
+      the first table row for that product with the same store and pack, primary first
+      (`planner._Sources._borrow_expected`), and uses it for the plan's cost.
+    Rows the plan doesn't use say nothing.
+    """
+    given = {s.product: s for s in desired.sourcing}
+    by_key = {(o.sku, o.rank): o for o in rows}
+    bought: dict[str, set[str]] = {}
+    for line in result.lines:
+        if line.purchase is not None:
+            bought.setdefault(line.product, {"primary"})
+            if line.purchase.alternate is not None:
+                bought[line.product].add("alternate")
+    warnings = []
+    for product, ranks in sorted(bought.items()):
+        if product not in given:
+            for rank in ("primary", "alternate"):
+                o = by_key.get((product, rank))
+                if rank in ranks and o is not None and o.is_stale(now):
+                    warnings.append(_stale_warning(o, now, f"the sourcing table's {rank} price"))
+            continue
+        entry = given[product]
+        for rank, mine in (("primary", entry.primary), ("alternate", entry.alternate)):
+            if rank not in ranks or mine is None or mine.expected_price_per_pack is not None:
+                continue
+            lent = next((o for o in (by_key.get((product, "primary")), by_key.get((product, "alternate")))
+                         if o is not None and o.store == mine.store and o.units_per_pack == mine.units_per_pack
+                         and o.expected_cents is not None), None)
+            if lent is not None and lent.is_stale(now):
+                warnings.append(_stale_warning(
+                    lent, now, f"your {rank} option gave no expected price, so the plan's cost uses the "
+                    f"sourcing table's {lent.rank} price"))
+    return warnings
+
+
+def _stale_warning(o: sourcing.Option, now: datetime, what: str) -> str:
+    return (f"{o.sku}: {what}, {sourcing.describe_inline(o)}, was checked {o.checked_at:%Y-%m-%d}, "
+            f"{(now - o.checked_at).days} days ago; it may have changed, so check it and update it with "
+            f"python -m vending.sourcing set {o.sku} ... --by NAME, or give sourcing with its own expected price")
 
 
 def _option(o: schema.PurchaseOption) -> planner.PurchaseOption:
@@ -206,7 +268,7 @@ def _int_setting(conn: psycopg.Connection, key: str, default: int) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
-def _latest_prices(conn: psycopg.Connection) -> tuple[dict[str, int | None], datetime | None]:
+def _latest_prices(conn: psycopg.Connection, slots: tuple[str, ...]) -> tuple[dict[str, int | None], datetime | None]:
     latest = conn.execute(
         "select session_id, started_at from polls where device_id = %s and crc_ok"
         " order by started_at desc limit 1", (DEVICE_ID,)).fetchone()
@@ -214,5 +276,5 @@ def _latest_prices(conn: psycopg.Connection) -> tuple[dict[str, int | None], dat
         return {}, None
     rows = conn.execute(
         "select selection, price_cents from poll_selections where session_id = %s and selection = any(%s)",
-        (latest[0], list(SLOTS)))
+        (latest[0], list(slots)))
     return {selection: price for selection, price in rows}, latest[1]

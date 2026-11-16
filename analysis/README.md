@@ -33,10 +33,12 @@ Three pages built on this analysis, as step-by-step labs: step tabs, toggles, sl
 | File | What it is |
 |---|---|
 | `export_sales.py` | Reads the database (read-only) and writes `analysis/data/*.csv`: our slots' poll readings and sales events (filtered like `vending.ledger._counter_rows`), every poll time, `machine_hourly.csv` (units and cents the whole machine sold since the previous poll; totals only) and `door_events.csv` (the EVA-DTS `EA2*DO` door-open counter at every poll and its rise). |
+| `door_events.py` | Reads the door-open counter out of a raw poll and finds its rises with `vending.counters.rises`, so a misread door reading isn't a visit. `export_sales.py` writes `door_events.csv` with it; `visit_windows.py` and `sales_analysis.py` recompute the rises from the lifetime column the same way, so an older export is safe too. |
 | `sales_analysis.py` | The whole analysis in one script with fixed seeds. It writes `analysis/out/lab_data.json` (the labs' data) and `analysis/out/analysis_report.md`. |
 | `slots_config.py` | Decides which slots are ours (see above) and checks the list. |
 | `rebuild.py` | Runs the export, the analysis and the three lab builds in one go, then prints a short summary. |
 | `labs/` | The three labs: one build script each (`forecast_lab.py`, `rhythm_lab.py`, `slot_lab.py`), their templates and scripts, and `labkit.py` (shared paths, the slot text filled into the templates, the two page forms). |
+| `visit_windows.py` | Dark periods: when the door opened, how long each visit window was, how often polls ran late, and how many of our sales fell inside a window. Reads the exported CSVs (and the visit grades in `lab_data.json` if present), standard library only, and writes `analysis/out/visit_windows.json`. See `docs/cutover.md`. |
 | `golisano_calendar_2026_27.json` | The Golisano Institute's 2026-27 academic calendar, one entry per day from Aug 24 2026 to Jan 31 2027, with class days, breaks and closures, its sources, and the date it was last checked against the official page (`checked`). |
 | `planograms_photos.json`, `planogram_2026-10-08.json` | What our slots held in the dated team photos (other slots are listed as `{"slot": ..., "ours": false}` with no values). The Oct 8 file also describes the snack machine next to ours. |
 | `product_history.md` | Our slots' products over time, read from those photos. |

@@ -463,11 +463,12 @@ EVEN = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
 
 
 @pytest.fixture
-def even_columns(monkeypatch):
+def even_columns(monkeypatch, conn):
     """Our slots on every other column, so nothing assumes columns 5 to 8."""
-    from vending.tools import machine_state
+    from vending import slots
     monkeypatch.setattr(dashboard, "SLOTS", EVEN)
-    monkeypatch.setattr(machine_state, "SLOTS", EVEN)
+    monkeypatch.setattr(slots, "SLOTS", EVEN)         # the bound on the stored assignment moves with it
+    conn.execute("update slot_assignment set slots = %s", (list(EVEN),))
     return EVEN
 
 
@@ -521,7 +522,7 @@ def test_now_and_next_friday(conn, page_conn, even_columns):
 
 @pytest.mark.parametrize("name, package", [
     ("COKE-20OZ", "20oz PET"), ("Sprite 20 oz bottle", "20oz PET"), ("Jarritos 16oz glass", "16oz glass"),
-    ("Water 16 oz PET", "16oz PET"), ("Snapple 16 oz", None), ("Coke 12 oz can", "12oz can"),
+    ("Water 16 oz PET", "16oz PET"), ("Monster 16 oz can", "16oz can"), ("Snapple 16 oz", None), ("Coke 12 oz can", "12oz can"),
     ("Coke 12 oz", None), ("Red Bull 250ml", "240/250ml can"), ("Starbucks 14 fl oz", "14oz PET"),
     ("Gatorade 28 oz", None), ("MTDEW", None), (None, None),
 ])

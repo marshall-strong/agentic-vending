@@ -2,12 +2,12 @@
 
 The project brief asks for "a sample restock and pricing directive -- the artifact operations would
 actually receive and act on" (Project Brief (Revised), section 5). This is a real one, not a mock-up:
-the agent's first live run produced it, and it went to the bridge as purchase request
+the agent's first live test run produced it, and it went to the bridge as purchase request
 `pr_v8hB_h3gQatc` for the scheduled visit on Friday 13 Nov 2026.
 
 | | |
 |---|---|
-| Run | Agent run 2, live, `claude-opus-5-5` at `medium` effort, 12 Nov 2026 00:02-00:04 ET, model cost $0.40 |
+| Run | Agent run 2, a live test before the competition, `claude-opus-5-5` at `medium` effort, 12 Nov 2026 00:02-00:04 ET, model cost $0.40 |
 | Request | `pr_v8hB_h3gQatc`, accepted by the bridge as `pending` at 05:04 UTC |
 | Visit | Scheduled (Friday, no fee) |
 | Money | $233.31 expected, $270.00 at most, from a spendable balance of $599.71 |
@@ -86,7 +86,8 @@ The agent writes a reason for every slot it changes. These are its own words, st
 
 Its summary: "This is the first run and we have no stock records, and most of our 20 slots sold nothing
 last week, so I submitted a $233 order (at most $270) that fills 6 slots with the five drinks we have
-prices for." Only five drinks on our price list were in the catalog that night, which is why the other
+prices for." (By "the first run" it means its first live run: run 1, an hour earlier, was a dry run that sent
+nothing.) Only five drinks on our price list were in the catalog that night, which is why the other
 14 slots stay as they are.
 
 The floors come from the pricing gate (`vending/pricing.py`): the most the worker may pay per unit,
@@ -131,7 +132,7 @@ and set every price without asking a question. Line by line:
 | Product as brand, flavor and size, with no internal names or codes | **No** | The directive prints the catalog's SKU (`REDBULL-ORIGINAL-8_4CAN`), not its name ("Red Bull Original 8.4 oz can"). The catalog has the name; `_directive` in `vending/planner.py` doesn't use it. |
 | How many units, or that the slot stays as it is | Yes | `Load`, or `no change` |
 | The price on the tag | Yes | Every slot, including unchanged ones |
-| What to do with units removed at a product change | **No** | `Pull` says `-` on every switch. The planner fills it only when our records show stock in the slot, and on this first run we had no receipts. The worker may well find old product in slots 15, 17, 26, 35, 47 and 56 and has nothing telling them what to do with it. |
+| What to do with units removed at a product change | **No** | `Pull` says `-` on every switch. The planner fills it only when our records show stock in the slot, and on this first live run we had no receipts. The worker may well find old product in slots 15, 17, 26, 35, 47 and 56 and has nothing telling them what to do with it. |
 | No conditions for the worker to work out | Partly | The order went in after the Wednesday Amazon cutoff, so it may arrive after Friday. The agent wrote "load these slots when the stock arrives" in its update to the team, but that never reached the worker: the request has an optional `note` field (up to 500 characters) that our planner doesn't fill. |
 | Prices in 5-cent steps | Yes | Enforced by the pricing gate |
 

@@ -61,8 +61,9 @@ from vending.pricing import (
 )
 from vending.slots import SLOTS
 
-# Our 20 selections, from `vending.slots`, the one place that lists them. Kept
-# under this name because `Config.slots` and the tests use it.
+# The default for `Config.slots`, for code and tests with no database. Live
+# planning (`vending.planning.planner_config`) passes the stored assignment from
+# `vending.slots.our_slots` instead. Kept under this name because the tests use it.
 OUR_SLOTS: tuple[str, ...] = SLOTS
 
 # Spelled exactly as the API wants them.
@@ -241,7 +242,7 @@ class Config:
     from each product's catalog size and the loading chart (`vending.capacity`).
     `capacity_overrides` holds a person's count per product, which wins over
     the chart and is the only capacity for a package the chart doesn't list.
-    The ceiling default is the team's $6.00 proposal; the API refuses any
+    The ceiling default is the team's $6.50, decided 12 Nov; the API refuses any
     sale price over $10.00, so a higher ceiling is an error. Cutoffs are per
     store and in `timezone`; past a cutoff in `soft_cutoff_stores` is a
     warning, not a refusal, because David saw no hard Amazon deadline. The
@@ -253,7 +254,7 @@ class Config:
     which Windows lacks unless the `tzdata` package is installed.
     """
     capacity_overrides: Mapping[str, int] = field(default_factory=dict)
-    price_ceiling_cents: int = 600
+    price_ceiling_cents: int = 650
     tax_percent: int = DEFAULT_TAX_PERCENT
     midweek_fee_cents: int = 2500
     halted: bool = False
@@ -414,6 +415,7 @@ class _Option:
     max_cents: int
     expected_cents: int | None
     pack_description: str | None
+    expected_from_table: bool = False   # the expected price was borrowed from the sourcing table
 
 
 @dataclass
@@ -557,7 +559,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 refusals.append(Refusal(code, (
                     f"slot {s.slot} needs {s.shortfall} {s.product}, the closet can't cover "
                     f"it, and there is no sourcing for it, given or in the table; "
-                    f"add sourcing or lower fill_to"), s.slot))
+                    f"add sourcing, ask a person to add it to the table (python -m vending.sourcing set), "
+                    f"or lower fill_to"), s.slot))
             continue
         extra = 0
         if s.product not in extras_placed:
@@ -830,10 +833,11 @@ class _Sources:
             # pack costs leaves the slot empty. The expected price is an
             # estimate, so the agent may give its own when it knows better.
             if option and option.expected_cents is not None and option.expected_cents > option.max_cents:
+                whose = "the sourcing table's expected" if option.expected_from_table else "the expected"
                 self._bad.add(s.product)
                 self._refusals.append(Refusal("bad_sourcing", (
                     f"{s.product}: {label} max_price_per_pack {_dollars(option.max_cents)} is below "
-                    f"the expected {_dollars(option.expected_cents)}, so the worker couldn't buy it; "
+                    f"{whose} {_dollars(option.expected_cents)}, so the worker couldn't buy it; "
                     f"raise the max, or give expected_price_per_pack if you know the pack costs less")))
                 return None
         return _Source(primary, alternate, s.extra_units_to_closet)
@@ -886,6 +890,7 @@ class _Sources:
                     and o.expected_price_per_pack is not None:
                 try:
                     option.expected_cents = to_cents(o.expected_price_per_pack)
+                    option.expected_from_table = True
                 except ValueError:
                     pass
                 return

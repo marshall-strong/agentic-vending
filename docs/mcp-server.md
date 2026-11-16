@@ -12,7 +12,7 @@ machine.
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
 | `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. |
-| `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, the catalog can't be read, or `capacity_overrides` in config is invalid. |
+| `preview_desired_state` | **Works.** Runs the restock planner on live data: the request lines, the worker's directive, cost and balance left, each slot's price floor and how it was worked out, warnings, and every refusal at once. `success` is whether the plan could be submitted as it stands. Says what a person must do first when the ledger isn't open, our slots haven't been recorded, the catalog can't be read, or `capacity_overrides` in config is invalid. |
 | `get_purchase_requests` | **Works.** Our requests, newest first (or only pending ones): status, decision note, the plan we sent, and each line's receipt with later losses. Reads only our database, so it's as fresh as the last `python -m vending.sync_requests`; pending requests that sync hasn't read in 6 hours (counted from submission if it has never read them) are listed in `not_checked_recently` and named in the message. |
 | `get_catalog` | **Works, version 1.** The single-item products the bridge lists (sku, name, line, flavor, size), searchable by text, with when the catalog was last synced. Says so when that was over 36 hours ago. Our last unit cost, sourcing rows and pending catalog requests are not in it yet. |
 | `get_project_rules` | **Works.** Our own notes on the project brief, from [`agent/`](agent/README.md). With no topic, the list of topics and their one-line summaries; with a topic, that file's text. A topic is a plain name from the list: paths, `..` and unknown names are refused with the list. Logged like any read. |
@@ -29,6 +29,7 @@ You need the local database from the history sync first ([`README.md`](../README
 pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate            # creates or updates the tables
+python -m vending.slots record          # needs the class tailnet; stores which slots are ours
 python -m vending.sync_history          # needs the class tailnet; loads real polls
 python -m vending.server                # waits silently on stdin: that's correct
 ```
@@ -76,6 +77,10 @@ paths, then restart Claude Desktop:
 ```
 
 The server reads `DATABASE_URL` from the repository's `.env`, so the config needs no secrets.
+
+Every tool that reads our slots (`get_machine_state`, `get_sales_history`, `get_account_balance`,
+`get_pnl`, `preview_desired_state`) takes them from the assignment `python -m vending.slots record`
+stored. Until it has run, each one answers `success: false` and names that command.
 
 ## The halt switch
 
@@ -235,7 +240,8 @@ ledger; and the planner's settings from `config`.
 packages in front of a pusher. `vending/capacity.py` matches each product's catalog `size` against
 the machine's Package Loading chart ([photographed 9 Nov](images/package-loading-chart-2026-11-09.jpg)): 20 oz bottle 7, 16 oz bottle 7 (the chart
 says glass 7, PET 8, and the catalog doesn't say which), 14 oz bottle 8, 12 oz can 8, 240/250 ml can
-11. A package the chart doesn't list (a 16 oz can, a 16.9 oz bottle, a carton) is refused as
+11. The chart doesn't list the 16 oz can; it gets 8, estimated from its width (the 12 oz can's, only
+taller; assumption A20). Any other package the chart doesn't list (a 16.9 oz bottle, a carton) is refused as
 `unknown_capacity` until a person counts how many fit and records it; a count also wins over the
 chart, which calls its own figures approximate:
 
@@ -256,7 +262,7 @@ and a SKU with a space in it is refused, since SKUs have none and it would never
 warns about a count for a SKU that isn't in the catalog, and about one more than 1.5 times the
 chart's figure for that package.
 
-The other keys the planner reads are `price_ceiling_cents` (600), `tax_percent` (8) and
+The other keys the planner reads are `price_ceiling_cents` (650), `tax_percent` (8) and
 `midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for
 type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
 refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
@@ -272,9 +278,12 @@ bridge down says to stop, not to check Tailscale. A poll older
 than 3 hours adds a `STALE` note, since stock on the rails is overstated by whatever sold since.
 A refused plan comes back with every refusal and everything that could still be worked out, so the
 agent fixes the whole plan in one turn. In `cost`, `spendable` and `spendable_left_at_max` are the
-ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. There is no
-sourcing table yet: the agent gives `sourcing` for every product it buys, and a slot that needs a
-purchase without it is refused `no_sourcing`.
+ledger's spendable balance, the same figure `get_account_balance` calls `spendable`. A product the agent
+gives no `sourcing` for is bought the way the team's sourcing table says ([`sourcing.md`](sourcing.md)),
+and a table price checked over 7 days ago is named in `warnings`. When the agent gives sourcing
+with no `expected_price_per_pack`, the cost borrows the table's expected price for the same store
+and pack, and an old borrowed price is named the same way. A slot that needs a purchase with
+no sourcing given or in the table is refused `no_sourcing`.
 
 ### `submit_desired_state`: the only way to buy
 

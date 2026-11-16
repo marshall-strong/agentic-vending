@@ -9,7 +9,9 @@ Meaghan Gartland, Sean Kelley, Kevin Sykes and Marshall Strong. Group B.
 
 There is a Royal Vendors RVV NG drink machine in the building. It has 40 selections:
 5 rows, with 8 columns in each row. Our team is assigned some of those slots, and
-another team is assigned others. We do not get to know which slots are theirs.
+another team is assigned others. We do not get to know which slots are theirs. Ours come
+from the inventory server (`GET /api/v1/slots`): `python -m vending.slots record` stores
+them, and every tool reads them from the database.
 
 We start with **$600** of institute credit, once. From that we buy drinks, set prices,
 and ask for the machine to be restocked. Everything the machine sells credits the same
@@ -80,7 +82,7 @@ from day one.
 | [`docs/pnl-report.md`](docs/pnl-report.md) | The weekly P&L report: a printable page of profit and loss by week, from the ledger |
 | [`docs/guardrail-evidence.md`](docs/guardrail-evidence.md) | Each guardrail tried against the real system on 12 Nov: over-budget and out-of-bounds plans refused, and a running agent halted by one line of SQL |
 | [`docs/halt-for-instructors.md`](docs/halt-for-instructors.md) | Our halt card: three ways to stop our agent without its help. Instructors don't need a halt switch (David, 12 Nov), but may use it |
-| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live run, with its reasons and a check against our own directive rules |
+| [`docs/sample-directive.md`](docs/sample-directive.md) | A real restock and pricing directive from the agent's first live test run, with its reasons and a check against our own directive rules |
 | [`docs/integrity.md`](docs/integrity.md) | The team integrity rule, why our pricing ignores the other team's prices for now, and the guardrails |
 | [`docs/assumptions.md`](docs/assumptions.md) | The assumptions register: what our code and scores rely on that we haven't confirmed |
 | [`docs/dashboard.md`](docs/dashboard.md) | The read-only dashboard for watching the agent: status, plan and what changed, activity, requests |
@@ -217,10 +219,14 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 docker compose up -d db
 python -m vending.db migrate
+python -m vending.slots record
 python -m vending.sync_history --since 2026-08-28
 ```
 
-`migrate` creates or updates the tables. The sync then copies every stored poll since
+`migrate` creates or updates the tables. `slots record` reads which selections are ours
+from the inventory server and stores them; until it has run, the agent's tools refuse and
+name it. Run it again any time: the same answer changes nothing, and a different one is
+refused, because the assignment is meant to stay fixed. The sync then copies every stored poll since
 28 August into `polls` and `poll_selections` (about 830 polls on 22 October, two minutes).
 Run it again any time to pick up new polls; it only fetches what it doesn't have. It never
 touches the machine itself: it reads the bridge's stored history. Neither the sync nor the

@@ -310,6 +310,14 @@ def test_count_note_gives_the_range_of_dates_and_each_slot_source():
     assert "(2026-10-26; 1 from the door open)" in doors and "photo" not in doors
 
 
+def test_count_note_lists_a_slot_seen_stocked_with_units_uncounted():
+    from vending.tools.machine_state import _count_note
+    both = {**seen(slot="15", product="Gorgie energy drink, blue can", on_hand=None),
+            **seen(slot="35", product=None, on_hand=0)}
+    note = _count_note(build(NOW, {}, None, {}, seen=both, now=NOW))
+    assert "Slots it saw holding stock: 15." in note
+
+
 def test_count_note_says_which_to_trust_when_receipts_and_count_both_show():
     from vending.tools.machine_state import _count_note
     before = count(slot="47", since=NOW - timedelta(days=5))          # the count came after the load
