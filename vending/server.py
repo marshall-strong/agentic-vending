@@ -153,7 +153,7 @@ def _write_sync(tool: str, arguments: dict[str, Any], action: Callable[[psycopg.
 
 @_tool(built=True)
 async def get_machine_state() -> machine_state.MachineState:
-    """Each of our 20 slots: price, lifetime units, units sold and units/day over the last 7 days, and from receipts the product, stock on hand, days since loaded and days of stock left. Where receipts don't know a slot, counted_product and counted_on_hand say what a person last saw in it (counted_at, counted_days_ago, count_source; an old count is weak evidence). Plus the closet (back stock) at cost."""
+    """Each of our 20 slots: price, lifetime units, units sold and units/day over the last 7 days, and from receipts the product, stock on hand, days since loaded and days of stock left. Plan demand with units_per_class_day: units sold per class day while the slot held stock, or the fall rate for its price until it has 5 such days (rate_basis says which), with class_days_of_stock_left. Where receipts don't know a slot, counted_product and counted_on_hand say what a person last saw in it (counted_at, counted_days_ago, count_source; an old count is weak evidence). Plus the closet (back stock) at cost."""
     return await _read("get_machine_state", machine_state.get_machine_state)
 
 

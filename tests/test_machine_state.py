@@ -311,3 +311,36 @@ def test_count_note_says_which_to_trust_when_receipts_and_count_both_show():
     assert "Slots 47 have both stock_on_hand and counted_on_hand: the count is newer, so trust it." in _count_note(states)
     only = build(NOW, {"47": (350, 10)}, None, {}, seen=seen(), now=NOW)
     assert "both stock_on_hand" not in _count_note(only)
+
+
+# --- Demand per class day while in stock (units_per_class_day) ------------------------
+
+def test_build_without_receipts_gives_the_fall_prior_for_the_price():
+    s = by_slot(build(NOW, {"15": (450, 110)}, NOW - timedelta(days=7), {"15": 10}))["15"]
+    assert (s.units_per_class_day, s.class_days_in_stock) == ("1.354", None)
+    assert s.rate_basis.startswith("fall prior: mid seller, premium-priced")
+    assert s.class_days_of_stock_left is None                      # nothing known on hand
+
+
+def test_build_uses_the_newer_count_for_class_days_left():
+    s = by_slot(build(NOW, {"47": (250, 10)}, None, {}, seen=seen(on_hand=5), now=NOW))["47"]
+    assert s.class_days_of_stock_left == "2.9"                     # 5 / 1.701, the fast prior at $2.50
+
+
+def test_an_emptied_slot_rates_only_the_days_it_held_stock(conn):
+    friday = datetime(2026, 10, 16, 20, tzinfo=timezone.utc)       # 4 PM Eastern
+    store_poll(conn, "p0", "2026-10-16T12:00:00+00:00", {"15": (250, 100), "16": (300, 50)})
+    fulfilled(conn, "r1", friday, ("15", "COKE20", "primary", "12.00", 8, 0, 0))
+    store_poll(conn, "p1", "2026-10-19T22:00:00+00:00", {"15": (250, 103), "16": (300, 50)})
+    store_poll(conn, "p2", "2026-10-20T22:00:00+00:00", {"15": (250, 106), "16": (300, 50)})
+    store_poll(conn, "p3", "2026-10-21T22:00:00+00:00", {"15": (250, 108), "16": (300, 50)})   # empty from here
+    store_poll(conn, "p4", "2026-10-22T22:00:00+00:00", {"15": (250, 108), "16": (300, 50)})
+    fulfilled(conn, "r2", friday + timedelta(days=7), ("15", "COKE20", "primary", "12.00", 8, 0, 0))
+    store_poll(conn, "p5", "2026-10-26T22:00:00+00:00", {"15": (250, 111), "16": (300, 50)})
+    store_poll(conn, "p6", "2026-10-27T22:00:00+00:00", {"15": (250, 113), "16": (300, 50)})
+    states = by_slot(get_machine_state(conn, now=datetime(2026, 10, 28, 12, tzinfo=timezone.utc)).data)
+    s = states["15"]
+    assert s.class_days_in_stock == 6                               # Mon-Wed, then Mon-Wed: not Thu 22 Oct
+    assert (s.units_per_class_day, s.rate_basis) == ("2.17", "own: 13 sold over 6 in-stock class days")
+    assert (s.stock_on_hand, s.class_days_of_stock_left) == (3, "1.4")
+    assert states["16"].units_per_class_day == "0.722" and states["16"].class_days_in_stock is None

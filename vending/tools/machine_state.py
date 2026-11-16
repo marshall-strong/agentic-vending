@@ -22,6 +22,13 @@ Built from our database only; it never reads the machine.
   is weak evidence (the slot may have been restocked or emptied since). When a
   slot has both `stock_on_hand` and `counted_on_hand`, the count is the later
   observation: trust it over the receipts' arithmetic.
+- `units_per_class_day` is the demand estimate the agent should plan with
+  (`vending.demand`): units sold since the slot's product went in ÷ the class
+  days it held stock, once it has 5 such days; before that, the fall rate of
+  the segment priced nearest it. `rate_basis` says which, and
+  `class_days_of_stock_left` divides the units on hand (the count's when it is
+  newer) by it. `units_per_day` stays as before: the last 7 calendar days,
+  empty days and weekends included, so it reads low for a slot that sold out.
 
 A slot with no receipts yet has `null` for every receipt field: null, not
 zero, so the agent can't mistake "unknown" for "empty". The message names
@@ -38,7 +45,7 @@ from fractions import Fraction
 import psycopg
 from pydantic import BaseModel
 
-from vending import counters, slot_counts, stock
+from vending import counters, demand, slot_counts, stock
 from vending.slots import DEVICE_ID, SLOTS, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
@@ -62,6 +69,11 @@ class SlotState(BaseModel):
     units_sold_since_load: int | None = None
     days_since_loaded: int | None = None
     days_of_stock_left: str | None = None
+    # Demand per class day while in stock (`vending.demand`): the figure to plan with.
+    units_per_class_day: str | None = None
+    rate_basis: str | None = None              # "own: ..." or "fall prior: ..."
+    class_days_in_stock: int | None = None     # since the product went in; null without receipts
+    class_days_of_stock_left: str | None = None
     # From the latest person's count, when receipts don't cover the slot or the count is newer.
     counted_product: str | None = None   # as seen, free text, not a SKU; null when seen empty
     counted_on_hand: int | None = None   # counted less sold since; an estimate for a photo count
@@ -94,10 +106,13 @@ Counters = dict[str, tuple[int | None, int]]
 def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold: dict[str, int],
           counts: dict[str, stock.SlotCount] | None = None, last_loaded: dict[str, datetime] | None = None,
           sold_since_load: dict[str, int] | None = None, now: datetime | None = None,
-          seen: dict[str, dict] | None = None, slots: tuple[str, ...] = SLOTS) -> list[SlotState]:
-    """Per-slot state for `slots` from the latest poll, the window's sales, the receipts and the latest
-    person's count (`seen`, from `vending.slot_counts.latest`). Pure: no database, no clock."""
+          seen: dict[str, dict] | None = None, slots: tuple[str, ...] = SLOTS,
+          demands: dict[str, demand.Demand] | None = None) -> list[SlotState]:
+    """Per-slot state for `slots` from the latest poll, the window's sales, the receipts, the latest
+    person's count (`seen`, from `vending.slot_counts.latest`) and each slot's own in-stock sales
+    (`demands`; a slot without one gets the fall prior for its price). Pure: no database, no clock."""
     counts, last_loaded, sold_since_load, seen = counts or {}, last_loaded or {}, sold_since_load or {}, seen or {}
+    demands = demands or {}
     days = Decimal((as_of - start).total_seconds()) / 86400 if start else Decimal(0)
     states = []
     for slot in slots:
@@ -109,6 +124,8 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold
         count = counts.get(slot)
         loaded_at = last_loaded.get(slot)
         looked = _newer_count(seen.get(slot), count)
+        rate = demands.get(slot) or demand.estimate(0, 0, price)
+        on_hand = looked["on_hand"] if looked else (count.units if count else None)
         states.append(SlotState(
             slot=slot,
             price=None if price is None else f"{price // 100}.{price % 100:02d}",
@@ -120,6 +137,10 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold
             units_sold_since_load=sold_since_load.get(slot) if count else None,
             days_since_loaded=((now or as_of) - loaded_at).days if count and loaded_at else None,
             days_of_stock_left=_days_left(count.units, per_day) if count else None,
+            units_per_class_day=None if rate.units_per_class_day is None else str(rate.units_per_class_day),
+            rate_basis=rate.basis,
+            class_days_in_stock=rate.class_days_in_stock if count else None,
+            class_days_of_stock_left=demand.class_days_left(on_hand, rate.units_per_class_day),
             counted_product=looked["product"] if looked else None,
             counted_on_hand=looked["on_hand"] if looked else None,
             counted_at=looked["counted_at"] if looked else None,
@@ -201,8 +222,10 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     last_loaded = _last_loaded(conn)
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
     seen = _seen(conn)
-    states = build(as_of, _counters(conn, latest[0], slots), start, window_sold,
-                   counts, last_loaded, sold_since_load, now, seen, slots)
+    latest_counters = _counters(conn, latest[0], slots)
+    demands = _demands(counts, _loads(conn), counted.sales, latest_counters, now)
+    states = build(as_of, latest_counters, start, window_sold,
+                   counts, last_loaded, sold_since_load, now, seen, slots, demands)
     closet, closet_value = closet_items(counted.closet)
 
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
@@ -283,6 +306,30 @@ def _last_loaded(conn: psycopg.Connection) -> dict[str, datetime]:
         " where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded') and l.units_loaded > 0"
         " group by l.slot")
     return dict(rows)
+
+
+def _loads(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
+    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`."""
+    loads: dict[str, list[tuple[datetime, int]]] = {}
+    for slot, at, units in conn.execute(
+            "select l.slot, l.resolved_at, l.units_loaded from purchase_lines l join purchase_requests r"
+            " using (request_id) where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded')"
+            " and l.units_loaded > 0 and l.resolved_at is not null"):
+        loads.setdefault(slot, []).append((at, units))
+    return loads
+
+
+def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[datetime, int]]],
+             sales: tuple[stock.SaleCost, ...], latest: Counters, now: datetime) -> dict[str, demand.Demand]:
+    """Each receipted slot's in-stock rate (or prior) for its current product, since it went in. Pure."""
+    demands = {}
+    for slot, count in counts.items():
+        slot_loads = [(at, units) for at, units in loads.get(slot, []) if at >= count.since]
+        slot_sales = [(s.at, s.units) for s in sales if s.slot == slot and s.at > count.since]
+        spans = demand.in_stock_spans(slot_loads, slot_sales, now, count.units)
+        demands[slot] = demand.estimate(sum(units for _, units in slot_sales),
+                                        len(demand.class_days_in_stock(spans)), latest.get(slot, (None, None))[0])
+    return demands
 
 
 def _sold_since_load(sales: tuple[stock.SaleCost, ...], last_loaded: dict[str, datetime]) -> dict[str, int]:
