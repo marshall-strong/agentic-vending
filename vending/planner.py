@@ -415,6 +415,7 @@ class _Option:
     max_cents: int
     expected_cents: int | None
     pack_description: str | None
+    expected_from_table: bool = False   # the expected price was borrowed from the sourcing table
 
 
 @dataclass
@@ -558,7 +559,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 refusals.append(Refusal(code, (
                     f"slot {s.slot} needs {s.shortfall} {s.product}, the closet can't cover "
                     f"it, and there is no sourcing for it, given or in the table; "
-                    f"add sourcing or lower fill_to"), s.slot))
+                    f"add sourcing, ask a person to add it to the table (python -m vending.sourcing set), "
+                    f"or lower fill_to"), s.slot))
             continue
         extra = 0
         if s.product not in extras_placed:
@@ -831,10 +833,11 @@ class _Sources:
             # pack costs leaves the slot empty. The expected price is an
             # estimate, so the agent may give its own when it knows better.
             if option and option.expected_cents is not None and option.expected_cents > option.max_cents:
+                whose = "the sourcing table's expected" if option.expected_from_table else "the expected"
                 self._bad.add(s.product)
                 self._refusals.append(Refusal("bad_sourcing", (
                     f"{s.product}: {label} max_price_per_pack {_dollars(option.max_cents)} is below "
-                    f"the expected {_dollars(option.expected_cents)}, so the worker couldn't buy it; "
+                    f"{whose} {_dollars(option.expected_cents)}, so the worker couldn't buy it; "
                     f"raise the max, or give expected_price_per_pack if you know the pack costs less")))
                 return None
         return _Source(primary, alternate, s.extra_units_to_closet)
@@ -887,6 +890,7 @@ class _Sources:
                     and o.expected_price_per_pack is not None:
                 try:
                     option.expected_cents = to_cents(o.expected_price_per_pack)
+                    option.expected_from_table = True
                 except ValueError:
                     pass
                 return
