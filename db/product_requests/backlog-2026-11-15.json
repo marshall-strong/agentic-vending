@@ -1,0 +1,130 @@
+[
+ {
+  "name": "Snapple Apple",
+  "size": "16 oz bottle",
+  "line": "Snapple",
+  "flavor": "Apple",
+  "note": "A third Snapple flavour. Amazon 12-pack, sold by Amazon.com, $12.24.",
+  "why": "Adds about $50 to the best day-one plan (projection, 15 Nov); juice at $1.02 a bottle",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)",
+  "est_gain_cents": 4969
+ },
+ {
+  "name": "Powerade Sports Drink",
+  "size": "20 oz bottle",
+  "line": "Powerade",
+  "flavor": "Mountain Berry Blast",
+  "note": "A low-cost sports drink. Amazon 8-pack, sold by Amazon.com, $6.48.",
+  "why": "Adds about $40 (projection, 15 Nov); a cheap sports drink, and the catalog has none",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)",
+  "est_gain_cents": 4024
+ },
+ {
+  "name": "Reign Total Body Fuel",
+  "size": "16 oz can",
+  "line": "Reign",
+  "flavor": "Razzle Berry",
+  "note": "Another energy brand. Amazon 12-pack, sold by Amazon.com, $29.76.",
+  "why": "16 oz cans now fit 8 a column (#134); another energy brand. The Interloper sells Reign",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "AriZona Green Tea with Ginseng and Honey",
+  "size": "16 oz can",
+  "line": "AriZona",
+  "flavor": "Green Tea",
+  "note": "A low-cost tea. Amazon 12-pack, sold by Amazon.com, $7.89.",
+  "why": "16 oz can at $0.66; low-cost tea",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "Dr Pepper",
+  "size": "20 oz bottle",
+  "line": "Dr Pepper",
+  "flavor": null,
+  "note": "A soda we don't have yet. Price to be checked at Walmart.",
+  "why": "A soda the catalog lacks; adds $0 at Walmart's estimated 20 oz price",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "Sprite",
+  "size": "20 oz bottle",
+  "line": "Sprite",
+  "flavor": null,
+  "note": "A lemon-lime soda we don't have yet. Price to be checked at Walmart.",
+  "why": "A soda the catalog lacks; adds $0 at Walmart's estimated 20 oz price",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "BodyArmor Lyte Sports Drink",
+  "size": "16 oz bottle",
+  "line": "BodyArmor",
+  "flavor": "Strawberry Banana",
+  "note": "A sports drink students know. Amazon 12-pack, sold by Amazon.com, $19.08.",
+  "why": "Sports drink; adds $0 in the projection. The Interloper sells BodyArmor",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "Essentia Ionized Alkaline Water",
+  "size": "20 oz bottle",
+  "line": "Essentia",
+  "flavor": null,
+  "note": "Still water to cover the water category. Amazon 24-pack, sold by Amazon.com, $34.98.",
+  "why": "Still water; adds $0 in the projection (Hint already covers water)",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "poppi Prebiotic Soda",
+  "size": "12 oz can",
+  "line": "poppi",
+  "flavor": "Strawberry Lemon",
+  "note": "A newer soda style to test. Amazon 12-pack, sold by Amazon.com, $17.95.",
+  "why": "Newer soda style; adds $0 at $1.50 a can",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "Olipop Prebiotic Soda",
+  "size": "12 oz can",
+  "line": "Olipop",
+  "flavor": "Vintage Cola",
+  "note": "A newer soda style to test. Amazon 12-pack, sold by Amazon.com, $23.64.",
+  "why": "Newer soda style; adds $0 at $1.97 a can",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "Starbucks Frappuccino",
+  "size": "13.7 oz bottle",
+  "line": "Starbucks",
+  "flavor": "Mocha",
+  "note": "Frappuccino sold this fall. Amazon 12-pack, sold by Amazon.com, $23.05.",
+  "why": "Sold this fall; the 13.7 oz glass bottle needs a column count before it can be planned",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "Muscle Milk Protein Shake",
+  "size": "11 oz carton",
+  "line": "Muscle Milk",
+  "flavor": "Chocolate",
+  "note": "A lower-cost protein shake. Amazon 12-pack, sold by Amazon.com, $20.94.",
+  "why": "Protein; the 11 oz carton needs a column count",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "fairlife Nutrition Plan Protein Shake",
+  "size": "11.5 oz bottle",
+  "line": "fairlife",
+  "flavor": "Chocolate",
+  "note": "A high-protein shake. Costco 18-pack, $42.99.",
+  "why": "Protein; the 11.5 oz bottle needs a column count",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ },
+ {
+  "name": "Tropicana Orange Juice",
+  "size": "10 oz bottle",
+  "line": "Tropicana",
+  "flavor": "Orange",
+  "note": "Juice sold this fall. Amazon 24-pack, sold by Amazon.com, $20.16.",
+  "why": "Juice; the 10 oz bottle needs a column count",
+  "source": "team list, 15 Nov (left over when the bridge stopped the batch)"
+ }
+]
