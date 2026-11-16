@@ -37,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="the weekly run's day, at 19:00 (Amazon's cutoff for Friday is Wednesday 23:59)")
     parser.add_argument("--elasticity", type=float, default=0.46)
     parser.add_argument("--facing-exponent", type=float, default=0.5)
+    parser.add_argument("--interloper", type=float, default=0.0,
+                        help="share of a drink's demand the Interloper next door takes when it sells the same "
+                             "line at our price (0 = no Interloper; energy drinks lose 0.4 of that)")
     parser.add_argument("--stop-at", help="stop (and save) at this Eastern date, e.g. 2026-12-05")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--out", type=Path, required=True, help="directory for the checkpoint and data files")
@@ -57,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     stop_at = (datetime.combine(datetime.fromisoformat(args.stop_at).date(), time(0), world.EASTERN)
                if args.stop_at else None)
     opts = {"budget": args.budget, "run_cap": args.run_cap, "min_run": args.min_run,
-            "elasticity": args.elasticity, "facing_exponent": args.facing_exponent}
+            "elasticity": args.elasticity, "facing_exponent": args.facing_exponent, "interloper": args.interloper}
     with db.connect() as conn:
         conn.autocommit = True
         if args.resume:

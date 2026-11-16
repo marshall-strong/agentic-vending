@@ -70,6 +70,25 @@ def test_demand_shares_a_product_and_counts_what_empty_slots_lose():
     assert d.slot_rates(cal, datetime(2026, 12, 25, 9, tzinfo=EASTERN), m.slots)[0]["15"] == 0
 
 
+
+def test_the_interloper_takes_demand_from_the_drinks_it_sells():
+    cal, nine = Calendar(), datetime(2026, 12, 8, 9, 0, tzinfo=EASTERN)
+    m = Machine.empty()
+    for slot, sku, price in (("15", "PEPSI-ORIGINAL-12CAN", 150), ("16", "REDBULL-ORIGINAL-8_4CAN", 400),
+                             ("17", "COCA-ORIGINAL-20BOT", 200)):
+        m.slots[slot].sku, m.slots[slot].units, m.slots[slot].price_cents = sku, 5, price
+    none = Demand().slot_rates(cal, nine, m.slots)[0]
+    some = Demand(interloper=0.25).slot_rates(cal, nine, m.slots)[0]
+    assert some["15"] == pytest.approx(none["15"] * 0.75)               # same drink, same price
+    assert some["16"] == pytest.approx(none["16"] * (1 - 0.25 * 0.4))   # energy against its Reign
+    assert some["17"] == none["17"]                                       # it sells no Coke
+    pepsi = world.BY_SKU["PEPSI-ORIGINAL-12CAN"]
+    assert world.interloper_loss(pepsi, 300, 0.25) == pytest.approx(0.5)   # twice its price: the cap of 2
+    assert world.interloper_loss(pepsi, 600, 0.25) == pytest.approx(0.5)
+    assert world.interloper_loss(pepsi, 75, 0.25) == pytest.approx(0.125)
+    assert world.interloper_loss(pepsi, 300, 0.8) == world.INTERLOPER_MAX_LOSS
+    assert world.interloper_loss(pepsi, 150, 0.0) == 0.0
+
 def test_directive_loads_read_the_planner_table():
     text = ("Visit: scheduled\n\nSlot  Action     Product                  Price  Load  From        Pull\n"
             "15    switch     REDBULL-ORIGINAL-8_4CAN  $4.50  11    buy         -\n"

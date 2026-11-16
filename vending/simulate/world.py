@@ -200,11 +200,40 @@ HOUR_SHARE = {7: 0.02, 8: 0.26, 9: 0.22, 10: 0.18, 11: 0.08, 12: 0.07, 13: 0.06,
 OFF_DAY = 0.05      # a weekend or no-class weekday sells "about nothing" (inventory-demand.md, assumptions)
 
 
+# The Interloper (#116, docs/agent/interloper.md): the outside machine beside ours, as Sean saw it on
+# 14 Nov. A product line it sells loses a share of our demand to it; an energy drink loses a smaller
+# share to its Reign. Its other drinks (protein shakes) aren't products here. Nobody can see its sales,
+# so the strength is an assumption, swept in the write-up.
+INTERLOPER_LINES = {"Pepsi": 150, "Mountain Dew": 150, "Spindrift": 150}    # its price, cents (12 oz cans)
+INTERLOPER_ENERGY = 400                                                    # Reign, 16 oz can
+ENERGY_LINES = frozenset({"Red Bull", "Celsius", "Gorgie", "Monster Energy"})
+ENERGY_WEIGHT = 0.4             # a different energy brand competes less than the same drink
+INTERLOPER_MAX_LOSS = 0.9
+
+
+def interloper_loss(p: "Product", price_cents: int, strength: float) -> float:
+    """The share of `p`'s demand the Interloper takes at our price: strength x weight x price ratio.
+
+    At the same price, the same line loses `strength`; dearer than theirs loses more (the ratio is
+    capped at 2), cheaper loses less. Per unit, not per ounce: a shopper sees two price tags.
+    """
+    if strength <= 0:
+        return 0.0
+    if p.line in INTERLOPER_LINES:
+        theirs, weight = INTERLOPER_LINES[p.line], 1.0
+    elif p.line in ENERGY_LINES:
+        theirs, weight = INTERLOPER_ENERGY, ENERGY_WEIGHT
+    else:
+        return 0.0
+    return min(INTERLOPER_MAX_LOSS, strength * weight * min(2.0, price_cents / theirs))
+
+
 @dataclass(frozen=True)
 class Demand:
-    """How customers respond. Both knobs are assumptions; the write-up tests other values offline."""
+    """How customers respond. The knobs are assumptions; the write-up tests other values offline."""
     elasticity: float = 0.46        # ln(1.354/1.701) / ln(4.326/2.626): fall mid vs fast segment
     facing_exponent: float = 0.5    # product demand grows with the square root of its stocked slots
+    interloper: float = 0.0         # share of a same-line drink's demand lost to the Interloper at equal price
 
     def day_factor(self, cal: Calendar, day: date) -> float:
         if day in cal.closed:
@@ -241,7 +270,8 @@ class Demand:
 
             def unit(name: str) -> float:
                 price = slots[name].price_cents or p.reference_cents
-                return p.rate * (price / p.reference_cents) ** (-self.elasticity) * share
+                kept = 1.0 - interloper_loss(p, price, self.interloper)
+                return p.rate * (price / p.reference_cents) ** (-self.elasticity) * share * kept
 
             for name in stocked:
                 sales[name] = unit(name) * k ** self.facing_exponent / k

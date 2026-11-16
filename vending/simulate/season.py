@@ -337,7 +337,8 @@ def load(path: Path) -> State:
 
 def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path, stop_at: datetime | None,
                say=print) -> State:
-    cal, demand = Calendar(), Demand(opts.get("elasticity", 0.46), opts.get("facing_exponent", 0.5))
+    cal, demand = Calendar(), Demand(opts.get("elasticity", 0.46), opts.get("facing_exponent", 0.5),
+                                         opts.get("interloper", 0.0))
     with patched(st.clock):
         t = st.poll_at
         while t < world.COMPETITION_END:
