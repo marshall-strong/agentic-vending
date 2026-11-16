@@ -48,7 +48,9 @@ figure and reported on its own as `after_opening_test`, and the page warns about
 it, so a stray dry run or sweep in December is seen rather than hidden.
 
 Money is exact (`Fraction` cents) until it is shown, to four decimal places,
-since a call can cost a tenth of a cent. The demo data is the runs the team
+since a call can cost a tenth of a cent. `--json` and the page's data give every
+amount as an exact decimal string ("0.1234499"), so it is rounded only once,
+where it is shown. The demo data is the runs the team
 wrote down (`docs/agent.md`, `docs/sample-directive.md`, `docs/benchmark.md`,
 `docs/guardrail-evidence.md`) and says so on every view: it is not the ledger.
 """
@@ -366,9 +368,24 @@ def usd(cents: Fraction) -> str:
     return f"${value:,.4f}"
 
 
-def _dollars(cents: Fraction) -> float:
-    """For JSON: dollars to six places. The page only draws and shows them; every sum is made here."""
-    return round(float(cents / 100), 6)
+def _dollars(cents: Fraction) -> str:
+    """For JSON: dollars as an exact decimal string, "0.1234499", never a float.
+
+    A figure is rounded once, where it is shown: by `usd` here, and by the page's
+    own formatter, which rounds the same string the same way (half up). A float
+    here would round twice, and $0.1234499 would show as $0.1235.
+    """
+    value = cents / 100
+    rest = value.denominator
+    for prime in (2, 5):
+        while rest % prime == 0:
+            rest //= prime
+    if rest != 1:       # every amount comes from a decimal (cost_usd, amount_cents, a run note), so sums are too
+        raise ValueError(f"{value} dollars has no exact decimal form")
+    places = 0
+    while (10 ** places) % value.denominator:
+        places += 1
+    return format(Decimal(value.numerator * (10 ** places // value.denominator)).scaleb(-places), "f")
 
 
 def _bucket_json(b: Bucket) -> dict:
@@ -462,14 +479,16 @@ def render(report: Report) -> str:
 # --- The page --------------------------------------------------------------------------
 
 PAGE = Path(__file__).with_name("dev_spend.html")
+# Inside <script>, a label's "</script>" would end the element early, and "<!--<script>" would stop the page
+# parsing the rest of it. U+2028 and U+2029 end a line in older JavaScript. Outside a string, JSON has none of
+# these characters, and inside one the \u escape stands for the same text.
+SCRIPT_SAFE = {ord(c): f"\\u{ord(c):04x}" for c in "<>&  "}
 
 
 def page(weeks: Report, days: Report) -> str:
     """The page with both reports inlined, so it opens from a file with no server and fetches nothing."""
     data = json.dumps({"weekly": to_json(weeks), "daily": to_json(days)}, separators=(",", ":"))
-    # Inside <script>, "</" could end the element early; JSON allows the escaped slash.
-    data = data.replace("</", "<\\/")
-    return PAGE.read_text(encoding="utf-8").replace("/*DATA*/null", data, 1)
+    return PAGE.read_text(encoding="utf-8").replace("/*DATA*/null", data.translate(SCRIPT_SAFE), 1)
 
 
 def main(argv: list[str] | None = None, conn: psycopg.Connection | None = None, now: datetime | None = None) -> int:

@@ -2,6 +2,7 @@
 model_calls and the ledger. The pure tests run without a database; the rest use a throwaway schema."""
 
 import json
+import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -222,7 +223,7 @@ def test_the_cli_prints_json_and_a_table_and_only_reads(conn, capsys):
     add(conn, et(11), cost="0.80", label="agent run 1 turn 3")
     assert dev_spend.main(["--json"], conn=conn, now=BEFORE_OPEN_NOW) == 0
     data = json.loads(capsys.readouterr().out)
-    assert data["unit"] == "week" and data["totals"]["total_usd"] == 0.8 and data["runs"][0]["label"] == "agent run 1"
+    assert data["unit"] == "week" and data["totals"]["total_usd"] == "0.8" and data["runs"][0]["label"] == "agent run 1"
     assert data["buckets"][0]["start"] == "2026-11-07" and data["source"] == "model_calls and the ledger"
     assert dev_spend.main(["--daily"], conn=conn, now=BEFORE_OPEN_NOW) == 0
     out = capsys.readouterr().out
@@ -238,6 +239,51 @@ def test_the_page_carries_its_data_inline(conn, tmp_path, capsys):
     assert "/*DATA*/null" not in html and '"weekly":' in html and '"daily":' in html
     assert "</script><b>" not in html                                 # a label can't end the script early
     assert "default-src 'none'" in html                               # it fetches nothing
+
+
+def test_amounts_leave_as_exact_decimals_so_they_are_rounded_once():
+    # $0.1234499 is $0.1234 to four places. Through a float rounded to six places it became 0.12345, which the page
+    # showed as $0.1235.
+    r = summarise([call(et(11), "0.1234499", label="a"), call(et(11), "0.0000001", label="b")], None, "week",
+                  BEFORE_OPEN_NOW)
+    data = dev_spend.to_json(r)
+    assert dev_spend.usd(next(x for x in r.runs if x.label == "a").total_cents) == "$0.1234"
+    assert {x["label"]: x["total_usd"] for x in data["runs"]} == {"a": "0.1234499", "b": "0.0000001"}
+    assert data["totals"]["total_usd"] == "0.12345" and data["totals"]["by_model"] == {"claude-opus-5-5": "0.12345"}
+    assert data["totals"]["unconfirmed_usd"] == "0"
+
+    def amounts(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k.endswith("_usd"):
+                    yield v
+                elif k.startswith("by_"):
+                    yield from v.values()
+                else:
+                    yield from amounts(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from amounts(v)
+    found = list(amounts(data))
+    assert found and all(isinstance(v, str) and re.fullmatch(r"-?\d+(\.\d+)?", v) for v in found)   # no floats, no 1E-7
+    try:
+        dev_spend._dollars(Fraction(1, 3))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a third of a cent has no exact decimal form and must not be rounded quietly")
+
+
+def test_the_page_escapes_every_markup_character_in_its_data():
+    # "<!--<script>" in a script element stops the browser parsing the rest of the page.
+    label = "<!--<script> & \u2028 \u2029 x > y"
+    r = summarise([call(et(11), label=label)], None, "week", BEFORE_OPEN_NOW)
+    html = dev_spend.page(r, r)
+    start = html.index("const DATA = ") + len("const DATA = ")
+    data = html[start:html.index(";\n", start)]
+    assert not set(data) & set("<>&\u2028\u2029")
+    assert json.loads(data)["weekly"]["runs"][0]["label"] == label
+    assert html.count("<script") == 1 and html.count("</script") == 1
 
 
 def test_the_demo_page_needs_no_database(tmp_path, capsys):
@@ -300,6 +346,6 @@ def test_after_opening_unconfirmed_is_separate(conn):
     opening(conn)
     add(conn, OPEN + timedelta(hours=1), status="error", cost="0.25")
     bucket = dev_spend.to_json(dev_spend.weekly(conn, NOW))["buckets"][0]
-    assert bucket["after_opening_test_usd"] == 0.25
-    assert bucket["after_opening_test_unconfirmed_usd"] == 0.25
-    assert bucket["unconfirmed_usd"] == 0
+    assert bucket["after_opening_test_usd"] == "0.25"
+    assert bucket["after_opening_test_unconfirmed_usd"] == "0.25"
+    assert bucket["unconfirmed_usd"] == "0"
