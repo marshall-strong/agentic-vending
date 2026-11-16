@@ -49,8 +49,12 @@ already in the catalog.
 
 - **`preview_desired_state` and `submit_desired_state`.** A product the agent gives no
   `sourcing` for is bought the way this table says: its primary, and its alternate if it has
-  one. The agent's own sourcing always wins. A table price the plan uses that was checked more
-  than 7 days ago is named in the plan's `warnings`, with the command to update it. A product
+  one. When the agent does give sourcing, its store, pack and max go into the request, but if it
+  gives no `expected_price_per_pack`, the plan's cost uses the expected price of the table's row
+  for the same store and pack, when there is one. A max below that borrowed price is refused
+  `bad_sourcing`, and the message says the price came from the table. Any table price the plan
+  uses, either way, that was checked more than 7 days ago is named in the plan's `warnings`, with
+  the command to update it. A product
   with no sourcing given or in the table is refused `no_sourcing`, as before.
 - **Next:** `get_catalog` shows each product's stores and prices, and our last real cost from
   receipts.

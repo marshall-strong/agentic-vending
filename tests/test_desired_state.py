@@ -396,13 +396,55 @@ def test_a_table_price_over_a_week_old_is_used_but_flagged(db, fake):  # noqa: F
     assert "COKE20" in stale and "9 days ago" in stale and "python -m vending.sourcing set COKE20" in stale
 
 
-def test_the_agents_own_sourcing_wins_and_an_old_table_row_says_nothing(db, fake):  # noqa: F811
+def test_the_agents_own_max_wins_but_an_old_borrowed_expected_price_is_named(db, fake):  # noqa: F811
+    """Marshall, #133: the agent's Costco 12-pack gives no expected price, so the planner borrows the
+    table's $11.49 for the cost. The line keeps the agent's max; the 30-day-old price is named."""
     ready(db, capacity=15)
     stocked(db)
     table_row(db, fake, checked=NOW - timedelta(days=30))
     reply = preview_desired_state(db, desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]), fake.client(), NOW)
     assert reply.ok and reply.lines[0].api["primary"]["max_price_per_pack"] == "13.00"
+    assert reply.cost.expected == "11.49"
+    [stale] = [w for w in reply.warnings if "sourcing table" in w]
+    assert "your primary option gave no expected price" in stale
+    assert "Costco 12 a pack at $11.49 (max $13.50), was checked 2026-10-10, 30 days ago" in stale
+
+
+def test_the_agents_own_expected_price_borrows_nothing_and_says_nothing(db, fake):  # noqa: F811
+    ready(db, capacity=15)
+    stocked(db)
+    table_row(db, fake, checked=NOW - timedelta(days=30))
+    mine = coke_sourcing(expected_price_per_pack="12.25")
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15), sourcing=[mine]), fake.client(), NOW)
+    assert reply.ok and reply.cost.expected == "12.25"
     assert not any("sourcing table" in w for w in reply.warnings)
+
+
+def test_a_max_below_a_borrowed_expected_price_says_it_came_from_the_table(db, fake):  # noqa: F811
+    ready(db, capacity=15)
+    stocked(db)
+    table_row(db, fake, expected_cents=1349, max_cents=1400)
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    [refusal] = [r for r in reply.refusals if r.code == "bad_sourcing"]
+    assert "max_price_per_pack $13.00 is below the sourcing table's expected $13.49" in refusal.message
+
+
+def test_the_tables_alternate_reaches_the_request_and_an_old_one_is_named(db, fake):  # noqa: F811
+    from vending import sourcing
+    ready(db, capacity=15)
+    stocked(db)
+    table_row(db, fake)                                                   # a fresh Costco primary
+    sourcing.set_option(db, sourcing.Option(
+        sku="COKE20", rank="alternate", store="Walmart", units_per_pack=12, expected_cents=1199, max_cents=1400,
+        url=None, pack_description=None, checked_at=NOW - timedelta(days=10), checked_by="test"), NOW)
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15)), fake.client(), NOW)
+    assert reply.ok
+    api = reply.lines[0].api
+    assert (api["primary"]["store"], api["alternate"]["store"]) == ("Costco", "Walmart")
+    assert api["alternate"]["max_price_per_pack"] == "14.00"
+    [stale] = [w for w in reply.warnings if "sourcing table" in w]
+    assert "the sourcing table's alternate price, Walmart 12 a pack at $11.99 (max $14.00), was checked" in stale
+    assert "10 days ago" in stale
 
 
 def test_an_old_row_for_a_product_the_plan_doesnt_buy_says_nothing(db, fake):  # noqa: F811

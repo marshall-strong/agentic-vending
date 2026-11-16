@@ -177,7 +177,7 @@ async def get_account_balance() -> account_balance.AccountBalance:
 
 @_tool(built=True)
 async def preview_desired_state(desired: DesiredState) -> preview.PlanReply:
-    """Plan a desired state for all 20 slots without submitting: the request lines, worker directive, cost and balance left, each slot's price floor, warnings, and every refusal at once. A product you give no `sourcing` for is bought the way the team's sourcing table says; a table price over a week old is named in warnings."""
+    """Plan a desired state for all 20 slots without submitting: the request lines, worker directive, cost and balance left, each slot's price floor, warnings, and every refusal at once. A product you give no `sourcing` for is bought the way the team's sourcing table says; if you give sourcing without expected_price_per_pack, the table's expected price for the same store and pack is used for cost. A table price over a week old is named in warnings."""
     return await _read("preview_desired_state", _preview, desired=desired)
 
 

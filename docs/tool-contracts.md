@@ -159,6 +159,8 @@ should do next.
     `url`, required for Amazon; optional `expected_price_per_pack` and `pack_description`), and
     `extra_units_to_closet`. Optional per product: one left out is bought the way the team's
     sourcing table says (`docs/sourcing.md`), with a warning when that price is over 7 days old.
+    An option given without `expected_price_per_pack` borrows the table's expected price for the
+    same store and pack, for cost and for the max check, with the same warning when it is old.
 - **Outputs**: `success` (whether the plan could be submitted as it stands); `plan_hash` (only for
   a plan with no refusals); `lines`, one per slot that changes, with the exact request body in
   `api`; `directive`, the instructions the worker will read; `cost` (`expected`, `max`,

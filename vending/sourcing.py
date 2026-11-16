@@ -157,16 +157,26 @@ def in_catalog(conn: psycopg.Connection, skus: list[str]) -> set[str]:
         "select sku from catalog_products where sku = any(%s) and delisted_at is null", (list(skus),))}
 
 
-def table(conn: psycopg.Connection) -> tuple[planner.Sourcing, ...]:
-    """The table in the planner's shape: one `Sourcing` per product that has a primary option.
+def listed_options(conn: psycopg.Connection) -> list[Option]:
+    """Every stored row whose product is still in the catalog.
 
     A product the catalog has since delisted is left out, so the planner refuses it as unknown
     rather than buying it from an old row (Kevin, #132).
     """
-    by_sku: dict[str, dict[str, Option]] = {}
     rows = options(conn)
     listed = in_catalog(conn, [o.sku for o in rows])
-    for o in (o for o in rows if o.sku in listed):
+    return [o for o in rows if o.sku in listed]
+
+
+def table(conn: psycopg.Connection) -> tuple[planner.Sourcing, ...]:
+    """The table in the planner's shape: one `Sourcing` per listed product that has a primary option."""
+    return to_planner(listed_options(conn))
+
+
+def to_planner(rows: list[Option]) -> tuple[planner.Sourcing, ...]:
+    """`rows` in the planner's shape: one `Sourcing` per product that has a primary option. Pure."""
+    by_sku: dict[str, dict[str, Option]] = {}
+    for o in rows:
         by_sku.setdefault(o.sku, {})[o.rank] = o
     return tuple(
         planner.Sourcing(product=sku, primary=_purchase_option(ranks["primary"]),
@@ -236,6 +246,12 @@ def read_csv(path: Path, by: str, now: datetime) -> list[Option]:
     if errors:
         raise SourcingError(f"{path}: nothing imported.\n" + "\n".join(errors))
     return found
+
+
+def describe_inline(o: Option) -> str:
+    """For use mid-sentence: "Costco 12 a pack at $11.49 (max $13.50)"."""
+    price = f"at {_money(o.expected_cents)}" if o.expected_cents is not None else "at an unknown price"
+    return f"{o.store} {o.units_per_pack} a pack {price} (max {_money(o.max_cents)})"
 
 
 def describe(o: Option) -> str:
