@@ -713,10 +713,16 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
             f"slot {w.slot} is the wildcard and stays at {_dollars(w.price_cents)}, above the wildcard ceiling of "
             f"{_dollars(config.wildcard_ceiling_cents)}; price it at or under that at this visit"), w.slot))
     starting = w.price_cents is not None and w.price_cents > ceiling and w.slot not in above_now
-    if starting or w.changes_product:
+    ends_above = w.price_cents is not None and w.price_cents > ceiling
+    if ends_above and (starting or w.changes_product):
         # Whatever the source, closet or purchase: if the line that moves the other slot came back
-        # unavailable, the wildcard's product would be in two slots.
+        # unavailable, the wildcard's product would be in two slots. A slot we can't name may hold it.
         held = sorted(s.slot for s in slots if s.slot != w.slot and w.product and s.state.product == w.product)
+        unsure = sorted(s.slot for s in slots if s.slot != w.slot and s.state.product is None and s.state.units > 0)
+        if unsure:
+            refusals.append(Refusal("wildcard", (
+                f"slot {w.slot} can't take {w.product} above {_dollars(ceiling)} while we don't know what slot "
+                f"{', '.join(unsure)} holds, since it may hold the same product; have it counted first"), w.slot))
         if held:
             refusals.append(Refusal("wildcard", (
                 f"{w.product} is in slot {', '.join(held)} now, so slot {w.slot} can't take it as the wildcard "
@@ -734,11 +740,6 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
             refusals.append(Refusal("wildcard", (
                 f"slot {w.slot} can't go above {_dollars(ceiling)} while the price of slot {', '.join(unknown)} "
                 f"isn't known, since one of them may be above it already; wait for a poll with its price"), w.slot))
-        unsure = sorted(s.slot for s in slots if s.slot != w.slot and s.state.product is None and s.state.units > 0)
-        if unsure:
-            refusals.append(Refusal("wildcard", (
-                f"slot {w.slot} can't go above {_dollars(ceiling)} while we don't know what slot {', '.join(unsure)} "
-                f"holds, since it may hold the same product; have it counted first"), w.slot))
         if desired.off_cycle:
             refusals.append(Refusal("wildcard", (
                 f"the wildcard moves only at a Friday visit, so slot {w.slot} can't go above "
@@ -804,7 +805,7 @@ def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[
             refusals.append(Refusal("wildcard", (
                 f"{product} is the wildcard's product (slot {owner}) and is in slot {', '.join(held)} now, so it "
                 f"can't be bought at this visit; move {', '.join(held)} to another product first"), owner))
-        shared = sorted(s.slot for s in slots if s.slot != owner and s.product == product)
+        shared = sorted(s.slot for s in slots if s.slot != owner and s.product == product and s.changes_product)
         if shared:
             refusals.append(Refusal("wildcard", (
                 f"{product} is the wildcard's product (slot {owner}), so it can't be in slot {', '.join(shared)}; "
