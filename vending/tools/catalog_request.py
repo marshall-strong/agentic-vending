@@ -6,9 +6,10 @@ It costs nothing and orders nothing, but each request goes to a person, and
 too many open ones get a `429`. So before sending, it refuses, all at once:
 a field the bridge would reject, a size that isn't a liquid volume, alcohol or
 THC, a product already in the catalog, one we have already requested, and any
-request over our own weekly limit. There is no limit before the competition
-starts; from the start it begins at 20 a week and falls each week as the
-catalog grows (Kevin, 15 Nov 2026).
+request over our own weekly limit. There is no limit before the machine goes
+live; from then it is 20 in the first competition week and falls week by
+week (Kevin, 15 Nov 2026). Each competition week starts at midnight Eastern
+on a Thursday, and only requests filed since that midnight count.
 
 The bridge has no route that lists our requests, so `product_requests` is our
 only record, and the duplicate check reads it. Runs inside the write gate, so
@@ -36,13 +37,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from vending.bridge import Bridge, BridgeAnswered, BridgeError, BridgeNoAnswer, BridgeUnreachable
+from vending.ledger import TIMEZONE
 from vending.pricing import Refusal
 from vending.tools import WriteReply
 from vending.write_gate import Refused
@@ -50,15 +52,19 @@ from vending.write_gate import Refused
 # The live schema's limits (ProductRequestCreate, checked 2 Nov 2026).
 MAX_FIELD = 100
 MAX_NOTE = 500
-# Our own limit on requests filed in any 7 days, so the agent can't flood the
-# instructors (Kevin, 15 Nov 2026):
-# - before the competition starts, none: a request costs nothing, and a wide
+# Our own limit on requests filed in each competition week, so the agent can't
+# flood the instructors (Kevin, 15 Nov 2026):
+# - before the machine goes live, none: a request costs nothing, and a wide
 #   catalog helps the day-one fill;
-# - from the start, WEEKLY_LIMITS[n] in competition week n (week 0 starts at
-#   COMPETITION_START), falling as the catalog grows, then FINAL_WEEKLY_LIMIT.
+# - from then, WEEKLY_LIMITS[n] in competition week n (week 0 starts at
+#   MACHINE_LIVE), falling week by week, then FINAL_WEEKLY_LIMIT. Only
+#   requests filed since the current week began count, so requests made before
+#   go-live, or late in the week before, never use up a later week's share.
 # The numbers are a starting point the team can tune. The bridge's own 429 for
-# too many open requests still applies.
-COMPETITION_START = datetime(2026, 12, 3, tzinfo=ZoneInfo("America/New_York"))
+# too many open requests (about 24, seen 15 Nov) still applies before go-live.
+# MACHINE_LIVE is the 3 Dec go-live, not the ledger's opening (which comes
+# before the day-one fill; `vending/usage.py` calls that "the competition start").
+MACHINE_LIVE = datetime(2026, 12, 3, tzinfo=ZoneInfo(TIMEZONE))
 WEEKLY_LIMITS = (20, 15, 10, 5)
 FINAL_WEEKLY_LIMIT = 3
 # Statuses the bridge can give a request that our table stores as they are.
@@ -160,28 +166,36 @@ def already_in_catalog(catalog: list[dict], wanted: list[str]) -> list[Refusal]:
     return [Refusal("already_in_catalog", f"already in the catalog: {listed}; order it by SKU instead")]
 
 
-def weekly_limit(now: datetime) -> int | None:
-    """Requests allowed in any 7 days at `now`: None (no limit) before the start, then the schedule."""
-    if now < COMPETITION_START:
+def competition_week(now: datetime) -> int | None:
+    """The competition week `now` falls in, 0 for the first; None before the machine goes live."""
+    if now < MACHINE_LIVE:
         return None
-    week = (now - COMPETITION_START).days // 7
+    return (now - MACHINE_LIVE).days // 7
+
+
+def weekly_limit(now: datetime) -> int | None:
+    """Requests allowed in the competition week of `now`: None (no limit) before go-live, then the schedule."""
+    week = competition_week(now)
+    if week is None:
+        return None
     return WEEKLY_LIMITS[week] if week < len(WEEKLY_LIMITS) else FINAL_WEEKLY_LIMIT
 
 
-def over_weekly_limit(conn: psycopg.Connection, catalog_size: int) -> list[Refusal]:
-    """A refusal if we've already filed this week's share of requests. None before the start."""
+def over_weekly_limit(conn: psycopg.Connection) -> list[Refusal]:
+    """A refusal if we've already filed this competition week's share of requests. None before go-live."""
     (now,) = conn.execute("select now()").fetchone()
+    week = competition_week(now)
+    if week is None:
+        return []
     limit = weekly_limit(now)
-    if limit is None:
+    week_start = MACHINE_LIVE + timedelta(days=7 * week)
+    (filed,) = conn.execute(
+        "select count(*) from product_requests where requested_at >= %s", (week_start,)).fetchone()
+    if filed < limit:
         return []
-    (recent,) = conn.execute(
-        "select count(*) from product_requests where requested_at > now() - interval '7 days'").fetchone()
-    if recent < limit:
-        return []
-    week = (now - COMPETITION_START).days // 7 + 1
-    return [Refusal("request_limit", f"we've filed {recent} product requests in the last 7 days, the limit is "
-                                     f"{limit} in competition week {week} (the catalog has {catalog_size} "
-                                     "products); pick the most wanted ones and try again later")]
+    return [Refusal("request_limit", f"we've filed {filed} product requests in competition week {week + 1} "
+                                     f"(since {week_start:%a %d %b}), the limit is {limit} this week; pick the "
+                                     "most wanted ones and try again next week")]
 
 
 def request_catalog_product(name: str, size: str, line: str | None, flavor: str | None, note: str | None,
@@ -208,7 +222,7 @@ def request_catalog_product(name: str, size: str, line: str | None, flavor: str 
             if refusals:
                 raise Refused(refusals) from None
             return CatalogRequestReply(success=False, message=f"Couldn't read the catalog to check for duplicates ({error}); nothing was sent.")
-        refusals += already_in_catalog(catalog, wanted) + over_weekly_limit(conn, len(catalog))
+        refusals += already_in_catalog(catalog, wanted) + over_weekly_limit(conn)
         if refusals:
             raise Refused(refusals)
         row = _save_sending(connect, body, wanted)

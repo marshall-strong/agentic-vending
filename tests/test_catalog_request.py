@@ -1,11 +1,10 @@
 """`request_catalog_product` through the MCP client, the write gate and Postgres,
 against a local HTTP server standing in for the bridge's two routes."""
 
-from datetime import datetime, timedelta, timezone
-
 import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -80,6 +79,9 @@ def fake(db, monkeypatch):  # noqa: F811
     yield bridge
     bridge.server.shutdown()
     bridge.server.server_close()
+
+PAST = datetime(2000, 1, 1, tzinfo=timezone.utc)
+FUTURE = datetime(2999, 1, 1, tzinfo=timezone.utc)
 
 
 def ask(**arguments):
@@ -299,8 +301,8 @@ def test_halted_never_calls_the_bridge(db, fake):  # noqa: F811
     assert fake.gets == 0 and fake.posts == []
 
 
-def test_the_limit_in_the_first_competition_week(db, fake, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(catalog_request, "COMPETITION_START", PAST)
+def test_the_final_weekly_limit_refuses_once_reached(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "MACHINE_LIVE", PAST)
     monkeypatch.setattr(catalog_request, "WEEKLY_LIMITS", ())
     monkeypatch.setattr(catalog_request, "FINAL_WEEKLY_LIMIT", 2)
     for i, drink in enumerate(["Sprite", "Fanta"]):
@@ -312,7 +314,7 @@ def test_the_limit_in_the_first_competition_week(db, fake, monkeypatch):  # noqa
 
 
 def test_requests_older_than_a_week_do_not_count(db, fake, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(catalog_request, "COMPETITION_START", PAST)
+    monkeypatch.setattr(catalog_request, "MACHINE_LIVE", PAST)
     monkeypatch.setattr(catalog_request, "WEEKLY_LIMITS", ())
     monkeypatch.setattr(catalog_request, "FINAL_WEEKLY_LIMIT", 1)
     assert ask(name="Sprite")["success"]
@@ -321,12 +323,8 @@ def test_requests_older_than_a_week_do_not_count(db, fake, monkeypatch):  # noqa
     assert ask(name="Fanta")["success"]
 
 
-PAST = datetime(2000, 1, 1, tzinfo=timezone.utc)
-FUTURE = datetime(2999, 1, 1, tzinfo=timezone.utc)
-
-
 def test_there_is_no_weekly_limit_before_the_start(db, fake, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(catalog_request, "COMPETITION_START", FUTURE)
+    monkeypatch.setattr(catalog_request, "MACHINE_LIVE", FUTURE)
     monkeypatch.setattr(catalog_request, "FINAL_WEEKLY_LIMIT", 1)
     for i, drink in enumerate(["Sprite", "Fanta", "Pibb", "Fresca"]):
         fake.answer = (201, {"id": f"req-{i}", "status": "pending"}, 0.0)
@@ -334,9 +332,44 @@ def test_there_is_no_weekly_limit_before_the_start(db, fake, monkeypatch):  # no
     assert len(fake.posts) == 4
 
 
+def db_now(db):
+    return db.execute("select now()").fetchone()[0]
+
+
+def test_requests_before_go_live_do_not_count_against_week_1(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "MACHINE_LIVE", db_now(db) - timedelta(hours=1))
+    monkeypatch.setattr(catalog_request, "WEEKLY_LIMITS", (1,))
+    for i, drink in enumerate(["Sprite", "Fanta", "Pibb"]):
+        fake.answer = (201, {"id": f"req-{i}", "status": "pending"}, 0.0)
+        assert ask(name=drink)["success"], drink
+        if i < 2:   # filed two days before go-live
+            db.execute("update product_requests set requested_at = now() - interval '2 days' where bridge_id = %s",
+                       (f"req-{i}",))
+    reply = ask(name="Fresca")   # the third, filed in week 1, used week 1's one request
+    assert codes(reply) == ["request_limit"] and "competition week 1" in reply["refusals"][0]["message"]
+
+
+def test_requests_late_in_one_week_do_not_count_against_the_next(db, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(catalog_request, "MACHINE_LIVE", db_now(db) - timedelta(days=7, hours=1))
+    monkeypatch.setattr(catalog_request, "WEEKLY_LIMITS", (5, 1))
+    assert ask(name="Sprite")["success"]
+    db.execute("update product_requests set requested_at = now() - interval '2 hours'")   # late in week 1
+    fake.answer = (201, {"id": "req-2", "status": "pending"}, 0.0)
+    assert ask(name="Fanta")["success"]   # week 2's one request is still free
+    fake.answer = (201, {"id": "req-3", "status": "pending"}, 0.0)
+    assert codes(ask(name="Pibb")) == ["request_limit"]
+
+
+def test_go_live_is_midnight_eastern_on_3_december():
+    limit = catalog_request.weekly_limit
+    assert limit(datetime(2026, 12, 3, 4, 59, 59, tzinfo=timezone.utc)) is None
+    assert limit(datetime(2026, 12, 3, 5, 0, tzinfo=timezone.utc)) == 20
+    assert limit(datetime(2026, 12, 10, 4, 59, 59, tzinfo=timezone.utc)) == 20
+    assert limit(datetime(2026, 12, 10, 5, 0, tzinfo=timezone.utc)) == 15
+
 
 def test_the_limit_starts_at_20_and_falls_each_week():
-    start = catalog_request.COMPETITION_START
+    start = catalog_request.MACHINE_LIVE
     limit = catalog_request.weekly_limit
     assert limit(start - timedelta(seconds=1)) is None
     assert [limit(start + timedelta(days=7 * w)) for w in range(6)] == [20, 15, 10, 5, 3, 3]
