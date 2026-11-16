@@ -1,0 +1,897 @@
+[
+ {
+  "at": "2026-11-30T15:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_001",
+  "off_cycle": false,
+  "visit_at": "2026-12-02T15:00:00-05:00"
+ },
+ {
+  "at": "2026-11-30T15:00:00+00:00",
+  "kind": "agent_run",
+  "run": 1,
+  "status": "submitted"
+ },
+ {
+  "at": "2026-12-02T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2026-12-02T20:00:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_001",
+  "lines": [
+   {
+    "slot": "15",
+    "request_id": "pr_sim_001",
+    "line": 0,
+    "at": "2026-12-02T20:00:00+00:00",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "paid": "32.82",
+    "units_loaded": 11,
+    "to_closet": 13,
+    "lost": 0,
+    "price": "4.00",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "16",
+    "request_id": "pr_sim_001",
+    "line": 1,
+    "at": "2026-12-02T20:02:00+00:00",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "paid": "32.82",
+    "units_loaded": 11,
+    "to_closet": 13,
+    "lost": 0,
+    "price": "4.00",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "17",
+    "request_id": "pr_sim_001",
+    "line": 2,
+    "at": "2026-12-02T20:04:00+00:00",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "paid": "21.58",
+    "units_loaded": 8,
+    "to_closet": 4,
+    "lost": 0,
+    "price": "3.50",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "18",
+    "request_id": "pr_sim_001",
+    "line": 3,
+    "at": "2026-12-02T20:06:00+00:00",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "paid": "32.82",
+    "units_loaded": 11,
+    "to_closet": 13,
+    "lost": 0,
+    "price": "4.00",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "25",
+    "request_id": "pr_sim_001",
+    "line": 4,
+    "at": "2026-12-02T20:08:00+00:00",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "paid": "21.58",
+    "units_loaded": 8,
+    "to_closet": 4,
+    "lost": 0,
+    "price": "3.50",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "26",
+    "request_id": "pr_sim_001",
+    "line": 5,
+    "at": "2026-12-02T20:10:00+00:00",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "paid": "21.58",
+    "units_loaded": 8,
+    "to_closet": 4,
+    "lost": 0,
+    "price": "3.50",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "27",
+    "request_id": "pr_sim_001",
+    "line": 6,
+    "at": "2026-12-02T20:12:00+00:00",
+    "outcome": "primary",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "store": "Amazon",
+    "paid": "55.08",
+    "units_loaded": 7,
+    "to_closet": 17,
+    "lost": 0,
+    "price": "3.00",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "28",
+    "request_id": "pr_sim_001",
+    "line": 7,
+    "at": "2026-12-02T20:14:00+00:00",
+    "outcome": "primary",
+    "sku": "COCA-DIET-20BOT",
+    "store": "Amazon",
+    "paid": "51.15",
+    "units_loaded": 7,
+    "to_closet": 17,
+    "lost": 0,
+    "price": "3.00",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "35",
+    "request_id": "pr_sim_001",
+    "line": 8,
+    "at": "2026-12-02T20:16:00+00:00",
+    "outcome": "primary",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": "Amazon",
+    "paid": "49.22",
+    "units_loaded": 7,
+    "to_closet": 17,
+    "lost": 0,
+    "price": "3.00",
+    "pulled": 0,
+    "tried": []
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 39,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 12,
+   "COCA-ORIGINAL-20BOT": 17,
+   "COCA-DIET-20BOT": 17,
+   "MOUNTAIN-ORIGINAL-20BOT": 17
+  }
+ },
+ {
+  "at": "2026-12-04T00:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_002",
+  "off_cycle": false,
+  "visit_at": "2026-12-04T16:39:00-05:00"
+ },
+ {
+  "at": "2026-12-04T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 2,
+  "status": "submitted"
+ },
+ {
+  "at": "2026-12-04T21:39:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_002",
+  "lines": [
+   {
+    "slot": "47",
+    "request_id": "pr_sim_002",
+    "line": 0,
+    "at": "2026-12-04T21:39:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 7,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "request_id": "pr_sim_002",
+    "line": 1,
+    "at": "2026-12-04T21:41:00+00:00",
+    "outcome": "loaded",
+    "sku": "COCA-DIET-20BOT",
+    "units_loaded": 7,
+    "price": "3.00",
+    "pulled": 0
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 39,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 12,
+   "COCA-ORIGINAL-20BOT": 17,
+   "COCA-DIET-20BOT": 10,
+   "MOUNTAIN-ORIGINAL-20BOT": 10
+  }
+ },
+ {
+  "at": "2026-12-07T12:30:00+00:00",
+  "kind": "check_in",
+  "empty_by_receipts": [],
+  "pending": false
+ },
+ {
+  "at": "2026-12-09T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2026-12-11T00:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_003",
+  "off_cycle": false,
+  "visit_at": "2026-12-11T16:19:00-05:00"
+ },
+ {
+  "at": "2026-12-11T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 3,
+  "status": "submitted"
+ },
+ {
+  "at": "2026-12-11T21:19:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_003",
+  "lines": [
+   {
+    "slot": "27",
+    "request_id": "pr_sim_003",
+    "line": 0,
+    "at": "2026-12-11T21:19:00+00:00",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "units_loaded": 7,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "request_id": "pr_sim_003",
+    "line": 1,
+    "at": "2026-12-11T21:21:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 7,
+    "price": "3.00",
+    "pulled": 0
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 39,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 12,
+   "COCA-ORIGINAL-20BOT": 10,
+   "COCA-DIET-20BOT": 10,
+   "MOUNTAIN-ORIGINAL-20BOT": 3
+  }
+ },
+ {
+  "at": "2026-12-14T12:30:00+00:00",
+  "kind": "check_in",
+  "empty_by_receipts": [],
+  "pending": false
+ },
+ {
+  "at": "2026-12-16T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2026-12-18T00:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_004",
+  "off_cycle": false,
+  "visit_at": "2026-12-18T16:12:00-05:00"
+ },
+ {
+  "at": "2026-12-18T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 4,
+  "status": "submitted"
+ },
+ {
+  "at": "2026-12-18T21:12:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_004",
+  "lines": [
+   {
+    "slot": "15",
+    "request_id": "pr_sim_004",
+    "line": 0,
+    "at": "2026-12-18T21:12:00+00:00",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "units_loaded": 8,
+    "price": "4.00",
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "request_id": "pr_sim_004",
+    "line": 1,
+    "at": "2026-12-18T21:14:00+00:00",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "units_loaded": 8,
+    "price": "3.50",
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "request_id": "pr_sim_004",
+    "line": 2,
+    "at": "2026-12-18T21:16:00+00:00",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "units_loaded": 6,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "request_id": "pr_sim_004",
+    "line": 3,
+    "at": "2026-12-18T21:18:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 3,
+    "price": "3.00",
+    "pulled": 0
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 31,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 4,
+   "COCA-ORIGINAL-20BOT": 4,
+   "COCA-DIET-20BOT": 10,
+   "MOUNTAIN-ORIGINAL-20BOT": 0
+  }
+ },
+ {
+  "at": "2026-12-21T12:30:00+00:00",
+  "kind": "check_in",
+  "empty_by_receipts": [
+   "26"
+  ],
+  "pending": false
+ },
+ {
+  "at": "2026-12-23T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2026-12-25T00:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_005",
+  "off_cycle": false,
+  "visit_at": "2026-12-29T15:04:00-05:00"
+ },
+ {
+  "at": "2026-12-25T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 5,
+  "status": "submitted"
+ },
+ {
+  "at": "2026-12-29T20:04:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_005",
+  "lines": [
+   {
+    "slot": "16",
+    "request_id": "pr_sim_005",
+    "line": 0,
+    "at": "2026-12-29T20:04:00+00:00",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "units_loaded": 6,
+    "price": "4.00",
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "request_id": "pr_sim_005",
+    "line": 1,
+    "at": "2026-12-29T20:06:00+00:00",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "units_loaded": 6,
+    "price": "4.00",
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "request_id": "pr_sim_005",
+    "line": 2,
+    "at": "2026-12-29T20:08:00+00:00",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "units_loaded": 4,
+    "price": "3.50",
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "request_id": "pr_sim_005",
+    "line": 3,
+    "at": "2026-12-29T20:10:00+00:00",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "units_loaded": 2,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "request_id": "pr_sim_005",
+    "line": 4,
+    "at": "2026-12-29T20:12:00+00:00",
+    "outcome": "loaded",
+    "sku": "COCA-DIET-20BOT",
+    "units_loaded": 5,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "request_id": "pr_sim_005",
+    "line": 5,
+    "at": "2026-12-29T20:14:00+00:00",
+    "outcome": "loaded",
+    "sku": "COCA-DIET-20BOT",
+    "units_loaded": 5,
+    "price": "3.00",
+    "pulled": 0
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 19,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 0,
+   "COCA-ORIGINAL-20BOT": 2,
+   "COCA-DIET-20BOT": 0,
+   "MOUNTAIN-ORIGINAL-20BOT": 0
+  }
+ },
+ {
+  "at": "2026-12-30T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2027-01-01T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 6,
+  "status": "skipped"
+ },
+ {
+  "at": "2027-01-04T12:30:00+00:00",
+  "kind": "check_in",
+  "empty_by_receipts": [],
+  "pending": false
+ },
+ {
+  "at": "2027-01-06T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2027-01-08T00:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_006",
+  "off_cycle": false,
+  "visit_at": "2027-01-11T15:11:00-05:00"
+ },
+ {
+  "at": "2027-01-08T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 7,
+  "status": "submitted"
+ },
+ {
+  "at": "2027-01-11T12:30:00+00:00",
+  "kind": "check_in",
+  "empty_by_receipts": [
+   "17",
+   "26",
+   "35",
+   "47"
+  ],
+  "pending": true
+ },
+ {
+  "at": "2027-01-11T20:11:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_006",
+  "lines": [
+   {
+    "slot": "17",
+    "request_id": "pr_sim_006",
+    "line": 0,
+    "at": "2027-01-11T20:11:00+00:00",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "paid": "21.26",
+    "units_loaded": 5,
+    "to_closet": 7,
+    "lost": 0,
+    "price": "3.50",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "26",
+    "request_id": "pr_sim_006",
+    "line": 1,
+    "at": "2027-01-11T20:13:00+00:00",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "paid": "21.26",
+    "units_loaded": 4,
+    "to_closet": 8,
+    "lost": 0,
+    "price": "3.50",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "35",
+    "request_id": "pr_sim_006",
+    "line": 2,
+    "at": "2027-01-11T20:15:00+00:00",
+    "outcome": "primary",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": "Amazon",
+    "paid": "47.10",
+    "units_loaded": 3,
+    "to_closet": 21,
+    "lost": 0,
+    "price": "3.00",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "47",
+    "request_id": "pr_sim_006",
+    "line": 3,
+    "at": "2027-01-11T20:17:00+00:00",
+    "outcome": "primary",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": "Amazon",
+    "paid": "47.10",
+    "units_loaded": 5,
+    "to_closet": 19,
+    "lost": 0,
+    "price": "3.00",
+    "pulled": 0,
+    "tried": []
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 19,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 15,
+   "COCA-ORIGINAL-20BOT": 2,
+   "COCA-DIET-20BOT": 0,
+   "MOUNTAIN-ORIGINAL-20BOT": 40
+  }
+ },
+ {
+  "at": "2027-01-13T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2027-01-15T00:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_007",
+  "off_cycle": false,
+  "visit_at": "2027-01-18T15:01:00-05:00"
+ },
+ {
+  "at": "2027-01-15T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 8,
+  "status": "submitted"
+ },
+ {
+  "at": "2027-01-18T12:30:00+00:00",
+  "kind": "check_in",
+  "empty_by_receipts": [
+   "16",
+   "27",
+   "28",
+   "35",
+   "48"
+  ],
+  "pending": true
+ },
+ {
+  "at": "2027-01-18T20:01:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_007",
+  "lines": [
+   {
+    "slot": "15",
+    "request_id": "pr_sim_007",
+    "line": 0,
+    "at": "2027-01-18T20:01:00+00:00",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "units_loaded": 5,
+    "price": "4.00",
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "request_id": "pr_sim_007",
+    "line": 1,
+    "at": "2027-01-18T20:03:00+00:00",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "units_loaded": 7,
+    "price": "4.00",
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "request_id": "pr_sim_007",
+    "line": 2,
+    "at": "2027-01-18T20:05:00+00:00",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "units_loaded": 4,
+    "price": "4.00",
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "request_id": "pr_sim_007",
+    "line": 3,
+    "at": "2027-01-18T20:07:00+00:00",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "units_loaded": 2,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "request_id": "pr_sim_007",
+    "line": 4,
+    "at": "2027-01-18T20:09:00+00:00",
+    "outcome": "primary",
+    "sku": "COCA-DIET-20BOT",
+    "store": "Amazon",
+    "paid": "50.48",
+    "units_loaded": 7,
+    "to_closet": 17,
+    "lost": 0,
+    "price": "3.00",
+    "pulled": 0,
+    "tried": []
+   },
+   {
+    "slot": "35",
+    "request_id": "pr_sim_007",
+    "line": 5,
+    "at": "2027-01-18T20:11:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 4,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "request_id": "pr_sim_007",
+    "line": 6,
+    "at": "2027-01-18T20:13:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 6,
+    "price": "3.00",
+    "pulled": 0
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 3,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 15,
+   "COCA-ORIGINAL-20BOT": 0,
+   "COCA-DIET-20BOT": 17,
+   "MOUNTAIN-ORIGINAL-20BOT": 30
+  }
+ },
+ {
+  "at": "2027-01-20T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2027-01-22T00:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_008",
+  "off_cycle": false,
+  "visit_at": "2027-01-22T15:15:00-05:00"
+ },
+ {
+  "at": "2027-01-22T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 9,
+  "status": "submitted"
+ },
+ {
+  "at": "2027-01-22T20:15:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_008",
+  "lines": [
+   {
+    "slot": "17",
+    "request_id": "pr_sim_008",
+    "line": 0,
+    "at": "2027-01-22T20:15:00+00:00",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "units_loaded": 5,
+    "price": "3.50",
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "request_id": "pr_sim_008",
+    "line": 1,
+    "at": "2027-01-22T20:17:00+00:00",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "units_loaded": 3,
+    "price": "4.00",
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "request_id": "pr_sim_008",
+    "line": 2,
+    "at": "2027-01-22T20:19:00+00:00",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "units_loaded": 5,
+    "price": "3.50",
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "request_id": "pr_sim_008",
+    "line": 3,
+    "at": "2027-01-22T20:21:00+00:00",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "units_loaded": 5,
+    "price": "3.50",
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "request_id": "pr_sim_008",
+    "line": 4,
+    "at": "2027-01-22T20:23:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 7,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "request_id": "pr_sim_008",
+    "line": 5,
+    "at": "2027-01-22T20:25:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 4,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "request_id": "pr_sim_008",
+    "line": 6,
+    "at": "2027-01-22T20:27:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 7,
+    "price": "3.00",
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "request_id": "pr_sim_008",
+    "line": 7,
+    "at": "2027-01-22T20:29:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 5,
+    "price": "3.00",
+    "pulled": 0
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 0,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 0,
+   "COCA-ORIGINAL-20BOT": 0,
+   "COCA-DIET-20BOT": 17,
+   "MOUNTAIN-ORIGINAL-20BOT": 7
+  }
+ },
+ {
+  "at": "2027-01-25T12:30:00+00:00",
+  "kind": "check_in",
+  "empty_by_receipts": [],
+  "pending": false
+ },
+ {
+  "at": "2027-01-27T17:00:00+00:00",
+  "kind": "sourcing_check"
+ },
+ {
+  "at": "2027-01-29T00:00:00+00:00",
+  "kind": "request_filed",
+  "request_id": "pr_sim_009",
+  "off_cycle": false,
+  "visit_at": "2027-01-29T15:52:00-05:00"
+ },
+ {
+  "at": "2027-01-29T00:00:00+00:00",
+  "kind": "agent_run",
+  "run": 10,
+  "status": "submitted"
+ },
+ {
+  "at": "2027-01-29T20:52:00+00:00",
+  "kind": "visit",
+  "request_id": "pr_sim_009",
+  "lines": [
+   {
+    "slot": "35",
+    "request_id": "pr_sim_009",
+    "line": 0,
+    "at": "2027-01-29T20:52:00+00:00",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "units_loaded": 5,
+    "price": "3.00",
+    "pulled": 0
+   }
+  ],
+  "closet_after": {
+   "REDBULL-ORIGINAL-8_4CAN": 0,
+   "CELSIUS-SPARKLING_ORANGE-12CAN": 0,
+   "COCA-ORIGINAL-20BOT": 0,
+   "COCA-DIET-20BOT": 17,
+   "MOUNTAIN-ORIGINAL-20BOT": 2
+  }
+ },
+ {
+  "at": "2027-02-01T12:30:00+00:00",
+  "kind": "check_in",
+  "empty_by_receipts": [
+   "18"
+  ],
+  "pending": false
+ },
+ {
+  "at": "2027-02-03T17:00:00+00:00",
+  "kind": "sourcing_check"
+ }
+]

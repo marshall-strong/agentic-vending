@@ -1,0 +1,2559 @@
+[
+ {
+  "week": 1,
+  "saturday": "2026-11-28",
+  "start": "2026-11-30T09:00:00-05:00",
+  "end": "2026-12-05T00:00:00-05:00",
+  "class_days": 2,
+  "units_sold": 16,
+  "units_lost": 0.0,
+  "revenue_ex_tax": 54.17,
+  "cost_of_sales": 26.57,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 318.65,
+  "gross_profit": 27.6,
+  "model_spend": 0.2362859,
+  "profit": 27.36,
+  "cumulative_profit": 27.36,
+  "balance": 339.85,
+  "spendable": 335.52,
+  "inventory_at_cost": 292.08,
+  "runs": [
+   {
+    "run_id": 1,
+    "kind": "day-one",
+    "at": "2026-11-30T10:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.1583424,
+    "decision": "submit",
+    "reason": "The machine had no receipts and nothing was known to be stocked, so I restocked the 9 slots whose products have sourcing. The request costs at most $376 of the $600 balance.",
+    "update": "Submitted pr_sim_001 (pending), costing at most $376 and leaving $224 or more. Slots 15, 16 and 18 get Red Bull Original at $4.00, with 11 units each. Slots 17, 25 and 26 get Celsius Orange at $3.50, with 8 each. Slot 27 gets Coke 20 oz, slot 28 Diet Coke 20 oz and slot 35 Mountain Dew 20 oz, all at $3.00, with 7 each. Prices are the reference price, or the floor if that is higher. Slots 36-58 are unchanged. Red Bull Red, Pepsi (12 oz and 20 oz) and Spindrift have no sourcing, so we can't stock them. Please add sourcing for those four, and refresh the Amazon prices, which are 18 days old. Next Friday the worker should load per the directive.",
+    "slot_reasons": [
+     {
+      "slot": "15",
+      "reason": "New product, Red Bull Original at reference $4.00 (floor $1.85); the slot's contents were unknown."
+     },
+     {
+      "slot": "16",
+      "reason": "New product, Red Bull Original at reference $4.00; the energy category was 45% of past units."
+     },
+     {
+      "slot": "17",
+      "reason": "New product, Celsius Orange at reference $3.50 (floor $2.25); the sourcing price is stale."
+     },
+     {
+      "slot": "18",
+      "reason": "New product, Red Bull Original at reference $4.00; this slot was the best seller before."
+     },
+     {
+      "slot": "25",
+      "reason": "New product, Celsius at reference $3.50; Celsius sold the most units of any drink before."
+     },
+     {
+      "slot": "26",
+      "reason": "New product, Celsius at reference $3.50, loading 8 units."
+     },
+     {
+      "slot": "27",
+      "reason": "New product, Coca-Cola 20 oz at $3.00, just above the $2.90 floor, so it will probably sell slowly."
+     },
+     {
+      "slot": "28",
+      "reason": "New product, Diet Coke 20 oz at $3.00, just above the $2.70 floor, so it will probably sell slowly."
+     },
+     {
+      "slot": "35",
+      "reason": "New product, Mountain Dew 20 oz at $3.00, just above the $2.60 floor, with no price history, so it starts near the floor."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_account_balance",
+     "get_purchase_requests",
+     "get_project_rules",
+     "get_project_rules",
+     "get_project_rules",
+     "get_project_rules",
+     "get_catalog",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_001"
+   },
+   {
+    "run_id": 2,
+    "kind": "weekly",
+    "at": "2026-12-03T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.0779435,
+    "decision": "submit",
+    "reason": "Slots 47 and 48 had unknown contents, so I filled them from closet stock we already own at zero new cost. The nine slots we restocked have plenty of stock, so I bought nothing.",
+    "update": "pr_sim_001 was fulfilled on 2 Dec and loaded 9 slots. Sales are slow since then: about 7 units in 1 day. Stock is ample, with 6 to 11 units per slot and 102 units in the closet. This week we submitted pr_sim_002, a zero-cost request. Slot 47 gets 7 Mountain Dew 20 oz and slot 48 gets 7 Diet Coke 20 oz, both at $3.00 and both from back stock. No prices changed elsewhere. We bought nothing, and spendable cash is $305.89. Slots 36, 37, 38, 45, 46, 55, 56, 57 and 58 are still unknown and kept as they are. Operations: please report what is in those slots.",
+    "slot_reasons": [
+     {
+      "slot": "47",
+      "reason": "Fill from closet Mountain Dew 20 oz at $3.00, which is above the $2.25 floor, with no new spend."
+     },
+     {
+      "slot": "48",
+      "reason": "Fill from closet Diet Coke 20 oz at $3.00, which is above the $2.35 floor, with no new spend."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "get_account_balance",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_002"
+   }
+  ],
+  "requests": [
+   "pr_sim_001",
+   "pr_sim_002"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_001",
+    "at": "2026-12-02T15:18:00-05:00",
+    "paid": "318.65",
+    "lines": 9,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "16": "4.00",
+     "17": "3.50",
+     "18": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "27": "3.00",
+     "28": "3.00",
+     "35": "3.00"
+    }
+   },
+   {
+    "request_id": "pr_sim_002",
+    "at": "2026-12-04T16:43:00-05:00",
+    "paid": "0.00",
+    "lines": 2,
+    "unavailable": 0,
+    "prices": {
+     "47": "3.00",
+     "48": "3.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 600,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 300,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "good",
+    "why": "0 of 16 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "good",
+    "why": "0 stocked slots with no sale for 5 class days: none"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 51% on $54.17 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $335.52 at week end (floor $53); model $0.24 over 2 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "good",
+    "why": "no preview refusals"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 2,
+  "saturday": "2026-12-05",
+  "start": "2026-12-05T00:00:00-05:00",
+  "end": "2026-12-12T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 38,
+  "units_lost": 3.9,
+  "revenue_ex_tax": 118.98,
+  "cost_of_sales": 70.37,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 48.61,
+  "model_spend": 0.0795099,
+  "profit": 48.53,
+  "cumulative_profit": 75.89,
+  "balance": 468.35,
+  "spendable": 454.5,
+  "inventory_at_cost": 221.71,
+  "runs": [
+   {
+    "run_id": 3,
+    "kind": "weekly",
+    "at": "2026-12-10T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.0795099,
+    "decision": "submit",
+    "reason": "Slots 27 (Coke) and 47 (Mountain Dew) sold out after selling 7 each, the best in the week, so I refilled both from the closet at no cash cost.",
+    "update": "Submitted pr_sim_003: refill slot 27 (Coke 20oz) and slot 47 (Mountain Dew 20oz) with 7 units each from the closet, at $3.00. Both were empty and were our best sellers (7 units each in the week). The cost is $0 because the stock is already in the closet. Everything else stays as it is. Red Bull and Celsius sell slowly (0.3 to 0.7 a day), and slots 16 and 48 have 30 or more days of stock left. Don't buy more of those. Spendable cash is $427.65.",
+    "slot_reasons": [
+     {
+      "slot": "27",
+      "reason": "Slot is empty and sold 7 units in the week, so I refilled it with 7 Coke from the closet at $3.00."
+     },
+     {
+      "slot": "47",
+      "reason": "Slot is empty and sold 7 units in the week, so I refilled it with 7 Mountain Dew from the closet at $3.00."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "get_account_balance",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_003"
+   }
+  ],
+  "requests": [
+   "pr_sim_003"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_003",
+    "at": "2026-12-11T16:23:00-05:00",
+    "paid": "0.00",
+    "lines": 2,
+    "unavailable": 0,
+    "prices": {
+     "27": "3.00",
+     "47": "3.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 6,
+    "lost": 0.0,
+    "revenue_cents": 2400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 5,
+    "lost": 3.5,
+    "revenue_cents": 1500,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 600,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 900,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 7,
+    "lost": 0.4,
+    "revenue_cents": 2100,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 600,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "watch",
+    "why": "4 of 42 units of demand lost to empty slots (9%); 45 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "good",
+    "why": "0 stocked slots with no sale for 5 class days: none"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 41% on $118.98 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $454.50 at week end (floor $53); model $0.08 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "good",
+    "why": "no preview refusals"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 3,
+  "saturday": "2026-12-12",
+  "start": "2026-12-12T00:00:00-05:00",
+  "end": "2026-12-19T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 35,
+  "units_lost": 3.4,
+  "revenue_ex_tax": 109.26,
+  "cost_of_sales": 65.64,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 43.62,
+  "model_spend": 0.0794808,
+  "profit": 43.54,
+  "cumulative_profit": 119.43,
+  "balance": 586.35,
+  "spendable": 563.76,
+  "inventory_at_cost": 156.07,
+  "runs": [
+   {
+    "run_id": 4,
+    "kind": "weekly",
+    "at": "2026-12-17T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.0794808,
+    "decision": "submit",
+    "reason": "Slots 15 and 25 were empty and 27 and 35 were nearly empty, so I refilled them from the closet at no purchase cost.",
+    "update": "Submitted pr_sim_004, loaded entirely from the closet with no purchases. It puts 8 Red Bull in slot 15, 8 Celsius in slot 25, 6 Coke in slot 27 (to 7) and 3 Mountain Dew in slot 35 (to 4). Prices are unchanged. Slots 15 and 25 had sold out. Closet after the load: 4 Coke, 0 Mountain Dew, 10 Diet Coke, 4 Celsius, 31 Red Bull. Mountain Dew is now out of back stock, so slots 35 and 47 need a purchase soon. Diet Coke in slots 28 and 48 is still slow at about 0.3 a day. Cash is about $541 after tax owed.",
+    "slot_reasons": [
+     {
+      "slot": "15",
+      "reason": "Sold out; refill with 8 Red Bull from the closet, which sells about 0.7 a day."
+     },
+     {
+      "slot": "25",
+      "reason": "Sold out; refill with 8 Celsius from the closet, which sells about 0.57 a day."
+     },
+     {
+      "slot": "27",
+      "reason": "Best-selling Coke slot with 1 unit left; top up to 7 from the closet."
+     },
+     {
+      "slot": "35",
+      "reason": "Mountain Dew with 1 unit left; add the last 3 from the closet to reach 4."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "get_account_balance",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "over_capacity",
+       "price_off_step"
+      ],
+      "max_cost": "0.00",
+      "warnings": 0
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_004"
+   }
+  ],
+  "requests": [
+   "pr_sim_004"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_004",
+    "at": "2026-12-18T16:20:00-05:00",
+    "paid": "0.00",
+    "lines": 4,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "25": "3.50",
+     "27": "3.00",
+     "35": "3.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 2,
+    "lost": 0.5,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 5,
+    "lost": 0.0,
+    "revenue_cents": 2000,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 350,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 4,
+    "lost": 1.1,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 3,
+    "lost": 0.2,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 7,
+    "lost": 1.3,
+    "revenue_cents": 2100,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 600,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.3,
+    "revenue_cents": 900,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 600,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "watch",
+    "why": "3 of 38 units of demand lost to empty slots (9%); 77 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "good",
+    "why": "0 stocked slots with no sale for 5 class days: none"
+   },
+   "margin": {
+    "grade": "watch",
+    "why": "gross margin 40% on $109.26 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $563.76 at week end (floor $53); model $0.08 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: over_capacity, price_off_step"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 4,
+  "saturday": "2026-12-19",
+  "start": "2026-12-19T00:00:00-05:00",
+  "end": "2026-12-26T00:00:00-05:00",
+  "class_days": 1,
+  "units_sold": 5,
+  "units_lost": 0.5,
+  "revenue_ex_tax": 15.74,
+  "cost_of_sales": 9.29,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 6.45,
+  "model_spend": 0.1007373,
+  "profit": 6.35,
+  "cumulative_profit": 125.78,
+  "balance": 603.35,
+  "spendable": 579.5,
+  "inventory_at_cost": 146.78,
+  "runs": [
+   {
+    "run_id": 5,
+    "kind": "weekly",
+    "at": "2026-12-24T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.1007373,
+    "decision": "submit",
+    "reason": "Slot 26 was empty and several other slots were low, so I topped them up from the closet at no cost and bought nothing.",
+    "update": "Submitted pr_sim_005, a closet-only restock that costs $0. It loads slots 16 and 18 with 6 Red Bull each (to 8), slot 26 with 4 Celsius, slot 27 with 2 Coke (to 7), and slots 28 and 48 with 5 Diet Coke each (to 7). Prices are unchanged. Sales slowed this week to about 0.3 units/day or less per slot, so I bought nothing. Stock on the other slots lasts 7 to 21 days. The closet will be nearly empty after this load: 0 Celsius, 0 Diet Coke, 2 Coke and 19 Red Bull. Mountain Dew slots 35 and 47 have 3 units each, and the closet has none.",
+    "slot_reasons": [
+     {
+      "slot": "16",
+      "reason": "Had 2 Red Bull left, so I topped it up to 8 from the closet."
+     },
+     {
+      "slot": "18",
+      "reason": "Had 2 Red Bull left, so I topped it up to 8 from the closet."
+     },
+     {
+      "slot": "26",
+      "reason": "Slot was empty, so I loaded the 4 Celsius in the closet."
+     },
+     {
+      "slot": "27",
+      "reason": "Coke is our best seller, so I topped it up to 7 with the 2 Coke from the closet."
+     },
+     {
+      "slot": "28",
+      "reason": "Had 2 Diet Coke left, so I topped it up to 7 from the closet."
+     },
+     {
+      "slot": "48",
+      "reason": "Had 2 Diet Coke left, so I topped it up to 7 from the closet."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_account_balance",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_005"
+   }
+  ],
+  "requests": [
+   "pr_sim_005"
+  ],
+  "visits_done": [],
+  "slots": {
+   "15": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 0,
+    "lost": 0.5,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 300,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 300,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 300,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "watch",
+    "why": "0 of 5 units of demand lost to empty slots (8%); 72 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "1 stocked slots with no sale for 5 class days: 17 (CELSIUS-SPARKLING_ORANGE-12CAN)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 41% on $15.74 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $579.50 at week end (floor $53); model $0.10 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "good",
+    "why": "no preview refusals"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 5,
+  "saturday": "2026-12-26",
+  "start": "2026-12-26T00:00:00-05:00",
+  "end": "2027-01-02T00:00:00-05:00",
+  "class_days": 0,
+  "units_sold": 0,
+  "units_lost": 0.1,
+  "revenue_ex_tax": 0.0,
+  "cost_of_sales": 0.0,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 0.0,
+  "model_spend": 0.0940176,
+  "profit": -0.09,
+  "cumulative_profit": 125.69,
+  "balance": 603.35,
+  "spendable": 579.5,
+  "inventory_at_cost": 146.78,
+  "runs": [
+   {
+    "run_id": 6,
+    "kind": "weekly",
+    "at": "2026-12-31T19:00:00-05:00",
+    "status": "skipped",
+    "cost_usd": 0.0940176,
+    "decision": "skip",
+    "reason": "Nothing sold this past week (holiday break) and every slot has enough stock for another slow week, so a restock would only tie up cash.",
+    "update": "No restock this week. pr_sim_005 was fulfilled as planned (back stock only, cost $0). Our 20 slots sold 0 units since last Thursday, which is the holiday break, and the 15 days before that were also slow. Stock: Red Bull 8 in each of slots 15, 16 and 18. Celsius 8 in slot 25, 4 in slot 26 and 2 in slot 17. Coke 7 in slot 27, Diet Coke 7 in each of slots 28 and 48, Mountain Dew 3 in each of slots 35 and 47. No prices change. Closet: 2 Coke and 19 Red Bull. Spendable is $579.50. No slow-seller flags, because break days don't count. Next week: if sales recover, buy Mountain Dew, Celsius and Coke.",
+    "slot_reasons": [],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "get_account_balance",
+     "get_sales_history",
+     "get_project_rules",
+     "get_project_rules",
+     "get_account_balance"
+    ],
+    "previews": [],
+    "request_id": null
+   }
+  ],
+  "requests": [],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_005",
+    "at": "2026-12-29T15:16:00-05:00",
+    "paid": "0.00",
+    "lines": 6,
+    "unavailable": 0,
+    "prices": {
+     "16": "4.00",
+     "18": "4.00",
+     "26": "3.50",
+     "27": "3.00",
+     "28": "3.00",
+     "48": "3.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 0,
+    "lost": 0.1,
+    "revenue_cents": 0,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $579.50 at week end (floor $53); model $0.09 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "good",
+    "why": "no preview refusals"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 6,
+  "saturday": "2027-01-02",
+  "start": "2027-01-02T00:00:00-05:00",
+  "end": "2027-01-09T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 34,
+  "units_lost": 2.0,
+  "revenue_ex_tax": 107.41,
+  "cost_of_sales": 62.01,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 45.4,
+  "model_spend": 0.0703822,
+  "profit": 45.33,
+  "cumulative_profit": 171.02,
+  "balance": 719.35,
+  "spendable": 686.91,
+  "inventory_at_cost": 84.77,
+  "runs": [
+   {
+    "run_id": 7,
+    "kind": "weekly",
+    "at": "2027-01-07T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.0703822,
+    "decision": "submit",
+    "reason": "Sales resumed after the break, and four slots were empty or nearly empty (17 and 47 at 0, 26 at 1, 35 at 2), so I restocked them.",
+    "update": "Sales are back after the break, at about 0.3 to 0.4 units a day per slot. I submitted pr_sim_006: 4 lines, at most $171 and about $148 expected. Celsius goes into slots 17 and 26 (fill to 5, $3.50). Mountain Dew goes into slots 35 and 47 (fill to 5, $3.00). All other slots are kept as they are. Red Bull and Coke slots have 5 to 6 units each, which is enough. Amazon's cutoff has passed, so the order may arrive after Friday's visit. Operations should check on Friday that the Amazon items arrived and loaded. Closet will hold about 15 extra Celsius and 40 extra Mountain Dew after this.",
+    "slot_reasons": [
+     {
+      "slot": "17",
+      "reason": "Out of stock after selling 2 this week, so I'm refilling Celsius to 5 at $3.50."
+     },
+     {
+      "slot": "26",
+      "reason": "Only 1 unit left, about 2 days of stock, so I'm topping up Celsius to 5."
+     },
+     {
+      "slot": "35",
+      "reason": "Only 2 units left, so I'm topping up Mountain Dew to 5."
+     },
+     {
+      "slot": "47",
+      "reason": "Out of stock after selling 3 this week, so I'm refilling Mountain Dew to 5."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_account_balance",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_006"
+   }
+  ],
+  "requests": [
+   "pr_sim_006"
+  ],
+  "visits_done": [],
+  "slots": {
+   "15": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1600,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 2,
+    "lost": 0.6,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 600,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.5,
+    "revenue_cents": 900,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 3,
+    "lost": 0.8,
+    "revenue_cents": 900,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "watch",
+    "why": "2 of 36 units of demand lost to empty slots (6%); 60 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "good",
+    "why": "0 stocked slots with no sale for 5 class days: none"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 42% on $107.41 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $686.91 at week end (floor $53); model $0.07 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "good",
+    "why": "no preview refusals"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 7,
+  "saturday": "2027-01-09",
+  "start": "2027-01-09T00:00:00-05:00",
+  "end": "2027-01-16T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 33,
+  "units_lost": 8.1,
+  "revenue_ex_tax": 103.7,
+  "cost_of_sales": 60.4,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 136.72,
+  "gross_profit": 43.3,
+  "model_spend": 0.1471705,
+  "profit": 43.16,
+  "cumulative_profit": 214.18,
+  "balance": 694.63,
+  "spendable": 653.89,
+  "inventory_at_cost": 161.09,
+  "runs": [
+   {
+    "run_id": 8,
+    "kind": "weekly",
+    "at": "2027-01-14T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.1471705,
+    "decision": "submit",
+    "reason": "Slots 16, 27, 28 and 48 were empty and Red Bull in slots 15 and 18 was low, so I restocked mostly from closet stock and bought only one Diet Coke pack.",
+    "update": "Submitted pr_sim_007, with a max cost of $56.50. Slots 16, 27, 28 and 48 sold out. Slots 15 and 18 (Red Bull) and 35 (Mountain Dew) were low. Loads from the closet: Red Bull to 7 each in slots 15, 16 and 18; 2 Coke in slot 27; Mountain Dew in slot 35 (+4). Slot 48 switches from Diet Coke to Mountain Dew (6 units from the closet) to avoid buying a second 24-pack of Diet Coke. We buy one 24-pack of Diet Coke on Amazon for slot 28, 7 units. It is past the Amazon cutoff, so it may miss Friday's visit. If it does, slot 28 stays empty until next week. Prices are unchanged. Demand is still low, about 0.3 to 0.7 units a day per slot.",
+    "slot_reasons": [
+     {
+      "slot": "15",
+      "reason": "Red Bull had 2 units left, so I topped it up to 7 from the closet."
+     },
+     {
+      "slot": "16",
+      "reason": "Red Bull was sold out, so I refilled it to 7 from the closet."
+     },
+     {
+      "slot": "18",
+      "reason": "Red Bull had 3 units left, so I topped it up to 7 from the closet."
+     },
+     {
+      "slot": "27",
+      "reason": "Coke was sold out, so I loaded the last 2 closet bottles."
+     },
+     {
+      "slot": "28",
+      "reason": "Diet Coke was sold out and sells about 0.7 a day, so I'm buying one 24-pack and loading 7."
+     },
+     {
+      "slot": "35",
+      "reason": "Mountain Dew had 1 unit left, so I topped it up to 5 from the closet."
+     },
+     {
+      "slot": "48",
+      "reason": "Diet Coke was sold out; I'm switching it to Mountain Dew from the closet (6 units) to avoid buying a second Diet Coke pack."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_purchase_requests",
+     "get_account_balance",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_007"
+   }
+  ],
+  "requests": [
+   "pr_sim_007"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_006",
+    "at": "2027-01-11T15:19:00-05:00",
+    "paid": "136.72",
+    "lines": 4,
+    "unavailable": 0,
+    "prices": {
+     "17": "3.50",
+     "26": "3.50",
+     "35": "3.00",
+     "47": "3.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 800,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 5,
+    "lost": 0.4,
+    "revenue_cents": 2000,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 2,
+    "lost": 0.4,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 2,
+    "lost": 0.4,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 5,
+    "lost": 1.9,
+    "revenue_cents": 1500,
+    "sku": "COCA-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 3,
+    "lost": 1.6,
+    "revenue_cents": 900,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.8,
+    "revenue_cents": 900,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 3,
+    "lost": 0.6,
+    "revenue_cents": 900,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 3,
+    "lost": 1.9,
+    "revenue_cents": 900,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "bad",
+    "why": "8 of 41 units of demand lost to empty slots (20%); 257 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "good",
+    "why": "0 stocked slots with no sale for 5 class days: none"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 42% on $103.70 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $653.89 at week end (floor $53); model $0.15 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "good",
+    "why": "no preview refusals"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 8,
+  "saturday": "2027-01-16",
+  "start": "2027-01-16T00:00:00-05:00",
+  "end": "2027-01-23T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 30,
+  "units_lost": 15.0,
+  "revenue_ex_tax": 93.98,
+  "cost_of_sales": 54.19,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 50.48,
+  "gross_profit": 39.79,
+  "model_spend": 0.1318614,
+  "profit": 39.66,
+  "cumulative_profit": 253.84,
+  "balance": 745.65,
+  "spendable": 697.39,
+  "inventory_at_cost": 157.39,
+  "runs": [
+   {
+    "run_id": 9,
+    "kind": "weekly",
+    "at": "2027-01-21T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.1318614,
+    "decision": "submit",
+    "reason": "Several slots (17, 25, 26, 27, 47) are empty and others are low, and the closet already holds enough stock to refill them, so the order costs $0.",
+    "update": "Submitted pr_sim_008. It costs $0 and refills the empty slots from the closet. Celsius goes to 5 units each in slots 17, 25 and 26. Slot 18 gets 3 more Red Bull, so it holds 4. Mountain Dew goes to 7 units in slots 35, 47 and 48. Slot 27 switches from Coke, which we have none left of, to Mountain Dew at $3.00 (7 units). Slots 15, 16 and 28 are unchanged. Diet Coke in slot 28 sold 0 this week and 17 more bottles are in the closet. Red Bull in slots 15 and 16 also sold 0. No new purchases, because only about 1 week of sales remains after this visit. Spendable is $676.10.",
+    "slot_reasons": [
+     {
+      "slot": "17",
+      "reason": "Out of stock; refill with 5 Celsius from the closet."
+     },
+     {
+      "slot": "18",
+      "reason": "Only 1 can left and it sells about 0.9/day; add 3 Red Bull from the closet."
+     },
+     {
+      "slot": "25",
+      "reason": "Out of stock; refill with 5 Celsius from the closet."
+     },
+     {
+      "slot": "26",
+      "reason": "Out of stock; refill with 5 Celsius from the closet."
+     },
+     {
+      "slot": "27",
+      "reason": "Coke is out with an empty closet, so switch to Mountain Dew (7 units from the closet), which sells better."
+     },
+     {
+      "slot": "35",
+      "reason": "Top up Mountain Dew to 7 units from the closet."
+     },
+     {
+      "slot": "47",
+      "reason": "Out of stock; refill with 7 Mountain Dew from the closet."
+     },
+     {
+      "slot": "48",
+      "reason": "Top up Mountain Dew to 7 units from the closet."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_account_balance",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     }
+    ],
+    "request_id": "pr_sim_008"
+   }
+  ],
+  "requests": [
+   "pr_sim_008"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_007",
+    "at": "2027-01-18T15:15:00-05:00",
+    "paid": "50.48",
+    "lines": 7,
+    "unavailable": 0,
+    "prices": {
+     "15": "4.00",
+     "16": "4.00",
+     "18": "4.00",
+     "27": "3.00",
+     "28": "3.00",
+     "35": "3.00",
+     "48": "3.00"
+    }
+   },
+   {
+    "request_id": "pr_sim_008",
+    "at": "2027-01-22T15:31:00-05:00",
+    "paid": "0.00",
+    "lines": 8,
+    "unavailable": 0,
+    "prices": {
+     "17": "3.50",
+     "18": "4.00",
+     "25": "3.50",
+     "26": "3.50",
+     "27": "3.00",
+     "35": "3.00",
+     "47": "3.00",
+     "48": "3.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 1,
+    "lost": 0.4,
+    "revenue_cents": 400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 3,
+    "lost": 1.8,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 6,
+    "lost": 0.1,
+    "revenue_cents": 2400,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 4,
+    "lost": 2.7,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 2,
+    "lost": 2.6,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 2,
+    "lost": 5.5,
+    "revenue_cents": 600,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 3,
+    "lost": 0.6,
+    "revenue_cents": 900,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 1,
+    "lost": 0.4,
+    "revenue_cents": 300,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 2,
+    "lost": 0.5,
+    "revenue_cents": 600,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 6,
+    "lost": 0.6,
+    "revenue_cents": 1800,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "bad",
+    "why": "15 of 45 units of demand lost to empty slots (33%); 353 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "1 stocked slots with no sale for 5 class days: 15 (REDBULL-ORIGINAL-8_4CAN)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 42% on $93.98 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $697.39 at week end (floor $53); model $0.13 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "good",
+    "why": "no preview refusals"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 9,
+  "saturday": "2027-01-23",
+  "start": "2027-01-23T00:00:00-05:00",
+  "end": "2027-01-30T00:00:00-05:00",
+  "class_days": 5,
+  "units_sold": 33,
+  "units_lost": 0.5,
+  "revenue_ex_tax": 106.02,
+  "cost_of_sales": 56.85,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 49.17,
+  "model_spend": 0.0871729,
+  "profit": 49.08,
+  "cumulative_profit": 302.92,
+  "balance": 860.15,
+  "spendable": 803.41,
+  "inventory_at_cost": 100.53,
+  "runs": [
+   {
+    "run_id": 10,
+    "kind": "weekly",
+    "at": "2027-01-28T19:00:00-05:00",
+    "status": "submitted",
+    "cost_usd": 0.0871729,
+    "decision": "submit",
+    "reason": "I submitted a zero-cost move of 5 Mountain Dew from the closet into slot 35, which is the fastest seller and nearly empty. I skipped new purchases because sales are slow and this is near the end of the run.",
+    "update": "Sales are slow, about 0.3 to 0.7 units a day per slot. I submitted pr_sim_009, which loads 5 Mountain Dew from the closet into slot 35 at $0 cost. Prices are unchanged. I did not buy Red Bull or Celsius for slot 18 (empty) or slot 17 (1 left). Amazon packs are 12 and 24 units, so the extras would be left over, and the order is past the Wednesday cutoff. Closet after the visit: 2 Mountain Dew and 17 Diet Coke. Spendable is $784.43.",
+    "slot_reasons": [
+     {
+      "slot": "35",
+      "reason": "Fastest seller with only 2 left, so I topped it up to 7 with 5 Mountain Dew from the closet at no cost."
+     }
+    ],
+    "tool_calls": [
+     "get_machine_state",
+     "get_account_balance",
+     "get_purchase_requests",
+     "preview_desired_state",
+     "preview_desired_state",
+     "preview_desired_state",
+     "submit_desired_state"
+    ],
+    "previews": [
+     {
+      "ok": false,
+      "refusals": [
+       "over_capacity",
+       "price_off_step"
+      ],
+      "max_cost": "0.00",
+      "warnings": 0
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "partial": true
+     },
+     {
+      "ok": true,
+      "refusals": [],
+      "max_cost": "0.00",
+      "warnings": 0
+     }
+    ],
+    "request_id": "pr_sim_009"
+   }
+  ],
+  "requests": [
+   "pr_sim_009"
+  ],
+  "visits_done": [
+   {
+    "request_id": "pr_sim_009",
+    "at": "2027-01-29T15:54:00-05:00",
+    "paid": "0.00",
+    "lines": 1,
+    "unavailable": 0,
+    "prices": {
+     "35": "3.00"
+    }
+   }
+  ],
+  "slots": {
+   "15": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1600,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 3,
+    "lost": 0.5,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 1050,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1400,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 300,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 1,
+    "lost": 0.0,
+    "revenue_cents": 300,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 6,
+    "lost": 0.0,
+    "revenue_cents": 1800,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 600,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 2,
+    "lost": 0.0,
+    "revenue_cents": 600,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "good",
+    "why": "0 of 33 units of demand lost to empty slots (1%); 19 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "good",
+    "why": "0 stocked slots with no sale for 5 class days: none"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 46% on $106.02 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $803.41 at week end (floor $53); model $0.09 over 1 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "watch",
+    "why": "preview refusals: over_capacity, price_off_step"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ },
+ {
+  "week": 10,
+  "saturday": "2027-01-30",
+  "start": "2027-01-30T00:00:00-05:00",
+  "end": "2027-02-04T00:00:00-05:00",
+  "class_days": 3,
+  "units_sold": 20,
+  "units_lost": 7.1,
+  "revenue_ex_tax": 62.96,
+  "cost_of_sales": 34.92,
+  "shrinkage": 0.0,
+  "visit_fees": 0.0,
+  "visits": 0,
+  "purchases": 0.0,
+  "gross_profit": 28.04,
+  "model_spend": 0.0,
+  "profit": 28.04,
+  "cumulative_profit": 330.96,
+  "balance": 928.15,
+  "spendable": 866.37,
+  "inventory_at_cost": 65.62,
+  "runs": [],
+  "requests": [],
+  "visits_done": [],
+  "slots": {
+   "15": {
+    "sold": 3,
+    "lost": 0.1,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "16": {
+    "sold": 3,
+    "lost": 0.2,
+    "revenue_cents": 1200,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "17": {
+    "sold": 1,
+    "lost": 1.2,
+    "revenue_cents": 350,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "18": {
+    "sold": 0,
+    "lost": 1.3,
+    "revenue_cents": 0,
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "price_cents": 400
+   },
+   "25": {
+    "sold": 2,
+    "lost": 1.6,
+    "revenue_cents": 700,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "26": {
+    "sold": 1,
+    "lost": 2.7,
+    "revenue_cents": 350,
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "price_cents": 350
+   },
+   "27": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 900,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "28": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "COCA-DIET-20BOT",
+    "price_cents": 300
+   },
+   "35": {
+    "sold": 3,
+    "lost": 0.0,
+    "revenue_cents": 900,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "36": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "37": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "38": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 300
+   },
+   "45": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "46": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 200
+   },
+   "47": {
+    "sold": 4,
+    "lost": 0.0,
+    "revenue_cents": 1200,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "48": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "price_cents": 300
+   },
+   "55": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "56": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 325
+   },
+   "57": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 100
+   },
+   "58": {
+    "sold": 0,
+    "lost": 0.0,
+    "revenue_cents": 0,
+    "sku": null,
+    "price_cents": 150
+   }
+  },
+  "report_card": {
+   "stock_outs": {
+    "grade": "bad",
+    "why": "7 of 27 units of demand lost to empty slots (26%); 168 slot-hours empty while customers came"
+   },
+   "slow_sellers": {
+    "grade": "bad",
+    "why": "2 stocked slots with no sale for 5 class days: 27 (MOUNTAIN-ORIGINAL-20BOT), 48 (MOUNTAIN-ORIGINAL-20BOT)"
+   },
+   "margin": {
+    "grade": "good",
+    "why": "gross margin 45% on $62.96 revenue ex tax"
+   },
+   "spend_vs_plan": {
+    "grade": "good",
+    "why": "spendable $866.37 at week end (floor $53); model $0.00 over 0 runs (plan $1.00 a run)"
+   },
+   "refusals": {
+    "grade": "good",
+    "why": "no preview refusals"
+   },
+   "guardrails": {
+    "grade": "good",
+    "why": "none hit"
+   }
+  }
+ }
+]

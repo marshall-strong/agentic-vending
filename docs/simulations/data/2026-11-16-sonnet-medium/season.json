@@ -1,0 +1,22 @@
+{
+ "decider": "model",
+ "model": "claude-sonnet-5-5",
+ "effort": "medium",
+ "seed": 20261203,
+ "units_sold": 244,
+ "revenue_ex_tax": 772.22,
+ "gross_profit": 331.99,
+ "visit_fees": 0.0,
+ "model_spend": 1.0266185,
+ "profit_after_model": 330.96,
+ "inventory_at_cost_end": 65.62,
+ "balance_end": 928.15,
+ "units_lost": 40.6,
+ "runs": 10,
+ "submitted": 9,
+ "failed": 0,
+ "midweek_visits": 0,
+ "qualifying_units_directed": 257,
+ "price_problems": [],
+ "assumptions": {}
+}

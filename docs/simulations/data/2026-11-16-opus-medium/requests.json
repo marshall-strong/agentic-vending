@@ -1,0 +1,1138 @@
+[
+ {
+  "request_id": "pr_sim_001",
+  "submitted_at": "2026-12-03T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "221.36",
+  "fulfilled_at": "2026-12-07T15:41:00-05:00",
+  "sale_prices": {
+   "15": "4.00",
+   "17": "4.00",
+   "18": "4.00",
+   "25": "3.50",
+   "26": "3.50",
+   "27": "3.50",
+   "28": "3.50",
+   "35": "4.00"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "34.44",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "34.44",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "34.44",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "20.90",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "20.90",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "20.90",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "20.90",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "34.44",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "slot": "15",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "38.00"
+     }
+    },
+    {
+     "slot": "17",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "38.00"
+     }
+    },
+    {
+     "slot": "18",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "38.00"
+     }
+    },
+    {
+     "slot": "25",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "26",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "27",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "28",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "35",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "38.00"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_002",
+  "submitted_at": "2026-12-10T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2026-12-11T17:01:00-05:00",
+  "sale_prices": {
+   "15": "4.00",
+   "16": "3.50",
+   "18": "4.00",
+   "25": "3.50",
+   "26": "3.50",
+   "27": "3.50",
+   "28": "3.50",
+   "35": "4.00",
+   "36": "4.00",
+   "37": "4.00",
+   "38": "4.00"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 11,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 11,
+    "pulled": 0
+   },
+   {
+    "slot": "38",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 11,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "15",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 7,
+      "sale_price": "3.50",
+      "change_product": true
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 1,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 3,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "25",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 1,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 3,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 2,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "28",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 11,
+      "sale_price": "4.00",
+      "change_product": true
+     },
+     "slot": "36",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 11,
+      "sale_price": "4.00",
+      "change_product": true
+     },
+     "slot": "37",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 11,
+      "sale_price": "4.00",
+      "change_product": true
+     },
+     "slot": "38",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_003",
+  "submitted_at": "2026-12-17T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "43.82",
+  "fulfilled_at": "2026-12-21T16:25:00-05:00",
+  "sale_prices": {
+   "15": "4.00",
+   "16": "3.50",
+   "25": "3.50"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.91",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 7,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.91",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 8,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 5,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "15",
+     "source": "back_stock"
+    },
+    {
+     "slot": "16",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "24.50"
+     }
+    },
+    {
+     "slot": "25",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "24.50"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_004",
+  "submitted_at": "2026-12-24T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2026-12-29T16:26:00-05:00",
+  "sale_prices": {
+   "16": "3.50",
+   "17": "4.00",
+   "26": "3.50",
+   "27": "3.50",
+   "28": "3.50",
+   "35": "4.00",
+   "37": "4.00"
+  },
+  "lines": [
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 1,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "17",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 5,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 5,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 3,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "28",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 4,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "37",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_005",
+  "submitted_at": "2027-01-07T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2027-01-08T15:08:00-05:00",
+  "sale_prices": {
+   "16": "3.50",
+   "36": "4.00"
+  },
+  "lines": [
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 1,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 1,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "36",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_006",
+  "submitted_at": "2027-01-14T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "20.71",
+  "fulfilled_at": "2027-01-18T15:13:00-05:00",
+  "sale_prices": {
+   "17": "3.50"
+  },
+  "lines": [
+   {
+    "slot": "17",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "20.71",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 10
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "slot": "17",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "24.50"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_007",
+  "submitted_at": "2027-01-21T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2027-01-22T15:11:00-05:00",
+  "sale_prices": {
+   "18": "4.00",
+   "25": "3.50",
+   "26": "3.50",
+   "36": "4.00",
+   "37": "4.00"
+  },
+  "lines": [
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 1,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 1,
+    "pulled": 0
+   },
+   {
+    "slot": "36",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "37",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 4,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 3,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "25",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 1,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 2,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "36",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 4,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "37",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ }
+]

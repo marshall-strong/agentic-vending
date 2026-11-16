@@ -21,6 +21,8 @@ secrets/
 # append-only; keep them out of git and back them up separately.
 # ---------------------------------------------------------------------------
 data/
+# ...but the archived simulated seasons are committed: the dashboard's /simulations pages read them.
+!docs/simulations/data/
 snapshots/
 *.dex
 *.sqlite

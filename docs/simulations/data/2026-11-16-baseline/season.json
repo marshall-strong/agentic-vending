@@ -1,0 +1,22 @@
+{
+ "decider": "scripted",
+ "model": null,
+ "effort": null,
+ "seed": 20261203,
+ "units_sold": 324,
+ "revenue_ex_tax": 1028.61,
+ "gross_profit": 464.61,
+ "visit_fees": 0.0,
+ "model_spend": 0.0012,
+ "profit_after_model": 464.62,
+ "inventory_at_cost_end": 487.9,
+ "balance_end": 659.0,
+ "units_lost": 15.6,
+ "runs": 10,
+ "submitted": 10,
+ "failed": 0,
+ "midweek_visits": 0,
+ "qualifying_units_directed": 489,
+ "price_problems": [],
+ "assumptions": {}
+}

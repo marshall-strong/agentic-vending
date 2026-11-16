@@ -1,0 +1,6 @@
+{
+ "name": "Baseline rule (no model)",
+ "strategy": "Scripted: refill every slot to its column at reference price; the bar the model should clear",
+ "built": "2026-11-16T01:31-05:00",
+ "moments": 183
+}

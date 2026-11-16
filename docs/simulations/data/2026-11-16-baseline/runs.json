@@ -1,0 +1,1419 @@
+[
+ {
+  "run_id": 1,
+  "kind": "day-one",
+  "at": "2026-11-30T10:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_001",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_001",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor",
+     "insufficient_balance"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_001",
+  "update": "Baseline rule: refilled to the column; request pr_sim_001",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "slot": "15",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "16",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "17",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "18"
+    },
+    {
+     "slot": "25",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "keep": true,
+     "slot": "27"
+    },
+    {
+     "keep": true,
+     "slot": "28"
+    },
+    {
+     "slot": "35",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "sale_price": "2.60"
+    },
+    {
+     "keep": true,
+     "slot": "36"
+    },
+    {
+     "keep": true,
+     "slot": "37"
+    },
+    {
+     "keep": true,
+     "slot": "38"
+    },
+    {
+     "slot": "45",
+     "product": "COCA-ORIGINAL-20BOT",
+     "sale_price": "2.90"
+    },
+    {
+     "keep": true,
+     "slot": "46"
+    },
+    {
+     "keep": true,
+     "slot": "47"
+    },
+    {
+     "keep": true,
+     "slot": "48"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.70"
+    },
+    {
+     "keep": true,
+     "slot": "56"
+    },
+    {
+     "keep": true,
+     "slot": "57"
+    },
+    {
+     "keep": true,
+     "slot": "58"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_001",
+   "plan_hash": "3da6d24254b8571128b1d213b1208f4441db76e498f3a1ac17b7abeeb71c0094"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 2,
+  "kind": "weekly",
+  "at": "2026-12-03T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_002",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_002",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "insufficient_balance"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_002",
+  "update": "Baseline rule: refilled to the column; request pr_sim_002",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "slot": "15",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "16"
+    },
+    {
+     "slot": "17",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "18",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "25"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "27",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "28",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "35"
+    },
+    {
+     "slot": "36",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "37",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "38",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "45"
+    },
+    {
+     "slot": "46",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "47",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "48"
+    },
+    {
+     "keep": true,
+     "slot": "55"
+    },
+    {
+     "slot": "56",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "57",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "58"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_002",
+   "plan_hash": "597ce738c1f82c5fd8ae2de4ebba0d96d0ecf363fc29b03b8b3d684b5190112f"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 3,
+  "kind": "weekly",
+  "at": "2026-12-10T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_003",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_003",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_003",
+  "update": "Baseline rule: refilled to the column; request pr_sim_003",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "slot": "15",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "16",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "17",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "18"
+    },
+    {
+     "slot": "25",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "27",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "28",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "35",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "sale_price": "2.30"
+    },
+    {
+     "slot": "36",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "37",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "38",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "45",
+     "product": "COCA-ORIGINAL-20BOT",
+     "sale_price": "2.50"
+    },
+    {
+     "slot": "46",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "47",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "48",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.35"
+    },
+    {
+     "slot": "56",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "57",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "58",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_003",
+   "plan_hash": "b104563d828d0ff5b9227e42ffa7705afc3b1715a834a499805212171c4ee3fa"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 4,
+  "kind": "weekly",
+  "at": "2026-12-17T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_004",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_004",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_004",
+  "update": "Baseline rule: refilled to the column; request pr_sim_004",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "slot": "15",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "16",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "17",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "18"
+    },
+    {
+     "slot": "25",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "27",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "28",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "35",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "sale_price": "2.30"
+    },
+    {
+     "keep": true,
+     "slot": "36"
+    },
+    {
+     "slot": "37",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "38"
+    },
+    {
+     "slot": "45",
+     "product": "COCA-ORIGINAL-20BOT",
+     "sale_price": "2.50"
+    },
+    {
+     "keep": true,
+     "slot": "46"
+    },
+    {
+     "slot": "47",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "48",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.35"
+    },
+    {
+     "slot": "56",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "57",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "58",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_004",
+   "plan_hash": "646d16ff60db96192f774c5085155921d08d890f027203cbb8a206f79c9ae433"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 5,
+  "kind": "weekly",
+  "at": "2026-12-24T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_005",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_005",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_005",
+  "update": "Baseline rule: refilled to the column; request pr_sim_005",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "keep": true,
+     "slot": "15"
+    },
+    {
+     "keep": true,
+     "slot": "16"
+    },
+    {
+     "keep": true,
+     "slot": "17"
+    },
+    {
+     "keep": true,
+     "slot": "18"
+    },
+    {
+     "keep": true,
+     "slot": "25"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "keep": true,
+     "slot": "27"
+    },
+    {
+     "keep": true,
+     "slot": "28"
+    },
+    {
+     "slot": "35",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "sale_price": "2.30"
+    },
+    {
+     "keep": true,
+     "slot": "36"
+    },
+    {
+     "keep": true,
+     "slot": "37"
+    },
+    {
+     "keep": true,
+     "slot": "38"
+    },
+    {
+     "slot": "45",
+     "product": "COCA-ORIGINAL-20BOT",
+     "sale_price": "2.50"
+    },
+    {
+     "slot": "46",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "47"
+    },
+    {
+     "keep": true,
+     "slot": "48"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.35"
+    },
+    {
+     "keep": true,
+     "slot": "56"
+    },
+    {
+     "slot": "57",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "58"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_005",
+   "plan_hash": "6c30ea4b69331b52aa8b6434afd9bd944adb66f840629cac8b718b7105b416ac"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 6,
+  "kind": "weekly",
+  "at": "2026-12-31T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_006",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_006",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor"
+    ],
+    "max_cost": "0.00",
+    "warnings": 0
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "max_cost": "0.00",
+    "warnings": 0
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_006",
+  "update": "Baseline rule: refilled to the column; request pr_sim_006",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "keep": true,
+     "slot": "15"
+    },
+    {
+     "keep": true,
+     "slot": "16"
+    },
+    {
+     "keep": true,
+     "slot": "17"
+    },
+    {
+     "keep": true,
+     "slot": "18"
+    },
+    {
+     "keep": true,
+     "slot": "25"
+    },
+    {
+     "keep": true,
+     "slot": "26"
+    },
+    {
+     "keep": true,
+     "slot": "27"
+    },
+    {
+     "keep": true,
+     "slot": "28"
+    },
+    {
+     "keep": true,
+     "slot": "35"
+    },
+    {
+     "keep": true,
+     "slot": "36"
+    },
+    {
+     "keep": true,
+     "slot": "37"
+    },
+    {
+     "keep": true,
+     "slot": "38"
+    },
+    {
+     "keep": true,
+     "slot": "45"
+    },
+    {
+     "keep": true,
+     "slot": "46"
+    },
+    {
+     "keep": true,
+     "slot": "47"
+    },
+    {
+     "keep": true,
+     "slot": "48"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.35"
+    },
+    {
+     "keep": true,
+     "slot": "56"
+    },
+    {
+     "keep": true,
+     "slot": "57"
+    },
+    {
+     "keep": true,
+     "slot": "58"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_006",
+   "plan_hash": "ae9bdff10be436f4ad3672187c7a9e97c0e2c03f658d12f1be7382cb3bc35513"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 7,
+  "kind": "weekly",
+  "at": "2027-01-07T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_007",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_007",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_007",
+  "update": "Baseline rule: refilled to the column; request pr_sim_007",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "slot": "15",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "16",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "17",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "18",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "25",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "27",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "28",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "35",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "sale_price": "2.30"
+    },
+    {
+     "slot": "36",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "37",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "38",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "45",
+     "product": "COCA-ORIGINAL-20BOT",
+     "sale_price": "2.90"
+    },
+    {
+     "slot": "46",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "47",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "48",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.35"
+    },
+    {
+     "slot": "56",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "57",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "58",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_007",
+   "plan_hash": "0a3dbbad538092d4bffca9c82580c70e23f0f6e4362582533122967bcebe047c"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 8,
+  "kind": "weekly",
+  "at": "2027-01-14T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_008",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_008",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_008",
+  "update": "Baseline rule: refilled to the column; request pr_sim_008",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "slot": "15",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "16",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "17"
+    },
+    {
+     "slot": "18",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "25",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "keep": true,
+     "slot": "27"
+    },
+    {
+     "slot": "28",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "35",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "sale_price": "2.30"
+    },
+    {
+     "slot": "36",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "37",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "38",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "45",
+     "product": "COCA-ORIGINAL-20BOT",
+     "sale_price": "2.55"
+    },
+    {
+     "slot": "46",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "47",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "48",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.55"
+    },
+    {
+     "slot": "56",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "57",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "58",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_008",
+   "plan_hash": "35fc7a7c042ac4fd5343dfc661192f6762878c44acbc9720893a5270f8b035c6"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 9,
+  "kind": "weekly",
+  "at": "2027-01-21T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_009",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_009",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_009",
+  "update": "Baseline rule: refilled to the column; request pr_sim_009",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "slot": "15",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "16",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "17"
+    },
+    {
+     "slot": "18",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "25",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "27",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "28"
+    },
+    {
+     "slot": "35",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "sale_price": "2.60"
+    },
+    {
+     "slot": "36",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "37",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "38",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "45",
+     "product": "COCA-ORIGINAL-20BOT",
+     "sale_price": "2.55"
+    },
+    {
+     "slot": "46",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "47",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "48",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.40"
+    },
+    {
+     "slot": "56",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "57",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "58",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_009",
+   "plan_hash": "76050719ddeed1294234625debdf44290804dd989f33fd5a4192ac35f29f2d79"
+  },
+  "thinking": []
+ },
+ {
+  "run_id": 10,
+  "kind": "weekly",
+  "at": "2027-01-28T19:00:00-05:00",
+  "status": "submitted",
+  "detail": "refilled to the column; request pr_sim_010",
+  "cost_usd": 0.00012,
+  "request_id": "pr_sim_010",
+  "model_calls": 5,
+  "input_tokens": 5,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "output_tokens": 5,
+  "tool_calls": [
+   "get_machine_state",
+   "get_purchase_requests",
+   "preview_desired_state",
+   "preview_desired_state",
+   "submit_desired_state"
+  ],
+  "previews": [
+   {
+    "ok": false,
+    "refusals": [
+     "below_floor"
+    ],
+    "partial": true
+   },
+   {
+    "ok": true,
+    "refusals": [],
+    "partial": true
+   }
+  ],
+  "decision": "submit",
+  "reason": "refilled to the column; request pr_sim_010",
+  "update": "Baseline rule: refilled to the column; request pr_sim_010",
+  "notes": "Baseline rule: refill every slot to its column at reference price.",
+  "slot_reasons": [],
+  "plan": {
+   "slots": [
+    {
+     "slot": "15",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "16",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "17",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "18",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "25",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "26",
+     "product": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "sale_price": "3.50"
+    },
+    {
+     "slot": "27",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "28"
+    },
+    {
+     "slot": "35",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "sale_price": "2.30"
+    },
+    {
+     "slot": "36",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "37",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "keep": true,
+     "slot": "38"
+    },
+    {
+     "slot": "45",
+     "product": "COCA-ORIGINAL-20BOT",
+     "sale_price": "2.55"
+    },
+    {
+     "slot": "46",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "47",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "48",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "sale_price": "4.00"
+    },
+    {
+     "slot": "55",
+     "product": "COCA-DIET-20BOT",
+     "sale_price": "2.40"
+    },
+    {
+     "keep": true,
+     "slot": "56"
+    },
+    {
+     "keep": true,
+     "slot": "57"
+    },
+    {
+     "keep": true,
+     "slot": "58"
+    }
+   ],
+   "visit": "scheduled",
+   "reason": "refilled to the column; request pr_sim_010",
+   "plan_hash": "1352f065a58dd3b425dec2d8545e8e80896f46a9d34dc56010042a98fa33c571"
+  },
+  "thinking": []
+ }
+]

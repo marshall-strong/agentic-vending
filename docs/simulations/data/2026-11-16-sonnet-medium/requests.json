@@ -1,0 +1,1343 @@
+[
+ {
+  "request_id": "pr_sim_001",
+  "submitted_at": "2026-11-30T10:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "318.65",
+  "fulfilled_at": "2026-12-02T15:18:00-05:00",
+  "sale_prices": {
+   "15": "4.00",
+   "16": "4.00",
+   "17": "3.50",
+   "18": "4.00",
+   "25": "3.50",
+   "26": "3.50",
+   "27": "3.00",
+   "28": "3.00",
+   "35": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "32.82",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "32.82",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "17",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.58",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "32.82",
+    "loaded": 11,
+    "lost": 0,
+    "to_closet": 13,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.58",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.58",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 4,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "55.08",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 17,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "COCA-DIET-20BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "51.15",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 17,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "49.22",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 17,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "slot": "15",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.50"
+     }
+    },
+    {
+     "slot": "16",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.50"
+     }
+    },
+    {
+     "slot": "17",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "18",
+     "source": "purchase",
+     "primary": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "url": "https://www.amazon.com/dp/B003PFPFIE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "4.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 8.4 oz cans",
+      "max_price_per_pack": "40.50"
+     }
+    },
+    {
+     "slot": "25",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "26",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": true,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "25.00"
+     }
+    },
+    {
+     "slot": "27",
+     "source": "purchase",
+     "primary": {
+      "sku": "COCA-ORIGINAL-20BOT",
+      "url": "https://www.amazon.com/dp/B004I405P4",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 20 oz bottles",
+      "max_price_per_pack": "63.50"
+     }
+    },
+    {
+     "slot": "28",
+     "source": "purchase",
+     "primary": {
+      "sku": "COCA-DIET-20BOT",
+      "url": "https://www.amazon.com/dp/B008CAB1OE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 20 oz bottles",
+      "max_price_per_pack": "59.00"
+     }
+    },
+    {
+     "slot": "35",
+     "source": "purchase",
+     "primary": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "url": "https://www.amazon.com/dp/B00ODVQ8U8",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": true,
+      "units_per_pack": 24,
+      "pack_description": "24 x 20 oz bottles",
+      "max_price_per_pack": "57.00"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_002",
+  "submitted_at": "2026-12-03T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2026-12-04T16:43:00-05:00",
+  "sale_prices": {
+   "47": "3.00",
+   "48": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "47",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-DIET-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 7,
+      "sale_price": "3.00",
+      "change_product": true
+     },
+     "slot": "47",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-DIET-20BOT",
+      "units": 7,
+      "sale_price": "3.00",
+      "change_product": true
+     },
+     "slot": "48",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_003",
+  "submitted_at": "2026-12-10T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2026-12-11T16:23:00-05:00",
+  "sale_prices": {
+   "27": "3.00",
+   "47": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-20BOT",
+      "units": 7,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 7,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "47",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_004",
+  "submitted_at": "2026-12-17T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2026-12-18T16:20:00-05:00",
+  "sale_prices": {
+   "15": "4.00",
+   "25": "3.50",
+   "27": "3.00",
+   "35": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 8,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 8,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 8,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 6,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 8,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "15",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 8,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "25",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-20BOT",
+      "units": 6,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 3,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_005",
+  "submitted_at": "2026-12-24T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2026-12-29T15:16:00-05:00",
+  "sale_prices": {
+   "16": "4.00",
+   "18": "4.00",
+   "26": "3.50",
+   "27": "3.00",
+   "28": "3.00",
+   "48": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 6,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 6,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-DIET-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-DIET-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 6,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 6,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 4,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-20BOT",
+      "units": 2,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-DIET-20BOT",
+      "units": 5,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "28",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-DIET-20BOT",
+      "units": 5,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "48",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_006",
+  "submitted_at": "2027-01-07T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "136.72",
+  "fulfilled_at": "2027-01-11T15:19:00-05:00",
+  "sale_prices": {
+   "17": "3.50",
+   "26": "3.50",
+   "35": "3.00",
+   "47": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "17",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.26",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 7,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 12,
+    "paid": "21.26",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 8,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "47.10",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 21,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "47.10",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 19,
+    "from_closet": 0,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "slot": "17",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "26.00"
+     }
+    },
+    {
+     "slot": "26",
+     "source": "purchase",
+     "primary": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "url": "https://www.amazon.com/dp/B007R8XGJA",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.50",
+      "change_product": false,
+      "units_per_pack": 12,
+      "pack_description": "12 x 12 oz cans",
+      "max_price_per_pack": "26.00"
+     }
+    },
+    {
+     "slot": "35",
+     "source": "purchase",
+     "primary": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "url": "https://www.amazon.com/dp/B00ODVQ8U8",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": false,
+      "units_per_pack": 24,
+      "pack_description": "24 x 20 oz bottles",
+      "max_price_per_pack": "59.50"
+     }
+    },
+    {
+     "slot": "47",
+     "source": "purchase",
+     "primary": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "url": "https://www.amazon.com/dp/B00ODVQ8U8",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": false,
+      "units_per_pack": 24,
+      "pack_description": "24 x 20 oz bottles",
+      "max_price_per_pack": "59.50"
+     }
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_007",
+  "submitted_at": "2027-01-14T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "50.48",
+  "fulfilled_at": "2027-01-18T15:15:00-05:00",
+  "sale_prices": {
+   "15": "4.00",
+   "16": "4.00",
+   "18": "4.00",
+   "27": "3.00",
+   "28": "3.00",
+   "35": "3.00",
+   "48": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "15",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "16",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "COCA-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 2,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 2,
+    "pulled": 0
+   },
+   {
+    "slot": "28",
+    "source": "purchase",
+    "outcome": "primary",
+    "sku": "COCA-DIET-20BOT",
+    "store": "Amazon",
+    "packs": 1,
+    "units_bought": 24,
+    "paid": "50.48",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 17,
+    "from_closet": 0,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 6,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 6,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 5,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "15",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 7,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "16",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 4,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "COCA-ORIGINAL-20BOT",
+      "units": 2,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "slot": "28",
+     "source": "purchase",
+     "primary": {
+      "sku": "COCA-DIET-20BOT",
+      "url": "https://www.amazon.com/dp/B008CAB1OE",
+      "packs": 1,
+      "store": "Amazon",
+      "sale_price": "3.00",
+      "change_product": false,
+      "units_per_pack": 24,
+      "pack_description": "24 x 20 oz bottles",
+      "max_price_per_pack": "56.50"
+     }
+    },
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 4,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 6,
+      "sale_price": "3.00",
+      "change_product": true
+     },
+     "slot": "48",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_008",
+  "submitted_at": "2027-01-21T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2027-01-22T15:31:00-05:00",
+  "sale_prices": {
+   "17": "3.50",
+   "18": "4.00",
+   "25": "3.50",
+   "26": "3.50",
+   "27": "3.00",
+   "35": "3.00",
+   "47": "3.00",
+   "48": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "17",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "18",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 3,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 3,
+    "pulled": 0
+   },
+   {
+    "slot": "25",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "26",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   },
+   {
+    "slot": "27",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 4,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 4,
+    "pulled": 0
+   },
+   {
+    "slot": "47",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 7,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 7,
+    "pulled": 0
+   },
+   {
+    "slot": "48",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 5,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "17",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 3,
+      "sale_price": "4.00",
+      "change_product": false
+     },
+     "slot": "18",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 5,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "25",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+      "units": 5,
+      "sale_price": "3.50",
+      "change_product": false
+     },
+     "slot": "26",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 7,
+      "sale_price": "3.00",
+      "change_product": true
+     },
+     "slot": "27",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 4,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 7,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "47",
+     "source": "back_stock"
+    },
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 5,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "48",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ },
+ {
+  "request_id": "pr_sim_009",
+  "submitted_at": "2027-01-28T19:00:00-05:00",
+  "off_cycle": false,
+  "status": "fulfilled",
+  "total_paid": "0.00",
+  "fulfilled_at": "2027-01-29T15:54:00-05:00",
+  "sale_prices": {
+   "35": "3.00"
+  },
+  "lines": [
+   {
+    "slot": "35",
+    "source": "back_stock",
+    "outcome": "loaded",
+    "sku": "MOUNTAIN-ORIGINAL-20BOT",
+    "store": null,
+    "packs": 0,
+    "units_bought": 0,
+    "paid": "0.00",
+    "loaded": 5,
+    "lost": 0,
+    "to_closet": 0,
+    "from_closet": 5,
+    "pulled": 0
+   }
+  ],
+  "body": {
+   "lines": [
+    {
+     "load": {
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 5,
+      "sale_price": "3.00",
+      "change_product": false
+     },
+     "slot": "35",
+     "source": "back_stock"
+    }
+   ],
+   "off_cycle": false
+  }
+ }
+]
