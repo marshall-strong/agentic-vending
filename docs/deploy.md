@@ -95,7 +95,8 @@ only if the start moves.
 
 - **Before the lock time**, a different answer replaces the stored one. It prints `changed: ...`,
   and `action_log` (tool `slots.record`) says what it was and what it is now.
-- **From the lock time**, a different answer is refused and nothing changes (exit 1). In the
+- **The first check at or after the lock** records the server's final assignment, including a
+  change made just before the start. A later different answer is refused (exit 1). In the
   worker that fails the round, so `/health` answers 503. Ask the instructors which is right; if
   the new one is, clear `slot_assignment` and record again.
 - **Always refused**, before or after: an answer that isn't 20 different selections on `vmc1`,

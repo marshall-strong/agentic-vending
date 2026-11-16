@@ -44,7 +44,7 @@ from fractions import Fraction
 from typing import TYPE_CHECKING
 
 from vending import counters
-from vending.slots import DEVICE_ID
+from vending.slots import DEVICE_ID, our_slots
 
 if TYPE_CHECKING:  # the replay itself needs no database, so its tests run without psycopg
     import psycopg
@@ -472,8 +472,10 @@ def weighted_average(movements: list[Movement]) -> Stock:
     )
 
 
-def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
+def stock(conn: psycopg.Connection, until: datetime | None = None, *,
+          selections: tuple[str, ...] | None = None) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
+    assigned = set(our_slots(conn) if selections is None else selections)
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
@@ -481,8 +483,8 @@ def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
-    # Every slot our fulfilled receipts name: those are the slots we stocked.
-    slots = sorted({line["slot"] for line in lines})
+    # Receipts preserve our purchases, but cannot authorize counter reads after reassignment.
+    slots = sorted({line["slot"] for line in lines} & assigned)
     # poll_selections only has rows for polls whose checksum passed. The sync
     # stores every device's polls, so read only our machine's counters.
     # Cents and price too, to split a window that spans a product change (#97).

@@ -397,7 +397,7 @@ def test_the_public_json_has_only_our_selections_in_its_counts(site, schema_url,
     assert theirs not in sales and theirs not in stock and set(sales) | set(stock) <= set(_stored(conn))
     # The local snapshot, for the team, still has the whole count.
     with open_in(*schema_url) as local:
-        assert sorted(dashboard.snapshot(local)["counts"]["data"]) == sorted([ours, theirs])
+        assert sorted(dashboard.snapshot(local)["counts"]["data"]) == [ours]
 
 
 def test_the_public_explorer_shows_only_our_rows_of_the_selection_tables(site, schema_url, conn):
@@ -499,7 +499,7 @@ def test_after_a_reassignment_the_public_json_drops_the_old_slots_stock(site, sc
     with open_in(*schema_url) as local:
         stock = dashboard.snapshot(local)["stock"]["data"]
         assert stock["slots"]["15"]["product"] == OLD_SLOT
-        assert any("slot 15" in w for w in stock["warnings"])
+        assert not any("slot 15" in w for w in stock["warnings"])
 
 
 def test_after_a_reassignment_plans_list_only_our_slots(site, schema_url, conn):

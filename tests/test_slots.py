@@ -151,27 +151,25 @@ def test_a_change_just_before_the_lock_is_still_followed(empty):
 @pytest.mark.parametrize("at", [LOCK, AFTER, LOCK + timedelta(days=60)])
 def test_a_change_from_the_lock_on_is_refused_and_changes_nothing(empty, at):
     slots.record(empty, ANSWER, NOW)
+    slots.record(empty, ANSWER, LOCK)
     logged = len(_log(empty))
     with pytest.raises(BadAssignment, match="different assignment, but ours locked at 2026-12-03T00:00:00-05:00"):
         slots.record(empty, MOVED, at)
     assert slots.our_slots(empty) == TEST_SLOTS
-    assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (NOW,)
+    assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (LOCK,)
     assert len(_log(empty)) == logged
 
 
 def test_the_lock_can_be_moved(empty):
     slots.record(empty, ANSWER, NOW)
+    slots.record(empty, ANSWER, NOW + timedelta(hours=1), lock=NOW + timedelta(hours=1))
     with pytest.raises(BadAssignment, match="locked at"):
         slots.record(empty, MOVED, NOW + timedelta(hours=2), lock=NOW + timedelta(hours=1))
     assert slots.record(empty, MOVED, AFTER, lock=AFTER + timedelta(hours=1)) == "changed"
 
 
-def test_a_change_that_waits_on_the_row_lock_past_the_deadline_is_refused(empty, schema_url):
-    """The deadline is judged when the row is ours, not when the call began.
-
-    Another recorder holds the row past the lock; the waiting call then sees
-    the deadline gone and must change nothing.
-    """
+def test_a_waiting_first_post_start_check_records_the_final_assignment(empty, schema_url):
+    """A transaction begun before the start records the actual time after waiting."""
     import threading
     import time
 
@@ -194,8 +192,12 @@ def test_a_change_that_waits_on_the_row_lock_past_the_deadline_is_refused(empty,
         caller.start()
         time.sleep(1.0)            # the caller is now queued on the row, and the deadline has passed
     caller.join(timeout=10)
-    assert isinstance(outcome.get("result"), BadAssignment), outcome
-    assert slots.our_slots(empty) == TEST_SLOTS
+    assert not caller.is_alive()
+    assert outcome.get("result") == "changed", outcome
+    assert slots.our_slots(empty) == LEFT
+    assert empty.execute("select last_checked_at >= %s from slot_assignment", (lock,)).fetchone() == (True,)
+    with pytest.raises(BadAssignment):
+        slots.record(empty, ANSWER, lock=lock)
 
 
 def test_a_new_team_label_alone_is_stored_not_refused(empty):

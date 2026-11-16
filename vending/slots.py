@@ -14,8 +14,8 @@ the server until the lock time, `SLOTS_LOCK_AT`, and holds what it has from then
 
  - Before the lock time, a well-formed answer that differs from the stored one
    replaces it, and `action_log` says what it was and what it is now.
- - From the lock time, a different answer is refused (exit 1) and nothing
-   changes, so a person looks before anything switches.
+ - The first check at or after the lock records the server's final assignment.
+   Later changes are refused (exit 1), so a person checks before anything switches.
  - At any time, the same answer only moves `last_checked_at`, and a new team
    label alone is stored.
 
@@ -169,9 +169,12 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
     """Store the bridge's answer as our assignment, or check it against the one stored.
 
     Returns "recorded", "unchanged", "team renamed" or "changed". Before `lock`
-    (default `lock_at()`), an answer whose device or slots differ from the stored
-    ones replaces them ("changed"), and the log says old -> new. From `lock` on
-    it raises `BadAssignment` and nothing changes. A malformed answer raises
+    (default `lock_at()`, the start), an answer whose device or slots differ from
+    the stored ones replaces them ("changed"), and the log says old -> new. The
+    first check at or after `lock` takes whatever the server says then: that is
+    the assignment at the start, even if it changed just before and no check
+    ran in between. From then on a different answer raises `BadAssignment` and
+    nothing changes. A malformed answer raises
     `BadAssignment` at any time. Only the device and the slots are the
     assignment: nothing reads `team`, so a new label alone is stored, not refused.
     """
@@ -181,37 +184,43 @@ def record(conn: psycopg.Connection, answer: Any, now: datetime | None = None, b
     lock = lock or lock_at()
     note = ""
     with conn.transaction():
-        old = conn.execute("select team, device_id, slots from slot_assignment where id = 1 for update").fetchone()
+        # Serializes recorders even while the table is empty, when FOR UPDATE has no row to lock.
+        conn.execute("select pg_advisory_xact_lock(hashtext('vending.slot_assignment'))")
+        old = conn.execute("select team, device_id, slots, last_checked_at from slot_assignment"
+                           " where id = 1 for update").fetchone()
         # The time is read once the row is ours: a call that waited on another
         # recorder's lock past the deadline is judged at the deadline's far side.
         at = now or datetime.now(timezone.utc)
         if old is None:
             conn.execute(
                 "insert into slot_assignment (team, device_id, slots, first_read_at, last_checked_at, response)"
-                " values (%s, %s, %s, coalesce(%s, now()), coalesce(%s, now()), %s)",
-                (new.team, new.device_id, list(new.slots), now, now, Jsonb(answer)))
+                " values (%s, %s, %s, %s, %s, %s)",
+                (new.team, new.device_id, list(new.slots), at, at, Jsonb(answer)))
             outcome = "recorded"
         else:
             before = Assignment(old[0], old[1], tuple(old[2]))
             if (before.device_id, set(before.slots)) != (new.device_id, set(new.slots)):
-                if at >= lock:
+                # Locked once a check at or after the start has confirmed an assignment.
+                if at >= lock and old[3] is not None and old[3] >= lock:
                     raise BadAssignment(
                         f"the inventory server now gives a different assignment, but ours locked at "
                         f"{lock.isoformat()} ({LOCK_SETTING}). Stored: {_describe(before)}. Now: {_describe(new)}. "
                         "Nothing was changed; ask the instructors which is right before anyone acts on it")
                 # first_read_at becomes when this assignment was first read; the log keeps the old one.
                 conn.execute("update slot_assignment set team = %s, device_id = %s, slots = %s, response = %s,"
-                             " first_read_at = coalesce(%s, now()), last_checked_at = coalesce(%s, now())"
+                             " first_read_at = %s, last_checked_at = %s"
                              " where id = 1",
-                             (new.team, new.device_id, list(new.slots), Jsonb(answer), now, now))
+                             (new.team, new.device_id, list(new.slots), Jsonb(answer), at, at))
                 outcome = "changed"
-                note = f" (was {_describe(before)}; locks at {lock.isoformat()})"
+                note = (f" (was {_describe(before)}; the first check since the start at {lock.isoformat()}, "
+                        "so this is the assignment from now on)" if at >= lock
+                        else f" (was {_describe(before)}; locks at {lock.isoformat()})")
             elif before.team == new.team:
-                conn.execute("update slot_assignment set last_checked_at = coalesce(%s, now()) where id = 1", (now,))
+                conn.execute("update slot_assignment set last_checked_at = %s where id = 1", (at,))
                 outcome = "unchanged"
             else:
-                conn.execute("update slot_assignment set team = %s, response = %s, last_checked_at = coalesce(%s, now())"
-                             " where id = 1", (new.team, Jsonb(answer), now))
+                conn.execute("update slot_assignment set team = %s, response = %s, last_checked_at = %s"
+                             " where id = 1", (new.team, Jsonb(answer), at))
                 outcome = "team renamed"
                 note = f" (team {before.team} -> {new.team})"
         conn.execute("insert into action_log (kind, tool, arguments, outcome, detail) values ('write', %s, %s, 'done', %s)",

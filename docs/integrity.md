@@ -50,7 +50,10 @@ repo root points here.
   `tests/test_server.py::test_tool_list_is_pinned` pins the MCP server's tool names, so
   adding a tool (a web fetcher, say) is a deliberate change that shows up in review.
 - **Our stock count reads only our machine's counters.** `vending/stock.py` reads poll
-  counters only from `DEVICE_ID`, and only for the slots our own receipts name.
+  counters only from `DEVICE_ID`, and only for selections in the current server assignment
+  that our own receipts name. A historical receipt does not authorize reads after reassignment.
+- **Count estimates use the same assignment.** Both the count rows and the counter query filter
+  selections in SQL. Dashboard response filtering is an additional display check.
 - **The fall analysis stops at the start.** `analysis/export_sales.py --fall-all` writes
   per-selection rows for all 40 selections, but only from polls before 3 Dec 2026 00:00
   Eastern (`analysis/slots_config.py`, `START`). `check_before_start` refuses any row of the
