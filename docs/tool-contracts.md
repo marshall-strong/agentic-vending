@@ -143,7 +143,9 @@ should do next.
   - No `start` and the ledger not opened: `success: false`, naming the command.
   - `end` before `start`: `success: false`.
   - Units sold that no receipt can cost: `cost_of_sales_complete: false` and a note saying how
-    many. Cost of sales is never "unknown" as a whole.
+    many. Cost of sales is never "unknown" as a whole. Units sold across a product change the
+    counters can't split (#112) count as costed, at the new product's average cost, with a note
+    that it may be the wrong product's.
   - Stock whose cost is unknown: `inventory_complete: false` and a note.
 - **Owner**: Marshall Strong (issue #23, PR #35).
 

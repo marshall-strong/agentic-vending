@@ -22,8 +22,10 @@ turns receipts into stock movements and replays them in time order:
   reading that goes down means).
 - a poll can't tell when a worker swapped a slot's product (#97), so a window
   between two polls that spans the swap holds units of both. The cents
-  counter and the price at each end split them; units it can't split are
-  booked with no cost and a warning, never at the new product's cost.
+  counter and the price at each end split them. Units it can't split keep
+  the cost taken from the slot (`unattributed_cost_cents`), which is the new
+  product's average cost and may be the wrong product's; the ledger counts it
+  in cost of sales and says so in a note, so profit isn't overstated.
 
 A slot's count starts again whenever its product changes, so `loaded` and
 `sold` are since the last change, and on hand is loaded - sold - lost.
@@ -190,7 +192,8 @@ def sales_from_counters(rows: list[tuple]) -> list[Movement]:
     Each sale carries its window, the cents rise over it and the price at both
     ends, so `weighted_average` can split a window that spans a product change.
     Rows of just `(selection, polled_at, lifetime_units)` still work; a window
-    that spans a change then can't be split, and its sales get no cost.
+    that spans a change then can't be split, and its sales keep the new
+    product's average cost as `unattributed_cost_cents`.
     """
     by_selection: dict[str, list[tuple[datetime, int]]] = {}
     cents_by_selection: dict[str, list[tuple[datetime, int]]] = {}
@@ -230,7 +233,8 @@ def _old_units(m: Movement, change: datetime) -> int | None:
     old price (#112).
     """
     a, b = m.price_before, m.price_after
-    if a is not None and a == b and m.price_prior is not None and m.price_prior != a             and m.since is not None and change - m.since <= _VISIT_MAX:
+    if (a is not None and a == b and m.price_prior is not None and m.price_prior != a
+            and m.since is not None and change - m.since <= _VISIT_MAX):
         return 0
     if a is None or b is None or m.cents is None or a == b:
         return None
@@ -249,7 +253,8 @@ def _split_at_changes(movements: list[Movement]) -> list[Movement]:
     so they come out of the old count instead of being written off as
     shrinkage, but they keep the window's poll as `booked_at`. A window the
     counters can't split, or one with two changes in it, is left whole, and
-    `weighted_average` books it with no cost. Splitting twice changes nothing.
+    `weighted_average` costs it at the new product's average, kept as
+    `unattributed_cost_cents`. Splitting twice changes nothing.
 
     The change is the receipt's `resolved_at`, the end of the visit. A poll
     that lands during a visit, after the worker set the new price, starts a

@@ -373,10 +373,15 @@ def test_an_unsplit_swap_window_stays_in_cost_of_sales_and_says_why(conn):
     store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
     store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25700)})
     p = ledger.pnl(conn, OPENED, NOW)
-    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 0, 300)
+    # Their cost is in cost of sales, so they count as costed: the P&L page and get_pnl show a
+    # known figure instead of "unknown", and the note says the product may be wrong.
+    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 2, 300)
+    assert p.cost_of_sales_complete
     assert any("can't split" in n and "may be the wrong product's" in n for n in p.notes)
     assert not any("have no known cost" in n for n in p.notes)
-    assert sum(w.cost_of_sales_cents for w in ledger.pnl_by_week(conn, OPENED, NOW)) == 300
+    weeks = ledger.pnl_by_week(conn, OPENED, NOW)
+    assert sum(w.cost_of_sales_cents for w in weeks) == 300
+    assert all(w.cost_of_sales_complete for w in weeks)
 
 
 def test_purchases_and_the_stock_they_bring_go_by_the_same_clock(conn):
