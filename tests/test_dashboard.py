@@ -702,3 +702,196 @@ def test_a_stock_warning_keeps_its_slot_through_copies():
     w = StockWarning("slot 16: x", "16")
     for again in (copy.copy(w), copy.deepcopy(w), pickle.loads(pickle.dumps(w))):
         assert again == "slot 16: x" and again.slot == "16"
+
+
+# --- The machine close-up (vending.machine_art) ------------------------------------------------------
+
+def catalog(conn, *rows):
+    """Catalog products as the sync stores them: (sku, name, line, flavor, size)."""
+    for sku, name, line, flavor, size in rows:
+        conn.execute("insert into catalog_products (sku, name, line, flavor, size, last_response)"
+                     " values (%s, %s, %s, %s, %s, '{}')", (sku, name, line, flavor, size))
+
+
+def lane_html(page: str, slot: str) -> str:
+    """One lane's card, from its opening tag to the next lane's."""
+    start = page.index(f'id="lane-{slot}"')
+    end = page.find("<article", start)
+    return page[start:end if end != -1 else len(page)]
+
+
+def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json(conn, page_conn):
+    # 12 isn't ours (ours are columns 5 to 8): a receipt, a catalog row, a count, a poll and a plan entry name it.
+    catalog(conn, ("ZZ-RIVAL-SKU", "Zebra Fizz Rival", "Zebra Fizz", "Mango", "16 oz glass bottle"),
+            ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
+    fulfilled(conn, "pr-12", "12", "ZZ-RIVAL-SKU", units_loaded=6, paid="5.55", at=MONDAY - timedelta(days=3))
+    fulfilled(conn, "pr-15", "15", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=2)).isoformat(), {"12": (987, 4321), "15": (250, 10)})
+    from vending import slot_counts
+    slot_counts.record(conn, slot_counts.parse({
+        "count_id": "c1", "counted_at": (MONDAY - timedelta(hours=1)).isoformat(), "source": "photo",
+        "device_id": "vmc1", "selections": [{"selection": "12", "product": "Quokka Cola Secret", "units": 7,
+                                             "price_on_tag": "8.76"}]}), "kevin")
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "12", "product": "ZZ-RIVAL-SKU", "fill_to": 9},
+                                                        {"slot": "15", "fill_to": 7}))
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    page, state = dashboard.render(snap), dashboard.to_json(snap)
+    assert snap["products"]["ok"] and list(snap["products"]["data"]["catalog"]) == ["COKE-20OZ"]
+    # (The request's own total, $5.55, stays in Requests: that is our money, not a lane.)
+    for leak in ("ZZ-RIVAL", "Zebra", "Mango", "Quokka", "9.87", "8.76", "4321"):
+        assert leak not in page and leak not in state, leak
+    card = lane_html(page, "12")
+    assert 'class="ma-lane ma-notours"' in page and "Not ours" in card and "<svg" not in card
+    assert "+2 back Friday" in lane_html(page, "15")        # ours is drawn: fill 7 less 5 on hand
+
+
+def test_a_selection_reassigned_away_stops_being_drawn(conn, page_conn):
+    catalog(conn, ("COKE-20OZ", "Coca-Cola Twenty", "Coca-Cola", None, "20 oz bottle"))
+    fulfilled(conn, "pr-15", "15", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
+    before = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
+    assert "Coca-Cola Twenty" in lane_html(before, "15")
+    conn.execute("update slot_assignment set slots = %s", ([s for s in EVEN],))   # 15 is no longer ours
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    after, state = dashboard.render(snap), dashboard.to_json(snap)
+    assert '<article class="ma-lane ma-notours" id="lane-15"' in after
+    assert "Coca-Cola Twenty" not in after and "COKE-20OZ" not in state
+
+
+def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn):
+    catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"),
+            ("SHAKE-11CTN", "Protein shake", "Premier Protein", "Chocolate", "11 oz carton"),
+            ("CAN-12", "Plain can", "Plain", None, "12 oz can"))
+    week = MONDAY - timedelta(days=3)
+    fulfilled(conn, "a", "15", "COKE-20OZ", units_loaded=5, paid="6", at=week)    # 5 of 7, fill 7: +2
+    fulfilled(conn, "b", "16", "SHAKE-11CTN", units_loaded=2, paid="6", at=week)  # carton: no capacity
+    fulfilled(conn, "c", "17", "CAN-12", units_loaded=6, paid="6", at=week)       # fill 4 below 6: nothing to add
+    fulfilled(conn, "d", "18", "CAN-12", units_loaded=3, paid="6", at=week)       # not in the plan
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "submitted", plan=plan(
+        {"slot": "15", "fill_to": 7}, {"slot": "16", "fill_to": 5}, {"slot": "17", "fill_to": 4},
+        {"slot": "25", "product": "CAN-12", "fill_to": 8}))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
+    coke, shake, can, out, unknown = (lane_html(page, s) for s in ("15", "16", "17", "18", "25"))
+    assert "<b>5</b> of 7" in coke and "+2 back Friday" in coke and "+2 added" in coke
+    assert coke.count('class="ma-ghost ma-go"') == 2 and coke.count('class="ma-fill"') == 2
+    # No capacity: no empty slots beyond what the plan fills, and it says so.
+    assert "capacity not counted yet" in shake and "+3 back Friday" in shake
+    assert shake.count("ma-ghost") == 3 and "<b>2</b> on hand" in shake
+    assert "plan 4, nothing to add" in can and "+" not in can.split("ma-chips")[1].split("</p>")[0]
+    assert "not in plan" in out
+    # 25 holds no record: a product the plan puts in, never a made-up count before it.
+    assert "<b>?</b> no record yet" in unknown and "new product Friday" in unknown
+    # A lane with a product but no count says ? and +? (photo count of a product with no units).
+    view = {"15": {"now": {"product": "COKE-20OZ", "units": None, "price": "2.50", "source": "receipt",
+                           "counted_at": None},
+                   "next": {"in_plan": True, "product": "COKE-20OZ", "units": 7, "price": "2.50", "old_price": None,
+                            "pulled": False, "fill_to": 7}, "change": None, "fill_to": 7}}
+    products = {"catalog": {"COKE-20OZ": {"name": "Coke", "line": "Coca-Cola", "flavor": None,
+                                          "size": "20 oz bottle"}}, "overrides": {}}
+    html = dashboard.machine_art.closeup_html(view, products, True)
+    assert "<b>?</b> of 7" in html and "+? back Friday" in html and "filled to 7" in html
+    assert "ma-unk" in html and "units unknown" in html
+
+
+def test_a_swap_and_a_price_change_on_friday(conn, page_conn):
+    catalog(conn, ("VW-20", "vitaminwater", "vitaminwater", "dark", "20 oz bottle"),
+            ("TOPO-16G", "Topo Chico", "Topo Chico", None, "16 oz glass bottle"),
+            ("BUB-12", "bubly", "bubly", "Strawberry", "12 oz can"),
+            ("RB-250", "Red Bull", "Red Bull", None, "250 ml can"))
+    week = MONDAY - timedelta(days=3)
+    fulfilled(conn, "a", "15", "VW-20", units_loaded=2, paid="6", at=week)
+    fulfilled(conn, "b", "16", "BUB-12", units_loaded=3, paid="6", at=week)
+    fulfilled(conn, "c", "17", "RB-250", units_loaded=6, paid="6", at=week)
+    store_poll(conn, "p", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (300, 1), "16": (100, 1), "17": (300, 1)})
+    first = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 6}, {"slot": "16", "fill_to": 8},
+                                                          {"slot": "17", "fill_to": 6}))
+    reason = "Topo Chico sold out twice; <b>2 old</b> units come out\nand 7 go in. " + "x" * 200
+    second = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, second, "submitted", plan=plan(
+        {"slot": "15", "product": "TOPO-16G", "fill_to": 7, "reason": reason},
+        {"slot": "16", "fill_to": 8, "sale_price": "1.25", "reason": "sold out 3 Fridays running"},
+        {"slot": "17", "fill_to": 0, "reason": "slow"}))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
+    swap, price, pulled = lane_html(page, "15"), lane_html(page, "16"), lane_html(page, "17")
+    # The swap draws the new package and look on Friday, chips "swap", and gives the reason on one line.
+    assert '<g class="v-now">' in swap and '<g class="v-next ma-swapin">' in swap
+    assert "#ma-p-bottle-20" in swap and "#ma-p-bottle-16-glass" in swap
+    assert '<span class="ma-chip info">swap</span>' in swap and "swap Friday" in swap
+    assert '<p class="ma-nm v-next">Topo Chico' in swap
+    why = swap.split('<p class="ma-why"')[1].split("</p>")[0]
+    assert "&lt;b&gt;2 old&lt;/b&gt;" in why and "<b>2 old</b>" not in why and "\n" not in why.split(">", 1)[1]
+    assert why.endswith("…") and len(why.split(">", 1)[1]) < 200
+    # The price change: Friday's tag strikes the old price, and the reason sits under it.
+    assert "<s>$1.00</s> &rarr; <b>$1.25</b> from Friday" in price and ">sold out 3 Fridays running</p>" in price
+    assert 'stroke="#d6232a"' in price and ">$1.25</text>" in price
+    assert '<span class="ma-chip bad">pulled</span>' in pulled and "<b>0</b> pulled" in pulled
+
+
+def test_the_close_up_survives_a_failed_products_read(conn, page_conn, monkeypatch):
+    catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
+    fulfilled(conn, "a", "15", "COKE-20OZ", units_loaded=5, paid="6", at=MONDAY - timedelta(days=3))
+
+    def broken(connection, skus):
+        connection.execute("select 1 / 0")     # any database error inside the read
+    monkeypatch.setattr(dashboard.machine_art, "read_products", broken)
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    assert snap["products"] == {"ok": False, "why": dashboard.PRODUCTS_FAILED}
+    assert snap["stock"]["ok"] and snap["catalog_requests"]["ok"]   # the transaction carried on
+    page = dashboard.render(snap)
+    lane = lane_html(page, "15")
+    assert "<b>5</b> on hand" in lane and "capacity not counted yet" in lane and "#ma-p-bottle-20" in lane
+    assert "Packages are approximate" in page and "division" not in page
+
+
+def test_a_missing_catalog_table_only_makes_the_close_up_approximate(conn, page_conn):
+    conn.execute("drop table sourcing_options")
+    conn.execute("drop table catalog_products")
+    fulfilled(conn, "a", "15", "MYSTERY", units_loaded=5, paid="6", at=MONDAY - timedelta(days=3))
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    assert snap["products"]["ok"] is False and snap["stock"]["ok"]
+    lane = lane_html(dashboard.render(snap), "15")
+    assert "<b>5</b> on hand" in lane and "#ma-p-can-12" in lane     # the generic can
+
+
+def test_the_close_up_escapes_everything_it_prints():
+    from vending import machine_art
+    view = {"55": {"now": {"product": "<img src=x>", "units": 3, "price": "<b>1</b>", "source": "photo",
+                           "counted_at": MONDAY},
+                   "next": {"in_plan": True, "product": "EVIL", "units": 4, "price": "1.00", "old_price": "<i>",
+                            "pulled": False, "fill_to": 4},
+                   "change": {"labels": ["swap"], "kind": "info", "reason": "<script>alert(1)</script>"},
+                   "fill_to": 4}}
+    products = {"catalog": {"EVIL": {"name": "\"><svg onload=x>", "line": "<l>", "flavor": "<f>",
+                                     "size": "12 oz can"}}, "overrides": {}}
+    html = machine_art.closeup_html(view, products, True)
+    for raw in ("<img src=x>", "<script>", "<b>1</b>", "<svg onload", "<l>", "<f>", "<i>"):
+        assert raw not in html, raw
+    assert "&lt;img src=x&gt;" in html and "&lt;script&gt;" in html and "named from a photo count" in html
+
+
+@pytest.mark.parametrize("size, key", [
+    ("12 oz can", "can-12"), ("12 fl oz sleek can", "can-12-sleek"), ("16 oz can", "can-16"),
+    ("250 ml can", "can-250ml"), ("8.4 oz can", "can-250ml"), ("7.5 oz can", "can-7.5"),
+    ("20 oz bottle", "bottle-20"), ("16 oz bottle", "bottle-16"), ("16 oz glass bottle", "bottle-16-glass"),
+    ("16.9 oz bottle", "bottle-16.9"), ("14 oz bottle", "bottle-14"), ("11 oz carton", "carton-11"),
+    ("1 L bottle", "bottle-16"), ("2 liter bottle", "bottle-16"), ("large", "can-12"), (None, "can-12"),
+])
+def test_a_package_shape_comes_from_the_catalog_size(size, key):
+    assert dashboard.machine_art.shape_for_size(size)[0] == key
+
+
+def test_a_product_look_falls_back_to_a_steady_hash():
+    from vending import machine_art
+    assert machine_art.look_for("ANY", "Bubly", "Strawberry")["c1"] == "#94c93a"     # by line and flavor
+    assert machine_art.look_for("ANY", "bubly", "Mango")["label"] == "bubly"          # by line
+    new = machine_art.look_for("NEW-SKU-1", "Brand New Line", None)
+    assert new == machine_art.look_for("NEW-SKU-1", "Brand New Line", None) != machine_art.look_for("NEW-SKU-2")
+    assert new["label"] == "Brand"
+
+
+@pytest.mark.parametrize("value, text", [("2.5", "$2.50"), (Decimal("1.25"), "$1.25"), ("3", "$3.00"),
+                                         ("1.255", "$1.255"), (None, None)])
+def test_tag_prices_are_exact_text(value, text):
+    assert dashboard.machine_art.money(value) == text
