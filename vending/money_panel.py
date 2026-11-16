@@ -88,7 +88,15 @@ def committed(conn: psycopg.Connection) -> dict:
 
     A submission left `sending` or `unknown` (sent, no usable answer: it may exist at the bridge)
     counts too, at its worst case, since the worker may fill it without our knowing its ID.
+    `max` is None when any purchase line has no usable price: the most is then unknown, never
+    the sum of the lines that do have one.
     """
+    pending, _ = _committed(conn)
+    return pending
+
+
+def _committed(conn: psycopg.Connection) -> tuple[dict, Fraction | None]:
+    """`committed`, and its maximum as exact cents (None when unknown)."""
     fee = config.get_value(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS)
     if not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
         fee = ledger.DEFAULT_MIDWEEK_FEE_CENTS
@@ -107,8 +115,9 @@ def committed(conn: psycopg.Connection) -> dict:
         unpriced += missing
         if off_cycle:
             total += visit_fee if isinstance(visit_fee, int) and not isinstance(visit_fee, bool) else fee
+    most = None if unpriced else total
     return {"requests": len(rows) + len(unsettled), "unsettled": len(unsettled),
-            "max": ledger.money(total), "unpriced_lines": unpriced}
+            "max": ledger.money(most), "unpriced_lines": unpriced}, most
 
 
 def early_receipts(conn: psycopg.Connection, opening_at: datetime) -> tuple[int, Fraction]:
@@ -129,7 +138,7 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
     `opened` is False before the opening entry, and while the opening entry is dated after `now`
     (then `opens_at` says when).
     """
-    pending = committed(conn)
+    pending, most = _committed(conn)
     start = ledger.opening(conn)
     if start is not None and start.at > now:
         return {"opened": False, "opens_at": start.at, "committed": pending}
@@ -142,7 +151,7 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
     if bal is None or p is None:
         return {"opened": False, "committed": pending}
     m = ledger.money
-    after_pending = bal.spendable_cents - (_cents(pending["max"]) or 0)
+    after_pending = None if most is None else bal.spendable_cents - most
     early_lines, early_cents = early_receipts(conn, bal.opening_at)
     early_notes = [] if not early_lines else [
         f"Stock on hand and cost of sales count every receipt, including {early_lines} receipt "
@@ -157,6 +166,9 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
         "receipts": m(bal.receipts_cents), "receipt_lines": bal.receipt_lines,
         "visit_fees": m(bal.visit_fees_cents), "visits": bal.visits,
         "tokens": m(bal.token_spend_cents), "tax_remitted": m(bal.tax_remitted_cents),
+        # Drinks, visits and model together, summed exact and rounded once: the three rounded parts can
+        # add up to a cent less or more.
+        "spent": m(bal.receipts_cents + bal.visit_fees_cents + bal.token_spend_cents),
         "adjustments": m(bal.adjustments_cents),
         "balance": m(bal.balance_cents), "tax_owed": m(bal.tax_owed_cents), "spendable": m(bal.spendable_cents),
         "spendable_after_pending": m(after_pending),
@@ -201,17 +213,23 @@ def attention(data: dict) -> list[tuple[str, str]]:
                                 "`python -m vending.ledger open --amount 600.00 --by NAME`."))
         return out
     spendable = Decimal(data["spendable"])
-    after = Decimal(data["spendable_after_pending"])
+    after = None if data["spendable_after_pending"] is None else Decimal(data["spendable_after_pending"])
+    if pending["unpriced_lines"]:
+        n = pending["unpriced_lines"]
+        out.append(("warn", f"{n} pending purchase line{' has' if n == 1 else 's have'} no price we can read, so "
+                            "the most the pending requests can cost is unknown and we can't say whether we can pay "
+                            "for them. Check each pending request's `max_price_per_pack` and `packs` in "
+                            "`purchase_requests`."))
     if pending.get("unsettled"):
         out.append(("warn", f"{pending['unsettled']} purchase submission(s) were sent with no usable answer, so "
                             "they may exist at the bridge; they are counted as committed. Check the bridge, then run "
                             "`python -m vending.submissions resolve`."))
     if spendable < 0:
         out.append(("bad", f"Spendable is {_plain(data['spendable'])}: more has gone out than we have."))
-    elif after < 0:
+    elif after is not None and after < 0:
         out.append(("bad", f"Pending purchase requests could cost up to {_plain(pending['max'])}, more than the "
                            f"{_plain(data['spendable'])} we can spend."))
-    elif after * 100 < FLOOR_CENTS and pending["requests"]:
+    elif after is not None and after * 100 < FLOOR_CENTS and pending["requests"]:
         out.append(("warn", f"If the pending requests cost their most ({_plain(pending['max'])}), "
                             f"{_plain(data['spendable_after_pending'])} stays spendable, under the proposed $53.00 "
                             "floor (#113)."))
@@ -292,7 +310,8 @@ def html(panel: dict) -> str:
                 f'{"" if pending["requests"] == 1 else "s"}</b> could cost up to {_usd(pending["max"])}; the ledger '
                 'counts a purchase only once it is fulfilled.'
                 + (f' {pending["unsettled"]} of them sent with no usable answer.' if pending.get("unsettled") else "")
-                + (f' {pending["unpriced_lines"]} line(s) had no price to count.' if pending["unpriced_lines"] else "")
+                + (f' {pending["unpriced_lines"]} line(s) have no price we can read, so the most is unknown.'
+                   if pending["unpriced_lines"] else "")
                 + "</p>")
     split = "".join(f"<li>{_e(label)} <b>{_usd(ledger.money(c))}</b></li>" for label, c in PROPOSED_SPLIT)
     plan = (f'<details class="plan113"><summary>The proposed split of the $600 (<a href="{PLAN_ISSUE}">#113</a>, '

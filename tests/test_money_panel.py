@@ -104,7 +104,8 @@ def test_a_line_it_cant_price_is_counted_as_unpriced_not_guessed(conn, page_conn
     pending(conn, "pr-7", body(line(-2, "10.00"), line(1, "-5.00"), line(1, "ten"),
                                {"source": "back_stock", "slot": "16", "load": {}}))
     got = dashboard.snapshot(page_conn, NOW)["money"]["data"]["committed"]
-    assert got == {"requests": 1, "unsettled": 0, "max": "0.00", "unpriced_lines": 3}    # back stock costs nothing
+    # Back stock costs nothing; three unpriced lines make the most unknown, not $0.00.
+    assert got == {"requests": 1, "unsettled": 0, "max": None, "unpriced_lines": 3}
 
 
 def test_a_json_number_price_is_read_exactly(conn, page_conn):
@@ -246,3 +247,64 @@ def test_a_missing_ledger_table_blanks_only_the_money_panel(conn, page_conn):
     assert "Not available" in page and 'id="vm"' in page
     # The Spent tile can't tell the period without the ledger, so it doesn't claim one.
     assert "Spent so far" in page and "Spent before the opening" not in page
+
+
+# --- Review fixes ----------------------------------------------------------------------------------
+
+def test_a_pending_line_it_cant_price_makes_the_most_it_can_cost_unknown(conn, page_conn):
+    # One priced line ($40.00) and one with no usable price: the most the request can cost is
+    # unknown, not $40.00 and not $0.00, so what stays spendable is unknown too, and it is flagged.
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
+    pending(conn, "pr-u", body(line(1, "40.00"), line(1, "ten")))
+    snap = dashboard.snapshot(page_conn, NOW)
+    data = snap["money"]["data"]
+    assert data["committed"] == {"requests": 1, "unsettled": 0, "max": None, "unpriced_lines": 1}
+    assert data["spendable_after_pending"] is None and data["spendable"] == "600.00"
+    assert any(a["level"] == "warn" and "1 pending purchase line has no price" in a["text"]
+               and "can't say whether we can pay" in a["text"] for a in snap["attention"])
+    page = dashboard.render(snap)
+    assert "could cost up to $0.00" not in page and "could cost up to $40.00" not in page
+    assert 'could cost up to <span class="dim">unknown</span>' in page
+    json_text = dashboard.to_json(snap)
+    assert '"max": "0.00"' not in json_text
+
+
+def test_an_unpriced_line_before_the_opening_is_still_unknown(conn, page_conn):
+    pending(conn, "pr-u0", body(line(1, "ten")))
+    data = dashboard.snapshot(page_conn, NOW)["money"]["data"]
+    assert data["opened"] is False and data["committed"]["max"] is None
+
+
+def test_the_spent_tile_rounds_the_exact_total_once(conn, page_conn):
+    # $0.0049 of drinks and $0.0049 of model spend: each rounds to $0.00, the exact $0.0098 to $0.01.
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
+    fulfilled(conn, "pr-s", "15", "RB", units_loaded=1, paid="0.0049", at=OPENED + timedelta(days=1))
+    ledger.record_tokens(conn, "0.0049", "claude-opus-5-5", 1, 1, "msg_s", at=OPENED + timedelta(days=2))
+    snap = dashboard.snapshot(page_conn, NOW)
+    tile = dashboard._tiles(snap).split("Spent since the opening")[1]
+    assert '<span class="big">$0.01</span>' in tile
+    assert snap["money"]["data"]["spent"] == "0.01"
+
+
+def test_a_ledger_read_over_the_statement_timeout_blanks_only_the_money_panel(conn, page_conn, monkeypatch):
+    # The public page's connection has a statement timeout (`pages.STATEMENT_TIMEOUT_MS`). A slow ledger
+    # read is cancelled; that must cost the money panel, not the whole page.
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
+    real = ledger.balance
+
+    def slow(c, *args, **kwargs):
+        c.execute("select pg_sleep(2)")
+        return real(c, *args, **kwargs)
+
+    monkeypatch.setattr(ledger, "balance", slow)
+    page_conn.execute("set statement_timeout = 200")
+    try:
+        snap = dashboard.snapshot(page_conn, NOW)
+    finally:
+        page_conn.execute("reset statement_timeout")
+    panels = {k: v for k, v in snap.items() if isinstance(v, dict) and "ok" in v}
+    assert [k for k, v in panels.items() if not v["ok"]] == ["money"]
+    assert "took too long" in snap["money"]["why"] and "migrate" not in snap["money"]["why"]
+    assert any(a["text"].startswith("Money isn't available: ") for a in snap["attention"])
+    page = dashboard.render(snap)
+    assert "Not available: " in page and 'id="vm"' in page

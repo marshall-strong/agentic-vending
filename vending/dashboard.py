@@ -118,7 +118,8 @@ def _guarded(conn: psycopg.Connection, read: Callable[[], Any]) -> Any:
 
 
 class Unavailable(Exception):
-    """An optional panel's read failed; the rest of the page carries on without it."""
+    """An optional panel's read failed (a query over the statement timeout, say); the rest of the page
+    carries on without it. Its text is ours, never the database's."""
 
 
 # Milliseconds an optional panel may wait, on a statement or a lock, before it gives up.
@@ -401,6 +402,18 @@ def _spend(conn: psycopg.Connection, now: datetime) -> dict:
     return {"model": model, "drinks": drinks}
 
 
+def _money_panel(conn: psycopg.Connection, now: datetime) -> dict:
+    """The money panel's figures. The ledger replays every poll and receipt, so it is the read most
+    likely to pass the public page's statement timeout. That cancels only its own savepoint, so it
+    costs this panel, not the page. Other panels don't catch it yet: a cancelled read there still
+    fails the whole snapshot."""
+    try:
+        return _guarded(conn, lambda: money_panel.read(conn, now))
+    except psycopg.errors.QueryCanceled as error:
+        raise Unavailable("reading the ledger took too long and was stopped; the rest of the page is "
+                          "current, and the next refresh tries again") from error
+
+
 def _recent_calls(conn: psycopg.Connection, now: datetime) -> dict:
     rows = _rows(conn, "select kind, outcome, count(*) as n from action_log where at > %s group by kind, outcome",
                  (now - RECENT,))
@@ -527,7 +540,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
                    {"ok": True, "data": {}}),
         "spend": _panel(lambda: _spend(conn, now)),
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
-        "money": _panel(lambda: _guarded(conn, lambda: money_panel.read(conn, now))),
+        "money": _panel(lambda: _money_panel(conn, now)),
         "purchase_requests": _panel(lambda: _rows(conn, """
             select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,
                    count(l.line_no) as lines,
@@ -1072,8 +1085,8 @@ def _tiles(snap: dict) -> str:
     ledgered = money["data"] if money and money["ok"] and money["data"].get("opened") else None
     if ledgered:
         # Once the ledger is open, one source for money on the whole page: the ledger's.
-        total = sum(Decimal(ledgered[k]) for k in ("receipts", "visit_fees", "tokens"))
-        tiles.append(("Spent since the opening", f'<span class="big">{_money(total)}</span>',
+        # The total is summed exact by the panel and rounded once, not added up from the rounded parts.
+        tiles.append(("Spent since the opening", f'<span class="big">{_money(Decimal(ledgered["spent"]))}</span>',
                       f'drinks {_money(Decimal(ledgered["receipts"]))}, visits {_money(Decimal(ledgered["visit_fees"]))}, '
                       f'model {_money(Decimal(ledgered["tokens"]))} &middot; from the ledger'))
     elif spend["ok"]:
