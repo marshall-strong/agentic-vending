@@ -113,6 +113,7 @@ from tests.test_sync_requests import BODY, fulfilled, later, receipt  # noqa: E4
 from vending import ledger, stock  # noqa: E402
 from vending.purchase_requests import record as record_request, store  # noqa: E402
 from vending.tools.account_balance import get_account_balance  # noqa: E402
+from vending.tools.pnl import get_pnl  # noqa: E402
 
 OPENED = datetime(2026, 11, 1, 0, 0, tzinfo=timezone.utc)
 NOW = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
@@ -281,6 +282,26 @@ def test_receipts_before_the_opening_are_test_purchases_and_not_our_stock(conn):
     assert (p.receipts_cents, p.units_sold, p.units_costed) == (1237, 5, 5)
     assert p.cost_of_sales_cents == 5 * UNIT_COST
     assert p.inventory_cents == (8 - 5 + 3) * UNIT_COST                 # only the real purchase is on hand
+
+
+def test_a_pnl_range_spanning_the_opening_leaves_out_test_purchases_and_their_fees(conn):
+    """A range that starts before the opening applies the same boundary to purchases and visit fees as
+    stock does to inventory, cost of sales and shrinkage: a test purchase and its fee are not ours."""
+    early = datetime(2026, 10, 20, tzinfo=timezone.utc)
+    # A $12.37 off-cycle test purchase on 25 Oct with a $25 visit fee, and a later loss from it.
+    deliver(conn, "test", off_cycle=True, visit_fee_cents=2500, resolved_at="2026-10-25T16:00:00Z",
+            losses=[later(2, at="2026-11-03T10:00:00Z")])
+    p = ledger.pnl(conn, early, NOW)                                    # no opening yet: it all counts
+    assert (p.receipts_cents, p.visits, p.visit_fees_cents, p.shrinkage_units) == (1237, 1, 2500, 2)
+    open_ledger(conn)                                                   # 1 Nov
+    p = ledger.pnl(conn, early, NOW)
+    assert (p.receipts_cents, p.visits, p.visit_fees_cents) == (0, 0, 0)
+    assert (p.inventory_cents, p.cost_of_sales_cents, p.shrinkage_units, p.shrinkage_cents) == (None, 0, 0, 0)
+    assert p.net_cents == 0
+    assert [(w.visits, w.visit_fees_cents) for w in ledger.pnl_by_week(conn, early, NOW) if w.visits] == []
+    reply = get_pnl(conn, date(2026, 10, 20), date(2026, 11, 9))
+    assert (reply.purchases, reply.visit_fees, reply.visits, reply.shrinkage, reply.net) == (
+        "0.00", "0.00", 0, "0.00", "0.00")
 
 
 def test_pnl_costs_sales_at_weighted_average_and_values_what_is_left(conn):

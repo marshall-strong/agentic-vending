@@ -26,7 +26,9 @@ A slot's count starts again whenever its product changes, so `loaded` and
 
 **Receipts before the ledger's opening don't count once it exists.** Purchases
 made before the opening are tests: they never came out of the $600 (#104), so
-they are not our stock and cost nothing in the competition. Until the opening
+they are not our stock and cost nothing in the competition. `vending.ledger`
+leaves their purchases and visit fees out at the same boundary,
+`receipts_count_from`. Until the opening
 is recorded every receipt counts, so the planner and the tools can be tested
 on test purchases. Sales counters are read as before; a sale from a slot with
 no counted receipt is sold but not costed.
@@ -351,14 +353,27 @@ def opening_at(conn: psycopg.Connection) -> datetime | None:
     return None if row is None else row[0]
 
 
+def receipts_count_from(conn: psycopg.Connection, start: datetime | None = None) -> datetime | None:
+    """The earliest moment a receipt (and the visit that brought it) counts: the later of `start` and
+    the ledger's opening, or `start` (None: no limit) while there is no opening.
+
+    The one boundary for stock here and for purchases and visit fees in `vending.ledger`, so a test
+    purchase can't be left out of one figure and kept in another. See the module docstring.
+    """
+    opened = opening_at(conn)
+    if opened is None:
+        return start
+    return opened if start is None else max(start, opened)
+
+
 def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll.
 
     Once the ledger has an opening entry, receipt lines resolved before it (test purchases) and their
     later losses are left out: see the module docstring.
     """
-    opened = opening_at(conn)
-    since, args = (" and l.resolved_at >= %s", (opened,)) if opened is not None else ("", ())
+    since_at = receipts_count_from(conn)
+    since, args = (" and l.resolved_at >= %s", (since_at,)) if since_at is not None else ("", ())
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + since, args)]
