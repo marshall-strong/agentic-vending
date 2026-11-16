@@ -53,7 +53,8 @@ def assert_cash_is_the_balance(conn, days) -> None:
     for d in days:
         if d.counted:
             end = window(d.date, d.date)[1]
-            assert d.cash_balance_cents == ledger.balance(conn, end).balance_cents, d.date
+            b = ledger.balance(conn, end)
+            assert (d.cash_balance_cents, d.tax_owed_cents) == (b.balance_cents, b.tax_owed_cents), d.date
 
 
 # --- Days and weeks against the ledger -------------------------------------------------------
@@ -86,7 +87,9 @@ def test_a_restock_a_sale_and_spend_add_up_to_pnl_by_day_and_by_week(conn):
     # Two calls are one event for the day, with no single reference.
     assert [(e.detail, e.reference, e.amount_cents) for e in spend.events] == [("2 model calls", None, 20)]
     assert (spend.capital_cents, days[4].tax_remitted_cents) == (10000, 50)
-    assert sale.net_worth_cents == sale.cash_balance_cents + sale.inventory_cents
+    # Net worth leaves out the sales tax still owed: it was never ours.
+    assert sale.tax_owed_cents == ledger.balance(conn, window(sale.date, sale.date)[1]).tax_owed_cents > 0
+    assert sale.net_worth_cents == sale.cash_balance_cents - sale.tax_owed_cents + sale.inventory_cents
 
     # Every line adds up to the ledger's P&L over the window, and so does every single day,
     # except tax: a day's tax is what it added to its week's rounded tax, not its own rounding.
@@ -332,6 +335,7 @@ def made(on: date, **lines) -> money_series.Day:
     """A whole, counted day with the given lines and zeros elsewhere."""
     blank = money_series._not_counted(on, "", AFTER)
     return replace(blank, counted_from=money_series._midnight(on), notes=(), cash_balance_cents=Fraction(0),
+                   tax_owed_cents=Fraction(0),
                    inventory_cents=Fraction(0), inventory_complete=True, **lines)
 
 

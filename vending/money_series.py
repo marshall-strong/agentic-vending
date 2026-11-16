@@ -7,17 +7,18 @@ One row per day of what `vending.ledger` counts: takings and the tax inside
 them, revenue, cost of sales, shrinkage, visit fees, token spend and
 adjustments, so gross profit and net; purchases, capital and tax remitted,
 which move cash without being profit or loss; and at the day's end the cash
-balance, inventory at cost and net worth. Each day also lists its events
+balance, the sales tax still owed in it, inventory at cost, and net worth (the
+balance less that tax, plus inventory at cost). Each day also lists its events
 (visits, receipt lines, model calls, observed price changes) for a chart to
 mark, and notes for whatever it couldn't count. `by_week` adds the days up into
 the ledger's Saturday-to-Friday weeks. This is the data under the money chart,
 the weekly report and the agent's briefing. It reads; it decides nothing.
 
 It is competition money only. Counting starts at the ledger's opening entry,
-as `ledger.balance` does: model calls before it are development spend (#104),
-and nothing built on this series may show them to the agent. Days before the
-opening, and every day while there is no opening, are rows of zeros with a
-note saying why, and no figure or note on them mentions what was spent.
+as `ledger.balance` does: model calls before it are development spend (#104)
+and are in no figure here (the agent may know what testing cost; it just never
+comes out of the $600). Days before the opening, and every day while there is
+no opening, are rows of zeros with a note saying why.
 
 Each line is booked to the Eastern day of the moment the ledger books it at: a
 sale to the poll that showed it, a purchase to its receipt line, a visit to its
@@ -60,6 +61,17 @@ always add up to the cent. `exact_cents` beside them has every money figure as
 an exact string, a whole number of cents or a fraction ("6185/11"), which
 `Fraction(text)` reads back, for anything that adds rows up. An unknown figure
 is null in both. Times are UTC, ISO 8601; dates are Eastern.
+
+Known limits, both the ledger's, so the series keeps agreeing with it until they are fixed there:
+
+- Sales in a window that starts after a counter misread are read from the
+  window's own baseline, as `ledger.pnl` reads them, so the misread can show as
+  a rise. From the opening (the default, and what the chart and the briefing
+  use) the series reads them as the balance does. The cash balance and tax
+  owed always count from the opening.
+- A receipt line with no `total_paid` whose units were all lost replays with
+  no shrinkage event in `vending.stock`, so its unknown cost doesn't mark net
+  unknown.
 
 The CLI never migrates: on a database that is behind it refuses and names
 `python -m vending.db migrate`, like the ledger's.
@@ -148,10 +160,15 @@ class _Lines:
 
     @property
     def net_worth_cents(self) -> Fraction | None:
-        """Cash plus inventory at cost; None unless both are known and every unit on hand has a cost."""
-        if self.cash_balance_cents is None or self.inventory_cents is None or not self.inventory_complete:
+        """Spendable cash plus inventory at cost; None unless both are known and every unit on hand has a cost.
+
+        Spendable is `ledger.Balance.spendable_cents`: the balance less the sales tax still owed. That
+        tax was never ours, so counting it would overstate what the business is worth.
+        """
+        if (self.cash_balance_cents is None or self.tax_owed_cents is None or self.inventory_cents is None
+                or not self.inventory_complete):
             return None
-        return self.cash_balance_cents + self.inventory_cents
+        return self.cash_balance_cents - self.tax_owed_cents + self.inventory_cents
 
 
 @dataclass(frozen=True)
@@ -176,6 +193,7 @@ class Day(_Lines):
     capital_cents: Fraction         # cash in, not profit
     tax_remitted_cents: Fraction    # cash out, not a cost: the tax was never revenue
     cash_balance_cents: Fraction | None     # `ledger.balance` at the day's end; None when not counted
+    tax_owed_cents: Fraction | None         # its sales tax set aside since the opening, less remitted
     inventory_cents: Fraction | None        # machine and closet at cost, at the day's end
     inventory_complete: bool
     events: tuple[Event, ...]
@@ -221,6 +239,7 @@ class Week(_Lines):
     capital_cents: Fraction
     tax_remitted_cents: Fraction
     cash_balance_cents: Fraction | None     # at the end of its last day in the series
+    tax_owed_cents: Fraction | None
     inventory_cents: Fraction | None
     inventory_complete: bool
     notes: tuple[str, ...]
@@ -292,6 +311,9 @@ class _Book:
             # (a misread just before the start reads as a rise after it from the window's own baseline).
             rises = ledger.rises_between(sales_rows, opened.at, until)[2]
         self.cash += [(r.at, Fraction(r.amount)) for r in rises]
+        # The tax still owed at a moment counts from the opening too, rounded per week as the balance does.
+        self.open_rises = sorted((r.at, r.amount) for r in rises)
+        self.remitted: list[tuple[datetime, Fraction]] = []
         self.poll_days = {_day(at) for at, _, _ in sales_rows}
         for r in ledger.rises_between(ledger._counter_rows(conn, "lifetime_units", until), since, until)[2]:
             self.units[_day(r.at)] += r.amount
@@ -300,6 +322,8 @@ class _Book:
         for e in ledger.entries(conn, opened.at, until):
             if e.kind != "opening":
                 self.cash.append((e.at, e.amount_cents))
+            if e.kind == "tax_remitted":
+                self.remitted.append((e.at, -e.amount_cents))
             if e.at >= first:
                 self.entries[_day(e.at), e.kind] += e.amount_cents
                 if e.kind == "tokens":
@@ -364,6 +388,16 @@ class _Book:
         """`ledger.balance(conn, moment).balance_cents`, from the cash movements already read."""
         n = bisect_right(self.cash_moments, moment)
         return self.opened.amount_cents + sum((cents for _, cents in self.cash[:n]), Fraction(0))
+
+    def tax_owed_at(self, moment: datetime) -> Fraction:
+        """`ledger.balance(conn, moment).tax_owed_cents`: tax set aside since the opening, less remitted."""
+        weeks: dict[date, int] = defaultdict(int)
+        for at, cents in self.open_rises:
+            if at > moment:
+                break
+            weeks[ledger.week_of(at.astimezone(EASTERN))] += cents
+        set_aside = sum(tax_cents(c, DEFAULT_TAX_PERCENT) for c in weeks.values())
+        return set_aside - sum((c for at, c in self.remitted if at <= moment), Fraction(0))
 
     def _visit_events(self, conn: psycopg.Connection) -> None:
         """Each fulfilled request, timed at its first receipt line as the ledger times a visit."""
@@ -432,14 +466,14 @@ class _Book:
             self.lost_units[d], self.lost_cost[d], d not in self.lost_unknown, self.visits[d], self.fees[d],
             -self.entries[d, "tokens"], self.entries[d, "adjustment"], self.purchases[d],
             self.entries[d, "capital"], -self.entries[d, "tax_remitted"],
-            self.cash_at(finish), inventory, inventory_complete,
+            self.cash_at(finish), self.tax_owed_at(finish), inventory, inventory_complete,
             tuple(sorted(self.events[d], key=lambda e: (e.at, e.kind, e.reference or ""))), tuple(notes))
 
 
 def _not_counted(d: date, why: str, now: datetime) -> Day:
     """A day outside the competition: zeros, no balances, no events, and the reason."""
     return Day(d, None, _midnight(d + timedelta(days=1)) <= now, 0, 0, 0, 0, Fraction(0), 0, Fraction(0), True,
-               0, 0, Fraction(0), Fraction(0), Fraction(0), Fraction(0), Fraction(0), None, None, False, (), (why,))
+               0, 0, Fraction(0), Fraction(0), Fraction(0), Fraction(0), Fraction(0), None, None, None, False, (), (why,))
 
 
 def _before_opening(opened: ledger.Entry) -> str:
@@ -507,7 +541,8 @@ def by_week(days: list[Day], opening_day: date | None) -> list[Week]:
             sums["cost_of_sales_cents"], sums["shrinkage_units"], sums["shrinkage_cents"],
             all(d.shrinkage_complete for d in group), sums["visits"], sums["visit_fees_cents"],
             sums["token_spend_cents"], sums["adjustments_cents"], sums["purchases_cents"], sums["capital_cents"],
-            sums["tax_remitted_cents"], last.cash_balance_cents, last.inventory_cents, last.inventory_complete,
+            sums["tax_remitted_cents"], last.cash_balance_cents, last.tax_owed_cents, last.inventory_cents,
+            last.inventory_complete,
             tuple(notes)))
     return out
 
@@ -534,7 +569,7 @@ def cumulative(rows: list[Day] | list[Week], field: str) -> list[Fraction | None
 
 MONEY = ("takings", "sales_tax", "revenue_ex_tax", "cost_of_sales", "gross_profit", "gross_profit_known",
          "shrinkage", "visit_fees", "token_spend", "adjustments", "net", "net_known", "purchases", "capital",
-         "tax_remitted", "cash_balance", "inventory", "net_worth")
+         "tax_remitted", "cash_balance", "tax_owed", "inventory", "net_worth")
 
 
 def as_json(row: Day | Week) -> dict:
