@@ -218,3 +218,40 @@ def test_the_cookie_lasts_the_stated_days():
     assert not gate.token_valid(value, now=1_000_000 + gate.DAYS * 86400 + 1)
 
 
+
+
+def test_guesses_sent_all_at_once_get_one_check_between_them(site, monkeypatch):
+    """Marshall's #136 review: a burst used to slip past the delay while the first check ran."""
+    monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        statuses = sorted(pool.map(lambda _: sign_in(site, "not it")[0], range(20)))
+    assert statuses.count(401) == 1 and statuses.count(429) == 19
+
+
+def test_a_right_password_or_a_busy_page_doesnt_use_up_the_turn(monkeypatch):
+    monkeypatch.setattr(gate, "PASSWORD_HASH", gate.make_hash(PASSWORD, n=2**10))
+    monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
+    monkeypatch.setattr(gate, "WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(gate, "_next_try", {})
+    assert gate.check(PASSWORD, "teammate") is True
+    assert gate.check(PASSWORD, "teammate") is True  # signing in again isn't held up
+    held = [gate._checking.acquire() for _ in range(gate.CHECKS_AT_ONCE)]
+    try:
+        with pytest.raises(gate.Busy):
+            gate.check(PASSWORD, "teammate")
+    finally:
+        for _ in held:
+            gate._checking.release()
+    assert gate.check(PASSWORD, "teammate") is True  # the busy page didn't count as a guess
+
+
+def test_a_full_list_drops_finished_delays_before_anyone_waiting(monkeypatch):
+    monkeypatch.setattr(gate, "PASSWORD_HASH", gate.make_hash(PASSWORD, n=2**10))
+    monkeypatch.setattr(gate, "MAX_CLIENTS", 3)
+    monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 30)
+    monkeypatch.setattr(gate, "_next_try", {"old": 0.0, "older": 0.0, "stranger": gate.time.monotonic() + 30})
+    assert gate.check("wrong", "new") is False
+    assert set(gate._next_try) == {"stranger", "new"}
+    with pytest.raises(gate.TooSoon):
+        gate.check(PASSWORD, "stranger")

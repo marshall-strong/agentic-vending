@@ -92,25 +92,42 @@ class TooSoon(Exception):
 
 
 def check(password: str, client: str = "") -> bool:
-    """Whether `password` is right. Raises TooSoon right after this client's wrong guess, and Busy
-    when every check slot stays taken. One client's wrong guesses slow only that client, so a
-    stranger guessing can't lock the team out."""
+    """Whether `password` is right. Raises TooSoon while this client's turn is taken, and Busy
+    when every check slot stays taken. A client's turn is claimed before its check starts, so
+    however many guesses it sends at once, it gets at most one check per `WRONG_DELAY_SECONDS`.
+    One client's guesses slow only that client, so a stranger guessing can't lock the team out."""
     now = time.monotonic()
+    turn = now + WRONG_DELAY_SECONDS
     with _wrong_lock:
         if _next_try.get(client, 0.0) > now:
             raise TooSoon
+        if len(_next_try) >= MAX_CLIENTS:
+            _forget_expired(now)
+        _next_try[client] = turn
     if not _checking.acquire(timeout=WAIT_SECONDS):
+        _give_back(client, turn)  # never checked, so this didn't use the client's turn
         raise Busy
     try:
         right = bool(password) and len(password) <= 256 and password_matches(password)
     finally:
         _checking.release()
-    if not right:
-        with _wrong_lock:
-            if len(_next_try) >= MAX_CLIENTS:
-                _next_try.clear()
-            _next_try[client] = time.monotonic() + WRONG_DELAY_SECONDS
+    if right:
+        _give_back(client, turn)
     return right
+
+
+def _forget_expired(now: float) -> None:
+    """Make room: drop clients whose delay is over, and only if that frees nothing, everyone."""
+    for key in [k for k, until in _next_try.items() if until <= now]:
+        del _next_try[key]
+    if len(_next_try) >= MAX_CLIENTS:
+        _next_try.clear()
+
+
+def _give_back(client: str, turn: float) -> None:
+    with _wrong_lock:
+        if _next_try.get(client) == turn:
+            del _next_try[client]
 
 
 def client_of(forwarded_for: str | None, peer: str) -> str:
