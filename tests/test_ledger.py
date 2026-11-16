@@ -473,6 +473,28 @@ def test_get_pnl_defaults_to_the_opening_day(db):  # noqa: F811
     assert reply["success"] and reply["start"].startswith("2026-11-01")
 
 
+def test_get_pnl_leaves_development_spend_out_of_net(db):  # noqa: F811
+    open_ledger(db)
+    ledger.record_tokens(db, "12.34", "m", 1, 1, "dev", at=OPENED - timedelta(hours=1))
+    ledger.record_tokens(db, "0.40", "m", 1, 1, "live", at=OPENED)
+    ledger.record_tokens(db, "0.60", "m", 1, 1, "live later", at=OPENED + timedelta(days=2))
+    ledger.record(db, "adjustment", 300, "early adjustment", "test", OPENED - timedelta(hours=2))
+    result = call("get_pnl", {"start": "2026-10-30", "end": "2026-11-09"}).structuredContent
+    assert (result["token_spend"], result["net"], result["adjustments"]) == ("1.00", "2.00", "3.00")
+    assert any(n.startswith("12.34 of model calls before the ledger's opening") for n in result["notes"])
+    later = call("get_pnl", {"start": "2026-11-02", "end": "2026-11-09"}).structuredContent
+    assert (later["token_spend"], later["net"]) == ("0.60", "-0.60")
+    assert not any("development spend" in n for n in later["notes"])
+
+
+def test_pnl_with_no_opening_counts_every_call_as_development(db):  # noqa: F811
+    ledger.record_tokens(db, "12.34", "m", 1, 1, "dev", at=OPENED)
+    result = call("get_pnl", {"start": "2026-10-30", "end": "2026-11-09"}).structuredContent
+    assert result["success"] and (result["token_spend"], result["net"]) == ("0.00", "0.00")
+    assert any("no opening entry yet" in n for n in result["notes"])
+    assert not call("get_account_balance").structuredContent["success"]
+
+
 # --- Command line ---------------------------------------------------------------------------
 
 def test_cli_opens_shows_and_lists(schema_url, monkeypatch, capsys):
