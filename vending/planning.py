@@ -72,6 +72,10 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
         capacity_overrides=overrides,
         slots=slots,
         price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 650),
+        # Never below the ceiling, even if someone raises the ceiling past it later.
+        wildcard_ceiling_cents=max(_int_setting(conn, "wildcard_ceiling_cents", 800),
+                                   _int_setting(conn, "price_ceiling_cents", 650)),
+        wildcard_purchase_cap_cents=_int_setting(conn, "wildcard_purchase_cap_cents", 8200),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
         halted=config.is_halted(conn),
@@ -174,6 +178,7 @@ def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
     return planner.DesiredState(
         slots=tuple(planner.DesiredSlot(s.slot, s.keep, s.product, s.sale_price, s.fill_to) for s in desired.slots),
         off_cycle=desired.off_cycle,
+        wildcard=desired.wildcard,
         sourcing=tuple(
             planner.Sourcing(
                 s.product,

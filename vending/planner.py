@@ -200,10 +200,14 @@ class DesiredState:
     `off_cycle=True` asks for a visit on any day but Friday, which costs
     `config.midweek_fee_cents` on top of the purchases (confirmed 29 Oct) and
     skips the store cutoffs, which only time purchases for the Friday visit.
+
+    `wildcard` names the one slot allowed the wildcard ceiling this visit
+    (Kevin's proposal, #100 and #110 item 1). See "The wildcard slot" below.
     """
     slots: tuple[DesiredSlot, ...]
     off_cycle: bool = False
     sourcing: tuple[Sourcing, ...] = ()
+    wildcard: str | None = None
 
     def __post_init__(self):
         # The tool schema should already stop this; a truthy string here would
@@ -246,6 +250,10 @@ class Config:
 
     `timezone` may be a name or a tzinfo. A name needs the IANA database,
     which Windows lacks unless the `tzdata` package is installed.
+
+    The wildcard slot gets `wildcard_ceiling_cents` instead of the ceiling, and
+    one purchase for it may cost at most `wildcard_purchase_cap_cents` at the
+    worker's maximum ($8.00 and $82.00, proposed on #100 and #90).
     """
     capacity_overrides: Mapping[str, int] = field(default_factory=dict)
     price_ceiling_cents: int = 650
@@ -260,12 +268,17 @@ class Config:
     soft_cutoff_stores: frozenset[str] = frozenset({AMAZON})
     week_starts: int = 5
     timezone: str | tzinfo = "America/New_York"
+    wildcard_ceiling_cents: int = 800
+    wildcard_purchase_cap_cents: int = 8200
 
     def __post_init__(self):
-        if self.price_ceiling_cents > MAX_SALE_PRICE_CENTS:
-            raise ValueError(
-                f"price ceiling {_dollars(self.price_ceiling_cents)} is over the API's "
-                f"{_dollars(MAX_SALE_PRICE_CENTS)}")
+        for name, cents in (("price ceiling", self.price_ceiling_cents),
+                            ("wildcard ceiling", self.wildcard_ceiling_cents)):
+            if cents > MAX_SALE_PRICE_CENTS:
+                raise ValueError(f"{name} {_dollars(cents)} is over the API's {_dollars(MAX_SALE_PRICE_CENTS)}")
+        if self.wildcard_ceiling_cents < self.price_ceiling_cents:
+            raise ValueError(f"wildcard ceiling {_dollars(self.wildcard_ceiling_cents)} is below the "
+                             f"ceiling of {_dollars(self.price_ceiling_cents)}")
 
 
 # --- Outputs -----------------------------------------------------------------
@@ -389,6 +402,7 @@ class Plan:
     refusals: tuple[Refusal, ...]
     plan_hash: str | None
     off_cycle: bool = False
+    wildcard: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -625,7 +639,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 f"or keep the old price"), s.slot))
         floor = slot_floor_cents([p.floor_cents for p in s.parts]) if s.parts else 0
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
-        refusals.extend(check_price(s.price_cents, floor, config.price_ceiling_cents, s.slot))
+        ceiling = config.wildcard_ceiling_cents if s.slot == desired.wildcard else config.price_ceiling_cents
+        refusals.extend(check_price(s.price_cents, floor, ceiling, s.slot))
+    refusals.extend(_check_wildcard(slots, desired, config))
 
     # 8. The plan, with every refusal found.
     # Only slots with a source get a line. A slot that couldn't be stocked is
@@ -643,7 +659,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 "no slot loads anything, so there is no request to send; "
                 "skip this week's request")))
     plan = Plan(lines, _directive(desired.off_cycle, slots), cost, tuple(floors),
-                tuple(warnings), tuple(refusals), None, desired.off_cycle)
+                tuple(warnings), tuple(refusals), None, desired.off_cycle, desired.wildcard)
     if refusals:
         return plan
     week = _week_of(now.astimezone(_tz(config.timezone)), config.week_starts)
@@ -651,7 +667,51 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     body = json.dumps({"week": week.isoformat(), "request": plan.request(),
                        "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents}, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
-                hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle)
+                hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle, desired.wildcard)
+
+
+# --- The wildcard slot ---------------------------------------------------------
+# One of our slots may sell above the ceiling, up to the wildcard ceiling, for a
+# riskier bet: a premium drink, a high-price test, a rotating feature (Kevin, #100;
+# the team decides on #110, item 1). The floor is every slot's floor. The planner
+# keeps no record of which slot it is: the slot priced above the ceiling is the
+# wildcard, so the rules can be checked from the slots alone.
+#
+# - At most one slot is above the ceiling after the visit, and it is the one the
+#   plan names as `wildcard`.
+# - It moves only at a Friday visit: a midweek plan can't take a new slot above
+#   the ceiling.
+# - One purchase for it costs at most the purchase cap at the worker's maximum
+#   (packs x max per pack, for the primary and for the alternate).
+
+def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -> list[Refusal]:
+    refusals: list[Refusal] = []
+    wildcard = desired.wildcard
+    if wildcard is not None and wildcard not in config.slots:
+        return [Refusal("wildcard", f"wildcard slot {wildcard} is not one of ours", wildcard)]
+    ceiling = config.price_ceiling_cents
+    for s in slots:
+        above_now = s.state.price_cents is not None and s.state.price_cents > ceiling
+        above_after = s.price_cents is not None and s.price_cents > ceiling
+        if s.slot != wildcard and above_after and s.action == NO_CHANGE:
+            # A changed slot above the ceiling is already refused by check_price.
+            refusals.append(Refusal("wildcard", (
+                f"slot {s.slot} stays at {_dollars(s.price_cents)}, above the {_dollars(ceiling)} ceiling, so it is "
+                f"the wildcard; name it as the wildcard, or price it at or under {_dollars(ceiling)} at this visit"),
+                s.slot))
+        if s.slot == wildcard and desired.off_cycle and above_after and not above_now:
+            refusals.append(Refusal("wildcard", (
+                f"the wildcard moves only at a Friday visit, so slot {s.slot} can't go above "
+                f"{_dollars(ceiling)} on a midweek one; wait for Friday"), s.slot))
+        if s.slot == wildcard and s.purchase is not None:
+            options = [o for o in (s.purchase.primary, s.purchase.alternate) if o is not None]
+            most = max(o.packs * o.max_price_per_pack_cents for o in options)
+            if most > config.wildcard_purchase_cap_cents:
+                refusals.append(Refusal("wildcard", (
+                    f"slot {s.slot} is the wildcard, and its purchase could cost {_dollars(most)} at the worker's "
+                    f"maximum, over the {_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a "
+                    f"cheaper pack"), s.slot))
+    return refusals
 
 
 # --- Step 1 helpers ----------------------------------------------------------
