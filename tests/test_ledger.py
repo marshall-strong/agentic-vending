@@ -2,6 +2,7 @@
 P&L on a throwaway schema with synthetic polls, receipts and entries, and the two
 tools through the MCP client."""
 
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from fractions import Fraction
@@ -247,9 +248,16 @@ def test_the_balance_inside_a_transaction_counts_an_entry_committed_since_it_beg
 def test_the_balance_time_is_utc_whatever_the_session_time_zone(conn):
     conn.execute("set timezone = 'America/New_York'")
     open_ledger(conn)
-    as_of = ledger.balance(conn).as_of
-    assert as_of.utcoffset() == timedelta(0)
-    assert f"as of {as_of:%Y-%m-%d %H:%M} UTC" in get_account_balance(conn).message
+    before = ledger.balance(conn).as_of
+    message = get_account_balance(conn).message
+    after = ledger.balance(conn).as_of
+    assert before.utcoffset() == timedelta(0)
+    # The message reads the clock itself, so a minute can turn between the reads: it must name a
+    # minute in [before, after] in UTC. New York's minute is hours away, so it can't pass by chance.
+    stamp = re.search(r"as of (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC", message)
+    assert stamp, message
+    shown = datetime.strptime(stamp[1], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+    assert before.replace(second=0, microsecond=0) <= shown <= after
 
 
 def test_entries_dated_before_the_opening_are_outside_the_balance_and_said_so(conn):
