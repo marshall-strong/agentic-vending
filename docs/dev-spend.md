@@ -1,8 +1,9 @@
 # Development spend
 
 What building and testing the agent has cost on our Anthropic keys, week by week, until the
-competition starts. **It is for the team and the teachers, not the agent.** No agent tool reads it,
-and nothing in the agent's brief mentions it.
+competition starts, for the team and the teachers. None of it comes out of the $600. No agent tool
+reads it today; the agent may know what testing cost, but its competition figures count from the
+ledger's opening on.
 
 ```
 python -m vending.dev_spend                          # one row a week, Saturday to Friday, Eastern
@@ -86,8 +87,7 @@ The sweep's answers were graded by Claude Code subagents, not on our key, so the
 
 ## Open question
 
-- **What the agent can see.** `get_account_balance` leaves pre-opening token entries out of the
-  balance, but one of its notes gives their count and total ("development spend, not in the
-  balance"). `get_pnl` with an explicit start before the opening counts them as token spend and
-  says nothing. Only live calls reach the ledger, so this concerns live tests before the opening
-  (such as agent run 2), not test runs.
+- **`get_pnl` over a window that starts before the opening** counts pre-opening token entries as
+  token spend and in net, and says nothing, so the agent would think it had spent money that never
+  came out of the $600. Only live calls reach the ledger, so this concerns live tests before the
+  opening (such as agent run 2), not test runs. A separate change fixes it.

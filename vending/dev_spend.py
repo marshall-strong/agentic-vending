@@ -6,10 +6,9 @@
     python -m vending.dev_spend --html dev-spend.html    # one page with the data inside it, no server
     python -m vending.dev_spend --demo --html demo.html  # from the team's run notes, no database
 
-**This is for the team and the teachers, not the agent.** What testing cost has no
-bearing on the agent's decisions, so no tool reads it and nothing in the agent's
-brief mentions it. The default `get_pnl` window starts at the opening; an
-explicit earlier window can include pre-opening ledger token entries.
+**This is for the team and the teachers.** No agent tool reads it today. The
+agent may know what testing cost, but none of it comes out of the $600, so its
+competition figures (the balance, `get_pnl`) count from the opening on.
 
 **Development ends at the ledger's opening entry** (`python -m vending.ledger
 open`). A model call before it, live or test, is development spend and doesn't
