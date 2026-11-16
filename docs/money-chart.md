@@ -46,12 +46,12 @@ Every figure is the money series', so each day adds up to `ledger.pnl` and each 
 Competition money only: counting starts at the ledger's opening, so model calls before it
 (development spend, #104) are in no figure.
 
-**Unknown stays unknown.** When a drink sold or lost has no known cost, gross and net profit are
-unknown from that day on. Their lines stop at the last day they were known, with a dotted leader
-to a label that says which day, and the tiles say "unknown". The page never draws a guess.
+**Unknown stays unknown.** A missing cost makes the affected profit and cost totals unknown.
+The net worth view leaves a gap when stock value is unknown. Rolling totals and selected ranges
+recover when their own days have complete costs. Weekly profit includes shrinkage and adjustments.
+The page sums exact cents before it rounds values for display. A profit tile covers the exported
+period, which can start after the ledger opening or end during an unfinished day.
 
 ## Not yet
 
 - It isn't on the dashboard yet. Next: serve it next to the money panel (#124).
-- The net worth, weekly P&L and AI views don't yet leave gaps for unknown figures as the main
-  view does.
