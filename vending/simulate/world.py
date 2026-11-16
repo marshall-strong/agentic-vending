@@ -104,7 +104,7 @@ class Product:
     units_per_pack: int
     pack_cents: int             # 11 Nov list price for that pack on Amazon
     url: str | None             # Amazon page, where the repo has one
-    sourced: bool               # has a row in db/sourcing/2026-11-11-amazon.csv
+    sourced: bool               # had a row in the first sourcing file, 2026-11-11 (informational)
     reference_cents: int        # docs/agent/price-history.md
     rate: float                 # units per class day per stocked slot at the reference price
     rate_basis: str
@@ -146,6 +146,41 @@ PRODUCTS: tuple[Product, ...] = (
             24, 4799, None, False, 410, _mean_rate("16 26 27 38"), "Red Bull's fall slots; energy reference"),
     Product("PEPSI-ORIGINAL-20BOT", "Pepsi 20 oz bottle", "Pepsi", "Original", "20 oz bottle",
             12, 2999, None, False, 230, _mean_rate("45 46 47 55 58"), "soda's fall slots"),
+    # The team's 15 Nov sourcing file (db/sourcing/2026-11-15-catalog.csv, #137). Rates and references
+    # follow the same rule: the product line's fall slots and row in price-history.md, else its
+    # category's. Left out: Pepsi Real Sugar 7.5 oz cans and Premier Protein cartons, whose sizes
+    # the loading chart (vending/capacity.py) doesn't cover.
+    Product("REDBULL-SUGARFRE-8_4CAN", "Red Bull Sugarfree 8.4 oz can", "Red Bull", "Sugarfree", "8.4 oz can",
+            24, 3499, None, False, 400, _mean_rate("16 26 27 38"), "Red Bull's fall slots"),
+    Product("GORGIE-MANGO-12CAN", "Gorgie Mango Burst 12 oz can", "Gorgie", "Mango Burst", "12 oz can",
+            12, 3108, None, False, 450, _mean_rate("15 16 17"), "Gorgie's fall slots 15-17"),
+    Product("GORGIE-PEACH-12CAN", "Gorgie Peach Tea 12 oz can", "Gorgie", "Peach Tea", "12 oz can",
+            12, 3199, None, False, 450, _mean_rate("15 16 17"), "Gorgie's fall slots 15-17"),
+    Product("STARBUCKS-BLUE_LEMON-12CAN", "Starbucks Blueberry Lemonade 12 oz can", "Starbucks",
+            "Blueberry Lemonade", "12 oz can", 12, 2398, None, False, 350, _mean_rate("38"),
+            "Starbucks's fall slot 38"),
+    Product("SNAPPLE-FRUIT_PUNCH-16BOT", "Snapple Fruit Punch 16 oz bottle", "Snapple", "Fruit Punch",
+            "16 oz bottle", 12, 1884, None, False, 300, _mean_rate("27 38 47 48 55"), "Snapple's fall slots"),
+    Product("SNAPPLE-MANGO_MADNESS-16BOT", "Snapple Mango Madness 16 oz bottle", "Snapple", "Mango Madness",
+            "16 oz bottle", 12, 2145, None, False, 300, _mean_rate("27 38 47 48 55"), "Snapple's fall slots"),
+    Product("HINT-GEORGIA_PEACH-16BOT", "Hint Georgia Peach 16 oz bottle", "Hint", "Georgia Peach",
+            "16 oz bottle", 12, 1346, None, False, 265, _mean_rate("37 46 47 48 57 58"),
+            "water's fall slots (vitaminwater's); water reference"),
+    Product("HINT-GRAPE-16BOT", "Hint Grape 16 oz bottle", "Hint", "Grape", "16 oz bottle",
+            12, 1346, None, False, 265, _mean_rate("37 46 47 48 57 58"),
+            "water's fall slots (vitaminwater's); water reference"),
+    Product("ARIZONA-ICED_LEMON-16BOT", "AriZona Iced Tea with Lemon 16 oz bottle", "AriZona", "Iced Tea Lemon",
+            "16 oz bottle", 12, 819, None, False, 235, _mean_rate("35 36"), "tea's fall slots (Pure Leaf's)"),
+    Product("COCA-ORIGINAL-12CAN", "Coca-Cola 12 oz can", "Coca-Cola", "Original", "12 oz can",
+            12, 768, None, False, 200, _mean_rate("45 46"), "Coca-Cola's fall slots 45, 46"),
+    Product("PEPSI-DIET-20BOT", "Diet Pepsi 20 oz bottle", "Pepsi", "Diet", "20 oz bottle",
+            24, 5745, None, False, 230, _mean_rate("45 46 47 55 58"), "soda's fall slots"),
+    Product("MOUNTAIN-CODE_RED-20BOT", "Mountain Dew Code Red 20 oz bottle", "Mountain Dew", "Code Red",
+            "20 oz bottle", 24, 5745, None, False, 230, _mean_rate("45 46 47 55 58"), "soda's fall slots"),
+    Product("MOUNTAIN-DIET-20BOT", "Diet Mountain Dew 20 oz bottle", "Mountain Dew", "Diet", "20 oz bottle",
+            24, 5521, None, False, 230, _mean_rate("45 46 47 55 58"), "soda's fall slots"),
+    Product("MONSTER-WHITE-16CAN", "Monster Zero Ultra 16 oz can", "Monster Energy", "Zero Ultra", "16 oz can",
+            15, 2989, None, False, 450, _mean_rate("15 16 17 18"), "Monster's fall slots 15-18"),
 )
 BY_SKU = {p.sku: p for p in PRODUCTS}
 
@@ -292,6 +327,23 @@ STORE_SOLD_OUT = 0.03    # chance a store has none of a product on a given visit
 BREAKAGE = 0.005         # chance each unit arrives broken (assumed)
 
 
+def _store_unit_prices() -> dict[tuple[str, str], Fraction]:
+    """Unit prices the team found at each store (db/sourcing/*.csv): a pack at BJ's prices from BJ's
+    list, not Amazon's. The latest file wins."""
+    import csv
+    out: dict[tuple[str, str], Fraction] = {}
+    for path in sorted((REPO / "db" / "sourcing").glob("*.csv")):
+        with path.open(encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                if row.get("price") and row.get("units_per_pack"):
+                    cents = Fraction(row["price"]) * 100
+                    out[(row["sku"], row["store"].casefold())] = cents / int(row["units_per_pack"])
+    return out
+
+
+STORE_UNIT_PRICE = _store_unit_prices()
+
+
 def market_pack_cents(seed: int, sku: str, units_per_pack: int, store: str, on: date) -> int:
     """What a pack costs at a store in the week of `on`: the 11 Nov list price per unit, times the pack,
     with a seeded weekly drift. Other stores are assumed to charge the Amazon unit price."""
@@ -299,5 +351,5 @@ def market_pack_cents(seed: int, sku: str, units_per_pack: int, store: str, on: 
     week = (on - date(2026, 11, 7)).days // 7
     r = rng(seed, "price", sku, week)
     drift = min(max(math.exp(r.gauss(0, DRIFT_SD)), DRIFT_LIMIT[0]), DRIFT_LIMIT[1])
-    per_unit = Fraction(p.pack_cents, p.units_per_pack)
+    per_unit = STORE_UNIT_PRICE.get((sku, store.casefold()), Fraction(p.pack_cents, p.units_per_pack))
     return int(round(per_unit * units_per_pack * Fraction(drift)))

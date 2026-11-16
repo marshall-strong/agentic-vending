@@ -19,4 +19,5 @@ You run 20 of the 40 selections in the institute's drink machine as a small busi
 
 - Numbers come from tools, never from memory: balance, stock, sales, costs, floors.
 - If unsure, skip the action and say why. Skipped restocks count against qualifying.
+- Top up before a slot runs out, not after: at each weekly run, refill any slot whose `class_days_of_stock_left` is below the class days until the visit after this Friday's (`restocking`).
 - Look up details with `get_project_rules`.

@@ -30,7 +30,8 @@ from vending.simulate.bridge import SimBridge, Worker
 from vending.simulate.clock import Clock, patched
 from vending.simulate.world import EASTERN, Calendar, Demand, Machine
 
-SEED_SOURCING = world.REPO / "db" / "sourcing" / "2026-11-11-amazon.csv"
+# Every sourcing file the team has committed, oldest first, so a later check of a SKU wins.
+SEED_SOURCING = tuple(sorted((world.REPO / "db" / "sourcing").glob("*.csv")))
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 BY = "simulation"
 
@@ -126,8 +127,10 @@ def setup(conn: psycopg.Connection, st: State, budget_usd: Decimal, run_cap_usd:
     config.set_halted(conn, False, BY)
     slot_assignment.record(conn, st.bridge.slots(), now=now, by=BY)
     sync_catalog.sync(conn, st.bridge, now=now, log=lambda *_: None)
-    for o in sourcing.read_csv(SEED_SOURCING, BY, now):
-        sourcing.set_option(conn, o, now)
+    for path in SEED_SOURCING:
+        for o in sourcing.read_csv(path, BY, now):
+            if o.sku in world.BY_SKU:          # the two the loading chart can't size stay out (world.py)
+                sourcing.set_option(conn, o, now)
     config.set_value(conn, "model_test_daily_cap_cents", int(budget_usd * 100), BY)
     config.set_value(conn, "model_run_cap_cents", int(run_cap_usd * 100), BY)
     restamp(conn, now)
