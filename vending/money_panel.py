@@ -14,9 +14,10 @@ they are reference lines, never a limit. Nothing here enforces them.
 The competition counts from the ledger's opening entry. Everything before it is development and
 test spend, not from the $600: the panel never counts it in a competition figure, and says so where
 it shows. An opening entry dated in the future (recorded ahead with `--at`) isn't open yet: the
-panel keeps its pre-opening view and says when the ledger opens. Stock on hand and cost of sales
-replay every receipt, including any from before the opening, so the panel notes such receipts
-when there are any.
+panel keeps its pre-opening view and says when the ledger opens. Receipts and visit fees from
+before the opening are test purchases: once the opening is recorded, the ledger and the stock
+count leave them out of every figure, stock on hand and cost of sales included
+(`stock.receipts_count_from`).
 
 Reads only, inside the dashboard's one read-only snapshot. Money is exact: cents as Fractions in,
 dollar strings out (`ledger.money`), never a float. No model calls.
@@ -120,18 +121,6 @@ def _committed(conn: psycopg.Connection) -> tuple[dict, Fraction | None]:
             "max": ledger.money(most), "unpriced_lines": unpriced}, most
 
 
-def early_receipts(conn: psycopg.Connection, opening_at: datetime) -> tuple[int, Fraction]:
-    """(receipt lines, cents paid) for fulfilled lines resolved before the opening.
-
-    The balance leaves them out (`ledger._receipts` is windowed), but `vending.stock` replays every
-    fulfilled request, so they are in stock on hand and can be in cost of sales.
-    """
-    lines, total = conn.execute(
-        "select count(*), coalesce(sum(l.total_paid), 0) from purchase_lines l join purchase_requests r"
-        " using (request_id) where r.status = 'fulfilled' and l.resolved_at < %s", (opening_at,)).fetchone()
-    return lines, Fraction(Decimal(total)) * 100
-
-
 def read(conn: psycopg.Connection, now: datetime) -> dict:
     """Everything the panel shows, as exact dollar strings.
 
@@ -152,12 +141,6 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
         return {"opened": False, "committed": pending}
     m = ledger.money
     after_pending = None if most is None else bal.spendable_cents - most
-    early_lines, early_cents = early_receipts(conn, bal.opening_at)
-    early_notes = [] if not early_lines else [
-        f"Stock on hand and cost of sales count every receipt, including {early_lines} receipt "
-        f"line{'' if early_lines == 1 else 's'} totalling ${m(early_cents)} dated before the opening on "
-        f"{bal.opening_at:%Y-%m-%d}: development or test purchases, not from the $600 and not in the balance. "
-        "If that isn't real stock, stock on hand is overstated."]
     return {
         "opened": True,
         "opening_at": bal.opening_at,
@@ -172,8 +155,7 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
         "adjustments": m(bal.adjustments_cents),
         "balance": m(bal.balance_cents), "tax_owed": m(bal.tax_owed_cents), "spendable": m(bal.spendable_cents),
         "spendable_after_pending": m(after_pending),
-        "notes": list(bal.notes) + [n for n in p.notes if n not in bal.notes] + early_notes,
-        "early_receipts": {"lines": early_lines, "paid": m(early_cents)},
+        "notes": list(bal.notes) + [n for n in p.notes if n not in bal.notes],
         "committed": pending,
         "pnl": {
             "units_sold": p.units_sold, "units_costed": p.units_costed,
@@ -194,6 +176,16 @@ def _plain(text: str) -> str:
     return f"-${text[1:]}" if text.startswith("-") else f"${text}"
 
 
+def _eastern_text(value: datetime) -> str:
+    """A moment for plain text (Needs attention can't hold a `<time>`): Eastern, the machine's zone,
+    like the cutoff tile; UTC, labelled, without the IANA database."""
+    try:
+        from zoneinfo import ZoneInfo
+        return f"{value.astimezone(ZoneInfo('America/New_York')):%a %d %b %Y %H:%M} Eastern"
+    except Exception:   # Windows without the tzdata package
+        return f"{value.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC"
+
+
 def attention(data: dict) -> list[tuple[str, str]]:
     """(level, sentence) for the dashboard's Needs attention."""
     out = []
@@ -204,7 +196,7 @@ def attention(data: dict) -> list[tuple[str, str]]:
     if not data["opened"]:
         if pending["requests"] and data.get("opens_at"):
             out.append(("warn", f"{pending['requests']} purchase request(s) are pending, but the ledger doesn't "
-                                f"open until {data['opens_at'].astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC, so "
+                                f"open until {_eastern_text(data['opens_at'])}, so "
                                 "nothing can say whether we can pay, and a purchase fulfilled before the opening "
                                 "isn't counted against the $600."))
         elif pending["requests"]:
@@ -349,10 +341,7 @@ def html(panel: dict) -> str:
         ("Midweek visit fees", _usd(p["visit_fees"])),
         ("Model spend", _usd(p["tokens"])),
         ("<b>Profit</b>", f'<b>{_usd(p["net"])}</b>'),
-        ("Stock on hand, at cost" + (
-            f'<div class="sub warn-text">all receipts, including {_usd(d["early_receipts"]["paid"])} dated before the '
-            'opening (see the ledger notes)</div>' if d["early_receipts"]["lines"] else ""),
-         _usd(p["inventory"]) + ("" if p["inventory_complete"] else " (some costs unknown)")),
+        ("Stock on hand, at cost", _usd(p["inventory"]) + ("" if p["inventory_complete"] else " (some costs unknown)")),
     ))
     notes = "".join(f"<li>{_e(n)}</li>" for n in d["notes"])
     return (f'<div class="mtiles">{tiles}</div>'

@@ -203,7 +203,7 @@ def test_an_opening_dated_ahead_keeps_the_pre_opening_view(conn, page_conn):
     snap = dashboard.snapshot(page_conn, NOW)
     data = snap["money"]["data"]
     assert data["opened"] is False and data["opens_at"] == opens and "balance" not in data
-    assert any(a["level"] == "warn" and "doesn't open until 2026-12-12 17:00 UTC" in a["text"]
+    assert any(a["level"] == "warn" and "doesn't open until Sat 12 Dec 2026 12:00 Eastern" in a["text"]
                for a in snap["attention"])
     page = dashboard.render(snap)
     assert "The ledger opens" in page and '<time datetime="2026-12-12T17:00:00+00:00" data-f="day"' in page
@@ -214,26 +214,29 @@ def test_an_opening_dated_ahead_keeps_the_pre_opening_view(conn, page_conn):
     assert dashboard.snapshot(page_conn, opens + timedelta(hours=1))["money"]["data"]["opened"] is True
 
 
-def test_receipts_from_before_the_opening_are_noted_on_the_stock_line(conn, page_conn):
-    # A test purchase on 12 Nov, then the opening: the balance leaves it out, but stock replays it.
+def test_receipts_from_before_the_opening_are_left_out_of_every_figure(conn, page_conn):
+    # A test purchase on 12 Nov, the opening, then a real one: the balance, purchases and stock on
+    # hand all count only the real one (`stock.receipts_count_from`), so the panel needs no note.
     fulfilled(conn, "pr-12nov", "15", "RB", units_loaded=0, to_back_stock=71, paid="252.45",
               at=datetime(2026, 11, 12, 18, 0, tzinfo=timezone.utc))
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
+    fulfilled(conn, "pr-after", "15", "RB", units_loaded=11, paid="34.99", at=OPENED + timedelta(days=1))
     snap = dashboard.snapshot(page_conn, NOW)
     data = snap["money"]["data"]
-    assert data["balance"] == "600.00" and data["receipts"] == "0.00"
-    assert data["early_receipts"] == {"lines": 1, "paid": "252.45"}
-    assert any("1 receipt line totalling $252.45 dated before the opening on 2026-11-27" in n for n in data["notes"])
-    page = dashboard.render(snap)
-    assert "all receipts, including $252.45 dated before the opening" in page
+    assert data["balance"] == "565.01" and data["receipts"] == "34.99"
+    assert data["pnl"]["inventory"] == "34.99" and data["pnl"]["inventory_complete"] is True
+    assert "early_receipts" not in data and not any("252.45" in n for n in data["notes"])
+    money = dashboard.render(snap).split('<section id="money">')[1].split("</section>")[0]
+    assert "$252.45" not in money and "dated before the opening" not in money
 
 
-def test_no_note_when_every_receipt_is_after_the_opening(conn, page_conn):
+def test_only_a_test_purchase_leaves_stock_on_hand_unknown(conn, page_conn):
+    # Nothing bought since the opening: no counted receipt, so stock on hand has no figure.
+    fulfilled(conn, "pr-12nov", "15", "RB", units_loaded=0, to_back_stock=71, paid="252.45",
+              at=datetime(2026, 11, 12, 18, 0, tzinfo=timezone.utc))
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
-    fulfilled(conn, "pr-after", "15", "RB", units_loaded=11, paid="34.99", at=OPENED + timedelta(days=1))
     data = dashboard.snapshot(page_conn, NOW)["money"]["data"]
-    assert data["early_receipts"] == {"lines": 0, "paid": "0.00"}
-    assert "dated before the opening" not in dashboard.render(dashboard.snapshot(page_conn, NOW))
+    assert data["balance"] == "600.00" and data["receipts"] == "0.00" and data["pnl"]["inventory"] is None
 
 
 def test_a_missing_ledger_table_blanks_only_the_money_panel(conn, page_conn):
