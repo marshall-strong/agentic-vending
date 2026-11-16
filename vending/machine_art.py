@@ -406,7 +406,7 @@ _GRADIENTS = (
     '<stop offset="1" stop-color="#000" stop-opacity=".34"/></linearGradient>'
     '<linearGradient id="ma-fog" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#05070a" stop-opacity=".62"/>'
     '<stop offset=".5" stop-color="#05070a" stop-opacity=".16"/><stop offset="1" stop-color="#05070a" stop-opacity="0"/>'
-    '</linearGradient><linearGradient id="ma-ledge" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#9aa2ad"/>'
+    '</linearGradient><linearGradient id="ma-ledge-g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#9aa2ad"/>'
     '<stop offset=".12" stop-color="#5c636d"/><stop offset="1" stop-color="#23272d"/></linearGradient>'
     '<linearGradient id="ma-glass" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#26303a"/>'
     '<stop offset="1" stop-color="#0d1115"/></linearGradient>'
@@ -416,9 +416,11 @@ _GRADIENTS = (
     '<rect width="5" height="5" fill="#1b2027"/><line y2="5" stroke="#2c333d" stroke-width="1.6"/></pattern>')
 
 
-def _defs(keys: Iterable[str]) -> str:
-    """Gradients and the drawings of only the packages this page uses, once, for `<use>`."""
-    parts = [_GRADIENTS]
+def _defs(keys: Iterable[str], columns: Iterable[int]) -> str:
+    """Gradients, the rails of the columns drawn and the ledge, and the drawings of only the packages
+    this page uses, once each, for `<use>`."""
+    parts = [_GRADIENTS, f'<g id="ma-ledge">{_LEDGE}</g>']
+    parts += [f'<g id="ma-rail-{c}">{_rail_art(c)}</g>' for c in sorted(set(columns))]
     for key in sorted(set(keys)):
         sp = SHAPES[key]
         parts.append(f'<g id="ma-p-{key}">{_draw(sp, VF, ER, True)}</g><g id="ma-f-{key}">{_draw(sp, 1.0, 0.10, False)}'
@@ -585,6 +587,14 @@ def _rail_art(col: int) -> str:
     return "".join(out)
 
 
+# The front of every lane: the retainer ears, the metal ledge and the number plate.
+_LEDGE = "".join(
+    f'<path d="M{50 + side * 47},176V132Q{50 + side * 47},127 {50 + side * 42},127H{50 + side * 38}" fill="none" '
+    f'stroke="#cfe4ff" stroke-opacity=".5" stroke-width="1.6" stroke-linecap="round"/>' for side in (-1, 1)
+) + (f'<rect y="176" width="{VBW}" height="{VBH - 176}" fill="url(#ma-ledge-g)"/>'
+     '<rect x="6" y="183" width="27" height="16" rx="2.5" fill="#07080a" stroke="#6b727c" stroke-width=".8"/>')
+
+
 def _label_text(item: Item) -> str:
     sp, label = item.spec, item.look["label"]
     d = sp["d"]
@@ -609,8 +619,7 @@ def _style(item: Item) -> str:
 def _badge(x: float, y: float, text: str, cls: str, fill: str, ink: str) -> str:
     r = 7.5 if len(text) < 3 else 9.5
     return (f'<g class="{cls}"><circle cx="{x:.0f}" cy="{y:.1f}" r="{r}" fill="{fill}" stroke="#05070a"/>'
-            f'<text x="{x:.0f}" y="{y + 3.6:.1f}" text-anchor="middle" font-size="10.5" font-weight="800" fill="{ink}" '
-            f'font-family="Arial,sans-serif">{_e(text)}</text></g>')
+            f'<text x="{x:.0f}" y="{y + 3.6:.1f}" class="ma-tx" font-size="10.5" fill="{ink}">{_e(text)}</text></g>')
 
 
 def _layer(lane: Lane, item: Item, have: int | None, want: int | None, cap: int | None, estimate: bool,
@@ -670,12 +679,11 @@ def _tag(price: Any, x: float = 54, w: float = 40) -> str:
     text = money(price)
     if text is None:
         return (f'<rect x="{x}" y="183" width="{w}" height="16" rx="2.5" fill="url(#ma-hatch)" stroke="#f3bb52" '
-                f'stroke-width=".9"/><text x="{x + w / 2}" y="195.4" text-anchor="middle" font-size="12" '
-                f'font-weight="900" fill="#f3bb52" font-family="Arial,sans-serif">$?</text>')
+                f'stroke-width=".9"/><text x="{x + w / 2}" y="195.4" class="ma-tx" font-size="12" fill="#f3bb52">$?</text>')
     size = 11 if len(text) <= 5 else 9.5
     return (f'<rect x="{x}" y="183" width="{w}" height="16" rx="2.5" fill="#f4f3ee" stroke="#8b8f95" '
-            f'stroke-width=".8"/><text x="{x + w / 2}" y="195" text-anchor="middle" font-size="{size}" '
-            f'font-weight="800" fill="#10151b" font-family="Arial,sans-serif">{_e(text)}</text>')
+            f'stroke-width=".8"/><text x="{x + w / 2}" y="195" class="ma-tx" font-size="{size}" fill="#10151b">'
+            f'{_e(text)}</text>')
 
 
 def _price_change(old: Any, new: Any) -> str:
@@ -690,7 +698,7 @@ def _price_change(old: Any, new: Any) -> str:
 
 def lane_svg(lane: Lane) -> str:
     """The lane seen from above the front edge: rail, packages, ledge, number plate and tag."""
-    out = [_rail_art(lane.col)]
+    out = [f'<use href="#ma-rail-{lane.col}"/>']
     estimate = lane.source == "photo"
     item, nxt = lane.now_item, lane.next
     if item is None:
@@ -713,14 +721,8 @@ def lane_svg(lane: Lane) -> str:
         if nxt is not None and nxt["in_plan"]:
             want = 0 if lane.pulled else lane.next_units
         out.append(_layer(lane, item, lane.units, want, lane.cap, estimate, nxt is not None))
-    for side in (-1, 1):
-        x = 50 + side * 47
-        out.append(f'<path d="M{x},176V132Q{x},127 {x - side * 5},127H{x - side * 9}" fill="none" stroke="#cfe4ff" '
-                   f'stroke-opacity=".5" stroke-width="1.6" stroke-linecap="round"/>')
-    out.append(f'<rect y="176" width="{VBW}" height="{VBH - 176}" fill="url(#ma-ledge)"/>'
-               f'<rect x="6" y="183" width="27" height="16" rx="2.5" fill="#07080a" stroke="#6b727c" stroke-width=".8"/>'
-               f'<text x="19.5" y="195.2" text-anchor="middle" font-size="12.5" font-weight="800" fill="#fff" '
-               f'font-family="Arial,sans-serif">{_e(lane.slot)}</text>')
+    out.append(f'<use href="#ma-ledge"/><text class="ma-tx" x="19.5" y="195.2" font-size="12.5" fill="#fff">'
+               f'{_e(lane.slot)}</text>')
     if nxt is not None and nxt["old_price"] is not None:
         out.append(f'<g class="v-now">{_tag(lane.price)}</g><g class="v-next">{_price_change(nxt["old_price"], nxt["price"])}</g>')
     elif nxt is not None and nxt["price"] is not None and lane.price is None:
@@ -846,7 +848,7 @@ def _front(lanes: dict[str, Lane], ours: set[str]) -> str:
     for r in range(1, SHELVES + 1):
         y_top = GY + 4 + PITCH * (r - 1)
         base = y_top + 54
-        out.append(f'<rect x="{GX}" y="{base + 1}" width="{GW}" height="6" fill="url(#ma-ledge)"/>')
+        out.append(f'<rect x="{GX}" y="{base + 1}" width="{GW}" height="6" fill="url(#ma-ledge-g)"/>')
         for c in range(1, COLUMNS + 1):
             slot, x = f"{r}{c}", GX + (c - 1) * width
             if slot not in ours:
@@ -935,7 +937,7 @@ def closeup_html(view: dict[str, dict], products: dict | None, linked: bool) -> 
         panels.append(f'<div class="ma-shelf" id="shelf-{r}" data-n="{r}" role="group" aria-label="Shelf {r}">'
                       f'<div class="ma-sh"><h3>Shelf {r}{where} &middot; {r}1&ndash;{r}{COLUMNS}</h3>'
                       f'<span class="dim">{head}</span></div>{body}</div>')
-    return (f'{_defs(keys)}<div class="ma">'
+    return (f'{_defs(keys, (lane.col for lane in lanes.values()))}<div class="ma">'
             f'<nav class="ma-fm" aria-label="The machine\'s front: pick a shelf"><div class="ma-fmgrid"><div>'
             f'{_front(lanes, ours)}</div><div class="ma-rows">{"".join(rows)}</div></div></nav>'
             f'<div class="ma-shelves">{"".join(panels)}</div></div>')
@@ -953,6 +955,7 @@ def default_shelf(view: Mapping[str, Any]) -> int:
 # (it is a black machine); the text around it follows the page's theme variables.
 STYLE = """
 .ma-defs { position:absolute; width:0; height:0; overflow:hidden }
+.ma-tx { font-family:Arial, sans-serif; font-weight:800; text-anchor:middle }
 .ma { display:grid; grid-template-columns:minmax(0, 1fr); gap:14px; min-width:0 } .ma > * { min-width:0 }
 .ma-fmgrid { display:grid; grid-template-columns:minmax(0, 46%) minmax(0, 1fr); gap:8px; max-width:440px }
 .ma-front { display:block; width:100%; height:auto }
