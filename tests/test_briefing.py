@@ -294,3 +294,57 @@ def test_unresolved_submission_alert_both_ways(conn):
     assert "submission_unresolved" in codes(briefing.build(conn, NOW))
     conn.execute("update purchase_submissions set status='not_filed'")
     assert "submission_unresolved" not in codes(briefing.build(conn, NOW))
+
+
+def fill(conn, request_id, sent, loaded, off_cycle=False):
+    purchase_requests.record(conn, request_id, sent, off_cycle, {**BODY, "off_cycle": off_cycle})
+    response = fulfilled(request_id, receipt(resolved_at=loaded.isoformat()), fulfilled_at=loaded.isoformat())
+    response["off_cycle"] = off_cycle
+    purchase_requests.store(conn, request_id, response, NOW)
+
+
+def turnaround(b, kind):
+    return next(t for t in b.requests.turnaround if t.kind == kind)
+
+
+def test_turnaround_median_longest_and_over_expected_by_kind(conn):
+    for n, hours in enumerate((30, 26, 50)):
+        fill(conn, f"mid-{n}", NOW - timedelta(days=10 + n), NOW - timedelta(days=10 + n) + timedelta(hours=hours), True)
+    fill(conn, "fri", NOW - timedelta(days=8, hours=44), NOW - timedelta(days=8))
+    b = briefing.build(conn, NOW)
+    mid, regular = turnaround(b, "off-cycle"), turnaround(b, "regular")
+    assert (mid.count, mid.median_hours, mid.longest_hours, mid.over_expected) == (3, "30.0", "50.0", 1)
+    assert (regular.count, regular.median_hours, regular.longest_hours, regular.over_expected) == (1, "44.0", "44.0", 0)
+    text = briefing.render(b)
+    assert "expected 25-48h" in text and "off-cycle 3 done, median 30.0h, longest 50.0h, 1 over 48h" in text
+    assert "regular 1 done, median 44.0h" in text
+
+
+def test_turnaround_even_count_median_and_none_yet(conn):
+    for n, hours in enumerate((26, 30)):
+        fill(conn, f"mid-{n}", NOW - timedelta(days=5 + n), NOW - timedelta(days=5 + n) + timedelta(hours=hours), True)
+    b = briefing.build(conn, NOW)
+    assert turnaround(b, "off-cycle").median_hours == "28.0"
+    assert "regular none yet" in briefing.render(b)
+
+
+def test_turnaround_ignores_loads_after_the_snapshot(conn):
+    fill(conn, "later", NOW - timedelta(hours=30), NOW + timedelta(hours=1), True)
+    assert turnaround(briefing.build(conn, NOW), "off-cycle").count == 0
+
+
+@pytest.mark.parametrize("hours,overdue", [(48, False), (48.01, True)])
+def test_off_cycle_request_overdue_past_48_hours_both_ways(conn, hours, overdue):
+    purchase_requests.record(conn, "mid", NOW - timedelta(hours=hours), True, {**BODY, "off_cycle": True})
+    b = briefing.build(conn, NOW)
+    assert ("request_overdue" in codes(b)) == overdue and (b.requests.overdue == ["mid"]) == overdue
+    assert ("OVERDUE" in briefing.render(b)) == overdue
+
+
+@pytest.mark.parametrize("sent,overdue", [
+    (datetime(2026, 11, 7, 5, 30, tzinfo=timezone.utc), False),   # Sat 7 Nov 00:30 Eastern: this week, due Fri 13
+    (datetime(2026, 11, 7, 4, 30, tzinfo=timezone.utc), True),    # Fri 6 Nov 23:30 Eastern: last week's visit passed
+])
+def test_regular_request_overdue_once_its_week_ends(conn, sent, overdue):
+    purchase_requests.record(conn, "fri", sent, False, BODY)
+    assert ("request_overdue" in codes(briefing.build(conn, NOW))) == overdue

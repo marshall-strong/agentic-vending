@@ -24,6 +24,10 @@ from vending.tools import catalog, machine_state, purchase_requests
 
 EASTERN = ZoneInfo(ledger.TIMEZONE)
 MISSING_SCHEMA = (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn)
+# How long the worker takes to get product, from our request to the load (Kevin, 16 Nov).
+EXPECTED_TURNAROUND_HOURS = (25, 48)
+# The most recent fulfilled requests of each kind that the measured turnaround uses.
+TURNAROUND_SAMPLE = 10
 
 
 class Source(BaseModel):
@@ -84,10 +88,25 @@ class RequestCheck(BaseModel):
     stale: bool
 
 
+class Turnaround(BaseModel):
+    """Hours from our request to the worker's load, over recent fulfilled requests.
+
+    A regular request waits for the Friday visit, so its hours say when we sent it as
+    much as how fast the worker is; an off-cycle one is the worker's own speed.
+    """
+    kind: Literal["off-cycle", "regular"]
+    count: int = 0
+    median_hours: str | None = None
+    longest_hours: str | None = None
+    over_expected: int = 0
+
+
 class Requests(BaseModel):
     unavailable: str | None = None
     pending: list[RequestCheck] = Field(default_factory=list)
     unresolved_submission_count: int | None = None
+    overdue: list[str] = Field(default_factory=list)
+    turnaround: list[Turnaround] = Field(default_factory=list)
 
 
 class Briefing(BaseModel):
@@ -261,7 +280,48 @@ def _inventory(conn, b: Briefing, ours: tuple[str, ...]) -> None:
         _alert(b, "counts_stale", f"{weak} counts exceed 7d", "get_machine_state")
 
 
+def _hours(delta: timedelta) -> Decimal:
+    return (Decimal(delta.total_seconds()) / 3600).quantize(Decimal("0.1"), ROUND_HALF_UP)
+
+
+def _turnaround(conn, b: Briefing) -> None:
+    """Measured worker turnaround, and pending requests past what it should take.
+
+    Requests sent before the ledger's opening are tests, but the worker's speed on
+    them is still real, so they count. Only fulfilled requests with both times do.
+    """
+    low, high = EXPECTED_TURNAROUND_HOURS
+    for off_cycle, kind in ((True, "off-cycle"), (False, "regular")):
+        rows = conn.execute(
+            "select fulfilled_at - submitted_at from purchase_requests"
+            " where status = 'fulfilled' and off_cycle = %s and fulfilled_at is not null"
+            "   and fulfilled_at >= submitted_at and fulfilled_at <= %s"
+            " order by fulfilled_at desc limit %s", (off_cycle, b.computed_at, TURNAROUND_SAMPLE)).fetchall()
+        hours = sorted(_hours(r[0]) for r in rows)
+        t = Turnaround(kind=kind, count=len(hours))
+        if hours:
+            mid = len(hours) // 2
+            median = hours[mid] if len(hours) % 2 else ((hours[mid - 1] + hours[mid]) / 2).quantize(Decimal("0.1"), ROUND_HALF_UP)
+            t.median_hours, t.longest_hours = str(median), str(hours[-1])
+            t.over_expected = sum(h > high for h in hours)
+        b.requests.turnaround.append(t)
+    now_local = b.computed_at.astimezone(EASTERN)
+    for request_id, sent, off_cycle in conn.execute(
+            "select request_id, submitted_at, off_cycle from purchase_requests"
+            " where status = 'pending' and submitted_at <= %s order by submitted_at", (b.computed_at,)).fetchall():
+        # An off-cycle request is late past the expected hours; a regular one once its
+        # Saturday-to-Friday week is over without the Friday load.
+        late = (b.computed_at - sent > timedelta(hours=high) if off_cycle
+                else ledger.week_of(sent.astimezone(EASTERN)) < ledger.week_of(now_local))
+        if late:
+            b.requests.overdue.append(request_id)
+    if b.requests.overdue:
+        _alert(b, "request_overdue", f"{len(b.requests.overdue)} pending requests past {high}h (off-cycle) "
+               "or their Friday visit (regular); a late load changes stock and cover", "get_purchase_requests")
+
+
 def _requests(conn, b: Briefing) -> None:
+    _turnaround(conn, b)
     r = purchase_requests.get_purchase_requests(conn, pending_only=True, now=b.computed_at)
     b.requests.pending = [RequestCheck(
         request_id=x.request_id, checked_at=None if x.last_checked is None else datetime.fromisoformat(x.last_checked),
@@ -393,7 +453,13 @@ def render(b: Briefing) -> str:
     lines.append("Requests: " + (f"unavailable ({r.unavailable})" if r.unavailable else
                  f"{len(r.pending)} pending; {r.unresolved_submission_count} unresolved submissions."))
     lines += [f'"{_cell(x.request_id)}": check {_stamp(x.checked_at)}, age {x.age_hours}h' +
-              (" STALE" if x.stale else "") for x in r.pending[:6]]
+              (" STALE" if x.stale else "") + (" OVERDUE" if x.request_id in r.overdue else "") for x in r.pending[:6]]
+    if not r.unavailable:
+        low, high = EXPECTED_TURNAROUND_HOURS
+        lines.append(f"Worker turnaround, request to load (expected {low}-{high}h; regular waits for Friday): " + "; ".join(
+            f"{t.kind} {t.count} done, median {t.median_hours}h, longest {t.longest_hours}h"
+            + (f", {t.over_expected} over {high}h" if t.over_expected else "")
+            if t.count else f"{t.kind} none yet" for t in r.turnaround) + ".")
     lines.append(f"Omitted: {max(0, len(b.closet) - 4)} closet rows, {max(0, len(r.pending) - 6)} request IDs "
                  f"({sum(x.stale for x in r.pending[6:])} stale), {labels_trimmed} full slot labels, "
                  f"{b.stock_warning_count} stock warning details. No slots omitted.")
