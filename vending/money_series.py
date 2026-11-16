@@ -393,11 +393,11 @@ class _Book:
         self._visit_events(conn)
         self._price_changes(conn)
 
-        # Stock: one read of every movement. The day's end cuts a prefix of them, which is
-        # exactly what `stock.stock(conn, until=...)` would replay (same list, same order).
-        self.movements = sorted(stock.load_movements(conn), key=lambda m: m.at)
-        self.moments = [m.at for m in self.movements]
-        self._replays: dict[int, stock.Stock] = {}
+        # Stock: one read of every movement. Each day's end replays them with
+        # `stock.replay`, exactly what `stock.stock(conn, until=...)` does, so a
+        # product change is split the same way (#97).
+        self.movements = stock.load_movements(conn)
+        self._replays: dict[datetime, stock.Stock] = {}
         counted = self.stock_at(until)
         for s in counted.sales:
             if since < s.at <= until and s.cost_cents is not None:
@@ -412,11 +412,10 @@ class _Book:
                     self.lost_cost[_day(s.at)] += s.cost_cents
 
     def stock_at(self, moment: datetime) -> stock.Stock:
-        """`stock.stock(conn, until=moment)`, from the movements already read. Days with no movement share one."""
-        n = bisect_right(self.moments, moment)
-        if n not in self._replays:
-            self._replays[n] = stock.weighted_average(self.movements[:n])
-        return self._replays[n]
+        """`stock.stock(conn, until=moment)`, from the movements already read."""
+        if moment not in self._replays:
+            self._replays[moment] = stock.replay(self.movements, moment)
+        return self._replays[moment]
 
     def cash_at(self, moment: datetime) -> Fraction:
         """`ledger.balance(conn, moment).balance_cents`, from the cash movements already read."""
