@@ -796,6 +796,29 @@ class TestWildcard(unittest.TestCase):
         self.assertEqual(codes(wild(lower, wildcard=None, slots=already, sourcing=(extras,))), ["wildcard"])
         self.assertTrue(wild(lower, wildcard=None, slots=already).ok)
 
+    def test_an_above_ceiling_slot_with_unknown_contents_caps_every_purchase(self):
+        mystery = {"17": SlotState("17", None, 750, 2, None)}
+        extras = replace(TABLE[2], extra_units_to_closet=60)
+        into_16 = DesiredSlot("16", product=PICKLE, sale_price="6.50", fill_to=1)
+        p = wild(into_16, wildcard="17", slots=mystery, sourcing=(extras,))
+        self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals])
+        self.assertTrue(wild(into_16, wildcard="17", slots=mystery).ok)      # one $29.99 pack is under the cap
+
+    def test_a_wildcard_cant_start_while_its_product_is_in_another_slot_now(self):
+        # 16 and 17 both hold PICKLE. Moving 16 away while raising 17: if 16's line failed, PICKLE would be
+        # in two slots with 17 the wildcard.
+        both = {"16": SlotState("16", PICKLE, 650, 2, 250), "17": SlotState("17", PICKLE, 650, 2, 250)}
+        sprite_16 = DesiredSlot("16", product=SPRITE, sale_price="3.00", fill_to=10)
+        p = wild(sprite_16, pickle_17(price="7.50"), wildcard="17", slots=both, sourcing=(SPRITE_SOURCING,))
+        self.assertIn(("wildcard", "17"), [(r.code, r.slot) for r in p.refusals])
+        # Moving 16 away first, with nothing bought for PICKLE, is the way out.
+        self.assertTrue(wild(sprite_16, wildcard=None, slots=both, sourcing=(SPRITE_SOURCING,)).ok)
+        # An existing wildcard with a duplicate: no buying its product until the duplicate is gone.
+        dup = {"16": SlotState("16", PICKLE, 650, 2, 250), "17": SlotState("17", PICKLE, 750, 2, 250)}
+        p = wild(sprite_16, pickle_17(price="7.50"), wildcard="17", slots=dup, sourcing=(SPRITE_SOURCING,))
+        self.assertIn(("wildcard", "17"), [(r.code, r.slot) for r in p.refusals])
+        self.assertTrue(wild(sprite_16, wildcard="17", slots=dup, sourcing=(SPRITE_SOURCING,)).ok)
+
     def test_the_wildcard_must_be_one_of_ours(self):
         self.assertEqual(codes(wild(restock_15(), wildcard="99")), ["wildcard"])
 
