@@ -12,7 +12,7 @@ Before each Friday restock the agent needs two answers:
 | Part | Today (code) | Proposed (this doc) |
 |---|---|---|
 | Stock on hand | Receipts + polls + counts (`vending/stock.py`) | Same |
-| Demand per slot | `units_per_day`, last 7 calendar days; ignores sold-out days and breaks | In-stock rate per class day, segment prior until 5 class days |
+| Demand per slot | **Built (#110 item 6):** `units_per_class_day` in `get_machine_state` (`vending/demand.py`, `vending/class_days.py`); `units_per_day` (last 7 calendar days) is still there | In-stock rate per class day, segment prior until 5 class days |
 
 Principles: `docs/agent/inventory-belief.md`. Money: `docs/opening-capital-plan.md` (#90). Restock thresholds: `docs/restock-policy.md` (#91).
 
@@ -81,7 +81,7 @@ Whole week: 23.3 units per class day (REPORT.md, "Next 4 weeks") × 5 = 116.5, a
 1. **Visit-time sales can land on the wrong product (#97).** An old-product sale just before the door opens is subtracted from the new product. Units balance, but shrinkage is overstated and new on-hand understated. Of 450 units our slots sold 21 Sep to 11 Nov, 37 (8%) fell in a visit window (`docs/cutover.md`, PR #105, open). PR #112 fixes the accounting side: it splits a swap day's sales between the two products using the two prices. A swap where both products have the same price still can't be split (#110, item 7).
 2. **Hidden product.** A photo sees only the front of a rail. Only a `door` count is exact.
 3. **Counts don't correct the books.** They override `get_machine_state` but not `vending/stock.py` or the ledger.
-4. **The agent's rate ignores censoring and the calendar.** `units_per_day` divides by calendar days, so a sold-out slot looks slow and a break week makes `days_of_stock_left` huge.
+4. **Fixed for the agent: `units_per_class_day`.** `units_per_day` divides by calendar days, so a sold-out slot looks slow and a break week makes `days_of_stock_left` huge. `units_per_class_day` counts only class days the slot held stock, and the agent's rules (`docs/agent/inventory-belief.md`) say to plan with it. Its limits: a class day counts when the slot held stock as it began, so the day it sold out counts in full; and a slot with only a person's count, no receipts, gets the prior.
 5. **No history for our products.** Per-slot fall rates (staff's products and prices) don't transfer. Category results do, loosely: energy 45% of our units, caffeinated 65% (finding 14).
 6. **Machine-wide data ends.** After 3 Dec polls may carry only our 20 selections (#102); whole-machine totals stop before the start (#84).
 7. **Winter Holiday Break, 22 Dec to 1 Jan.** Closed Fri 25 Dec, Mon 28 Dec, Thu 31 Dec, Fri 1 Jan. A Fri 18 Dec fill faces 1 class day (Mon 21 Dec) before Mon 4 Jan. The run ends at week 9 (`docs/agent/goal-and-scoring.md`): Wed 3 Feb if break weeks count, about 10 to 17 Feb if not (not yet asked); only in the second case can the Presidents Day closure, Mon 15 Feb, fall inside it.
@@ -118,7 +118,7 @@ To number in `docs/assumptions.md` (open PRs use A16-A19: #69 A16, #99 A17-A18, 
 ## Open decisions
 
 - **Does #68's forecast feed the agent?** Recommended: no. Team to decide (#93).
-- **Add the in-stock rate and a "sold out since" time to `get_machine_state`?** Depends on the above; agent docs wait for #99 and #100.
+- **Add the in-stock rate and a "sold out since" time to `get_machine_state`?** The in-stock rate is built (`units_per_class_day`, with the segment prior until 5 class days); a "sold out since" time is not.
 - **Should a door count post a correction to the books?** Not decided.
 - **Cost method:** weighted average (`vending/stock.py` today) or FIFO.
 - **Restocks on Fri 25 Dec and Fri 1 Jan** (closures). Not yet asked in #102.

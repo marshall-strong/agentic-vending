@@ -42,7 +42,11 @@ should do next.
 - **Outputs**: one row per slot (all 20) in `data`: `price`, `lifetime_units`,
   `units_sold_in_window` and `units_per_day` over the last 7 days of stored polls; and, from the
   purchase receipts, `product`, `stock_on_hand`, `units_sold_since_load`, `days_since_loaded`
-  and `days_of_stock_left`. Also the closet (back stock) per product in `closet`, with `units`,
+  and `days_of_stock_left`. The demand estimate to plan with: `units_per_class_day` (units sold
+  per class day while the slot held stock, since its product went in; the fall segment rate for
+  its price until it has 5 such days), `rate_basis` (which of the two, in words),
+  `class_days_in_stock` (null without receipts) and `class_days_of_stock_left` (on hand, the
+  count's when it is newer, ÷ the rate). Also the closet (back stock) per product in `closet`, with `units`,
   `unit_cost` and `value_at_cost`, and its total in `closet_value_at_cost`. Plus `as_of` (the
   poll's time), `window_start`, `stale` and any stock `warnings`.
 - **Preconditions**: at least one good poll stored by the history sync
