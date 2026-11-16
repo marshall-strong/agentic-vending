@@ -48,6 +48,16 @@ leaves them out looks complete and isn't. So `gross_profit_cents` and
 costs we do know, beside the flags that say which are missing. A running
 total (`cumulative`) of an unknown figure is unknown from the first unknown day.
 
+A fulfilled receipt line with no `total_paid` is left out of what was paid, as
+`ledger.balance` leaves it out. So `purchases_cents` is the priced lines only and
+`purchases_complete` is false on its day, and `cash_balance_cents` is over by
+what the line cost and `cash_complete` is false from its day on (the line is
+still unpriced on every later day). Net worth is None while it is. A week takes
+`purchases_complete` from all its days and `cash_complete` from its last day.
+
+Takings with no poll behind them are counted as 0, as the ledger counts them.
+A note says so in the JSON and in the table.
+
 Everything is read once for the whole window: the counters, the entries, the
 receipts and every stock movement. A day's inventory is a replay of the
 movements up to its end, which is what `stock.stock(until=...)` does, without
@@ -99,11 +109,15 @@ from vending.tools.sales_history import tax_cents
 EASTERN = ZoneInfo(ledger.TIMEZONE)
 MICROSECOND = timedelta(microseconds=1)
 NO_OPENING = "the ledger has no opening entry, so none of this is competition money yet"
+NO_GOOD_POLL = "no good poll this day, so its sales show on the next day that has one"
+# How the notes about the polls behind the takings begin: ours above, and `ledger.rises_between`'s
+# ("no polls in the window, ..." and "no poll at or before ..."). The table shows these in full.
+POLL_NOTES = ("no good poll", "no polls", "no poll at or before")
 
 # The lines a day has and a week adds up. Each is summed exactly, so a week's are its days'.
 FLOWS = ("takings_cents", "sales_tax_cents", "units_sold", "units_costed", "cost_of_sales_cents",
          "shrinkage_units", "shrinkage_cents", "visits", "visit_fees_cents", "token_spend_cents",
-         "adjustments_cents", "purchases_cents", "capital_cents", "tax_remitted_cents")
+         "adjustments_cents", "purchases_cents", "unpaid_lines", "capital_cents", "tax_remitted_cents")
 # What `cumulative` can run: the flows and the figures worked out from them.
 RUNNING = FLOWS + ("revenue_ex_tax_cents", "gross_profit_known_cents", "net_known_cents",
                    "gross_profit_cents", "net_cents")
@@ -159,14 +173,27 @@ class _Lines:
         return self.net_known_cents if self.costs_complete else None
 
     @property
+    def purchases_complete(self) -> bool:
+        """Every receipt line in the row has a `total_paid`, so `purchases_cents` is the whole figure."""
+        return self.unpaid_lines == 0
+
+    @property
+    def cash_complete(self) -> bool:
+        """Every receipt line since the opening has a `total_paid`, so the cash balance is the whole figure.
+
+        A line without one leaves the balance over by what it cost, from its day on, as in `ledger.balance`.
+        """
+        return self.cash_unpaid_lines == 0
+
+    @property
     def net_worth_cents(self) -> Fraction | None:
-        """Spendable cash plus inventory at cost; None unless both are known and every unit on hand has a cost.
+        """Spendable cash plus inventory at cost; None unless both are known and complete.
 
         Spendable is `ledger.Balance.spendable_cents`: the balance less the sales tax still owed. That
         tax was never ours, so counting it would overstate what the business is worth.
         """
-        if (self.cash_balance_cents is None or self.tax_owed_cents is None or self.inventory_cents is None
-                or not self.inventory_complete):
+        if (self.cash_balance_cents is None or not self.cash_complete or self.tax_owed_cents is None
+                or self.inventory_cents is None or not self.inventory_complete):
             return None
         return self.cash_balance_cents - self.tax_owed_cents + self.inventory_cents
 
@@ -189,10 +216,12 @@ class Day(_Lines):
     visit_fees_cents: int
     token_spend_cents: Fraction
     adjustments_cents: Fraction     # signed
-    purchases_cents: Fraction       # receipts: cash out now, cost of sales as the units sell
+    purchases_cents: Fraction       # receipts: cash out now, cost of sales as the units sell; the priced lines
+    unpaid_lines: int               # receipt lines with no total_paid, which purchases leave out
     capital_cents: Fraction         # cash in, not profit
     tax_remitted_cents: Fraction    # cash out, not a cost: the tax was never revenue
     cash_balance_cents: Fraction | None     # `ledger.balance` at the day's end; None when not counted
+    cash_unpaid_lines: int                  # receipt lines since the opening with no total_paid: it leaves them out
     tax_owed_cents: Fraction | None         # its sales tax set aside since the opening, less remitted
     inventory_cents: Fraction | None        # machine and closet at cost, at the day's end
     inventory_complete: bool
@@ -236,9 +265,11 @@ class Week(_Lines):
     token_spend_cents: Fraction
     adjustments_cents: Fraction
     purchases_cents: Fraction
+    unpaid_lines: int
     capital_cents: Fraction
     tax_remitted_cents: Fraction
     cash_balance_cents: Fraction | None     # at the end of its last day in the series
+    cash_unpaid_lines: int
     tax_owed_cents: Fraction | None
     inventory_cents: Fraction | None
     inventory_complete: bool
@@ -296,6 +327,7 @@ class _Book:
         self.fees: dict[date, int] = defaultdict(int)
         self.purchases: dict[date, Fraction] = defaultdict(Fraction)
         self.unpaid_lines: dict[date, int] = defaultdict(int)
+        self.unpaid_moments: list[datetime] = []     # every unpriced line since the opening, for the cash
         self.entries: dict[tuple[date, str], Fraction] = defaultdict(Fraction)
         self.events: dict[date, list[Event]] = defaultdict(list)
         # Every cash movement since the opening, (when, signed cents), for the balance at each day's end.
@@ -345,7 +377,9 @@ class _Book:
                 " and l.resolved_at >= %s and l.resolved_at <= %s order by l.resolved_at, l.request_id, l.line_no",
                 (opened.at, until)):
             paid = stock.cents(paid)
-            if paid is not None:
+            if paid is None:
+                self.unpaid_moments.append(at)          # in order: the query sorts by resolved_at
+            else:
                 self.cash.append((at, -paid))
             if at >= first:
                 if paid is None:
@@ -388,6 +422,10 @@ class _Book:
         """`ledger.balance(conn, moment).balance_cents`, from the cash movements already read."""
         n = bisect_right(self.cash_moments, moment)
         return self.opened.amount_cents + sum((cents for _, cents in self.cash[:n]), Fraction(0))
+
+    def unpaid_at(self, moment: datetime) -> int:
+        """Receipt lines with no total_paid from the opening to `moment`: what `cash_at` leaves out."""
+        return bisect_right(self.unpaid_moments, moment)
 
     def tax_owed_at(self, moment: datetime) -> Fraction:
         """`ledger.balance(conn, moment).tax_owed_cents`: tax set aside since the opening, less remitted."""
@@ -437,6 +475,7 @@ class _Book:
         machine, closet, inventory_complete = ledger._inventory(counted)
         inventory = None if machine is None and closet is None else (machine or 0) + (closet or 0)
         units, costed = self.units[d], self.costed[d]
+        cash_unpaid = self.unpaid_at(finish)
 
         notes = []
         if start > _midnight(d):
@@ -446,7 +485,7 @@ class _Book:
         if not ended:
             notes.append("the day wasn't over when this was read, so these are its figures so far")
         elif d not in self.poll_days:
-            notes.append("no good poll this day, so its sales show on the next day that has one")
+            notes.append(NO_GOOD_POLL)
         if units > costed:
             notes.append(f"{units - costed} of {units} units sold have no known cost (sold from a slot before we "
                          "first loaded it, or past what we loaded), so gross profit and net are unknown; "
@@ -458,22 +497,30 @@ class _Book:
                          "net at known cost leaves them out")
         if self.unpaid_lines[d]:
             notes.append(f"{self.unpaid_lines[d]} receipt lines have no total_paid, so purchases leave them out")
+        if cash_unpaid:
+            notes.append(_cash_note(cash_unpaid))
         if not inventory_complete:
             notes.append("some units on hand have no known cost, so inventory at cost leaves them out "
                          "and net worth is unknown")
         return Day(
             d, start, ended, self.takings[d], tax, units, costed, self.cost[d],
             self.lost_units[d], self.lost_cost[d], d not in self.lost_unknown, self.visits[d], self.fees[d],
-            -self.entries[d, "tokens"], self.entries[d, "adjustment"], self.purchases[d],
+            -self.entries[d, "tokens"], self.entries[d, "adjustment"], self.purchases[d], self.unpaid_lines[d],
             self.entries[d, "capital"], -self.entries[d, "tax_remitted"],
-            self.cash_at(finish), self.tax_owed_at(finish), inventory, inventory_complete,
+            self.cash_at(finish), cash_unpaid, self.tax_owed_at(finish), inventory, inventory_complete,
             tuple(sorted(self.events[d], key=lambda e: (e.at, e.kind, e.reference or ""))), tuple(notes))
 
 
 def _not_counted(d: date, why: str, now: datetime) -> Day:
     """A day outside the competition: zeros, no balances, no events, and the reason."""
     return Day(d, None, _midnight(d + timedelta(days=1)) <= now, 0, 0, 0, 0, Fraction(0), 0, Fraction(0), True,
-               0, 0, Fraction(0), Fraction(0), Fraction(0), Fraction(0), Fraction(0), None, None, None, False, (), (why,))
+               0, 0, Fraction(0), Fraction(0), Fraction(0), 0, Fraction(0), Fraction(0), None, 0, None, None, False,
+               (), (why,))
+
+
+def _cash_note(lines: int) -> str:
+    return (f"{lines} receipt lines since the opening have no total_paid, so the cash balance leaves them out "
+            "and net worth is unknown")
 
 
 def _before_opening(opened: ledger.Entry) -> str:
@@ -513,7 +560,7 @@ def by_week(days: list[Day], opening_day: date | None) -> list[Week]:
         counted = [d for d in group if d.counted]
         sums = {name: sum((getattr(d, name) for d in group), Fraction(0)) for name in FLOWS}
         for name in ("takings_cents", "sales_tax_cents", "units_sold", "units_costed", "shrinkage_units", "visits",
-                     "visit_fees_cents"):
+                     "visit_fees_cents", "unpaid_lines"):
             sums[name] = int(sums[name])
         last = group[-1]
         partial = sum(d.whole for d in group) < 7
@@ -527,11 +574,20 @@ def by_week(days: list[Day], opening_day: date | None) -> list[Week]:
             if not counted[-1].ended:
                 why += ", the last not over"
             notes.append(why)
+        # The window's own note on its polls (none at all, or no baseline) is on its first counted day.
+        notes += [n for d in counted for n in d.notes if n.startswith(POLL_NOTES) and n != NO_GOOD_POLL]
+        no_poll = sum(NO_GOOD_POLL in d.notes for d in counted)
+        if no_poll:
+            notes.append(f"{no_poll} of its days had no good poll, so their sales show on the next day that has one")
         if sums["units_sold"] > sums["units_costed"]:
             notes.append(f"{sums['units_sold'] - sums['units_costed']} of {sums['units_sold']} units sold have no "
                          "known cost, so gross profit and net are unknown")
         if not all(d.shrinkage_complete for d in group):
             notes.append("some units lost without a sale have no known cost, so net is unknown")
+        if sums["unpaid_lines"]:
+            notes.append(f"{sums['unpaid_lines']} receipt lines have no total_paid, so purchases leave them out")
+        if counted and last.cash_unpaid_lines:
+            notes.append(_cash_note(last.cash_unpaid_lines))
         if counted and not last.inventory_complete:
             notes.append("some units on hand have no known cost, so net worth is unknown")
         out.append(Week(
@@ -540,8 +596,9 @@ def by_week(days: list[Day], opening_day: date | None) -> list[Week]:
             sums["takings_cents"], sums["sales_tax_cents"], sums["units_sold"], sums["units_costed"],
             sums["cost_of_sales_cents"], sums["shrinkage_units"], sums["shrinkage_cents"],
             all(d.shrinkage_complete for d in group), sums["visits"], sums["visit_fees_cents"],
-            sums["token_spend_cents"], sums["adjustments_cents"], sums["purchases_cents"], sums["capital_cents"],
-            sums["tax_remitted_cents"], last.cash_balance_cents, last.tax_owed_cents, last.inventory_cents,
+            sums["token_spend_cents"], sums["adjustments_cents"], sums["purchases_cents"], sums["unpaid_lines"],
+            sums["capital_cents"], sums["tax_remitted_cents"], last.cash_balance_cents, last.cash_unpaid_lines,
+            last.tax_owed_cents, last.inventory_cents,
             last.inventory_complete,
             tuple(notes)))
     return out
@@ -586,7 +643,9 @@ def as_json(row: Day | Week) -> dict:
     out |= {"units_sold": row.units_sold, "units_costed": row.units_costed, "shrinkage_units": row.shrinkage_units,
             "visits": row.visits, "cost_of_sales_complete": row.cost_of_sales_complete,
             "shrinkage_complete": row.shrinkage_complete, "costs_complete": row.costs_complete,
-            "inventory_complete": row.inventory_complete,
+            "inventory_complete": row.inventory_complete, "unpaid_lines": row.unpaid_lines,
+            "purchases_complete": row.purchases_complete, "cash_unpaid_lines": row.cash_unpaid_lines,
+            "cash_complete": row.cash_complete,
             "exact_cents": {name: _exact(getattr(row, name + "_cents")) for name in MONEY}}
     if isinstance(row, Day):
         out["events"] = [{"at": _utc(e.at), "kind": e.kind, "detail": e.detail, "reference": e.reference,
@@ -634,6 +693,8 @@ def _flags(row: Day | Week) -> list[str]:
         out.append(f"from the opening at {row.counted_from.astimezone(EASTERN):%H:%M}")
     if isinstance(row, Day) and not row.ended:
         out.append("so far")
+    # Takings with no poll behind them read as 0.00, so the row says why. A week's note counts its days.
+    out += [n for n in row.notes if n.startswith(POLL_NOTES) or (isinstance(row, Week) and "had no good poll" in n)]
     if not row.cost_of_sales_complete:
         out.append(f"{row.units_sold - row.units_costed} of {row.units_sold} units not costed")
     if not row.shrinkage_complete:
@@ -645,6 +706,10 @@ def _flags(row: Day | Week) -> list[str]:
                          ("capital", row.capital_cents), ("tax remitted", row.tax_remitted_cents)):
         if cents:
             out.append(f"{label} {ledger.money(cents)}")
+    if not row.purchases_complete:
+        out.append(f"purchases leave out {row.unpaid_lines} receipt lines with no total_paid")
+    if not row.cash_complete:
+        out.append(f"cash leaves out {row.cash_unpaid_lines} receipt lines with no total_paid, so net worth unknown")
     if not row.inventory_complete:
         out.append("inventory not all costed")
     return out
