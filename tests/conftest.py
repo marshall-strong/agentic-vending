@@ -110,11 +110,134 @@ def database_url():
     return url
 
 
-@pytest.fixture
-def schema_url(database_url, monkeypatch):
-    """(url, schema) for a fresh, migrated schema, dropped after the test."""
-    import psycopg
+# Everything about a schema's objects that a test could change: tables, columns, defaults,
+# constraints, indexes, owners, grants, functions, triggers. Read with an empty search_path so
+# every name is qualified, then the schema's own name is replaced, so two schemas built by the
+# same migrations print the same.
+_SHAPE = """
+select string_agg(line, E'\\n' order by line) from (
+    select 'schema ' || coalesce(nspacl::text, '') || ' ' || nspowner::regrole::text as line
+    from pg_namespace where oid = %(s)s::regnamespace
+  union all
+    select 'rel ' || c.oid::regclass::text || ' ' || c.relkind::text || ' ' || c.relowner::regrole::text
+           || ' ' || coalesce(c.relacl::text, '') || ' ' || c.relrowsecurity::text
+    from pg_class c where c.relnamespace = %(s)s::regnamespace
+  union all
+    select 'col ' || a.attrelid::regclass::text || '.' || a.attname || ' '
+           || format_type(a.atttypid, a.atttypmod) || ' ' || a.attnotnull::text || ' '
+           || coalesce(pg_get_expr(d.adbin, d.adrelid), '') || ' ' || coalesce(a.attacl::text, '')
+    from pg_attribute a join pg_class c on c.oid = a.attrelid
+    left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+    where c.relnamespace = %(s)s::regnamespace and a.attnum > 0 and not a.attisdropped
+  union all
+    select 'con ' || conrelid::regclass::text || ' ' || conname || ' ' || pg_get_constraintdef(oid)
+    from pg_constraint where connamespace = %(s)s::regnamespace
+  union all
+    select 'idx ' || indexrelid::regclass::text || ' ' || pg_get_indexdef(indexrelid)
+    from pg_index i join pg_class c on c.oid = i.indexrelid where c.relnamespace = %(s)s::regnamespace
+  union all
+    select 'trg ' || tgrelid::regclass::text || ' ' || tgname from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid where not t.tgisinternal and c.relnamespace = %(s)s::regnamespace
+  union all
+    select 'fn ' || p.oid::regprocedure::text from pg_proc p where p.pronamespace = %(s)s::regnamespace
+  union all
+    select 'type ' || t.oid::regtype::text from pg_type t
+    where t.typnamespace = %(s)s::regnamespace and t.typrelid = 0 and t.typelem = 0
+  union all
+    select 'defacl ' || defaclobjtype::text || ' ' || defaclacl::text from pg_default_acl
+    where defaclnamespace = %(s)s::regnamespace
+) shape
+"""
 
+
+class SchemaPool:
+    """Migrated schemas kept for reuse within one pytest process (one per xdist worker).
+
+    Building a schema is most of a database test's time (create, migrate, drop: about 1 s each
+    on Docker Desktop). A schema whose objects a test left exactly as the migrations made them
+    goes back to the pool with its rows reset to `pristine`'s, a schema migrated once and never
+    handed out. A schema the test changed in any other way (a new table, a grant, a dropped
+    column) is dropped instead, so the next test still starts from what the migrations make.
+    """
+
+    def __init__(self, url: str):
+        import psycopg
+
+        from vending import db
+
+        self.url = url
+        self.admin = psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
+                                     options=db.session_options(url, FAST_COMMIT, "-c search_path="))
+        self.free: list[str] = []
+        self.pristine = self.build()
+        self.shape = self.shape_of(self.pristine)
+        tables = [row[0] for row in self.admin.execute(
+            "select relname from pg_class where relnamespace = %s::regnamespace and relkind = 'r'",
+            (self.pristine,))]
+        references = self.admin.execute(
+            "select c.relname, r.relname from pg_constraint k"
+            " join pg_class c on c.oid = k.conrelid join pg_class r on r.oid = k.confrelid"
+            " where k.contype = 'f' and k.connamespace = %s::regnamespace and c.oid <> r.oid",
+            (self.pristine,)).fetchall()
+        # Children before parents, so every delete passes the foreign keys.
+        order, left = [], set(tables)
+        while left:
+            leaves = sorted(t for t in left if not any(r == t and c in left for c, r in references))
+            order += leaves
+            left -= set(leaves)
+        self.order = order
+        self.seeded = [t for t in tables
+                       if self.admin.execute(f'select exists (select from {self.pristine}."{t}")').fetchone()[0]]
+        self.sequences = self.admin.execute(
+            "select sequencename, start_value from pg_sequences where schemaname = %s",
+            (self.pristine,)).fetchall()
+        assert all(row[0] is None for row in self.admin.execute(
+            "select last_value from pg_sequences where schemaname = %s", (self.pristine,))), \
+            "a migration used a sequence, so resetting them to their start is no longer right"
+
+    def build(self) -> str:
+        from vending import db
+
+        schema = f"test_{uuid.uuid4().hex[:8]}"
+        self.admin.execute(f"create schema {schema}")
+        with open_in(self.url, schema) as conn:
+            db.migrate(conn)
+        return schema
+
+    def shape_of(self, schema: str) -> str:
+        shape = self.admin.execute(_SHAPE, {"s": schema}).fetchone()[0]
+        return shape.replace(f"{schema}.", "<schema>.")
+
+    def take(self) -> str:
+        return self.free.pop() if self.free else self.build()
+
+    def give_back(self, schema: str) -> None:
+        if self.shape_of(schema) != self.shape:
+            self.admin.execute(f"drop schema {schema} cascade")
+            return
+        statements = [f'delete from {schema}."{t}"' for t in self.order]
+        statements += [f'insert into {schema}."{t}" select * from {self.pristine}."{t}"' for t in self.seeded]
+        statements += [f"select setval('{schema}.\"{name}\"', {start}, false)" for name, start in self.sequences]
+        with self.admin.transaction():
+            self.admin.execute(";\n".join(statements))
+        self.free.append(schema)
+
+    def close(self) -> None:
+        for schema in [*self.free, self.pristine]:
+            self.admin.execute(f"drop schema {schema} cascade")
+        self.admin.close()
+
+
+@pytest.fixture(scope="session")
+def _schema_pool(database_url):
+    pool = SchemaPool(database_url)
+    yield pool
+    pool.close()
+
+
+@pytest.fixture
+def schema_url(database_url, _schema_pool, monkeypatch):
+    """(url, schema) for a migrated schema with only the seed rows, dropped or reset after the test."""
     from vending import db, slots
 
     # `migrate` takes one advisory lock for the whole database, so under pytest-xdist every
@@ -125,20 +248,15 @@ def schema_url(database_url, monkeypatch):
         monkeypatch.setattr(db, "MIGRATION_LOCK", db.MIGRATION_LOCK + 1 + int(worker[2:]))
 
     url = database_url
-    admin = psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
-                            options=db.session_options(url, FAST_COMMIT))
-    schema = f"test_{uuid.uuid4().hex[:8]}"
-    admin.execute(f"create schema {schema}")
+    schema = _schema_pool.take()
     with open_in(url, schema) as conn:
-        db.migrate(conn)
         # A slot assignment as the inventory server would give it (TEST_SLOTS), so tools that read it work
         # as they will live. tests/test_slots.py deletes it to test the refusals.
         conn.execute("insert into slot_assignment (team, device_id, slots, first_read_at, last_checked_at, response)"
                      " values (%s, %s, %s, %s, %s, '{}')",
                      (slots.DEFAULT_TEAM, slots.DEVICE_ID, list(TEST_SLOTS), TEST_CHECKED_AT, TEST_CHECKED_AT))
     yield url, schema
-    admin.execute(f"drop schema {schema} cascade")
-    admin.close()
+    _schema_pool.give_back(schema)
 
 
 def open_in(url: str, schema: str):
