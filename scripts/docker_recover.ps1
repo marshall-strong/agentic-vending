@@ -24,7 +24,7 @@
     Every run appends one line to data\logs\docker-recover.log.
 
 .PARAMETER CheckOnly
-    Probe only. Never stop or restart anything.
+    Probe only. Never stop, start, restart or remove anything.
 
 .PARAMETER DryRun
     Print the recovery commands instead of running them. Probes still run for real.
@@ -114,7 +114,9 @@ function Invoke-Timed([string]$File, [string[]]$Arguments, [int]$TimeoutSec) {
     $errTask = $p.StandardError.ReadToEndAsync()
     $exited = $p.WaitForExit($TimeoutSec * 1000)
     if (-not $exited) {
-        & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
+        # taskkill writes to stderr when a process in the tree is already gone; under
+        # ErrorActionPreference=Stop that would throw and end the script mid-recovery.
+        try { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null } catch { }
         $p.WaitForExit(5000) | Out-Null
     }
     $sw.Stop()
@@ -211,15 +213,17 @@ function Clear-StuckContainers {
 
 # Pull the probe image if it isn't cached. Call this only while the engine answers:
 # with the engine down, `image inspect` fails too, and that says nothing about the image.
-function Confirm-ProbeImage {
+# Returns whether the image is there. A failed pull exits 3 only with -Final: before the
+# recovery, a broken Docker network can be what stops the pull.
+function Confirm-ProbeImage([switch]$Final) {
     $img = Invoke-Timed 'docker' @('image', 'inspect', '--format', '{{.Id}}', $ProbeImage) 20
-    if (-not $img.Ok -and -not $img.TimedOut) {
-        Say "probe image $ProbeImage is not cached; pulling it"
-        $pull = Invoke-Timed 'docker' @('pull', $ProbeImage) 180
-        if (-not $pull.Ok) {
-            Finish 3 'no_probe_image' "docker pull $ProbeImage $(Describe $pull)"
-        }
-    }
+    if ($img.Ok -or $img.TimedOut) { return $true }
+    Say "probe image $ProbeImage is not cached; pulling it"
+    $pull = Invoke-Timed 'docker' @('pull', $ProbeImage) 180
+    if ($pull.Ok) { return $true }
+    if ($Final) { Finish 3 'no_probe_image' "docker pull $ProbeImage $(Describe $pull), after a full restart" }
+    Say "docker pull $ProbeImage $(Describe $pull); treating Docker as broken"
+    return $false
 }
 
 # --- 0. Preflight ---------------------------------------------------------------
@@ -236,25 +240,29 @@ if (-not $engineUp -and -not (Get-Process -Name 'Docker Desktop' -ErrorAction Si
     Say 'Docker Desktop is not running; starting it'
     $start = Invoke-Step 'start' 'docker' @('desktop', 'start', '--timeout', "$StartTimeoutSec") ($StartTimeoutSec + 15)
     if ($DryRun) {
-        Finish 0 'not_running' 'dry run: Docker Desktop is not running; start printed, nothing started'
+        Finish 1 'not_running' 'dry run: Docker Desktop is not running; start printed, nothing started'
     }
     if (-not (Wait-Engine 120)) {
         Finish 1 'engine_down' "Docker Desktop did not answer within 120s after start ($(Describe $start))"
     }
     $engineUp = $true
+} elseif (-not $engineUp) {
+    # Docker Desktop runs but the engine doesn't answer. It may still be starting (just
+    # after login), so give it a minute before treating it as hung.
+    Say 'Docker Desktop is running but the engine does not answer; waiting up to 60s'
+    $engineUp = Wait-Engine 60
 }
-# If Docker Desktop runs but the engine doesn't answer, the probe below fails and the
-# recovery runs. The image is checked after the recovery instead.
-if ($engineUp) { Confirm-ProbeImage }
+# If the engine still doesn't answer, the probe below fails and the recovery runs.
+$imageOk = $engineUp -and (Confirm-ProbeImage)
 
 # --- 1. Probe ------------------------------------------------------------------
-$healthy = Test-Engine 'first'
+$healthy = $imageOk -and (Test-Engine 'first')
 if ($SimulateHang) {
     Say 'first probe: -SimulateHang set, treating it as failed'
     $healthy = $false
 }
 if ($healthy) {
-    Clear-StuckContainers
+    if (-not $CheckOnly) { Clear-StuckContainers }
     Finish 0 'healthy' 'docker run worked; nothing restarted'
 }
 if ($CheckOnly) {
@@ -287,8 +295,8 @@ if (-not $shutdown.Ok -or -not $boot.Ok) {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)
     if ($isAdmin) {
-        Say 'WSL is wedged; restarting WSLService (elevated)'
-        Restart-Service -Name WSLService -Force
+        $svc = Invoke-Step 'restart-wslservice' 'powershell.exe' @('-NoProfile', '-Command',
+            'Restart-Service -Name WSLService -Force') $WslShutdownTimeoutSec
         $boot = Invoke-Step 'wsl-boot' 'wsl.exe' @('-d', 'docker-desktop', '-e', 'true') $WslBootTimeoutSec
     }
     if ($boot -eq $null -or -not $boot.Ok) {
@@ -305,11 +313,14 @@ if (-not $DryRun -and -not (Wait-Engine 120)) {
 # Kevin's WSL sshd (`ssh laptop`) went down with `wsl --shutdown`; bring it back now.
 if (Get-ScheduledTask -TaskName 'KsaiWslKeepalive' -ErrorAction SilentlyContinue) {
     if ($DryRun) { Say 'DRY RUN, would run scheduled task KsaiWslKeepalive' }
-    else { Start-ScheduledTask -TaskName 'KsaiWslKeepalive'; Say 'started scheduled task KsaiWslKeepalive (WSL sshd)' }
+    else {
+        try { Start-ScheduledTask -TaskName 'KsaiWslKeepalive'; Say 'started scheduled task KsaiWslKeepalive (WSL sshd)' }
+        catch { Say "could not start scheduled task KsaiWslKeepalive: $_" }
+    }
 }
 
 # --- 3. Probe again, restore containers ------------------------------------------
-if (-not $DryRun) { Confirm-ProbeImage }
+if (-not $DryRun) { Confirm-ProbeImage -Final | Out-Null }
 if (-not (Test-Engine 'second')) {
     Finish 1 'still_hung' 'docker run still fails after the full restart. Collect `docker desktop diagnose` and see docs/docker-recovery.md.'
 }
@@ -317,6 +328,7 @@ if (-not (Test-Engine 'second')) {
 $after = Get-RunningNames
 if ($null -eq $after) { $after = @() }
 $restarted = @()
+$notRestored = @()
 foreach ($name in $before) {
     if ($after -notcontains $name) {
         # Skip containers that are gone or were started with --rm: they aren't coming back.
@@ -324,10 +336,12 @@ foreach ($name in $before) {
         if (-not $ar.Ok -or $ar.Output -eq 'true') { Say "restore: skipping $name (gone, or a --rm container)"; continue }
         $r = Invoke-Step "restore $name" 'docker' @('start', $name) 60
         if ($r.Ok -and -not $DryRun) { $restarted += $name }
+        elseif (-not $r.Ok) { $notRestored += $name }
     }
 }
 if ($restarted.Count) { Say "restarted: $($restarted -join ', ')" }
 
 Clear-StuckContainers
 $detail = if ($DryRun) { 'dry run: escalation path printed, nothing stopped' } else { 'docker run works again after stop + wsl --shutdown + start' }
+if ($notRestored.Count) { $detail += "; could not restart: $($notRestored -join ', ') (start them by hand)" }
 Finish 0 'recovered' $detail

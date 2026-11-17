@@ -14,7 +14,8 @@ Don't improvise restarts. The script does the whole escalation, and every step h
 
 0. **Start.** If the engine doesn't answer and Docker Desktop isn't running at all (after a
    reboot, for example), the script starts it and waits for the engine. With `-CheckOnly`
-   it reports this and exits 1 instead.
+   it reports this and exits 1 instead. If Docker Desktop is running but its engine doesn't
+   answer yet, the script waits up to a minute before treating it as hung.
 1. **Probe.** `docker version`, then `docker run --rm alpine:3 true` (60 s). If both work,
    the script stops and restarts nothing.
 2. **Recover.** `docker desktop stop --force` (if that hangs, it kills the Docker Desktop
@@ -30,11 +31,12 @@ Don't improvise restarts. The script does the whole escalation, and every step h
 | Exit code | Meaning | What to do |
 |---|---|---|
 | 0 | Docker can run containers (healthy, or recovered) | Continue |
-| 1 | Still broken after the full restart, or Docker Desktop didn't answer within 120 s of starting | Run `docker desktop diagnose`, tell Kevin |
+| 1 | Still broken after the full restart, or Docker Desktop didn't answer within 120 s of starting. With `-CheckOnly`: hung or not running | Run `docker desktop diagnose`, tell Kevin |
 | 2 | The WSL service itself is wedged | Elevated PowerShell: `Restart-Service WSLService -Force`, run the script again. If that hangs, reboot. |
-| 3 | Probe image `alpine:3` is missing and can't be pulled | Network problem, not Docker |
+| 3 | Probe image `alpine:3` is missing and can't be pulled, even after a full restart | Network problem, not Docker |
+| 4 | The `docker` command isn't on PATH | Install or repair Docker Desktop |
 
-Options: `-CheckOnly` probes and never restarts anything. `-DryRun -SimulateHang` prints the
+Options: `-CheckOnly` probes and never restarts or removes anything. `-DryRun -SimulateHang` prints the
 escalation without stopping anything (use it to test the script). Each run adds one line to
 `data\logs\docker-recover.log`, so we can see how often this happens.
 
