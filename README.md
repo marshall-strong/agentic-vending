@@ -238,7 +238,8 @@ Run it again any time to pick up new polls; it only fetches what it doesn't have
 touches the machine itself: it reads the bridge's stored history. Neither the sync nor the
 server migrates on its own: on a database that is behind, each refuses to run and names
 `migrate`, so nothing started from a branch can change the shared Azure database's schema.
-Run the tests with `pytest`.
+Run the tests with `pytest`, or `pytest -n 6` to spread them over six processes (about 1.5 to 2
+minutes instead of 4 on a laptop; more workers than that was slower on Kevin's laptop).
 
 Before the live run starts, a person records the opening capital once with
 `python -m vending.ledger open --amount 600.00 --by NAME`; until then `get_account_balance`
