@@ -123,7 +123,7 @@ select string_agg(line, E'\\n' order by line) from (
            || ' ' || coalesce(c.relacl::text, '') || ' ' || c.relrowsecurity::text
     from pg_class c where c.relnamespace = %(s)s::regnamespace
   union all
-    select 'col ' || a.attrelid::regclass::text || '.' || a.attname || ' '
+    select 'col ' || a.attrelid::regclass::text || '.' || a.attname || ' ' || a.attnum::text || ' '
            || format_type(a.atttypid, a.atttypmod) || ' ' || a.attnotnull::text || ' '
            || coalesce(pg_get_expr(d.adbin, d.adrelid), '') || ' ' || coalesce(a.attacl::text, '')
     from pg_attribute a join pg_class c on c.oid = a.attrelid
@@ -148,6 +148,10 @@ select string_agg(line, E'\\n' order by line) from (
     where defaclnamespace = %(s)s::regnamespace
 ) shape
 """
+
+
+class _NotReusable(Exception):
+    """A schema that goes back to the pool by being dropped."""
 
 
 class SchemaPool:
@@ -183,6 +187,7 @@ class SchemaPool:
         order, left = [], set(tables)
         while left:
             leaves = sorted(t for t in left if not any(r == t and c in left for c, r in references))
+            assert leaves, f"foreign keys form a cycle among {sorted(left)}; the pool can't order the deletes"
             order += leaves
             left -= set(leaves)
         self.order = order
@@ -211,21 +216,38 @@ class SchemaPool:
     def take(self) -> str:
         return self.free.pop() if self.free else self.build()
 
-    def give_back(self, schema: str) -> None:
-        if self.shape_of(schema) != self.shape:
-            self.admin.execute(f"drop schema {schema} cascade")
+    def give_back(self, schema: str, reuse: bool = True) -> None:
+        """Reset `schema` for the next test, or drop it.
+
+        Dropped instead when the test failed (a thread it started may still write after the
+        reset, as one in tests/test_submit.py can when its join times out), when its objects
+        changed, or when checking or resetting it fails for any reason.
+        """
+        try:
+            if not reuse or self.shape_of(schema) != self.shape:
+                raise _NotReusable
+            statements = [f'delete from {schema}."{t}"' for t in self.order]
+            statements += [f'insert into {schema}."{t}" select * from {self.pristine}."{t}"' for t in self.seeded]
+            statements += [f"select setval('{schema}.\"{name}\"', {start}, false)" for name, start in self.sequences]
+            with self.admin.transaction():
+                self.admin.execute(";\n".join(statements))
+        except Exception:
+            self.admin.execute(f"drop schema if exists {schema} cascade")
             return
-        statements = [f'delete from {schema}."{t}"' for t in self.order]
-        statements += [f'insert into {schema}."{t}" select * from {self.pristine}."{t}"' for t in self.seeded]
-        statements += [f"select setval('{schema}.\"{name}\"', {start}, false)" for name, start in self.sequences]
-        with self.admin.transaction():
-            self.admin.execute(";\n".join(statements))
         self.free.append(schema)
 
     def close(self) -> None:
         for schema in [*self.free, self.pristine]:
             self.admin.execute(f"drop schema {schema} cascade")
         self.admin.close()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Keep each phase's report on the test, so `schema_url` can tell whether the test failed."""
+    report = yield
+    setattr(item, f"rep_{report.when}", report)
+    return report
 
 
 @pytest.fixture(scope="session")
@@ -236,7 +258,7 @@ def _schema_pool(database_url):
 
 
 @pytest.fixture
-def schema_url(database_url, _schema_pool, monkeypatch):
+def schema_url(database_url, _schema_pool, monkeypatch, request):
     """(url, schema) for a migrated schema with only the seed rows, dropped or reset after the test."""
     from vending import db, slots
 
@@ -256,7 +278,8 @@ def schema_url(database_url, _schema_pool, monkeypatch):
                      " values (%s, %s, %s, %s, %s, '{}')",
                      (slots.DEFAULT_TEAM, slots.DEVICE_ID, list(TEST_SLOTS), TEST_CHECKED_AT, TEST_CHECKED_AT))
     yield url, schema
-    _schema_pool.give_back(schema)
+    failed = any(getattr(getattr(request.node, f"rep_{when}", None), "failed", False) for when in ("setup", "call"))
+    _schema_pool.give_back(schema, reuse=not failed)
 
 
 def open_in(url: str, schema: str):
