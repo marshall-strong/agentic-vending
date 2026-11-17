@@ -773,6 +773,20 @@ class TestWildcard(unittest.TestCase):
         self.assertTrue(plan(pickle_17(price="6.50"), sourcing=(replace(dear, primary=replace(
             dear.primary, max_price_per_pack="60.00")),)).ok)
 
+    def test_a_trial_under_the_ceiling_keeps_to_the_cap(self):
+        # The named slot is the wildcard at any price: the capital plan gives it one $82.00 line.
+        dear = Sourcing(PICKLE, PurchaseOption("Amazon", 24, "85.00", url=PICKLE_URL))   # floor $3.85
+        p = wild(pickle_17(price="6.00"), wildcard="17", sourcing=(dear,))
+        self.assertEqual([(r.code, r.slot) for r in p.refusals], [("wildcard", "17")])
+        self.assertIn("$85.00", p.refusals[0].message)
+        self.assertTrue(wild(pickle_17(price="6.00"), wildcard="17").ok)
+
+    def test_the_plan_hash_covers_the_wildcard(self):
+        # Submit records the wildcard, so naming another slot than the preview did must change the hash.
+        hashes = {w: wild(pickle_17(), restock_15(), wildcard=w).plan_hash for w in (None, "15", "17")}
+        self.assertEqual(len(set(hashes.values())), 3)
+        self.assertEqual(hashes[None], plan(pickle_17(), restock_15()).plan_hash)
+
     def test_the_wildcard_product_is_in_no_other_slot(self):
         # Otherwise another slot could buy it past the cap and fill the closet for the wildcard.
         already = {"17": SlotState("17", PICKLE, 750, 2, 250)}

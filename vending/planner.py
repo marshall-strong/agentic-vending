@@ -664,8 +664,12 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         return plan
     week = _week_of(now.astimezone(_tz(config.timezone)), config.week_starts)
     # What it could cost goes in too: a new visit fee leaves the request body as it was.
-    body = json.dumps({"week": week.isoformat(), "request": plan.request(),
-                       "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents}, sort_keys=True)
+    hashed = {"week": week.isoformat(), "request": plan.request(),
+              "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents}
+    if desired.wildcard is not None:
+        # The submission records the wildcard, so a submit naming another slot than the preview did is a change.
+        hashed["wildcard"] = desired.wildcard
+    body = json.dumps(hashed, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
                 hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle, desired.wildcard)
 
@@ -689,6 +693,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 # - Its product is in no other slot after the visit, so only its own line buys that
 #   product, and one purchase (extras to the closet included) costs at most the
 #   purchase cap at the worker's maximum, for the primary and for the alternate.
+# - At or under the ceiling, a named slot is a trial (`vending.wildcard_trial`): its
+#   own purchase still keeps to the cap, but its product may be in other slots.
 
 def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -> list[Refusal]:
     wildcard = desired.wildcard
@@ -712,6 +718,13 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
         refusals.append(Refusal("wildcard", (
             f"slot {w.slot} is the wildcard and stays at {_dollars(w.price_cents)}, above the wildcard ceiling of "
             f"{_dollars(config.wildcard_ceiling_cents)}; price it at or under that at this visit"), w.slot))
+    if w.purchase is not None and not (w.price_cents is not None and w.price_cents > ceiling)             and _most(w.purchase) > config.wildcard_purchase_cap_cents:
+        # Above the ceiling, the product rule below caps it. A trial at or under the ceiling is still the
+        # wildcard, and the capital plan gives it one $82.00 line.
+        refusals.append(Refusal("wildcard", (
+            f"slot {w.slot} is the wildcard, and its purchase could cost {_dollars(_most(w.purchase))} at the "
+            f"worker's maximum, over the {_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a "
+            f"cheaper pack"), w.slot))
     starting = w.price_cents is not None and w.price_cents > ceiling and w.slot not in above_now
     ends_above = w.price_cents is not None and w.price_cents > ceiling
     if ends_above and (starting or w.changes_product):

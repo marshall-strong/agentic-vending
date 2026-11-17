@@ -155,3 +155,36 @@ def test_the_poll_window_holding_the_load_is_left_out(conn):
     t = get_machine_state(conn, now=NOW).wildcard_trial
     assert t.units_sold == 15                  # Monday's 3 sold in the window that began before the load
     assert t.profit_per_class_day == f"{(4500 - 333 - 750) / 100 / t.class_days_in_stock:.2f}"
+
+
+def test_a_price_test_ends_when_the_price_is_back_under_the_ceiling(conn):
+    week_of_sales(conn, price15=750)                           # $7.50 to the poll of Monday 26 Oct
+    submit(conn, "r1", "15")
+    # Restocked at $3.00 on Tuesday 27 Oct: the trial counts from the first poll at that price.
+    fulfilled(conn, "r2", datetime(2026, 10, 27, 20, tzinfo=timezone.utc), ("15", "AAA", "primary", "10.00", 20, 0, 0),
+              ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    u15, u16 = 118, 62
+    for n, day in enumerate(("10-28", "10-29", "10-30", "11-02", "11-03", "11-04")):
+        u15, u16 = u15 + 3, u16 + 2
+        store_poll(conn, f"e{n}", f"2026-{day}T22:00:00+00:00", {"15": (300, u15), "16": (200, u16)})
+    t = get_machine_state(conn, now=datetime(2026, 11, 5, 12, tzinfo=timezone.utc)).wildcard_trial
+    assert not t.price_test and t.since == datetime(2026, 10, 28, 22, tzinfo=timezone.utc)
+    assert t.units_sold == 15 and t.verdict == PROMOTE         # the 5 windows after it, at $3.00
+    assert t.weakest_class_days_in_stock == t.class_days_in_stock
+
+
+def test_the_trial_counts_from_when_the_slot_was_named(conn):
+    week_of_sales(conn)
+    submit(conn, "r0", None, at=SINCE - timedelta(days=2))
+    submit(conn, "r1", "15", at=datetime(2026, 10, 21, 23, tzinfo=timezone.utc))
+    t = get_machine_state(conn, now=NOW).wildcard_trial
+    assert t.since == datetime(2026, 10, 21, 23, tzinfo=timezone.utc)
+    assert t.verdict == TOO_EARLY and t.units_sold == 6        # the windows ending 23 and 26 Oct
+    assert current_wildcard(conn) == ("15", datetime(2026, 10, 21, 23, tzinfo=timezone.utc))
+    submit(conn, "r2", "15", at=NOW - timedelta(hours=1))      # named again: the run began on the 21st
+    assert current_wildcard(conn)[1] == datetime(2026, 10, 21, 23, tzinfo=timezone.utc)
+
+
+def test_units_sold_past_the_receipts_make_profit_unknown():
+    r = slot_record("15", "A", SINCE, 5, 3, 900, [None], 8)
+    assert r.profit_cents is None

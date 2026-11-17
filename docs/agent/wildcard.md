@@ -6,7 +6,8 @@ One slot tests products for the other 19 and may sell up to $8.00; it moves only
 
 **A testing ground.** `get_machine_state` shows `wildcard_trial`: the product on trial, its profit per in-stock class day (revenue without tax, less the cost of what sold), the weakest of our other slots over the same days, and a verdict.
 
-- **Price a trial as a regular slot would**, at or under $6.50, so the result carries over. A trial that sells above $6.50 is a price test, not a promotion trial.
+- **Price a trial as a regular slot would**, at or under $6.50, so the result carries over. While it sells above $6.50 it is a price test, not a promotion trial; back at or under, the trial counts from the next poll.
+- **Test a product no other slot holds**, so its sales aren't split. The trial counts from when the product went in or the slot was named, whichever is later.
 - **Judge it at the first Friday visit after 5 in-stock class days**, when its own rate counts (`restocking`).
 - **Promote** when it earns more per day than the weakest other slot. Keep it where it is, now as a regular slot; send the weakest slot's product to the closet; make that slot the wildcard with the next product to test. No stock moves between slots.
 - **Drop** when it doesn't: switch the wildcard to the next product to test. Pick from the catalog, and say why in `slot_reasons`.
@@ -16,6 +17,6 @@ One slot tests products for the other 19 and may sell up to $8.00; it moves only
 - **It moves only at a Friday visit.** A midweek plan can't take a new slot above $6.50.
 - **One at a time.** Any slot priced above $6.50 is the wildcard, so a plan that keeps one there must name it, or reprice it. To move it, lower the old slot at one visit and start the new one at the next. A new wildcard above $6.50 also waits until every other slot's price and contents are known.
 - **One purchase for it costs at most $82.00** at the worker's maximum (`wildcard_purchase_cap_cents`, #90).
-- **Its product is in no other slot**, so `pricing` step 1 (one price per product) still holds, and only its own line buys that product: extras to the closet count toward the $82.00. A slot that was above $6.50 keeps its product to itself until a visit has brought it back under, in case the line that changes it comes back unavailable. When a slot's contents or price are unknown, the preview holds purchases to $82.00 and blocks switches that could put the wildcard's product in two slots; its refusals say what to count or wait for.
+- **Above $6.50, its product is in no other slot**, so `pricing` step 1 (one price per product) still holds, and only its own line buys that product: extras to the closet count toward the $82.00. A slot that was above $6.50 keeps its product to itself until a visit has brought it back under, in case the line that changes it comes back unavailable. When a slot's contents or price are unknown, the preview holds purchases to $82.00 and blocks switches that could put the wildcard's product in two slots; its refusals say what to count or wait for.
 
 **One known limit.** A price changes only with a load (`price_only_unsupported`), so a full slot above $6.50 can't be lowered until it sells a unit; then restock it at the lower price.

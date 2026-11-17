@@ -99,7 +99,7 @@ class WildcardTrial(BaseModel):
     """The wildcard as a testing ground (`docs/agent/wildcard.md`): is its product worth a regular slot?"""
     slot: str
     product: str | None = None                  # null: no receipts show what the slot holds
-    since: datetime | None = None               # when the product on trial went in
+    since: datetime | None = None               # when the trial began: loaded, named or back under the ceiling
     class_days_in_stock: int | None = None
     units_sold: int | None = None               # in whole poll windows since it went in
     profit_per_class_day: str | None = None     # dollars: revenue without tax, less cost of sales

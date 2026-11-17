@@ -3,8 +3,9 @@
 The rule (`docs/agent/wildcard.md`, "A testing ground"):
 
 1. **The trial** is the product in the slot the latest accepted plan named as
-   the wildcard, from when that product went in. A plan that names no wildcard
-   ends the trial.
+   the wildcard. It counts from when that product went in or the slot was first
+   named (in an unbroken run of plans naming it), whichever is later. A plan
+   that names no wildcard, or another slot, ends the trial.
 2. **The measure** is profit per in-stock class day: revenue without tax, less
    the cost of what sold, over the class days the slot held stock
    (`vending.demand`). The restock policy ranks slots by the same yardstick.
@@ -18,13 +19,15 @@ The rule (`docs/agent/wildcard.md`, "A testing ground"):
    slot, and the weakest slot's product goes to the closet; that slot becomes the
    wildcard with the next product to test. Either way the agent acts at a Friday
    visit.
-5. **A trial priced above the ceiling** at any poll is a price test, not a
-   promotion trial: a regular slot couldn't charge that, so its profit wouldn't
-   carry over.
+5. **A trial priced above the ceiling** now is a price test, not a promotion
+   trial: a regular slot couldn't charge that, so its profit wouldn't carry over.
+   Once it is back at or under the ceiling, the trial counts from the first poll
+   at that price.
 
 Revenue and costs count only the poll windows that began after the start. The
 window holding the load mixes the old product's sales with the new one's, so it
-is left out of both.
+is left out of both. Units sold past what the receipts loaded have no cost, so
+they make the profit unknown rather than free.
 
 `judge` and `slot_record` are pure; `current_wildcard` and `trial` read the database.
 """
@@ -88,12 +91,13 @@ def judge(trial: SlotRecord, price_test: bool, others: list[SlotRecord]) -> tupl
         return TOO_EARLY, None, (f"{trial.class_days_in_stock} of {TRIAL_DAYS} in-stock class days so far; "
                                  "judge it at the first Friday visit after it has them")
     if price_test:
-        return PRICE_TEST, None, ("it sold above the ceiling during the trial, so this is a price test, not a "
-                                  "promotion trial: a regular slot couldn't charge that. Price it at or under the "
-                                  "ceiling to test it for promotion")
+        return PRICE_TEST, None, ("it sells above the ceiling, so this is a price test, not a promotion trial: a "
+                                  "regular slot couldn't charge that. Price it at or under the ceiling to test it for "
+                                  "promotion; the trial then counts from the first poll at that price")
     ppd = trial.profit_per_class_day_cents
     if ppd is None:
-        return UNKNOWN, None, "the cost of some of its sales is unknown, so its profit is too"
+        return UNKNOWN, None, ("the cost of some of its sales is unknown (or more sold than the receipts loaded), "
+                               "so its profit is too")
     rivals = [o for o in others if o.class_days_in_stock >= TRIAL_DAYS and o.profit_per_class_day_cents is not None]
     if not rivals:
         return UNKNOWN, None, (f"no other slot has {TRIAL_DAYS} in-stock class days with a known profit over the "
@@ -118,15 +122,23 @@ def _money(cents: Fraction) -> str:
 
 
 def current_wildcard(conn: psycopg.Connection) -> tuple[str | None, datetime | None]:
-    """The slot the latest accepted plan named as the wildcard (None: it named none), and when it was sent.
+    """The slot the latest accepted plan named as the wildcard (None: it named none), and since when.
 
+    "Since" is the first of the unbroken run of accepted plans naming that slot.
     A request the bridge rejected moved nothing, so it doesn't count.
     """
-    row = conn.execute(
+    rows = conn.execute(
         "select s.wildcard, s.at from purchase_submissions s left join purchase_requests r using (request_id)"
-        " where s.status = 'accepted' and r.status is distinct from 'rejected' order by s.at desc, s.id desc limit 1"
-    ).fetchone()
-    return (row[0], row[1]) if row else (None, None)
+        " where s.status = 'accepted' and r.status is distinct from 'rejected' order by s.at desc, s.id desc"
+    ).fetchall()
+    if not rows or rows[0][0] is None:
+        return None, None
+    since = rows[0][1]
+    for slot, at in rows:
+        if slot != rows[0][0]:
+            break
+        since = at
+    return rows[0][0], since
 
 
 def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotCount],
@@ -136,7 +148,7 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
     `counts` are our slots' receipted counts and `loads` every load per slot, as
     `get_machine_state` reads them; `sales` is the stock replay's.
     """
-    slot, _ = current_wildcard(conn)
+    slot, named = current_wildcard(conn)
     if slot is None:
         return None
     w = counts.get(slot)
@@ -144,11 +156,16 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
         return Trial(None, slot, False, None, UNKNOWN,
                      f"slot {slot} is the wildcard, but no receipts show what it holds, so there is nothing to measure")
     ceiling_cents, tax_percent = _setting(conn, "price_ceiling_cents", 650), _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
-    readings = _readings(conn, w.since, now, list(counts))
-    records = {s: _record(c, max(w.since, c.since), now, loads.get(s, []), sales, readings.get(s, []), tax_percent)
+    start = max(w.since, named)
+    readings = _readings(conn, start, now, list(counts))
+    above = [at for at, _, _, price in readings.get(slot, []) if at >= start and price is not None and price > ceiling_cents]
+    price_test = bool(above) and above[-1] == readings[slot][-1][0]   # above the ceiling at the latest poll
+    if above and not price_test:
+        # It counts from the first poll back at or under the ceiling: the window before it may hold
+        # sales at the old price.
+        start = next(at for at, _, _, _ in readings[slot] if at > above[-1])
+    records = {s: _record(c, max(start, c.since), now, loads.get(s, []), sales, readings.get(s, []), tax_percent)
                for s, c in counts.items()}
-    price_test = any(price is not None and price > ceiling_cents
-                     for at, _, _, price in readings.get(slot, []) if at > w.since)
     verdict, weakest, reason = judge(records[slot], price_test, [r for s, r in sorted(records.items()) if s != slot])
     return Trial(records[slot], slot, price_test, weakest, verdict, reason)
 
@@ -168,7 +185,7 @@ def _record(count: stock.SlotCount, start: datetime, now: datetime, loads: list[
     whole = {at for begin, at, _ in counters.windows([(at, units) for at, units, _, _ in readings]) if begin >= start}
     counted = [s for s in mine if s.at in whole and s.taken_at is None and s.product == count.product]
     return slot_record(count.slot, count.product, start, days, sum(s.units for s in counted),
-                       takings, [s.cost_cents for s in counted], tax_percent)
+                       takings, [s.cost_cents if s.costed_units == s.units else None for s in counted], tax_percent)
 
 
 def _readings(conn: psycopg.Connection, since: datetime, until: datetime,
