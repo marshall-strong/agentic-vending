@@ -393,6 +393,16 @@ def test_purchases_and_the_stock_they_bring_go_by_the_same_clock(conn):
     assert (p.receipts_cents, p.inventory_machine_cents) == (1237, 8 * UNIT_COST)
 
 
+def test_pnl_by_week_leaves_development_spend_out_like_pnl(conn):
+    open_ledger(conn)
+    ledger.record_tokens(conn, "12.34", "m", 1, 1, "dev", at=OPENED - timedelta(days=2))
+    ledger.record_tokens(conn, "0.40", "m", 1, 1, "live", at=OPENED + timedelta(days=1))
+    start = OPENED - timedelta(days=3)
+    weeks, p = ledger.pnl_by_week(conn, start, NOW), ledger.pnl(conn, start, NOW)
+    assert p.token_spend_cents == 40 and sum(w.token_spend_cents for w in weeks) == 40
+    assert sum(w.net_cents for w in weeks) == p.net_cents
+
+
 # --- Through the MCP client -------------------------------------------------------------
 
 def test_pnl_by_week_books_each_line_to_its_week_and_adds_up_to_pnl(conn):
@@ -491,7 +501,7 @@ def test_pnl_with_no_opening_counts_every_call_as_development(db):  # noqa: F811
     ledger.record_tokens(db, "12.34", "m", 1, 1, "dev", at=OPENED)
     result = call("get_pnl", {"start": "2026-10-30", "end": "2026-11-09"}).structuredContent
     assert result["success"] and (result["token_spend"], result["net"]) == ("0.00", "0.00")
-    assert any("no opening entry yet" in n for n in result["notes"])
+    assert any(n.startswith("no opening is recorded yet, so every model call (12.34)") for n in result["notes"])
     assert not call("get_account_balance").structuredContent["success"]
 
 

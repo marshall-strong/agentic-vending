@@ -60,8 +60,8 @@ class Pnl(Reply):
 def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> Pnl:
     """Both dates are Eastern calendar days, inclusive. Defaults: the opening moment to today."""
     today = datetime.now(EASTERN).date()
-    opened = ledger.opening(conn)
     if start is None:
+        opened = ledger.opening(conn)
         if opened is None:
             return Pnl(success=False, message=ledger.OPEN_HINT + " Or give start and end dates.")
         first = opened.at
@@ -75,17 +75,7 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         p = ledger.pnl(conn, first, last)
     except SlotsNotRecorded as error:
         return Pnl(success=False, message=str(error))
-    # Model calls before the opening are development spend: they never came out of the $600, so
-    # counting them would make the competition look dearer than it is. The rest of the window stays.
-    excluded = sum((-e.amount_cents for e in ledger.entries(conn, first, last)
-                    if e.kind == "tokens" and (opened is None or e.at < opened.at)), start=0)
-    token_spend = p.token_spend_cents - excluded
-    net = ledger.money(p.net_cents + excluded)
-    notes = list(p.notes)
-    if excluded:
-        notes.append(f"{ledger.money(excluded)} of model calls before the ledger's opening is development spend, "
-                     "not from the $600, so it is left out of token spend and net"
-                     + ("; the ledger has no opening entry yet." if opened is None else "."))
+    net = ledger.money(p.net_cents)
     caveat = "" if p.cost_of_sales_complete else f" ({p.units_sold - p.units_costed} of {p.units_sold} units sold not costed)"
     return Pnl(
         success=True,
@@ -107,7 +97,7 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         shrinkage_units=p.shrinkage_units,
         visit_fees=ledger.money(p.visit_fees_cents),
         visits=p.visits,
-        token_spend=ledger.money(token_spend),
+        token_spend=ledger.money(p.token_spend_cents),
         adjustments=ledger.money(p.adjustments_cents),
         net=net,
         purchases=ledger.money(p.receipts_cents),
@@ -119,5 +109,5 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         inventory_complete=p.inventory_complete,
         weeks=[{"week": w.week.isoformat(), "revenue": ledger.money(w.takings_cents),
                 "tax_set_aside": ledger.money(w.tax_cents)} for w in p.takings.by_week],
-        notes=notes,
+        notes=list(p.notes),
     )

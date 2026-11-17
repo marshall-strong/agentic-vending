@@ -323,6 +323,11 @@ def opening(conn: psycopg.Connection) -> Entry | None:
     return found[0] if found else None
 
 
+def _development(e: Entry, opened: Entry | None) -> bool:
+    """A model call before the opening, or before any opening: development spend, not from the $600 (#104)."""
+    return e.kind == "tokens" and (opened is None or e.at < opened.at)
+
+
 def _sum(recorded: Iterable[Entry], kind: str) -> Fraction:
     return sum((e.amount_cents for e in recorded if e.kind == kind), Fraction(0))
 
@@ -480,7 +485,17 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     if missing:
         notes.append(f"{missing} receipt lines have no total_paid, so purchases and cost of sales leave them out")
     visits, fees = _visits(conn, start, end)
+    opened = opening(conn)
     recorded = entries(conn, start, end)
+    # Model calls before the opening are development spend: counting them would make the competition
+    # look dearer than it is. Only they are left out; the window's other lines stay (#104).
+    dev = money(-sum((e.amount_cents for e in recorded if _development(e, opened)), Fraction(0)))
+    recorded = [e for e in recorded if not _development(e, opened)]
+    if dev != money(0):
+        notes.append(f"{dev} of model calls before the ledger's opening is development spend, not from the $600, "
+                     "so token spend and net leave it out" if opened else
+                     f"no opening is recorded yet, so every model call ({dev}) is development spend, not from the "
+                     "$600, and token spend and net leave it out")
 
     counted = stock.stock(conn, until=end)
     # A rise is booked to the later poll, so the window's sales are the rises at polls after `start`.
@@ -556,7 +571,10 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
         fees[week(at)] += fee
     tokens: dict[date, Fraction] = defaultdict(Fraction)
     adjustments: dict[date, Fraction] = defaultdict(Fraction)
+    opened = opening(conn)
     for e in entries(conn, start, end):
+        if _development(e, opened):
+            continue                                      # left out, as in `pnl()`
         if e.kind == "tokens":
             tokens[week(e.at)] -= e.amount_cents
         elif e.kind == "adjustment":
