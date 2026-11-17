@@ -115,7 +115,7 @@ def only(slots: tuple[str, ...]) -> dict[str, db_explorer.Only]:
 
 def stored_slots(conn: psycopg.Connection) -> tuple[str, ...]:
     """Our selections from the stored assignment (`vending.slots.our_slots`), read per page.
-    None when nothing usable is stored or the table isn't there yet: then no selection is ours."""
+    Empty when nothing usable is stored or the table isn't there yet: then no selection is ours."""
     try:
         return our_slots(conn)
     except (SlotsNotRecorded, psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):

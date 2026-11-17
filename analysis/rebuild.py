@@ -12,11 +12,12 @@ Steps, each stops the run if it fails:
     1. analysis/export_sales.py        (skipped with --no-export)
     2. analysis/sales_analysis.py      writes analysis/out/lab_data.json and analysis_report.md
     3. analysis/labs/*_lab.py          write analysis/out/labs/<lab>/index.html and standalone.html
-    4. the fall run, all 40 selections, polls before the start (3 Dec 2026) only (skipped with --no-fall):
+    4. the fall run, all 40 selections, polls before the fall cut only (FALL_CUTOFF, never after the 3 Dec 2026
+       start; skipped with --no-fall):
        export_sales.py --fall-all to analysis/data/fall40/ (skipped with --no-export), sales_analysis.py on it to
        analysis/out/fall40/, then analysis/fall_rates.py, which writes fall_rates.md
-    5. REPORT.md = analysis_report.md + fall_rates.md (only when every check passed, the run covers all our slots
-       and the fall run ran)
+    5. REPORT.md = analysis_report.md + fall_rates.md (only when every check passed and the run covers all our
+       slots). With --no-fall it is analysis_report.md alone: the rollback when the fall data may not be used (A21).
 
 Full output of every step goes to analysis/out/rebuild_log.txt. Exits 1 if a step fails or all_ok is false.
 """
@@ -53,7 +54,7 @@ def main():
                     help="python with psycopg for the export (default: the project's .venv if there is one, else this one)")
     ap.add_argument("--no-report-copy", action="store_true", help="leave analysis/REPORT.md as it is")
     ap.add_argument("--no-fall", action="store_true",
-                    help="skip the fall run over all 40 selections (then REPORT.md is left as it is)")
+                    help="skip the fall run over all 40 selections, and write REPORT.md without its fall section")
     args = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
@@ -119,16 +120,22 @@ def main():
               f"all_ok {fall_ok}: {OUT / 'fall40' / 'fall_rates.md'}")
     if partial:
         print(f"report    left as is: a narrowed run's report stays in {OUT / 'analysis_report.md'}")
-    elif args.no_fall:
-        print("report    left as is: REPORT.md carries the fall section, and --no-fall skipped it")
-    elif all_ok and fall_ok and not args.no_report_copy:
-        report = (OUT / "analysis_report.md").read_text(encoding="utf-8")
-        section = (OUT / "fall40" / "fall_rates.md").read_text(encoding="utf-8")
-        (ANALYSIS / "REPORT.md").write_text(report.rstrip("\n") + "\n\n" + section.rstrip("\n") + "\n", encoding="utf-8", newline="\n")
-        print(f"report    written to {ANALYSIS / 'REPORT.md'} (the report + the fall section)")
+    elif all_ok and (args.no_fall or fall_ok) and not args.no_report_copy:
+        (ANALYSIS / "REPORT.md").write_text(report_text(args.no_fall), encoding="utf-8", newline="\n")
+        print(f"report    written to {ANALYSIS / 'REPORT.md'} "
+              + ("(the report alone: --no-fall leaves the fall section out)" if args.no_fall else "(the report + the fall section)"))
     all_ok = all_ok and fall_ok is not False
     print(f"log       {OUT / 'rebuild_log.txt'}")
     return 0 if all_ok else 1
+
+
+def report_text(no_fall, out=OUT):
+    """REPORT.md's text: the analysis report, plus the fall section unless `no_fall`."""
+    report = (out / "analysis_report.md").read_text(encoding="utf-8").rstrip("\n") + "\n"
+    if no_fall:
+        return report
+    section = (out / "fall40" / "fall_rates.md").read_text(encoding="utf-8")
+    return report + "\n" + section.rstrip("\n") + "\n"
 
 
 if __name__ == "__main__":

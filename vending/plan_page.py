@@ -483,7 +483,7 @@ def _face(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str]) -> st
     return (f'<div class="pcab"><div class="brand">{_e(DEVICE_ID.upper())} &middot; ROUND {_e(r.id.upper())}</div>'
             f'<div class="glass">{"".join(shelves)}</div></div>'
             f'<div class="legend">{legend}</div>'
-            '<p class="sub">Striped selections aren\'t in our current assignment, which the inventory server may redraw before the 3 Dec start; the day-one products would then move to the new slots. Each lit slot shows units loaded, the product, the '
+            '<p class="sub">Striped selections aren\'t in our current assignment, which the inventory server changes once before the 3 Dec start; the day-one products would then move to the new slots. Each lit slot shows units loaded, the product, the '
             'shelf price and, struck through, its floor. <b class="flag req">R</b> needs a catalog request, '
             '<b class="flag int">I</b> the Interloper sells the same drink, <b class="flag bad">!</b> a price or '
             'column problem. A blue dot: changed since the round before.</p>')

@@ -2,7 +2,7 @@
 
 Stock on hand is an estimate with uncertainty, built from restocks as reset points; demand is censored when a slot runs out, and stockouts shift demand to substitutes.
 
-**Only one thing is guaranteed** (Project Brief (Revised), section 3.1): the message saying which slots are ours. The server may change it once before the competition starts on Thu 3 Dec 2026; it is fixed from then on. Any other input (camera, sales signal, restock record, manual count) may or may not exist. Do not assume vision.
+**Only one thing is guaranteed** (Project Brief (Revised), section 3.1): the message saying which slots are ours. The instructors change it exactly once, through the server, before the competition starts on Thu 3 Dec 2026, and it is fixed from then on (David, 16 Nov). Any other input (camera, sales signal, restock record, manual count) may or may not exist. Do not assume vision.
 
 **Design for these** (section 3.1):
 

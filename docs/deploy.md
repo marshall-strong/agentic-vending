@@ -83,28 +83,55 @@ same `DATABASE_URL`:
 python -m vending.slots record
 ```
 
-It should print `recorded: team ..., device vmc1, 20 slots: ...` with the server's answer, and
-`python -m vending.slots` shows what is stored. Running it again is safe: the same answer only
-updates when it was last checked. The worker also runs it first in every round (`slots_record`),
-so after a deploy it keeps the stored assignment in step with the server without anyone running it.
+It should print `recorded: team group-b, device vmc1, 20 slots: ...` with the server's answer,
+and `python -m vending.slots` shows what is stored. Running it again is safe: the same answer only
+updates when it was last checked.
 
-The instructors may change our assignment until the competition starts, and it is fixed after
-(assumption A16). The lock time is the setting `SLOTS_LOCK_AT`, an ISO 8601 time with its offset;
-unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern, 3 Dec). Set it on the Container App
-only if the start moves.
+**Only a person stores or changes our slots.** The worker runs `python -m vending.slots check`
+first in every round (`slots_check`). It only confirms: the same answer updates when it was last
+checked; a different answer, or nothing stored, changes nothing and fails the round, so `/health`
+answers 503 until a person looks. The instructors change our assignment exactly once, through the
+server, and that change is what the competition uses (David, 16 Nov; assumption A16). So a failed
+`slots_check` before the start most likely means the change has come: check it with the
+instructors, then run `python -m vending.slots record`, and replan the day-one fill if it is
+already bought.
 
-- **Before the lock time**, a different answer replaces the stored one. It prints `changed: ...`,
-  and `action_log` (tool `slots.record`) says what it was and what it is now.
-- **The first check at or after the lock** records the server's final assignment, including a
-  change made just before the start. A check counts from when it asked the server, so one that
-  asked before the lock and got its answer after it confirms nothing. A later different answer is refused (exit 1). In the
-  worker that fails the round, so `/health` answers 503. Ask the instructors which is right; if
-  the new one is, clear `slot_assignment` and record again.
-- **Until that first post-start check**, readers refuse the old assignment. The dashboard shows
-  no assigned selections (back stock still shows, from the receipts), and the analysis asks for
-  `python -m vending.slots record`.
+**Our team.** Every answer must name our team, `SLOTS_TEAM` (unset: `group-b`, the name the server
+has given since 12 Nov). An answer for another team, or with no team, is refused, so a swapped key
+or a misconfigured bridge can't hand us the other half of the machine.
+
+**The lock.** The assignment is fixed from the start. The lock time is the setting `SLOTS_LOCK_AT`,
+an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern,
+Thu 3 Dec, the first day of Winter Quarter on the Institute's calendar and the start David gave on
+12 Nov). If the instructors move the start (to Wed 2 Dec, say), set it on the Container App, for
+example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
+
+- **Before the lock time**, `record` takes a different answer in. It prints `changed: ...`, and
+  `action_log` (tool `slots.record`) says what it was and what it is now.
+- **At the lock**, the worker runs an extra round a minute after it. If the server still gives the
+  stored answer, that check confirms it for the competition, and `action_log` says so. A check
+  counts from when it asked the server, so one that asked before the lock and got its answer after
+  it confirms nothing.
+- **Until something confirms it**, every reader refuses: the agent's tools, the planner, the
+  ledger, replay and the analysis ask for `python -m vending.slots check`, and the dashboard shows
+  no assigned selections (back stock still shows, from the receipts).
+- **After the start**, a confirmed assignment is never changed by `record` alone (exit 1). If the
+  instructors say the confirmed one is wrong, a person runs `python -m vending.slots record --replace`.
 - **Always refused**, before or after: an answer that isn't 20 different selections on `vmc1`,
-  each a shelf 1-5 then a column 1-8 (11 to 58).
+  each a shelf 1-5 then a column 1-8 (11 to 58), or isn't for our team.
+
+**On the morning of the start** (just after midnight Eastern, or first thing before the 7:30 AM
+opening), one of us checks `/health`. `slots_check` passed at the extra round: nothing to do. It
+failed with a different assignment: ask the instructors, then run `record` (nothing has been
+confirmed since the lock, so `record` takes the server's answer then). The bridge is down: run
+`python -m vending.slots confirm` from a laptop with `DATABASE_URL`, which confirms the stored
+assignment without the server; run `check` once the bridge is back.
+
+**A change after the day-one fill.** Stock follows the receipts, but sales are read only for our
+current slots. If our slots change after the fill is loaded, the fill's receipts on the old slots
+stay counted as stock while their sales stop being read, so the P&L and the stock count go wrong.
+Plan on that not happening (the change comes before the start), but if it does, record a ledger
+adjustment for the units on the old slots (`docs/pnl-report.md`) and say so in the week's notes.
 
 The dashboard and `/db` read the stored assignment on every page, so they follow a change at
 once. With nothing stored, the dashboard lights no selection and says so, and `/db` shows no

@@ -612,3 +612,14 @@ def test_the_fall_section_shows_groups_never_one_selection_outside_ours():
     assert "2 left out" in text
     assert "1 selections were in stock fewer than 11 class days (1 in the left half, 0 in the right)" in text
     assert "(2 selections, 2 in the left half, 0 in the right:" in text
+
+
+def test_no_fall_writes_the_report_without_its_fall_section(tmp_path):
+    """A21's rollback: --no-fall must take the fall section out of REPORT.md, not leave the old one in place."""
+    import rebuild
+
+    (tmp_path / "fall40").mkdir()
+    (tmp_path / "analysis_report.md").write_text("# Report\n\nbody\n", encoding="utf-8")
+    (tmp_path / "fall40" / "fall_rates.md").write_text("## All 40 selections, fall\n\nrates\n", encoding="utf-8")
+    assert rebuild.report_text(True, tmp_path) == "# Report\n\nbody\n"
+    assert rebuild.report_text(False, tmp_path) == "# Report\n\nbody\n\n## All 40 selections, fall\n\nrates\n"

@@ -136,15 +136,15 @@ def configure(device, slots, source, resolved_at=None, assigned=()):
     PHOTO_NOV9["stocked"] = [s for s in PHOTO_NOV9_SEEN if s in RUN_SLOTS]
     PHOTO_NOV9["note"] = (f"Student team photo of the machine at the Mon Nov 9 visit (door counter rise at 09:31). Of our {len(RUN_SLOTS)} "
                           f"rail{'' if len(RUN_SLOTS) == 1 else 's'}, " + photo_note_tail(PHOTO_NOV9["stocked"], RUN_SLOTS))
-    SCOPE_NOTE = ("Machine-wide data is used only as totals over the whole machine, for the calendar and day-off effects, "
-                  "the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits: "
-                  "that history is from before the competition, when course staff stocked every slot, so it reflects no rival "
-                  "strategy. Everything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller "
+    SCOPE_NOTE = ("Machine-wide data is used only as totals, for the calendar and day-off effects, the time-of-day and "
+                  "day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. They cover the "
+                  "whole machine for polls before the fall cut (before the day-one fill, when course staff stocked every slot, so "
+                  "they reflect no team's strategy) and only our selections from the cut on. Everything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller "
                   f"flags, experiments) uses only {OUR}, and no slot is judged by another slot's state.")
     if source == SOURCE_FALL:
-        SCOPE_NOTE = ("Fall run: every selection, polls before the competition start (3 Dec 2026) only. Before the start no "
-                      "selection is either team's: course staff stocked the whole machine, and the inventory server may redraw "
-                      "the split before the start (docs/integrity.md). Where this report says 'our slots' it means every "
+        SCOPE_NOTE = ("Fall run: every selection, polls before the fall cut (before the day-one fill, never after the 3 Dec 2026 "
+                      "start) only. Before the cut no selection is either team's: course staff stocked the whole machine, and the "
+                      "inventory server changes our assignment once before the start (docs/integrity.md). Where this report says 'our slots' it means every "
                       "selection in this run. No slot is judged by another slot's state.")
 
 
