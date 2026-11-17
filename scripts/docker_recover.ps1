@@ -6,6 +6,8 @@
     Run this first whenever Docker hangs on this Windows laptop. Don't improvise.
     See docs/docker-recovery.md for the cause and what each step does.
 
+    0. If the engine doesn't answer and Docker Desktop isn't running at all, start it
+       and wait for the engine. (With -CheckOnly: report it and stop.)
     1. Probe: `docker version`, then `docker run --rm alpine:3 true`, each with a timeout.
        If both pass, the engine is healthy and the script stops (exit 0).
     2. Recover, every step with a timeout:
@@ -36,7 +38,7 @@
 
 .NOTES
     Exit codes: 0 = Docker can run containers (healthy, or recovered).
-                1 = still broken after recovery (or hung, with -CheckOnly).
+                1 = still broken after recovery (or hung or not running, with -CheckOnly).
                 2 = the WSL service itself is wedged: needs an elevated
                     `Restart-Service WSLService`, or a reboot.
                 3 = the probe image is missing and can't be pulled.
@@ -207,18 +209,43 @@ function Clear-StuckContainers {
     }
 }
 
+# Pull the probe image if it isn't cached. Call this only while the engine answers:
+# with the engine down, `image inspect` fails too, and that says nothing about the image.
+function Confirm-ProbeImage {
+    $img = Invoke-Timed 'docker' @('image', 'inspect', '--format', '{{.Id}}', $ProbeImage) 20
+    if (-not $img.Ok -and -not $img.TimedOut) {
+        Say "probe image $ProbeImage is not cached; pulling it"
+        $pull = Invoke-Timed 'docker' @('pull', $ProbeImage) 180
+        if (-not $pull.Ok) {
+            Finish 3 'no_probe_image' "docker pull $ProbeImage $(Describe $pull)"
+        }
+    }
+}
+
 # --- 0. Preflight ---------------------------------------------------------------
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Finish 4 'no_docker_cli' 'docker is not on PATH'
 }
-$img = Invoke-Timed 'docker' @('image', 'inspect', '--format', '{{.Id}}', $ProbeImage) 20
-if (-not $img.Ok -and -not $img.TimedOut) {
-    Say "probe image $ProbeImage is not cached; pulling it"
-    $pull = Invoke-Timed 'docker' @('pull', $ProbeImage) 180
-    if (-not $pull.Ok) {
-        Finish 3 'no_probe_image' "docker pull $ProbeImage $(Describe $pull)"
+$engineUp = (Invoke-Timed 'docker' @('version', '--format', '{{.Server.Version}}') 20).Ok
+if (-not $engineUp -and -not (Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue)) {
+    # Not hung, just not running (after a reboot, or after someone quit it). Start it;
+    # the stop + wsl --shutdown recovery is for a Docker Desktop that runs but hangs.
+    if ($CheckOnly) {
+        Finish 1 'not_running' 'Docker Desktop is not running; -CheckOnly, so not started'
     }
+    Say 'Docker Desktop is not running; starting it'
+    $start = Invoke-Step 'start' 'docker' @('desktop', 'start', '--timeout', "$StartTimeoutSec") ($StartTimeoutSec + 15)
+    if ($DryRun) {
+        Finish 0 'not_running' 'dry run: Docker Desktop is not running; start printed, nothing started'
+    }
+    if (-not (Wait-Engine 120)) {
+        Finish 1 'engine_down' "Docker Desktop did not answer within 120s after start ($(Describe $start))"
+    }
+    $engineUp = $true
 }
+# If Docker Desktop runs but the engine doesn't answer, the probe below fails and the
+# recovery runs. The image is checked after the recovery instead.
+if ($engineUp) { Confirm-ProbeImage }
 
 # --- 1. Probe ------------------------------------------------------------------
 $healthy = Test-Engine 'first'
@@ -282,6 +309,7 @@ if (Get-ScheduledTask -TaskName 'KsaiWslKeepalive' -ErrorAction SilentlyContinue
 }
 
 # --- 3. Probe again, restore containers ------------------------------------------
+if (-not $DryRun) { Confirm-ProbeImage }
 if (-not (Test-Engine 'second')) {
     Finish 1 'still_hung' 'docker run still fails after the full restart. Collect `docker desktop diagnose` and see docs/docker-recovery.md.'
 }

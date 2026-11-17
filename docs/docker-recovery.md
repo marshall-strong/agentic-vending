@@ -12,6 +12,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_recover.ps1
 
 Don't improvise restarts. The script does the whole escalation, and every step has a timeout:
 
+0. **Start.** If the engine doesn't answer and Docker Desktop isn't running at all (after a
+   reboot, for example), the script starts it and waits for the engine. With `-CheckOnly`
+   it reports this and exits 1 instead.
 1. **Probe.** `docker version`, then `docker run --rm alpine:3 true` (60 s). If both work,
    the script stops and restarts nothing.
 2. **Recover.** `docker desktop stop --force` (if that hangs, it kills the Docker Desktop
@@ -27,7 +30,7 @@ Don't improvise restarts. The script does the whole escalation, and every step h
 | Exit code | Meaning | What to do |
 |---|---|---|
 | 0 | Docker can run containers (healthy, or recovered) | Continue |
-| 1 | Still broken after the full restart | Run `docker desktop diagnose`, tell Kevin |
+| 1 | Still broken after the full restart, or Docker Desktop didn't answer within 120 s of starting | Run `docker desktop diagnose`, tell Kevin |
 | 2 | The WSL service itself is wedged | Elevated PowerShell: `Restart-Service WSLService -Force`, run the script again. If that hangs, reboot. |
 | 3 | Probe image `alpine:3` is missing and can't be pulled | Network problem, not Docker |
 
