@@ -187,7 +187,7 @@ def _has_eastern():
 def served(schema_url, monkeypatch):
     monkeypatch.setattr(dashboard, "connect", lambda: read_only(*schema_url))
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.Handler)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()
@@ -218,7 +218,7 @@ def test_a_database_that_is_down_gives_a_503_page(monkeypatch):
         raise psycopg.OperationalError("connection refused")
     monkeypatch.setattr(dashboard, "connect", down)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
     try:
         code, _, body = get(f"http://127.0.0.1:{httpd.server_address[1]}/")
         assert code == 503 and "connection refused" in body
