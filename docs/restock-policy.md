@@ -68,7 +68,7 @@ The factor is 1.6 to 1.9. Poisson understates the spread (rates rest on 11 weeks
 
 The fix is product choice, not visits: high-capacity packages, or two columns for one product (two 20 oz columns hold 14, the fast seller's 95% cover).
 
-**When a rate counts.** After **5 class days** of our in-stock sales (Proposed). Before that, use the segment rate priced near the product (R3, Proposed), and buy when slot plus closet is below that segment's 95% cover (14, 11, 7 or 7), not `units_per_day`. On the first Friday (Fri 4 Dec, if there is a visit; #102) the cutoffs fall on or before our first sales day, so an expected-fast slot in 12 oz cans with no closet units gets a pack (8 < 14); a slow slot full at 7 does not.
+**When a rate counts.** After **5 class days** of our in-stock sales (Proposed). Before that, use the segment rate priced near the product (R3, Proposed), and buy when slot plus closet is below that segment's 95% cover (14, 11, 7 or 7), not `units_per_day`. On the first Friday (Fri 4 Dec; its request is due 23:59 Thu 3 Dec) the cutoffs fall on or before our first sales day, so an expected-fast slot in 12 oz cans with no closet units gets a pack (8 < 14); a slow slot full at 7 does not.
 
 **Edge cases.**
 
@@ -188,8 +188,8 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - **The wildcard slot** (rule 3; ceiling about $8.00, same floor). Proposed by Kevin on #100; the team decides on #110 (item 1). Its $82 cap is an option in #90, not part of the plan.
 - **The floor: break-even or profit.** Today's breaks even after tax. Kevin proposed (unit cost + $0.25) × 1.08, rounded up to 5 cents, with a setting `min_margin_cents` (#100). Not decided.
 - **Day-one stock from the $600.** David to confirm (#106 row 3).
-- **First regular restock:** Fri 4 Dec or Fri 11 Dec (#102).
-- **Day-one deadline:** about Fri 27 Nov, inside the Institute's 26 to 29 Nov closure; time still being asked (#102).
+- **First regular restock:** answered 17 Nov: a request received by 23:59 Thu 3 Dec is filled Fri 4 Dec.
+- **Day-one deadline:** answered 17 Nov: catalog approvals by Wed 25 Nov, the fill request by 23:59 Sun 29 Nov, stocking Mon 30 Nov (`docs/planning/2026-11-17-david-answers.md`).
 - **More than one open request** (#106 row 12).
 - **A Friday visit in the Winter Holiday Break** (25 Dec, 1 Jan). Not yet asked.
 - **A rule for slow-but-steady slots.** None until we have sales of our own drinks (#100).

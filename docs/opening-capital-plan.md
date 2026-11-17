@@ -11,7 +11,7 @@ The $600 is given once. Sales flow back into the same account; midweek fees and 
 The instructor's 12 Nov answers (PR #106, issue #107):
 
 - Our **day-one order fills all 20 slots to capacity**, paid from the $600 (whether a slot may take fewer units is still asked, #102).
-- It is due about **Fri 27 Nov**, inside the 26 to 29 Nov closure; time TBC (#102).
+- The request is due by **23:59 Sun 29 Nov**, and staff buy and stock on **Mon 30 Nov**. Every product on it must be requested and approved in the catalog by **Wed 25 Nov**, or the whole request is denied (David, 17 Nov; `docs/planning/2026-11-17-david-answers.md`).
 - The machine goes live **Thu 3 Dec**. Restocks are **Friday afternoons** (3 PM target, likely later).
 - The ledger opens **before the fill is fulfilled**, so its receipts count (#104, #106).
 
@@ -67,7 +67,7 @@ The other 9 listed drinks cost $6.97 ($20.91 ÷ 24 × 8) to $19.47 ($42.48 ÷ 24
 
 The dearest case leaves $45. Hence the cap.
 
-**Example mix** (a pricing example, not the team's pick). It leans on energy drinks, 45% of our fall units (`analysis/REPORT.md`, finding 14). Slots are grouped so packs divide: three 20 oz slots use 21 of 24; three Celsius slots use two 12-packs exactly. 17 units go to the closet. Celsius Kiwi Guava and the Coca-Cola 12 oz can are "Wanted, not in the catalog yet" on the list, so the example needs 2 of a week's 3 catalog requests (`request_catalog_product`) before ~27 Nov.
+**Example mix** (a pricing example, not the team's pick). It leans on energy drinks, 45% of our fall units (`analysis/REPORT.md`, finding 14). Slots are grouped so packs divide: three 20 oz slots use 21 of 24; three Celsius slots use two 12-packs exactly. 17 units go to the closet. Celsius Kiwi Guava and the Coca-Cola 12 oz can are "Wanted, not in the catalog yet" on the list, so the example needs 2 catalog requests (`request_catalog_product`), approved by Wed 25 Nov.
 
 | Drink | Slots | Units | Packs | Expected | Most |
 |---|---|---|---|---|---|
@@ -98,7 +98,7 @@ The price floor is the worker's maximum unit cost × 1.08, rounded up to 5 cents
 | Refill at $2.26 | $263.29 | $158.20 |
 | Left | $98.08 | $58.93 |
 
-$3.35 = $1,881.50 ÷ 562, fall takings per unit at staff's prices (`analysis/REPORT.md`, finding 1); our prices aren't set, so this rests on assumption 5. At today's floor, "Left" falls to about $0. Under Kevin's proposed margin floor, (unit cost + $0.25) × 1.08 rounded up to 5 cents (#100, setting `min_margin_cents`), every sale keeps at least $0.25 after tax, so "Left" is at least $17.50 to $29.13 (70 or 116.5 units × $0.25). $2.26 = $360 ÷ 159, run 1's most per unit (#90). A Fri 4 Dec restock, if any (Open decision 12), would follow 1.5 to 2 class days (Thu 3 Dec, Fri 4 Dec morning) and be small.
+$3.35 = $1,881.50 ÷ 562, fall takings per unit at staff's prices (`analysis/REPORT.md`, finding 1); our prices aren't set, so this rests on assumption 5. At today's floor, "Left" falls to about $0. Under Kevin's proposed margin floor, (unit cost + $0.25) × 1.08 rounded up to 5 cents (#100, setting `min_margin_cents`), every sale keeps at least $0.25 after tax, so "Left" is at least $17.50 to $29.13 (70 or 116.5 units × $0.25). $2.26 = $360 ÷ 159, run 1's most per unit (#90). A Fri 4 Dec restock (request due 23:59 Thu 3 Dec; Open decision 12) would follow 1.5 to 2 class days (Thu 3 Dec, Fri 4 Dec morning) and be small.
 
 ### Product-switch reserve: $68.00 (Proposed)
 
@@ -162,7 +162,7 @@ To be numbered in `docs/assumptions.md` (open PRs take A16 to A19: #69 A16, #99 
 9. **Midweek visits held back for.** Proposed: 2 ($50), a risk choice.
 10. **Model caps and run frequency** (#51, #107). A $4.00 daily cap doesn't fit a $9.00 line; lowering it shrinks the floor and margin equally.
 11. **Day-one deadline and ordering method** (#102).
-12. **First regular restock:** Fri 4 Dec or Fri 11 Dec (#102).
+12. **First regular restock:** answered 17 Nov: a request received by 23:59 Thu 3 Dec is filled Fri 4 Dec.
 
 **Follow-ups after team sign-off.** Point `docs/agent/money.md` here (#90). Add a planner check for the $53 floor. Merge the price list (no PR yet).
 

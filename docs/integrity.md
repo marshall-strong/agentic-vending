@@ -14,6 +14,9 @@ other team's prices** (Kevin, 11 Nov). It keeps us inside David's rule, and we s
 need that information to win. The team can revisit this. If we do, change this page and
 assumption A15 first. Explain the choice in Summative 2.
 
+**The Interloper's prices are not an input either.** David said no on 17 Nov to using the
+third-party machine beside ours (#116) as a pricing input.
+
 Which selections are ours is not settled yet: the inventory server assigns them (brief,
 section 1). The machine is split evenly between the two teams.
 
@@ -41,5 +44,7 @@ repo root points here.
 - **Our stock count reads only our machine's counters.** `vending/stock.py` reads poll
   counters only from `DEVICE_ID`, and only for the slots our own receipts name.
 
-We still store every selection from each poll. The polls are the machine's own record, and
+From 3 Dec the polls carry the full, raw DEX response (David, 17 Nov), so the other team's
+selections arrive with ours. Everything that reads them for analysis, display or decisions
+filters to our assignment from the start. We still store every selection from each poll. The polls are the machine's own record, and
 which selections are ours may change when the inventory server assigns them.
