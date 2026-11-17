@@ -27,7 +27,7 @@ import pandas as pd
 
 ANALYSIS = Path(__file__).resolve().parent
 sys.path.insert(0, str(ANALYSIS))
-from slots_config import ALL_SLOTS, SOURCE_FALL, START  # noqa: E402
+from slots_config import ALL_SLOTS, SOURCE_FALL, fall_end  # noqa: E402
 
 SEED = 42
 B = 10_000                       # bootstrap resamples
@@ -132,9 +132,9 @@ def main():
     sc = fall["scope"]
     if sc.get("source") != SOURCE_FALL:
         raise SystemExit(f"{args.fall}: not a fall run (source {sc.get('source')!r}); run export_sales.py --fall-all first")
-    last = pd.Timestamp(fall["meta"]["last_poll"])
-    if last >= START:
-        raise SystemExit(f"{args.fall}: the fall run reaches {last}, at or after the start {START}; it must stop before it")
+    last, cut = pd.Timestamp(fall["meta"]["last_poll"]), fall_end()
+    if last >= cut:
+        raise SystemExit(f"{args.fall}: the fall run reaches {last}, at or after the fall cut {cut}; it must stop before it")
     ours = json.loads(Path(args.ours).read_text(encoding="utf-8")) if Path(args.ours).exists() else None
 
     df = pd.DataFrame(fall["slots"])
@@ -171,7 +171,7 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     result = dict(scope=dict(source=sc["source"], device=sc["device"], first_poll=fall["meta"]["first_poll"],
-                             last_poll=fall["meta"]["last_poll"], before=START.isoformat(), selections=len(df), dropped=dropped,
+                             last_poll=fall["meta"]["last_poll"], before=cut.isoformat(), selections=len(df), dropped=dropped,
                              seed=SEED, bootstrap=B, permutations=PERMS),
                   bands=[dict(name=n, lo=lo, hi=hi) for n, lo, hi in BANDS], by_band=by_band, by_row=by_row, by_half=by_half,
                   left_right=lr, our_rates_match_normal_run=same, segments_ours=old_segments,
@@ -185,17 +185,24 @@ def main():
     return 0
 
 
+def halves(per):
+    """How many of `per` (per-selection dicts) are in each half: the committed report names no single selection."""
+    left = sum(p["half"] == "left" for p in per)
+    return f"{left} in the left half, {len(per) - left} in the right"
+
+
 def report(r):
     lines = []
     w = lines.append
     sc, lr = r["scope"], r["left_right"]
-    w("## All 40 selections, fall (before the start)")
+    w("## All 40 selections, fall (before the fall cut)")
     w("")
-    w("**Why.** Before the competition starts no selection is either team's: course staff stocked the whole machine in the fall, "
-      "and the inventory server may change our assignment before Thu 3 Dec (docs/integrity.md, Kevin, 15 Nov). The sections above "
-      "use our 20 selections (the server's assignment) only. Starting rates should not depend on which 20 selections we get, so this "
-      f"section uses the fall's per-selection sales from all 40, polls before {START:%Y-%m-%d %H:%M} Eastern only "
-      f"(data {sc['first_poll'][:16]} to {sc['last_poll'][:16]}). From the start, nothing reads the other team's per-selection data "
+    w("**Why.** While course staff stocked the whole machine, no selection was either team's, and the inventory server changes "
+      "our assignment once before the 3 Dec start (assumptions A16 and A21; docs/integrity.md). The sections above use our "
+      "selections (the server's assignment) only. Starting rates should not depend on which 20 selections we get, so this "
+      f"section uses the fall's sales from all 40, polls before the fall cut ({sc['before'][:16]}, `FALL_CUTOFF`, before the "
+      f"day-one fill) only (data {sc['first_poll'][:16]} to {sc['last_poll'][:16]}). It shows groups only (price band, shelf, "
+      "half), never one selection's figures. From the cut, nothing reads per-selection data outside our assignment "
       "(`analysis/slots_config.py`, `check_before_start`).")
     w("")
     w("**Method.** The rate is the analysis's own: units per in-stock class day in the regular-polling era, with each selection's "
@@ -205,7 +212,7 @@ def report(r):
       f"which weights selections by how long they were in stock. 95% intervals resample selections ({sc['bootstrap']:,} bootstrap "
       f"draws, seed {sc['seed']}). Price band = the selection's average price paid in the fall. "
       f"{sc['selections']} selections have at least {MIN_INSTOCK_DAYS} in-stock class days"
-      + (f"; left out: {', '.join(sc['dropped'])}." if sc["dropped"] else "."))
+      + (f"; {len(sc['dropped'])} left out." if sc["dropped"] else "."))
     w("")
     w("### Starting rate by price band")
     w("")
@@ -230,7 +237,7 @@ def report(r):
     w("| All-40 segment (k = 4) | Selections | Left / right | Mean rate | Avg price |")
     w("|---|---|---|---|---|")
     for s in r["segments_all_40"]:
-        w(f"| {s['name']} | {', '.join(s['slots'])} | {s['left']} / {s['right']} | {s['rate']:.3f} | ${s['avg_price']:.2f} |")
+        w(f"| {s['name']} | {len(s['slots'])} | {s['left']} / {s['right']} | {s['rate']:.3f} | ${s['avg_price']:.2f} |")
     w("")
     w("### By shelf (row 1 = top shelf)")
     w("")
@@ -273,12 +280,12 @@ def report(r):
     quiet = [p for p in per if p["rate"] < QUIET_RATE and p["instock_class_days"] >= 30]
     cautions = []
     if short:
-        cautions.append(f"{len(short)} selections were in stock fewer than {SHORT_DAYS} class days "
-                        f"({', '.join(p['slot'] for p in short)}), so their rates are noisy.")
+        cautions.append(f"{len(short)} selections were in stock fewer than {SHORT_DAYS} class days ({halves(short)}), so their "
+                        "rates are noisy.")
     if quiet:
         cautions.append(f"A selection that sold almost nothing is never flagged as suspected empty, so it counts as in stock all fall "
-                        f"({', '.join(p['slot'] for p in quiet)}: under {QUIET_RATE} a class day over 30+ class days): its low rate "
-                        "may be an empty or jammed rail, not low demand.")
+                        f"({len(quiet)} selections, {halves(quiet)}: under {QUIET_RATE} a class day over 30+ class days): its low "
+                        "rate may be an empty or jammed rail, not low demand.")
     cautions.append("Products and prices were the operators' choice, not ours.")
     w("**Cautions.** " + " ".join(cautions))
     w("")

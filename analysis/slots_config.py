@@ -15,12 +15,14 @@ The export records the assignment next to the list (data/slots.json, `assigned_s
 and rebuild.py check it from there; a recorded scope without one is refused.
 Slots come back in shelf order (shelf 1 first, then by column).
 
-The fall run (--fall-all) is the one exception, and it is bounded by date, not by slot. Before the competition
-starts (START, 3 Dec 2026 00:00 Eastern) no selection is either team's: course staff stocked the whole machine,
-and the inventory server may redraw the split before the start (docs/integrity.md). So a fall run may cover all
-40 selections, but only polls before START. check_before_start() refuses any per-selection row, for a selection
-outside our assignment, from START on; in a fall run it refuses every row from START on, ours too
-(exempt_from_start). The export and the analysis both call it.
+The fall run (--fall-all) is the one exception, and it is bounded by date, not by slot. While course staff
+stocked the whole machine no selection was either team's (docs/integrity.md). That ends when they stop selling
+to load the day-one fill, which comes before the competition starts (START, 3 Dec 2026 00:00 Eastern): once
+the teams' products go in, the prices and counters are the teams' choices. So the fall data ends at the fall
+cut, fall_end(): the earlier of FALL_CUTOFF (a setting, default DEFAULT_FALL_CUTOFF) and START. A fall run may
+cover all 40 selections, but only polls before the cut. check_before_start() refuses any per-selection row, for
+a selection outside our assignment, from the cut on; in a fall run it refuses every row from the cut on, ours
+too (exempt_from_start). The export and the analysis both call it.
 """
 import datetime as dt
 import sys
@@ -39,6 +41,11 @@ SOURCE_FALL = "all 40 selections, polls before the start only (fall run)"
 # The competition starts Thu 3 Dec 2026 (Winter classes start; golisano_calendar_2026_27.json). From then on the
 # other team's selections are theirs: nothing reads their per-selection sales, prices or stock.
 START = dt.datetime(2026, 12, 3, tzinfo=ZoneInfo("America/New_York"))
+# The fall data ends before the day-one fill goes in (staff "basically turn it off" to load it, David, 12 Nov;
+# loading falls about 30 Nov to 2 Dec). Default: 18 Nov 00:00 Eastern, the first day of the break after Fall
+# Quarter classes (golisano_calendar_2026_27.json), safely before any loading. A setting, so the team can move it.
+FALL_CUTOFF_SETTING = "FALL_CUTOFF"
+DEFAULT_FALL_CUTOFF = "2026-11-18T00:00:00-05:00"
 ALL_SLOTS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(1, 9))
 ASSIGNMENT_SIZE = len(ALL_SLOTS) // 2      # two teams split the machine: 20 selections each
 
@@ -64,6 +71,22 @@ def check_assignment(codes, where):
     return tuple(sorted(codes))
 
 
+def fall_end():
+    """The end of the fall data: the earlier of FALL_CUTOFF (default DEFAULT_FALL_CUTOFF) and START.
+
+    No per-selection row outside our assignment may be from this time on. A malformed setting stops the run."""
+    from vending import settings
+
+    value = settings.get(FALL_CUTOFF_SETTING) or DEFAULT_FALL_CUTOFF
+    try:
+        cut = dt.datetime.fromisoformat(value)
+    except ValueError:
+        cut = None
+    if cut is None or cut.utcoffset() is None:
+        raise SystemExit(f"{FALL_CUTOFF_SETTING} is {value!r}; give a time with its offset, like {DEFAULT_FALL_CUTOFF}")
+    return min(cut, START)
+
+
 def exempt_from_start(source, assigned):
     """The selections whose rows may be from START on: our assignment, or none at all in a fall run.
 
@@ -74,14 +97,16 @@ def exempt_from_start(source, assigned):
 
 
 def check_before_start(rows, assigned=(), where="fall run"):
-    """Refuse per-selection data for a selection outside `assigned` from START on. Returns the rows' count.
+    """Refuse per-selection data for a selection outside `assigned` from the fall cut (fall_end) on. Returns the
+    rows' count. The cut is never later than START.
 
     `rows` gives (selection, time) pairs; each time must carry its time zone. Selections in `assigned` (our
-    own; see exempt_from_start) may have any time; with none given, no row may be from START on. Every other
-    selection's row must be from before START, or the whole run stops: no file and no figure may carry the
-    other team's per-selection sales, prices or stock from the competition.
+    own; see exempt_from_start) may have any time; with none given, no row may be from the cut on. Every other
+    selection's row must be from before the cut, or the whole run stops: no file and no figure may carry the
+    teams' own prices, sales or stock for a selection outside our assignment, from the day-one fill or later.
     """
     assigned = {str(s) for s in assigned}
+    cut = fall_end()
     late, n = {}, 0
     for sel, at in rows:
         n += 1
@@ -90,15 +115,16 @@ def check_before_start(rows, assigned=(), where="fall run"):
             continue
         if getattr(at, "tzinfo", None) is None:
             raise SystemExit(f"{where}: a row for selection {sel} has a time with no time zone ({at!r}); "
-                             "can't tell whether it is before the start")
-        if at >= START:
+                             "can't tell whether it is before the fall cut")
+        if at >= cut:
             late[sel] = min(at, late.get(sel, at))
     if late:
         first = min(late.values())
-        raise SystemExit(f"{where}: per-selection data from the competition for selections that aren't ours "
-                         f"({ranges(tuple(sorted(late)))}; first at {first.isoformat()}). Before the start "
-                         f"({START:%Y-%m-%d %H:%M} Eastern) no selection is either team's; from it, the other team's "
-                         "selections are theirs (docs/integrity.md). Nothing was used.")
+        raise SystemExit(f"{where}: per-selection data from the fall cut on, for selections not in our assignment "
+                         f"({ranges(tuple(sorted(late)))}; first at {first.isoformat()}). The fall data ends at "
+                         f"{cut.isoformat()} ({FALL_CUTOFF_SETTING}, never later than the start, "
+                         f"{START:%Y-%m-%d %H:%M} Eastern): from the day-one fill on, prices and sales are the teams' "
+                         "own (docs/integrity.md). Nothing was used.")
     return n
 
 

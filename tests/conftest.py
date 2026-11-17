@@ -42,16 +42,17 @@ TEST_CHECKED_AT = TEST_NOW - timedelta(days=1)
 
 @pytest.fixture(autouse=True)
 def _slots_before_the_start(monkeypatch):
-    """Every test sees the slot clock at TEST_NOW, the default lock (3 Dec 2026) and our default team, whatever the
-    real date and whatever a developer's `.env` sets. Without this the slot tests would start failing at the
+    """Every test sees the slot clock at TEST_NOW, the default lock (3 Dec 2026), our default team and the default
+    fall cut, whatever the real date and whatever a developer's `.env` sets. Without this the slot tests would start failing at the
     start, the day a hotfix is most likely."""
     from vending import slots
 
     monkeypatch.setattr(slots, "clock", lambda conn: TEST_NOW)
-    for name in (slots.LOCK_SETTING, slots.TEAM_SETTING):
+    # FALL_CUTOFF is analysis/slots_config.py's fall cut, also a setting a developer's `.env` may hold.
+    names = (slots.LOCK_SETTING, slots.TEAM_SETTING, "FALL_CUTOFF")
+    for name in names:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(settings, "_FILE", {k: v for k, v in settings._FILE.items()
-                                            if k not in (slots.LOCK_SETTING, slots.TEAM_SETTING)})
+    monkeypatch.setattr(settings, "_FILE", {k: v for k, v in settings._FILE.items() if k not in names})
 
 
 @pytest.fixture(autouse=True)

@@ -21,6 +21,13 @@ ALL_40 = ",".join(f"{r}{c}" for r in "12345" for c in "12345678")
 REDRAWN = tuple(f"{r}{c}" for r in "12345" for c in "1234")
 
 
+@pytest.fixture(autouse=True)
+def _fall_cut_at_the_start(monkeypatch):
+    """Most tests here were written for a fall that ends at the start, so they cut there. The tests of the default
+    cut (before the day-one fill) unset it."""
+    monkeypatch.setenv(slots_config.FALL_CUTOFF_SETTING, slots_config.START.isoformat())
+
+
 @pytest.fixture
 def stored(monkeypatch):
     """The stored server assignment the analysis reads (OURS unless a test sets another)."""
@@ -234,7 +241,7 @@ def test_the_guard_refuses_another_teams_selection_from_the_start_on():
                dt.datetime(2026, 12, 3, 5, 0, tzinfo=dt.timezone.utc),       # the same instant, in UTC
                dt.datetime(2027, 2, 1, 12, 0, tzinfo=EASTERN)):
         for code in ("11", "24", "54"):
-            with pytest.raises(SystemExit, match="aren't ours"):
+            with pytest.raises(SystemExit, match="not in our assignment"):
                 slots_config.check_before_start([("15", BEFORE), (code, at)])
     # one second before the start, in UTC, is still the fall
     assert slots_config.check_before_start([("11", dt.datetime(2026, 12, 3, 4, 59, 59, tzinfo=dt.timezone.utc))]) == 1
@@ -244,10 +251,10 @@ def test_the_guard_lets_our_own_selections_through_after_the_start():
     later = dt.datetime(2026, 12, 10, 9, 0, tzinfo=EASTERN)
     assert slots_config.check_before_start([(s, later) for s in OURS], assigned=OURS) == 20
     # with no assignment given, nothing is exempt
-    with pytest.raises(SystemExit, match="aren't ours"):
+    with pytest.raises(SystemExit, match="not in our assignment"):
         slots_config.check_before_start([("15", later)])
     # follows the assignment it is given: after a redraw, 15 may be theirs
-    with pytest.raises(SystemExit, match="aren't ours"):
+    with pytest.raises(SystemExit, match="not in our assignment"):
         slots_config.check_before_start([("15", later)], assigned=("11", "12"))
 
 
@@ -283,7 +290,7 @@ def test_sales_analysis_refuses_fall_rows_from_the_start_on(tmp_path):
                  ).to_csv(tmp_path / "r.csv", index=False)
     sales_analysis.configure(slots_config.DEVICE_ID, slots_config.ALL_SLOTS, slots_config.SOURCE_FALL)
     args = argparse.Namespace(sales=tmp_path / "s.csv", readings=tmp_path / "r.csv")
-    with pytest.raises(SystemExit, match="aren't ours"):
+    with pytest.raises(SystemExit, match="not in our assignment"):
         sales_analysis.load(args)
 
 
@@ -395,9 +402,9 @@ FALL_ROW = ("11", "2026-11-02T09:00:00-05:00")
 def test_a_fall_run_refuses_even_our_own_rows_from_the_start_on(tmp_path):
     # 15 is in our assignment, but a fall run is bounded by date, not by slot
     rows = [FALL_ROW, ("15", "2026-12-04T09:00:00-05:00")]
-    with pytest.raises(SystemExit, match="aren't ours"):
+    with pytest.raises(SystemExit, match="not in our assignment"):
         _load(tmp_path, rows, slots_config.SOURCE_FALL, slots_config.ALL_SLOTS)
-    with pytest.raises(SystemExit, match="aren't ours"):
+    with pytest.raises(SystemExit, match="not in our assignment"):
         _load(tmp_path, rows, slots_config.SOURCE_FALL, slots_config.ALL_SLOTS, assigned=OURS)
 
 
@@ -405,10 +412,10 @@ def test_a_normal_run_follows_the_recorded_assignment_after_the_start(tmp_path):
     after = "2026-12-10T09:00:00-05:00"
     sales = _load(tmp_path, [("11", after), ("24", after)], slots_config.SOURCE_SERVER, REDRAWN, REDRAWN)[0]
     assert sorted(sales.slot) == ["11", "24"]
-    with pytest.raises(SystemExit, match="outside ours|aren't ours"):
+    with pytest.raises(SystemExit, match="outside ours|not in our assignment"):
         _load(tmp_path, [("15", after)], slots_config.SOURCE_SERVER, REDRAWN, REDRAWN)
     # no assignment given: nothing is exempt, so no row from the start on gets through
-    with pytest.raises(SystemExit, match="aren't ours"):
+    with pytest.raises(SystemExit, match="not in our assignment"):
         _load(tmp_path, [("11", after)], slots_config.SOURCE_SERVER, REDRAWN)
 
 
@@ -428,7 +435,7 @@ def test_the_fall_load_cuts_at_the_start_in_any_offset(tmp_path, at, before_star
         sales = _load(tmp_path, [FALL_ROW, ("11", at)], slots_config.SOURCE_FALL, slots_config.ALL_SLOTS)[0]
         assert sales.t.max() < slots_config.START and str(sales.t.dt.tz) == "America/New_York"
     else:
-        with pytest.raises(SystemExit, match="aren't ours"):
+        with pytest.raises(SystemExit, match="not in our assignment"):
             _load(tmp_path, [FALL_ROW, ("11", at)], slots_config.SOURCE_FALL, slots_config.ALL_SLOTS)
 
 
@@ -460,7 +467,9 @@ def _run_export(schema_url, out, *flags):
     url, schema = schema_url
     params = conninfo_to_dict(url)
     params["options"] = " ".join(o for o in (params.get("options"), f"-c search_path={schema}") if o)
-    env = {**os.environ, "DATABASE_URL": make_conninfo(**params)}
+    # The lock far off: conftest's assignment was last checked before the start, and the export reads the real
+    # database clock, so after 3 Dec it would refuse (the run's own slot clock isn't patched in a subprocess).
+    env = {**os.environ, "DATABASE_URL": make_conninfo(**params), "SLOTS_LOCK_AT": "2999-01-01T00:00:00+00:00"}
     repo = Path(__file__).resolve().parent.parent
     return subprocess.run([sys.executable, str(repo / "analysis" / "export_sales.py"), *flags, str(out)],
                           cwd=repo, env=env, capture_output=True, text=True)
@@ -514,3 +523,92 @@ def test_the_export_stops_with_nothing_stored(conn, schema_url, tmp_path):
         p = _run_export(schema_url, tmp_path / "out", *flags)
         assert p.returncode != 0 and "python -m vending.slots record" in p.stdout + p.stderr
         assert not (tmp_path / "out" / "slots.json").exists()
+
+
+# --- the fall cut: the fall data ends before the day-one fill, not at the start ---
+
+CUT = dt.datetime(2026, 11, 18, 0, 0, tzinfo=EASTERN)
+
+
+def test_the_fall_cut_defaults_to_18_november_and_is_never_after_the_start(monkeypatch):
+    monkeypatch.delenv(slots_config.FALL_CUTOFF_SETTING)
+    from vending import settings
+    monkeypatch.setattr(settings, "_FILE", {})
+    assert slots_config.fall_end() == CUT
+    monkeypatch.setenv(slots_config.FALL_CUTOFF_SETTING, "2026-11-30T08:00:00-05:00")
+    assert slots_config.fall_end() == dt.datetime(2026, 11, 30, 8, tzinfo=EASTERN)
+    monkeypatch.setenv(slots_config.FALL_CUTOFF_SETTING, "2026-12-20T00:00:00-05:00")
+    assert slots_config.fall_end() == slots_config.START                    # never later than the start
+    for bad in ("18 Nov", "2026-11-18", "2026-11-18T00:00:00"):
+        monkeypatch.setenv(slots_config.FALL_CUTOFF_SETTING, bad)
+        with pytest.raises(SystemExit, match="FALL_CUTOFF"):
+            slots_config.fall_end()
+
+
+def test_the_guard_refuses_a_poll_between_the_cut_and_the_start(monkeypatch):
+    """The review's case on #146: the day-one fill goes in before the start, so its prices are the teams' own."""
+    monkeypatch.delenv(slots_config.FALL_CUTOFF_SETTING)
+    between = dt.datetime(2026, 12, 1, 12, 0, tzinfo=EASTERN)
+    assert slots_config.check_before_start([("11", CUT - dt.timedelta(seconds=1))]) == 1
+    for at in (CUT, between):
+        with pytest.raises(SystemExit, match="not in our assignment"):
+            slots_config.check_before_start([("11", at)])
+    assert slots_config.check_before_start([("15", between)], assigned=OURS) == 1        # our own, any time
+
+
+def test_the_exports_stop_at_the_fall_cut(conn, schema_url, tmp_path, monkeypatch):
+    import csv
+
+    monkeypatch.delenv(slots_config.FALL_CUTOFF_SETTING)
+    _store(conn, "p1", "2026-11-15T15:00:00Z", {"11": 5, "15": 7})
+    _store(conn, "p2", "2026-11-17T15:00:00Z", {"11": 6, "15": 8})      # before the cut: the whole machine
+    _store(conn, "p3", "2026-12-01T15:00:00Z", {"11": 9, "15": 9})      # between the cut and the start
+    _store(conn, "p4", "2026-12-10T15:00:00Z", {"11": 12, "15": 11})
+    readings, polls, manifest_ = _export(schema_url, tmp_path / "fall", "--fall-all")
+    assert manifest_["before"] == CUT.isoformat()
+    assert polls == ["2026-11-15T10:00:00-05:00", "2026-11-17T10:00:00-05:00"]
+    assert sorted((r["slot"], r["lifetime_units"]) for r in readings) == [("11", "5"), ("11", "6"), ("15", "7"), ("15", "8")]
+    # a normal export: whole-machine totals before the cut, only ours from it on
+    readings, polls, _ = _export(schema_url, tmp_path / "ours")
+    assert {r["slot"] for r in readings} == {"15"} and len(polls) == 4
+    with open(tmp_path / "ours" / "machine_hourly.csv", newline="") as f:
+        units = [int(r["units"]) for r in csv.DictReader(f)]
+    assert units == [0, 2, 1, 2]           # p2: 11 and 15; p3 and p4: 15 only
+
+
+def test_the_fall_section_shows_groups_never_one_selection_outside_ours():
+    """The committed report is public: the fall section gives bands, shelves and halves, not one selection's rates."""
+    pytest.importorskip("pandas")
+    pytest.importorskip("statsmodels")
+    import fall_rates
+
+    def group(level, n=10):
+        return dict(level=level, n=n, mean_rate=1.0, ci=[0.5, 1.5], pooled_rate=1.0, pooled_ci=[0.5, 1.5],
+                    avg_price=2.5, instock_days=100)
+
+    other = [s for s in slots_config.ALL_SLOTS if s not in OURS]
+    per = [dict(slot=s, row=int(s[0]), col=int(s[1]), half="left" if int(s[1]) <= 4 else "right", band="$2.50",
+                rate=0.1 if s in ("31", "34") else 1.0, instock_class_days=5 if s == "12" else 60, avg_price=2.5)
+           for s in slots_config.ALL_SLOTS]
+    ols = dict(coef=0.1, ci=[-0.2, 0.4], p=0.5, n=40)
+    result = dict(
+        scope=dict(source=slots_config.SOURCE_FALL, device="vmc1", first_poll="2026-08-27T00:00", last_poll="2026-11-11T18:00",
+                   before="2026-11-18T00:00:00-05:00", selections=38, dropped=["21", "44"], seed=1, bootstrap=100,
+                   permutations=100),
+        by_band={h: [group("$2.50")] for h in ("all", "left", "right")}, by_row=[group(r) for r in range(1, 6)],
+        by_half=[group("left"), group("right")],
+        left_right=dict(mean_diff=0.1, mean_ci=[-0.2, 0.4], pooled_diff=0.1, pooled_ci=[-0.2, 0.4], p_perm_within_shelf=0.5,
+                        ols=dict(shelf=ols, shelf_price=ols), by_row=[dict(row=r, left=1.0, right=1.1) for r in range(1, 6)],
+                        avg_price=dict(left=2.4, right=2.6)),
+        our_rates_match_normal_run=True,
+        segments_ours=[dict(name="Steady", slots=list(OURS[:5]), rate=1.0, avg_price=2.5)],
+        segments_all_40=[dict(name="Steady", slots=other[:6] + list(OURS[:4]), left=6, right=4, rate=1.0, avg_price=2.5)],
+        per_selection=per)
+    text = fall_rates.report(result)
+    assert "## All 40 selections, fall (before the fall cut)" in text and "2026-11-18T00:00" in text
+    assert ", ".join(other[:6]) not in text                     # the all-40 segments give counts
+    for listed in ("21, 44", "31, 34", "(12)", "(12,", ": 12", "(31", "(21"):
+        assert listed not in text, listed
+    assert "2 left out" in text
+    assert "1 selections were in stock fewer than 11 class days (1 in the left half, 0 in the right)" in text
+    assert "(2 selections, 2 in the left half, 0 in the right:" in text
