@@ -1,17 +1,18 @@
 """Our slot assignment: read from the inventory server, followed until the lock time, then held, and used by
-every tool that reads the database. The parsing tests need no database."""
+every tool that reads the database. Only a person changes it; the worker only confirms it. The parsing tests need
+no database. "Now" is conftest's TEST_NOW (before the start) unless a test sets the slot clock."""
 
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from tests.conftest import TEST_SLOTS
+from tests.conftest import TEST_NOW, TEST_SLOTS
 from vending import settings, slots
 from vending.slots import BadAssignment, SlotsNotRecorded, parse
 
 # An answer shaped like the bridge's, for the test assignment.
 ANSWER = {"team": "group-b", "device_id": "vmc1", "slots": list(TEST_SLOTS)}
-NOW = datetime(2026, 11, 12, 15, tzinfo=timezone.utc)
+NOW = TEST_NOW
 LOCK = datetime.fromisoformat(slots.DEFAULT_LOCK_AT)
 AFTER = LOCK + timedelta(hours=1)
 # The other half of the machine, columns 1-4: a redrawn split could give us this.
@@ -52,6 +53,12 @@ MALFORMED = [
     ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "68"]}, "not a selection .*: 68"),
     ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "A5"]}, "not a selection .*: A5"),
     ({**ANSWER, "slots": [*TEST_SLOTS[:-1], "155"]}, "not a selection .*: 155"),
+    ({"device_id": "vmc1", "slots": list(TEST_SLOTS)}, "names no team; ours is 'group-b'"),
+    ({**ANSWER, "team": ""}, "names no team"),
+    ({**ANSWER, "team": 2}, "names no team"),
+    ({**ANSWER, "team": "group-a"}, r"for team 'group-a', but ours is 'group-b' \(SLOTS_TEAM\)"),
+    ({**ANSWER, "team": "Group B"}, "for team 'Group B'"),
+    ({**MOVED, "team": "group-a"}, "for team 'group-a'"),          # the other half, under the other team's name
 ]
 
 
@@ -59,6 +66,14 @@ MALFORMED = [
 def test_an_answer_it_cant_trust_is_refused(answer, why):
     with pytest.raises(BadAssignment, match=why):
         parse(answer)
+
+
+def test_our_team_comes_from_the_setting(monkeypatch):
+    assert slots.our_team() == "group-b"
+    monkeypatch.setenv(slots.TEAM_SETTING, "Group B")
+    assert parse({**ANSWER, "team": "Group B"}).team == "Group B"
+    with pytest.raises(BadAssignment, match="for team 'group-b', but ours is 'Group B'"):
+        parse(ANSWER)
 
 
 # --- The lock time --------------------------------------------------------------------------------
@@ -142,12 +157,11 @@ def test_an_unchanged_check_is_logged_only_when_it_confirms_the_assignment(empty
 def test_a_change_before_the_lock_replaces_it_and_is_logged(empty):
     slots.record(empty, ANSWER, NOW)
     later = NOW + timedelta(days=5)
-    moved = {**MOVED, "team": "group-a"}
-    assert slots.record(empty, moved, later) == "changed"
+    assert slots.record(empty, MOVED, later) == "changed"
     assert slots.our_slots(empty) == LEFT
     row = empty.execute("select team, device_id, first_read_at, last_checked_at, response"
                         " from slot_assignment").fetchone()
-    assert row == ("group-a", "vmc1", later, later, moved)
+    assert row == ("group-b", "vmc1", later, later, MOVED)
     tool, outcome, detail = _log(empty)[-1]
     assert (tool, outcome) == ("slots.record", "done")
     assert detail.startswith("slot assignment changed: vmc1 11, 12, 13, 14, 21")
@@ -224,15 +238,158 @@ def test_a_delayed_observation_cannot_overwrite_a_newer_answer_or_unconfirm_it(e
         slots.record(empty, MOVED, NOW)
 
 
-def test_a_new_team_label_alone_is_stored_not_refused(empty):
-    """Nothing reads `team`, so a renamed team with the same slots mustn't fail the hourly `record`."""
+def test_another_teams_answer_is_refused_even_with_our_slots(empty):
+    """A swapped key or a misconfigured bridge answers for the other team: never ours, before or after the lock."""
     slots.record(empty, ANSWER, NOW)
-    renamed = {**ANSWER, "team": "Group B"}
-    assert slots.record(empty, renamed, AFTER) == "team renamed"        # after the lock too
-    row = empty.execute("select team, first_read_at, last_checked_at, response from slot_assignment").fetchone()
-    assert row == ("Group B", NOW, AFTER, renamed)
+    for at in (NOW + timedelta(hours=1), AFTER):
+        for answer in ({**ANSWER, "team": "group-a"}, {**MOVED, "team": "group-a"}):
+            with pytest.raises(BadAssignment, match="for team 'group-a'"):
+                slots.record(empty, answer, at)
+            with pytest.raises(BadAssignment, match="for team 'group-a'"):
+                slots.check(empty, answer, at)
     assert slots.our_slots(empty) == TEST_SLOTS
-    assert _log(empty)[-1][2].endswith("(team group-b -> Group B)")
+    assert empty.execute("select team, last_checked_at from slot_assignment").fetchone() == ("group-b", NOW)
+
+
+def test_a_stored_row_for_another_team_is_refused(conn, monkeypatch):
+    conn.execute("update slot_assignment set team = 'group-a'")
+    with pytest.raises(SlotsNotRecorded, match="can't be ours: it is for team 'group-a'"):
+        slots.our_slots(conn)
+    conn.execute("update slot_assignment set team = null")
+    with pytest.raises(SlotsNotRecorded, match="names no team"):
+        slots.our_slots(conn)
+    conn.execute("update slot_assignment set team = 'group-b'")
+    monkeypatch.setenv(slots.TEAM_SETTING, "group-a")
+    with pytest.raises(SlotsNotRecorded, match="for team 'group-b', but ours is 'group-a'"):
+        slots.our_slots(conn)
+
+
+# --- The worker only confirms ---------------------------------------------------------------------
+
+def test_the_worker_confirms_an_unchanged_answer(empty):
+    slots.record(empty, ANSWER, NOW)
+    logged = len(_log(empty))
+    reordered = {**ANSWER, "slots": list(reversed(TEST_SLOTS))}
+    assert slots.check(empty, reordered, NOW + timedelta(hours=1)) == "unchanged"
+    assert len(_log(empty)) == logged
+    assert slots.check(empty, ANSWER, AFTER) == "unchanged"
+    assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (AFTER,)
+    tool, outcome, detail = _log(empty)[-1]
+    assert (tool, outcome) == ("slots.record", "done") and "confirmed by the first check since the start" in detail
+    assert slots.our_slots(empty, now=AFTER) == TEST_SLOTS
+
+
+@pytest.mark.parametrize("at", [NOW + timedelta(hours=1), LOCK, AFTER])
+def test_the_worker_never_takes_in_a_change(empty, at):
+    """Before the start, at the first check after it (a wrong half from a bad deploy, say) and after it: the worker
+    changes nothing, and its round fails until a person runs record."""
+    slots.record(empty, ANSWER, NOW)
+    logged = _log(empty)
+    with pytest.raises(BadAssignment, match="different assignment.*only confirms.*python -m vending.slots record"):
+        slots.check(empty, MOVED, at)
+    assert empty.execute("select slots, last_checked_at from slot_assignment").fetchone() == (list(TEST_SLOTS), NOW)
+    assert _log(empty) == logged
+    assert slots.our_slots(empty) == TEST_SLOTS
+
+
+def test_the_worker_doesnt_store_a_first_assignment(empty):
+    with pytest.raises(BadAssignment, match="only confirms one.*python -m vending.slots record"):
+        slots.check(empty, ANSWER, NOW)
+    assert empty.execute("select count(*) from slot_assignment").fetchone() == (0,)
+
+
+def test_a_wrong_first_check_after_the_start_doesnt_stick(empty):
+    """The review's case on #146: the first check after the start gets the wrong half. The worker refuses it, the
+    readers keep refusing (nothing confirmed), and the right answer an hour later confirms the assignment."""
+    slots.record(empty, ANSWER, NOW)
+    with pytest.raises(BadAssignment):
+        slots.check(empty, MOVED, AFTER)
+    with pytest.raises(SlotsNotRecorded, match="not been confirmed"):
+        slots.our_slots(empty, now=AFTER)
+    assert slots.check(empty, ANSWER, AFTER + timedelta(hours=1)) == "unchanged"
+    assert slots.our_slots(empty, now=AFTER + timedelta(hours=1)) == TEST_SLOTS
+
+
+def test_a_person_can_take_the_servers_answer_at_the_start_while_nothing_is_confirmed(empty):
+    """The one change can land just before the start, with no check in between: a person stores it then."""
+    slots.record(empty, ANSWER, NOW)
+    assert slots.record(empty, MOVED, AFTER) == "changed"
+    assert "the first check since the start" in _log(empty)[-1][2]
+    assert slots.our_slots(empty, now=AFTER) == LEFT
+
+
+def test_a_person_replaces_a_confirmed_assignment_only_with_replace(empty):
+    slots.record(empty, ANSWER, NOW)
+    slots.check(empty, ANSWER, AFTER)
+    with pytest.raises(BadAssignment, match="locked at .*record --replace"):
+        slots.record(empty, MOVED, AFTER + timedelta(hours=1))
+    assert slots.record(empty, MOVED, AFTER + timedelta(hours=2), replace=True) == "replaced"
+    assert "replaced by a person with --replace" in _log(empty)[-1][2]
+    assert slots.our_slots(empty, now=AFTER + timedelta(hours=2)) == LEFT
+    with pytest.raises(BadAssignment, match="locked at"):          # one --replace doesn't unlock it
+        slots.record(empty, ANSWER, AFTER + timedelta(hours=3))
+
+
+# --- A person confirms without the server -----------------------------------------------------------
+
+def test_confirm_marks_the_stored_assignment_confirmed_after_the_start(empty):
+    slots.record(empty, ANSWER, NOW)
+    with pytest.raises(BadAssignment, match="nothing to confirm"):
+        slots.confirm(empty, now=NOW + timedelta(hours=1))
+    assert slots.confirm(empty, now=AFTER) == "confirmed"
+    assert "confirmed without the server" in _log(empty)[-1][2]
+    assert slots.our_slots(empty, now=AFTER) == TEST_SLOTS
+    assert slots.confirm(empty, now=AFTER + timedelta(hours=1)) == "already confirmed"
+
+
+def test_confirm_refuses_nothing_stored_or_a_bad_row(empty):
+    with pytest.raises(BadAssignment, match="python -m vending.slots record"):
+        slots.confirm(empty, now=AFTER)
+    slots.record(empty, ANSWER, NOW)
+    empty.execute("update slot_assignment set team = 'group-a'")
+    with pytest.raises(BadAssignment, match="can't be ours"):
+        slots.confirm(empty, now=AFTER)
+
+
+def test_readers_use_the_database_clock_by_default(empty, monkeypatch):
+    slots.record(empty, ANSWER, NOW)
+    monkeypatch.setattr(slots, "clock", lambda conn: AFTER)
+    with pytest.raises(SlotsNotRecorded, match="not been confirmed"):
+        slots.our_slots(empty)
+
+
+def test_the_real_clock_is_the_databases(conn, monkeypatch):
+    monkeypatch.undo()                          # conftest's fixed clock off
+    db_now = conn.execute("select clock_timestamp()").fetchone()[0]
+    assert abs((slots.clock(conn) - db_now).total_seconds()) < 5
+    assert slots.clock(conn).utcoffset() == timedelta(0)
+
+
+def test_a_malformed_lock_setting_is_a_refusal_the_tools_understand(conn, monkeypatch):
+    from vending.tools.machine_state import get_machine_state
+
+    monkeypatch.setenv(slots.LOCK_SETTING, "3 Dec")
+    with pytest.raises(SlotsNotRecorded, match="SLOTS_LOCK_AT"):
+        slots.our_slots(conn)
+    reply = get_machine_state(conn, now=NOW)
+    assert not reply.success and "SLOTS_LOCK_AT" in reply.message
+
+
+def test_the_tools_work_after_the_start_once_confirmed(conn, monkeypatch):
+    """The whole path with a post-start clock: the worker's check confirms, then the tools read our slots."""
+    from tests.conftest import store_poll
+    from vending.planning import planner_config
+    from vending.tools.machine_state import get_machine_state
+
+    later = LOCK + timedelta(days=1)
+    monkeypatch.setattr(slots, "clock", lambda c: later)
+    store_poll(conn, "a", "2026-12-03T12:00:00+00:00", {"15": (300, 50)})
+    store_poll(conn, "b", "2026-12-04T03:00:00+00:00", {"15": (300, 53)})
+    assert not get_machine_state(conn, now=later).success
+    assert slots.check(conn, ANSWER, LOCK + timedelta(minutes=1)) == "unchanged"
+    state = get_machine_state(conn, now=later)
+    assert state.success and [s.slot for s in state.data] == list(TEST_SLOTS)
+    assert planner_config(conn).slots == TEST_SLOTS
 
 
 @pytest.mark.parametrize("at", [NOW, AFTER])
@@ -397,13 +554,7 @@ def test_an_answer_asked_for_before_the_lock_and_delivered_after_it_confirms_not
     lock = datetime(2026, 12, 3, 5, tzinfo=timezone.utc)
     monkeypatch.setenv(slots.LOCK_SETTING, lock.isoformat())
     clock = {"now": lock - timedelta(days=1)}
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return clock["now"]
-
-    monkeypatch.setattr(slots, "datetime", Clock)
+    monkeypatch.setattr(slots, "clock", lambda conn: clock["now"])
     assert slots.main(["record"]) == 0                       # the day before: ANSWER stored
 
     class SlowBridge:
@@ -458,3 +609,32 @@ def test_record_never_migrates(schema_url, monkeypatch, capsys):
     monkeypatch.setattr(db, "migrate", lambda conn: pytest.fail("record must never migrate"))
     assert slots.main(["record"]) == 2
     assert "python -m vending.db migrate" in capsys.readouterr().err
+
+
+def test_check_is_the_workers_and_exits_1_on_a_change(command, capsys):
+    assert slots.main(["check"]) == 1                          # nothing stored: a person records first
+    assert "only confirms one" in capsys.readouterr().err
+    assert slots.main(["record"]) == 0
+    assert slots.main(["check"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1].startswith("unchanged: team group-b")
+    command["answer"] = MOVED
+    assert slots.main(["check"]) == 1
+    assert "only confirms an unchanged one" in capsys.readouterr().err
+    assert slots.main(["show"]) == 0 and "15, 16" in capsys.readouterr().out    # nothing changed
+
+
+def test_confirm_and_replace_from_the_command_line(command, monkeypatch, capsys):
+    assert slots.main(["record"]) == 0
+    assert slots.main(["confirm"]) == 1                        # the lock is in 2999
+    assert "nothing to confirm" in capsys.readouterr().err
+    monkeypatch.setenv(slots.LOCK_SETTING, "2026-11-01T00:00:00-05:00")
+    capsys.readouterr()
+    assert slots.main(["confirm"]) == 0                        # recorded at TEST_NOW, after this lock
+    assert capsys.readouterr().out.startswith("already confirmed: team group-b")
+    command["answer"] = MOVED
+    assert slots.main(["record"]) == 1
+    assert "record --replace" in capsys.readouterr().err
+    assert slots.main(["record", "--replace"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1].startswith("replaced: team group-b, device vmc1, 20 slots: 11")
+    with pytest.raises(SystemExit):
+        slots.main(["check", "--replace"])

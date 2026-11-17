@@ -98,8 +98,10 @@ def test_invalid_assignment_refuses_before_counters(conn, guarded, reader, assig
 def test_first_post_start_check_captures_the_servers_final_assignment(conn):
     conn.execute("update slot_assignment set last_checked_at = '2026-12-03T04:59:00Z'")
     final_slots = tuple(s for s in slot_counts.SELECTIONS if s not in TEST_SLOTS)
-    answer = {"device_id": "vmc1", "slots": list(final_slots)}
+    answer = {"team": "group-b", "device_id": "vmc1", "slots": list(final_slots)}
     at = datetime(2026, 12, 3, 5, 1, tzinfo=timezone.utc)
+    with pytest.raises(slots.BadAssignment, match="only confirms"):     # the worker never takes it in
+        slots.check(conn, answer, now=at)
     assert slots.record(conn, answer, now=at) == "changed"
     assert slots.our_slots(conn) == final_slots
     with pytest.raises(slots.BadAssignment):
@@ -115,12 +117,7 @@ def test_readers_refuse_until_the_first_post_start_confirmation(conn, schema_url
     start = slots.lock_at()
     conn.execute("update slot_assignment set last_checked_at = %s", (start.replace(year=start.year - 1),))
 
-    class AfterStart(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return start
-
-    monkeypatch.setattr(slots, "datetime", AfterStart)
+    monkeypatch.setattr(slots, "clock", lambda c: start)
     for read in (slots.our_slots, stock.stock, slot_counts.latest):
         with pytest.raises(slots.SlotsNotRecorded, match="final server assignment"):
             read(conn)
@@ -154,7 +151,7 @@ def test_simultaneous_initial_records_both_succeed(conn, schema_url):
         for each row execute function slow_insert()
     """)
     start = threading.Barrier(2)
-    answer = {"device_id": "vmc1", "slots": list(TEST_SLOTS)}
+    answer = {"team": "group-b", "device_id": "vmc1", "slots": list(TEST_SLOTS)}
 
     def record():
         with open_in(*schema_url) as other:
