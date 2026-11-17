@@ -57,6 +57,7 @@ from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import machine_state
+from vending.mascot import svg as mascot_svg  # after the rest: other PRs edit the lines above
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -1521,7 +1522,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     p = snap["plan"]["data"] if snap["plan"]["ok"] else None
     plan_hint = ("outlined slots changed &middot; open a slot for the agent's reason"
                  if p and p["previous_run"] else "open a slot for the agent's reason" if p else "")
-    head =(f'<header class="top"><h1>Agent dashboard</h1>'
+    head =(f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
             f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
             f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
             f'refreshes every {int(refresh)} s</span> &middot; <a href="{_e(json_href)}">JSON</a>{links}</span></header>')
@@ -1554,7 +1555,7 @@ def _error_page(message: str) -> str:
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}"><title>No database &middot; Agent dashboard</title>'
-            f'<style>{STYLE}</style></head><body><main><header class="top"><h1>Agent dashboard</h1>'
+            f'<style>{STYLE}</style></head><body><main><header class="top">{mascot_svg("problem")}<h1>Agent dashboard</h1>'
             f'<span class="verdict problem">No data</span></header>'
             f'<ul class="attention"><li class="bad"><span class="dot">!</span><span>Can\'t read the database: '
             f'{_e(message)}. This page tries again every {REFRESH_SECONDS} s.</span></li></ul></main></body></html>')
