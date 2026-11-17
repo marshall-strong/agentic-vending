@@ -27,7 +27,7 @@ A door opening isn't always a refill. Before the competition, course staff stock
 
 We don't depend on a set restock time. A student worker won't always be on time, and the history shows visits on every weekday.
 
-1. **Find the visit in the data.** A door-count rise between two polls marks it. A fulfilled request's `fulfilled_at` marks the end of the visit, and the worker's door times on the receipt (live since 17 Nov) narrow it further. A change in a slot's price field at a poll shows the new setup is in place.
+1. **Find the visit in the data.** A door-count rise between two polls marks it. A fulfilled request's `fulfilled_at` marks the end of the visit, and the worker's door times on the receipt (David confirmed them live on 17 Nov) narrow it further. A change in a slot's price field at a poll shows the new setup is in place.
 2. **Mark the uncertain window**: from the last poll before the first opening to the first poll after the last one. Before it is the old setup; after it is the new one.
 3. **Only our changed slots need care.** A slot whose product and price didn't change counts as usual.
 4. **When the price changed, solve with the counters.** With `u` units and `c` cents inside the window, an old price `a` and a new price `b`, the number sold at the new price is `(c - u*a) / (b - a)`. A whole number from 0 to `u` settles it. Anything else means a misread or a third price: flag it for a person.

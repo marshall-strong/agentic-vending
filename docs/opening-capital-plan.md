@@ -162,7 +162,7 @@ To be numbered in `docs/assumptions.md` (open PRs take A16 to A19: #69 A16, #99 
 9. **Midweek visits held back for.** Proposed: 2 ($50), a risk choice.
 10. **Model caps and run frequency** (#51, #107). A $4.00 daily cap doesn't fit a $9.00 line; lowering it shrinks the floor and margin equally.
 11. **Day-one deadline and ordering method** (#102).
-12. **First regular restock:** answered 17 Nov: a request received by 23:59 Thu 3 Dec is filled Fri 4 Dec.
+12. **First regular restock:** answered 17 Nov: a valid request received by 23:59 Thu 3 Dec is filled at the Fri 4 Dec visit.
 
 **Follow-ups after team sign-off.** Point `docs/agent/money.md` here (#90). Add a planner check for the $53 floor. Merge the price list (no PR yet).
 

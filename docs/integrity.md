@@ -45,6 +45,8 @@ repo root points here.
   counters only from `DEVICE_ID`, and only for the slots our own receipts name.
 
 From 3 Dec the polls carry the full, raw DEX response (David, 17 Nov), so the other team's
-selections arrive with ours. Everything that reads them for analysis, display or decisions
-filters to our assignment from the start. We still store every selection from each poll. The polls are the machine's own record, and
+selections arrive with ours. From the start, everything that reads them for analysis, display or
+decisions must filter to our assignment, and nothing may show a machine-wide total that includes
+their sales. On 17 Nov some readers didn't yet: see "Where the code stands" in
+`planning/2026-11-17-david-answers.md`. We still store every selection from each poll. The polls are the machine's own record, and
 which selections are ours may change when the inventory server assigns them.

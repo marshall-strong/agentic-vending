@@ -41,7 +41,7 @@ Kept full, the 20 slots would sell about 23.3 units a class day (`analysis/REPOR
 
 ## 1. Friday restock: how much stock a slot needs
 
-**Rule.** In the Friday request (in-store items by Thursday 23:59, Amazon items by Wednesday 23:59):
+**Rule.** In the Friday request (in-store items by Thursday 23:59; Amazon items by Wednesday 23:59 so they can arrive by Friday. That is a warning, not a deadline: a late Amazon item is stocked at the next scheduled visit, David 17 Nov):
 
 1. **Fill every slot to capacity from the closet.** No cash, so no threshold.
 2. **Buy a pack when slot plus closet at the visit covers less than 2 weeks of sales:** `(stock_on_hand + closet units - units_per_day x days until the visit) / units_per_day < 14`.
@@ -188,7 +188,7 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - **The wildcard slot** (rule 3; ceiling about $8.00, same floor). Proposed by Kevin on #100; the team decides on #110 (item 1). Its $82 cap is an option in #90, not part of the plan.
 - **The floor: break-even or profit.** Today's breaks even after tax. Kevin proposed (unit cost + $0.25) × 1.08, rounded up to 5 cents, with a setting `min_margin_cents` (#100). Not decided.
 - **Day-one stock from the $600.** David to confirm (#106 row 3).
-- **First regular restock:** answered 17 Nov: a request received by 23:59 Thu 3 Dec is filled Fri 4 Dec.
+- **First regular restock:** answered 17 Nov: a valid request received by 23:59 Thu 3 Dec is filled at the Fri 4 Dec visit.
 - **Day-one deadline:** answered 17 Nov: catalog approvals by Wed 25 Nov, the fill request by 23:59 Sun 29 Nov, stocking Mon 30 Nov (`docs/planning/2026-11-17-david-answers.md`).
 - **More than one open request** (#106 row 12).
 - **A Friday visit in the Winter Holiday Break** (25 Dec, 1 Jan). Not yet asked.

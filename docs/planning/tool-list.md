@@ -351,7 +351,7 @@ Each unit carries its `unit_cost_paid`, so the closet's value and our cost of go
 - [ ] Added 19 Oct: can a line load units bought or pulled by another line of the same request (one purchase feeding two slots, or two slots swapping products)?
 - [ ] Added 19 Oct: is the alternate only the same product from another store or pack, or can it be a different product? Can it carry its own sale price?
 - [ ] Added 19 Oct: is a $25 midweek visit a flag on the purchase request, or its own route?
-- [ ] Added 19 Oct: what is the ordering cutoff, and does it differ by store? David floated Friday noon for in-store buying, 21 Sep said Thursday midnight, and Amazon orders are due Wednesday for two-day shipping. Restocks are Friday afternoon.
+- [x] Added 19 Oct: what is the ordering cutoff, and does it differ by store? **12 and 17 Nov: in-store Thursday 23:59; Amazon has no hard deadline, it is ordered when the worker sees the request, and a late item waits for the next scheduled visit.** David floated Friday noon for in-store buying, 21 Sep said Thursday midnight, and Amazon orders are due Wednesday for two-day shipping. Restocks are Friday afternoon.
 - [ ] Added 19 Oct: is the store list Walmart, Amazon and BJ's, or Costco too?
 - [ ] Added 19 Oct: can we rescind a request, for example an Amazon order that won't arrive in time? Does a late delivery wait in the closet until the next visit?
 - [ ] Added 19 Oct: does Amazon shipping count against the max pack price?
