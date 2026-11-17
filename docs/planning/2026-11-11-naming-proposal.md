@@ -24,6 +24,10 @@ Each option comes from something real about our setup: Rochester (the "ROC"), th
 
 Honcho is a name for the agent the team already built (#39, #58), the one model that makes the weekly call. It decides what goes in each of our 20 slots, at what price, whether to pull a slow seller, and whether a $25 midweek visit is worth it. It signs every weekly plan ("Honcho's call for Friday") and appears by name on the dashboard and in the logs.
 
+## The machine: the Flagship
+
+Our vending machine (the Royal Vision Vender, device VMC1, the one both teams sell from) is **the Flagship**: Honcho is its captain, and the third-party drink and snack machine that appeared beside it around 14 Nov is **the Interloper** (#116). Both are nicknames for the slides and for talking about them. The dashboard keeps showing the machine's real model and device id.
+
 ## The crew: names for the parts around Honcho (proposed)
 
 The team hasn't agreed on a "head agent with a crew" design. As built (#39, #58), the system is **one agent calling MCP tools, with the arithmetic in plain code**. Most of the "crew" below is code that already exists, so most of these would just be names for existing parts. Four would be new: Scout, the catalog-drafting half of The Buyer, The Doorman and The Oracle. Whether to build them, and whether any should be a model call, is the team's call.
