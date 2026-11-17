@@ -137,7 +137,7 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 **Paying for a swap:** takings plus the switch reserve ($68, one pack; #90). The first flag can't act before Fri 11 Dec (Thu 3 to Wed 9 Dec are the first 5 class days), so a week of takings is in.
 
-**The wildcard slot (Proposed by Kevin on #100; built in `add_wildcard_slot`, adopted when that PR merges).** The agent picks one of our 20 slots, names it in its plan with a reason, and moves it only at a Friday visit. Ceiling about $8.00 (others $6.50, PR #100); same floor as every slot. Aim: every sale profits, no loss leaders, which needs a floor above today's break-even (open). Ideas: premium drink, high-price test, rotating feature, seasonal bet, anchor. Purchase cap $82 (#90).
+**The wildcard slot (Kevin, #100; adopted on #110, item 1, 16 Nov).** One of our 20 slots tests products for the other 19 (`docs/agent/wildcard.md`). A product on trial there is priced as a regular slot would be. At the first Friday visit after 5 in-stock class days, it is compared with the weakest of our other slots over the same days, by profit per in-stock class day (`get_machine_state`, `wildcard_trial`). If it earns more, it stays as a regular slot: the weakest slot's product is pulled to the closet at cost, as for a flag above, and that slot becomes the wildcard with the next product to test. If not, the wildcard switches to the next product. The agent names the slot in every plan with a reason and moves it only at a Friday visit. Ceiling $8.00 for a deliberate price test (others $6.50, PR #100); same floor as every slot. Purchase cap $82 (#90).
 
 ## 4. How the balance limits orders
 
@@ -153,7 +153,7 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 **Spendable** = balance less sales tax owed (`get_account_balance`). The planner refuses orders above spendable (`insufficient_balance`); the floor is stricter.
 
-**Condition on the capital plan:** at least $53 spendable after the day-one fill. Its caps leave $233 ($600 − $366 − $1), or $157 if the team adopts the wildcard option ($600 − $360 − $82 − $1). Then sales refill the account (about 23.3 × 5 = 117 units a week; cash depends on prices).
+**Condition on the capital plan:** at least $53 spendable after the day-one fill. Its caps leave $157 ($600 − $360 for 19 regular slots − $82 for the wildcard − $1). Then sales refill the account (about 23.3 × 5 = 117 units a week; cash depends on prices).
 
 ## Agent follow-ups (separate PR, after #99 and #100)
 
@@ -185,7 +185,7 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - **Order of cuts when the floor binds** (rule 4). Proposed here.
 - **Slot plus closet in rule 1**, and **no purchase for a flagged slot; swaps priced by PR #99 under $6.50** (rule 3). Proposed here.
 - **Swap first at a slow-seller flag** (rule 3). Proposed by Kevin, 12 Nov; depends on R6 (#102, P2).
-- **The wildcard slot** (rule 3; ceiling about $8.00, same floor). Proposed by Kevin on #100; built in `add_wildcard_slot` (rules in `docs/agent/wildcard.md`), and the team decides on #110 (item 1) by merging it or not. Its $82 cap is an option in #90, not part of the plan.
+- **The wildcard slot** (rule 3; ceiling $8.00, same floor). Kevin's proposal on #100, adopted on #110 (item 1), 16 Nov; rules in `docs/agent/wildcard.md`, $82 line in `docs/opening-capital-plan.md`. How a trial is judged (profit per in-stock class day against the weakest other slot, after 5 in-stock class days) is Proposed here.
 - **The floor: break-even or profit.** Today's breaks even after tax. Kevin proposed (unit cost + $0.25) × 1.08, rounded up to 5 cents, with a setting `min_margin_cents` (#100). Not decided.
 - **Day-one stock from the $600.** David to confirm (#106 row 3).
 - **First regular restock:** answered 17 Nov: a valid request received by 23:59 Thu 3 Dec is filled at the Fri 4 Dec visit.

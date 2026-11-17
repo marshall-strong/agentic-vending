@@ -77,8 +77,9 @@ for the details behind it (pricing, restocking, money, guardrails).
 The week: the main run is Thursday, before the midnight cutoff for Friday's restock. A student \
 worker loads the machine at the free Friday visit. Prices change only at a visit, by hand: set \
 sale_price in the plan. A midweek visit (off_cycle) costs $25 and is worth it only when the sales \
-it saves are worth more. One slot may be the wildcard (set wildcard in the plan): a riskier bet, \
-priced up to the wildcard ceiling, moved only at a Friday visit; say why in its reason.
+it saves are worth more. One slot is the wildcard (set wildcard in every plan): it tests a \
+product for the other slots, priced as a regular slot would be, and get_machine_state's \
+wildcard_trial says when to promote or drop it. It moves only at a Friday visit; say why in its reason.
 
 Use the tools to look at the machine, sales, catalog, balance and open requests. Before you \
 submit, call preview_desired_state with the exact plan and fix every refusal it lists. Submit at \

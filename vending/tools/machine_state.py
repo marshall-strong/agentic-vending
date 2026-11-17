@@ -30,6 +30,12 @@ Built from our database only; it never reads the machine.
   newer) by it. `units_per_day` stays as before: the last 7 calendar days,
   empty days and weekends included, so it reads low for a slot that sold out.
 
+`wildcard_trial` is the product on trial in the wildcard slot, judged against
+our other slots over the same days (`vending.wildcard_trial`): its profit per
+in-stock class day, the weakest other slot's, and a verdict (too early,
+promote, drop, price test or unknown) with the reason. Null when the latest
+accepted plan named no wildcard.
+
 A slot with no receipts yet has `null` for every receipt field: null, not
 zero, so the agent can't mistake "unknown" for "empty". The message names
 those slots. A count that saw a slot empty gives `counted_on_hand` 0 and
@@ -45,7 +51,7 @@ from fractions import Fraction
 import psycopg
 from pydantic import BaseModel
 
-from vending import counters, demand, slot_counts, stock
+from vending import counters, demand, slot_counts, stock, wildcard_trial
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
@@ -89,6 +95,23 @@ class ClosetItem(BaseModel):
     value_at_cost: str | None    # dollars
 
 
+class WildcardTrial(BaseModel):
+    """The wildcard as a testing ground (`docs/agent/wildcard.md`): is its product worth a regular slot?"""
+    slot: str
+    product: str | None = None                  # null: no receipts show what the slot holds
+    since: datetime | None = None               # when the product on trial went in
+    class_days_in_stock: int | None = None
+    units_sold: int | None = None               # in whole poll windows since it went in
+    profit_per_class_day: str | None = None     # dollars: revenue without tax, less cost of sales
+    price_test: bool = False                    # sold above the ceiling, so not a promotion trial
+    weakest_slot: str | None = None             # the weakest of our other slots over the same days
+    weakest_product: str | None = None
+    weakest_class_days_in_stock: int | None = None
+    weakest_profit_per_class_day: str | None = None
+    verdict: str                                # too early, promote, drop, price test or unknown
+    reason: str
+
+
 class MachineState(Reply):
     as_of: datetime | None = None
     stale: bool = False
@@ -96,6 +119,7 @@ class MachineState(Reply):
     data: list[SlotState] = []
     closet: list[ClosetItem] = []
     closet_value_at_cost: str | None = None
+    wildcard_trial: WildcardTrial | None = None
     warnings: list[str] = []
 
 
@@ -224,9 +248,11 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
     seen = _seen(conn)
     latest_counters = _counters(conn, latest[0], slots)
-    demands = _demands(counts, _loads(conn), counted.sales, latest_counters, now)
+    loads = _loads(conn)
+    demands = _demands(counts, loads, counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
+    trial = trial_reply(wildcard_trial.trial(conn, now, counts, loads, counted.sales))
     closet, closet_value = closet_items(counted.closet)
 
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
@@ -238,15 +264,46 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
         success=True,
         stale=stale,
         message=(f"{warning}{len(states)} slots as of the poll at {as_of:%Y-%m-%d %H:%M} UTC; "
-                 f"sales window {window}. {_receipts_note(slots, counts, closet, counted.warnings)}{_count_note(states)}"),
+                 f"sales window {window}. {_receipts_note(slots, counts, closet, counted.warnings)}{_count_note(states)}"
+                 f"{_trial_note(trial)}"),
         count=len(states),
         as_of=as_of,
         window_start=baseline[1] if baseline else None,
         data=states,
         closet=closet,
         closet_value_at_cost=closet_value,
+        wildcard_trial=trial,
         warnings=list(counted.warnings),
     )
+
+
+def trial_reply(trial: wildcard_trial.Trial | None) -> WildcardTrial | None:
+    """The trial in dollars for the agent. Pure."""
+    if trial is None:
+        return None
+    r, w = trial.record, trial.weakest
+    return WildcardTrial(
+        slot=trial.slot,
+        product=r.product if r else None,
+        since=r.since if r else None,
+        class_days_in_stock=r.class_days_in_stock if r else None,
+        units_sold=r.units_sold if r else None,
+        profit_per_class_day=_dollars(r.profit_per_class_day_cents) if r else None,
+        price_test=trial.price_test,
+        weakest_slot=w.slot if w else None,
+        weakest_product=w.product if w else None,
+        weakest_class_days_in_stock=w.class_days_in_stock if w else None,
+        weakest_profit_per_class_day=_dollars(w.profit_per_class_day_cents) if w else None,
+        verdict=trial.verdict,
+        reason=trial.reason,
+    )
+
+
+def _trial_note(trial: WildcardTrial | None) -> str:
+    if trial is None:
+        return " No wildcard trial: the latest plan named no wildcard."
+    on_trial = f"{trial.product} in slot {trial.slot}" if trial.product else f"slot {trial.slot}"
+    return f" Wildcard trial ({on_trial}): {trial.verdict}; {trial.reason}."
 
 
 def _receipts_note(slots: tuple[str, ...], counts: dict, closet: list[ClosetItem], warnings: tuple[str, ...]) -> str:
