@@ -45,6 +45,18 @@ Kevin sent David the open questions from #102 and the 12 Nov notes (`2026-11-12-
 
 "The full, raw DEX response" most likely means that each poll carries **all 40 selections**, including the other team's 20 (inferred; we will know when the first post-start poll arrives). From 3 Dec, our integrity rule forbids using the other team's per-selection sales, prices or stock (`docs/integrity.md`). The agent's tools already filter to our server assignment. Every other reader must apply the same filter from the start: dashboard, analysis, stock count and sim. We may still store the raw text, because the poll is the machine's record. The door counter is machine-wide, so it dates visits and nothing more.
 
+**Where the code stands (read-only check of main at `9523764`, 17 Nov):**
+
+- **The agent is clean.** Every agent tool, the ledger, the planner and the replayer read only our slots, and no tool returns raw DEX.
+- **These readers use every selection on main, with no cut at the start:**
+  - `analysis/export_sales.py`, whose machine-wide hourly totals feed `sales_analysis.py`. After 3 Dec, the total minus ours gives the other team's sales.
+  - `slot_counts.latest`, which feeds the local dashboard's `state.json` and `python -m vending.slot_counts show`.
+  - The public `/db` page, which shows `polls.total_paid_*`, the machine-wide VA1 totals.
+  - `scripts/bridge.py raw|latest|poll`, which prints the whole poll.
+- **Open PR #146 (server slots) fixes the analysis and `slot_counts`.** It does not fix the `/db` totals or `scripts/bridge.py`.
+- **The simulator writes 20-selection polls with no door counter.** No test feeds a post-start poll with all 40 selections.
+- **Nothing reads the door times yet.** They are most likely already stored in `purchase_requests.last_response`. Read their field names from a fulfilled request there, then use them in `stock._split_at_changes` and in `machine_state`'s load dates.
+
 ## Still open
 
 - **Day-one stock from the $600** (12 Nov notes, row 3): David was to confirm it. Not covered in this reply.
