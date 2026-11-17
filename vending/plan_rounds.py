@@ -277,9 +277,14 @@ def _check_slot(raw: Any, name: str, ours: tuple[str, ...]) -> str:
 
 
 def _check_note_slots(value: Any, name: str, ours: tuple[str, ...]) -> None:
-    """Notes name slots in free text ("38, 45, 46"); every two-digit selection named must be ours."""
+    """Notes name slots in free text ("38, 45, 46", "15-17", "15 to 17"); every two-digit selection named must be
+    ours, including each one inside a range."""
     for item in value if isinstance(value, list) else [value]:
         text = str(item.get("slot", "")) if isinstance(item, dict) else ""
+        for low, high in re.findall(r"\b(\d{2})\s*(?:-|–|to)\s*(\d{2})\b", text):
+            for n in range(int(low), int(high) + 1):
+                if str(n)[1] in "12345678":           # 19 and 20 aren't selections, so "18-21" is 18 and 21
+                    _check_slot(str(n), name, ours)
         for slot in re.findall(r"\b\d{2}\b", text):
             _check_slot(slot, name, ours)
 

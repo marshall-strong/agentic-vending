@@ -434,7 +434,7 @@ def only_ours(snap: dict) -> None:
     if snap["stock"]["ok"]:
         stock = snap["stock"]["data"]
         stock["slots"] = {s: v for s, v in stock["slots"].items() if s in ours}
-        stock["warnings"] = [w for w in stock["warnings"] if _slots_named(w) <= ours]
+        stock["warnings"] = [w for w in stock["warnings"] if _warning_is_ours(w, ours)]
 
 
 # How `vending.stock` names a selection in a warning: "slot 15". Plurals, lists and ranges
@@ -442,6 +442,15 @@ def only_ours(snap: dict) -> None:
 _SLOT_NAMED = re.compile(r"\bslot (\w+)")
 _SLOT_LIST = re.compile(r"\bslots? (\d+(?:\s*(?:,|-|–|and|or)\s*(?:slot\s+)?\d+)*)")
 _LIST_SEP = re.compile(r"\s*(?:,|\band\b|\bor\b)\s*(?:slot\s+)?")
+
+
+def _warning_is_ours(warning: str, ours: set[str]) -> bool:
+    """Keep a warning only when the selection `vending.stock` attached to it is ours (or it is about the
+    closet) and its text names no other. A warning without one attached (not from `vending.stock`) is
+    judged by its text alone, and one that mentions slots we can't read is dropped."""
+    if hasattr(warning, "slot") and warning.slot is not None and warning.slot not in ours:
+        return False
+    return _slots_named(warning) <= ours
 
 
 def _slots_named(warning: str) -> set[str]:

@@ -38,7 +38,9 @@ class Segment:
 
 
 # Fall 2026, our 20 slots: units per in-stock class day and the average price paid
-# (`analysis/REPORT.md`, "Our slots"; `docs/restock-policy.md`, "Sales rates").
+# (`analysis/REPORT.md`, "Our slots"; `docs/restock-policy.md`, "Sales rates"). The all-40 fall rates by
+# price band (`analysis/fall_rates.py`, the report's last section) are advice for people setting starting
+# rates; nothing in the code reads them yet.
 SEGMENTS = (
     Segment("fast seller", Decimal("1.701"), 263),
     Segment("mid seller, premium-priced", Decimal("1.354"), 433),

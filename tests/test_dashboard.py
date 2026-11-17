@@ -651,3 +651,31 @@ def test_only_ours_reads_plural_list_and_range_slot_names_in_warnings(warning, k
             "stock": {"ok": True, "data": {"slots": {}, "warnings": [warning]}}}
     dashboard.only_ours(snap)
     assert (snap["stock"]["data"]["warnings"] == [warning]) is kept
+
+
+@pytest.mark.parametrize("text, slot, kept", [
+    ("Slot 11: the polls show 2 more sales", "11", False),     # the wordings the review found slipping through
+    ("selection 11 oversold", "11", False),
+    ("slots 27-11 sold across a change", "27", False),
+    ("r1 line 2: 4 units of X lost in the closet but we counted only 2", None, True),   # the closet is no selection
+    ("r1 line 2: loaded 4 units of X from the closet but we counted only 2 there", "16", True),
+    ("r1 line 2: loaded 4 units of X from the closet but we counted only 2 there", "15", False),
+    ("slot 16: but it says slot 15 too", "16", False),          # the text is still checked
+])
+def test_only_ours_goes_by_the_slot_the_stock_warning_carries(text, slot, kept):
+    from vending import dashboard
+    from vending.stock import StockWarning
+
+    warning = StockWarning(text, slot)
+    snap = {"ours": {"ok": True, "data": ["16", "18"]}, "counts": {"ok": False},
+            "stock": {"ok": True, "data": {"slots": {}, "warnings": [warning]}}}
+    dashboard.only_ours(snap)
+    assert (snap["stock"]["data"]["warnings"] == [warning]) is kept
+
+
+def test_every_stock_warning_carries_its_slot():
+    from vending.stock import Movement, StockWarning, replay
+
+    T = datetime(2026, 11, 2, 15, tzinfo=timezone.utc)
+    found = replay([Movement(at=T, kind="pull", slot="27", sku="COKE20", units=3, ref="r1 line 1")])
+    assert found.warnings and all(isinstance(w, StockWarning) and w.slot == "27" for w in found.warnings)
