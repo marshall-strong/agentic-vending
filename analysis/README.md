@@ -64,7 +64,7 @@ Then one command does it all. Run it from the repo root with the analysis venv; 
 analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe
 ```
 
-It also runs the fall pass (all 40 selections, polls before the start only; see Scope). When every check passes in both runs it writes `REPORT.md`: the report plus the fall section. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/` and `analysis/data/fall40/`. `--no-fall` skips the fall pass and leaves `REPORT.md` as it is.
+It also runs the fall pass (all 40 selections, polls before the fall cut only; see Scope). When every check passes in both runs it writes `REPORT.md`: the report plus the fall section. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/` and `analysis/data/fall40/`. `--no-fall` skips the fall pass and writes `REPORT.md` without its fall section.
 
 To look at only some of our slots, say shelves 1 and 2, narrow the list:
 

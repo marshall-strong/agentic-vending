@@ -265,7 +265,11 @@ def test_a_round_runs_a_minute_after_the_slot_lock():
     assert worker.next_round(now, 60, lock) == lock + timedelta(minutes=1)
     assert worker.next_round(now, 10, lock) == now + timedelta(minutes=10)          # the hourly round comes first
     after = lock + timedelta(minutes=1)
-    assert worker.next_round(after, 60, lock) == after + timedelta(hours=1)         # once only
+    assert worker.next_round(after, 60, lock) == lock + timedelta(minutes=5)         # then 5 and 15 minutes after
+    assert worker.next_round(lock + timedelta(minutes=3), 60, lock) == lock + timedelta(minutes=5)
+    assert worker.next_round(lock + timedelta(minutes=5), 60, lock) == lock + timedelta(minutes=15)
+    later = lock + timedelta(minutes=15)
+    assert worker.next_round(later, 60, lock) == later + timedelta(hours=1)          # then hourly again
     assert worker.next_round(now, 60, None) == now + timedelta(hours=1)             # a malformed setting
 
 

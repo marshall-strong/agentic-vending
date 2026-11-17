@@ -22,10 +22,10 @@ Outputs (OUT_DIR):
 
 Scope (binding team decision): anything per slot -- product, price, position, segments, experiments, stock-outs,
 refill evidence, slow-seller flags -- uses ONLY our slots (the resolved slot list on vending.slots.DEVICE_ID), and no
-slot is ever judged by another slot's state.  Machine-wide data enters only as totals over the whole machine
-(machine_hourly.csv), and only for: calendar / day-off effects, time-of-day and day-of-week profiles, the overall
-trend, forecasting machine totals, and dating door visits.  The machine-wide history is pre-competition: course
-staff stocked every slot, so it reflects no rival strategy.
+slot is ever judged by another slot's state.  "Machine-wide" data enters only as totals (machine_hourly.csv), and
+only for: calendar / day-off effects, time-of-day and day-of-week profiles, the overall trend, forecasting machine
+totals, and dating door visits.  In a normal run those totals are our assignment summed (MACHINE says so in the
+report); only the fall run (all 40 selections, polls before the fall cut) totals the whole machine.
 
 Conventions (standard forecasting practice):
     error = actual - forecast.  Bias = mean(error); positive = the forecast ran LOW.
@@ -124,22 +124,28 @@ OUR = "our slots"                 # set by configure(): "our N slots" for the sl
 SCOPE_NOTE = ""
 
 
+MACHINE = "the whole machine"     # configure() sets it: what this run's machine-wide totals cover
+
+
 def configure(device, slots, source, resolved_at=None, assigned=()):
     """Set the slot list this run uses, our assignment (the date guard's exemption), and every text that names it."""
-    global DEVICE_ID, RUN_SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT, ASSIGNED, OUR, SCOPE_NOTE, LIKELY_MIN
+    global DEVICE_ID, RUN_SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT, ASSIGNED, OUR, SCOPE_NOTE, LIKELY_MIN, MACHINE
     DEVICE_ID, RUN_SLOTS, SLOT_SOURCE, SLOTS_RESOLVED_AT = device, tuple(slots), source, resolved_at
     ASSIGNED = tuple(assigned)
     OUR = f"our {len(RUN_SLOTS)} slot" + ("" if len(RUN_SLOTS) == 1 else "s")
+    # What the run's "machine-wide" totals cover: our assignment summed, or the whole machine in a fall run.
+    MACHINE = f"our {len(ASSIGNED) or len(RUN_SLOTS)} assigned selections summed"
     if source == SOURCE_FALL:
-        OUR = f"all {len(RUN_SLOTS)} selections (fall, before the start)"
+        OUR = f"all {len(RUN_SLOTS)} selections (fall, before the fall cut)"
+        MACHINE = "the whole machine"
     LIKELY_MIN = max(1, round(len(RUN_SLOTS) / 10))
     PHOTO_NOV9["stocked"] = [s for s in PHOTO_NOV9_SEEN if s in RUN_SLOTS]
     PHOTO_NOV9["note"] = (f"Student team photo of the machine at the Mon Nov 9 visit (door counter rise at 09:31). Of our {len(RUN_SLOTS)} "
                           f"rail{'' if len(RUN_SLOTS) == 1 else 's'}, " + photo_note_tail(PHOTO_NOV9["stocked"], RUN_SLOTS))
-    SCOPE_NOTE = ("Machine-wide data is used only as totals, for the calendar and day-off effects, the time-of-day and "
-                  "day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. They cover the "
-                  "whole machine for polls before the fall cut (before the day-one fill, when course staff stocked every slot, so "
-                  "they reflect no team's strategy) and only our selections from the cut on. Everything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller "
+    SCOPE_NOTE = (f"'Machine-wide' data is used only as totals, for the calendar and day-off effects, the time-of-day and "
+                  "day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. In this run those "
+                  f"totals are {MACHINE}, not the whole machine; the whole machine's fall totals are the fall run's "
+                  "(analysis/out/fall40, polls before the fall cut). Everything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller "
                   f"flags, experiments) uses only {OUR}, and no slot is judged by another slot's state.")
     if source == SOURCE_FALL:
         SCOPE_NOTE = ("Fall run: every selection, polls before the fall cut (before the day-one fill, never after the 3 Dec 2026 "
@@ -308,7 +314,7 @@ def load(args):
                          "re-export with the same slot list (python analysis/export_sales.py --slots ...)")
     sales["t"] = to_et(sales.at_eastern, f"{args.sales}")
     reads["t"] = to_et(reads.at_eastern, f"{args.readings}")
-    # Per-selection rows outside our assignment are allowed only before the start (slots_config.check_before_start).
+    # Per-selection rows outside our assignment are allowed only before the fall cut (slots_config.check_before_start).
     # A normal run never has any (the check above); a fall run must have no row at all from the start on.
     exempt = exempt_from_start(SLOT_SOURCE, ASSIGNED)
     check_before_start(zip(sales.slot, sales.t), exempt, f"{args.sales}")
@@ -2052,7 +2058,8 @@ def main():
     findings = [
         dict(title=f"Takings and volume, {OUR}", number=f"{TOTAL_UNITS} drinks / ${TOTAL_CENTS / 100:,.2f}",
              detail=f"Slots {slots_text}, from {T0:%b %d} to {T1:%b %d %H:%M} ET ({(T1 - T0).days} days, {len(P)} polls). Daily, weekly and "
-                    f"per-slot totals reconcile with the counters (checked slot by slot). The whole machine sold {MACHINE_UNITS} "
+                    f"per-slot totals reconcile with the counters (checked slot by slot). The 'machine-wide' totals ({MACHINE}) "
+                    f"come to {MACHINE_UNITS} "
                     "(an aggregate, used only for the calendar, time-of-day, trend and machine-forecast work)."),
         dict(title="Visits are dated from the door counter, not assumed weekdays",
              number=(f"{len(vis)} visits ({n_open} door openings); {len(ev_vis)} visits with refill evidence on our slots since hourly polling began ({REGULAR_START:%b} {REGULAR_START.day}): {wd_str}"

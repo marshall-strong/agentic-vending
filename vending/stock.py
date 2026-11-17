@@ -157,6 +157,9 @@ class StockWarning(str):
         made.slot = slot
         return made
 
+    def __getnewargs__(self) -> tuple[str, str | None]:     # copy, deepcopy and pickle keep the slot
+        return str(self), self.slot
+
 
 @dataclass(frozen=True)
 class Stock:

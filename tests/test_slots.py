@@ -13,6 +13,7 @@ from vending.slots import BadAssignment, SlotsNotRecorded, parse
 # An answer shaped like the bridge's, for the test assignment.
 ANSWER = {"team": "group-b", "device_id": "vmc1", "slots": list(TEST_SLOTS)}
 NOW = TEST_NOW
+REAL_CLOCK = slots.clock            # imported before conftest's fixture replaces it in each test
 LOCK = datetime.fromisoformat(slots.DEFAULT_LOCK_AT)
 AFTER = LOCK + timedelta(hours=1)
 # The other half of the machine, columns 1-4: a redrawn split could give us this.
@@ -358,11 +359,10 @@ def test_readers_use_the_database_clock_by_default(empty, monkeypatch):
         slots.our_slots(empty)
 
 
-def test_the_real_clock_is_the_databases(conn, monkeypatch):
-    monkeypatch.undo()                          # conftest's fixed clock off
+def test_the_real_clock_is_the_databases(conn):
     db_now = conn.execute("select clock_timestamp()").fetchone()[0]
-    assert abs((slots.clock(conn) - db_now).total_seconds()) < 5
-    assert slots.clock(conn).utcoffset() == timedelta(0)
+    assert abs((REAL_CLOCK(conn) - db_now).total_seconds()) < 5          # conftest's fixed clock is on slots.clock
+    assert REAL_CLOCK(conn).utcoffset() == timedelta(0)
 
 
 def test_a_malformed_lock_setting_is_a_refusal_the_tools_understand(conn, monkeypatch):

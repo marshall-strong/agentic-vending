@@ -645,8 +645,11 @@ def test_runs_chips_read_a_keep_against_the_tag_like_the_plan_panel(conn, page_c
     ("loaded 4 units of X from the closet but we counted only 2 there", True),
 ])
 def test_only_ours_reads_plural_list_and_range_slot_names_in_warnings(warning, kept):
+    """The text check, behind the slot each warning carries (here one that is ours, or None for the closet)."""
     from vending import dashboard
+    from vending.stock import StockWarning
 
+    warning = StockWarning(warning, None)
     snap = {"ours": {"ok": True, "data": ["16", "18"]}, "counts": {"ok": False},
             "stock": {"ok": True, "data": {"slots": {}, "warnings": [warning]}}}
     dashboard.only_ours(snap)
@@ -661,6 +664,9 @@ def test_only_ours_reads_plural_list_and_range_slot_names_in_warnings(warning, k
     ("r1 line 2: loaded 4 units of X from the closet but we counted only 2 there", "16", True),
     ("r1 line 2: loaded 4 units of X from the closet but we counted only 2 there", "15", False),
     ("slot 16: but it says slot 15 too", "16", False),          # the text is still checked
+    ("Slot 11 x", "16", False),                                 # the text check is case-blind
+    ("selection 11 oversold", "16", False),
+    ("selections 18-15 sold across a change", "16", False),    # a reversed range is read too
 ])
 def test_only_ours_goes_by_the_slot_the_stock_warning_carries(text, slot, kept):
     from vending import dashboard
@@ -679,3 +685,24 @@ def test_every_stock_warning_carries_its_slot():
     T = datetime(2026, 11, 2, 15, tzinfo=timezone.utc)
     found = replay([Movement(at=T, kind="pull", slot="27", sku="COKE20", units=3, ref="r1 line 1")])
     assert found.warnings and all(isinstance(w, StockWarning) and w.slot == "27" for w in found.warnings)
+
+
+
+def test_a_warning_with_no_slot_attached_is_never_public():
+    from vending import dashboard
+
+    snap = {"ours": {"ok": True, "data": ["16", "18"]}, "counts": {"ok": False},
+            "stock": {"ok": True, "data": {"slots": {}, "warnings": ["slot 16: plain text", "no slot named"]}}}
+    dashboard.only_ours(snap)
+    assert snap["stock"]["data"]["warnings"] == []
+
+
+def test_a_stock_warning_keeps_its_slot_through_copies():
+    import copy
+    import pickle
+
+    from vending.stock import StockWarning
+
+    w = StockWarning("slot 16: x", "16")
+    for again in (copy.copy(w), copy.deepcopy(w), pickle.loads(pickle.dumps(w))):
+        assert again == "slot 16: x" and again.slot == "16"

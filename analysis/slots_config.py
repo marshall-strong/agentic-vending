@@ -36,7 +36,7 @@ SOURCE_CLI = "command line"
 SOURCE_SERVER = "inventory server (stored)"
 # Older exports were made from a fixed list the code no longer has. A scope recorded with it is refused.
 SOURCE_OLD_DEFAULT = "default list in vending/slots.py"
-SOURCE_FALL = "all 40 selections, polls before the start only (fall run)"
+SOURCE_FALL = "all 40 selections, polls before the fall cut only (fall run)"
 
 # The competition starts Thu 3 Dec 2026 (Winter classes start; golisano_calendar_2026_27.json). From then on the
 # other team's selections are theirs: nothing reads their per-selection sales, prices or stock.
@@ -158,7 +158,7 @@ def check(codes, where, ours):
     not_ours = [c for c in codes if c not in bad and c not in ours]
     if not_ours:
         problems.append(f"not one of our slots ({ranges(tuple(sorted(ours)))}): {', '.join(not_ours)}; "
-                        "the analysis never covers another team's slots")
+                        "the analysis never covers a selection outside our assignment")
     if problems:
         raise SystemExit(f"{where}: " + "; ".join(problems))
     return tuple(sorted(codes))

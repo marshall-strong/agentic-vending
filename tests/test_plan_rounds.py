@@ -225,7 +225,7 @@ def test_a_fallback_range_checks_every_selection_inside_it(tmp_path):
     """"15-17" names 16 too, so a range whose ends are ours can't slip in a selection that isn't."""
     ours = tuple(s for s in TEST_SLOTS if s != "16") + ("11",)
     rows = [r for r in day_one() if str(r["slot"]) != "16"]
-    for text in ("15-17", "15 to 17", "15\u201317"):
+    for text in ("15-17", "15 to 17", "15\u201317", "17-15"):
         write(tmp_path, "round1", "1", {"day_one": rows, "fallbacks": [{"slot": text, "if": "x", "then": "y"}]})
         with pytest.raises(pr.RoundError, match="slot 16 isn't in our current assignment"):
             pr.load_all(tmp_path, ours)

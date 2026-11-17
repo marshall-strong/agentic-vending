@@ -36,7 +36,7 @@ def guarded(conn):
 
 
 def _polls(conn):
-    store_poll(conn, "before", "2026-11-20T12:00:00Z", {"15": (250, 100), "11": (250, 200)})
+    store_poll(conn, "before", "2026-11-16T12:00:00Z", {"15": (250, 100), "11": (250, 200)})   # before the fall cut
     store_poll(conn, "after", "2026-12-04T12:00:00Z", {"15": (250, 102), "11": (250, 205)})
 
 
@@ -50,7 +50,7 @@ def test_boundary_instrument_allows_ours_and_fall_but_rejects_later_others(conn,
 def test_export_never_reads_post_start_counters_outside_assignment(conn, schema_url, tmp_path, guarded):
     result = _run_export(schema_url, tmp_path / "ours")
     assert result.returncode == 0, result.stdout + result.stderr
-    # A fall export must still read all selections before the start.
+    # A fall export must still read all selections before the fall cut.
     # The volatile test projection can run before a join's timestamp filter;
     # use the real table to check the fall export's output instead.
     conn.execute("drop view poll_selections")
@@ -61,7 +61,7 @@ def test_export_never_reads_post_start_counters_outside_assignment(conn, schema_
     with (tmp_path / "fall" / "poll_readings.csv").open(newline="") as source:
         rows = list(csv.DictReader(source))
     assert {r["slot"] for r in rows} == {"11", "15"}
-    assert all(r["at_eastern"].startswith("2026-11-20") for r in rows)
+    assert all(r["at_eastern"].startswith("2026-11-16") for r in rows)
 
 
 def test_receipt_for_a_removed_selection_does_not_authorize_its_counters(conn, guarded):
@@ -76,7 +76,7 @@ def test_receipt_for_a_removed_selection_does_not_authorize_its_counters(conn, g
 def test_counts_filter_in_sql_before_reading_counters(conn, guarded):
     slot_counts.record(conn, slot_counts.parse({
         "count_id": "mixed", "device_id": "vmc1", "source": "photo",
-        "counted_at": "2026-11-19T12:00:00Z",
+        "counted_at": "2026-11-16T11:00:00Z",
         "selections": [{"selection": s, "product": "fixture", "units": 10} for s in ("11", "15")],
     }), "test")
     found = slot_counts.latest(conn)

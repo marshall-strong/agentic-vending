@@ -430,6 +430,9 @@ def main(argv: list[str] | None = None) -> int:
         found = stored(conn)
         print(f"{outcome}: team {found.team}, device {found.device_id}, {len(found.slots)} slots: "
               f"{', '.join(found.slots)}")
+        # This process's settings, which a laptop's .env may set differently from the Container App's.
+        print(f"(lock {lock.isoformat()} from {LOCK_SETTING}, team {our_team()} from {TEAM_SETTING}; the worker "
+              "uses the Container App's settings)", file=sys.stderr)
     return 0
 
 

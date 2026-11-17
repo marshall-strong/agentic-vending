@@ -9,9 +9,11 @@ Each round runs, in order, `python -m vending.slots check`,
 only confirms our slot assignment: if the server gives a different one, or none
 is stored, it changes nothing and fails the round until a person runs
 `python -m vending.slots record` (`vending.slots`). Besides the hourly rounds,
-one round runs a minute after the slot lock (`SLOTS_LOCK_AT`, the start), so the
-check that confirms the assignment for the competition doesn't wait up to an
-hour, with every reader refusing meanwhile.
+rounds run 1, 5 and 15 minutes after the slot lock (`SLOTS_LOCK_AT`, the start),
+so the check that confirms the assignment for the competition doesn't wait up to
+an hour, with every reader refusing meanwhile. The schedule uses this host's
+clock and the check the database's; the later rounds cover a host clock a few
+minutes ahead, or a round still running at the first.
 None of them migrates: on a database that is behind each refuses (exit 2), the
 round is logged as failed, and the worker tries again next round,
 so a deploy can never change the shared database's schema. A person runs
@@ -425,8 +427,8 @@ def serve_health(state: State, port: int) -> ThreadingHTTPServer:
     return server
 
 
-# How long after the slot lock the extra round runs: past the lock on a database clock a little ahead of ours.
-AFTER_LOCK = timedelta(minutes=1)
+# When the extra rounds after the slot lock run (see the module docstring).
+AFTER_LOCK = (timedelta(minutes=1), timedelta(minutes=5), timedelta(minutes=15))
 
 
 def _slot_lock() -> datetime | None:
@@ -440,11 +442,13 @@ def _slot_lock() -> datetime | None:
 
 
 def next_round(now: datetime, every_minutes: float, lock: datetime | None) -> datetime:
-    """When the next round runs: `every_minutes` from `now`, or sooner, a minute after the slot lock, when that
-    falls in between. That round's check confirms our assignment for the competition (`vending.slots`)."""
+    """When the next round runs: `every_minutes` from `now`, or sooner, at the next of the extra rounds after the
+    slot lock (AFTER_LOCK) that falls in between. Their check confirms our assignment for the competition."""
     due = now + timedelta(minutes=every_minutes)
-    if lock is not None and now < lock + AFTER_LOCK < due:
-        return lock + AFTER_LOCK
+    if lock is not None:
+        extra = [lock + after for after in AFTER_LOCK if now < lock + after < due]
+        if extra:
+            return min(extra)
     return due
 
 

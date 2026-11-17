@@ -105,10 +105,13 @@ an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midn
 Thu 3 Dec, the first day of Winter Quarter on the Institute's calendar and the start David gave on
 12 Nov). If the instructors move the start (to Wed 2 Dec, say), set it on the Container App, for
 example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
+Each process reads these settings itself: when you run `record` or `confirm` from a laptop, set the
+same `SLOTS_LOCK_AT` and `SLOTS_TEAM` as the Container App. Every `record`, `check` and `confirm`
+prints the lock and team it used, so a difference shows.
 
 - **Before the lock time**, `record` takes a different answer in. It prints `changed: ...`, and
   `action_log` (tool `slots.record`) says what it was and what it is now.
-- **At the lock**, the worker runs an extra round a minute after it. If the server still gives the
+- **At the lock**, the worker runs extra rounds 1, 5 and 15 minutes after it. If the server still gives the
   stored answer, that check confirms it for the competition, and `action_log` says so. A check
   counts from when it asked the server, so one that asked before the lock and got its answer after
   it confirms nothing.
@@ -121,7 +124,7 @@ example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, no
   each a shelf 1-5 then a column 1-8 (11 to 58), or isn't for our team.
 
 **On the morning of the start** (just after midnight Eastern, or first thing before the 7:30 AM
-opening), one of us checks `/health`. `slots_check` passed at the extra round: nothing to do. It
+opening), one of us checks `/health`. `slots_check` passed at an extra round: nothing to do. It
 failed with a different assignment: ask the instructors, then run `record` (nothing has been
 confirmed since the lock, so `record` takes the server's answer then). The bridge is down: run
 `python -m vending.slots confirm` from a laptop with `DATABASE_URL`, which confirms the stored

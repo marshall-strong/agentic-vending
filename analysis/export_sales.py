@@ -10,9 +10,10 @@ Which slots are ours: the assignment stored from the inventory server (`python -
 part of it --slots names. With nothing stored the export stops and says to record it. See analysis/slots_config.py.
 
 Scope: per-slot rows are written ONLY for our slots on `vending.slots.DEVICE_ID`, filtered
-the same way as `vending.ledger._counter_rows`. `machine_hourly.csv` totals cover every selection for polls
-before the fall cut (slots_config.fall_end(): FALL_CUTOFF, never later than the 3 Dec start), when no selection
-was either team's, and only our assignment from the cut on. No per-slot value outside our assignment is written.
+the same way as `vending.ledger._counter_rows`. A normal run's `machine_hourly.csv` totals cover our assignment
+only, for every poll, so the series has no step in it. The whole machine's totals are the fall run's
+(--fall-all), which stops at the fall cut (slots_config.fall_end(): FALL_CUTOFF, never later than the 3 Dec
+start). No per-slot value outside our assignment is written.
 
 --fall-all is the one exception: before the fall cut no selection is either team's (docs/integrity.md), so it
 writes per-selection rows for all 40, and every query stops at the cut. check_before_start() checks the rows
@@ -22,8 +23,8 @@ Writes:
     poll_readings.csv   every poll x OUR slot: lifetime counters and the current price
     sales_events.csv    one row per poll where one of OUR slots' counters rose (vending.counters.rises, misread-safe)
     polls.csv           the time of every poll, so gaps are not read as zero sales
-    machine_hourly.csv  every poll: units and cents sold by the whole machine before the fall cut, by our
-                        assignment from it on, each slot's rise found with vending.counters.rises. Aggregates only.
+    machine_hourly.csv  every poll: units and cents sold by our assignment (all 40 selections for --fall-all),
+                        each slot's rise found with vending.counters.rises. Aggregates only.
     door_events.csv     every poll's EVA-DTS door-open counter (EA2*DO*<since reset>*<lifetime>) and its rise
                         since the previous poll (door_events.door_rows: vending.counters.rises, misread-safe): a rise
                         means the door was opened (a visit) in between
@@ -73,14 +74,14 @@ with db.connect() as c:
         " where p.device_id = %s and p.crc_ok and ps.selection = any(%s) and p.started_at < %s"
         " order by ps.selection, p.started_at",
         (DEVICE_ID, list(RUN_SLOTS), before)).fetchall()
-    # Totals: every selection before the fall cut (the whole machine, nobody's), only our assignment from it on.
-    # A fall run stops at the cut, so it reads all of its selections.
+    # Totals: our assignment in a normal run, every selection in a fall run (which stops at the cut). The selection
+    # filter is on poll_selections alone, so no counter outside it is read (tests/test_assignment_boundaries.py).
     machine_rows = c.execute(
         "select ps.selection, p.started_at, ps.lifetime_units, ps.lifetime_sales_cents"
         " from poll_selections ps join polls p using (session_id)"
         " where p.device_id = %s and p.crc_ok and p.started_at < %s"
-        " and (p.started_at < %s or ps.selection = any(%s)) order by ps.selection, p.started_at",
-        (DEVICE_ID, before, CUT, list(RUN_SLOTS) if args.fall_all else list(ASSIGNED))).fetchall()
+        " and ps.selection = any(%s) order by ps.selection, p.started_at",
+        (DEVICE_ID, before, list(RUN_SLOTS) if args.fall_all else list(ASSIGNED))).fetchall()
     polls = c.execute(
         "select started_at from polls where device_id = %s and crc_ok and started_at < %s order by started_at",
         (DEVICE_ID, before)).fetchall()

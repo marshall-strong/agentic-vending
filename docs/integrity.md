@@ -76,7 +76,7 @@ repo root points here.
   (`analysis/slots_config.py`, `fall_end`: `FALL_CUTOFF`, never later than 3 Dec 2026 00:00
   Eastern). `check_before_start` refuses any row of the fall run from the cut on, ours included,
   in the export and again when the analysis loads it. Whole-machine totals in a normal export
-  stop at the cut too; from it, they cover our assignment only. Normal runs may keep rows from the start on only for our assignment as stored from the
+  stop at the cut too; from it, they cover our assignment only. Normal runs may keep rows from the fall cut on only for our assignment as stored from the
   inventory server (recorded in each export as `assigned_slots`; the code has no fixed list),
   and a time without a UTC offset is refused. `tests/test_analysis_slots.py` checks all of it.
 

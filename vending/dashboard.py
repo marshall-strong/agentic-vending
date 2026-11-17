@@ -439,16 +439,19 @@ def only_ours(snap: dict) -> None:
 
 # How `vending.stock` names a selection in a warning: "slot 15". Plurals, lists and ranges
 # ("slots 15-17", "slots 12, 15", "slot 12 and 15") are read too, so a new wording can't slip one past.
-_SLOT_NAMED = re.compile(r"\bslot (\w+)")
-_SLOT_LIST = re.compile(r"\bslots? (\d+(?:\s*(?:,|-|–|and|or)\s*(?:slot\s+)?\d+)*)")
-_LIST_SEP = re.compile(r"\s*(?:,|\band\b|\bor\b)\s*(?:slot\s+)?")
+_SLOT_NAMED = re.compile(r"\b(?:slot|selection) (\w+)", re.IGNORECASE)
+_SLOT_LIST = re.compile(r"\b(?:slots?|selections?) (\d+(?:\s*(?:,|-|–|and|or)\s*(?:(?:slot|selection)\s+)?\d+)*)",
+                        re.IGNORECASE)
+_LIST_SEP = re.compile(r"\s*(?:,|\band\b|\bor\b)\s*(?:(?:slot|selection)\s+)?", re.IGNORECASE)
 
 
 def _warning_is_ours(warning: str, ours: set[str]) -> bool:
-    """Keep a warning only when the selection `vending.stock` attached to it is ours (or it is about the
-    closet) and its text names no other. A warning without one attached (not from `vending.stock`) is
-    judged by its text alone, and one that mentions slots we can't read is dropped."""
-    if hasattr(warning, "slot") and warning.slot is not None and warning.slot not in ours:
+    """Keep a warning only when `vending.stock` attached a selection to it (`StockWarning.slot`), that
+    selection is ours or it is about the closet (None), and its text names no other. A warning with
+    nothing attached is dropped: the public page never guesses the selection from the text alone."""
+    if not hasattr(warning, "slot"):
+        return False
+    if warning.slot is not None and warning.slot not in ours:
         return False
     return _slots_named(warning) <= ours
 
@@ -460,11 +463,12 @@ def _slots_named(warning: str) -> set[str]:
     for listed in _SLOT_LIST.findall(warning):
         for part in _LIST_SEP.split(listed):
             low, _, high = (x.strip() for x in part.replace("–", "-").partition("-"))
-            if high.isdigit() and low.isdigit() and int(low) < int(high):
-                named.update(str(n) for n in range(int(low), int(high) + 1))
+            if high.isdigit() and low.isdigit():
+                a, b = sorted((int(low), int(high)))
+                named.update(str(n) for n in range(a, b + 1))
             elif low:
                 named.add(low)
-    if not named and re.search(r"\bslots?\b", warning):
+    if not named and re.search(r"\b(?:slots?|selections?)\b", warning, re.IGNORECASE):
         named.add("?")
     return named
 

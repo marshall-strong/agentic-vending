@@ -469,7 +469,10 @@ def _run_export(schema_url, out, *flags):
     params["options"] = " ".join(o for o in (params.get("options"), f"-c search_path={schema}") if o)
     # The lock far off: conftest's assignment was last checked before the start, and the export reads the real
     # database clock, so after 3 Dec it would refuse (the run's own slot clock isn't patched in a subprocess).
-    env = {**os.environ, "DATABASE_URL": make_conninfo(**params), "SLOTS_LOCK_AT": "2999-01-01T00:00:00+00:00"}
+    # Explicit team and fall cut too, so a developer's .env can't change what the subprocess does.
+    env = {**os.environ, "DATABASE_URL": make_conninfo(**params), "SLOTS_LOCK_AT": "2999-01-01T00:00:00+00:00",
+           "SLOTS_TEAM": "group-b",
+           "FALL_CUTOFF": os.environ.get("FALL_CUTOFF") or slots_config.DEFAULT_FALL_CUTOFF}
     repo = Path(__file__).resolve().parent.parent
     return subprocess.run([sys.executable, str(repo / "analysis" / "export_sales.py"), *flags, str(out)],
                           cwd=repo, env=env, capture_output=True, text=True)
@@ -568,12 +571,12 @@ def test_the_exports_stop_at_the_fall_cut(conn, schema_url, tmp_path, monkeypatc
     assert manifest_["before"] == CUT.isoformat()
     assert polls == ["2026-11-15T10:00:00-05:00", "2026-11-17T10:00:00-05:00"]
     assert sorted((r["slot"], r["lifetime_units"]) for r in readings) == [("11", "5"), ("11", "6"), ("15", "7"), ("15", "8")]
-    # a normal export: whole-machine totals before the cut, only ours from it on
+    # a normal export: our assignment only, totals too, for every poll (no step at the cut)
     readings, polls, _ = _export(schema_url, tmp_path / "ours")
     assert {r["slot"] for r in readings} == {"15"} and len(polls) == 4
     with open(tmp_path / "ours" / "machine_hourly.csv", newline="") as f:
         units = [int(r["units"]) for r in csv.DictReader(f)]
-    assert units == [0, 2, 1, 2]           # p2: 11 and 15; p3 and p4: 15 only
+    assert units == [0, 1, 1, 2]           # slot 15's rises only
 
 
 def test_the_fall_section_shows_groups_never_one_selection_outside_ours():
