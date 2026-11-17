@@ -18,9 +18,11 @@ Each option comes from something real about our setup: Rochester (the "ROC"), th
 | **Cold Call Beverage Co.** | A business-school pun: every sale is a cold call. |
 | **Thirst Quarter** | The competition runs one quarter. Cheeky, but still fine in front of David. |
 
-## The agent: Honcho
+## The agent: Rocco Kirk Honcho ("Honcho")
 
-**Honcho**, as in head honcho, the one in charge: a name for the agent the team already built (#39, #58), the one model that makes the weekly call. It decides what goes in each of our 20 slots, at what price, whether to pull a slow seller, and whether a $25 midweek visit is worth it. It signs every weekly plan ("Honcho's call for Friday") and appears by name on the dashboard and in the logs.
+**Rocco Kirk Honcho**, the head model that makes the decisions during the competition. One name from each of us who suggested one: **Rocco** (Kevin's, and the ROC in Rochester), **Kirk** (Sean's: a captain) and **Honcho** (Marshall's: the head honcho, the one in charge). He goes by **Honcho** in the logs and on the dashboard; the full name is for the deck. His mascot is a small vending machine in a captain's cap, saluting, whose face follows the dashboard's verdict (#161).
+
+Honcho is a name for the agent the team already built (#39, #58), the one model that makes the weekly call. It decides what goes in each of our 20 slots, at what price, whether to pull a slow seller, and whether a $25 midweek visit is worth it. It signs every weekly plan ("Honcho's call for Friday") and appears by name on the dashboard and in the logs.
 
 ## The crew: names for the parts around Honcho (proposed)
 
@@ -73,7 +75,7 @@ Our slots are the ones the inventory server assigns (stored with `python -m vend
 ## What we need from the team
 
 1. **A business name.** Pick one or suggest your own. It goes on the slides and in Summative 2.
-2. **Honcho, or another name** for the agent.
+2. **Rocco Kirk Honcho ("Honcho")**, or another name for the agent.
 3. **A label** for the selections that aren't ours.
 4. **The parts.** Keep these names, merge some, or drop the crew framing. Which new parts (if any) to build, and whether any should be a model call.
 5. **Which model and effort** for the agent. The default is Opus 5.5, pending this decision.
