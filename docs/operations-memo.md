@@ -29,7 +29,7 @@ On top of ours, the institute's system accepts prices only up to $10.00 in 5-cen
 
 | When | What |
 |---|---|
-| Before 3 Dec, once | Fill each of our 20 slots to capacity from our day-one request, which we send by about 27 November. |
+| Mon 30 Nov, once | Buy and fill each of our 20 slots to capacity from our day-one request, which we send by 23:59 on Sunday 29 November. |
 | Once a week | Review our request, which we send by Thursday midnight for the Friday visit. Approve it, or deny it with a short reason (the agent reads the reason next week). |
 | After approval | Buy what the shopping list says, at the named store, at or under the most-per-pack price. |
 | Friday visit | Load each slot as listed, change the price tags, and put any extra units in our closet. |
@@ -37,7 +37,7 @@ On top of ours, the institute's system accepts prices only up to $10.00 in 5-cen
 
 A midweek visit costs us $25, so the agent will ask for one only when it has a reason to.
 
-**If a delivery arrives late,** please load it at the next visit and use the prices on the request. **If a slot is switching to a new product,** take out whatever is in it and put it in our closet. We plan to add both instructions to the request itself (see below).
+**If an Amazon delivery hasn't arrived by the visit,** please load it at the next scheduled visit and use the prices on the request. **If a slot is switching to a new product,** take out whatever is in it and put it in our closet. We plan to add both instructions to the request itself (see below).
 
 ## How to stop us
 
