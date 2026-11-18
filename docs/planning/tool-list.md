@@ -189,7 +189,7 @@ The planner reduces each slot to one of David's cases:
 - `warnings`: risks that aren't refusals, such as an Amazon order placed after its cutoff arriving late.
 - `plan_hash`: identifies the plan, so #6 won't submit the same plan twice.
 
-**The cutoff is configurable** because it is still undecided; the only fixed point is the Friday-afternoon restock. `config.cutoff` holds a weekday and time per store. Defaults until David decides: Thursday 23:59 for in-store purchases, Wednesday 23:59 for Amazon (two-day shipping). Past the Amazon cutoff is a warning, not a refusal, since David saw no hard Amazon deadline.
+**The cutoff is configurable.** `config.cutoff` holds a weekday and time per store. Thursday 23:59 for in-store purchases (David, 12 and 17 Nov). Amazon has no hard cutoff: it is ordered when the worker sees the request, and an item that hasn't arrived by the Friday load waits for the next scheduled visit. So past Wednesday 23:59 for Amazon stays a warning, not a refusal.
 
 **Refusals**
 
@@ -319,6 +319,19 @@ Each unit carries its `unit_cost_paid`, so the closet's value and our cost of go
 | Get P&L | `get_pnl` (#10) | |
 | Holiday drinks | Strategy, not a tool | Depends on what the catalog offers; #2 shows whether seasonal items sell |
 
+## Dates and open PRs (18 Nov)
+
+**Catalog deadline, Wed 25 Nov** (David, 17 Nov): every product for the day-one fill must be requested and approved in the catalog. A purchase request naming a product not in the catalog is denied automatically. The day-one fill request is due by Sun 29 Nov 23:59, staff stock on Mon 30 Nov, and the machine goes live Thu 3 Dec. On 17 Nov: 40 requests filed, 15 approved, 25 pending, none rejected; the bridge takes no more at about 25 pending.
+
+Tool changes in open PRs, not yet merged:
+
+| Tool | Change | PR |
+|---|---|---|
+| #1 `get_machine_state` | Shows the wildcard trial: one wildcard and 19 regular slots; a product that proves itself in the wildcard moves into a regular slot | #166 |
+| #3 `get_catalog`, #11 `request_catalog_product` | A sync job reads each catalog request's decision back from the bridge every hour (until now every request stayed `pending` in our database) | #147 |
+| Dashboard | Lists every catalog request with the open count against the bridge's limit, and names any failing sync | #163 |
+| Project rules | The Interloper's nine drinks, never its prices: David said on 17 Nov its prices may not be a pricing input | #153 |
+
 ## Open questions
 
 **The three write tools (#6, #8, #11) can't be built until David ships the routes behind the first four questions (prices, midweek visits, catalog requests).** Tick each one off as it's answered and note the answer beside it.
@@ -331,12 +344,12 @@ Each unit carries its `unit_cost_paid`, so the closet's value and our cost of go
 - [x] Can we change a price without restocking anything? **9 Nov: no remote changes. Every price change is manual, by the student worker, on the Friday visit or a $25 midweek one.** A midweek visit for a price change alone still has no way through the API, because every line loads something. Earlier note: If a purchase request needs at least one line, a price-only change may have no way through. David (19 Oct): possibly free and remote through DEX, limited to about once a day, if the Cantaloupe card reader picks up price changes without a power cycle. Being verified.
 - [x] How do we ask for a $25 midweek visit? David (19 Oct): no endpoint yet; there will be one.
 - [x] How do we ask for a product to be added to the catalog, and how long does it take? David (19 Oct): two endpoints are coming, one to submit a product request and one to check it (pending, denied, or approved with the new product code). Quick turnaround.
-- [ ] Is the catalog shared with group A, or does each team have its own? (`/products` is described as "What your team can order".)
+- [x] Is the catalog shared with group A, or does each team have its own? (`/products` is described as "What your team can order".) **12 Nov: shared.** Both teams see every product and every request that was made and approved, but not each other's plans or prices.
 - [x] Can a catalog request be refused, and will we be told why? David (19 Oct): yes, but rarely; they only check it's nothing outlandish. A purchase request for an unlisted or inactive product is denied with a message naming it.
 - [x] Will the catalog include prices, or do we only learn the cost from the first receipt? David (19 Oct): no prices. Products become single items (for example Coca-Cola 20 oz); pack size, store and max price go on the purchase line, and the receipt gives the actual per-unit price.
 - [x] Does sales revenue go back into our account, or is $600 the most we can ever spend? Answered by the project brief (section 3.3): every unit sold credits our balance.
 - [x] Can one purchase request pull a drink from slot A and load it into slot B? Or do pulled drinks only reach the closet after that request finishes? David (19 Oct): yes, in principle. He wants the purchase request to become a desired state for all our slots, where a line can reposition a product. Still being designed.
-- [ ] Can we pull a product and leave the slot empty? Every pull in the API happens by switching the slot to another product.
+- [x] Can we pull a product and leave the slot empty? Every pull in the API happens by switching the slot to another product. **12 Nov: no.** Put something in every slot.
 - [x] Apart from purchase-request receipts, will the worker report anything back to us (jammed slots, damaged cans, closet counts), and where? David (19 Oct): the receipt reports actual per-unit cost and units loaded versus sent to inventory; a spoilage field for damaged items is planned.
 - [x] Can we ask the worker for a count of our closet stock between visits (for example through the `note`), and where would we see the answer? David (19 Oct): not needed; we track the closet ourselves, and damage comes through the spoilage field.
 - [x] What is the official sales-tax method: is tax included in the shelf price (price ÷ 1.08), or 8% added on top? David (19 Oct): 8%, arithmetic rounding, prices include tax, calculated weekly on takings. He said "multiply by 1.08"; the tax inside tax-inclusive takings is takings × 0.08 ÷ 1.08. Team decision (19 Oct): set aside takings × 0.08 ÷ 1.08 each week, rounded arithmetically; revisit if David says otherwise.
@@ -345,15 +358,17 @@ Each unit carries its `unit_cost_paid`, so the closet's value and our cost of go
 - [ ] Does token spend during development and testing count against the $600, or only during the live run?
 - [x] Is a Postgres database provided, or do we host our own? Answered 19 Oct (Graham): we host our own, in Azure, alongside the agent.
 - [ ] Can our repo be public?
-- [ ] Bottle deposit: who pays it, and does it count in cost of goods?
-- [ ] What promotions are allowed?
+- [x] Bottle deposit: who pays it, and does it count in cost of goods? **12 Nov: not a concern.**
+- [x] What promotions are allowed? **12 Nov: no bundles.**
 - [ ] Added 19 Oct: what is the final desired-state schema? Must every slot be listed, and what are the field names?
 - [ ] Added 19 Oct: can a line load units bought or pulled by another line of the same request (one purchase feeding two slots, or two slots swapping products)?
 - [ ] Added 19 Oct: is the alternate only the same product from another store or pack, or can it be a different product? Can it carry its own sale price?
-- [ ] Added 19 Oct: is a $25 midweek visit a flag on the purchase request, or its own route?
+- [x] Added 19 Oct: is a $25 midweek visit a flag on the purchase request, or its own route? **A flag (`off_cycle: true`, 29 Oct). 17 Nov: $25 confirmed, and it needs 24 hours' notice.** The 24 hours is the worker's planning time, not a promised visit time.
 - [x] Added 19 Oct: what is the ordering cutoff, and does it differ by store? **12 and 17 Nov: in-store Thursday 23:59; Amazon has no hard deadline, it is ordered when the worker sees the request, and a late item waits for the next scheduled visit.** David floated Friday noon for in-store buying, 21 Sep said Thursday midnight, and Amazon orders are due Wednesday for two-day shipping. Restocks are Friday afternoon.
 - [ ] Added 19 Oct: is the store list Walmart, Amazon and BJ's, or Costco too?
-- [ ] Added 19 Oct: can we rescind a request, for example an Amazon order that won't arrive in time? Does a late delivery wait in the closet until the next visit?
+- [ ] Added 19 Oct: can we rescind a request, for example an Amazon order that won't arrive in time? Does a late delivery wait in the closet until the next visit? **12 Nov: no cancelling; a request we don't want, we just don't use. 17 Nov: a late Amazon item waits for the next scheduled visit.** Left open because rescinding an Amazon order once placed isn't covered.
+- [x] Added 17 Nov: will receipts give the time the worker opened and closed the machine door? **17 Nov: yes, live now.** The 12 Nov receipt has `door_opened_at` 11:34 AM and `door_closed_at` 12:34 PM ET, to the minute. #168 stores them and uses them to split sales at a visit and to date loads.
+- [x] Added 17 Nov: after 3 Dec, what will the polls carry? **17 Nov: the door counter and the full, raw DEX response**, so all 40 selections and the machine-wide totals still arrive. From 3 Dec nothing may show or use the other team's per-selection data or a machine-wide total; storing the raw poll is fine. #167 filters the explorers and `scripts/bridge.py` from the start.
 - [ ] Added 19 Oct: does Amazon shipping count against the max pack price?
 
 Already answered on 8 Oct: the closet exists and holds pulled stock at cost, and we can ask for new catalog products.
