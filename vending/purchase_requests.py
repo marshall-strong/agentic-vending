@@ -62,6 +62,7 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     therefore never counts a loss twice, and a receipt the bridge corrects
     simply overwrites the old one. An answer we can't make sense of raises
     `ValueError` before anything is written, so a bad read never wipes a good one.
+    That includes door times with close before open (`door_times`).
     """
     if response.get("id") not in (None, request_id):
         raise ValueError(f"asked for {request_id}, the bridge answered about {response.get('id')}")
@@ -74,18 +75,20 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
         status, lines, losses = response["status"], [], []
     else:
         raise ValueError(f"unexpected answer for {request_id}: status {response.get('status')!r} and no lines")
+    opened, closed = door_times(request_id, response)
 
     with conn.transaction():
         updated = conn.execute(
             """
             update purchase_requests
                set status = %s, decision_note = %s, total_paid = %s, fulfilled_at = %s,
-                   updated_at = %s, last_checked = %s, last_response = %s
+                   updated_at = %s, last_checked = %s, last_response = %s,
+                   door_opened_at = %s, door_closed_at = %s
              where request_id = %s
             """,
             (status, response.get("decision_note"), _money(response.get("total_paid")),
              _when(response.get("fulfilled_at")), _when(response.get("updated_at")),
-             checked_at, Jsonb(response), request_id),
+             checked_at, Jsonb(response), opened, closed, request_id),
         ).rowcount
         if not updated:
             raise ValueError(f"{request_id} is not in purchase_requests; record it when it is submitted")
@@ -106,6 +109,22 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
                 losses,
             )
     return Stored(status, max(len(losses) - before, 0))
+
+
+def door_times(request_id: str, response: dict) -> tuple[datetime | None, datetime | None]:
+    """The request's `door_opened_at` and `door_closed_at`, as a pair or as `(None, None)`.
+
+    They are to the minute. Older requests have none, and the worker may leave
+    them out. With only one of the two, neither is kept: the visit needs both
+    ends. The answer is still kept whole in `last_response`. Close before open
+    is a bad receipt: `ValueError`, so `store` writes nothing.
+    """
+    opened, closed = _when(response.get("door_opened_at")), _when(response.get("door_closed_at"))
+    if opened is None or closed is None:
+        return None, None
+    if closed < opened:
+        raise ValueError(f"{request_id}: door closed at {closed.isoformat()}, before it opened at {opened.isoformat()}")
+    return opened, closed
 
 
 def _line_rows(request_id: str, lines: list[dict]) -> tuple[list[tuple], list[tuple]]:

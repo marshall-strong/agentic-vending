@@ -597,15 +597,16 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
 def _receipts(conn: psycopg.Connection, start: datetime, end: datetime) -> tuple[Fraction, int, int]:
     """(total paid in cents, lines counted, lines with no total) for receipt lines resolved in the window.
 
-    Lines go by their own `resolved_at`, the same clock the stock replay uses,
-    so a purchase and the sales it costs can't fall in different windows. Lines
-    before the opening are test purchases and left out, at the boundary the
-    stock replay uses (`stock.receipts_count_from`).
+    Lines go by the same clock the stock replay uses (door close when the
+    receipt has door times, else the line's own `resolved_at`), so a purchase
+    and the sales it costs can't fall in different windows. Lines before the
+    opening are test purchases and left out, at the boundary the stock replay
+    uses (`stock.receipts_count_from`).
     """
     total, lines, missing = conn.execute(
         "select coalesce(sum(l.total_paid), 0), count(l.total_paid), count(*) - count(l.total_paid)"
         " from purchase_lines l join purchase_requests r using (request_id)"
-        " where r.status = 'fulfilled' and l.resolved_at >= %s and l.resolved_at <= %s",
+        " where r.status = 'fulfilled' and coalesce(r.door_closed_at, l.resolved_at) between %s and %s",
         (stock.receipts_count_from(conn, start), end),
     ).fetchone()
     return Fraction(Decimal(total)) * 100, lines, missing
@@ -622,8 +623,9 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
 
     Each request is charged the fee stored on it at submission; requests from
     before that column existed fall back to `config.midweek_fee_cents`. A visit
-    is timed at its first receipt line, like the stock it delivered, so a visit
-    timed before the opening brought test purchases and its fee is left out
+    is timed like the stock it delivered: at door close when the receipt has
+    door times, else at its first receipt line. So a visit timed before the
+    opening brought test purchases and its fee is left out
     (`stock.receipts_count_from`).
     """
     fee = config.get_value(conn, "midweek_fee_cents", DEFAULT_MIDWEEK_FEE_CENTS)
@@ -631,7 +633,8 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
         fee = DEFAULT_MIDWEEK_FEE_CENTS
     rows = conn.execute(
         "select v.at, v.fee from ("
-        " select coalesce((select min(l.resolved_at) from purchase_lines l where l.request_id = r.request_id),"
+        " select coalesce(r.door_closed_at,"
+        "                 (select min(l.resolved_at) from purchase_lines l where l.request_id = r.request_id),"
         "                 r.fulfilled_at) as at, coalesce(r.visit_fee_cents, %s) as fee"
         " from purchase_requests r where r.off_cycle and r.status = 'fulfilled') v"
         " where v.at between %s and %s order by v.at",

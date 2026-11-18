@@ -27,7 +27,7 @@ A door opening isn't always a refill. Before the competition, course staff stock
 
 We don't depend on a set restock time. A student worker won't always be on time, and the history shows visits on every weekday.
 
-1. **Find the visit in the data.** A door-count rise between two polls marks it. A fulfilled request's `fulfilled_at` marks the end of the visit, and the worker's door times on the receipt (David confirmed them live on 17 Nov) narrow it further. A change in a slot's price field at a poll shows the new setup is in place.
+1. **Find the visit in the data.** A door-count rise between two polls marks it. A fulfilled request's `fulfilled_at` marks the end of the visit, and the receipt's door times pin it to the minute (below). A change in a slot's price field at a poll shows the new setup is in place.
 2. **Mark the uncertain window**: from the last poll before the first opening to the first poll after the last one. Before it is the old setup; after it is the new one.
 3. **Only our changed slots need care.** A slot whose product and price didn't change counts as usual.
 4. **When the price changed, solve with the counters.** With `u` units and `c` cents inside the window, an old price `a` and a new price `b`, the number sold at the new price is `(c - u*a) / (b - a)`. A whole number from 0 to `u` settles it. Anything else means a misread or a third price: flag it for a person.
@@ -38,10 +38,27 @@ We don't depend on a set restock time. A student worker won't always be on time,
 
 - **Restocks will be standard on Friday afternoons**, with 3 PM as the target. The student worker gets out of class at 1 and may have to drive to the stores first, so the load may well come at 3 to 5 PM or later. Our sales are lowest then (about 0.2 an hour after 3 PM), so a later visit puts even fewer sales in doubt. Poll about every 10 minutes from about 2 to 6 PM on Fridays. That isn't happening yet: our container only copies the bridge's hourly polls today. Our own Friday polling is #107.
 - **`fulfilled_at` is the end of the visit**, set when the worker submits the receipt after loading. There's no push notification; we poll the request.
-- **Door-open and door-closed times on the receipt** are live (David, 17 Nov). Our code doesn't read them yet.
+- **Door-open and door-closed times on the receipt** are live (David, 17 Nov), and the code reads them (below).
 - **Polling about every 10 minutes is allowed.** That shrinks the one gap door times don't close: a sale between the last poll and the door opening. David named that case himself.
 
 So the plan above gets a usual time to expect, and still handles a visit at any other time. Full notes: `docs/planning/2026-11-12-david-answers.md` (#106).
+
+## Door times on the receipt (17 Nov)
+
+David confirmed on 17 Nov that receipts now carry the door times. Each fulfilled request has `door_opened_at` and `door_closed_at`, beside `fulfilled_at`. They are to the minute. They can be null on older requests, or if the worker leaves them out.
+
+Each line's `resolved_at` is when the worker filled that line in, not when it went in the machine. On our first filled request (`pr_v8hB_h3gQatc`, 12 Nov) the lines ran from 16:31:52 to 17:34:08, and the door was open from 16:34 to 17:34. So one line was filled in before the door opened.
+
+How we use them:
+
+- **Stored** on `purchase_requests` (migration 019) by `vending/purchase_requests.py` `store`. They are kept as a pair or not at all. An answer with close before open is refused and logged, and the receipt we had is kept. The migration fills them in from each request's stored answer.
+- **Stock** (`vending/stock.py`). The old product leaves at door open: pulls are timed then, and so are its sales from a window that holds the visit. The new product goes in at door close. A window that ends before the door closed is all old product. One that starts after the door opened is all new. Only a window that holds the whole visit needs the price solve in step 4.
+- **Machine state.** `days_since_loaded` and `units_sold_since_load` count from door close. A sale between door close and `resolved_at` is sold since the load.
+- **Ledger.** Purchases and visit fees are dated by door close too, the same clock as the stock they bring.
+
+Without door times, everything works as before: `resolved_at` stands in for the visit.
+
+The one gap they don't close is still a sale between the last poll and the door opening. Polling about every 10 minutes on Fridays (#107) shrinks it.
 
 ## What we checked, and what David answered
 

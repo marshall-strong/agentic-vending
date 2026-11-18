@@ -451,6 +451,18 @@ def test_pnl_by_week_leaves_development_spend_out_like_pnl(conn):
     assert sum(w.net_cents for w in weeks) == p.net_cents
 
 
+def test_with_door_times_purchases_and_stock_go_by_door_close(conn):
+    open_ledger(conn)
+    # Filled in at 16:00 on the 7th, but the door closed just after midnight on the 8th.
+    record_request(conn, "r1", OPENED + timedelta(days=5), False, BODY)
+    store(conn, "r1", fulfilled("r1", receipt(resolved_at="2026-11-07T16:00:00Z"), fulfilled_at="2026-11-08T00:10:00Z",
+                                door_opened_at="2026-11-07T23:30:00Z", door_closed_at="2026-11-08T00:05:00Z"), NOW)
+    before = ledger.pnl(conn, OPENED, datetime(2026, 11, 8, 0, 0, tzinfo=timezone.utc))
+    after = ledger.pnl(conn, OPENED, datetime(2026, 11, 8, 1, 0, tzinfo=timezone.utc))
+    assert (before.receipts_cents, before.inventory_machine_cents) == (0, None)
+    assert (after.receipts_cents, after.inventory_machine_cents) == (1237, 8 * UNIT_COST)
+
+
 # --- Through the MCP client -------------------------------------------------------------
 
 def test_pnl_by_week_books_each_line_to_its_week_and_adds_up_to_pnl(conn):

@@ -337,3 +337,86 @@ def test_a_window_across_two_changes_says_so():
                            slot_reassigned=True, at=4, request_id="r3")]
     stock = book(lines, counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 250)])
     assert any("can't split" in w and "2 product changes" in w for w in stock.warnings)
+
+
+# Door times (17 Nov): the receipt says when the worker opened and closed the door. The old
+# product ends at door open and the new one starts at door close. Without them, the line's
+# resolved_at stands in, as above.
+
+def with_door(lines, opened=2.5, closed=3.5, request_id="r2"):
+    """The same lines, with door times on `request_id`'s lines (the swap), as `stock()` reads them."""
+    return [{**l, "door_opened_at": hours(opened), "door_closed_at": hours(closed)} if l["request_id"] == request_id
+            else l for l in lines]
+
+
+def test_with_door_times_a_window_across_the_visit_is_split_at_open_and_close():
+    stock = book(with_door(swap()), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    # The Arizona left its count at door open, the Red Bull went in at door close.
+    assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales] == [
+        (hours(5), hours(2.5), "ARIZONA", 1, 50), (hours(5), None, "REDBULL", 1, 150)]
+    [slot] = stock.slots
+    assert (slot.product, slot.units, slot.since) == ("REDBULL", 9, hours(3.5))
+    assert stock.shrinkage == () and stock.warnings == ()
+
+
+def test_with_door_times_a_window_that_starts_during_the_visit_is_all_new_with_no_guess():
+    # The same-price counters that can't be split without door times (above): a poll at 2h45m,
+    # inside the visit, with $3.50 at both ends of the next window and no price change before it.
+    counters = [("15", hours(1), 100, 20000, 350), ("15", hours(2.75), 100, 20000, 350),
+                ("15", hours(5), 102, 20700, 350)]
+    stock = book(with_door(swap()), counters=counters)
+    assert [(s.product, s.units, s.cost_cents) for s in stock.sales if s.units] == [("REDBULL", 2, 300)]
+    assert not any("can't split" in w for w in stock.warnings)
+
+
+def test_with_door_times_a_window_that_ends_during_the_visit_is_all_old():
+    # A poll at 3h, between door open and close, after 1 sale at $2.00 and before any new price.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", hours(3), 101, 20200, 200),
+                ("15", hours(5), 101, 20200, 400)]
+    stock = book(with_door(swap()), counters=counters)
+    assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales if s.units] == [
+        (hours(3), hours(2.5), "ARIZONA", 1, 50)]
+    # 10 loaded, 1 sold, 9 pulled: nothing written off.
+    assert stock.shrinkage == () and stock.warnings == ()
+
+
+def test_with_door_times_a_same_price_window_across_the_whole_visit_still_cannot_be_split():
+    stock = book(with_door(swap(sku="COKE20", total_paid="8.00")),
+                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20400, 200)])
+    [sale] = stock.sales
+    assert (sale.units, sale.cost_cents, sale.unattributed_cost_cents) == (2, None, 160)
+    assert any("can't split" in w for w in stock.warnings)
+
+
+def test_a_line_resolved_before_the_door_opened_is_timed_by_the_door():
+    # On pr_v8hB_h3gQatc one line was filled in 2 minutes before the door opened. Here the
+    # worker fills in the swap at 2h, opens the door at 2.5h and closes it at 3.5h. A poll at
+    # 2h15m shows 1 more sale at $2.00: an Arizona, sold before the door opened.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", hours(2.25), 101, 20200, 200),
+                ("15", hours(5), 102, 20600, 400)]
+    stock = book(with_door(swap(at=2)), counters=counters)
+    assert [(s.product, s.units, s.cost_cents) for s in stock.sales] == [("ARIZONA", 1, 50), ("REDBULL", 1, 150)]
+    assert stock.warnings == ()
+    # Without door times the swap is at 2h, so that Arizona sale lands after it.
+    guessed = book(swap(at=2), counters=counters)
+    assert any("can't split" in w for w in guessed.warnings)
+
+
+@pytest.mark.parametrize("counters", [
+    [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)],
+    [("15", hours(1), 100, 20000, 250), ("15", hours(2.75), 100, 20000, 350), ("15", hours(5), 102, 20700, 350)],
+    [("15", hours(1), 100, 20000, 350), ("15", hours(2.75), 100, 20000, 350), ("15", hours(5), 102, 20700, 350)],
+    [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20500, 400)],
+])
+def test_null_door_times_change_nothing(counters):
+    # Older requests, or a worker who left them out: the same answer as before door times.
+    nulls = [{**l, "door_opened_at": None, "door_closed_at": None} for l in swap()]
+    assert book(nulls, counters=counters) == book(swap(), counters=counters)
+
+
+def test_door_times_split_once_however_often_the_replay_splits():
+    moves = movements_from_receipts(with_door(swap()), []) + sales_from_counters(
+        [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    assert replay(moves) == weighted_average(moves)
+    cut = replay(moves, until=hours(4))
+    assert cut.shrinkage == () and cut.warnings == () and cut.sales == ()

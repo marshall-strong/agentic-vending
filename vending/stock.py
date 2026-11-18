@@ -20,6 +20,9 @@ turns receipts into stock movements and replays them in time order:
 - sales come from the polls' lifetime counters, one movement per rise between
   two polls, timed at the later poll (`vending.counters` decides what a
   reading that goes down means).
+- a receipt line is timed by its request's door times when the receipt has
+  them: pulls at door open, purchases and loads at door close. Without them,
+  everything is timed at the line's `resolved_at`, when the worker filled it in.
 - a poll can't tell when a worker swapped a slot's product (#97), so a window
   between two polls that spans the swap holds units of both. The cents
   counter and the price at each end split them. Units it can't split keep
@@ -34,7 +37,8 @@ A slot's count starts again whenever its product changes, so `loaded` and
 made before the opening are tests: they never came out of the $600 (#104), so
 they are not our stock and cost nothing in the competition. `vending.ledger`
 leaves their purchases and visit fees out at the same boundary,
-`receipts_count_from`. Until the opening
+`receipts_count_from`, read on the same clock: door close when the receipt has
+door times, else the line's `resolved_at`. Until the opening
 is recorded every receipt counts, so the planner and the tools can be tested
 on test purchases. Sales counters are read as before; a sale from a slot with
 no counted receipt is sold but not costed.
@@ -87,6 +91,7 @@ class Movement:
     price_prior: int | None = None       # sale: the price at the poll before `since`, in cents
     booked_at: datetime | None = None    # sale_before_change: the poll that measured its window
     changes: int = 0                     # sale: product changes inside a window left unsplit
+    opened_at: datetime | None = None    # purchase, load: the door opened then; `at` is door close (None: no door times)
 
 
 @dataclass(frozen=True)
@@ -184,23 +189,33 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
     and their later losses (`request_id`, `line_no`, `slot`, `location`, `sku`, `units`, `recorded_at`).
 
     An `unavailable` line moved nothing, unless the worker still pulled the old product.
+    A line may also carry its request's `door_opened_at` and `door_closed_at`.
+    With both, the pull is at door open and the purchase or load at door close.
+    Without them, all of it is at `resolved_at`.
     """
     moves = []
     for line in lines:
         ref = f"{line['request_id']} line {line['line_no']}"
-        at, slot = line["resolved_at"], line["slot"]
+        slot = line["slot"]
+        opened, closed = line.get("door_opened_at"), line.get("door_closed_at")
+        if opened is None or closed is None:
+            opened = None
+            pulled_at = loaded_at = line["resolved_at"]
+        else:
+            pulled_at, loaded_at = opened, closed
         if line["units_pulled"]:
-            moves.append(Movement(at, "pull", slot, line["pulled_sku"], units=line["units_pulled"], ref=ref))
+            moves.append(Movement(pulled_at, "pull", slot, line["pulled_sku"], units=line["units_pulled"], ref=ref))
         if line["outcome"] in ("primary", "alternate"):
             moves.append(Movement(
-                at, "purchase", slot, line["sku"], to_slot=line["units_loaded"],
+                loaded_at, "purchase", slot, line["sku"], to_slot=line["units_loaded"],
                 to_closet=line["units_to_back_stock"], lost=line["units_lost"],
-                paid_cents=cents(line["total_paid"]), reassigned=line["slot_reassigned"], ref=ref))
+                paid_cents=cents(line["total_paid"]), reassigned=line["slot_reassigned"], ref=ref,
+                opened_at=opened))
         elif line["outcome"] == "loaded":
             moves.append(Movement(
-                at, "load", slot, line["sku"], to_slot=line["units_loaded"],
+                loaded_at, "load", slot, line["sku"], to_slot=line["units_loaded"],
                 lost=line["units_from_back_stock"] - line["units_loaded"],
-                reassigned=line["slot_reassigned"], ref=ref))
+                reassigned=line["slot_reassigned"], ref=ref, opened_at=opened))
     for loss in losses:
         moves.append(Movement(
             loss["recorded_at"], "loss", loss["slot"], loss["sku"], units=loss["units"],
@@ -247,25 +262,50 @@ def sales_from_counters(rows: list[tuple]) -> list[Movement]:
 
 
 def _old_units(m: Movement, change: datetime) -> int | None:
-    """How many of a window's units sold at the old price, or None when the counters can't say.
+    """How many of a window's units sold at the old price, for a change with no door times.
 
-    With `n` units and `c` cents in the window, old price `a` and new price
-    `b`: `a*old + b*(n - old) = c`, so `old = (b*n - c) / (b - a)`. Only a whole
-    number from 0 to `n` fits; anything else is a misread or a third price.
-    The same price on both sides can't be split at all (#97), except when
-    the window's first poll landed during the visit: the price had already
-    changed from the poll before it, and the change ends the visit within
-    `_VISIT_MAX`. Then the old product was already out, so none sold at the
-    old price (#112).
+    `change` is the receipt's `resolved_at`, so where the visit sat is a guess.
+    The same price on both sides can't be split at all (#97), except when the
+    window's first poll landed during the visit: the price had already changed
+    from the poll before it, and the change ends the visit within `_VISIT_MAX`.
+    Then the old product was already out, so none sold at the old price (#112).
+    Otherwise the counters decide (`_solve`).
     """
     a, b = m.price_before, m.price_after
     if (a is not None and a == b and m.price_prior is not None and m.price_prior != a
             and m.since is not None and change - m.since <= _VISIT_MAX):
         return 0
+    return _solve(m)
+
+
+def _solve(m: Movement) -> int | None:
+    """How many of a window's units sold at the old price, or None when the counters can't say.
+
+    With `n` units and `c` cents in the window, old price `a` and new price
+    `b`: `a*old + b*(n - old) = c`, so `old = (b*n - c) / (b - a)`. Only a whole
+    number from 0 to `n` fits; anything else is a misread or a third price.
+    The same price on both sides can't be split at all (#97).
+    """
+    a, b = m.price_before, m.price_after
     if a is None or b is None or m.cents is None or a == b:
         return None
     old, rest = divmod(b * m.units - m.cents, b - a)
     return old if not rest and 0 <= old <= m.units else None
+
+
+def _old_units_by_door(m: Movement, opened: datetime, closed: datetime) -> int | None:
+    """How many of a window's units were the old product, when the door times are known.
+
+    The old product can only have sold before the door opened, and the new
+    one only after it closed. A window that ends before the door closed is
+    all old; one that starts after the door opened is all new. Only a window
+    that holds the whole visit needs the counters (`_solve`).
+    """
+    if m.at <= closed:
+        return m.units
+    if m.since >= opened:
+        return 0
+    return _solve(m)
 
 
 # The longest a restock visit runs, from the poll inside it to its `resolved_at`.
@@ -282,32 +322,43 @@ def _split_at_changes(movements: list[Movement]) -> list[Movement]:
     `weighted_average` costs it at the new product's average, kept as
     `unattributed_cost_cents`. Splitting twice changes nothing.
 
-    The change is the receipt's `resolved_at`, the end of the visit. A poll
-    that lands during a visit, after the worker set the new price, starts a
-    window with the new price at both ends; `_old_units` reads that as no old
-    units sold when the poll before it shows the old price. Door-closed times
-    (not built yet) would pin the visit exactly. Units are assumed not to sell
-    while the door is open.
+    With the receipt's door times, the visit runs from door open to door
+    close. The old product ends at door open, so its share is replayed then;
+    the new one starts at door close, so its share's window starts there. A
+    window touches the visit when it starts before the door closed and ends
+    after it opened. `_old_units_by_door` splits it.
+
+    Without them, the change is the receipt's `resolved_at`, when the worker
+    filled in the line. A poll that lands during a visit, after the worker set
+    the new price, starts a window with the new price at both ends;
+    `_old_units` reads that as no old units sold when the poll before it shows
+    the old price. Units are assumed not to sell while the door is open.
     """
-    changes: dict[str, list[datetime]] = {}
+    # Per slot, each change as (door open or resolved_at, door close or resolved_at, door times known).
+    changes: dict[str, list[tuple[datetime, datetime, bool]]] = {}
     holds: dict[str, str] = {}
     for m in sorted(movements, key=_replay_order):
         if m.kind in ("purchase", "load"):
             if holds.get(m.slot, m.sku) != m.sku:
-                changes.setdefault(m.slot, []).append(m.at)
+                changes.setdefault(m.slot, []).append(
+                    (m.opened_at, m.at, True) if m.opened_at is not None else (m.at, m.at, False))
             holds[m.slot] = m.sku
     out = []
     for m in movements:
-        inside = [t for t in changes.get(m.slot, ())
-                  if m.kind == "sale" and m.since is not None and m.since < t <= m.at]
-        old = _old_units(m, inside[0]) if len(inside) == 1 else None
+        inside = [(opened, closed, door) for opened, closed, door in changes.get(m.slot, ())
+                  if m.kind == "sale" and m.since is not None
+                  and (m.since < closed and opened < m.at if door else m.since < closed <= m.at)]
+        old = None
+        if len(inside) == 1:
+            opened, closed, door = inside[0]
+            old = _old_units_by_door(m, opened, closed) if door else _old_units(m, closed)
         if old is None:
             out.append(replace(m, changes=len(inside)) if inside else m)
             continue
         if old:
-            out.append(replace(m, at=inside[0], kind="sale_before_change", units=old, booked_at=m.at))
+            out.append(replace(m, at=opened, kind="sale_before_change", units=old, booked_at=m.at))
         if old < m.units:
-            out.append(replace(m, since=inside[0], units=m.units - old))
+            out.append(replace(m, since=closed, units=m.units - old))
     return out
 
 
@@ -526,14 +577,16 @@ def receipts_count_from(conn: psycopg.Connection, start: datetime | None = None)
 def _receipts(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
     """Every fulfilled line and every loss recorded against one: our own purchases, whatever the assignment.
 
-    Once the ledger has an opening entry, lines resolved before it (test purchases) and their later
-    losses are left out: see the module docstring.
+    Once the ledger has an opening entry, lines timed before it (test purchases) and their later
+    losses are left out: see the module docstring. A line is timed at its request's door close when
+    the receipt has door times, else at its own `resolved_at`, the clock `vending.ledger` uses too.
     """
     since_at = receipts_count_from(conn)
-    since, args = (" and l.resolved_at >= %s", (since_at,)) if since_at is not None else ("", ())
-    lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
-        f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
-        " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + since, args)]
+    since, args = (" and coalesce(r.door_closed_at, l.resolved_at) >= %s", (since_at,)) if since_at is not None else ("", ())
+    lines = [dict(zip(_LINE_COLUMNS + _DOOR_COLUMNS, row)) for row in conn.execute(
+        f"select {', '.join('l.' + c for c in _LINE_COLUMNS)}, {', '.join('r.' + c for c in _DOOR_COLUMNS)}"
+        " from purchase_lines l join purchase_requests r using (request_id) where r.status = 'fulfilled'"
+        + since, args)]
     losses = [dict(zip(_LOSS_COLUMNS, row)) for row in conn.execute(
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
@@ -614,4 +667,5 @@ def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
 _LINE_COLUMNS = ("request_id", "line_no", "slot", "outcome", "sku", "total_paid", "units_loaded",
                  "units_lost", "units_to_back_stock", "units_from_back_stock", "units_pulled",
                  "pulled_sku", "slot_reassigned", "resolved_at")
+_DOOR_COLUMNS = ("door_opened_at", "door_closed_at")   # the request's, on every one of its lines
 _LOSS_COLUMNS = ("request_id", "line_no", "slot", "location", "sku", "units", "recorded_at")

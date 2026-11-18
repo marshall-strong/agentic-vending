@@ -365,3 +365,25 @@ def test_an_emptied_slot_rates_only_the_days_it_held_stock(conn):
     assert (s.units_per_class_day, s.rate_basis) == ("2.17", "own: 13 sold over 6 in-stock class days")
     assert (s.stock_on_hand, s.class_days_of_stock_left) == (3, "1.4")
     assert states["16"].units_per_class_day == "0.722" and states["16"].class_days_in_stock is None
+
+
+def test_a_load_is_dated_by_door_close_when_the_receipt_has_door_times(conn):
+    # The door closed at 12:30 but the worker filled in the line at 15:00. The 13:00 poll's
+    # 3 sales came after the load, so they are sold since it. Without door times they aren't.
+    def state(door):
+        conn.execute("delete from purchase_requests")
+        conn.execute("delete from polls")
+        store_poll(conn, "p0", "2026-10-24T10:00:00+00:00", {"15": (250, 100)})
+        fulfilled(conn, "r1", datetime(2026, 10, 24, 15, tzinfo=timezone.utc),
+                  ("15", "COKE20", "primary", "12.00", 20, 0, 0))
+        if door:
+            conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s",
+                         (datetime(2026, 10, 24, 12, tzinfo=timezone.utc), datetime(2026, 10, 24, 12, 30, tzinfo=timezone.utc)))
+        store_poll(conn, "p1", "2026-10-24T13:00:00+00:00", {"15": (250, 103)})
+        store_poll(conn, "p2", "2026-10-29T10:00:00+00:00", {"15": (250, 105)})
+        return by_slot(get_machine_state(conn, now=NOW).data)["15"]
+
+    s = state(door=True)
+    assert (s.units_sold_since_load, s.stock_on_hand, s.days_since_loaded) == (5, 15, 4)
+    s = state(door=False)
+    assert (s.units_sold_since_load, s.stock_on_hand, s.days_since_loaded) == (2, 18, 4)

@@ -11,7 +11,9 @@ Built from our database only; it never reads the machine.
   counts from when the slot's current product went in (loaded − sold − lost),
   so a top-up of the same product adds to it.
 - `days_since_loaded` and `units_sold_since_load` count from the slot's most
-  recent load: the latest fulfilled receipt line that put units in it.
+  recent load: the latest fulfilled receipt line that put units in it, dated
+  by its request's door close when the receipt has door times, else by the
+  line's `resolved_at`.
 - The closet (back stock) is listed per product, with its value at cost.
 - What a person saw, from the latest count in `slot_counts` (`vending.slot_counts`),
   fills `counted_*` for a slot the receipts don't cover, or whose count is newer
@@ -56,6 +58,8 @@ RECEIPT_FIELDS = "product, stock_on_hand, units_sold_since_load, days_since_load
 
 
 COUNT_STALE_DAYS = 7   # a person's count older than this is called weak evidence in the message
+# When a receipt line's units went in: door close when the receipt has door times, else `resolved_at`.
+LOADED_AT = "coalesce(r.door_closed_at, l.resolved_at)"
 
 
 class SlotState(BaseModel):
@@ -301,19 +305,24 @@ def _seen(conn: psycopg.Connection) -> dict[str, dict]:
 
 
 def _last_loaded(conn: psycopg.Connection) -> dict[str, datetime]:
-    """When each slot last had units put in it, from fulfilled receipts."""
+    """When each slot last had units put in it, from fulfilled receipts.
+
+    A load is dated by its request's door close when the receipt has door
+    times, the same moment `vending.stock` puts the units in. Otherwise by the
+    line's `resolved_at`, when the worker filled it in.
+    """
     rows = conn.execute(
-        "select l.slot, max(l.resolved_at) from purchase_lines l join purchase_requests r using (request_id)"
+        f"select l.slot, max({LOADED_AT}) from purchase_lines l join purchase_requests r using (request_id)"
         " where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded') and l.units_loaded > 0"
         " group by l.slot")
     return dict(rows)
 
 
 def _loads(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
-    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`."""
+    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`, dated like `_last_loaded`."""
     loads: dict[str, list[tuple[datetime, int]]] = {}
     for slot, at, units in conn.execute(
-            "select l.slot, l.resolved_at, l.units_loaded from purchase_lines l join purchase_requests r"
+            f"select l.slot, {LOADED_AT}, l.units_loaded from purchase_lines l join purchase_requests r"
             " using (request_id) where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded')"
             " and l.units_loaded > 0 and l.resolved_at is not null"):
         loads.setdefault(slot, []).append((at, units))
