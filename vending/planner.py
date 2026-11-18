@@ -185,6 +185,10 @@ class CurrentState:
     catalog: tuple[CatalogProduct, ...] = ()
     sourcing_table: tuple[Sourcing, ...] = ()
     balance_cents: int = 0              # spendable, after the sales-tax set-aside
+    # The wildcard's trial, for the promotion gate (`vending.wildcard_trial`): its verdict now (None: no
+    # trial), and our regular slots that are silent now. `vending.planning.gather` reads both.
+    wildcard_verdict: str | None = None
+    silent: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -651,7 +655,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
         ceiling = config.wildcard_ceiling_cents if s.slot == config.wildcard_slot else config.price_ceiling_cents
         refusals.extend(check_price(s.price_cents, floor, ceiling, s.slot))
-    refusals.extend(_check_wildcard(slots, config))
+    refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle))
 
     # 8. The plan, with every refusal found.
     # Only slots with a source get a line. A slot that couldn't be stocked is
@@ -692,14 +696,25 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 #   or alternate, extras to the closet included.
 # - Its product is in no other slot while it is on trial, so a trial's sales
 #   aren't split:
-#   - no other slot switches to the product it holds now;
+#   - no other slot switches to the product it holds now, except as a promotion;
 #   - it switches only to a product no other slot holds now, and only while every
 #     other slot's contents are known: a slot no receipt describes may hold it,
 #     and the line that moves another slot may come back unavailable;
 #   - no other slot switches to the product it switches to;
 #   - it doesn't load more of its product while another slot holds it.
+# - A promotion copies the trial's product into one silent regular slot, which
+#   switches to it at a regular price the agent picks. Only when the trial's
+#   verdict is a pass, the slot is silent now, the wildcard switches to its next
+#   product in the same plan (so the product isn't on trial in two slots), and
+#   the visit is a Friday one. Anything unknown refuses it. If the wildcard's
+#   switch came back unavailable, the trial reads "promoted" and it can't load
+#   more of the product until it switches.
 
-def _check_wildcard(slots: list[_Slot], config: Config) -> list[Refusal]:
+PASS_VERDICT = "pass"   # `vending.wildcard_trial.PASS`; the planner imports nothing that needs a database
+
+
+def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState | None = None,
+                    off_cycle: bool = False) -> list[Refusal]:
     w = next((s for s in slots if s.slot == config.wildcard_slot), None)
     if w is None:
         return []
@@ -718,9 +733,7 @@ def _check_wildcard(slots: list[_Slot], config: Config) -> list[Refusal]:
     if held:
         into = sorted(s.slot for s in others if s.changes_product and s.product == held)
         if into:
-            refusals.append(Refusal("wildcard", (
-                f"{held} is on trial in the wildcard, slot {w.slot}, so slot {', '.join(into)} can't switch to it; "
-                "the wildcard's product is in no other slot"), w.slot))
+            refusals.extend(_check_promotion(w, into, current or CurrentState(()), off_cycle))
         dup = sorted(s.slot for s in others if s.state.product == held)
         if dup and w.need and not w.changes_product:
             refusals.append(Refusal("wildcard", (
@@ -745,6 +758,28 @@ def _check_wildcard(slots: list[_Slot], config: Config) -> list[Refusal]:
                 f"{w.product} goes on trial in the wildcard, slot {w.slot}, so slot {', '.join(into)} can't switch "
                 "to it; the wildcard's product is in no other slot"), w.slot))
     return refusals
+
+
+def _check_promotion(w: _Slot, into: list[str], current: CurrentState, off_cycle: bool) -> list[Refusal]:
+    """Slots `into` switch to the wildcard's product: refused unless it is a promotion the data backs."""
+    held = w.state.product
+    why = []
+    if len(into) > 1:
+        why.append("one slot at a time")
+    if current.wildcard_verdict != PASS_VERDICT:
+        why.append(f"its trial's verdict is {current.wildcard_verdict or 'unknown'}, not pass")
+    quiet = [t for t in into if t not in current.silent]
+    if quiet:
+        why.append(f"slot {', '.join(quiet)} isn't a silent slot (get_machine_state, wildcard_trial.silent_slots)")
+    if not (w.changes_product and w.product and w.product != held):
+        why.append(f"slot {w.slot} must switch to the next product to test in the same plan")
+    if off_cycle:
+        why.append("a promotion happens only at a Friday visit")
+    if not why:
+        return []
+    return [Refusal("wildcard", (
+        f"{held} is on trial in the wildcard, slot {w.slot}, so slot {', '.join(into)} can switch to it only as a "
+        f"promotion, and this isn't one: {'; '.join(why)}"), into[0])]
 
 
 def _most(purchase: Purchase) -> int:

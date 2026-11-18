@@ -709,9 +709,12 @@ class Inputs(unittest.TestCase):
 
 
 
-def wild(*changes, slot="17", off_cycle=False, sourcing=(), now=TUESDAY, config=CONFIG, **state):
-    """A plan with `slot` set as the wildcard in config (None: no wildcard set)."""
-    return plan_restock(current(**state), desired(*changes, off_cycle=off_cycle, sourcing=sourcing),
+def wild(*changes, slot="17", off_cycle=False, sourcing=(), now=TUESDAY, config=CONFIG, verdict=None, silent=(),
+         **state):
+    """A plan with `slot` set as the wildcard in config (None: no wildcard set), its trial's `verdict` and the
+    `silent` slots as `vending.planning.gather` would find them."""
+    now_state = replace(current(**state), wildcard_verdict=verdict, silent=frozenset(silent))
+    return plan_restock(now_state, desired(*changes, off_cycle=off_cycle, sourcing=sourcing),
                         replace(config, wildcard_slot=slot), now)
 
 
@@ -775,10 +778,63 @@ class TestWildcard(unittest.TestCase):
         # The same $85.00 purchase in a regular slot has no cap (only the ceiling).
         self.assertTrue(wild(pickle_17(price="6.50"), slot="18", sourcing=(dear,)).ok)
 
-    def test_no_other_slot_switches_to_the_product_on_trial(self):
+    def test_no_other_slot_switches_to_the_product_on_trial_outside_a_promotion(self):
         on_trial = {"17": SlotState("17", PICKLE, 750, 2, 250)}
         into_16 = DesiredSlot("16", product=PICKLE, sale_price="6.50", fill_to=1)
-        self.assertEqual(where(wild(into_16, slots=on_trial)), [("wildcard", "17")])
+        p = wild(into_16, slots=on_trial)
+        self.assertEqual(where(p), [("wildcard", "16")])
+        self.assertIn("verdict is unknown, not pass", p.refusals[0].message)
+
+    # A promotion: 17's PICKLE trial passed and 16 (COKE) is silent. 16 switches to PICKLE at a regular price,
+    # and 17 switches to SPRITE, its next test, in the same Friday plan.
+    PROMOTE_16 = DesiredSlot("16", product=PICKLE, sale_price="6.00", fill_to=6)
+    NEXT_17 = DesiredSlot("17", product=SPRITE, sale_price="3.00", fill_to=10)
+    TRIAL_17 = {"17": SlotState("17", PICKLE, 450, 3, 250)}
+
+    def promote(self, *changes, verdict="pass", silent=("16",), off_cycle=False):
+        return wild(*changes, slots=self.TRIAL_17, verdict=verdict, silent=silent, off_cycle=off_cycle,
+                    sourcing=(SPRITE_SOURCING,))
+
+    def test_a_passing_trial_is_promoted_into_a_silent_slot(self):
+        p = self.promote(self.PROMOTE_16, self.NEXT_17)
+        self.assertTrue(p.ok, [r.message for r in p.refusals])
+        self.assertEqual(line(p, "16").product, PICKLE)
+        self.assertTrue(line(p, "16").change_product)
+        self.assertEqual(line(p, "17").product, SPRITE)
+
+    def test_a_promotion_needs_a_pass(self):
+        for verdict in ("extend", "too early", "unknown", "promoted", None):
+            p = self.promote(self.PROMOTE_16, self.NEXT_17, verdict=verdict)
+            self.assertEqual(where(p), [("wildcard", "16")], verdict)
+            self.assertIn("not pass", p.refusals[0].message)
+
+    def test_a_promotion_goes_only_into_a_silent_slot(self):
+        p = self.promote(self.PROMOTE_16, self.NEXT_17, silent=("18",))
+        self.assertEqual(where(p), [("wildcard", "16")])
+        self.assertIn("isn't a silent slot", p.refusals[0].message)
+
+    def test_the_wildcard_switches_to_its_next_test_in_the_same_plan(self):
+        # Kept, or restocked with the same product, PICKLE would be on trial in two slots.
+        for wildcard_line in ((), (DesiredSlot("17", product=PICKLE, sale_price="4.50", fill_to=6),)):
+            p = self.promote(self.PROMOTE_16, *wildcard_line)
+            self.assertIn(("wildcard", "16"), where(p))
+            self.assertIn("must switch to the next product", " ".join(r.message for r in p.refusals))
+
+    def test_a_promotion_happens_only_at_a_friday_visit(self):
+        p = self.promote(self.PROMOTE_16, self.NEXT_17, off_cycle=True)
+        self.assertEqual(where(p), [("wildcard", "16")])
+        self.assertIn("only at a Friday visit", p.refusals[0].message)
+
+    def test_one_promotion_at_a_time(self):
+        into_18 = DesiredSlot("18", product=PICKLE, sale_price="6.00", fill_to=6)
+        p = self.promote(self.PROMOTE_16, into_18, self.NEXT_17, silent=("16", "18"))
+        self.assertIn("one slot at a time", " ".join(r.message for r in p.refusals))
+
+    def test_the_promoted_slots_price_is_a_regular_price(self):
+        # The agent picks it, at most the $6.50 ceiling; the trial's price isn't binding.
+        self.assertTrue(self.promote(replace(self.PROMOTE_16, sale_price="3.50"), self.NEXT_17).ok)
+        p = self.promote(replace(self.PROMOTE_16, sale_price="7.00"), self.NEXT_17)
+        self.assertEqual(where(p), [("above_ceiling", "16")])
 
     def test_the_wildcard_cant_switch_to_a_product_another_slot_holds_now(self):
         # Even from the closet, and even while that slot switches away: its line may come back unavailable.

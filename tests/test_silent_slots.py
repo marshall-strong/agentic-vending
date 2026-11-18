@@ -153,3 +153,66 @@ def test_a_friday_visit_with_no_time_leaves_every_slot_unknown(conn):
     assert r.window_start is None and r.silent == ()
     assert "r9" in r.reason and "python -m vending.sync_requests" in r.reason
     assert all(n.why == r.reason for n in r.not_silent)
+
+
+# --- What the agent and the planner see ----------------------------------------------------------------
+
+def trial_sales(extra=None):
+    """The wildcard, 15, sells one a day on 19-22 and 26 Oct: 5 over 9 in-stock class days, a first-look pass."""
+    days = [datetime(2026, 10, d, 15, tzinfo=UTC) for d in (19, 20, 21, 22, 26)]
+    return {"15": [(at, 1) for at in days], **(extra or {})}
+
+
+def test_a_pass_with_a_silent_slot_comes_with_a_proposal(conn):
+    from vending import config
+    from vending.tools.machine_state import get_machine_state
+
+    machine(conn, sales=trial_sales())
+    config.set_value(conn, "wildcard_slot", "15", "test")
+    reply = get_machine_state(conn, now=NOW)
+    t = reply.wildcard_trial
+    assert (t.verdict, t.units_sold, t.class_days_in_stock) == ("pass", 5, 9)
+    assert t.silent_since == WINDOW and [s.slot for s in t.silent_slots] == ["16"]
+    assert {u.slot for u in t.unconfirmed_slots} == {"17", "18", "26", "28"}
+    p = t.proposal
+    assert (p.into_slot, p.product, p.trial_price) == ("16", "AAA", "3.00")
+    assert p.pulls == "BBB (12 units to the closet)"
+    assert "switch slot 15 to the next product" in p.wildcard_next
+    assert "at most $6.50" in p.why and "Fri 23 Oct" in p.why
+    assert "Proposal for the next Friday plan: switch slot 16 to AAA" in reply.message
+    assert "maybe empty" in reply.message
+
+
+def test_a_pass_with_no_silent_slot_stays_in_the_wildcard(conn):
+    from vending import config
+    from vending.tools.machine_state import get_machine_state
+
+    machine(conn, sales=trial_sales({"16": [(datetime(2026, 10, 27, 15, tzinfo=UTC), 1)]}))
+    config.set_value(conn, "wildcard_slot", "15", "test")
+    t = get_machine_state(conn, now=NOW).wildcard_trial
+    assert t.verdict == "pass" and t.silent_slots == [] and t.proposal is None
+    assert "keep it in the wildcard" in t.reason
+
+
+def test_no_proposal_unless_it_passes(conn):
+    from vending import config
+    from vending.tools.machine_state import get_machine_state
+
+    machine(conn, sales={"15": [(datetime(2026, 10, 19, 15, tzinfo=UTC), 3)]})
+    config.set_value(conn, "wildcard_slot", "15", "test")
+    t = get_machine_state(conn, now=NOW).wildcard_trial
+    assert t.verdict == "extend" and [s.slot for s in t.silent_slots] == ["16"] and t.proposal is None
+
+
+def test_the_planner_gets_the_verdict_and_the_silent_slots(conn):
+    from tests.test_ledger import open_ledger
+    from vending import config, planner, planning, wildcard_trial
+
+    assert planner.PASS_VERDICT == wildcard_trial.PASS
+    open_ledger(conn)
+    machine(conn, sales=trial_sales())
+    gathered = planning.gather(conn, [], NOW)
+    assert (gathered.current.wildcard_verdict, gathered.current.silent) == (None, frozenset())   # no wildcard set
+    config.set_value(conn, "wildcard_slot", "15", "test")
+    gathered = planning.gather(conn, [], NOW)
+    assert (gathered.current.wildcard_verdict, gathered.current.silent) == ("pass", frozenset({"16"}))

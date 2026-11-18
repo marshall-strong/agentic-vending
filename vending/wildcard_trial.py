@@ -45,7 +45,10 @@ A promotion goes only into a **silent slot** (`silent_slots`): a regular slot
 that sold nothing since the last Friday visit, over `SILENT_DAYS` in-stock
 class days the polls watched, with its stock confirmed.
 
-`judge`, `slot_record` and `intervals` are pure; `last_friday_visit`,
+`propose` turns a pass and a silent slot into the promotion to make at the
+next Friday visit; the planner accepts that switch only when both hold.
+
+`judge`, `slot_record`, `intervals` and `propose` are pure; `last_friday_visit`,
 `standing_prices`, `trial` and `silent_slots` read the database.
 """
 
@@ -564,3 +567,36 @@ def _counted(conn: psycopg.Connection) -> dict[str, dict]:
             return slot_counts.latest(conn, DEVICE_ID)
     except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         return {}
+
+
+# --- The proposal -------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Proposal:
+    """A passing trial's promotion into the top-ranked silent slot, for the next Friday plan."""
+    into_slot: str
+    product: str
+    trial_price_cents: int | None     # what it sold at in the wildcard; the new slot's price is the agent's pick
+    pulls: str                        # what the silent slot holds now, which goes to the closet
+    wildcard_next: str
+    why: str
+
+
+def propose(t: Trial | None, report: SilentReport, counts: dict[str, stock.SlotCount],
+            ceiling_cents: int) -> Proposal | None:
+    """The promotion to make at the next Friday visit, or None: only a pass, only into a silent slot. Pure.
+
+    The planner (`vending.planner`, the promotion gate) checks the same two things again on the plan.
+    """
+    if t is None or t.verdict != PASS or t.record is None or not report.silent or report.window_start is None:
+        return None
+    target, r = report.silent[0], t.record
+    held = counts[target.slot]
+    price = "" if t.price_cents is None else f" at ${t.price_cents // 100}.{t.price_cents % 100:02d}"
+    return Proposal(
+        target.slot, r.product, t.price_cents,
+        f"{held.product} ({held.units} units to the closet)",
+        f"switch slot {t.slot} to the next product to test in the same plan",
+        (f"{r.units_sold} sold over {r.class_days_in_stock} in-stock class days{price}; slot {target.slot} sold "
+         f"nothing since {report.window_start:%a %d %b} (stock confirmed: {target.evidence}). Load {r.product} "
+         f"into slot {target.slot} at a price you pick, at most ${ceiling_cents // 100}.{ceiling_cents % 100:02d}"))

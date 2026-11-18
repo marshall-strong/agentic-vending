@@ -32,7 +32,7 @@ from datetime import datetime
 
 import psycopg
 
-from vending import config, ledger, planner, sourcing, stock
+from vending import config, ledger, planner, sourcing, stock, wildcard_trial
 from vending.bridge import Bridge, BridgeError
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import catalog as catalog_tool
@@ -149,8 +149,18 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
     # so the stale-price warnings describe the same rows the planner used.
     table_rows = tuple(sourcing.listed_options(conn))
+    verdict, silent = None, frozenset()
+    if settings.wildcard_slot is not None:
+        # For the promotion gate: the same verdict and silent slots get_machine_state shows the agent.
+        counts = {c.slot: c for c in counted.slots if c.slot in settings.slots}
+        loads = stock.loads(conn)
+        trial = wildcard_trial.trial(conn, now, counts, loads, counted.sales, settings.slots, settings.wildcard_slot)
+        verdict = trial.verdict if trial is not None else None
+        report = wildcard_trial.silent_slots(conn, now, counts, loads, counted.sales, settings.slots,
+                                             settings.wildcard_slot)
+        silent = frozenset(s.slot for s in report.silent)
     current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
-                                   spendable)
+                                   spendable, verdict, silent)
     return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
 
 
