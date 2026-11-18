@@ -296,10 +296,22 @@ def test_door_times_are_stored_with_the_receipt(conn):
 ])
 def test_missing_or_null_door_times_are_stored_as_null(conn, fields):
     submit(conn, "r1")
-    store(conn, "r1", fulfilled("r1", receipt(), **fields), NOW)
+    stored = store(conn, "r1", fulfilled("r1", receipt(), **fields), NOW)
     assert door_row(conn) == (None, None)
+    # Only half a pair is worth telling a person about: the receipt has one, so the other went missing.
+    half = len([v for v in fields.values() if v is not None]) == 1
+    assert len(stored.warnings) == half and all(w.startswith("r1: the receipt has door_") for w in stored.warnings)
     # The answer itself is still kept whole.
     assert conn.execute("select last_response from purchase_requests").fetchone()[0].items() >= fields.items()
+
+
+def test_half_a_pair_of_door_times_is_logged_naming_the_request(conn):
+    submit(conn, "r1")
+    said = []
+    sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED)}), NOW, log=said.append)
+    assert said == ["r1: the receipt has door_opened_at but no door_closed_at; neither is kept, "
+                    "so its visit is dated by resolved_at"]
+    assert door_row(conn) == (None, None)
 
 
 def test_a_door_closed_before_it_opened_is_logged_and_not_stored(conn):
@@ -365,6 +377,8 @@ def test_migration_019_backfills_door_times_from_stored_answers(database_url):
                     "half": {"door_opened_at": OPENED},
                     "backwards": {"door_opened_at": CLOSED, "door_closed_at": OPENED},
                     "garbage": {"door_opened_at": "soon", "door_closed_at": "later"},
+                    # Passes a prefix regex, but there is no 31 November: casting it would abort 019.
+                    "bad_date": {"door_opened_at": "2026-11-31T15:34:00Z", "door_closed_at": CLOSED},
                     "unread": None,
                 }
                 for request_id, fields in answers.items():
@@ -373,10 +387,17 @@ def test_migration_019_backfills_door_times_from_stored_answers(database_url):
                         " values (%s, %s, false, '{}', %s)",
                         (request_id, NOW, None if fields is None else Jsonb(fulfilled(request_id, receipt(), **fields))))
                 conn.execute("set time zone 'America/New_York'")   # the backfill must not depend on the session
+                notices = []
+                conn.add_notice_handler(lambda d: notices.append(d.message_primary))
                 assert db.migrate(conn)[0] == "019_door_times.sql"
                 got = dict((r, (o, c)) for r, o, c in conn.execute(
                     "select request_id, door_opened_at, door_closed_at from purchase_requests"))
                 visit = (datetime(2026, 11, 7, 15, 34, tzinfo=timezone.utc), datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc))
                 assert got == {"both": visit, "no_zone": visit, **{r: (None, None) for r in answers if r not in ("both", "no_zone")}}
+                # The skipped pairs are named; a request with no door times at all is not.
+                assert "019: door times filled in on 2 request(s)" in notices
+                [skipped] = [n for n in notices if "skipped" in n]
+                assert skipped.startswith("019: 4 request(s) skipped") and skipped.endswith(
+                    "left null: backwards, bad_date, garbage, half")
         finally:
             admin.execute(f"drop schema {schema} cascade")

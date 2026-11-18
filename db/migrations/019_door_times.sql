@@ -11,6 +11,12 @@
 -- `vending.purchase_requests.store` refuses an answer with close before open,
 -- so this check only backs it up.
 
+-- purchase_requests is live: the sync writes to it every hour. Give up rather
+-- than queue behind a long transaction and block everything queued behind us.
+set local lock_timeout = '10s';
+-- The bridge writes ISO times with a zone; one without is UTC, as in `store`.
+set local time zone 'UTC';
+
 alter table purchase_requests
     add column door_opened_at timestamptz,
     add column door_closed_at timestamptz,
@@ -18,22 +24,51 @@ alter table purchase_requests
         check ((door_opened_at is null) = (door_closed_at is null) and door_closed_at >= door_opened_at);
 
 -- Backfill from the answers already stored, under the same rules as `store`.
--- The bridge writes ISO times with a zone; one without is UTC, as in `store`.
--- A pair with a value that isn't a time string, or with close before open, is
--- skipped. Rows that already have door times are left alone.
-set local time zone 'UTC';
-
-update purchase_requests r
-   set door_opened_at = d.opened, door_closed_at = d.closed
-  from (
-      select request_id,
-             (last_response ->> 'door_opened_at')::timestamptz as opened,
-             (last_response ->> 'door_closed_at')::timestamptz as closed
-        from purchase_requests
-       where jsonb_typeof(last_response) = 'object'
-         and last_response ->> 'door_opened_at' ~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}'
-         and last_response ->> 'door_closed_at' ~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}'
-  ) d
- where r.request_id = d.request_id
-   and d.closed >= d.opened
-   and r.door_opened_at is null;
+-- A value is only cast once it is known to be a whole, valid time: a regex
+-- alone lets through `2026-11-31T15:34:00Z`, whose cast would abort the
+-- migration. The regex still guards the front, since Postgres also accepts
+-- words such as 'now' as times. A pair with only one time, a value that isn't
+-- a valid time, or close before open is skipped and named in a notice. Rows
+-- that already have door times are left alone.
+do $$
+declare
+    filled int;
+    skipped text[];
+begin
+    with answers as (
+        select request_id,
+               last_response ->> 'door_opened_at' as opened_text,
+               last_response ->> 'door_closed_at' as closed_text
+          from purchase_requests
+         where jsonb_typeof(last_response) = 'object'
+           and door_opened_at is null
+    ), parsed as (
+        select request_id,
+               case when opened_text ~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}'
+                     and pg_input_is_valid(opened_text, 'timestamptz')
+                    then opened_text::timestamptz end as opened,
+               case when closed_text ~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}'
+                     and pg_input_is_valid(closed_text, 'timestamptz')
+                    then closed_text::timestamptz end as closed
+          from answers
+         where opened_text is not null or closed_text is not null
+    ), updated as (
+        update purchase_requests r
+           set door_opened_at = p.opened, door_closed_at = p.closed
+          from parsed p
+         where r.request_id = p.request_id
+           and p.closed >= p.opened
+        returning r.request_id
+    )
+    select (select count(*) from updated),
+           array(select request_id from parsed
+                  where opened is null or closed is null or closed < opened
+                  order by request_id)
+      into filled, skipped;
+    raise notice '019: door times filled in on % request(s)', filled;
+    if cardinality(skipped) > 0 then
+        raise notice '019: % request(s) skipped, with only one door time, one that is not a valid time, '
+                     'or close before open; left null: %', cardinality(skipped), array_to_string(skipped, ', ');
+    end if;
+end
+$$;

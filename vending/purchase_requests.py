@@ -31,9 +31,10 @@ _MONEY = {"total_paid", "unit_cost_paid"}
 
 @dataclass(frozen=True)
 class Stored:
-    """What one read changed: the status now, and later losses we hadn't seen."""
+    """What one read changed: the status now, later losses we hadn't seen, and what to tell a person."""
     status: str
     new_losses: int = 0
+    warnings: tuple[str, ...] = ()
 
 
 def record(conn: psycopg.Connection, request_id: str, submitted_at: datetime, off_cycle: bool,
@@ -76,6 +77,7 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     else:
         raise ValueError(f"unexpected answer for {request_id}: status {response.get('status')!r} and no lines")
     opened, closed = door_times(request_id, response)
+    warnings = () if opened is not None else tuple(_half_door_times(request_id, response))
 
     with conn.transaction():
         updated = conn.execute(
@@ -93,7 +95,7 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
         if not updated:
             raise ValueError(f"{request_id} is not in purchase_requests; record it when it is submitted")
         if status != "fulfilled":
-            return Stored(status)
+            return Stored(status, warnings=warnings)
         before = conn.execute(
             "select count(*) from purchase_line_losses where request_id = %s", (request_id,)).fetchone()[0]
         conn.execute("delete from purchase_lines where request_id = %s", (request_id,))
@@ -108,7 +110,7 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
                 " recorded_at) values (%s, %s, %s, %s, %s, %s, %s, %s)",
                 losses,
             )
-    return Stored(status, max(len(losses) - before, 0))
+    return Stored(status, max(len(losses) - before, 0), warnings)
 
 
 def door_times(request_id: str, response: dict) -> tuple[datetime | None, datetime | None]:
@@ -125,6 +127,20 @@ def door_times(request_id: str, response: dict) -> tuple[datetime | None, dateti
     if closed < opened:
         raise ValueError(f"{request_id}: door closed at {closed.isoformat()}, before it opened at {opened.isoformat()}")
     return opened, closed
+
+
+def _half_door_times(request_id: str, response: dict) -> list[str]:
+    """A warning when the answer has one door time but not the other, else nothing.
+
+    `door_times` keeps neither then, so the visit is dated by `resolved_at` as
+    if the receipt had no door times. A person may want to ask for the other.
+    """
+    opened, closed = _when(response.get("door_opened_at")), _when(response.get("door_closed_at"))
+    if (opened is None) == (closed is None):
+        return []
+    have, missing = ("door_opened_at", "door_closed_at") if closed is None else ("door_closed_at", "door_opened_at")
+    return [f"{request_id}: the receipt has {have} but no {missing}; neither is kept, "
+            "so its visit is dated by resolved_at"]
 
 
 def _line_rows(request_id: str, lines: list[dict]) -> tuple[list[tuple], list[tuple]]:

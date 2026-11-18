@@ -91,6 +91,8 @@ def sync(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
         report.checked += 1
         setattr(report, stored.status, getattr(report, stored.status) + 1)
         report.new_losses += stored.new_losses
+        for warning in stored.warnings:
+            log(warning)
         if stored.new_losses:
             log(f"{request_id}: {stored.new_losses} new later losses")
     return report
