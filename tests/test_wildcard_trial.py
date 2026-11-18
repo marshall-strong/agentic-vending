@@ -9,19 +9,10 @@ from tests.conftest import store_poll
 from tests.test_machine_state import fulfilled
 from vending.tools.machine_state import get_machine_state
 from vending import config
-from vending.wildcard_trial import (DROP, MAX_POLL_GAP, PRICE_TEST, PROMOTE, TOO_EARLY, UNKNOWN, Comparison,
+from vending.wildcard_trial import (DROP, EXTEND, MAX_POLL_GAP, PASS, PRICE_TEST, PROMOTED, TOO_EARLY, UNKNOWN,
                                     SlotRecord, judge, slot_record)
 
 SINCE = datetime(2026, 10, 16, 20, tzinfo=timezone.utc)   # Friday 4 PM Eastern
-
-
-def rec(slot, profit_cents, days=5, product=None):
-    return SlotRecord(slot, product or f"P{slot}", SINCE, days, 10, None if profit_cents is None else Fraction(profit_cents))
-
-
-def against(trial, *others):
-    """The trial compared with each of `others` over days they share (here, all of the trial's)."""
-    return [Comparison(trial, o) for o in others]
 
 
 # --- The measure --------------------------------------------------------------
@@ -43,57 +34,59 @@ def test_no_days_in_stock_has_no_rate():
 
 # --- The verdict --------------------------------------------------------------
 
+def rec(units, days=5, profit_cents=1000, slot="15"):
+    return SlotRecord(slot, f"P{slot}", SINCE, days, units, None if profit_cents is None else Fraction(profit_cents))
+
+
 def test_too_early_before_five_in_stock_class_days():
-    trial = rec("15", 5000, days=4)
-    verdict, weakest, reason = judge(trial, False, against(trial, rec("16", 100)))
-    assert (verdict, weakest) == (TOO_EARLY, None) and "4 of 5" in reason
+    verdict, reason = judge(rec(9, days=4), False)
+    assert verdict == TOO_EARLY and "4 of 5" in reason
 
 
 def test_a_trial_above_the_ceiling_is_a_price_test():
-    trial = rec("15", 5000)
-    assert judge(trial, True, against(trial, rec("16", 100)))[0] == PRICE_TEST
+    assert judge(rec(9), True)[0] == PRICE_TEST
 
 
-def test_promote_when_it_beats_the_weakest_other_slot():
-    trial = rec("15", 1000, product="A")
-    verdict, weakest, reason = judge(trial, False,
-                                     against(trial, rec("16", 2000), rec("17", 900, product="B"), rec("18", 5000)))
-    assert (verdict, weakest.other.slot) == (PROMOTE, "17")
-    assert "$2.00" in reason and "$1.80" in reason and "B to the closet" in reason and "slot 17 the wildcard" in reason
+@pytest.mark.parametrize("units, days", [(4, 5), (6, 5), (4, 9)])
+def test_pass_at_four_units_over_five_in_stock_class_days(units, days):
+    verdict, reason = judge(rec(units, days=days), False)
+    assert verdict == PASS and "silent slot" in reason
 
 
-def test_drop_when_it_doesnt_beat_the_weakest():
-    trial = rec("15", 900)
-    verdict, weakest, reason = judge(trial, False, against(trial, rec("16", 900), rec("17", 2000)))
-    assert (verdict, weakest.other.slot) == (DROP, "16")        # a tie is not a win
-    assert "switch slot 15 to the next product" in reason
+def test_three_units_extends_it_once():
+    verdict, reason = judge(rec(3), False)
+    assert verdict == EXTEND and "judged again with 10 days" in reason
 
 
-def test_only_slots_with_five_shared_days_and_a_known_profit_are_compared():
-    trial = rec("15", 700)
-    others = against(trial, rec("16", 0, days=4), rec("17", None), rec("18", 600))
-    verdict, weakest, _ = judge(trial, False, others)
-    assert (verdict, weakest.other.slot) == (PROMOTE, "18")
-    assert judge(trial, False, others[:2])[0] == UNKNOWN
+@pytest.mark.parametrize("units", [0, 1, 2])
+def test_two_units_or_fewer_drops_it(units):
+    verdict, reason = judge(rec(units), False)
+    assert verdict == DROP and "switch slot 15 to the next product" in reason
 
 
-def test_each_comparison_uses_the_trials_rate_on_the_shared_days():
-    # Over all its days the trial earns $1.40 a day, but on the days it shares with 16 only $1.00.
-    trial = rec("15", 700)
-    shared = Comparison(rec("15", 500), rec("16", 600))
-    verdict, weakest, _ = judge(trial, False, [shared])
-    assert (verdict, weakest.other.slot) == (DROP, "16")
+@pytest.mark.parametrize("units, days, verdict", [
+    (7, 10, PASS), (6, 10, DROP),        # by 10 days it needs 7
+    (9, 13, DROP), (10, 14, PASS),       # and 0.7 a day since it began
+    (3, 10, DROP),                       # an extended trial that didn't get there
+])
+def test_by_ten_days_it_needs_seven_and_to_hold_its_rate(units, days, verdict):
+    assert judge(rec(units, days=days), False)[0] == verdict
+    assert judge(rec(units, days=days), False, waiting=True)[0] == verdict
 
 
-def test_an_unknown_trial_profit_is_unknown():
-    trial = rec("15", None)
-    assert judge(trial, False, against(trial, rec("16", 100)))[0] == UNKNOWN
+@pytest.mark.parametrize("units, days, verdict", [
+    (6, 8, PASS),                        # 0.75 a day: still eligible
+    (5, 8, EXTEND),                      # passed once, now under 0.7 a day: judged again at 10 days
+    (2, 8, DROP),
+])
+def test_a_waiting_trial_must_hold_seven_tenths_a_day(units, days, verdict):
+    # Judged at an earlier Friday, and a break kept it under 10 days.
+    assert judge(rec(units, days=days), False, waiting=True)[0] == verdict
 
 
-def test_losses_are_shown_as_negative_dollars():
-    trial = rec("15", -500)
-    _, _, reason = judge(trial, False, against(trial, rec("16", 100)))
-    assert "-$1.00" in reason
+def test_profit_decides_nothing():
+    assert judge(rec(4, profit_cents=-500), False)[0] == PASS
+    assert judge(rec(4, profit_cents=None), False)[0] == PASS
 
 
 # --- From the database --------------------------------------------------------
@@ -152,22 +145,17 @@ def test_no_wildcard_set_means_no_trial(conn):
     assert reply.wildcard_trial is None and "No wildcard slot is set" in reply.message
 
 
-def test_the_trial_is_judged_against_the_weakest_other_slot(conn):
+def test_the_trial_counts_units_over_the_in_stock_class_days_the_polls_saw(conn):
     week_of_sales(conn)
     set_wildcard(conn, "15")
     reply = get_machine_state(conn, now=NOW)
     t = reply.wildcard_trial
-    assert (t.slot, t.product, t.since, t.price_test) == ("15", "AAA", SINCE, False)
+    assert (t.slot, t.product, t.sale_price, t.since, t.price_test) == ("15", "AAA", "3.00", SINCE, False)
     assert t.units_sold == 18 and t.class_days_in_stock == 6
-    assert (t.weakest_slot, t.weakest_product) == ("16", "BBB")
-    assert t.weakest_class_days_in_stock == t.class_days_in_stock
-    # 18 sold at $3.00 is $54.00, $50.00 without tax, less 18 x $0.50: $41.00 over the days.
+    # For information: 18 sold at $3.00 is $54.00, $50.00 without tax, less 18 x $0.50: $41.00 over the days.
     assert t.profit_per_class_day == f"{41 / t.class_days_in_stock:.2f}"
-    assert t.profit_per_class_day_on_those_days == t.profit_per_class_day
-    # 12 sold at $2.00 is $24.00, $22.22 without tax, less $6.00.
-    assert t.weakest_profit_per_class_day == f"{(2400 - 178 - 600) / 100 / t.class_days_in_stock:.2f}"
-    assert t.verdict == PROMOTE
-    assert "Wildcard trial (AAA in slot 15): promote" in reply.message
+    assert t.verdict == PASS
+    assert "Wildcard trial (AAA in slot 15): pass" in reply.message
 
 
 def test_a_trial_above_the_ceiling_is_reported_as_a_price_test(conn):
@@ -230,8 +218,7 @@ def test_a_price_test_ends_when_the_price_is_back_under_the_ceiling(conn):
     polls(conn, rows, after=last)
     t = get_machine_state(conn, now=datetime(2026, 11, 5, 12, tzinfo=timezone.utc)).wildcard_trial
     assert not t.price_test and t.since == datetime(2026, 10, 28, 22, tzinfo=timezone.utc)
-    assert t.units_sold == 15 and t.verdict == PROMOTE         # the 5 windows after it, at $3.00
-    assert t.weakest_class_days_in_stock == t.class_days_in_stock
+    assert t.units_sold == 15 and t.verdict == PASS            # the 5 windows after it, at $3.00
 
 
 def test_a_missing_price_never_turns_a_price_test_into_a_trial(conn):
@@ -289,29 +276,57 @@ def test_polls_that_saw_no_sales_are_days_with_no_sales(conn):
     assert (t.verdict, t.class_days_in_stock, t.units_sold, t.profit_per_class_day) == (DROP, 6, 0, "0.00")
 
 
-def test_rates_are_compared_over_the_days_both_held_stock(conn):
-    # 15 sells out in week one; 16 is loaded only after that. They share no in-stock day, so no verdict.
-    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
-    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 15, 0, 0))
-    rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100), "16": (200, 50)})]
-    rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, 103 + 3 * n), "16": (200, 50)})
-             for n, day in enumerate(("19", "20", "21", "22", "23"))]
-    fulfilled(conn, "r2", datetime(2026, 10, 23, 23, tzinfo=timezone.utc), ("16", "BBB", "primary", "10.00", 20, 0, 0))
-    rows += [(f"e{n}", f"2026-{day}T22:00:00+00:00", {"15": (300, 115), "16": (200, 51 + n)})
-             for n, day in enumerate(("10-26", "10-27", "10-28", "10-29", "10-30", "11-02"))]
-    polls(conn, rows)
-    set_wildcard(conn, "15")
-    t = get_machine_state(conn, now=datetime(2026, 11, 3, 12, tzinfo=timezone.utc)).wildcard_trial
-    assert t.class_days_in_stock == 5 and t.verdict == UNKNOWN
-    assert t.weakest_slot is None and "both it and the trial holding stock" in t.reason
 
-
-def test_a_trial_whose_product_is_in_another_slot_has_no_verdict(conn):
+def test_a_trial_whose_product_was_in_another_slot_first_has_no_verdict(conn):
     week_of_sales(conn)
     fulfilled(conn, "r0", SINCE - timedelta(days=3), ("17", "AAA", "primary", "10.00", 20, 0, 0))
     set_wildcard(conn, "15")
     t = get_machine_state(conn, now=NOW).wildcard_trial
     assert t.verdict == UNKNOWN and "also in slot 17" in t.reason
+
+
+def test_a_regular_slot_that_took_the_product_after_the_trial_began_ends_it(conn):
+    week_of_sales(conn)
+    fulfilled(conn, "r2", datetime(2026, 10, 23, 20, tzinfo=timezone.utc), ("17", "AAA", "primary", "10.00", 20, 0, 0))
+    set_wildcard(conn, "15")
+    t = get_machine_state(conn, now=NOW).wildcard_trial
+    assert t.verdict == PROMOTED
+    assert "slot 17 took AAA on 2026-10-23" in t.reason and "switch slot 15 to the next product" in t.reason
+
+
+def test_counters_that_disagree_leave_the_verdict_unknown(conn):
+    # On the 22nd the takings counter rose $3.00 but the units counter didn't: that interval can't be read.
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100, 30000), "16": (200, 50)})]
+    for n, (day, units, cents) in enumerate((("19", 103, 30900), ("20", 106, 31800), ("21", 109, 32700),
+                                             ("22", 109, 33000), ("23", 112, 33900), ("26", 115, 34800))):
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents), "16": (200, 50)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+    t = get_machine_state(conn, now=NOW).wildcard_trial
+    assert t.verdict == UNKNOWN and "don't agree" in t.reason
+
+
+def test_a_trial_judged_at_an_earlier_friday_must_hold_its_rate(conn):
+    # Loaded Fri 16 Oct, 4 sold over the 5 class days the polls saw that week, then the polls stop until 1 Nov,
+    # then two more class days with no sales: 4 units over 7 days, under 0.7 a day.
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100), "16": (200, 50)})]
+    rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units), "16": (200, 50)})
+             for n, (day, units) in enumerate((("19", 101), ("20", 102), ("21", 103), ("22", 104), ("23", 104)))]
+    polls(conn, rows)
+    polls(conn, [(f"e{n}", f"2026-11-0{day}T22:00:00+00:00", {"15": (300, 104), "16": (200, 50)})
+                 for n, day in enumerate((1, 2, 3))])
+    set_wildcard(conn, "15")
+    now = datetime(2026, 11, 4, 12, tzinfo=timezone.utc)
+    t = get_machine_state(conn, now=now).wildcard_trial
+    assert (t.units_sold, t.class_days_in_stock, t.verdict) == (4, 7, PASS)   # first look: 4 over 5 days or more
+    # A Friday visit on 30 Oct, when it already had its 5 days: it was judged then, so now it is waiting.
+    request(conn, "r2", datetime(2026, 10, 30, 20, tzinfo=timezone.utc), status="fulfilled")
+    t = get_machine_state(conn, now=now).wildcard_trial
+    assert t.verdict == EXTEND and "isn't eligible" in t.reason
 
 
 
@@ -376,8 +391,7 @@ def test_a_week_without_polls_counts_neither_its_days_nor_its_sales(conn):
     # 19 and 20 Oct, then 28 Oct to 3 Nov: 7 class days and 3 a day. The week's 21, 22, 23, 26 and 27 Oct,
     # and the 15 units sold in it, are left out.
     assert (t.class_days_in_stock, t.units_sold) == (7, 21)
-    assert t.weakest_class_days_in_stock == 7
-    assert t.verdict == PROMOTE
+    assert t.verdict == PASS
 
 
 def test_an_unpriced_poll_doesnt_end_a_price_test(conn):

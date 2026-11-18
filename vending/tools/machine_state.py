@@ -30,12 +30,12 @@ Built from our database only; it never reads the machine.
   newer) by it. `units_per_day` stays as before: the last 7 calendar days,
   empty days and weekends included, so it reads low for a slot that sold out.
 
-`wildcard_trial` is the product on trial in the wildcard slot, judged against
-our other slots over the same days (`vending.wildcard_trial`): its profit per
-in-stock class day the polls saw, the weakest other slot's over the class days
-both held stock, and a verdict (too early, promote, drop, price test or
-unknown) with the reason. The slot is fixed in config (`wildcard_slot`); null
-when none is set. Its `slot` is null when the slot set isn't one of ours now.
+`wildcard_trial` is the product on trial in the wildcard slot
+(`vending.wildcard_trial`): its units over the in-stock class days the polls
+saw, its profit per class day for information, and a verdict (too early,
+price test, pass, extend, drop, promoted or unknown) with the reason. The
+slot is fixed in config (`wildcard_slot`); null when none is set. Its `slot`
+is null when the slot set isn't one of ours now.
 
 A slot with no receipts yet has `null` for every receipt field: null, not
 zero, so the agent can't mistake "unknown" for "empty". The message names
@@ -100,17 +100,13 @@ class WildcardTrial(BaseModel):
     """The wildcard as a testing ground (`docs/agent/wildcard.md`): is its product worth a regular slot?"""
     slot: str | None                            # null: the slot set isn't one of ours now
     product: str | None = None                  # null: no receipts show what the slot holds
+    sale_price: str | None = None               # dollars, its standing price; null if the polls disagree
     since: datetime | None = None               # when the trial began: loaded, or back under the ceiling
     class_days_in_stock: int | None = None      # class days it held stock in poll intervals since then
     units_sold: int | None = None               # in those poll intervals
-    profit_per_class_day: str | None = None     # dollars: revenue without tax, less cost of sales
+    profit_per_class_day: str | None = None     # dollars, for information: revenue without tax, less cost
     price_test: bool = False                    # sold above the ceiling, so not a promotion trial
-    weakest_slot: str | None = None             # the weakest of our other slots over the days both held stock
-    weakest_product: str | None = None
-    weakest_class_days_in_stock: int | None = None   # the class days the polls saw both holding stock
-    weakest_profit_per_class_day: str | None = None  # dollars, over those days
-    profit_per_class_day_on_those_days: str | None = None   # dollars: the trial's own over the same days
-    verdict: str                                # too early, promote, drop, price test or unknown
+    verdict: str                                # too early, price test, pass, extend, drop, promoted, unknown
     reason: str
 
 
@@ -285,20 +281,15 @@ def trial_reply(trial: wildcard_trial.Trial | None) -> WildcardTrial | None:
     if trial is None:
         return None
     r = trial.record
-    c, w = trial.compared, trial.compared.other if trial.compared else None
     return WildcardTrial(
         slot=trial.slot,
         product=r.product if r else None,
+        sale_price=_dollars(trial.price_cents),
         since=r.since if r else None,
         class_days_in_stock=r.class_days_in_stock if r else None,
         units_sold=r.units_sold if r else None,
         profit_per_class_day=_dollars(r.profit_per_class_day_cents) if r else None,
         price_test=trial.price_test,
-        weakest_slot=w.slot if w else None,
-        weakest_product=w.product if w else None,
-        weakest_class_days_in_stock=w.class_days_in_stock if w else None,
-        weakest_profit_per_class_day=_dollars(w.profit_per_class_day_cents) if w else None,
-        profit_per_class_day_on_those_days=_dollars(c.trial.profit_per_class_day_cents) if c else None,
         verdict=trial.verdict,
         reason=trial.reason,
     )

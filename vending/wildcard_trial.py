@@ -7,29 +7,30 @@ The rule (`docs/agent/wildcard.md`, "A testing ground"):
    product went in (the receipts' last product change). With no slot set
    there is no trial; a slot set that isn't one of ours now (the stored
    assignment) has no verdict.
-2. **The measure** is profit per in-stock class day: revenue without tax, less
-   the cost of what sold, over the class days the slot held stock
-   (`vending.demand`). The restock policy ranks slots by the same yardstick.
-3. **Only what the polls saw counts.** Money and days come from the same poll
+2. **The measure** is units sold over the in-stock class days the polls saw
+   (`vending.demand` counts a class day when the slot held stock as it
+   began). Profit per in-stock class day (revenue without tax, less the cost
+   of what sold) is reported too, for information; it decides nothing.
+3. **Only what the polls saw counts.** Units and days come from the same poll
    intervals: stretches where the units and the cents counters both measured
    every sale and agree on where the stretch begins and ends. A stretch the
-   polls didn't cover adds no days, and one where the counters disagree (or
-   the replay's sales don't match them) makes the profit unknown. An interval
-   with no sales is a zero, not a gap. An interval longer than
-   `MAX_POLL_GAP` (the polls stopped) adds neither its days nor its sales.
-4. **After `TRIAL_DAYS` in-stock class days** the polls saw, the point where a
-   slot's own rate counts, compare it with each of our other slots over the
-   intervals both were seen holding stock: identical poll intervals, so both
-   rates cover the same class days. Only slots with `TRIAL_DAYS` such shared
-   class days count; with none, there is no verdict.
-5. **Promote** when the trial earns more per day than the weakest of them over
-   the days they share; else **drop** it. A promoted product stays in its
-   slot, which becomes a regular slot, and the weakest slot's product goes to
-   the closet; that slot becomes the wildcard with the next product to test.
-   Either way the agent acts at a Friday visit.
+   polls didn't cover adds no days. One where the counters and the stock
+   replay's sales disagree, or the sales aren't this product's, makes the
+   verdict unknown. An interval with no sales is a zero, not a gap. An
+   interval longer than `MAX_POLL_GAP` (the polls stopped) adds neither its
+   days nor its sales.
+4. **The bar** is absolute, because a promotion only ever fills a silent slot
+   (one that sold nothing): **pass** at `PASS_UNITS` units or more over
+   `TRIAL_DAYS` in-stock class days or more. Below it (research rule 6):
+   `EXTEND_UNITS` extends it one Friday cycle, fewer **drop** it. By
+   `LATE_DAYS` it needs `LATE_UNITS` to pass, else drop. A trial judged at an
+   earlier Friday (it had `TRIAL_DAYS` by the last Friday visit) is waiting:
+   it passes only while it keeps `HOLD_RATE` a day since it began.
+5. **Promoted**: another regular slot took the product at or after the trial
+   began. The trial is over; the wildcard switches to the next product.
 6. **A trial priced above the ceiling** at its latest priced poll is a price
    test, not a promotion trial: a regular slot couldn't charge that, so its
-   profit wouldn't carry over (`standing_prices`). It counts again only from
+   result wouldn't carry over (`standing_prices`). It counts again only from
    the first poll strictly after the last one that read a price above the
    ceiling, and only intervals whose polls all read a price at or under it
    count for it. A poll with no price never qualifies one. Polls at the same
@@ -37,34 +38,40 @@ The rule (`docs/agent/wildcard.md`, "A testing ground"):
    priced moment, the price is unknown and so is the verdict.
 
 The interval holding the load mixes the old product's sales with the new one's,
-so it is left out of both money and days. Units sold past what the receipts
+so it is left out of both units and days. Units sold past what the receipts
 loaded have no cost, so they make the profit unknown rather than free.
 
-`judge`, `compare`, `slot_record` and `intervals` are pure; `standing_prices`
-and `trial` read the database.
+`judge`, `slot_record` and `intervals` are pure; `last_friday_visit`,
+`standing_prices` and `trial` read the database.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from fractions import Fraction
 
 import psycopg
 
 from vending import config, counters, demand, stock
-from vending.class_days import class_days_after
+from vending.class_days import EASTERN, class_days_after, eastern_date
 from vending.pricing import DEFAULT_TAX_PERCENT
 from vending.slots import DEVICE_ID
 from vending.tools.sales_history import tax_cents
 
 TRIAL_DAYS = demand.OWN_RATE_AFTER   # in-stock class days before a trial is judged
+PASS_UNITS = 4                       # units over TRIAL_DAYS to pass (Kevin, 18 Nov)
+EXTEND_UNITS = 3                     # below the bar: one more Friday cycle (research rule 6)
+LATE_DAYS = 10                       # by then it needs LATE_UNITS to pass, else drop
+LATE_UNITS = 7
+HOLD_RATE = Fraction(7, 10)          # units a day a passing trial keeps while it waits for a silent slot
 
 # The longest stretch between two polls that still counts as watched. David polls hourly; a longer gap
 # means the polls stopped, and the class days and sales inside it weren't seen, so they count for nothing.
 MAX_POLL_GAP = timedelta(hours=6)
 
-TOO_EARLY, PROMOTE, DROP, PRICE_TEST, UNKNOWN = "too early", "promote", "drop", "price test", "unknown"
+TOO_EARLY, PRICE_TEST, PASS, EXTEND, DROP, PROMOTED, UNKNOWN = (
+    "too early", "price test", "pass", "extend", "drop", "promoted", "unknown")
 
 # `(polled_at, lifetime_units, lifetime_sales_cents, price_cents)`
 Reading = tuple[datetime, int, int, int | None]
@@ -72,7 +79,7 @@ Reading = tuple[datetime, int, int, int | None]
 
 @dataclass(frozen=True)
 class SlotRecord:
-    """What one slot's current product earned from `since`, over the class days it held stock."""
+    """What one slot's current product sold from `since`, over the class days it held stock."""
     slot: str
     product: str
     since: datetime
@@ -88,20 +95,13 @@ class SlotRecord:
 
 
 @dataclass(frozen=True)
-class Comparison:
-    """The trial and one other slot over the same poll intervals, so over the same class days."""
-    trial: SlotRecord
-    other: SlotRecord
-
-
-@dataclass(frozen=True)
 class Trial:
     record: SlotRecord | None         # None: nothing to measure (no receipts, not ours, or the price is unknown)
     slot: str | None                  # None: the configured slot isn't one of ours now
     price_test: bool
-    compared: Comparison | None       # the trial against the weakest other slot, over the days they share
     verdict: str
     reason: str
+    price_cents: int | None = None    # its standing price; None when unknown
 
 
 @dataclass(frozen=True)
@@ -111,9 +111,9 @@ class Interval:
     end: datetime
     units: int
     takings_cents: int                # tax inside
+    agree: bool                       # the replay's sales in it are the counters' units, all of this product
     cost_cents: Fraction | None       # None: a cost is unknown, or the counters and the sales don't agree
     days: tuple[date, ...]            # the class days in it the slot held stock as they began
-    held: bool                        # held stock as it began and as every class day in it began
 
 
 def slot_record(slot: str, product: str, since: datetime, class_days: int, units: int,
@@ -132,64 +132,61 @@ class Measured:
     since: datetime
     intervals: list[Interval]
 
-    def record(self, tax_percent: int, keep: set[tuple[datetime, datetime]] | None = None) -> SlotRecord:
-        """Its record over all its intervals, or only those in `keep`: their money and in-stock class days. Pure."""
-        chosen = [i for i in self.intervals if keep is None or (i.begin, i.end) in keep]
+    @property
+    def agree(self) -> bool:
+        return all(i.agree for i in self.intervals)
+
+    def record(self, tax_percent: int, until: datetime | None = None) -> SlotRecord:
+        """Its record over its intervals, or those that ended by `until`: units, money and class days. Pure."""
+        chosen = [i for i in self.intervals if until is None or i.end <= until]
         days = {d for i in chosen for d in i.days}
         return slot_record(self.slot, self.product, self.since, len(days), sum(i.units for i in chosen),
                            sum(i.takings_cents for i in chosen), [i.cost_cents for i in chosen], tax_percent)
 
 
-def compare(trial: Measured, other: Measured, tax_percent: int) -> Comparison:
-    """The trial and another slot over the poll intervals that saw both holding stock. Pure.
+def judge(trial: SlotRecord, price_test: bool, waiting: bool = False) -> tuple[str, str]:
+    """The verdict on a trial, and why, in words the agent can quote. Pure.
 
-    The polls are the machine's, so both slots' intervals normally share their
-    ends; an interval only one of them has (a misread in one slot) is left out
-    of both, so both rates still cover the same class days.
+    `waiting`: it was judged at an earlier Friday already (it had `TRIAL_DAYS`
+    by the last Friday visit), so it is extended or waiting for a silent slot.
     """
-    shared = {(i.begin, i.end) for i in trial.intervals if i.held} & {(i.begin, i.end) for i in other.intervals if i.held}
-    return Comparison(trial.record(tax_percent, shared), other.record(tax_percent, shared))
-
-
-def judge(trial: SlotRecord, price_test: bool, others: list[Comparison]) -> tuple[str, Comparison | None, str]:
-    """The verdict on a trial, the comparison with the weakest slot, and why, in words the agent can quote. Pure.
-
-    `others` holds the trial against each other slot over the days the two share.
-    """
-    if trial.class_days_in_stock < TRIAL_DAYS:
-        return TOO_EARLY, None, (f"{trial.class_days_in_stock} of {TRIAL_DAYS} in-stock class days the polls have "
-                                 "seen so far; judge it at the first Friday visit after it has them")
+    days, units = trial.class_days_in_stock, trial.units_sold
+    if days < TRIAL_DAYS:
+        return TOO_EARLY, (f"{days} of {TRIAL_DAYS} in-stock class days the polls have seen so far; judge it at "
+                           "the first Friday visit after it has them")
     if price_test:
-        return PRICE_TEST, None, ("it sells above the ceiling, so this is a price test, not a promotion trial: a "
-                                  "regular slot couldn't charge that. Price it at or under the ceiling to test it for "
-                                  "promotion; the trial then counts from the first poll that reads that price")
-    if trial.profit_per_class_day_cents is None:
-        return UNKNOWN, None, ("its profit is unknown: the cost of some of its sales is unknown, more sold than the "
-                               "receipts loaded, or the units and takings counters disagree")
-    rivals = [c for c in others if c.other.class_days_in_stock >= TRIAL_DAYS
-              and c.other.profit_per_class_day_cents is not None and c.trial.profit_per_class_day_cents is not None]
-    if not rivals:
-        return UNKNOWN, None, (f"no other slot has {TRIAL_DAYS} class days with a known profit on which the polls saw "
-                               "both it and the trial holding stock, so there is nothing to compare it with yet")
-    weakest = min(rivals, key=lambda c: (c.other.profit_per_class_day_cents, c.other.slot))
-    ppd, w = weakest.trial.profit_per_class_day_cents, weakest.other
-    days = f"over the {w.class_days_in_stock} class days both held stock"
-    if ppd > w.profit_per_class_day_cents:
-        return PROMOTE, weakest, (
-            f"{_money(ppd)} profit per in-stock class day beats slot {w.slot}'s {_money(w.profit_per_class_day_cents)} "
-            f"({w.product}), the weakest of our other slots, {days}. At the next Friday visit, "
-            f"keep {trial.product} in slot {trial.slot} as a regular slot, send {w.product} to the closet, "
-            f"and make slot {w.slot} the wildcard with the next product to test")
-    return DROP, weakest, (
-        f"{_money(ppd)} profit per in-stock class day doesn't beat slot {w.slot}'s "
-        f"{_money(w.profit_per_class_day_cents)} ({w.product}), the weakest of our other slots, {days}. "
-        f"At the next Friday visit, switch slot {trial.slot} to the next product to test")
+        return PRICE_TEST, ("it sells above the ceiling, so this is a price test, not a promotion trial: a regular "
+                            "slot couldn't charge that. Price it at or under the ceiling to test it for promotion; "
+                            "the trial then counts from the first poll that reads that price")
+    seen = f"{units} sold over {days} in-stock class days the polls saw"
+    holds = units >= HOLD_RATE * days
+    switch = f"At the next Friday visit, switch slot {trial.slot} to the next product to test"
+    passed = (f"{seen}: it passes. Promote it at a Friday visit into a silent slot; while none is silent, keep it "
+              f"in the wildcard and keep selling. To stay eligible it must keep {_rate(HOLD_RATE)} a day since it "
+              f"began, and {LATE_UNITS} by {LATE_DAYS} days")
+    if days >= LATE_DAYS:
+        if units >= LATE_UNITS and holds:
+            return PASS, passed
+        return DROP, (f"{seen}: by {LATE_DAYS} days it needs {LATE_UNITS}, and {_rate(HOLD_RATE)} a day since it "
+                      f"began, so drop it. {switch}")
+    if not waiting:
+        if units >= PASS_UNITS:
+            return PASS, passed
+        if units == EXTEND_UNITS:
+            return EXTEND, (f"{seen}, one under the bar of {PASS_UNITS}: extend it one Friday cycle. It is judged "
+                            f"again with {LATE_DAYS} days in, and needs {LATE_UNITS} by then")
+        return DROP, f"{seen}, under the bar of {PASS_UNITS}, so drop it. {switch}"
+    # Judged at an earlier Friday, still under LATE_DAYS (a break paused the clock).
+    if units >= PASS_UNITS and holds:
+        return PASS, passed
+    if units < EXTEND_UNITS:
+        return DROP, f"{seen}, under the bar of {PASS_UNITS}, so drop it. {switch}"
+    return EXTEND, (f"{seen}: under {_rate(HOLD_RATE)} a day since it began, so it isn't eligible now; it is judged "
+                    f"again with {LATE_DAYS} days in, and needs {LATE_UNITS} by then")
 
 
-def _money(cents: Fraction) -> str:
-    sign = "-" if cents < 0 else ""
-    whole = round(abs(cents))
-    return f"{sign}${whole // 100}.{whole % 100:02d}"
+def _rate(rate: Fraction) -> str:
+    return f"{float(rate):.1f}"
 
 
 def intervals(readings: list[Reading], start: datetime, product: str, sales: list[stock.SaleCost],
@@ -212,15 +209,14 @@ def intervals(readings: list[Reading], start: datetime, product: str, sales: lis
                 price is not None and price <= ceiling_cents for at, _, _, price in readings if begin <= at <= end):
             continue
         inside = [s for s in sales if begin < s.at <= end]
-        # The replay's sales in it must be the counters' units, all of this product and costed, or the cost
-        # isn't this interval's. Units without takings, or takings without units, can't be reconciled either.
+        # The replay's sales in it must be the counters' units, all of this product, or they aren't this
+        # interval's. Units without takings, or takings without units, can't be reconciled either.
         agree = (sum(s.units for s in inside) == units and (units > 0) == (takings > 0)
-                 and all(s.product == product and s.taken_at is None and s.cost_cents is not None
-                         and s.costed_units == s.units for s in inside))
-        cost = sum((s.cost_cents for s in inside), Fraction(0)) if agree else None
+                 and all(s.product == product and s.taken_at is None for s in inside))
+        costed = agree and all(s.cost_cents is not None and s.costed_units == s.units for s in inside)
+        cost = sum((s.cost_cents for s in inside), Fraction(0)) if costed else None
         days = class_days_after(begin, end)
-        held = any(a <= begin < b for a, b in spans) and all(d in in_stock for d in days)
-        out.append(Interval(begin, end, units, takings, cost, tuple(d for d in days if d in in_stock), held))
+        out.append(Interval(begin, end, units, takings, agree, cost, tuple(d for d in days if d in in_stock)))
     return out
 
 
@@ -250,6 +246,30 @@ def _joint(readings: list[Reading]) -> list[tuple[datetime, datetime, int, int]]
             out.append((begin, u_end, units, cents))
             done = u_end
     return out
+
+
+def last_friday_visit(conn: psycopg.Connection, now: datetime) -> tuple[datetime | None, str | None]:
+    """Eastern midnight of the Friday on or before the last Friday visit, or None and why not.
+
+    The last Friday visit is the latest fulfilled request that isn't off-cycle,
+    fulfilled by `now`. `fulfilled_at` may trail the visit, so the Friday
+    midnight before it is the safe start: it makes a window from the visit
+    longer, never shorter. A fulfilled Friday request with no `fulfilled_at`
+    can't be placed, so the visit is unknown.
+    """
+    rows = conn.execute("select request_id, fulfilled_at from purchase_requests"
+                        " where status = 'fulfilled' and not off_cycle").fetchall()
+    unplaced = sorted(request_id for request_id, at in rows if at is None)
+    if unplaced:
+        return None, (f"Friday request {', '.join(unplaced)} is fulfilled but its fulfilled_at is null, so when the "
+                      "last Friday visit was is unknown; run the request sync (python -m vending.sync_requests) so "
+                      "the time is recorded, or ask a person to check the request")
+    done = [at for _, at in rows if at <= now]
+    if not done:
+        return None, "no Friday visit is recorded yet"
+    day = eastern_date(max(done))
+    friday = day - timedelta(days=(day.weekday() - 4) % 7)
+    return datetime.combine(friday, time(0), tzinfo=EASTERN), None
 
 
 @dataclass(frozen=True)
@@ -300,49 +320,58 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
     if slot is None:
         return None
     if slot not in slots:
-        return Trial(None, None, False, None, UNKNOWN, (
+        return Trial(None, None, False, UNKNOWN, (
             f"config wildcard_slot is {slot}, which isn't one of ours in the stored slot assignment, so no trial "
             "can be judged and preview and submit refuse; a person checks the assignment and the setting"))
     w = counts.get(slot)
     if w is None:
-        return Trial(None, slot, False, None, UNKNOWN,
+        return Trial(None, slot, False, UNKNOWN,
                      f"slot {slot} is the wildcard, but no receipts show what it holds, so there is nothing to measure")
     ceiling_cents, tax_percent = _setting(conn, "price_ceiling_cents", 650), _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
     start = w.since
-    readings = _readings(conn, start, now, list(counts))
+    readings = _readings(conn, start, now, [slot]).get(slot, [])
     standing = standing_prices(conn, [slot]).get(slot)
     if standing is not None and not standing.known:
-        return Trial(None, slot, False, None, UNKNOWN, (
+        return Trial(None, slot, False, UNKNOWN, (
             f"the polls at {standing.at:%Y-%m-%d %H:%M} UTC read different prices for slot {slot} "
             f"({', '.join(f'${p // 100}.{p % 100:02d}' for p in sorted(standing.prices))}), so its price is "
             "unknown and so is whether it is a price test; a later poll that reads one price settles it"))
+    price = min(standing.prices) if standing is not None else None
     # Above the ceiling at the latest poll that read a price: a poll with no price changes nothing.
     price_test = standing is not None and bool(standing.above(ceiling_cents))
-    priced = [(at, price) for at, _, _, price in readings.get(slot, []) if at >= start and price is not None]
-    above = [at for at, price in priced if price > ceiling_cents]
+    priced = [(at, p) for at, _, _, p in readings if at >= start and p is not None]
+    above = [at for at, p in priced if p > ceiling_cents]
     if above and not price_test:
         # It counts from the first poll strictly after the last one above the ceiling: the interval before it
         # may hold sales at the old price. A poll with no price doesn't count as back under.
-        back = next((at for at, price in priced if at > above[-1]), None)
+        back = next((at for at, p in priced if at > above[-1]), None)
         if back is None:   # can't happen while the standing price is under the ceiling; refuse rather than guess
-            return Trial(None, slot, False, None, UNKNOWN, (
+            return Trial(None, slot, False, UNKNOWN, (
                 f"no poll after the last one that read slot {slot} above the ceiling has read its price, so "
-                "whether its price test has ended is unknown"))
+                "whether its price test has ended is unknown"), price)
         start = back
-    measured = {s: _measure(c, max(start, c.since), now, loads.get(s, []), sales, readings.get(s, []),
-                            None if s != slot or price_test else ceiling_cents)
-                for s, c in counts.items()}
-    on_trial = measured[slot]
-    others = [compare(on_trial, m, tax_percent) for s, m in sorted(measured.items()) if s != slot]
-    record = on_trial.record(tax_percent)
-    shared = sorted(s for s, c in counts.items() if s != slot and c.product == w.product)
-    if shared:
-        # Its sales are split with another slot, so its rate isn't its own (the planner refuses this for a new trial).
-        return Trial(record, slot, price_test, None, UNKNOWN, (
-            f"{w.product} is also in slot {', '.join(shared)}, so its sales are split and the trial measures "
-            f"neither; the wildcard's product is in no other slot. Move {', '.join(shared)} to another product"))
-    verdict, compared, reason = judge(record, price_test, others)
-    return Trial(record, slot, price_test, compared, verdict, reason)
+    measured = _measure(w, start, now, loads.get(slot, []), sales, readings, None if price_test else ceiling_cents)
+    record = measured.record(tax_percent)
+    others = {s: c for s, c in counts.items() if s != slot and c.product == w.product}
+    before = sorted(s for s, c in others.items() if c.since < w.since)
+    if before:
+        # Its sales are split with a slot that held it first, so its rate isn't its own.
+        return Trial(record, slot, price_test, UNKNOWN, (
+            f"{w.product} is also in slot {', '.join(before)}, so its sales are split and the trial measures "
+            f"neither; the wildcard's product is in no other slot. Switch slot {slot} to another product"), price)
+    if others:
+        took = min(c.since for c in others.values())
+        return Trial(record, slot, price_test, PROMOTED, (
+            f"slot {', '.join(sorted(others))} took {w.product} on {took:%Y-%m-%d}, after its trial began: the "
+            f"trial is over. At the next Friday visit, switch slot {slot} to the next product to test"), price)
+    if not measured.agree:
+        return Trial(record, slot, price_test, UNKNOWN, (
+            "in some poll interval the units and takings counters, or the stock replay's sales, don't agree, so "
+            "what it sold is unknown; a person checks the polls and receipts"), price)
+    visit, _ = last_friday_visit(conn, now)
+    waiting = visit is not None and measured.record(tax_percent, visit).class_days_in_stock >= TRIAL_DAYS
+    verdict, reason = judge(record, price_test, waiting)
+    return Trial(record, slot, price_test, verdict, reason, price)
 
 
 def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list[tuple[datetime, int]],
