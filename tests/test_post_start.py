@@ -14,7 +14,6 @@ pytest.importorskip("psycopg")
 from tests.conftest import store_poll  # noqa: E402
 from tests.test_evadts import build  # noqa: E402
 from vending import db_explorer, pages  # noqa: E402
-from vending.slots import SLOTS  # noqa: E402
 
 # Machine-wide VA1 totals no single selection adds up to, so they can't show by chance.
 TOTAL_CENTS, TOTAL_UNITS = 987654, 98765
@@ -25,7 +24,7 @@ def test_the_public_explorer_hides_the_machine_wide_totals_of_every_poll(schema_
     store_poll(conn, "s1", "2026-12-04T15:00:00+00:00", {"15": (250, 3)})
     conn.execute("update polls set total_paid_cents = %s, total_paid_units = %s", (TOTAL_CENTS, TOTAL_UNITS))
     request = db_explorer.Request(schema, "polls", 0)
-    status, page = db_explorer.render(conn, request, pages.HIDE, (), pages.ONLY)
+    status, page = db_explorer.render(conn, request, pages.HIDE)
     assert status == 200 and "(hidden)" in page and "s1" in page
     assert str(TOTAL_CENTS) not in page and str(TOTAL_UNITS) not in page
     # Without the rule they would be there: the test sees the page it means to.
@@ -34,7 +33,10 @@ def test_the_public_explorer_hides_the_machine_wide_totals_of_every_poll(schema_
 
 # --- scripts/bridge.py ----------------------------------------------------------------------------
 
-THEIRS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(1, 5))   # the 20 that aren't ours
+# The assignment `tests/conftest.py` stores (columns 5-8; the canary checks it), and the other 20.
+# Written out here, not imported, because #146 replaces `vending.slots.SLOTS` with the stored assignment.
+OURS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(5, 9))
+THEIRS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(1, 5))
 # The other team's selections in a poll from the start: a price and counters nothing of ours has.
 SENTINEL_PRICE, SENTINEL_UNITS = 987, 7919
 SENTINEL_CENTS = SENTINEL_PRICE * SENTINEL_UNITS
@@ -44,7 +46,7 @@ OUR_PRICE = 250
 def machine_poll(our_units: int, their_price: int, their_units: int, door: int) -> bytes:
     """A whole-machine poll as the bridge sends it from the start: all 40 selections, the VA1
     totals over all of them, and the door counter. Ours sell at `OUR_PRICE`."""
-    sold = [(s, OUR_PRICE, our_units) for s in SLOTS] + [(s, their_price, their_units) for s in THEIRS]
+    sold = [(s, OUR_PRICE, our_units) for s in OURS] + [(s, their_price, their_units) for s in THEIRS]
     records = ["ID1*TEST-MACHINE*0000**EVS3.0*", "ID4*2*1840*5",
                f"VA1*{sum(p * u for _, p, u in sold)}*{sum(u for *_, u in sold)}*0*0",
                "CA2*1234*56*0*0", f"EA2*DO*{door}*{door + 100}"]
@@ -96,7 +98,7 @@ def script(monkeypatch):
     monkeypatch.setattr(module, "get_json", get_json)
     monkeypatch.setattr(module, "datetime", Now)
     module.stored_selections = module.our_selections   # the real one, for tests that store an assignment
-    monkeypatch.setattr(module, "our_selections", lambda: (SLOTS, None))
+    monkeypatch.setattr(module, "our_selections", lambda: (OURS, None))
     return module
 
 

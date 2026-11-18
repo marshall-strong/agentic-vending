@@ -29,10 +29,10 @@ pytest.importorskip("psycopg")
 from tests.conftest import open_in  # noqa: E402
 from tests.test_pages import _get, fresh, reader, site  # noqa: E402, F401 (fixtures)
 from tests.test_post_start import (  # noqa: E402, F401 (script is a fixture)
-    OUR_PRICE, SENTINEL_PRICE, SENTINEL_UNITS, THEIRS, leaked, machine_poll, script)
+    OUR_PRICE, OURS, SENTINEL_PRICE, SENTINEL_UNITS, THEIRS, leaked, machine_poll, script)
 from tests.test_server import call  # noqa: E402
 from vending import dashboard, db, db_explorer, ledger, server, slot_counts, stock  # noqa: E402
-from vending.slots import SLOTS  # noqa: E402
+from vending.slots import our_slots  # noqa: E402
 from vending.start import START  # noqa: E402
 from vending.sync_history import store  # noqa: E402
 
@@ -41,8 +41,8 @@ NOW = datetime(2026, 12, 5, 15, 0, tzinfo=timezone.utc)
 OURS_BEFORE, OURS_AFTER = 10, 13
 POLL = machine_poll(OURS_AFTER, SENTINEL_PRICE, SENTINEL_UNITS, door=7)
 # The machine-wide VA1 totals of the poll from the start: the total minus ours is theirs.
-VA1_CENTS = len(SLOTS) * OUR_PRICE * OURS_AFTER + len(THEIRS) * SENTINEL_PRICE * SENTINEL_UNITS
-VA1_UNITS = len(SLOTS) * OURS_AFTER + len(THEIRS) * SENTINEL_UNITS
+VA1_CENTS = len(OURS) * OUR_PRICE * OURS_AFTER + len(THEIRS) * SENTINEL_PRICE * SENTINEL_UNITS
+VA1_UNITS = len(OURS) * OURS_AFTER + len(THEIRS) * SENTINEL_UNITS
 TOTALS = (VA1_CENTS, VA1_UNITS, len(THEIRS) * SENTINEL_UNITS, len(THEIRS) * SENTINEL_PRICE * SENTINEL_UNITS)
 
 
@@ -56,6 +56,7 @@ def machine(schema_url, conn, monkeypatch):
     """The two polls stored, a ledger opening, and a photo count of one of ours and one of theirs.
     The MCP server and `vending.db.connect` use the test schema."""
     assert datetime.fromisoformat(BEFORE) < START <= datetime.fromisoformat(AFTER)
+    assert set(our_slots(conn)) == set(OURS) and not set(OURS) & set(THEIRS)
     assert store(conn, {"session_id": "before", "device_id": "vmc1", "started_at": BEFORE},
                  machine_poll(OURS_BEFORE, 200, 0, door=5)) == "ok"
     assert store(conn, {"session_id": "after", "device_id": "vmc1", "started_at": AFTER}, POLL) == "ok"
@@ -98,14 +99,14 @@ def test_the_agents_tools_measure_our_sales(machine):
     """The sales history does read the poll from the start: our three units each, nothing of theirs."""
     reply = call("get_sales_history", {"start": "2026-12-01T00:00:00Z", "end": "2026-12-05T00:00:00Z"})
     rows = reply.structuredContent["data"]
-    assert {r["slot"] for r in rows} == set(SLOTS) and {r["units"] for r in rows} == {OURS_AFTER - OURS_BEFORE}
+    assert {r["slot"] for r in rows} == set(OURS) and {r["units"] for r in rows} == {OURS_AFTER - OURS_BEFORE}
 
 
 def test_the_machine_state_as_of_after_the_start(machine):
     from vending.tools import machine_state, sales_history
 
     state = machine_state.get_machine_state(machine, NOW)
-    assert state.success and {s.slot for s in state.data} == set(SLOTS)
+    assert state.success and {s.slot for s in state.data} == set(OURS)
     clean(state.model_dump_json())
     history = sales_history.get_sales_history(machine, START, NOW, None)
     assert history.success
@@ -114,8 +115,8 @@ def test_the_machine_state_as_of_after_the_start(machine):
 
 def test_the_ledger_and_the_stock_count(machine):
     takings = ledger.takings(machine, START, NOW)
-    assert takings.cents == len(SLOTS) * OUR_PRICE * (OURS_AFTER - OURS_BEFORE)
-    assert ledger.units_sold(machine, START, NOW) == len(SLOTS) * (OURS_AFTER - OURS_BEFORE)
+    assert takings.cents == len(OURS) * OUR_PRICE * (OURS_AFTER - OURS_BEFORE)
+    assert ledger.units_sold(machine, START, NOW) == len(OURS) * (OURS_AFTER - OURS_BEFORE)
     for found in (takings, ledger.balance(machine, NOW), ledger.pnl(machine, START, NOW),
                   ledger.pnl_by_week(machine, START, NOW), stock.stock(machine, until=NOW)):
         clean(repr(found))
