@@ -2507,7 +2507,7 @@ def write_report(path, L):
     w("")
     coef_rows("B")
     w("")
-    w("## Our slots" + ("" if SLOT_SOURCE == SOURCE_FALL else f" ({col_text})"))
+    w("## Our slots")
     w("")
     bk = clusters["best_k_by_silhouette"]
     w(f"K-means on 5 standardized slot features, our {len(slots)} slots; k = 2..6 tried. Best silhouette at k = {bk} "
