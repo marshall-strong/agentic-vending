@@ -14,6 +14,10 @@ or uses polls and checks that no sentinel, and no machine-wide total, is in what
 - every table of the public /db explorer, as served,
 - `scripts/bridge.py` printing the poll, with our slots from the stored assignment.
 
+It runs once for each assignment in `tests.test_post_start.ASSIGNMENTS`: four in each row, like a
+redraw could give us. On main, `our_slots` refuses any assignment that isn't columns 5-8 (the
+hard-coded `vending.slots.SLOTS`), so those runs are strict xfails that name #146, which removes it.
+
 The local dashboard and `slot_counts.latest` still show the other team's counts on main; #146
 (use_server_slots) cuts `slot_counts.latest` to our assignment. Those two are strict xfails, so
 they fail loudly once #146 lands and the marks should come off.
@@ -29,21 +33,33 @@ pytest.importorskip("psycopg")
 from tests.conftest import open_in  # noqa: E402
 from tests.test_pages import _get, fresh, reader, site  # noqa: E402, F401 (fixtures)
 from tests.test_post_start import (  # noqa: E402, F401 (script is a fixture)
-    OUR_PRICE, OURS, SENTINEL_PRICE, SENTINEL_UNITS, THEIRS, leaked, machine_poll, script)
+    ASSIGNMENTS, COLUMNS_5_TO_8, OUR_PRICE, SENTINEL_PRICE, SENTINEL_UNITS, leaked, machine_poll, others, script)
 from tests.test_server import call  # noqa: E402
 from vending import dashboard, db, db_explorer, ledger, server, slot_counts, stock  # noqa: E402
-from vending.slots import our_slots  # noqa: E402
+from vending.slots import SlotsNotRecorded, our_slots  # noqa: E402
 from vending.start import START  # noqa: E402
 from vending.sync_history import store  # noqa: E402
 
 BEFORE, AFTER = "2026-12-02T15:00:00+00:00", "2026-12-04T15:00:00+00:00"
 NOW = datetime(2026, 12, 5, 15, 0, tzinfo=timezone.utc)
 OURS_BEFORE, OURS_AFTER = 10, 13
-POLL = machine_poll(OURS_AFTER, SENTINEL_PRICE, SENTINEL_UNITS, door=7)
+N = 20   # selections per team in every assignment
 # The machine-wide VA1 totals of the poll from the start: the total minus ours is theirs.
-VA1_CENTS = len(OURS) * OUR_PRICE * OURS_AFTER + len(THEIRS) * SENTINEL_PRICE * SENTINEL_UNITS
-VA1_UNITS = len(OURS) * OURS_AFTER + len(THEIRS) * SENTINEL_UNITS
-TOTALS = (VA1_CENTS, VA1_UNITS, len(THEIRS) * SENTINEL_UNITS, len(THEIRS) * SENTINEL_PRICE * SENTINEL_UNITS)
+VA1_CENTS = N * OUR_PRICE * OURS_AFTER + N * SENTINEL_PRICE * SENTINEL_UNITS
+VA1_UNITS = N * OURS_AFTER + N * SENTINEL_UNITS
+TOTALS = (VA1_CENTS, VA1_UNITS, N * SENTINEL_UNITS, N * SENTINEL_PRICE * SENTINEL_UNITS)
+
+UNTIL_146 = pytest.mark.xfail(strict=True, raises=SlotsNotRecorded,
+                              reason="on main our_slots refuses an assignment that isn't columns 5-8 "
+                                     "(vending.slots.SLOTS); #146 (use_server_slots) removes that bound")
+
+
+@pytest.fixture(params=[pytest.param(ours, id=name, marks=() if ours == COLUMNS_5_TO_8 else UNTIL_146)
+                        for name, ours in ASSIGNMENTS.items()])
+def assignment(request) -> tuple[str, ...]:
+    """Our selections in this test, stored as the server's assignment by `machine`."""
+    assert len(request.param) == N
+    return request.param
 
 
 def clean(text: str) -> None:
@@ -52,18 +68,20 @@ def clean(text: str) -> None:
 
 
 @pytest.fixture
-def machine(schema_url, conn, monkeypatch):
-    """The two polls stored, a ledger opening, and a photo count of one of ours and one of theirs.
-    The MCP server and `vending.db.connect` use the test schema."""
+def machine(schema_url, conn, monkeypatch, assignment):
+    """`assignment` stored as ours, the two polls stored, a ledger opening, and a photo count of one
+    of ours and one of theirs. The MCP server and `vending.db.connect` use the test schema."""
     assert datetime.fromisoformat(BEFORE) < START <= datetime.fromisoformat(AFTER)
-    assert set(our_slots(conn)) == set(OURS) and not set(OURS) & set(THEIRS)
+    conn.execute("update slot_assignment set slots = %s where id = 1", (list(assignment),))
+    assert our_slots(conn) == assignment
     assert store(conn, {"session_id": "before", "device_id": "vmc1", "started_at": BEFORE},
-                 machine_poll(OURS_BEFORE, 200, 0, door=5)) == "ok"
-    assert store(conn, {"session_id": "after", "device_id": "vmc1", "started_at": AFTER}, POLL) == "ok"
+                 machine_poll(assignment, OURS_BEFORE, 200, 0, door=5)) == "ok"
+    assert store(conn, {"session_id": "after", "device_id": "vmc1", "started_at": AFTER},
+                 machine_poll(assignment, OURS_AFTER, SENTINEL_PRICE, SENTINEL_UNITS, door=7)) == "ok"
     assert conn.execute("select total_paid_cents from polls where session_id = 'after'").fetchone()[0] == VA1_CENTS
     assert conn.execute("select count(*) from poll_selections where session_id = 'after'").fetchone()[0] == 40
     ledger.record(conn, "opening", 60_000, "opening capital", "canary", datetime(2026, 11, 30, tzinfo=timezone.utc))
-    for selection in ("15", THEIRS[0]):
+    for selection in (assignment[0], others(assignment)[0]):
         conn.execute("insert into slot_counts (count_id, counted_at, counted_by, source, device_id, selection,"
                      " product, units, exact) values ('c1', %s, 'canary', 'photo', 'vmc1', %s, 'Drink', 5, true)",
                      ("2026-12-01T15:00:00+00:00", selection))
@@ -85,28 +103,30 @@ def test_the_poll_does_carry_the_sentinels(machine):
 @pytest.mark.parametrize("tool, arguments", [
     ("get_machine_state", {}),
     ("get_sales_history", {"start": "2026-12-01T00:00:00Z", "end": "2026-12-05T00:00:00Z"}),
-    ("get_sales_history", {"start": "2026-12-01T00:00:00Z", "end": "2026-12-05T00:00:00Z", "slots": ["15"]}),
+    ("get_sales_history", {"start": "2026-12-01T00:00:00Z", "end": "2026-12-05T00:00:00Z", "slots": "first"}),
     ("get_pnl", {"start": "2026-11-30", "end": "2026-12-05"}),
     ("get_account_balance", {}),
 ])
-def test_the_agents_tools(machine, tool, arguments):
+def test_the_agents_tools(machine, assignment, tool, arguments):
+    if arguments.get("slots") == "first":   # one of ours, whichever the assignment is
+        arguments = {**arguments, "slots": [assignment[0]]}
     result = call(tool, arguments)
     assert not result.isError, result
     clean(result.model_dump_json())
 
 
-def test_the_agents_tools_measure_our_sales(machine):
+def test_the_agents_tools_measure_our_sales(machine, assignment):
     """The sales history does read the poll from the start: our three units each, nothing of theirs."""
     reply = call("get_sales_history", {"start": "2026-12-01T00:00:00Z", "end": "2026-12-05T00:00:00Z"})
     rows = reply.structuredContent["data"]
-    assert {r["slot"] for r in rows} == set(OURS) and {r["units"] for r in rows} == {OURS_AFTER - OURS_BEFORE}
+    assert {r["slot"] for r in rows} == set(assignment) and {r["units"] for r in rows} == {OURS_AFTER - OURS_BEFORE}
 
 
-def test_the_machine_state_as_of_after_the_start(machine):
+def test_the_machine_state_as_of_after_the_start(machine, assignment):
     from vending.tools import machine_state, sales_history
 
     state = machine_state.get_machine_state(machine, NOW)
-    assert state.success and {s.slot for s in state.data} == set(OURS)
+    assert state.success and {s.slot for s in state.data} == set(assignment)
     clean(state.model_dump_json())
     history = sales_history.get_sales_history(machine, START, NOW, None)
     assert history.success
@@ -115,8 +135,8 @@ def test_the_machine_state_as_of_after_the_start(machine):
 
 def test_the_ledger_and_the_stock_count(machine):
     takings = ledger.takings(machine, START, NOW)
-    assert takings.cents == len(OURS) * OUR_PRICE * (OURS_AFTER - OURS_BEFORE)
-    assert ledger.units_sold(machine, START, NOW) == len(OURS) * (OURS_AFTER - OURS_BEFORE)
+    assert takings.cents == N * OUR_PRICE * (OURS_AFTER - OURS_BEFORE)
+    assert ledger.units_sold(machine, START, NOW) == N * (OURS_AFTER - OURS_BEFORE)
     for found in (takings, ledger.balance(machine, NOW), ledger.pnl(machine, START, NOW),
                   ledger.pnl_by_week(machine, START, NOW), stock.stock(machine, until=NOW)):
         clean(repr(found))
@@ -145,12 +165,12 @@ def test_the_public_pages_as_served(machine, site, schema_url):
 
 @pytest.mark.parametrize("argv", [["latest"], ["raw", "after"], ["poll", "--live"]])
 def test_the_bridge_script_with_the_stored_assignment(machine, script, capsys, monkeypatch, argv):
-    script.poll = POLL
+    script.poll = bytes(machine.execute("select raw from polls where session_id = 'after'").fetchone()[0])
     monkeypatch.setattr(script, "our_selections", script.stored_selections)
     assert script.main(argv) == 0
     out, err = capsys.readouterr()
     clean(out)
-    assert "PA1*15*250*" in out and "EA2*DO*7*107" in out and "no selection is printed" not in err
+    assert f"PA1*{script.ours[0]}*250*" in out and "EA2*DO*7*107" in out and "no selection is printed" not in err
 
 
 @pytest.mark.xfail(strict=True, reason="slot_counts.latest reads every selection counted; "

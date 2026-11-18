@@ -33,20 +33,50 @@ def test_the_public_explorer_hides_the_machine_wide_totals_of_every_poll(schema_
 
 # --- scripts/bridge.py ----------------------------------------------------------------------------
 
-# The assignment `tests/conftest.py` stores (columns 5-8; the canary checks it), and the other 20.
-# Written out here, not imported, because #146 replaces `vending.slots.SLOTS` with the stored assignment.
-OURS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(5, 9))
-THEIRS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(1, 5))
+# Assignments the inventory server could give: 20 of the 40, four in each of rows 1-5. They are test
+# data, not ours. Our real slots come only from the server (`vending.slots.our_slots`), and they will
+# change at least once before the start. Columns 5-8 is the assignment of 12 Nov 2026, which `SLOTS`
+# on main still holds. The others aren't columns 5-8, so a test with one of them fails if code
+# still assumes columns 5-8: it would drop some of ours or show some of theirs.
+ALL_SELECTIONS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(1, 9))
+
+
+def by_row(*columns: str) -> tuple[str, ...]:
+    """An assignment from the four columns each of rows 1-5 has, e.g. by_row("1234", ...)."""
+    assert len(columns) == 5 and all(len(c) == 4 for c in columns)
+    return tuple(f"{row}{col}" for row, cols in enumerate(columns, start=1) for col in cols)
+
+
+ASSIGNMENTS = {
+    "columns 5-8": by_row("5678", "5678", "5678", "5678", "5678"),
+    "columns 1-4": by_row("1234", "1234", "1234", "1234", "1234"),
+    "odd columns": by_row("1357", "1357", "1357", "1357", "1357"),
+    "mixed": by_row("1278", "3456", "2367", "1458", "1238"),
+}
+COLUMNS_5_TO_8 = ASSIGNMENTS["columns 5-8"]
+
+
+def others(ours: tuple[str, ...]) -> tuple[str, ...]:
+    """The other team's 20: every selection that isn't in `ours`."""
+    return tuple(s for s in ALL_SELECTIONS if s not in ours)
+
+
+@pytest.fixture(params=list(ASSIGNMENTS.values()), ids=list(ASSIGNMENTS))
+def assignment(request) -> tuple[str, ...]:
+    """Our selections in this test: each assignment in `ASSIGNMENTS` in turn."""
+    return request.param
+
+
 # The other team's selections in a poll from the start: a price and counters nothing of ours has.
 SENTINEL_PRICE, SENTINEL_UNITS = 987, 7919
 SENTINEL_CENTS = SENTINEL_PRICE * SENTINEL_UNITS
 OUR_PRICE = 250
 
 
-def machine_poll(our_units: int, their_price: int, their_units: int, door: int) -> bytes:
+def machine_poll(ours: tuple[str, ...], our_units: int, their_price: int, their_units: int, door: int) -> bytes:
     """A whole-machine poll as the bridge sends it from the start: all 40 selections, the VA1
-    totals over all of them, and the door counter. Ours sell at `OUR_PRICE`."""
-    sold = [(s, OUR_PRICE, our_units) for s in OURS] + [(s, their_price, their_units) for s in THEIRS]
+    totals over all of them, and the door counter. `ours` sell at `OUR_PRICE`."""
+    sold = [(s, OUR_PRICE, our_units) for s in ours] + [(s, their_price, their_units) for s in others(ours)]
     records = ["ID1*TEST-MACHINE*0000**EVS3.0*", "ID4*2*1840*5",
                f"VA1*{sum(p * u for _, p, u in sold)}*{sum(u for *_, u in sold)}*0*0",
                "CA2*1234*56*0*0", f"EA2*DO*{door}*{door + 100}"]
@@ -77,11 +107,12 @@ AFTER, BEFORE = "2026-12-04T15:00:00+00:00", "2026-12-02T15:00:00+00:00"
 
 
 @pytest.fixture
-def script(monkeypatch):
+def script(monkeypatch, assignment):
     """scripts/bridge.py, answering from a fake bridge with one stored poll, `script.poll`, taken
-    at `script.taken`. "Now" is the day after the start."""
+    at `script.taken`. `script.ours` is our assignment. "Now" is the day after the start."""
     module = load_script()
-    module.poll, module.taken = machine_poll(13, SENTINEL_PRICE, SENTINEL_UNITS, 7), AFTER
+    module.ours = assignment
+    module.poll, module.taken = machine_poll(assignment, 13, SENTINEL_PRICE, SENTINEL_UNITS, 7), AFTER
 
     def call(method, path, **kwargs):
         return module.poll, {}
@@ -98,7 +129,7 @@ def script(monkeypatch):
     monkeypatch.setattr(module, "get_json", get_json)
     monkeypatch.setattr(module, "datetime", Now)
     module.stored_selections = module.our_selections   # the real one, for tests that store an assignment
-    monkeypatch.setattr(module, "our_selections", lambda: (OURS, None))
+    monkeypatch.setattr(module, "our_selections", lambda: (assignment, None))
     return module
 
 
@@ -107,8 +138,11 @@ def test_the_bridge_script_prints_only_our_selections_of_a_poll_from_the_start(s
     assert script.main(argv) == 0
     out, err = capsys.readouterr()
     assert not leaked(out)
-    assert "EA2*DO*7*107" in out and "PA1*15*250*" in out and "PA2*13*3250*" in out
-    assert "VA1" not in out and "CA2" not in out and "PA1*11*" not in out
+    for ours in script.ours:
+        assert f"PA1*{ours}*250*\r\nPA2*13*3250*" in out
+    for theirs in others(script.ours):
+        assert f"PA1*{theirs}*" not in out
+    assert "EA2*DO*7*107" in out and "VA1" not in out and "CA2" not in out
     assert out.startswith("DXS*") and out.rstrip().endswith("DXE*1*1") and "\r\n" in out
     assert "left out" in err and "--out" in err
 
