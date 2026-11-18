@@ -235,7 +235,7 @@ async def request_catalog_product(name: str, size: str, line: str | None = None,
 
 @_tool(built=True)
 async def set_wildcard_slot(slot: str, reason: str) -> WriteReply:
-    """Pick the one wildcard slot, once; it never moves (get_project_rules wildcard). Refused once one is set."""
+    """Pick the one wildcard slot, once; it never moves (get_project_rules wildcard). Asking again for the same slot changes nothing; a different slot is refused once one is set."""
     return await _write("set_wildcard_slot", {"slot": slot, "reason": reason},
                         wildcard_slot.set_wildcard_slot(slot, reason))
 

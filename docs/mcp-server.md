@@ -18,7 +18,7 @@ machine.
 | `get_project_rules` | **Works.** Our own notes on the project brief, from [`agent/`](agent/README.md). With no topic, the list of topics and their one-line summaries; with a topic, that file's text. A topic is a plain name from the list: paths, `..` and unknown names are refused with the list. Logged like any read. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state` | **Works.** Plans the desired state again on live data inside the write gate, refuses with every problem at once, otherwise POSTs it once and records the request. Saves what it is about to send before sending, so a lost answer leaves a row a person settles with `python -m vending.submissions resolve`. |
-| `set_wildcard_slot` | **Works.** Sets config `wildcard_slot` once, through the write gate: one of our slots, on shelf 2 to 4, not column 5, with a reason. Refused once a slot is set; only a person can change it (`python -m vending.config`). |
+| `set_wildcard_slot` | **Works.** Sets config `wildcard_slot` once, through the write gate: one of our slots, on shelf 2 to 4, not column 5, with a reason. Asking again for the same slot changes nothing; a different slot is refused once one is set, and only a person can change it (`python -m vending.config`). |
 | `set_price` | **Dropped.** Prices change only at a worker visit (free Friday, $25 midweek), through `submit_desired_state`. The stub stays so a call gets that answer. |
 
 ## Run it
@@ -278,7 +278,7 @@ warns about a count for a SKU that isn't in the catalog, and about one more than
 chart's figure for that package.
 
 The other keys the planner reads are `price_ceiling_cents` (650), `tax_percent` (8) and
-`midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for
+`midweek_fee_cents` (2500). **Only the keys in `KNOWN` can be set**, and each value is checked for
 type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
 refused as dollars typed by mistake, a misspelt key is refused rather than saved silently, and the
 agreed limits are maxima: `price_ceiling_cents` at most 650, `wildcard_ceiling_cents` at most 800 and

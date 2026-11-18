@@ -13,13 +13,13 @@ One fixed slot tests products for the other 19 and may sell up to $8.00; it neve
 - **extend**: 3 sold. Keep it one more Friday; by 10 days it needs 7.
 - **drop** (0 to 2 sold, or under 7 by 10 days) or **promoted** (another slot holds its product): switch the wildcard to the next product.
 - **price test**: priced above $6.50, so it can't be promoted.
-- **unknown**: don't promote. The reason says what to fix: a slot with no receipt, no price read in 6 hours, an unsettled counter, or counts that disagree.
+- **unknown**: don't promote. The reason says what to fix: a slot with no receipt, an unsettled counter, counts that disagree, or, for a pass, no price in 6 hours.
 
-**What counts.** Only what the polls saw: not a gap over 6 hours, nor the poll window holding the load. Profit is information only.
+**What counts.** Only what the polls saw: no gap over 6 hours, nor the poll window holding the load. Profit is information only.
 
 **Silent slots** (`silent_slots`). A promotion goes only into a regular slot that:
 
-- sold nothing since the last Friday visit, with one product throughout, and its counter proves it: read before that Friday's midnight and within 6 hours of now, with no restart or gap over 6 hours;
+- sold nothing since the last Friday visit, one product throughout, proven by its counter: read at or before that Friday's midnight and within 6 hours of now, with no restart or gap over 6 hours;
 - was watched for 4 in-stock class days, Monday to Thursday, each to 6 PM (so run Thursday evening);
 - has stock confirmed: that visit's own receipt loaded it, or a count since its last load names its SKU and its receipted units. A disagreeing count makes it unknown.
 
