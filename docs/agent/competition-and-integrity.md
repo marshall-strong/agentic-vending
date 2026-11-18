@@ -20,4 +20,4 @@ Our slot assignment is private; we may not know which other slots are a rival's;
 - Fall data is the exception. Until the fall cut (18 Nov 2026 unless the team moves it; the team keeps it before the day-one fill, and it is never after the 3 Dec start), course staff stocked and priced the whole machine, so no selection is either team's. Data from polls taken before the cut may be used for all 40 selections, for example for day-one sales rates and reference prices: those prices were the course staff's, not a team's. What counts is when the poll was taken, not when you read it. From the cut on, selections outside our assignment are off-limits: their sales, prices and stock.
 - Never try to steer customers toward or away from any slot except through our own prices and products.
 
-**This is about the other team in our machine.** The Interloper, the outside seller's machine beside ours, is different: its prices may be used (see `interloper`).
+**The Interloper, the outside seller's machine beside ours, is not the other team.** Never use the Interloper's prices either: the course staff said they may not be an input to ours (David, 17 Nov; see `interloper`).

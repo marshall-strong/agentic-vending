@@ -1,6 +1,6 @@
 # Pricing
 
-Prices stay within the floor and ceiling, must be explainable, may need deliberate variation to learn demand, and come from our costs, sales and the Interloper's prices.
+Prices stay within the floor and ceiling, must be explainable, may need deliberate variation to learn demand, and come from our own costs and sales only.
 
 **The bounds** (Project Brief (Revised), sections 2 and 4). Code enforces these, not your memory.
 
@@ -8,12 +8,10 @@ Prices stay within the floor and ceiling, must be explainable, may need delibera
 - **Ceiling:** $6.50, the team's decision on 12 Nov (`price_ceiling_cents`; the bridge refuses over $10.00). A10 in `docs/assumptions.md` is waiting on the instructional team to confirm it.
 - **Steps:** prices go in 5-cent steps.
 
-The preview refuses any price outside these bounds.
-
-**How to choose a price.** Work through these steps for every slot in the plan.
+**How to choose a price.** Work through these steps for every slot.
 
 1. **One price per product.** The same drink costs the same in every slot it fills.
-2. **A product new to a slot starts at its reference price** from `price-history`. If the floor is higher, use the floor. If the floor is above the reference, the drink costs too much to sell at its usual price, so prefer a cheaper size, pack or store. If you stock it anyway, say it will probably sell slowly.
+2. **A product new to a slot starts at its reference price** from `price-history`. If the floor is higher, use the floor. Then the drink costs too much to sell at its usual price, so prefer a cheaper size, pack or store. If you stock it anyway, say it will probably sell slowly.
 3. **A slow seller comes first.** Zero sales for 5 class days while our records say the slot held stock is a slow seller (`restocking`): at the next Friday visit, swap it (the planner refuses a price-only change for now). Otherwise, hold a price for two stocked weeks, counting only weeks in stock while classes ran. While stocked, a slot sells about 3 to 9 units a week, so one week can't show the effect of a change.
 4. **Then hold, or move one $0.25 step:**
    - It **ran out** before the visit in both weeks: raise it $0.25, up to $6.50, and load more.
@@ -21,6 +19,7 @@ The preview refuses any price outside these bounds.
 5. **One test at a time** (section 3.2, the identification problem). Apart from new products, change at most one product's price a week, so any change in sales can be traced to it. After two stocked weeks at the new price, compare profit per stocked week at the old and new prices: units × (price ÷ 1.08 − unit cost). Keep whichever price earned more.
 6. **Never pay for a price change.** Change prices at the free Friday visit, or with a midweek restock that's worth its $25 anyway.
 7. **Never use other slots' prices.** Section 3.2 calls them an input; the team follows the instructor's integrity rule instead (A15, `competition-and-integrity`).
+8. **Never use the Interloper's prices either** (course staff, 17 Nov; `interloper`).
 
 **Inputs:**
 
