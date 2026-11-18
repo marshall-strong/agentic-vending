@@ -713,8 +713,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 PASS_VERDICT = "pass"   # `vending.wildcard_trial.PASS`; the planner imports nothing that needs a database
 
 
-def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState | None = None,
-                    off_cycle: bool = False) -> list[Refusal]:
+def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, off_cycle: bool) -> list[Refusal]:
     w = next((s for s in slots if s.slot == config.wildcard_slot), None)
     if w is None:
         return []
@@ -733,7 +732,7 @@ def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState | 
     if held:
         into = sorted(s.slot for s in others if s.changes_product and s.product == held)
         if into:
-            refusals.extend(_check_promotion(w, into, current or CurrentState(()), off_cycle))
+            refusals.extend(_check_promotion(w, into, current, off_cycle))
         dup = sorted(s.slot for s in others if s.state.product == held)
         if dup and w.need and not w.changes_product:
             refusals.append(Refusal("wildcard", (

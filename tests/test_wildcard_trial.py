@@ -186,6 +186,7 @@ def test_a_wildcard_no_longer_in_our_assignment_has_no_verdict_and_blocks_planni
     t = reply.wildcard_trial
     assert (t.slot, t.product, t.verdict, t.class_days_in_stock) == (None, None, UNKNOWN, None)
     assert "isn't one of ours" in t.reason
+    assert t.silent_slots == [] and t.proposal is None and t.silent_note == "not checked"
     # Preview and submit both gather through planner_config: they refuse, saying why.
     with pytest.raises(planning.NotReady, match="wildcard_slot"):
         planning.gather(conn, [], NOW)

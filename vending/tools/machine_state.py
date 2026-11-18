@@ -284,8 +284,9 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     wildcard = config.get_value(conn, "wildcard_slot")
     trial = trial_reply(wildcard_trial.trial(conn, now, counts, loads, counted.sales, slots, wildcard),
+                        # A slot set that isn't ours has no verdict; nor is any slot judged silent against it.
                         wildcard_trial.silent_slots(conn, now, counts, loads, counted.sales, slots, wildcard)
-                        if wildcard is not None else None,
+                        if wildcard in slots else None,
                         counts, _ceiling(conn))
     closet, closet_value = closet_items(counted.closet)
 
