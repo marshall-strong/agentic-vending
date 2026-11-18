@@ -95,6 +95,7 @@ def script(monkeypatch):
     monkeypatch.setattr(module, "call", call)
     monkeypatch.setattr(module, "get_json", get_json)
     monkeypatch.setattr(module, "datetime", Now)
+    module.stored_selections = module.our_selections   # the real one, for tests that store an assignment
     monkeypatch.setattr(module, "our_selections", lambda: (SLOTS, None))
     return module
 
