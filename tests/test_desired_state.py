@@ -107,15 +107,9 @@ def ready(conn, capacity=10):
 
 
 def stocked(conn):
-    """Slot 15 holds 8 COKE20 at 1237/11 cents each, priced $2.50; 3 more are in the closet. The poll prices
-    every other slot at $2.00: a slot with no receipts at a price nobody has read may be the wildcard."""
+    """Slot 15 holds 8 COKE20 at 1237/11 cents each, priced $2.50; 3 more are in the closet."""
     deliver(conn, "r1")
-    store_poll(conn, "a", "2026-11-08T17:00:00+00:00", every_slot_priced({"15": (250, 100)}))
-
-
-def every_slot_priced(selections: dict) -> dict:
-    """`selections`, with every other slot of ours read at $2.00 and nothing sold."""
-    return {**{s: (200, 0) for s in OUR_SLOTS}, **selections}
+    store_poll(conn, "a", "2026-11-08T17:00:00+00:00", {"15": (250, 100)})
 
 
 def desired(*changes: dict, off_cycle=False, sourcing=()) -> schema.DesiredState:
@@ -257,7 +251,6 @@ def test_the_planner_counts_a_cost_recorded_just_now_when_the_host_clock_is_behi
 def test_with_nothing_counted_the_catalog_size_sets_the_capacity(db, fake):  # noqa: F811
     open_ledger(db)
     set_halted(db, False, "test")
-    store_poll(db, "a", "2026-11-08T17:00:00+00:00", every_slot_priced({}))
     # Slot 15 is empty, and COKE20 is a "20 oz bottle", 7 a column on the loading chart.
     reply = preview_desired_state(db, desired(restock_15(fill_to=10), sourcing=[coke_sourcing()]), fake.client(), NOW)
     assert codes(reply) == ["over_capacity"] and "0-7" in reply.refusals[0].message

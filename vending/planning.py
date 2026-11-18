@@ -16,7 +16,9 @@ our database and the bridge:
 - the planner's settings, from the `config` table. None is required. How many
   of a product fit in a column comes from its catalog size and the loading
   chart (`vending.capacity`), or from `capacity_overrides` where a person
-  counted; a product with neither is refused by the planner, not here.
+  counted; a product with neither is refused by the planner, not here. The
+  wildcard slot (`wildcard_slot`, set once) must be one of ours in the stored
+  assignment, or nothing can be planned until a person looks.
 
 Anything missing raises `NotReady` with the command that fixes it, so the tool
 can say exactly what a person has to do before the agent can plan.
@@ -30,7 +32,7 @@ from datetime import datetime
 
 import psycopg
 
-from vending import config, ledger, planner, sourcing, stock, wildcard_trial
+from vending import config, ledger, planner, sourcing, stock
 from vending.bridge import Bridge, BridgeError
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import catalog as catalog_tool
@@ -69,6 +71,7 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
     except SlotsNotRecorded as error:
         raise NotReady(str(error)) from None
     return planner.Config(
+        wildcard_slot=wildcard_slot(conn, slots),
         capacity_overrides=overrides,
         slots=slots,
         price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 650),
@@ -80,6 +83,22 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
         halted=config.is_halted(conn),
     )
+
+
+def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...]) -> str | None:
+    """The configured wildcard slot (None: none yet). Raises `NotReady` unless it is one of `slots`, ours."""
+    value = config.get_value(conn, "wildcard_slot")
+    if value is None:
+        return None
+    problem = config.KNOWN["wildcard_slot"].check(value)
+    if problem is None and value not in slots:
+        problem = f"is {value}, which isn't one of ours in the stored slot assignment"
+    if problem:
+        # Only a hand edit, or an assignment that changed after it was set, gets here.
+        raise NotReady(f"config wildcard_slot {problem}, so no plan can say which slot may go above the ceiling; "
+                       "a person checks the slot assignment, deletes the row by hand and sets it again "
+                       "(python -m vending.config set wildcard_slot '\"37\"' --by NAME)")
+    return value
 
 
 def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
@@ -99,11 +118,6 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     notes.extend(counted.warnings)
     by_slot = {s.slot: s for s in counted.slots}
     prices, poll_at = _latest_prices(conn, settings.slots)
-    # A slot whose latest priced poll read it above the ceiling is still a price test, so still the wildcard,
-    # until a strictly later poll reads it at or under: a poll with no price doesn't end it, and polls at the
-    # same moment that disagree leave it open (`vending.wildcard_trial.standing_prices`, as the trial reads it).
-    standing = wildcard_trial.standing_prices(conn, settings.slots)
-    price_tests = {slot for slot, st in standing.items() if st.above(settings.price_ceiling_cents) is not False}
     if poll_at is None:
         notes.append("no good poll is stored, so current prices are unknown; every slot's price change "
                      "will look like a change")
@@ -119,17 +133,14 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
             units=by_slot[slot].units if slot in by_slot else 0,
             unit_cost=by_slot[slot].unit_cost if slot in by_slot else None,
             contents_known=slot in by_slot,
-            price_test=slot in price_tests,
         )
         for slot in settings.slots
     )
     without_receipts = [s for s in settings.slots if s not in by_slot]
     if without_receipts:
         notes.append(f"no receipts yet for slots {', '.join(without_receipts)}, so their product and stock "
-                     "are unknown and counted as empty for restocking; a new wildcard waits until every slot has "
-                     "receipts, and while one of them is or may be the wildcard (above the ceiling, the wildcard, "
-                     "or at a price no poll has read) every purchase is held to the wildcard cap and no slot may "
-                     "switch product")
+                     "are unknown and counted as empty; the wildcard can't switch product until every slot has "
+                     "receipts")
     closet = tuple(planner.ClosetStock(c.product, c.units, c.unit_cost) for c in counted.closet)
     pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
@@ -138,18 +149,8 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
     # so the stale-price warnings describe the same rows the planner used.
     table_rows = tuple(sourcing.listed_options(conn))
-    # The wildcard in effect, so a midweek plan can't move it, read against the same stored assignment the
-    # planner checks the plan's slots against, as `wildcard_trial.trial` does: one no longer ours is no wildcard.
-    try:
-        named, _ = wildcard_trial.current_wildcard(conn)
-    except wildcard_trial.WildcardUnresolved as error:
-        raise NotReady(str(error)) from None
-    wildcard = named if named in settings.slots else None
-    if named is not None and wildcard is None:
-        notes.append(f"slot {named}, the wildcard the latest Friday visit named, isn't one of ours in the stored "
-                     "slot assignment, so no wildcard is in effect; a Friday plan may name a new one")
     current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
-                                   spendable, wildcard)
+                                   spendable)
     return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
 
 
@@ -198,7 +199,6 @@ def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
     return planner.DesiredState(
         slots=tuple(planner.DesiredSlot(s.slot, s.keep, s.product, s.sale_price, s.fill_to) for s in desired.slots),
         off_cycle=desired.off_cycle,
-        wildcard=desired.wildcard,
         sourcing=tuple(
             planner.Sourcing(
                 s.product,

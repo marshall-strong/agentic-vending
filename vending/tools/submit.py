@@ -103,7 +103,7 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
         # Opened before anything is sent, and reused to settle: a connect that would fail
         # fails now, while nothing has left, not after the bridge has the request.
         with connect() as side:
-            row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee, plan.wildcard)
+            row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee)
             reply = _send(client, plan, body, row, side, gathered.now)
         # What preview would have said about this plan, so a changed warning since the preview isn't missed.
         return reply.model_copy(update={"warnings": list(plan.warnings), "notes": list(gathered.notes)})

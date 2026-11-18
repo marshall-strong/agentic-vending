@@ -17,6 +17,7 @@ WRITE_ARGS = {
     "submit_desired_state": {"desired": {"slots": [{"slot": "15", "keep": True}]}},
     "set_price": {"slot": "15", "sale_price": "2.50"},
     "request_catalog_product": {"name": "Coca-Cola Cherry", "size": "20 oz"},
+    "set_wildcard_slot": {"slot": "37", "reason": "middle shelf"},
 }
 
 
@@ -40,9 +41,9 @@ def db(schema_url, monkeypatch):
         server._conn.close()
 
 
-def test_lists_all_eleven_tools():
+def test_lists_all_twelve_tools():
     tools = {t.name: t for t in call(None).tools}
-    assert len(tools) == 11
+    assert len(tools) == 12
     assert server.WRITE_TOOLS <= tools.keys()
     assert set(WRITE_ARGS) == server.WRITE_TOOLS
     assert tools["get_machine_state"].outputSchema is not None
@@ -54,7 +55,7 @@ def test_lists_all_eleven_tools():
 TOOL_NAMES = {
     "get_machine_state", "get_sales_history", "get_catalog", "get_account_balance",
     "preview_desired_state", "submit_desired_state", "get_purchase_requests", "set_price",
-    "get_pnl", "request_catalog_product", "get_project_rules",
+    "get_pnl", "request_catalog_product", "get_project_rules", "set_wildcard_slot",
 }
 
 
@@ -175,11 +176,12 @@ def test_built_only_hides_the_stubs(monkeypatch):
         assert [t.name for t in call(None).tools] == ["get_machine_state", "get_sales_history", "get_catalog",
                                                       "get_account_balance", "preview_desired_state",
                                                       "submit_desired_state", "get_purchase_requests",
-                                                      "get_pnl", "get_project_rules", "request_catalog_product"]
+                                                      "get_pnl", "get_project_rules", "request_catalog_product",
+                                                      "set_wildcard_slot"]
     finally:
         monkeypatch.delenv("VENDING_TOOLS")
         importlib.reload(server)
-    assert len(call(None).tools) == 11
+    assert len(call(None).tools) == 12
 
 
 def test_parallel_calls_do_not_collide(db):

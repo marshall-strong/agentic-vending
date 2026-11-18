@@ -68,7 +68,6 @@ class PlanReply(Reply):
     ok: bool = False
     plan_hash: str | None = None
     off_cycle: bool = False
-    wildcard: str | None = None
     as_of: datetime | None = None
     prices_as_of: datetime | None = None
     lines: list[PlannedLine] = []
@@ -98,7 +97,6 @@ def describe(plan: planner.Plan, gathered: planning.Gathered, more: list = ()) -
         ok=ok,
         plan_hash=plan.plan_hash,
         off_cycle=plan.off_cycle,
-        wildcard=plan.wildcard,
         as_of=gathered.now,
         prices_as_of=gathered.price_poll_at,
         lines=[_line(ln) for ln in plan.lines],

@@ -34,10 +34,8 @@ Built from our database only; it never reads the machine.
 our other slots over the same days (`vending.wildcard_trial`): its profit per
 in-stock class day the polls saw, the weakest other slot's over the class days
 both held stock, and a verdict (too early, promote, drop, price test or
-unknown) with the reason. Null when the latest confirmed Friday visit named no
-wildcard. Its `slot` is null when the slot named isn't one of ours now, or when a
-fulfilled Friday visit has no recorded end time, so which slot is the wildcard
-can't be settled; the reason says which.
+unknown) with the reason. The slot is fixed in config (`wildcard_slot`); null
+when none is set. Its `slot` is null when the slot set isn't one of ours now.
 
 A slot with no receipts yet has `null` for every receipt field: null, not
 zero, so the agent can't mistake "unknown" for "empty". The message names
@@ -54,7 +52,7 @@ from fractions import Fraction
 import psycopg
 from pydantic import BaseModel
 
-from vending import counters, demand, slot_counts, stock, wildcard_trial
+from vending import config, counters, demand, slot_counts, stock, wildcard_trial
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
@@ -100,9 +98,9 @@ class ClosetItem(BaseModel):
 
 class WildcardTrial(BaseModel):
     """The wildcard as a testing ground (`docs/agent/wildcard.md`): is its product worth a regular slot?"""
-    slot: str | None                            # null: the slot named isn't one of ours now, or it is unresolved
+    slot: str | None                            # null: the slot set isn't one of ours now
     product: str | None = None                  # null: no receipts show what the slot holds
-    since: datetime | None = None               # when the trial began: loaded, named or back under the ceiling
+    since: datetime | None = None               # when the trial began: loaded, or back under the ceiling
     class_days_in_stock: int | None = None      # class days it held stock in poll intervals since then
     units_sold: int | None = None               # in those poll intervals
     profit_per_class_day: str | None = None     # dollars: revenue without tax, less cost of sales
@@ -256,7 +254,8 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     demands = _demands(counts, loads, counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
-    trial = trial_reply(wildcard_trial.trial(conn, now, counts, loads, counted.sales, slots))
+    trial = trial_reply(wildcard_trial.trial(conn, now, counts, loads, counted.sales, slots,
+                                             config.get_value(conn, "wildcard_slot")))
     closet, closet_value = closet_items(counted.closet)
 
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
@@ -307,7 +306,8 @@ def trial_reply(trial: wildcard_trial.Trial | None) -> WildcardTrial | None:
 
 def _trial_note(trial: WildcardTrial | None) -> str:
     if trial is None:
-        return " No wildcard trial: the latest confirmed Friday visit named no wildcard."
+        return (" No wildcard slot is set, so no slot may go above the ceiling; pick one once with "
+                "set_wildcard_slot (get_project_rules wildcard).")
     if trial.slot is None:
         return f" No wildcard trial can be judged: {trial.reason}."
     on_trial = f"{trial.product} in slot {trial.slot}" if trial.product else f"slot {trial.slot}"

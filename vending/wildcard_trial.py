@@ -2,19 +2,11 @@
 
 The rule (`docs/agent/wildcard.md`, "A testing ground"):
 
-1. **The trial** is the product in the slot the latest Friday visit's plan
-   named as the wildcard. A plan's wildcard takes effect when its visit is
-   confirmed (the request is fulfilled), not when it is filed, and a midweek
-   visit never moves it. Visits are put in order by when they ended: the
-   request's `door_closed_at` where that column exists, else its
-   `fulfilled_at`. A fulfilled Friday request with neither can't be put in
-   order, so the wildcard in effect is unresolved (`WildcardUnresolved`), not
-   guessed from when the plan was filed. The trial counts from when that
-   product went in or the slot was first named (in an unbroken run of visits
-   naming it), whichever is later. A visit whose plan named no wildcard, or
-   another slot, ends the trial. A named slot that isn't one of ours now (the
-   stored assignment) is no wildcard at all: no trial, and the planner
-   (`vending.planning.gather`) treats it as none.
+1. **The trial** is the product in the wildcard slot, which is fixed in
+   config (`wildcard_slot`, set once, never moved). It counts from when that
+   product went in (the receipts' last product change). With no slot set
+   there is no trial; a slot set that isn't one of ours now (the stored
+   assignment) has no verdict.
 2. **The measure** is profit per in-stock class day: revenue without tax, less
    the cost of what sold, over the class days the slot held stock
    (`vending.demand`). The restock policy ranks slots by the same yardstick.
@@ -48,8 +40,8 @@ The interval holding the load mixes the old product's sales with the new one's,
 so it is left out of both money and days. Units sold past what the receipts
 loaded have no cost, so they make the profit unknown rather than free.
 
-`judge`, `compare`, `slot_record` and `intervals` are pure; `current_wildcard`,
-`standing_prices` and `trial` read the database.
+`judge`, `compare`, `slot_record` and `intervals` are pure; `standing_prices`
+and `trial` read the database.
 """
 
 from __future__ import annotations
@@ -105,7 +97,7 @@ class Comparison:
 @dataclass(frozen=True)
 class Trial:
     record: SlotRecord | None         # None: nothing to measure (no receipts, not ours, or the price is unknown)
-    slot: str | None                  # None: the named slot isn't one of ours now, or the wildcard is unresolved
+    slot: str | None                  # None: the configured slot isn't one of ours now
     price_test: bool
     compared: Comparison | None       # the trial against the weakest other slot, over the days they share
     verdict: str
@@ -260,52 +252,6 @@ def _joint(readings: list[Reading]) -> list[tuple[datetime, datetime, int, int]]
     return out
 
 
-class WildcardUnresolved(RuntimeError):
-    """The wildcard in effect can't be settled from the data. The message says why and what fixes it."""
-
-
-def current_wildcard(conn: psycopg.Connection) -> tuple[str | None, datetime | None]:
-    """The wildcard in effect (None: none), and since when.
-
-    It is the slot the plan of the latest confirmed Friday visit named: a
-    request takes effect when it is fulfilled, so one still pending (or
-    rejected) changes nothing, and a midweek visit can't move it. Visits are
-    put in order by when they ended (`_visit_end`). "Since" is the end of the
-    visit that began the unbroken run naming that slot.
-
-    Raises `WildcardUnresolved` when a fulfilled Friday request has no end
-    time: it can't be put in order, so the wildcard in effect isn't known.
-    """
-    end = _visit_end(conn)
-    rows = conn.execute(
-        f"select s.wildcard, {end}, r.request_id from purchase_submissions s"
-        " join purchase_requests r using (request_id)"
-        " where s.status = 'accepted' and r.status = 'fulfilled' and not r.off_cycle"
-        f" order by {end}, s.id"
-    ).fetchall()
-    unresolved = sorted({request_id for _, at, request_id in rows if at is None})
-    if unresolved:
-        column = "door_closed_at and fulfilled_at are" if "door_closed_at" in end else "fulfilled_at is"
-        raise WildcardUnresolved(
-            f"Friday request {', '.join(unresolved)} is fulfilled but its {column} null, so its visit can't be put "
-            "in order with the others and which slot is the wildcard is unknown; run the request sync "
-            "(python -m vending.sync_requests) so the time is recorded, or ask a person to check the request")
-    slot, since = None, None
-    for named, at, _ in rows:
-        if named == slot:
-            continue
-        slot, since = named, at
-    return slot, since if slot is not None else None
-
-
-def _visit_end(conn: psycopg.Connection) -> str:
-    """SQL for when a fulfilled request's visit ended: `door_closed_at` where that column exists, else `fulfilled_at`."""
-    has_door = conn.execute(
-        "select exists (select 1 from information_schema.columns where table_schema = current_schema()"
-        " and table_name = 'purchase_requests' and column_name = 'door_closed_at')").fetchone()[0]
-    return "coalesce(r.door_closed_at, r.fulfilled_at)" if has_door else "r.fulfilled_at"
-
-
 @dataclass(frozen=True)
 class Standing:
     """A slot's price as the polls last read one: the latest moment a good poll read a price for it."""
@@ -327,7 +273,7 @@ def standing_prices(conn: psycopg.Connection, slots: tuple[str, ...] | list[str]
     A poll that read no price leaves the standing price where it was, so a
     price test ends only when a strictly later poll reads a price at or under
     the ceiling. Polls at the same moment that disagree leave it unknown.
-    `trial` and the planner (`vending.planning.gather`) both read it here.
+    `trial` reads it here.
     """
     out: dict[str, Standing] = {}
     for selection, at, prices in conn.execute(
@@ -344,29 +290,25 @@ def standing_prices(conn: psycopg.Connection, slots: tuple[str, ...] | list[str]
 
 def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotCount],
           loads: dict[str, list[tuple[datetime, int]]], sales: tuple[stock.SaleCost, ...],
-          slots: tuple[str, ...]) -> Trial | None:
-    """The running trial, judged against our other slots; None when no wildcard is named.
+          slots: tuple[str, ...], slot: str | None) -> Trial | None:
+    """The running trial in the wildcard `slot` (config `wildcard_slot`), judged; None when no slot is set.
 
     `slots` are ours (the stored assignment), `counts` our slots' receipted
     counts and `loads` every load per slot, as `get_machine_state` reads them;
     `sales` is the stock replay's.
     """
-    try:
-        slot, named = current_wildcard(conn)
-    except WildcardUnresolved as error:
-        return Trial(None, None, False, None, UNKNOWN, str(error))
     if slot is None:
         return None
     if slot not in slots:
         return Trial(None, None, False, None, UNKNOWN, (
-            "the slot the latest Friday visit named as the wildcard isn't one of ours in the stored slot "
-            "assignment, so no trial is running; name one of ours at the next Friday visit"))
+            f"config wildcard_slot is {slot}, which isn't one of ours in the stored slot assignment, so no trial "
+            "can be judged and preview and submit refuse; a person checks the assignment and the setting"))
     w = counts.get(slot)
     if w is None:
         return Trial(None, slot, False, None, UNKNOWN,
                      f"slot {slot} is the wildcard, but no receipts show what it holds, so there is nothing to measure")
     ceiling_cents, tax_percent = _setting(conn, "price_ceiling_cents", 650), _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
-    start = max(w.since, named)
+    start = w.since
     readings = _readings(conn, start, now, list(counts))
     standing = standing_prices(conn, [slot]).get(slot)
     if standing is not None and not standing.known:
