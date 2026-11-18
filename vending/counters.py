@@ -29,12 +29,15 @@ def rises(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, int]
     return [(at, rise) for _, at, rise in windows(readings)]
 
 
-def windows(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, datetime, int]]:
+def windows(readings: Iterable[tuple[datetime, int]], zeros: bool = False) -> list[tuple[datetime, datetime, int]]:
     """`(start, at, rise)`: each rise with the poll it is measured from. Pure.
 
     The units in a rise sold somewhere between `start` and `at`, so a restock
     inside that window can't be placed before or after them (#97). After a
     misread, `start` is the good poll before it, not the misread.
+
+    `zeros=True` also gives the windows where the counter didn't rise, so a
+    stretch the polls saw sell nothing can be told from one they didn't see.
     """
     out: list[tuple[datetime, datetime, int]] = []
     previous: tuple[datetime, int] | None = None
@@ -44,14 +47,14 @@ def windows(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, da
             previous = (at, value)
             continue
         if value >= previous[1]:
-            if value > previous[1]:
+            if value > previous[1] or zeros:
                 out.append((previous[0], at, value - previous[1]))
             previous, pending = (at, value), None
         elif pending is None:
             pending = (at, value)
         else:
             # Two polls in a row below the old high: the counter restarted at `pending`.
-            if value > pending[1]:
+            if value > pending[1] or (zeros and value == pending[1]):
                 out.append((pending[0], at, value - pending[1]))
             previous, pending = (at, value), None
     return out

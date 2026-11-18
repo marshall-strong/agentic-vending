@@ -30,7 +30,7 @@ from datetime import datetime
 
 import psycopg
 
-from vending import config, ledger, planner, sourcing, stock
+from vending import config, ledger, planner, sourcing, stock, wildcard_trial
 from vending.bridge import Bridge, BridgeError
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import catalog as catalog_tool
@@ -113,13 +113,15 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
             price_cents=prices.get(slot),
             units=by_slot[slot].units if slot in by_slot else 0,
             unit_cost=by_slot[slot].unit_cost if slot in by_slot else None,
+            contents_known=slot in by_slot,
         )
         for slot in settings.slots
     )
     without_receipts = [s for s in settings.slots if s not in by_slot]
     if without_receipts:
         notes.append(f"no receipts yet for slots {', '.join(without_receipts)}, so their product and stock "
-                     "are unknown and counted as empty")
+                     "are unknown and counted as empty for restocking; a new wildcard waits until every slot has "
+                     "receipts")
     closet = tuple(planner.ClosetStock(c.product, c.units, c.unit_cost) for c in counted.closet)
     pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
@@ -128,8 +130,10 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
     # so the stale-price warnings describe the same rows the planner used.
     table_rows = tuple(sourcing.listed_options(conn))
+    # The wildcard in effect, so a midweek plan can't move it (`vending.wildcard_trial.current_wildcard`).
+    wildcard, _ = wildcard_trial.current_wildcard(conn)
     current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
-                                   spendable)
+                                   spendable, wildcard)
     return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
 
 

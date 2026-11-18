@@ -32,9 +32,10 @@ Built from our database only; it never reads the machine.
 
 `wildcard_trial` is the product on trial in the wildcard slot, judged against
 our other slots over the same days (`vending.wildcard_trial`): its profit per
-in-stock class day, the weakest other slot's, and a verdict (too early,
-promote, drop, price test or unknown) with the reason. Null when the latest
-accepted plan named no wildcard.
+in-stock class day the polls saw, the weakest other slot's over the class days
+both held stock, and a verdict (too early, promote, drop, price test or
+unknown) with the reason. Null when the latest confirmed Friday visit named no
+wildcard.
 
 A slot with no receipts yet has `null` for every receipt field: null, not
 zero, so the agent can't mistake "unknown" for "empty". The message names
@@ -97,17 +98,18 @@ class ClosetItem(BaseModel):
 
 class WildcardTrial(BaseModel):
     """The wildcard as a testing ground (`docs/agent/wildcard.md`): is its product worth a regular slot?"""
-    slot: str
+    slot: str | None                            # null: the slot named isn't one of ours now
     product: str | None = None                  # null: no receipts show what the slot holds
     since: datetime | None = None               # when the trial began: loaded, named or back under the ceiling
-    class_days_in_stock: int | None = None
-    units_sold: int | None = None               # in whole poll windows since it went in
+    class_days_in_stock: int | None = None      # class days it held stock in poll intervals since then
+    units_sold: int | None = None               # in those poll intervals
     profit_per_class_day: str | None = None     # dollars: revenue without tax, less cost of sales
     price_test: bool = False                    # sold above the ceiling, so not a promotion trial
-    weakest_slot: str | None = None             # the weakest of our other slots over the same days
+    weakest_slot: str | None = None             # the weakest of our other slots over the days both held stock
     weakest_product: str | None = None
-    weakest_class_days_in_stock: int | None = None
-    weakest_profit_per_class_day: str | None = None
+    weakest_class_days_in_stock: int | None = None   # the class days the polls saw both holding stock
+    weakest_profit_per_class_day: str | None = None  # dollars, over those days
+    profit_per_class_day_on_those_days: str | None = None   # dollars: the trial's own over the same days
     verdict: str                                # too early, promote, drop, price test or unknown
     reason: str
 
@@ -252,7 +254,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     demands = _demands(counts, loads, counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
-    trial = trial_reply(wildcard_trial.trial(conn, now, counts, loads, counted.sales))
+    trial = trial_reply(wildcard_trial.trial(conn, now, counts, loads, counted.sales, slots))
     closet, closet_value = closet_items(counted.closet)
 
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
@@ -281,7 +283,8 @@ def trial_reply(trial: wildcard_trial.Trial | None) -> WildcardTrial | None:
     """The trial in dollars for the agent. Pure."""
     if trial is None:
         return None
-    r, w = trial.record, trial.weakest
+    r = trial.record
+    c, w = trial.compared, trial.compared.other if trial.compared else None
     return WildcardTrial(
         slot=trial.slot,
         product=r.product if r else None,
@@ -294,6 +297,7 @@ def trial_reply(trial: wildcard_trial.Trial | None) -> WildcardTrial | None:
         weakest_product=w.product if w else None,
         weakest_class_days_in_stock=w.class_days_in_stock if w else None,
         weakest_profit_per_class_day=_dollars(w.profit_per_class_day_cents) if w else None,
+        profit_per_class_day_on_those_days=_dollars(c.trial.profit_per_class_day_cents) if c else None,
         verdict=trial.verdict,
         reason=trial.reason,
     )
@@ -301,7 +305,9 @@ def trial_reply(trial: wildcard_trial.Trial | None) -> WildcardTrial | None:
 
 def _trial_note(trial: WildcardTrial | None) -> str:
     if trial is None:
-        return " No wildcard trial: the latest plan named no wildcard."
+        return " No wildcard trial: the latest confirmed Friday visit named no wildcard."
+    if trial.slot is None:
+        return f" No wildcard trial: {trial.reason}."
     on_trial = f"{trial.product} in slot {trial.slot}" if trial.product else f"slot {trial.slot}"
     return f" Wildcard trial ({on_trial}): {trial.verdict}; {trial.reason}."
 

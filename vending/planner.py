@@ -93,12 +93,22 @@ Price = str | Decimal | int
 
 @dataclass(frozen=True)
 class SlotState:
-    """One of our slots as our database sees it now."""
+    """One of our slots as our database sees it now.
+
+    `contents_known` is False when no receipt says what the slot holds: then
+    `product` None and `units` 0 mean "we don't know", not "empty".
+    """
     slot: str
     product: str | None
     price_cents: int | None             # PA1-02
     units: int                          # estimated on hand: loaded - sold
     unit_cost: Fraction | int | None    # actual cents per unit of those units
+    contents_known: bool = True
+
+    @property
+    def unsure(self) -> bool:
+        """We can't say what it holds: no receipts, or stock we can't name."""
+        return not self.contents_known or (self.product is None and self.units > 0)
 
 
 @dataclass(frozen=True)
@@ -175,6 +185,7 @@ class CurrentState:
     catalog: tuple[CatalogProduct, ...] = ()
     sourcing_table: tuple[Sourcing, ...] = ()
     balance_cents: int = 0              # spendable, after the sales-tax set-aside
+    wildcard: str | None = None         # the wildcard in effect: the latest confirmed Friday visit named it
 
 
 @dataclass(frozen=True)
@@ -641,7 +652,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
         ceiling = config.wildcard_ceiling_cents if s.slot == desired.wildcard else config.price_ceiling_cents
         refusals.extend(check_price(s.price_cents, floor, ceiling, s.slot))
-    refusals.extend(_check_wildcard(slots, desired, config))
+    refusals.extend(_check_wildcard(slots, desired, config, current.wildcard))
 
     # 8. The plan, with every refusal found.
     # Only slots with a source get a line. A slot that couldn't be stocked is
@@ -677,9 +688,10 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 # --- The wildcard slot ---------------------------------------------------------
 # One of our slots may sell above the ceiling, up to the wildcard ceiling, for a
 # riskier bet: a premium drink, a high-price test, a rotating feature (Kevin, #100;
-# the team decides on #110, item 1). The floor is every slot's floor. The planner
-# keeps no record of which slot it is: the slot priced above the ceiling is the
-# wildcard, so the rules can be checked from the slots alone.
+# the team decides on #110, item 1). The floor is every slot's floor. The slot
+# priced above the ceiling is the wildcard, so the price rules can be checked from
+# the slots alone; `CurrentState.wildcard` says which slot is the wildcard now, so a
+# midweek plan can't move it.
 #
 # - At most one slot is above the ceiling, and it is the one the plan names.
 #   A kept slot above the ceiling must be named; a named one, kept or not, stays
@@ -688,21 +700,34 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 #   every other slot's price is known. Retiring the old wildcard and starting a new
 #   one in the same visit could leave two above it if the retiring line comes back
 #   unavailable, so the new one starts at the next visit.
-# - It moves only at a Friday visit: a midweek plan can't take a new slot above
-#   the ceiling.
-# - Its product is in no other slot after the visit, so only its own line buys that
-#   product, and one purchase (extras to the closet included) costs at most the
-#   purchase cap at the worker's maximum, for the primary and for the alternate.
-# - At or under the ceiling, a named slot is a trial (`vending.wildcard_trial`): its
-#   own purchase still keeps to the cap, but its product may be in other slots.
+# - It moves only at a Friday visit: a midweek plan names the wildcard in effect
+#   (`CurrentState.wildcard`, which the latest confirmed Friday visit named), and
+#   can't take a new slot above the ceiling.
+# - Its product is in no other slot after the visit, at any price: a trial's sales
+#   aren't split, only its own line buys that product, and one purchase (extras to
+#   the closet included) costs at most the purchase cap at the worker's maximum,
+#   for the primary and for the alternate. A slot that starts as the wildcard or
+#   switches product checks every other slot's contents now, since the line that
+#   moves another slot may come back unavailable; a slot no receipt describes
+#   may hold anything.
 
-def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -> list[Refusal]:
+def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config,
+                    current: str | None = None) -> list[Refusal]:
     wildcard = desired.wildcard
     if wildcard is not None and wildcard not in config.slots:
         return [Refusal("wildcard", f"wildcard slot {wildcard} is not one of ours", wildcard)]
     refusals: list[Refusal] = []
     ceiling = config.price_ceiling_cents
     above_now = {s.slot for s in slots if s.state.price_cents is not None and s.state.price_cents > ceiling}
+    if current is None and len(above_now) == 1:
+        # Before any visit named one, a slot already above the ceiling is the wildcard.
+        (current,) = above_now
+    if desired.off_cycle and wildcard != current:
+        now_is = f"slot {current}" if current else "none"
+        refusals.append(Refusal("wildcard", (
+            f"the wildcard moves only at a Friday visit, and it is {now_is} now, so a midweek plan names "
+            f"{'slot ' + current if current else 'no wildcard'}; make the change in a Friday plan"),
+            wildcard or current))
     for s in slots:
         above_after = s.price_cents is not None and s.price_cents > ceiling
         if s.slot != wildcard and above_after and s.action == NO_CHANGE:
@@ -718,24 +743,18 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
         refusals.append(Refusal("wildcard", (
             f"slot {w.slot} is the wildcard and stays at {_dollars(w.price_cents)}, above the wildcard ceiling of "
             f"{_dollars(config.wildcard_ceiling_cents)}; price it at or under that at this visit"), w.slot))
-    if w.purchase is not None and not (w.price_cents is not None and w.price_cents > ceiling)             and _most(w.purchase) > config.wildcard_purchase_cap_cents:
-        # Above the ceiling, the product rule below caps it. A trial at or under the ceiling is still the
-        # wildcard, and the capital plan gives it one $82.00 line.
-        refusals.append(Refusal("wildcard", (
-            f"slot {w.slot} is the wildcard, and its purchase could cost {_dollars(_most(w.purchase))} at the "
-            f"worker's maximum, over the {_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a "
-            f"cheaper pack"), w.slot))
     starting = w.price_cents is not None and w.price_cents > ceiling and w.slot not in above_now
-    ends_above = w.price_cents is not None and w.price_cents > ceiling
-    if ends_above and (starting or w.changes_product):
-        # Whatever the source, closet or purchase: if the line that moves the other slot came back
-        # unavailable, the wildcard's product would be in two slots. A slot we can't name may hold it.
+    if starting or w.changes_product or w.slot != current:
+        # A new trial, at any price. Whatever the source, closet or purchase: if the line that moves the
+        # other slot came back unavailable, the wildcard's product would be in two slots. A slot we can't
+        # name may hold it.
         held = sorted(s.slot for s in slots if s.slot != w.slot and w.product and s.state.product == w.product)
-        unsure = sorted(s.slot for s in slots if s.slot != w.slot and s.state.product is None and s.state.units > 0)
+        unsure = sorted(s.slot for s in slots if s.slot != w.slot and s.state.unsure)
         if unsure:
             refusals.append(Refusal("wildcard", (
-                f"slot {w.slot} can't take {w.product} above {_dollars(ceiling)} while we don't know what slot "
-                f"{', '.join(unsure)} holds, since it may hold the same product; have it counted first"), w.slot))
+                f"slot {w.slot} can't take {w.product} as the wildcard while no receipt shows what slot "
+                f"{', '.join(unsure)} holds, since it may hold the same product; stock it first, so a receipt "
+                f"names its product, and start the wildcard at the next Friday visit"), w.slot))
         if held:
             refusals.append(Refusal("wildcard", (
                 f"{w.product} is in slot {', '.join(held)} now, so slot {w.slot} can't take it as the wildcard "
@@ -753,7 +772,7 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
             refusals.append(Refusal("wildcard", (
                 f"slot {w.slot} can't go above {_dollars(ceiling)} while the price of slot {', '.join(unknown)} "
                 f"isn't known, since one of them may be above it already; wait for a poll with its price"), w.slot))
-        if desired.off_cycle:
+        if desired.off_cycle and wildcard == current:   # naming another slot is refused above
             refusals.append(Refusal("wildcard", (
                 f"the wildcard moves only at a Friday visit, so slot {w.slot} can't go above "
                 f"{_dollars(ceiling)} on a midweek one; wait for Friday"), w.slot))
@@ -763,17 +782,19 @@ def _check_wildcard(slots: list[_Slot], desired: DesiredState, config: Config) -
 
 def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[str],
                             config: Config) -> list[Refusal]:
-    """The wildcard's product is in no other slot, and a purchase of it stays under the cap.
+    """The wildcard's product is in no other slot, at any price, and a purchase of it stays under the cap.
 
     The product of a slot above the ceiling *now* is protected too, even if this plan switches or
     lowers that slot: its line may come back unavailable, and the slot would still be the wildcard.
     """
     owners: dict[str, str] = {s.state.product: s.slot for s in slots if s.slot in above_now and s.state.product}
-    if w is not None and w.product is not None and w.price_cents is not None and w.price_cents > config.price_ceiling_cents:
+    if w is not None and w.product:
+        # At any price: a trial's product in two slots splits its sales.
         owners.setdefault(w.product, w.slot)
     refusals: list[Refusal] = []
     # A slot with stock we can't name, priced above the ceiling or at a price we don't know, may be the
-    # wildcard holding any product.
+    # wildcard holding any product. A slot with no receipts at all still counts as empty here, so a plan
+    # can be made before the polls have prices; a new wildcard still waits for its receipts (above).
     unknown = sorted(s.slot for s in slots if not s.state.product and s.state.units > 0
                      and (s.slot in above_now or s.state.price_cents is None))
     if unknown:
@@ -822,9 +843,9 @@ def _check_wildcard_product(slots: list[_Slot], w: _Slot | None, above_now: set[
         if shared:
             refusals.append(Refusal("wildcard", (
                 f"{product} is the wildcard's product (slot {owner}), so it can't be in slot {', '.join(shared)}; "
-                f"the wildcard's product is in no other slot, so its purchases stay under the cap. A slot that "
-                f"was the wildcard keeps that product to itself until a visit has brought it back under "
-                f"{_dollars(config.price_ceiling_cents)}"), owner))
+                f"the wildcard's product is in no other slot, so a trial's sales aren't split and its purchases "
+                f"stay under the cap. A slot that was the wildcard above {_dollars(config.price_ceiling_cents)} "
+                f"keeps that product to itself until a visit has brought it back under"), owner))
         for s in buys:
             most = _most(s.purchase)
             if most > config.wildcard_purchase_cap_cents:
@@ -875,7 +896,7 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
     """
     sizes = sizes or {}
     counted = counted or {}
-    state = state or SlotState(slot, None, None, 0, None)
+    state = state or SlotState(slot, None, None, 0, None, contents_known=False)
     on_hand = max(0, state.units)   # loaded - sold can drift below zero
     held = _Slot(slot, state, on_hand, state.product, state.price_cents, on_hand, on_hand)
     if target is None or target.keep:
