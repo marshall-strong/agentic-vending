@@ -65,7 +65,6 @@ from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import machine_state
-from vending.tools.catalog_request import OPEN_REQUEST_CAP
 from vending.mascot import svg as mascot_svg  # after the rest: other PRs edit the lines above
 
 HOST = "127.0.0.1"
@@ -75,12 +74,17 @@ ACTIVITY_ROWS = 50
 RUN_ROWS = 10
 # Purchase requests read. Catalog requests are all read: the team needs every one of them.
 REQUEST_ROWS = 10
+# About how many open (pending) catalog requests the bridge lets one team have before it answers
+# 429. Observed, not documented: it refused a filing with 25 open on 17 Nov 2026, and one at 24 on
+# 15 Nov, though that day's count was inferred. Kept here, not in `vending.tools.catalog_request`,
+# so the page imports nothing that needs time-zone data to start.
+OPEN_REQUEST_CAP = 25
 # A catalog request's statuses, in the order the counts show them (`db/migrations/005_product_requests.sql`).
 CATALOG_STATUSES = ("pending", "approved", "rejected", "sending", "unknown")
 # What a sync job's exit code means. The three syncs share them (`vending/sync_history.py` and the others).
 SYNC_EXITS = {1: "finished with problems; the container's log has them",
               2: "the database is missing migrations; run `python -m vending.db migrate`",
-              3: "couldn't reach the bridge"}
+              3: "a bridge error: unreachable, or it refused our key or answered with an error"}
 # Purchase requests shown before the rest fold away.
 REQUESTS_SHOWN = 5
 # Every transaction on the dashboard's connection is read-only; Postgres refuses any write.
@@ -1327,10 +1331,9 @@ def _catalog_lede(counts: dict) -> str:
     c = counts["data"]
     by = c["by_status"]
     parts = [f'{by["pending"]} pending', f'{by["approved"]} approved', f'{by["rejected"]} rejected']
-    if c["unsettled"]:
-        parts.append(f'<span class="warn-text">{c["unsettled"]} sending or unknown</span>')
+    parts += [f'<span class="warn-text">{by[s]} {s}</span>' for s in ("sending", "unknown") if by[s]]
     left = f'{c["left"]} place{"" if c["left"] == 1 else "s"} left'
-    if c["unsettled"]:
+    if c["unsettled"] and c["left"]:
         left += f', fewer if any of the {c["unsettled"]} sending or unknown reached the bridge'
     return (f'<p class="lede">{_plural(c["total"], "request")}: {", ".join(parts)}.</p>'
             f'<p class="lede"><b>Open: {c["open"]} of about {c["cap"]}</b> &middot; '
@@ -1368,7 +1371,7 @@ def _requests_html(purchases: dict, catalog: dict, now: datetime) -> str:
     if (missing := _missing(catalog)) is not None:
         out += missing
     elif not catalog["data"]:
-        out += '<p class="empty">None yet.</p>'
+        out += _catalog_lede(_catalog_counts(catalog)) + '<p class="empty">None yet.</p>'
     else:
         out += _catalog_lede(_catalog_counts(catalog)) + '<ul class="list">' + "".join(
             f'<li><div class="head"><b>{_e(r["name"])}</b> <span class="dim">{_e(r["size"])}</span> '

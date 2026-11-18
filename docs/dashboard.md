@@ -124,16 +124,18 @@ The instructors must approve every day-one product by Wed 25 Nov 2026, so the pa
 our catalog requests, not the newest few. They are our own team's records, so the public page
 shows them too. Above the list:
 
-- **Counts by status:** pending, approved, rejected, and sending or unknown together (a request we
+- **Counts by status:** pending, approved, rejected, and any sending or unknown (a request we
   sent but can't tell whether the bridge filed; settle it with `python -m vending.product_requests
   resolve`).
 - **Open: N of about 25, and the places left.** The bridge answers `429` once a team has about 25
   open (pending) requests. That number is observed, not documented: it refused a filing at 25 open
   on 17 Nov, and at 24 on 15 Nov, though that day's count was inferred. It is
-  `OPEN_REQUEST_CAP` in `vending/tools/catalog_request.py`. A sending or unknown request may hold
-  a place too, so the page says the places left may be fewer by that many.
+  `OPEN_REQUEST_CAP` in `vending/dashboard.py`. A sending or unknown request may hold
+  a place too, so while places are left the page says they may be fewer by that many. With no
+  requests yet the counts still show, all zero.
 
-Statuses and SKUs are what `product_requests` last stored. Today a person or the tool writes
+Statuses and SKUs are what `product_requests` last stored, so on `main` an approval made on the
+bridge still shows as pending until someone stores it. Today a person or the tool writes
 them; the request sync in PR #147 (`vending/sync_product_requests.py`) fills in `status`, `sku` and
 `decision_note` from the bridge, and the panel reads those same columns, so it needs no change
 when that merges. `/state.json` carries the rows in `catalog_requests` and the counts in
@@ -152,7 +154,7 @@ hands the same dict to it (`snapshot(..., syncs=...)`). When a job in the latest
 |---|---|
 | 1 | finished with problems; the container's log has them |
 | 2 | the database is missing migrations; run `python -m vending.db migrate` |
-| 3 | couldn't reach the bridge |
+| 3 | a bridge error: unreachable, or it refused our key or answered with an error |
 
 Like `/health`, it shows no error text. `/state.json` carries the round as `syncs`. Run on its own
 (`python -m vending.dashboard`), the dashboard has no worker beside it, so `syncs` is `null` and
@@ -204,8 +206,9 @@ visible description.
 
 - **It can't write.** Its connection sets `default_transaction_read_only`, so Postgres refuses
   any write, and it never migrates. A table that doesn't exist yet blanks only its own panel.
-- **On the container it is public, on purpose (#53).** `/dashboard` on the Container App shows
-  this page to anyone with the link, with `/dashboard/state.json` beside it. There it connects as a
+- **On the container it is behind the team password (#136).** `/dashboard` on the Container App,
+  with `/dashboard/state.json` beside it, shows this page to anyone who signs in with the team's
+  shared password; only `/health` is open without it. There it connects as a
   login that can only read, and the error text of failed tool calls and failed runs is left out,
   on the page and in the JSON. So are the selections not assigned to us: the JSON's counts hold only ours. [`deploy.md`](deploy.md#the-public-pages) has the rules.
 - **Run locally, it listens on 127.0.0.1 only, and has no login.** It answers only requests addressed to

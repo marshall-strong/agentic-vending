@@ -976,28 +976,47 @@ def test_every_catalog_request_shows_with_counts_and_the_places_left(conn, page_
     assert any("Drink 00" in t and "`sending`" in t for t in warns)
     assert any("Drink 39" in t and "`unknown`" in t for t in warns)
     page = dashboard.render(snap)
-    assert "40 requests: 22 pending, 14 approved, 2 rejected, " in page and "2 sending or unknown</span>." in page
+    assert ('40 requests: 22 pending, 14 approved, 2 rejected, <span class="warn-text">1 sending</span>, '
+            '<span class="warn-text">1 unknown</span>.') in page
     assert "<b>Open: 22 of about 25</b>" in page
     assert "3 places left, fewer if any of the 2 sending or unknown reached the bridge" in page
-    assert page.count("Drink ") >= 40
+    panel = page.split("<h3>Catalog requests</h3>", 1)[1]
+    assert all(f"<b>Drink {i:02d}</b>" in panel for i in range(40))
     # An approved request shows its SKU, which may not be the name's; one without says so.
     assert "SKU <code>DRPEP-12OZ-CAN</code>" in page and "added as Dr Pepper 12 oz" in page
     assert page.count("no SKU recorded yet") == 13
     assert '"sku": "DRPEP-12OZ-CAN"' in dashboard.to_json(snap)
 
 
-def test_at_the_cap_no_places_are_left(conn, page_conn):
-    for i in range(dashboard.OPEN_REQUEST_CAP + 1):
+@pytest.mark.parametrize("pending", [dashboard.OPEN_REQUEST_CAP, dashboard.OPEN_REQUEST_CAP + 1])
+def test_at_the_cap_no_places_are_left(conn, page_conn, pending):
+    for i in range(pending):
         catalog_request(conn, f"Drink {i:02d}", "pending", MONDAY - timedelta(minutes=i))
+    catalog_request(conn, "Drink unsure", "unknown", MONDAY - timedelta(hours=2))
     snap = dashboard.snapshot(page_conn, MONDAY)
-    assert (snap["catalog_counts"]["data"]["open"], snap["catalog_counts"]["data"]["left"]) == (26, 0)
+    assert (snap["catalog_counts"]["data"]["open"], snap["catalog_counts"]["data"]["left"]) == (pending, 0)
     page = dashboard.render(snap)
-    assert '<b>Open: 26 of about 25</b>' in page and '<span class="bad-text">0 places left</span>' in page
+    assert f'<b>Open: {pending} of about 25</b>' in page and '<span class="bad-text">0 places left</span>' in page
     assert "fewer if any" not in page
 
 
-def test_a_missing_catalog_table_blanks_its_counts_too(conn, page_conn):
+def test_no_catalog_requests_still_shows_the_counts(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    page = dashboard.render(snap).split("<h3>Catalog requests</h3>", 1)[1]
+    assert "0 requests: 0 pending, 0 approved, 0 rejected." in page and "<b>Open: 0 of about 25</b>" in page
+    assert "25 places left" in page and "None yet." in page
+
+
+def test_a_missing_catalog_column_blanks_its_counts_too(conn, page_conn):
     conn.execute("alter table product_requests drop column sku")
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["catalog_requests"]["ok"] is False and snap["catalog_counts"]["ok"] is False
+    assert snap["purchase_requests"]["ok"] is True
+    dashboard.render(snap)
+
+
+def test_a_missing_catalog_table_blanks_only_its_panel(conn, page_conn):
+    conn.execute("drop table product_requests")
     snap = dashboard.snapshot(page_conn, MONDAY)
     assert snap["catalog_requests"]["ok"] is False and snap["catalog_counts"]["ok"] is False
     assert snap["purchase_requests"]["ok"] is True
@@ -1027,6 +1046,13 @@ def test_failing_syncs_name_each_job_and_what_its_exit_code_means(page_conn):
     assert "<code>sync_history</code> exit 2" in page and "<code>python -m vending.db migrate</code>" in page
     assert "sync_requests" not in bad[0]
     assert snap["syncs"]["results"][0]["exit_code"] == 2 and "secret error text" not in dashboard.to_json(snap)
+
+
+def test_a_sync_that_finished_with_problems_is_a_problem_too(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY, syncs=syncs(("sync_history", 1, "finished")))
+    bad = [a["text"] for a in snap["attention"] if a["level"] == "bad"]
+    assert len(bad) == 1 and "`sync_history` exit 1" in bad[0] and "finished with problems" in bad[0]
+    assert dashboard.verdict(snap["attention"]) == "problem"
 
 
 @pytest.mark.parametrize("given", [
