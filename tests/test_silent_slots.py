@@ -16,17 +16,23 @@ NOW = THURSDAY_EVENING + timedelta(hours=1)
 STEP = timedelta(hours=4)
 
 
-def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit=None):
+def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit=None, full=False):
     """Our slots on a Friday-to-Thursday cycle, polled every 4 hours from Fri 16 Oct to `last`.
 
     At the 16 Oct visit: 15 (the wildcard), 16, 17, 18, 25, 26 and 28 are loaded with 10 each. At the 23 Oct
     visit 16 is topped up with 2 and 25 switches product. `sales` maps slot -> [(when, units)]. No poll is
     stored inside a gap `(begin, end)`. `drop_at` is when slot 16's units counter reads low once. `edit(t,
-    units)` may change a poll's units per slot before it is stored, or drop a slot from it."""
+    units)` may change a poll's units per slot before it is stored, or drop a slot from it. `full` loads our
+    other 13 slots at the 16 Oct visit too (no poll reads them), so a receipt names what every slot holds."""
+    from vending.slots import SLOTS
+
     sales = sales or {}
-    fulfilled(conn, "r0", R0, *[(slot, sku, "primary", paid, 10, 0, 0) for slot, sku, paid in (
+    lines = [(slot, sku, "primary", paid, 10, 0, 0) for slot, sku, paid in (
         ("15", "AAA", "10.00"), ("16", "BBB", "10.00"), ("17", "CCC", "10.00"), ("18", "FFF", "10.00"),
-        ("25", "EEE", "10.00"), ("26", "GGG", "10.00"), ("28", "HHH", "20.00"))])
+        ("25", "EEE", "10.00"), ("26", "GGG", "10.00"), ("28", "HHH", "20.00"))]
+    if full:
+        lines += [(slot, f"X{slot}", "primary", "5.00", 5, 0, 0) for slot in SLOTS if slot not in {l[0] for l in lines}]
+    fulfilled(conn, "r0", R0, *lines)
     fulfilled(conn, "r1", VISIT, ("16", "BBB", "primary", "2.00", 2, 0, 0), ("25", "DDD", "primary", "10.00", 10, 0, 0))
     t, n = datetime(2026, 10, 16, 18, tzinfo=UTC), 0
     while t <= last:
@@ -176,7 +182,7 @@ def test_a_pass_with_a_silent_slot_comes_with_a_proposal(conn):
     from vending import config
     from vending.tools.machine_state import get_machine_state
 
-    machine(conn, sales=trial_sales())
+    machine(conn, sales=trial_sales(), full=True)
     config.set_value(conn, "wildcard_slot", "15", "test")
     reply = get_machine_state(conn, now=NOW)
     t = reply.wildcard_trial
@@ -196,7 +202,7 @@ def test_a_pass_with_no_silent_slot_stays_in_the_wildcard(conn):
     from vending import config
     from vending.tools.machine_state import get_machine_state
 
-    machine(conn, sales=trial_sales({"16": [(datetime(2026, 10, 27, 15, tzinfo=UTC), 1)]}))
+    machine(conn, sales=trial_sales({"16": [(datetime(2026, 10, 27, 15, tzinfo=UTC), 1)]}), full=True)
     config.set_value(conn, "wildcard_slot", "15", "test")
     t = get_machine_state(conn, now=NOW).wildcard_trial
     assert t.verdict == "pass" and t.silent_slots == [] and t.proposal is None
@@ -207,7 +213,7 @@ def test_no_proposal_unless_it_passes(conn):
     from vending import config
     from vending.tools.machine_state import get_machine_state
 
-    machine(conn, sales={"15": [(datetime(2026, 10, 19, 15, tzinfo=UTC), 3)]})
+    machine(conn, sales={"15": [(datetime(2026, 10, 19, 15, tzinfo=UTC), 3)]}, full=True)
     config.set_value(conn, "wildcard_slot", "15", "test")
     t = get_machine_state(conn, now=NOW).wildcard_trial
     assert t.verdict == "extend" and [s.slot for s in t.silent_slots] == ["16"] and t.proposal is None
@@ -219,7 +225,7 @@ def test_the_planner_gets_the_verdict_and_the_silent_slots(conn):
 
     assert planner.PASS_VERDICT == wildcard_trial.PASS
     open_ledger(conn)
-    machine(conn, sales=trial_sales())
+    machine(conn, sales=trial_sales(), full=True)
     gathered = planning.gather(conn, [], NOW)
     assert (gathered.current.wildcard_verdict, gathered.current.silent) == (None, frozenset())   # no wildcard set
     config.set_value(conn, "wildcard_slot", "15", "test")

@@ -717,7 +717,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 #     comes back unavailable its old stock may stay, which, like any unavailable
 #     line, the plan can't foresee, so it is warned of, not refused;
 #   - no other slot switches to the product it switches to;
-#   - it doesn't load more of its product while another slot holds it.
+#   - it doesn't load more of its product while another slot holds it;
+#   - while no receipt says what it holds, no other slot loads anything unless
+#     the plan sets its product too (the day-one fill does).
 # - A promotion copies the trial's product into one silent regular slot, which
 #   switches to it at a regular price the agent picks. Only when the trial's
 #   verdict is a pass, the slot is silent now, the wildcard switches to its next
@@ -745,6 +747,14 @@ def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, o
             f"worker's maximum, over the {_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a "
             "cheaper pack"), w.slot))
     others = [s for s in slots if s.slot != w.slot]
+    if w.state.unsure and not (w.changes_product and w.product):
+        # No receipt says what the wildcard holds, so any load elsewhere may put its product in two slots.
+        loading = sorted(s.slot for s in others if s.need > 0 or s.changes_product)
+        if loading:
+            refusals.append(Refusal("wildcard", (
+                f"no receipt says what the wildcard, slot {w.slot}, holds, so the load into slot "
+                f"{', '.join(loading)} may put the same product in two slots; set the wildcard's product in this "
+                "plan, as the day-one fill does, or stock it first so a receipt names its product"), w.slot))
     held = w.state.product
     if held:
         into = sorted(s.slot for s in others if s.changes_product and s.product == held)

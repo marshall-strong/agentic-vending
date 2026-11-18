@@ -24,11 +24,15 @@ The rule (`docs/agent/wildcard.md`, "A testing ground"):
    `TRIAL_DAYS` in-stock class days or more. Below it (research rule 6):
    `EXTEND_UNITS` extends it one Friday cycle, fewer **drop** it. By
    `LATE_DAYS` it needs `LATE_UNITS` to pass, else drop. A trial judged at an
-   earlier Friday (it had `TRIAL_DAYS` by the last Friday visit) is waiting:
-   it passes only while it keeps `HOLD_RATE` a day since it began.
+   earlier Friday (it had `TRIAL_DAYS` by 00:00 Eastern on any Friday before
+   the one the plan is for, a request filed then or not: `judged_by`) is
+   waiting: it passes only while it keeps `HOLD_RATE` a day since it began.
 5. **Promoted**: another regular slot took the product at or after the trial
    began. The trial is over; the wildcard switches to the next product.
-6. **A trial priced above the ceiling** at its latest priced poll is a price
+6. **Unknown means unknown.** No verdict while a regular slot's contents are
+   unknown (it may hold the trial's product), and no pass while the counters
+   end on an unsettled drop or no poll within `MAX_POLL_GAP` read its price.
+7. **A trial priced above the ceiling** at its latest priced poll is a price
    test, not a promotion trial: a regular slot couldn't charge that, so its
    result wouldn't carry over (`standing_prices`). It counts again only from
    the first poll strictly after the last one that read a price above the
@@ -306,8 +310,10 @@ class Standing:
         return max(self.prices) > ceiling_cents if self.known else None
 
 
-def standing_prices(conn: psycopg.Connection, slots: tuple[str, ...] | list[str]) -> dict[str, Standing]:
-    """Each slot's latest priced moment on our machine, over every good poll. A slot no poll priced is left out.
+def standing_prices(conn: psycopg.Connection, slots: tuple[str, ...] | list[str],
+                    until: datetime | None = None) -> dict[str, Standing]:
+    """Each slot's latest priced moment on our machine, over every good poll by `until` (default: every one).
+    A slot no poll priced is left out.
 
     A poll that read no price leaves the standing price where it was, so a
     price test ends only when a strictly later poll reads a price at or under
@@ -320,9 +326,10 @@ def standing_prices(conn: psycopg.Connection, slots: tuple[str, ...] | list[str]
             " join polls p using (session_id)"
             " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and s.price_cents is not null"
             " and p.started_at = (select max(p2.started_at) from poll_selections s2 join polls p2 using (session_id)"
-            "   where p2.device_id = %s and p2.crc_ok and s2.selection = s.selection and s2.price_cents is not null)"
+            "   where p2.device_id = %s and p2.crc_ok and s2.selection = s.selection and s2.price_cents is not null"
+            "   and (%s::timestamptz is null or p2.started_at <= %s::timestamptz))"
             " group by s.selection, p.started_at",
-            (DEVICE_ID, list(slots), DEVICE_ID)):
+            (DEVICE_ID, list(slots), DEVICE_ID, until, until)):
         out[selection] = Standing(at, frozenset(prices))
     return out
 
@@ -351,7 +358,13 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
     tax_percent = _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
     start = w.since
     readings = _readings(conn, start, now, [slot]).get(slot, [])
-    standing = standing_prices(conn, [slot]).get(slot)
+    for name, column in (("units", 1), ("takings", 2)):
+        if counters.unsettled([(r[0], r[column]) for r in readings]):
+            # A lone low reading: a misread or a restart. Until the next poll settles it, what sold is unknown.
+            return Trial(None, slot, False, UNKNOWN, (
+                f"slot {slot}'s {name} counter's latest reading is a drop the next poll hasn't settled (a misread "
+                "or a restart), so what it sold is unknown; judge it once a later poll reads it"))
+    standing = standing_prices(conn, [slot], now).get(slot)
     if standing is not None and not standing.known:
         return Trial(None, slot, False, UNKNOWN, (
             f"the polls at {standing.at:%Y-%m-%d %H:%M} UTC read different prices for slot {slot} "
@@ -385,14 +398,38 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
         return Trial(record, slot, price_test, PROMOTED, (
             f"slot {', '.join(sorted(others))} took {w.product} on {took:%Y-%m-%d}, after its trial began: the "
             f"trial is over. At the next Friday visit, switch slot {slot} to the next product to test"), price)
+    unknown = sorted(s for s in slots if s != slot and s not in counts)
+    if unknown:
+        # One of them may hold the trial's product, which would split its sales and end it unseen.
+        return Trial(record, slot, price_test, UNKNOWN, (
+            f"no receipt says what slot {', '.join(unknown)} holds, so any of them may hold {w.product} too, and "
+            f"whether the trial measures its own sales is unknown; stock or count {'it' if len(unknown) == 1 else 'them'} "
+            "so a receipt names the product"), price)
     if not measured.agree:
         return Trial(record, slot, price_test, UNKNOWN, (
             "in some poll interval the units and takings counters, or the stock replay's sales, don't agree, so "
             "what it sold is unknown; a person checks the polls and receipts"), price)
-    visit, _ = last_friday_visit(conn, now)
-    waiting = visit is not None and measured.record(tax_percent, visit).class_days_in_stock >= TRIAL_DAYS
+    # It was judged at an earlier Friday if it had its days by one: every Friday counts, request or not.
+    waiting = measured.record(tax_percent, judged_by(now)).class_days_in_stock >= TRIAL_DAYS
     verdict, reason = judge(record, price_test, waiting)
+    if verdict == PASS and (standing is None or now - standing.at > MAX_POLL_GAP):
+        seen = "no poll has read its price" if standing is None else (
+            f"the latest poll that read its price was at {standing.at:%Y-%m-%d %H:%M} UTC, over "
+            f"{_hours(MAX_POLL_GAP)} hours ago")
+        return Trial(record, slot, price_test, UNKNOWN, (
+            f"it would pass, but {seen}, so its price now, and whether it is still under the ceiling, is unknown; "
+            "judge it once a poll reads it"), price)
     return Trial(record, slot, price_test, verdict, reason, price)
+
+
+def judged_by(now: datetime) -> datetime:
+    """The latest Friday evaluation cutoff before the one `now` judges for: 00:00 Eastern on that Friday. Pure.
+
+    A plan is made for the next Friday visit (today, on a Friday), so the
+    Friday before that one is the last time the trial was judged, whether or
+    not a request was filed then. A trial with `TRIAL_DAYS` by it is waiting.
+    """
+    return _friday_midnight(eastern_date(now) - timedelta(days=1))
 
 
 def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list[tuple[datetime, int]],

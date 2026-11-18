@@ -122,11 +122,22 @@ def polls(conn, rows, after=None):
     return after
 
 
-def week_of_sales(conn, price15=300, per_day15=3, per_day16=2):
+def stock_the_rest(conn, at=SINCE, leave=()):
+    """Our other 18 slots loaded at `at` with a product each of their own, so a receipt names what every slot
+    holds; a slot in `leave` has no receipt. A trial with a slot no receipt describes has no verdict."""
+    from vending.slots import SLOTS
+
+    lines = [(slot, f"X{slot}", "primary", "5.00", 5, 0, 0) for slot in SLOTS if slot not in ("15", "16", *leave)]
+    fulfilled(conn, "rest", at, *lines)
+
+
+def week_of_sales(conn, price15=300, per_day15=3, per_day16=2, leave=()):
     """Both slots loaded on Friday 16 Oct, polled every few hours to Monday 26 Oct, each class day's sales seen
-    at its evening poll. Returns the last poll, for `polls(after=...)`."""
+    at its evening poll; the other 18 slots loaded too, except any in `leave` (`stock_the_rest`). Returns the
+    last poll, for `polls(after=...)`."""
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (price15, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn, leave=leave)
     # A poll just after the load: the window holding the load is left out of the money.
     rows, u15, u16 = [("p1", "2026-10-16T21:00:00+00:00", {"15": (price15, 100), "16": (200, 50)})], 100, 50
     for n, day in enumerate(("19", "20", "21", "22", "23", "26")):
@@ -136,6 +147,7 @@ def week_of_sales(conn, price15=300, per_day15=3, per_day16=2):
 
 
 NOW = datetime(2026, 10, 27, 12, tzinfo=timezone.utc)
+FRESH = datetime(2026, 10, 27, 2, tzinfo=timezone.utc)   # 4 hours after week_of_sales' last poll: its price is current
 DAYS = ("19", "20", "21", "22", "23", "26")
 
 
@@ -148,7 +160,7 @@ def test_no_wildcard_set_means_no_trial(conn):
 def test_the_trial_counts_units_over_the_in_stock_class_days_the_polls_saw(conn):
     week_of_sales(conn)
     set_wildcard(conn, "15")
-    reply = get_machine_state(conn, now=NOW)
+    reply = get_machine_state(conn, now=FRESH)
     t = reply.wildcard_trial
     assert (t.slot, t.product, t.sale_price, t.since, t.price_test) == ("15", "AAA", "3.00", SINCE, False)
     assert t.units_sold == 18 and t.class_days_in_stock == 6
@@ -168,7 +180,7 @@ def test_a_trial_above_the_ceiling_is_reported_as_a_price_test(conn):
 
 
 def test_a_wildcard_without_receipts_is_unknown(conn):
-    week_of_sales(conn)
+    week_of_sales(conn, leave=("17",))
     set_wildcard(conn, "17")
     t = get_machine_state(conn, now=NOW).wildcard_trial
     assert (t.slot, t.product, t.verdict) == ("17", None, UNKNOWN)
@@ -196,6 +208,7 @@ def test_the_poll_window_holding_the_load_is_left_out(conn):
     # The poll after the load also saw 2 sales: before or after the load, nobody knows, so they don't count.
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn)
     rows = [("p1", "2026-10-16T22:00:00+00:00", {"15": (300, 102), "16": (200, 50)})]
     rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, 105 + 3 * n), "16": (200, 52 + 2 * n)})
              for n, day in enumerate(DAYS)]
@@ -217,7 +230,7 @@ def test_a_price_test_ends_when_the_price_is_back_under_the_ceiling(conn):
         u15, u16 = u15 + 3, u16 + 2
         rows.append((f"e{n}", f"2026-{day}T22:00:00+00:00", {"15": (300, u15), "16": (200, u16)}))
     polls(conn, rows, after=last)
-    t = get_machine_state(conn, now=datetime(2026, 11, 5, 12, tzinfo=timezone.utc)).wildcard_trial
+    t = get_machine_state(conn, now=datetime(2026, 11, 5, 1, tzinfo=timezone.utc)).wildcard_trial
     assert not t.price_test and t.since == datetime(2026, 10, 28, 22, tzinfo=timezone.utc)
     assert t.units_sold == 15 and t.verdict == PASS            # the 5 windows after it, at $3.00
 
@@ -226,6 +239,7 @@ def test_a_missing_price_never_turns_a_price_test_into_a_trial(conn):
     # $7.50 at the polls around the load, then polls that read no price: it was never seen at or under $6.50.
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (750, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn)
     rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (750, 100), "16": (200, 50)})]
     rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00",
               {"15": (None, 103 + 3 * n, 75000 + 900 * (n + 1)), "16": (200, 52 + 2 * n)}) for n, day in enumerate(DAYS)]
@@ -248,6 +262,7 @@ def test_money_comes_from_the_same_windows_as_the_units(conn):
     # no counted units would be profit from nothing.
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn)
     store_poll(conn, "p1", "2026-10-16T21:00:00+00:00", {"15": (300, 5, 30000), "16": (200, 50)})
     rows = [("p2", "2026-10-16T22:00:00+00:00", {"15": (300, 101), "16": (200, 50)})]
     rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, 104 + 3 * n), "16": (200, 52 + 2 * n)})
@@ -264,6 +279,7 @@ def test_days_without_polls_are_not_days_with_no_sales(conn):
     # One poll after the load and nothing since: no class day was seen, so it is too early, not a drop.
     store_poll(conn, "p0", "2026-10-16T12:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn)
     store_poll(conn, "p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     set_wildcard(conn, "15")
     t = get_machine_state(conn, now=NOW).wildcard_trial
@@ -279,7 +295,7 @@ def test_polls_that_saw_no_sales_are_days_with_no_sales(conn):
 
 
 def test_a_trial_whose_product_was_in_another_slot_first_has_no_verdict(conn):
-    week_of_sales(conn)
+    week_of_sales(conn, leave=("17",))
     fulfilled(conn, "r0", SINCE - timedelta(days=3), ("17", "AAA", "primary", "10.00", 20, 0, 0))
     set_wildcard(conn, "15")
     t = get_machine_state(conn, now=NOW).wildcard_trial
@@ -299,6 +315,7 @@ def test_counters_that_disagree_leave_the_verdict_unknown(conn):
     # On the 22nd the takings counter rose $3.00 but the units counter didn't: that interval can't be read.
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn)
     rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100, 30000), "16": (200, 50)})]
     for n, (day, units, cents) in enumerate((("19", 103, 30900), ("20", 106, 31800), ("21", 109, 32700),
                                              ("22", 109, 33000), ("23", 112, 33900), ("26", 115, 34800))):
@@ -314,6 +331,7 @@ def test_a_trial_judged_at_an_earlier_friday_must_hold_its_rate(conn):
     # then two more class days with no sales: 4 units over 7 days, under 0.7 a day.
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn)
     rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100), "16": (200, 50)})]
     rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units), "16": (200, 50)})
              for n, (day, units) in enumerate((("19", 101), ("20", 102), ("21", 103), ("22", 104), ("23", 104)))]
@@ -321,13 +339,13 @@ def test_a_trial_judged_at_an_earlier_friday_must_hold_its_rate(conn):
     polls(conn, [(f"e{n}", f"2026-11-0{day}T22:00:00+00:00", {"15": (300, 104), "16": (200, 50)})
                  for n, day in enumerate((1, 2, 3))])
     set_wildcard(conn, "15")
-    now = datetime(2026, 11, 4, 12, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 4, 1, tzinfo=timezone.utc)
+    # By Friday 30 Oct it already had its 5 days, so it was judged then, a request filed or not: it is waiting.
     t = get_machine_state(conn, now=now).wildcard_trial
-    assert (t.units_sold, t.class_days_in_stock, t.verdict) == (4, 7, PASS)   # first look: 4 over 5 days or more
-    # A Friday visit on 30 Oct, when it already had its 5 days: it was judged then, so now it is waiting.
-    request(conn, "r2", datetime(2026, 10, 30, 20, tzinfo=timezone.utc), status="fulfilled")
-    t = get_machine_state(conn, now=now).wildcard_trial
+    assert (t.units_sold, t.class_days_in_stock) == (4, 7)
     assert t.verdict == EXTEND and "isn't eligible" in t.reason
+    request(conn, "r2", datetime(2026, 10, 30, 20, tzinfo=timezone.utc), status="fulfilled")
+    assert get_machine_state(conn, now=now).wildcard_trial.verdict == EXTEND
 
 
 
@@ -335,6 +353,7 @@ def test_units_sold_past_the_receipts_make_profit_unknown(conn):
     # 10 loaded, 12 sold: the last window's extra units have no cost, so the profit isn't free money.
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "5.00", 10, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn)
     rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100), "16": (200, 50)})]
     rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, 103 + 3 * n), "16": (200, 52 + 2 * n)})
              for n, day in enumerate(("19", "20", "21", "22"))]
@@ -351,7 +370,7 @@ def test_the_planner_gets_the_wildcard_from_config_and_which_slots_it_cant_see(c
     from vending import planning
 
     open_ledger(conn)
-    week_of_sales(conn)
+    week_of_sales(conn, leave=("17",))
     assert planning.gather(conn, [], NOW).config.wildcard_slot is None
     set_wildcard(conn, "15")
     gathered = planning.gather(conn, [], NOW)
@@ -367,6 +386,7 @@ def test_two_polls_a_week_apart_see_no_class_days(conn):
     # watched, so neither they nor the sales in that stretch count. Before, this was five days and "promote".
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
+    stock_the_rest(conn)
     store_poll(conn, "p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     store_poll(conn, "p2", "2026-10-23T22:00:00+00:00", {"15": (300, 115), "16": (200, 60)})
     set_wildcard(conn, "15")
@@ -378,6 +398,7 @@ def test_a_week_without_polls_counts_neither_its_days_nor_its_sales(conn):
     # Watched Monday and Tuesday, then the polls stop for a week (15 units sell meanwhile), then resume.
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 40, 0, 0), ("16", "BBB", "primary", "10.00", 40, 0, 0))
+    stock_the_rest(conn)
     polls(conn, [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100), "16": (200, 50)}),
                  ("d0", "2026-10-19T22:00:00+00:00", {"15": (300, 103), "16": (200, 51)}),
                  ("d1", "2026-10-20T22:00:00+00:00", {"15": (300, 106), "16": (200, 52)})])
@@ -388,7 +409,7 @@ def test_a_week_without_polls_counts_neither_its_days_nor_its_sales(conn):
         rows.append((f"e{n + 1}", f"2026-{day}T22:00:00+00:00", {"15": (300, u15), "16": (200, u16)}))
     polls(conn, rows)
     set_wildcard(conn, "15")
-    t = get_machine_state(conn, now=datetime(2026, 11, 4, 12, tzinfo=timezone.utc)).wildcard_trial
+    t = get_machine_state(conn, now=datetime(2026, 11, 4, 1, tzinfo=timezone.utc)).wildcard_trial
     # 19 and 20 Oct, then 28 Oct to 3 Nov: 7 class days and 3 a day. The week's 21, 22, 23, 26 and 27 Oct,
     # and the 15 units sold in it, are left out.
     assert (t.class_days_in_stock, t.units_sold) == (7, 21)
