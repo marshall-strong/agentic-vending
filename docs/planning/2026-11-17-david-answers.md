@@ -61,7 +61,6 @@ Kevin sent David the open questions from #102 and the 12 Nov notes (`2026-11-12-
 
 - **How fast catalog requests are decided.** David said to poll for the status but gave no turnaround.
 - **How long the Interloper stays.** He said it is outside the project; he didn't say for how long.
-
 - **Day-one stock from the $600** (12 Nov notes, row 3): David was to confirm it. Not covered in this reply.
 - **Restocks on Fri 25 Dec and Fri 1 Jan** (Institute closures). Not asked yet.
 - **Door times field names.** Check them on the next real receipt and in the bridge spec.
