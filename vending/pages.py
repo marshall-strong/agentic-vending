@@ -31,8 +31,9 @@ that can't get one within `WAIT_SECONDS` is told the page is busy, every
 statement is cancelled after `STATEMENT_TIMEOUT_MS`, and the explorer shows 100
 rows a page. Hammering the pages makes the pages slow, not the syncs.
 
-What the pages leave out: the selections not assigned to us, by the stored assignment
-(`only`, and `dashboard.only_ours`), and the error text of failures (`HIDE`, and
+What the pages leave out: the selections that aren't ours by the stored assignment and the
+machine-wide poll totals (`explorer_rules`, which `python -m vending.db_explorer` uses too, and
+`dashboard.only_ours`), and the error text of failures (`HIDE`, and
 `dashboard.hide_errors`), because a database error names the host and the user.
 Their own errors are answered with a plain sentence, and the detail goes to the
 container's log. No table holds a password or a key.
@@ -79,17 +80,23 @@ HTML, JSON, TEXT = "text/html; charset=utf-8", "application/json", "text/plain; 
 CSP = "default-src 'none'; style-src 'unsafe-inline'"
 CSP_DASHBOARD = CSP + "; script-src 'unsafe-inline'; connect-src 'self'"
 
-# What the explorer leaves out, by table name. The dashboard's own list is `dashboard.hide_errors`.
+# What every explorer leaves out, however it is run (here at /db, or `python -m vending.db_explorer`).
+# VA1, the machine-wide lifetime totals: from the start (`vending.start.START`) they include the other
+# team's sales, and the total minus ours is theirs (`docs/integrity.md`). Hidden in every row, not
+# only from the start: `Hide` can't test a time, and nothing needs the pre-start ones. `raw` is safe
+# as it is: the explorer shows a bytea's size, never its bytes.
+TOTALS = {
+    "polls": db_explorer.Hide("", "", ("total_paid_cents", "total_paid_units"), "(hidden)"),
+}
+
+# What the public explorer leaves out besides, by table name. The dashboard's own list is
+# `dashboard.hide_errors`.
 HIDE = {
     "action_log": db_explorer.Hide("outcome", "failed", ("detail", "result"), dashboard.HIDDEN),
     "agent_runs": db_explorer.Hide("status", "failed", ("detail",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
-    # VA1, the machine-wide lifetime totals. From the start (`vending.start.START`) they include the other
-    # team's sales, and the total minus ours is theirs (`docs/integrity.md`). Hidden in every row, not
-    # only from the start: `Hide` can't test a time, and nothing on the page needs the pre-start ones.
-    # `raw` is safe as it is: the explorer shows a bytea's size, never its bytes.
-    "polls": db_explorer.Hide("", "", ("total_paid_cents", "total_paid_units"), "(hidden)"),
+    **TOTALS,
 }
 
 
@@ -103,10 +110,10 @@ def _ours(column: str, slots: tuple[str, ...]) -> sql.Composable:
 
 
 def only(slots: tuple[str, ...]) -> dict[str, db_explorer.Only]:
-    """The rows the explorer shows, by table name, for our selections `slots`.
+    """The rows an explorer shows, by table name, for our selections `slots`.
 
-    The pages show only the selections assigned to us (`docs/integrity.md`), so these two tables,
-    which store every selection, are cut to them. `poll_selections` has no device column, so it
+    The other selections aren't ours (`docs/integrity.md`), so these two tables, which store every
+    selection, are cut to `slots` on our machine. `poll_selections` has no device column, so it
     goes through its poll. With no slots, neither shows a row.
     """
     return {
@@ -120,12 +127,25 @@ def only(slots: tuple[str, ...]) -> dict[str, db_explorer.Only]:
 
 
 def stored_slots(conn: psycopg.Connection) -> tuple[str, ...]:
-    """Our selections from the stored assignment (`vending.slots.our_slots`), read per page.
-    Empty when nothing usable is stored or the table isn't there yet: then no selection is ours."""
+    """Our selections from the stored assignment (`vending.slots.our_slots`), read per page. Empty
+    when it can't be read (nothing usable stored, no table yet, a login that may not read it): then
+    no selection is ours. A savepoint, so a failed read leaves the caller's transaction usable."""
     try:
-        return our_slots(conn)
-    except (SlotsNotRecorded, psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+        with conn.transaction():
+            return our_slots(conn)
+    except (SlotsNotRecorded, psycopg.Error):
         return ()
+
+
+def explorer_rules(conn: psycopg.Connection, public: bool) -> tuple[dict[str, db_explorer.Hide],
+                                                                     dict[str, db_explorer.Only]]:
+    """(hide, only) for `db_explorer.render`, the one policy both explorers use.
+
+    Both leave out the selections that aren't ours by the stored assignment (none shown when it
+    can't be read) and the machine-wide poll totals (`TOTALS`). The public page also leaves out
+    the error text of failures and the dev machines' hostnames (`HIDE`).
+    """
+    return (HIDE if public else TOTALS), only(stored_slots(conn))
 
 
 NOT_SET_UP = ("This page isn't set up here yet. It needs a database login that can only read "
@@ -285,8 +305,9 @@ def respond(target: str) -> Reply | None:
     try:
         with _connection() as conn:
             if request is not None:
-                status, body = db_explorer.render(conn, request, HIDE, (("Home", "/"), ("Agent dashboard", DASHBOARD)),
-                                                  only(stored_slots(conn)))
+                hide, rows = explorer_rules(conn, public=True)
+                status, body = db_explorer.render(
+                    conn, request, hide, (("Home", "/"), ("Agent dashboard", DASHBOARD)), rows)
                 return Reply(status, HTML, body)
             snap = dashboard.snapshot(conn, public=True)
     except Busy:
