@@ -604,6 +604,17 @@ def loads(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
     return out
 
 
+def request_loads(conn: psycopg.Connection, request_ids: list[str]) -> dict[str, list[tuple[str, int]]]:
+    """What the receipts of these requests loaded into each slot, as `(sku, units)`: one visit's own loads."""
+    out: dict[str, list[tuple[str, int]]] = {}
+    for slot, sku, units in conn.execute(
+            "select l.slot, l.sku, l.units_loaded from purchase_lines l join purchase_requests r using (request_id)"
+            " where r.status = 'fulfilled' and r.request_id = any(%s)"
+            " and l.outcome in ('primary', 'alternate', 'loaded') and l.units_loaded > 0", (list(request_ids),)):
+        out.setdefault(slot, []).append((sku, units))
+    return out
+
+
 def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
     """`weighted_average` of the movements up to `until`. Pure.
 

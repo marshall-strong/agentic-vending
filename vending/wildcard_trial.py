@@ -257,27 +257,38 @@ def _joint(readings: list[Reading]) -> list[tuple[datetime, datetime, int, int]]
 
 
 def last_friday_visit(conn: psycopg.Connection, now: datetime) -> tuple[datetime | None, str | None]:
-    """Eastern midnight of the Friday on or before the last Friday visit, or None and why not.
+    """Eastern midnight of the Friday on or before the last Friday visit, or None and why not."""
+    start, _, why = _last_friday(conn, now)
+    return start, why
+
+
+def _last_friday(conn: psycopg.Connection, now: datetime) -> tuple[datetime | None, tuple[str, ...], str | None]:
+    """The last Friday visit's Friday midnight, Eastern, the requests fulfilled at it, or None and why not.
 
     The last Friday visit is the latest fulfilled request that isn't off-cycle,
     fulfilled by `now`. `fulfilled_at` may trail the visit, so the Friday
     midnight before it is the safe start: it makes a window from the visit
-    longer, never shorter. A fulfilled Friday request with no `fulfilled_at`
-    can't be placed, so the visit is unknown.
+    longer, never shorter. Its requests are the Friday requests fulfilled from
+    then to `now`; an off-cycle one never is. A fulfilled Friday request with
+    no `fulfilled_at` can't be placed, so the visit is unknown.
     """
     rows = conn.execute("select request_id, fulfilled_at from purchase_requests"
                         " where status = 'fulfilled' and not off_cycle").fetchall()
     unplaced = sorted(request_id for request_id, at in rows if at is None)
     if unplaced:
-        return None, (f"Friday request {', '.join(unplaced)} is fulfilled but its fulfilled_at is null, so when the "
-                      "last Friday visit was is unknown; run the request sync (python -m vending.sync_requests) so "
-                      "the time is recorded, or ask a person to check the request")
+        return None, (), (f"Friday request {', '.join(unplaced)} is fulfilled but its fulfilled_at is null, so when "
+                          "the last Friday visit was is unknown; run the request sync (python -m "
+                          "vending.sync_requests) so the time is recorded, or ask a person to check the request")
     done = [at for _, at in rows if at <= now]
     if not done:
-        return None, "no Friday visit is recorded yet"
-    day = eastern_date(max(done))
-    friday = day - timedelta(days=(day.weekday() - 4) % 7)
-    return datetime.combine(friday, time(0), tzinfo=EASTERN), None
+        return None, (), "no Friday visit is recorded yet"
+    start = _friday_midnight(eastern_date(max(done)))
+    return start, tuple(sorted(r for r, at in rows if start <= at <= now)), None
+
+
+def _friday_midnight(day: date) -> datetime:
+    """00:00 Eastern on the Friday on or before `day`."""
+    return datetime.combine(day - timedelta(days=(day.weekday() - 4) % 7), time(0), tzinfo=EASTERN)
 
 
 @dataclass(frozen=True)
@@ -483,11 +494,12 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
     The wildcard is never a silent slot, nor is a slot no receipt describes.
     """
     regular = [s for s in slots if s != wildcard]
-    start, why = last_friday_visit(conn, now)
+    start, visit, why = _last_friday(conn, now)
     if start is None:
         return SilentReport(None, (), (), tuple(NotSilent(s, why) for s in regular), why)
     readings = _readings(conn, start, now, regular)
     seen = _counted(conn)
+    at_visit = stock.request_loads(conn, list(visit))
     tax_percent = _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
     silent: list[Silent] = []
     unconfirmed: list[Unconfirmed] = []
@@ -517,25 +529,15 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
         if c.since > start:
             not_silent.append(NotSilent(slot, f"its product changed on {c.since:%Y-%m-%d}"))
             continue
-        loaded = [(at, n) for at, n in loads.get(slot, []) if at >= start]
         look = seen.get(slot)
-        look = look if look is not None and look["counted_at"] >= start else None
-        if c.units <= 0:
-            unconfirmed.append(Unconfirmed(slot, c.product, "the receipts say it is empty"))
+        evidence, doubt = _stock_evidence(c, start, at_visit.get(slot, []),
+                                          [(at, n) for at, n in loads.get(slot, []) if at <= now],
+                                          look if look is not None and look["counted_at"] <= now else None)
+        if evidence is None:
+            unconfirmed.append(Unconfirmed(slot, c.product, doubt))
             continue
-        if look is not None and look["units_counted"] == 0:
-            unconfirmed.append(Unconfirmed(slot, c.product, (
-                f"a person counted it empty on {look['counted_at']:%Y-%m-%d}")))
-            continue
-        if look is not None and look["units_counted"]:
-            evidence = (f"{look['source']} count {look['count_id']} on {look['counted_at']:%Y-%m-%d}: "
-                        f"{look['units_counted']} units")
-        elif loaded:
-            evidence = f"loaded {sum(n for _, n in loaded)} at the visit on {loaded[0][0]:%Y-%m-%d}"
-        else:
-            unconfirmed.append(Unconfirmed(slot, c.product, (
-                "no receipt shows units loaded at the last Friday visit and no count since saw it, so it may be "
-                "empty; a count of it confirms it")))
+        if doubt is not None:
+            not_silent.append(NotSilent(slot, f"unknown: {doubt}"))
             continue
         days = len(_watched_days(_measure(c, start, now, loads.get(slot, []), sales, mine, None).intervals))
         if days < SILENT_DAYS:
@@ -551,6 +553,48 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
         silent.append(Silent(slot, c.product, days, quiet, margin, evidence))
     silent.sort(key=lambda s: (s.quiet_since, s.unit_margin_cents is None, s.unit_margin_cents or 0, s.slot))
     return SilentReport(start, tuple(silent), tuple(unconfirmed), tuple(not_silent))
+
+
+def _stock_evidence(c: stock.SlotCount, start: datetime, at_visit: list[tuple[str, int]],
+                    loads: list[tuple[datetime, int]], look: dict | None) -> tuple[str | None, str | None]:
+    """What confirms a slot held stock through the window. Pure.
+
+    `(evidence, None)` confirms it; `(None, why)` leaves it unconfirmed, maybe
+    empty; `(CONFLICT, why)` is unknown, because the evidence and the receipts
+    disagree. Two things confirm it, each checked against what the receipts
+    say it holds (`c`): a receipt line of the last Friday visit's own request
+    that loaded its product into it, or a person's count since both the
+    window's start and its last load that names the same SKU and saw the
+    units the receipts say are there. A count that disagrees on either is a
+    conflict, not a confirmation: nobody could say what a promotion would pull.
+    A load at any other visit, an off-cycle one included, confirms nothing.
+    """
+    if c.units <= 0:
+        return None, "the receipts say it is empty"
+    last_load = max((at for at, _ in loads), default=None)
+    if look is not None and look["counted_at"] >= start and (last_load is None or look["counted_at"] >= last_load):
+        when = f"{look['source']} count {look['count_id']} on {look['counted_at']:%Y-%m-%d}"
+        if look["units_counted"] == 0:
+            return None, f"a person counted it empty on {look['counted_at']:%Y-%m-%d}"
+        named = (look["product"] or "").strip()
+        if named.casefold() != c.product.casefold() or look["units_counted"] != c.units:
+            saw = "an uncounted number" if look["units_counted"] is None else look["units_counted"]
+            return CONFLICT, (f"the {when} saw {saw} of {named or 'no product named'}, but the receipts say it "
+                              f"holds {c.units} of {c.product}; a door count naming the SKU, or a corrected "
+                              "receipt, settles it")
+        return f"{when}: {look['units_counted']} units of {c.product}", None
+    others = sorted({sku for sku, _ in at_visit if sku != c.product})
+    if others:
+        return CONFLICT, (f"the last Friday visit's receipt loaded {', '.join(others)} into it, but the receipts "
+                          f"say it holds {c.product}; a person checks the receipt")
+    loaded = sum(n for sku, n in at_visit if sku == c.product)
+    if loaded:
+        return f"loaded {loaded} of {c.product} at the Friday visit of {start:%Y-%m-%d}", None
+    return None, ("no receipt of the last Friday visit's request shows units loaded into it, and no count since its "
+                  "last load matches its receipts, so it may be empty; a door count of it confirms it")
+
+
+CONFLICT = "conflict"
 
 
 def _unproven(units: list[tuple[datetime, int]], start: datetime, now: datetime) -> str | None:
@@ -631,7 +675,9 @@ def propose(t: Trial | None, report: SilentReport, counts: dict[str, stock.SlotC
     if t is None or t.verdict != PASS or t.record is None or not report.silent or report.window_start is None:
         return None
     target, r = report.silent[0], t.record
-    held = counts[target.slot]
+    held = counts.get(target.slot)
+    if held is None or held.product != target.product or held.units <= 0:
+        return None   # it would promise to pull a SKU or quantity nothing confirms
     price = "" if t.price_cents is None else f" at ${t.price_cents // 100}.{t.price_cents % 100:02d}"
     return Proposal(
         target.slot, r.product, t.price_cents,

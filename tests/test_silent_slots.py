@@ -53,10 +53,15 @@ def why(r, slot):
         (u.why for u in r.unconfirmed if u.slot == slot), None)
 
 
-def count(conn, slot, units, at=datetime(2026, 10, 24, 15, tzinfo=UTC), count_id="c1"):
+# What the receipts say each slot holds after the 23 Oct visit.
+HELD = {"15": "AAA", "16": "BBB", "17": "CCC", "18": "FFF", "25": "DDD", "26": "GGG", "28": "HHH"}
+
+
+def count(conn, slot, units, at=datetime(2026, 10, 24, 15, tzinfo=UTC), count_id="c1", product=None):
+    """A person's door count of `slot`: `units` of `product`, by default the SKU its receipts name."""
     conn.execute("insert into slot_counts (count_id, counted_at, counted_by, source, device_id, selection, product,"
-                 " units, exact) values (%s, %s, 'kevin', 'door', 'vmc1', %s, 'seen', %s, true)",
-                 (count_id, at, slot, units))
+                 " units, exact) values (%s, %s, 'kevin', 'door', 'vmc1', %s, %s, %s, true)",
+                 (count_id, at, slot, product or HELD[slot], units))
 
 
 def test_a_slot_loaded_at_the_visit_that_sold_nothing_over_four_watched_class_days_is_silent(conn):
@@ -66,7 +71,7 @@ def test_a_slot_loaded_at_the_visit_that_sold_nothing_over_four_watched_class_da
     assert [s.slot for s in r.silent] == ["16"]
     s16 = r.silent[0]
     assert (s16.product, s16.class_days_seen) == ("BBB", SILENT_DAYS)
-    assert "loaded 2 at the visit on 2026-10-23" in s16.evidence
+    assert s16.evidence == "loaded 2 of BBB at the Friday visit of 2026-10-23"
     assert why(r, "18") == "sold 1 since the window began"
     assert why(r, "25") == "its product changed on 2026-10-23"
     assert why(r, "27") == "no receipts say what it holds"
@@ -79,21 +84,21 @@ def test_without_a_load_at_the_visit_or_a_count_since_a_slot_is_unconfirmed_not_
     assert {u.slot for u in r.unconfirmed} == {"17", "18", "26", "28"}
     assert "may be empty" in why(r, "17")
     # A person's count since the visit confirms it; one that saw it empty says so.
-    count(conn, "17", 6)
+    count(conn, "17", 10)
     count(conn, "26", 0)
     r = report(conn)
     assert "17" in [s.slot for s in r.silent]
-    assert next(s for s in r.silent if s.slot == "17").evidence == "door count c1 on 2026-10-24: 6 units"
+    assert next(s for s in r.silent if s.slot == "17").evidence == "door count c1 on 2026-10-24: 10 units of CCC"
     assert why(r, "26") == "a person counted it empty on 2026-10-24"
     # A count from before the visit says nothing about now.
-    count(conn, "28", 6, at=datetime(2026, 10, 22, 15, tzinfo=UTC), count_id="c0")
+    count(conn, "28", 10, at=datetime(2026, 10, 22, 15, tzinfo=UTC), count_id="c0")
     assert "28" in {u.slot for u in report(conn).unconfirmed}
 
 
 def test_silent_slots_rank_silent_longest_then_lowest_margin(conn):
     machine(conn, sales={"16": [(datetime(2026, 10, 21, 15, tzinfo=UTC), 1)]})
-    count(conn, "17", 6)
-    count(conn, "28", 6)
+    count(conn, "17", 10)
+    count(conn, "28", 10)
     # 17 and 28 have been quiet since the 16 Oct load; 28 cost $2.00 a unit, 17 $1.00, so 28 earns less.
     # 16 was loaded at the 23 Oct visit, so it has been quiet the shortest.
     assert [s.slot for s in report(conn).silent] == ["28", "17", "16"]

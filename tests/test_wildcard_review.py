@@ -171,3 +171,49 @@ def test_1_a_stale_closing_reading_is_unknown(conn):
     r = _silent_report(conn, now=THURSDAY_EVENING + timedelta(hours=8))
     assert "16" not in [s.slot for s in r.silent]
     assert _why(r, "16").startswith("unknown: its latest reading, at 2026-10-29 22:00 UTC, is over 6 hours old")
+
+
+# --- 3. Only evidence about the slot's own product and units confirms stock ---------------------------
+
+def test_3_a_count_naming_a_different_product_doesnt_confirm_a_slot(conn):
+    from tests.test_silent_slots import count, machine, report
+
+    machine(conn)
+    count(conn, "17", 10, product="ZZZ-NOT-CCC")
+    r = report(conn)
+    assert "17" not in [s.slot for s in r.silent]
+    assert _why(r, "17").startswith("unknown: the door count c1 on 2026-10-24 saw 10 of ZZZ-NOT-CCC")
+
+
+def test_3_a_count_that_disagrees_with_the_receipted_units_doesnt_confirm_a_slot(conn):
+    from tests.test_silent_slots import count, machine, report
+
+    machine(conn)
+    count(conn, "17", 6)                    # the receipts say 10 of CCC
+    r = report(conn)
+    assert "17" not in [s.slot for s in r.silent]
+    assert "receipts say it holds 10 of CCC" in _why(r, "17")
+
+
+def test_3_an_off_cycle_receipt_after_friday_isnt_a_friday_load(conn):
+    from tests.test_silent_slots import machine, report
+
+    machine(conn)
+    # A Monday off-cycle visit tops up 18: it says nothing about what 18 held from Friday.
+    fulfilled(conn, "mon", datetime(2026, 10, 26, 15, tzinfo=UTC), ("18", "FFF", "primary", "2.00", 2, 0, 0))
+    conn.execute("update purchase_requests set off_cycle = true where request_id = 'mon'")
+    r = report(conn)
+    assert "18" not in [s.slot for s in r.silent]
+    assert "18" in {u.slot for u in r.unconfirmed}
+
+
+def test_3_a_conflicting_count_withholds_the_proposal(conn):
+    from tests.test_silent_slots import count, machine, trial_sales
+    from vending.tools.machine_state import get_machine_state
+    from tests.test_silent_slots import NOW
+
+    machine(conn, sales=trial_sales())
+    config.set_value(conn, "wildcard_slot", "15", "test")
+    count(conn, "16", 5)                     # the receipts say 12 of BBB: what would the promotion pull?
+    t = get_machine_state(conn, now=NOW).wildcard_trial
+    assert t.proposal is None and "16" not in [s.slot for s in t.silent_slots]
