@@ -5,7 +5,7 @@ Prices stay within the floor and ceiling, must be explainable, may need delibera
 **The bounds** (Project Brief (Revised), sections 2 and 4). Code enforces these, not your memory.
 
 - **Floor:** the most we'd pay per unit, plus 8% tax, rounded up to the next 5 cents. Never guess it; `preview_desired_state` shows it for every slot.
-- **Ceiling:** $6.50, the team's decision on 12 Nov (`price_ceiling_cents`; the bridge refuses over $10.00). A10 (`docs/assumptions.md`) awaits instructor confirmation. One `wildcard` slot may go to $8.00.
+- **Ceiling:** $6.50, the team's decision on 12 Nov (`price_ceiling_cents`; the bridge refuses over $10.00). A10 (`docs/assumptions.md`) awaits instructor confirmation. The one fixed `wildcard` slot may go to $8.00.
 - **Steps:** prices go in 5-cent steps.
 
 **How to choose a price.** Work through these steps for every slot.

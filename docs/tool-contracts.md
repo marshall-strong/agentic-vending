@@ -8,7 +8,7 @@ every figure below is worked out by code, not by the model. Every tool that chan
 outside our database (a write tool) passes the write gate: the halt switch is checked first, and
 every attempt is logged.
 
-This is the contract for each of the 11 tools registered in `vending/server.py` on `main`, as
+This is the contract for each of the 12 tools registered in `vending/server.py` on `main`, as
 Summative 2 asks: "inputs, outputs, preconditions, side effects, cost, failure behavior, and who
 owns it" (Project Brief (Revised), section 5). Checked against the code at `ba14a6d`, 12 Nov 2026.
 
@@ -26,6 +26,7 @@ owns it" (Project Brief (Revised), section 5). Checked against the code at `ba14
 | `get_purchase_requests` | Read | Our purchase requests, their status and receipts | Meaghan Gartland |
 | `get_project_rules` | Read | Our notes on the project brief, by topic | Kevin Sykes |
 | `request_catalog_product` | Write | Ask the instructors to add a drink to the catalog | Kevin Sykes |
+| `set_wildcard_slot` | Write | Pick the one wildcard slot, once | Kevin Sykes |
 | `set_price` | Write | Dropped: always refuses and says to use `submit_desired_state` | Kevin Sykes (dropped it) |
 
 How the owners were found: the `mcp-tool` issues #15 to #24 and the pull request that built each
@@ -48,7 +49,10 @@ should do next.
   `class_days_in_stock` (null without receipts) and `class_days_of_stock_left` (on hand, the
   count's when it is newer, ÷ the rate). Also the closet (back stock) per product in `closet`, with `units`,
   `unit_cost` and `value_at_cost`, and its total in `closet_value_at_cost`. Plus `as_of` (the
-  poll's time), `window_start`, `stale` and any stock `warnings`.
+  poll's time), `window_start`, `stale` and any stock `warnings`. And `wildcard_trial`, null until
+  a wildcard slot is set: the trial's product, price, units, in-stock class days, verdict and
+  reason, our silent and unconfirmed slots, and on a pass with a silent slot a `proposal`
+  (`docs/agent/wildcard.md`).
 - **Preconditions**: at least one good poll stored by the history sync
   (`python -m vending.sync_history`). The stock fields also need receipts, stored by
   `python -m vending.sync_requests`.
@@ -205,7 +209,8 @@ Both `preview_desired_state` and `submit_desired_state` return these.
 | `product_unknown` | The SKU is not active in the catalog. |
 | `price_off_step` | No sale price, a malformed one, or not a multiple of 5 cents. |
 | `below_floor` | Price under the slot's floor, or $0.00. |
-| `above_ceiling` | Price over the ceiling (`price_ceiling_cents`, $6.50 by default). |
+| `above_ceiling` | Price over the ceiling (`price_ceiling_cents`, $6.50 by default), or for the wildcard slot over the wildcard ceiling (`wildcard_ceiling_cents`, $8.00). |
+| `wildcard` | The wildcard slot's own purchase is over the $82.00 cap, its product would be in two slots, it would switch while another slot's contents are unknown, or another slot takes its product without a promotion the data backs (`docs/agent/wildcard.md`). |
 | `unknown_capacity` | Nobody knows how many of this package fit in a column. |
 | `over_capacity` | `fill_to` is more than fit in a column. |
 | `bad_sourcing` | A purchase option is invalid (store, Amazon link, pack size, max price below expected). |
@@ -333,6 +338,21 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   - The POST is never retried: a retry after a lost answer could file it twice.
 - **Owner**: Kevin Sykes built it (PR #14); Marshall Strong fixed the bugs found in review
   (PR #33). Issue #24 has no assignee.
+
+## `set_wildcard_slot`
+
+- **Inputs**: `slot` and `reason`.
+- **Outputs**: `success` and a message; on a refusal, `refusals`.
+- **Preconditions**: the halt switch is off; our slot assignment is recorded; no wildcard slot is set
+  yet (asking for the slot already set succeeds and changes nothing).
+- **Side effects**: config `wildcard_slot` is set, once; it is write-once, so only a person deleting
+  the row by hand can change it. One `action_log` row for the attempt, with the reason, and one
+  for the config change.
+- **Cost**: database only.
+- **Failure behavior**: code `wildcard`, every reason at once: not one of ours, not on a middle
+  shelf (2 to 4), column 5 (beside the machine's centre line), no reason, or a slot already set.
+  `halted` when the halt switch is on.
+- **Owner**: Kevin Sykes (PR #166).
 
 ## `set_price`
 

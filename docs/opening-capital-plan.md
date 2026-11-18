@@ -35,7 +35,7 @@ This plan owns the Summative 2 money numbers; the restock policy (`docs/restock-
 
 **Headroom.** At expected prices the example's 19 regular slots cost $308.26, $51.74 under the cap. After the fill and the wildcard at their most ($360 + $82) and one live run between the ledger's opening and 3 Dec ($1), $600 − $443 = $157 stays spendable.
 
-**The wildcard slot is adopted** (Kevin's proposal on #100; the team agreed on #110, item 1, 16 Nov). One of our 20 slots tests products for the other 19 (`docs/agent/wildcard.md`). The fill cap covers the 19 regular slots ($360), the wildcard gets its own $82 line, and the safety margin is $31. The planner enforces the $82.00 cap on every purchase for it (`wildcard_purchase_cap_cents`).
+**The wildcard slot is adopted** (Kevin's proposal on #100; the team agreed on #110, item 1, 16 Nov). One fixed slot of our 20 tests products for the other 19 (`docs/agent/wildcard.md`). The fill cap covers the 19 regular slots ($360), the wildcard gets its own $82 line, and the safety margin is $31. The planner enforces the $82.00 cap on every purchase for it (`wildcard_purchase_cap_cents`).
 
 ## 1. The day-one fill
 
@@ -109,7 +109,7 @@ A slot is flagged after 5 in-stock class days with no sales (PR #100). The first
 
 The team agreed on #110 (item 1), 16 Nov: one wildcard, 19 regular slots. Adopting it cut the fill cap from $366.00 for 20 slots to $360.00 for 19, added this line, and cut the safety margin from $107.00 to $31.00 ($600 − $360 − $82 − $50 − $9 − $68).
 
-**What it is** (Kevin, #100; rules in `docs/agent/wildcard.md`). A testing ground: a product with no sales of ours gets a trial in the wildcard, priced as a regular slot would be. After 5 in-stock class days, if it earns more profit per in-stock class day than the weakest regular slot, it becomes a regular slot and the weakest product goes to the closet. The agent names the slot in its plan with a reason and moves it only at a Friday visit. Its ceiling is $8.00 (others $6.50, PR #100) for a deliberate price test; same floor as every slot. Aim: every sale profits, no loss leaders, which needs a floor above today's break-even (Open decision 3; Kevin's margin-floor proposal on #100). Purchase cap $82 (below).
+**What it is** (Kevin, #100; rules in `docs/agent/wildcard.md`). A testing ground in one fixed slot, set once after the slot redraw (config `wildcard_slot`) and never moved. A product with no sales of ours gets a trial there, priced as a regular slot would be. If it sells at least 4 units over at least 5 in-stock class days, it is copied into a regular slot that sold nothing since the last Friday visit (a silent slot), whose product goes to the closet, and the wildcard moves on to the next product. Its ceiling is $8.00 (others $6.50, PR #100) for a deliberate price test; same floor as every slot. Aim: every sale profits, no loss leaders, which needs a floor above today's break-even (Open decision 3; Kevin's margin-floor proposal on #100). Purchase cap $82 (below).
 
 **Bound.** No product is picked; the dearest listed unit is Pepsi 20 oz at $2.50 ($29.99 ÷ 12). An $8.00 price allows a unit cost up to $8.00 ÷ 1.08 = $7.407 (`vending/pricing.py` allows fractional cents). The largest column holds 11: 11 × $7.407 = $81.48 → $82.00. (12 oz can column: $59.26; 20 oz: $51.85.)
 
