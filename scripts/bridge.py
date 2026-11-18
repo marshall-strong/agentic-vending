@@ -14,8 +14,8 @@ One command per question you might have about the machine or our account:
     python scripts/bridge.py request REQUEST_ID     where a purchase request has got to
     python scripts/bridge.py poll --live            read the machine right now (see below)
 
-From the 3 Dec 2026 start, `raw`, `latest` and `poll` print only our selections
-and the door counter (see "From the start" below).
+From the 3 Dec 2026 start, `raw`, `latest` and `poll` print a view rebuilt from
+our selections and the door counter only (see "From the start" below).
 
 Settings come from `.env` at the repository root (copy `.env.example`), or from
 the environment: `DEX_BASE_URL` and `DEX_API_KEY`. You must be on Tailscale --
@@ -36,23 +36,28 @@ Two things this script deliberately does not do:
 **From the start (3 Dec 2026, `vending.start`).** From then a poll carries all
 40 selections, the other team's 20 too, and nothing may show their
 per-selection data or a machine-wide total that includes their sales
-(`docs/integrity.md`). So when `raw`, `latest` or `poll` print a poll from the
-start, they print only:
+(`docs/integrity.md`). Our selections are the stored assignment
+(`vending.slots.our_slots`, which needs `DATABASE_URL`), never a fresh
+`/api/v1/slots` answer. For a poll from the start:
 
-- the envelope and the `ID` records (`DXS`, `ST`, `ID1`, `ID4`, ..., `G85`, `SE`, `DXE`),
-- the `PA` block (`PA1`, `PA2`, ...) of each of our selections,
-- the door counter, `EA2*DO`, which dates visits and nothing more.
+- `raw`, `latest` and `poll --live` print a view rebuilt from checked fields,
+  not lines copied from the poll: `ID4` with its decimal places, `PA1` (the
+  selection and its price) and `PA2` (its counters) for each of our selections,
+  and the door counter `EA2*DO` with its counts. Nothing else: no envelope, no
+  `ID1`, no `G85` checksum, no other team's selection and no machine-wide total
+  (`VA1`, the cash and card records, the rest). A note on stderr says how many
+  lines were left out. When the assignment can't be read, no selection is
+  printed, and stderr says so. Nothing prints the whole poll.
+- `--out FILE` saves the raw bytes, because storing the poll is fine. It
+  writes only a regular file: it refuses `-`, a device (`/dev/stdout`, `CON`,
+  `NUL`), a pipe, a directory, or anything else that isn't a regular file.
+- `latest --summary` reads the stored assignment first, and skips every
+  selection that isn't ours before reading any of its fields.
 
-Every other line is left out: the other team's selections and the
-machine-wide totals (`VA1`, the cash and card records, and the rest). The
-`G85` checksum then no longer matches, and a note on stderr says how many lines
-were left out. Our selections are the stored assignment
-(`vending.slots.our_slots`, which needs `DATABASE_URL`); when it can't be read,
-no selection is printed. `raw` isn't told when its poll was taken, so from the
-start it treats every poll as one from the start. `--unredacted` prints
-everything: for a poll from before the start, or to debug the machine itself.
-`--out FILE` always saves the raw bytes, because storing the poll is fine.
-`latest --summary` already shows only our slots.
+`raw` isn't told when its poll was taken, so from the start it treats every
+poll as one from the start. A poll from before the start prints whole, as
+before. An error from a poll route (`history`, `raw`, `poll`) shows the status
+and a short reason, never the bridge's reply.
 
 Standard library only, except reading the stored assignment, so it runs
 anywhere Python 3.11 does with nothing to install.
@@ -62,11 +67,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import stat
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from http import HTTPStatus
 from pathlib import Path
 
 # Exit codes, so a wrapper script can tell failures apart.
@@ -80,6 +89,18 @@ EXIT_REFUSED = 6        # this script declined to do it (for example `poll` with
 # A live poll takes about 8.5 s; give it room. Everything else is quick.
 TIMEOUT_SECONDS = 15
 POLL_TIMEOUT_SECONDS = 30
+
+
+# Routes whose replies are polls or list them. Their error replies are never printed (see `call`).
+POLL_ROUTES = ("/api/v1/history", "/api/v1/poll")
+
+
+def status_phrase(code: int) -> str:
+    """A status's standard phrase, from the standard library, not from the bridge."""
+    try:
+        return HTTPStatus(code).phrase
+    except ValueError:
+        return "error"
 
 
 class BridgeError(Exception):
@@ -146,13 +167,18 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read(), dict(response.headers.items())
     except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
-        detail = body
-        try:
-            parsed = json.loads(body)
-            detail = parsed.get("error") or parsed.get("detail") or body
-        except (json.JSONDecodeError, AttributeError):
-            pass
+        if path.startswith(POLL_ROUTES):
+            # From the start a poll carries the other team's data, so a poll route's reply is never
+            # echoed, not even an error's: the status and its standard phrase only.
+            detail = status_phrase(error.code)
+        else:
+            body = error.read().decode("utf-8", errors="replace")
+            detail = body
+            try:
+                parsed = json.loads(body)
+                detail = parsed.get("error") or parsed.get("detail") or body
+            except (json.JSONDecodeError, AttributeError):
+                pass
         if error.code in (401, 403):
             raise BridgeError(
                 f"{error.code}: the bridge rejected our key ({detail}). "
@@ -190,43 +216,57 @@ def print_json(value: object) -> None:
 # EVA-DTS, just enough for `latest --summary`
 # --------------------------------------------------------------------------
 
-def summarize(dex_text: str, our_slots: list[str]) -> list[dict[str, object]]:
-    """Price and lifetime units sold for each of our slots.
+def number(field: str) -> int | None:
+    """A field of counts or money as an int: 1 to 12 digits and nothing else, or None."""
+    return int(field) if re.fullmatch(r"[0-9]{1,12}", field) else None
+
+
+def summarize(dex_text: str, ours: tuple[str, ...] | list[str]) -> list[dict[str, object]]:
+    """Price and lifetime units sold for each of `ours`, our selections from the stored assignment.
 
     Records are `*`-separated, one per line. `PA1*<selection>*<price>` opens a
     selection, and the `PA2*<units>*<value>*...` line after it holds that
     selection's lifetime counters. Currency is an integer; `ID4-01` (the first
     field after the tag, `ID4*2*...`) says how many decimal places it carries.
 
+    A selection that isn't one of `ours` is skipped at its `PA1`: only its name is compared, and
+    no other field of it, or of its `PA2`, is read. A field that isn't a plain number is None.
+
     This does not validate the `G85` checksum, so treat it as a quick look, not
     as data to build on. The real parser belongs in the history sync.
     """
+    wanted = set(ours)
     decimals = 2
-    rows: dict[str, dict[str, object]] = {}
+    rows: dict[str, dict[str, int | None]] = {}
     current: str | None = None
     for line in dex_text.splitlines():
         fields = line.strip().split("*")
         tag = fields[0]
-        if tag == "ID4" and len(fields) > 1 and fields[1].isdigit():
-            decimals = int(fields[1])
-        elif tag == "PA1" and len(fields) > 2:
-            current = fields[1]
-            rows[current] = {"slot": current, "price_cents": int(fields[2] or 0)}
-        elif tag == "PA2" and current is not None and len(fields) > 2:
-            rows[current]["lifetime_units"] = int(fields[1] or 0)
-            rows[current]["lifetime_value_cents"] = int(fields[2] or 0)
+        if not tag.startswith("PA"):
+            current = None
+        if tag == "ID4" and len(fields) > 1:
+            places = number(fields[1])
+            if places is not None and places <= 6:
+                decimals = places
+        elif tag == "PA1":
+            current = fields[1] if len(fields) > 1 and fields[1] in wanted else None
+            if current is not None:
+                rows[current] = {"price_cents": number(fields[2]) if len(fields) > 2 else None}
+        elif tag == "PA2" and current is not None:
+            rows[current]["lifetime_units"] = number(fields[1]) if len(fields) > 1 else None
+            rows[current]["lifetime_value_cents"] = number(fields[2]) if len(fields) > 2 else None
             current = None
 
     scale = 10 ** decimals
     result = []
-    for slot in our_slots:
-        row = rows.get(slot, {"slot": slot})
+    for slot in ours:
+        row = rows.get(slot, {})
+        price, value = row.get("price_cents"), row.get("lifetime_value_cents")
         result.append({
             "slot": slot,
-            "price": f"${row['price_cents'] / scale:.2f}" if "price_cents" in row else None,
+            "price": f"${price / scale:.2f}" if price is not None else None,
             "lifetime_units": row.get("lifetime_units"),
-            "lifetime_sales": f"${row['lifetime_value_cents'] / scale:,.2f}"
-            if "lifetime_value_cents" in row else None,
+            "lifetime_sales": f"${value / scale:,.2f}" if value is not None else None,
         })
     return result
 
@@ -235,34 +275,66 @@ def summarize(dex_text: str, our_slots: list[str]) -> list[dict[str, object]]:
 # From the start: only our selections (see the module docstring)
 # --------------------------------------------------------------------------
 
-# Records that frame the document; "" is a blank line.
-ENVELOPE = {"DXS", "ST", "G85", "SE", "DXE", ""}
+def counts(fields: list[str]) -> list[str]:
+    """The leading fields that are plain numbers (0 to 12 digits), up to the first that isn't."""
+    kept = []
+    for field in fields:
+        if not re.fullmatch(r"[0-9]{0,12}", field):
+            break
+        kept.append(field)
+    return kept
 
 
-def redact(dex_text: str, ours: tuple[str, ...] | list[str]) -> tuple[str, int]:
-    """`dex_text` with only what a poll from the start may show, and how many lines were left out.
+def rebuild(dex_text: str, ours: tuple[str, ...] | list[str]) -> tuple[str, int, int]:
+    """What a poll from the start may show: (text, how many of `ours` it prints, lines left out).
 
-    An allowlist, so a record nobody thought of is left out, not shown: the envelope, the `ID`
-    records, the `EA2*DO` door counter, and each `PA` block whose `PA1` names one of `ours`. A
-    `PA` block runs from its `PA1` to the next record that isn't a `PA` record. Line endings
-    stay as they were.
+    Nothing is copied from the poll. Each line is written anew from a known tag and fields
+    checked to be plain numbers, so a record nobody thought of, or a field that isn't a number,
+    can't come through:
+
+    - `ID4*<decimal places>`, so a price can be read;
+    - for each `PA1` that names one of `ours`: `PA1*<selection>*<price>`, then `PA2*<counts>`
+      from a `PA2` that follows it in the same `PA` block;
+    - `EA2*DO*<counts>`, the door counter.
+
+    Every other line is left out, the envelope and `G85` too (its checksum would be wrong). A
+    selection that isn't ours is dropped at its `PA1`, before any other field of it is read. A
+    field that isn't a number ends its record there. Lines end as the poll's do.
     """
-    kept: list[str] = []
-    left_out = 0
-    in_ours = False
-    for line in dex_text.splitlines(keepends=True):
+    wanted = set(ours)
+    newline = "\r\n" if "\r\n" in dex_text else "\n"
+    out: list[str] = []
+    printed = left_out = 0
+    current: str | None = None   # one of ours, whose PA2 may come next
+    for line in dex_text.splitlines():
+        if not line.strip():
+            continue
         fields = line.strip().split("*")
         tag = fields[0]
-        if tag == "PA1":
-            in_ours = len(fields) > 1 and fields[1] in ours
-        elif not tag.startswith("PA"):
-            in_ours = False
-        door = tag == "EA2" and len(fields) > 1 and fields[1] == "DO"
-        if (tag.startswith("PA") and in_ours) or tag in ENVELOPE or tag.startswith("ID") or door:
-            kept.append(line)
-        else:
+        record = None
+        if not tag.startswith("PA"):
+            current = None
+        if tag == "ID4":
+            places = counts(fields[1:2])
+            if places and places[0]:
+                record = f"ID4*{places[0]}"
+        elif tag == "PA1":
+            current = fields[1] if len(fields) > 1 and fields[1] in wanted else None
+            if current is not None:
+                record = "*".join(["PA1", current, *counts(fields[2:3])])
+                printed += 1
+        elif tag == "PA2" and current is not None:
+            found = counts(fields[1:])
+            if found:
+                record = "*".join(["PA2", *found])
+            current = None
+        elif tag == "EA2" and len(fields) > 1 and fields[1] == "DO":
+            record = "*".join(["EA2", "DO", *counts(fields[2:])])
+        if record is None:
             left_out += 1
-    return "".join(kept), left_out
+        else:
+            out.append(record)
+    return "".join(record + newline for record in out), printed, left_out
 
 
 def our_selections() -> tuple[tuple[str, ...], str | None]:
@@ -280,19 +352,27 @@ def our_selections() -> tuple[tuple[str, ...], str | None]:
         return (), f"{type(error).__name__}: {str(error)[:200]}"
 
 
-def show_poll(body: bytes, out: str | None, taken: datetime, unredacted: bool) -> None:
-    """Save a poll byte for byte, or print it; one from the start with only our selections."""
-    if out or unredacted or not on_or_after_start(taken):
-        write_text(body, out)
+def show_poll(body: bytes, out: str | None, taken: datetime) -> None:
+    """Print a poll, or save it byte for byte. One from the start prints only as `rebuild` writes
+    it, and saves only to a regular file (`save`). One from before the start is as it always was."""
+    after = on_or_after_start(taken)
+    if out:
+        if after:
+            save(body, out)
+        else:
+            write_text(body, out)
+        return
+    if not after:
+        write_text(body, None)
         return
     ours, why = our_selections()
     if why:
         print(f"note: our slot assignment can't be read ({why}), so no selection is printed",
               file=sys.stderr)
-    text, left_out = redact(body.decode("utf-8", errors="replace"), ours)
-    print(f"note: a poll from the start ({START:%d %b %Y}): {left_out} lines left out (the other "
-          "team's selections and the machine-wide totals), so G85 won't match. --out FILE saves "
-          "the whole poll", file=sys.stderr)
+    text, printed, left_out = rebuild(body.decode("utf-8", errors="replace"), ours)
+    print(f"note: a poll from the start ({START:%d %b %Y}): {printed} of our selections, rebuilt from "
+          f"checked fields; {left_out} lines left out (the other team's selections, the machine-wide "
+          "totals, the envelope and G85). --out FILE saves the whole poll", file=sys.stderr)
     sys.stdout.write(text)
 
 
@@ -334,10 +414,19 @@ def cmd_history(args: argparse.Namespace) -> None:
 def cmd_raw(args: argparse.Namespace) -> None:
     body, _ = call("GET", f"/api/v1/history/{urllib.parse.quote(args.session_id)}/raw")
     # The route doesn't say when the poll was taken, so from the start every poll counts as one from it.
-    show_poll(body, args.out, datetime.now(timezone.utc), args.unredacted)
+    show_poll(body, args.out, datetime.now(timezone.utc))
 
 
 def cmd_latest(args: argparse.Namespace) -> None:
+    ours: tuple[str, ...] = ()
+    if args.summary:
+        # Ours from the stored assignment, read before any poll; never from a fresh /api/v1/slots.
+        ours, why = our_selections()
+        if why:
+            print(f"note: our slot assignment can't be read ({why}), so no selection is printed",
+                  file=sys.stderr)
+            print_json([])
+            return
     # History is oldest first. Yesterday and today together always include the
     # newest poll, since David's poller runs every hour.
     today = datetime.now(timezone.utc)
@@ -355,10 +444,9 @@ def cmd_latest(args: argparse.Namespace) -> None:
 
     body, _ = call("GET", f"/api/v1/history/{newest['session_id']}/raw")
     if args.summary:
-        our_slots = get_json("/api/v1/slots").get("slots", [])
-        print_json(summarize(body.decode("utf-8", errors="replace"), our_slots))
+        print_json(summarize(body.decode("utf-8", errors="replace"), ours))
     else:
-        show_poll(body, args.out, taken_at(newest["started_at"]), args.unredacted)
+        show_poll(body, args.out, taken_at(newest["started_at"]))
 
 
 def cmd_request(args: argparse.Namespace) -> None:
@@ -377,11 +465,11 @@ def cmd_poll(args: argparse.Namespace) -> None:
     cached = {k.lower(): v for k, v in headers.items()}.get("x-poll-cached")
     if cached == "true":
         print("note: someone polled in the last 30 seconds; this is their read", file=sys.stderr)
-    show_poll(body, args.out, datetime.now(timezone.utc), args.unredacted)
+    show_poll(body, args.out, datetime.now(timezone.utc))
 
 
 def write_text(body: bytes, out: str | None) -> None:
-    """Print a raw document, or save it byte for byte so its checksum survives."""
+    """Print a raw document, or save it byte for byte so its checksum survives. Before the start only."""
     if out:
         Path(out).write_bytes(body)
         print(f"wrote {len(body)} bytes to {out}", file=sys.stderr)
@@ -389,13 +477,61 @@ def write_text(body: bytes, out: str | None) -> None:
         sys.stdout.write(body.decode("utf-8", errors="replace"))
 
 
+# Windows device names. `CON`, `nul.txt` or `C:\x\COM1` open a device, not a file, in any folder.
+DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$",
+                *(f"{port}{n}" for port in ("COM", "LPT") for n in (*"0123456789", "\u00b9", "\u00b2", "\u00b3"))}
+
+
+def device_name(out: str) -> bool:
+    """`out` names a Windows device (`CON`, `nul.txt`, `\\\\.\\pipe\\x`). Refused on every system,
+    so the rule is the same on each."""
+    if out.replace("/", "\\").startswith(("\\\\.\\", "\\\\?\\")):
+        return True
+    name = re.split(r"[\\/]", out)[-1]
+    return name.split(".", 1)[0].rstrip(" :").upper() in DEVICE_NAMES
+
+
+def save(body: bytes, out: str) -> None:
+    """Save a poll from the start byte for byte, to a regular file and nowhere else.
+
+    `--out` is for archiving, so it can't be a way round the rebuilt view: `-`, a device
+    (`/dev/stdout`, `/dev/tty`, `CON`), a pipe, a socket or a directory is refused, and nothing
+    is written. The target is checked after following links, and again on the opened file, so
+    one swapped in between is refused too.
+    """
+    def refuse(why: str) -> BridgeError:
+        return BridgeError(f"--out {out!r} {why}. A poll from the start is saved only to a regular "
+                           "file, never to the terminal, a device or a pipe.", EXIT_REFUSED)
+
+    if out == "-" or device_name(out):
+        raise refuse("names the terminal or a device")
+    try:
+        found = Path(out).resolve().stat()
+    except FileNotFoundError:
+        found = None
+    except OSError as error:
+        raise refuse(f"can't be checked ({error.strerror or type(error).__name__})") from None
+    if found is not None and not stat.S_ISREG(found.st_mode):
+        raise refuse("isn't a regular file")
+    # No O_TRUNC: the file is emptied only once it is known to be a regular one. O_NONBLOCK, so a
+    # pipe swapped in with nobody reading fails at once instead of waiting.
+    flags = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+             | getattr(os, "O_NOCTTY", 0))
+    try:
+        fd = os.open(out, flags, 0o644)
+    except OSError as error:
+        raise refuse(f"can't be opened ({error.strerror or type(error).__name__})") from None
+    with open(fd, "wb", closefd=True) as file:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise refuse("isn't a regular file")
+        file.truncate(0)
+        file.write(body)
+    print(f"wrote {len(body)} bytes to {out}", file=sys.stderr)
+
+
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
-
-UNREDACTED = ("print the whole of a poll from the start, the other team's selections and the "
-              "machine-wide totals too (read docs/integrity.md first)")
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -417,14 +553,12 @@ def build_parser() -> argparse.ArgumentParser:
     raw = commands.add_parser("raw", help="one stored poll as raw EVA-DTS text")
     raw.add_argument("session_id")
     raw.add_argument("--out", help="save to this file instead of printing")
-    raw.add_argument("--unredacted", action="store_true", help=UNREDACTED)
     raw.set_defaults(run=cmd_raw)
 
     latest = commands.add_parser("latest", help="the newest stored poll")
     latest.add_argument("--summary", action="store_true",
                         help="print price and lifetime sales for our slots instead of raw text")
     latest.add_argument("--out", help="save the raw text to this file")
-    latest.add_argument("--unredacted", action="store_true", help=UNREDACTED)
     latest.set_defaults(run=cmd_latest)
 
     request = commands.add_parser("request", help="status of one of our purchase requests")
@@ -434,7 +568,6 @@ def build_parser() -> argparse.ArgumentParser:
     poll = commands.add_parser("poll", help="read the machine live (needs --live)")
     poll.add_argument("--live", action="store_true", help="yes, really read the machine now")
     poll.add_argument("--out", help="save to this file instead of printing")
-    poll.add_argument("--unredacted", action="store_true", help=UNREDACTED)
     poll.set_defaults(run=cmd_poll)
 
     return parser
