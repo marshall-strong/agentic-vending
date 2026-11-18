@@ -41,8 +41,12 @@ The interval holding the load mixes the old product's sales with the new one's,
 so it is left out of both units and days. Units sold past what the receipts
 loaded have no cost, so they make the profit unknown rather than free.
 
+A promotion goes only into a **silent slot** (`silent_slots`): a regular slot
+that sold nothing since the last Friday visit, over `SILENT_DAYS` in-stock
+class days the polls watched, with its stock confirmed.
+
 `judge`, `slot_record` and `intervals` are pure; `last_friday_visit`,
-`standing_prices` and `trial` read the database.
+`standing_prices`, `trial` and `silent_slots` read the database.
 """
 
 from __future__ import annotations
@@ -53,7 +57,7 @@ from fractions import Fraction
 
 import psycopg
 
-from vending import config, counters, demand, stock
+from vending import config, counters, demand, slot_counts, stock
 from vending.class_days import EASTERN, class_days_after, eastern_date
 from vending.pricing import DEFAULT_TAX_PERCENT
 from vending.slots import DEVICE_ID
@@ -402,3 +406,161 @@ def _readings(conn: psycopg.Connection, since: datetime, until: datetime, slots:
 def _setting(conn: psycopg.Connection, key: str, default: int) -> int:
     value = config.get_value(conn, key)
     return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
+# --- Silent slots -------------------------------------------------------------
+# A promotion fills a silent slot: a regular slot that sold nothing since the last
+# Friday visit while it held stock (Kevin, 18 Nov). Never one that sold.
+
+SILENT_DAYS = 4             # in-stock class days the polls must have seen since the visit: Monday to Thursday
+SEEN_UNTIL = time(18, 0)    # Eastern: a class day counts once the polls watched it to here, so its sales are in
+
+
+@dataclass(frozen=True)
+class Silent:
+    slot: str
+    product: str
+    class_days_seen: int              # in-stock class days the polls watched since the window began
+    quiet_since: datetime             # the later of its last sale and its last load
+    unit_margin_cents: Fraction | None   # latest polled price without tax, less unit cost; None if either is unknown
+    evidence: str                     # what confirms it held stock
+
+
+@dataclass(frozen=True)
+class Unconfirmed:
+    """Sold nothing, but nothing confirms it held stock: maybe empty, not silent."""
+    slot: str
+    product: str
+    why: str
+
+
+@dataclass(frozen=True)
+class NotSilent:
+    slot: str
+    why: str
+
+
+@dataclass(frozen=True)
+class SilentReport:
+    window_start: datetime | None     # the last Friday visit's Friday, 00:00 Eastern; None: unknown or none yet
+    silent: tuple[Silent, ...]        # ranked: silent longest, then lowest unit margin, then slot
+    unconfirmed: tuple[Unconfirmed, ...]
+    not_silent: tuple[NotSilent, ...]
+    reason: str | None = None         # why `window_start` is None
+
+
+def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotCount],
+                 loads: dict[str, list[tuple[datetime, int]]], sales: tuple[stock.SaleCost, ...],
+                 slots: tuple[str, ...], wildcard: str | None) -> SilentReport:
+    """Which of our regular slots are silent: sold nothing since the last Friday visit, while holding stock.
+
+    A slot is silent when all of these hold, over the window from 00:00 Eastern
+    on the Friday of the last Friday visit (`last_friday_visit`) to `now`:
+
+    1. Its units counter rose in no poll window ending in it, however long the
+       window: one sale inside a gap must not be missed. A lone drop the next
+       poll hasn't settled, or no good poll since the window began, makes it
+       unknown, not silent.
+    2. It held one product the whole window (its last product change is at
+       or before the window's start).
+    3. Its stock is confirmed: the receipts say it holds units now, and a
+       receipt shows units loaded into it at or since the visit, or a person's
+       count since the visit saw units in it. Otherwise it is unconfirmed,
+       maybe empty, not silent; a count since the visit that saw it empty
+       says so.
+    4. The polls watched `SILENT_DAYS` in-stock class days of it in the window
+       (intervals no longer than `MAX_POLL_GAP`, each day watched from its
+       midnight to `SEEN_UNTIL`). With fewer it isn't silent yet.
+
+    The wildcard is never a silent slot, nor is a slot no receipt describes.
+    """
+    regular = [s for s in slots if s != wildcard]
+    start, why = last_friday_visit(conn, now)
+    if start is None:
+        return SilentReport(None, (), (), tuple(NotSilent(s, why) for s in regular), why)
+    readings = _readings(conn, start, now, regular)
+    seen = _counted(conn)
+    tax_percent = _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
+    silent: list[Silent] = []
+    unconfirmed: list[Unconfirmed] = []
+    not_silent: list[NotSilent] = []
+    for slot in regular:
+        c = counts.get(slot)
+        if c is None:
+            not_silent.append(NotSilent(slot, "no receipts say what it holds"))
+            continue
+        mine = readings.get(slot, [])
+        units = [(at, u) for at, u, _, _ in mine]
+        if not any(at > start for at, _ in units):
+            not_silent.append(NotSilent(slot, "unknown: no good poll since the window began"))
+            continue
+        if counters.unsettled(units):
+            not_silent.append(NotSilent(slot, "unknown: its units counter's latest reading is a drop the next "
+                                              "poll hasn't settled"))
+            continue
+        sold = sum(rise for _, at, rise in counters.windows(units) if at > start)
+        if sold:
+            not_silent.append(NotSilent(slot, f"sold {sold} since the window began"))
+            continue
+        if c.since > start:
+            not_silent.append(NotSilent(slot, f"its product changed on {c.since:%Y-%m-%d}"))
+            continue
+        loaded = [(at, n) for at, n in loads.get(slot, []) if at >= start]
+        look = seen.get(slot)
+        look = look if look is not None and look["counted_at"] >= start else None
+        if c.units <= 0:
+            unconfirmed.append(Unconfirmed(slot, c.product, "the receipts say it is empty"))
+            continue
+        if look is not None and look["units_counted"] == 0:
+            unconfirmed.append(Unconfirmed(slot, c.product, (
+                f"a person counted it empty on {look['counted_at']:%Y-%m-%d}")))
+            continue
+        if look is not None and look["units_counted"]:
+            evidence = (f"{look['source']} count {look['count_id']} on {look['counted_at']:%Y-%m-%d}: "
+                        f"{look['units_counted']} units")
+        elif loaded:
+            evidence = f"loaded {sum(n for _, n in loaded)} at the visit on {loaded[0][0]:%Y-%m-%d}"
+        else:
+            unconfirmed.append(Unconfirmed(slot, c.product, (
+                "no receipt shows units loaded at the last Friday visit and no count since saw it, so it may be "
+                "empty; a count of it confirms it")))
+            continue
+        days = len(_watched_days(_measure(c, start, now, loads.get(slot, []), sales, mine, None).intervals))
+        if days < SILENT_DAYS:
+            not_silent.append(NotSilent(slot, f"{days} of {SILENT_DAYS} in-stock class days seen since the window "
+                                              "began; not silent yet"))
+            continue
+        last_sale = max((s.at for s in sales if s.slot == slot), default=None)
+        last_load = max((at for at, _ in loads.get(slot, [])), default=None)
+        quiet = max(at for at in (last_sale, last_load, c.since) if at is not None)
+        price = next((p for _, _, _, p in reversed(mine) if p is not None), None)
+        margin = (None if price is None or c.unit_cost is None
+                  else Fraction(price - tax_cents(price, tax_percent)) - c.unit_cost)
+        silent.append(Silent(slot, c.product, days, quiet, margin, evidence))
+    silent.sort(key=lambda s: (s.quiet_since, s.unit_margin_cents is None, s.unit_margin_cents or 0, s.slot))
+    return SilentReport(start, tuple(silent), tuple(unconfirmed), tuple(not_silent))
+
+
+def _watched_days(kept: list[Interval]) -> list[date]:
+    """The in-stock class days in `kept` the polls watched from midnight to `SEEN_UNTIL`, Eastern. Pure."""
+    covered: list[list[datetime]] = []
+    for i in sorted(kept, key=lambda i: i.begin):
+        if covered and i.begin <= covered[-1][1]:
+            covered[-1][1] = max(covered[-1][1], i.end)
+        else:
+            covered.append([i.begin, i.end])
+    out = []
+    for day in sorted({d for i in kept for d in i.days}):
+        lo, hi = datetime.combine(day, time(0), tzinfo=EASTERN), datetime.combine(day, SEEN_UNTIL, tzinfo=EASTERN)
+        if any(a <= lo and hi <= b for a, b in covered):
+            out.append(day)
+    return out
+
+
+def _counted(conn: psycopg.Connection) -> dict[str, dict]:
+    """The latest person's count per selection (`vending.slot_counts.latest`), or none if the table isn't there."""
+    try:
+        with conn.transaction():
+            return slot_counts.latest(conn, DEVICE_ID)
+    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+        return {}

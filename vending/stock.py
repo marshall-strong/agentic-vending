@@ -593,6 +593,17 @@ def load_movements(conn: psycopg.Connection) -> list[Movement]:
     return movements_from_receipts(lines, losses) + sales_from_counters(counters)
 
 
+def loads(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
+    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`."""
+    out: dict[str, list[tuple[datetime, int]]] = {}
+    for slot, at, units in conn.execute(
+            "select l.slot, l.resolved_at, l.units_loaded from purchase_lines l join purchase_requests r"
+            " using (request_id) where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded')"
+            " and l.units_loaded > 0 and l.resolved_at is not null"):
+        out.setdefault(slot, []).append((at, units))
+    return out
+
+
 def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
     """`weighted_average` of the movements up to `until`. Pure.
 

@@ -246,7 +246,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
     seen = _seen(conn)
     latest_counters = _counters(conn, latest[0], slots)
-    loads = _loads(conn)
+    loads = stock.loads(conn)
     demands = _demands(counts, loads, counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
@@ -363,17 +363,6 @@ def _last_loaded(conn: psycopg.Connection) -> dict[str, datetime]:
         " where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded') and l.units_loaded > 0"
         " group by l.slot")
     return dict(rows)
-
-
-def _loads(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
-    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`."""
-    loads: dict[str, list[tuple[datetime, int]]] = {}
-    for slot, at, units in conn.execute(
-            "select l.slot, l.resolved_at, l.units_loaded from purchase_lines l join purchase_requests r"
-            " using (request_id) where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded')"
-            " and l.units_loaded > 0 and l.resolved_at is not null"):
-        loads.setdefault(slot, []).append((at, units))
-    return loads
 
 
 def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[datetime, int]]],

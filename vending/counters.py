@@ -29,6 +29,14 @@ def rises(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, int]
     return [(at, rise) for _, at, rise in windows(readings)]
 
 
+def unsettled(readings: Iterable[tuple[datetime, int]]) -> bool:
+    """True when the latest reading is a lone drop the next poll hasn't settled: a misread or a restart. Pure.
+
+    Until it is settled, nothing can say whether the counter rose since.
+    """
+    return _walk(readings, False)[1] is not None
+
+
 def windows(readings: Iterable[tuple[datetime, int]], zeros: bool = False) -> list[tuple[datetime, datetime, int]]:
     """`(start, at, rise)`: each rise with the poll it is measured from. Pure.
 
@@ -39,6 +47,12 @@ def windows(readings: Iterable[tuple[datetime, int]], zeros: bool = False) -> li
     `zeros=True` also gives the windows where the counter didn't rise, so a
     stretch the polls saw sell nothing can be told from one they didn't see.
     """
+    return _walk(readings, zeros)[0]
+
+
+def _walk(readings: Iterable[tuple[datetime, int]],
+          zeros: bool) -> tuple[list[tuple[datetime, datetime, int]], tuple[datetime, int] | None]:
+    """`windows`, and the lone low reading still waiting for the next poll, if any."""
     out: list[tuple[datetime, datetime, int]] = []
     previous: tuple[datetime, int] | None = None
     pending: tuple[datetime, int] | None = None   # one reading below `previous`, waiting for the next poll to agree
@@ -57,4 +71,4 @@ def windows(readings: Iterable[tuple[datetime, int]], zeros: bool = False) -> li
             if value > pending[1] or (zeros and value == pending[1]):
                 out.append((pending[0], at, value - pending[1]))
             previous, pending = (at, value), None
-    return out
+    return out, pending
