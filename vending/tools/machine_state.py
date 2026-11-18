@@ -57,6 +57,7 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import config, counters, demand, slot_counts, stock, wildcard_trial
+from vending.planner import AGREED_CEILING_CENTS
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
@@ -343,8 +344,10 @@ def trial_reply(trial: wildcard_trial.Trial | None, report: wildcard_trial.Silen
 
 
 def _ceiling(conn: psycopg.Connection) -> int:
+    """The regular ceiling, never above the agreed $6.50 whatever a hand edit stored."""
     value = config.get_value(conn, "price_ceiling_cents")
-    return value if isinstance(value, int) and not isinstance(value, bool) else 650
+    value = value if isinstance(value, int) and not isinstance(value, bool) else AGREED_CEILING_CENTS
+    return min(value, AGREED_CEILING_CENTS)
 
 
 def _trial_note(trial: WildcardTrial | None) -> str:

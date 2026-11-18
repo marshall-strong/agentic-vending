@@ -69,6 +69,12 @@ MAX_PACKS = 20
 MAX_UNITS_PER_PACK = 60
 MAX_PRICE_PER_PACK_CENTS = 20000
 MAX_SALE_PRICE_CENTS = 1000
+
+# The limits the team agreed: the regular ceiling (#100), the wildcard's ceiling (#100) and the most one
+# wildcard purchase may cost (#90). Config and the planner allow these or lower, never higher.
+AGREED_CEILING_CENTS = 650
+AGREED_WILDCARD_CEILING_CENTS = 800
+AGREED_WILDCARD_CAP_CENTS = 8200
 MAX_PACK_DESCRIPTION = 100
 
 # David's cases, one per slot.
@@ -289,6 +295,13 @@ class Config:
                             ("wildcard ceiling", self.wildcard_ceiling_cents)):
             if cents > MAX_SALE_PRICE_CENTS:
                 raise ValueError(f"{name} {_dollars(cents)} is over the API's {_dollars(MAX_SALE_PRICE_CENTS)}")
+        for name, cents, agreed in (("price ceiling", self.price_ceiling_cents, AGREED_CEILING_CENTS),
+                                    ("wildcard ceiling", self.wildcard_ceiling_cents, AGREED_WILDCARD_CEILING_CENTS),
+                                    ("wildcard purchase cap", self.wildcard_purchase_cap_cents,
+                                     AGREED_WILDCARD_CAP_CENTS)):
+            if cents > agreed:
+                raise ValueError(f"{name} {_dollars(cents)} is over the agreed {_dollars(agreed)}; "
+                                 "lower is allowed, higher never")
         if self.wildcard_ceiling_cents < self.price_ceiling_cents:
             raise ValueError(f"wildcard ceiling {_dollars(self.wildcard_ceiling_cents)} is below the "
                              f"ceiling of {_dollars(self.price_ceiling_cents)}")

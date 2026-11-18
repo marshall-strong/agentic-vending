@@ -62,6 +62,7 @@ import psycopg
 
 from vending import config, counters, demand, slot_counts, stock
 from vending.class_days import EASTERN, class_days_after, eastern_date
+from vending.planner import AGREED_CEILING_CENTS
 from vending.pricing import DEFAULT_TAX_PERCENT
 from vending.slots import DEVICE_ID
 from vending.tools.sales_history import tax_cents
@@ -334,7 +335,9 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
     if w is None:
         return Trial(None, slot, False, UNKNOWN,
                      f"slot {slot} is the wildcard, but no receipts show what it holds, so there is nothing to measure")
-    ceiling_cents, tax_percent = _setting(conn, "price_ceiling_cents", 650), _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
+    # Never above the agreed $6.50, whatever a hand edit stored.
+    ceiling_cents = min(_setting(conn, "price_ceiling_cents", AGREED_CEILING_CENTS), AGREED_CEILING_CENTS)
+    tax_percent = _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
     start = w.since
     readings = _readings(conn, start, now, [slot]).get(slot, [])
     standing = standing_prices(conn, [slot]).get(slot)

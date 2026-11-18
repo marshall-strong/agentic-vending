@@ -70,15 +70,16 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
         slots = our_slots(conn)
     except SlotsNotRecorded as error:
         raise NotReady(str(error)) from None
+    ceiling = _limit(conn, "price_ceiling_cents", planner.AGREED_CEILING_CENTS)
     return planner.Config(
         wildcard_slot=wildcard_slot(conn, slots),
         capacity_overrides=overrides,
         slots=slots,
-        price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 650),
-        # Never below the ceiling, even if someone raises the ceiling past it later.
-        wildcard_ceiling_cents=max(_int_setting(conn, "wildcard_ceiling_cents", 800),
-                                   _int_setting(conn, "price_ceiling_cents", 650)),
-        wildcard_purchase_cap_cents=_int_setting(conn, "wildcard_purchase_cap_cents", 8200),
+        price_ceiling_cents=ceiling,
+        # Never below the ceiling: a lowered wildcard ceiling under the regular one is the regular one.
+        wildcard_ceiling_cents=max(_limit(conn, "wildcard_ceiling_cents", planner.AGREED_WILDCARD_CEILING_CENTS),
+                                   ceiling),
+        wildcard_purchase_cap_cents=_limit(conn, "wildcard_purchase_cap_cents", planner.AGREED_WILDCARD_CAP_CENTS),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
         halted=config.is_halted(conn),
@@ -296,6 +297,19 @@ def _stale_warning(o: sourcing.Option, now: datetime, what: str) -> str:
 def _option(o: schema.PurchaseOption) -> planner.PurchaseOption:
     return planner.PurchaseOption(o.store, o.units_per_pack, o.max_price_per_pack, o.url,
                                   o.expected_price_per_pack, o.pack_description)
+
+
+def _limit(conn: psycopg.Connection, key: str, default: int) -> int:
+    """One of the agreed limits from `config`, or `default` when unset. A stored value its check refuses (only a
+    hand edit gets one past `config set`, such as a ceiling above the agreed $6.50) raises `NotReady`."""
+    value = config.get_value(conn, key)
+    if value is None:
+        return default
+    problem = config.KNOWN[key].check(value)
+    if problem:
+        raise NotReady(f"config {key} {problem}, so no plan can be checked against it; a person sets it again "
+                       f"(python -m vending.config set {key} {default} --by NAME)")
+    return value
 
 
 def _int_setting(conn: psycopg.Connection, key: str, default: int) -> int:

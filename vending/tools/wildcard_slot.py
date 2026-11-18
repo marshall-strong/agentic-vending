@@ -32,35 +32,43 @@ CENTRE_COLUMN = "5"                # our column beside the machine's centre line
 
 def set_wildcard_slot(slot: str, reason: str) -> Action:
     def action(conn: psycopg.Connection) -> WriteReply:
-        try:
-            ours = our_slots(conn)
-        except SlotsNotRecorded as error:
-            raise Refused([Refusal("wildcard", str(error))]) from None
+        # Every check comes first, so asking again for a slot that is set but no longer ours, or never was an
+        # allowed spot, is refused rather than confirmed.
+        refusals = problems(conn, slot, reason)
         now = config.get_value(conn, "wildcard_slot")
-        if now == slot:
-            return WriteReply(success=True, message=f"Slot {slot} is already the wildcard; nothing changed.")
-        if now is not None:
-            raise Refused([Refusal("wildcard", (
-                f"the wildcard is slot {now} and never moves; only a person can change it"), slot)])
-        refusals = []
-        if slot not in ours:
-            refusals.append(Refusal("wildcard", f"slot {slot} isn't one of ours ({', '.join(ours)})", slot))
-        else:
-            shelf, column = slot[0], slot[1:]
-            if shelf not in MIDDLE_SHELVES:
-                refusals.append(Refusal("wildcard", (
-                    f"slot {slot} is on shelf {shelf}; the wildcard goes on a middle shelf "
-                    f"({', '.join(MIDDLE_SHELVES)}), an ordinary position"), slot))
-            if column == CENTRE_COLUMN:
-                refusals.append(Refusal("wildcard", (
-                    f"slot {slot} is in column {CENTRE_COLUMN}, beside the machine's centre line, the best-seen "
-                    "position; pick another column so a trial isn't flattered"), slot))
-        if not reason.strip():
-            refusals.append(Refusal("wildcard", "give a reason: why this slot", slot))
+        if now is not None and now != slot:
+            refusals.insert(0, Refusal("wildcard", (
+                f"the wildcard is slot {now} and never moves; only a person can change it"), slot))
         if refusals:
             raise Refused(refusals)
+        if now == slot:
+            return WriteReply(success=True, message=f"Slot {slot} is already the wildcard; nothing changed.")
         config.set_value(conn, "wildcard_slot", slot, "agent")
         return WriteReply(success=True, message=(
             f"Slot {slot} is the wildcard from now on, and never moves. It may sell up to the wildcard ceiling; "
             "every other slot keeps the ceiling. See get_machine_state's wildcard_trial."))
     return action
+
+
+def problems(conn: psycopg.Connection, slot: str, reason: str) -> list[Refusal]:
+    """Why `slot` can't be the wildcard: not ours in the stored assignment, not an ordinary spot, or no reason."""
+    try:
+        ours = our_slots(conn)
+    except SlotsNotRecorded as error:
+        return [Refusal("wildcard", str(error), slot)]
+    refusals = []
+    if slot not in ours:
+        refusals.append(Refusal("wildcard", f"slot {slot} isn't one of ours ({', '.join(ours)})", slot))
+    else:
+        shelf, column = slot[0], slot[1:]
+        if shelf not in MIDDLE_SHELVES:
+            refusals.append(Refusal("wildcard", (
+                f"slot {slot} is on shelf {shelf}; the wildcard goes on a middle shelf "
+                f"({', '.join(MIDDLE_SHELVES)}), an ordinary position"), slot))
+        if column == CENTRE_COLUMN:
+            refusals.append(Refusal("wildcard", (
+                f"slot {slot} is in column {CENTRE_COLUMN}, beside the machine's centre line, the best-seen "
+                "position; pick another column so a trial isn't flattered"), slot))
+    if not reason.strip():
+        refusals.append(Refusal("wildcard", "give a reason: why this slot", slot))
+    return refusals

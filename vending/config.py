@@ -30,9 +30,10 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending.planner import MAX_SALE_PRICE_CENTS
+from vending.planner import (AGREED_CEILING_CENTS, AGREED_WILDCARD_CAP_CENTS, AGREED_WILDCARD_CEILING_CENTS,
+                             MAX_SALE_PRICE_CENTS)
 from vending.pricing import PRICE_STEP_CENTS
-from vending.slots import SLOTS
+from vending.slots import SLOTS, SlotsNotRecorded, our_slots
 
 
 @dataclass(frozen=True)
@@ -59,13 +60,22 @@ def _fee(value: Any) -> str | None:
     return None
 
 
-def _ceiling(value: Any) -> str | None:
-    problem = _whole(value, PRICE_STEP_CENTS, MAX_SALE_PRICE_CENTS, "cents")
-    if problem:
-        return problem + f" (the API refuses any sale price over {MAX_SALE_PRICE_CENTS} cents)"
-    if value % PRICE_STEP_CENTS:
-        return f"must be a multiple of {PRICE_STEP_CENTS} cents, not {value}"
-    return None
+def _ceiling(agreed: int) -> Callable[[Any], str | None]:
+    """A sale-price ceiling: a multiple of the price step, at most the agreed `agreed` cents (lower is allowed)."""
+    def check(value: Any) -> str | None:
+        problem = _whole(value, PRICE_STEP_CENTS, agreed, "cents")
+        if problem:
+            return problem + (f" (the team agreed at most {agreed} cents; lower is allowed, and the API refuses "
+                              f"any sale price over {MAX_SALE_PRICE_CENTS} cents)")
+        if value % PRICE_STEP_CENTS:
+            return f"must be a multiple of {PRICE_STEP_CENTS} cents, not {value}"
+        return None
+    return check
+
+
+def _cap(value: Any) -> str | None:
+    problem = _whole(value, 100, AGREED_WILDCARD_CAP_CENTS, "cents")
+    return problem and problem + f" (the team agreed at most {AGREED_WILDCARD_CAP_CENTS} cents; lower is allowed)"
 
 
 def _slot(value: Any) -> str | None:
@@ -104,12 +114,14 @@ def _overrides(value: Any) -> str | None:
 KNOWN: dict[str, Setting] = {
     "capacity_overrides": Setting("units per column for products a person counted; replaces the whole "
                                   "object, wins over the loading chart (default none)", _overrides),
-    "price_ceiling_cents": Setting("highest sale price the planner allows (default 650)", _ceiling),
+    "price_ceiling_cents": Setting("highest sale price the planner allows (default and most 650)",
+                                   _ceiling(AGREED_CEILING_CENTS)),
     "wildcard_slot": Setting("the one slot that may sell above the ceiling and tests products; set once after "
                              "the redraw and never changed (default none: no slot above the ceiling)", _slot),
-    "wildcard_ceiling_cents": Setting("highest sale price for the one wildcard slot (default 800)", _ceiling),
+    "wildcard_ceiling_cents": Setting("highest sale price for the one wildcard slot (default and most 800)",
+                                      _ceiling(AGREED_WILDCARD_CEILING_CENTS)),
     "wildcard_purchase_cap_cents": Setting("most one purchase for the wildcard slot may cost at the worker's "
-                                           "maximum (default 8200)", lambda v: _whole(v, 100, 20000, "cents")),
+                                           "maximum (default and most 8200)", _cap),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
     "model_run_cap_cents": Setting("most one agent cycle or replay may spend on model calls (default 100)",
@@ -169,7 +181,8 @@ def set_value(conn: psycopg.Connection, key: str, value: Any, who: str) -> None:
     The halt flag has its own function. An unknown key is refused rather than
     saved silently, so a misspelt key can't sit there doing nothing. A key in
     `WRITE_ONCE` that is already set refuses any other value; setting the same
-    value again changes nothing.
+    value again changes nothing. `wildcard_slot` must also be one of ours in the
+    stored slot assignment, checked before either.
     """
     if key == "halted":
         raise ValueError("use set_halted (python -m vending.halt) for the halt flag")
@@ -186,13 +199,22 @@ def set_value(conn: psycopg.Connection, key: str, value: Any, who: str) -> None:
             # The lock makes two first settings take turns, so the second sees the first.
             conn.execute("select pg_advisory_xact_lock(hashtext('config:' || %s))", (key,))
             row = conn.execute("select value from config where key = %s", (key,)).fetchone()
-            if row is not None and row[0] == value:
-                return
-            if row is not None:
+            if row is not None and row[0] != value:
                 raise ValueError(
                     f"{key} is already {json.dumps(row[0])} and never changes: the wildcard is a fixed slot. "
                     f"To change it, a person deletes the row by hand (delete from config where key = '{key}') "
                     "and says why in the team's thread, then sets it again")
+            # One of ours now, by the stored server assignment: checked before the same value is taken as done,
+            # so a slot that has left the assignment is never confirmed.
+            try:
+                ours = our_slots(conn)
+            except SlotsNotRecorded as error:
+                raise ValueError(f"{key}: {error}") from None
+            if value not in ours:
+                raise ValueError(f"{key} {json.dumps(value)} isn't one of ours in the stored slot assignment "
+                                 f"({', '.join(ours)}); check it with python -m vending.slots show")
+            if row is not None:
+                return
         conn.execute(
             "insert into config (key, value, updated_by) values (%s, %s, %s)"
             " on conflict (key) do update set value = excluded.value,"
