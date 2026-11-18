@@ -1,7 +1,7 @@
 """When the competition starts: the one definition every reader uses.
 
 The machine goes live with our products on Thu 3 Dec 2026 (12 Nov notes, row 2;
-`docs/planning/2026-11-17-david-answers.md`). `START` is the start of that day,
+`docs/planning/2026-11-17-david-answers.md (PR #164)`, not on this branch yet). `START` is the start of that day,
 Eastern: 2026-12-03 00:00 America/New_York, 05:00 UTC.
 
 Two rules turn on it (`docs/integrity.md`):
