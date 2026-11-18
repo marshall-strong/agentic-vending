@@ -210,7 +210,7 @@ Both `preview_desired_state` and `submit_desired_state` return these.
 | `price_off_step` | No sale price, a malformed one, or not a multiple of 5 cents. |
 | `below_floor` | Price under the slot's floor, or $0.00. |
 | `above_ceiling` | Price over the ceiling (`price_ceiling_cents`, $6.50 by default), or for the wildcard slot over the wildcard ceiling (`wildcard_ceiling_cents`, $8.00). |
-| `wildcard` | The wildcard slot's own purchase is over the $82.00 cap, its product would be in two slots, it would switch while another slot's contents are unknown, or another slot takes its product without a promotion the data backs (`docs/agent/wildcard.md`). |
+| `wildcard` | The wildcard slot is kept above the wildcard ceiling; its own purchase is over the $82.00 cap; it would switch to a product another slot holds, or while the plan keeps a slot no receipt describes; it would load more of a product another slot holds; another slot would switch to its product without a promotion the data backs, or to the product it switches to; or, while no receipt says what it holds, another slot loads and the plan doesn't set its product (`docs/agent/wildcard.md`). |
 | `unknown_capacity` | Nobody knows how many of this package fit in a column. |
 | `over_capacity` | `fill_to` is more than fit in a column. |
 | `bad_sourcing` | A purchase option is invalid (store, Amazon link, pack size, max price below expected). |
@@ -344,7 +344,8 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
 - **Inputs**: `slot` and `reason`.
 - **Outputs**: `success` and a message; on a refusal, `refusals`.
 - **Preconditions**: the halt switch is off; our slot assignment is recorded; no wildcard slot is set
-  yet (asking for the slot already set succeeds and changes nothing).
+  yet. Asking again for the slot already set succeeds and changes nothing, but only after the same
+  checks a first pick passes: still one of ours in the stored assignment, the layout rule, a reason.
 - **Side effects**: config `wildcard_slot` is set, once; it is write-once, so only a person deleting
   the row by hand can change it. One `action_log` row for the attempt, with the reason, and one
   for the config change.

@@ -280,8 +280,11 @@ chart's figure for that package.
 The other keys the planner reads are `price_ceiling_cents` (650), `tax_percent` (8) and
 `midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for
 type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
-refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
-is refused rather than saved silently. Until the ledger is open, the
+refused as dollars typed by mistake, a misspelt key is refused rather than saved silently, and the
+agreed limits are maxima: `price_ceiling_cents` at most 650, `wildcard_ceiling_cents` at most 800 and
+`wildcard_purchase_cap_cents` at most 8200 (lower is allowed). A row hand-edited above one stops
+planning until a person sets it again. `wildcard_slot` must be one of ours in the stored slot
+assignment, checked again even when the same value is set twice. Until the ledger is open, the
 tool answers `success: false` with the command to run. Delisted products count as not in the
 catalog, and so do products the bridge marks inactive. A copy last synced over 36 hours ago (the
 same limit as `get_catalog`) is still used, with a `STALE` note saying to run
