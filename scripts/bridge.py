@@ -14,6 +14,9 @@ One command per question you might have about the machine or our account:
     python scripts/bridge.py request REQUEST_ID     where a purchase request has got to
     python scripts/bridge.py poll --live            read the machine right now (see below)
 
+From the 3 Dec 2026 start, `raw`, `latest` and `poll` print only our selections
+and the door counter (see "From the start" below).
+
 Settings come from `.env` at the repository root (copy `.env.example`), or from
 the environment: `DEX_BASE_URL` and `DEX_API_KEY`. You must be on Tailscale --
 the Pi is not on the public internet. The key is never printed.
@@ -30,8 +33,29 @@ Two things this script deliberately does not do:
   because that is where the balance, price and halt checks live. Reading a
   request's status is fine, so `request` is here.
 
-Standard library only, so it runs anywhere Python 3.11 does with nothing to
-install.
+**From the start (3 Dec 2026, `vending.start`).** From then a poll carries all
+40 selections, the other team's 20 too, and nothing may show their
+per-selection data or a machine-wide total that includes their sales
+(`docs/integrity.md`). So when `raw`, `latest` or `poll` print a poll from the
+start, they print only:
+
+- the envelope and the `ID` records (`DXS`, `ST`, `ID1`, `ID4`, ..., `G85`, `SE`, `DXE`),
+- the `PA` block (`PA1`, `PA2`, ...) of each of our selections,
+- the door counter, `EA2*DO`, which dates visits and nothing more.
+
+Every other line is left out: the other team's selections and the
+machine-wide totals (`VA1`, the cash and card records, and the rest). The
+`G85` checksum then no longer matches, and a note on stderr says how many lines
+were left out. Our selections are the stored assignment
+(`vending.slots.our_slots`, which needs `DATABASE_URL`); when it can't be read,
+no selection is printed. `raw` isn't told when its poll was taken, so from the
+start it treats every poll as one from the start. `--unredacted` prints
+everything: for a poll from before the start, or to debug the machine itself.
+`--out FILE` always saves the raw bytes, because storing the poll is fine.
+`latest --summary` already shows only our slots.
+
+Standard library only, except reading the stored assignment, so it runs
+anywhere Python 3.11 does with nothing to install.
 """
 
 from __future__ import annotations
@@ -77,6 +101,7 @@ def repo_root() -> Path:
 # on how a value is quoted or commented. Standard library too.
 sys.path.insert(0, str(repo_root()))
 from vending import settings as env  # noqa: E402
+from vending.start import START, on_or_after_start  # noqa: E402
 
 
 def settings() -> tuple[str, str]:
@@ -207,6 +232,77 @@ def summarize(dex_text: str, our_slots: list[str]) -> list[dict[str, object]]:
 
 
 # --------------------------------------------------------------------------
+# From the start: only our selections (see the module docstring)
+# --------------------------------------------------------------------------
+
+# Records that frame the document; "" is a blank line.
+ENVELOPE = {"DXS", "ST", "G85", "SE", "DXE", ""}
+
+
+def redact(dex_text: str, ours: tuple[str, ...] | list[str]) -> tuple[str, int]:
+    """`dex_text` with only what a poll from the start may show, and how many lines were left out.
+
+    An allowlist, so a record nobody thought of is left out, not shown: the envelope, the `ID`
+    records, the `EA2*DO` door counter, and each `PA` block whose `PA1` names one of `ours`. A
+    `PA` block runs from its `PA1` to the next record that isn't a `PA` record. Line endings
+    stay as they were.
+    """
+    kept: list[str] = []
+    left_out = 0
+    in_ours = False
+    for line in dex_text.splitlines(keepends=True):
+        fields = line.strip().split("*")
+        tag = fields[0]
+        if tag == "PA1":
+            in_ours = len(fields) > 1 and fields[1] in ours
+        elif not tag.startswith("PA"):
+            in_ours = False
+        door = tag == "EA2" and len(fields) > 1 and fields[1] == "DO"
+        if (tag.startswith("PA") and in_ours) or tag in ENVELOPE or tag.startswith("ID") or door:
+            kept.append(line)
+        else:
+            left_out += 1
+    return "".join(kept), left_out
+
+
+def our_selections() -> tuple[tuple[str, ...], str | None]:
+    """(our selections from the stored assignment, None), or ((), why they can't be read).
+
+    Imported here, not at the top, because only this needs psycopg and `DATABASE_URL`.
+    """
+    try:
+        from vending import db
+        from vending.slots import our_slots
+
+        with db.connect() as conn:
+            return tuple(our_slots(conn)), None
+    except Exception as error:  # noqa: BLE001 -- whatever went wrong, no selection is printed
+        return (), f"{type(error).__name__}: {str(error)[:200]}"
+
+
+def show_poll(body: bytes, out: str | None, taken: datetime, unredacted: bool) -> None:
+    """Save a poll byte for byte, or print it; one from the start with only our selections."""
+    if out or unredacted or not on_or_after_start(taken):
+        write_text(body, out)
+        return
+    ours, why = our_selections()
+    if why:
+        print(f"note: our slot assignment can't be read ({why}), so no selection is printed",
+              file=sys.stderr)
+    text, left_out = redact(body.decode("utf-8", errors="replace"), ours)
+    print(f"note: a poll from the start ({START:%d %b %Y}): {left_out} lines left out (the other "
+          "team's selections and the machine-wide totals), so G85 won't match. --out FILE saves "
+          "the whole poll", file=sys.stderr)
+    sys.stdout.write(text)
+
+
+def taken_at(started_at: str) -> datetime:
+    """A listing's `started_at` as an aware time. One with no zone is taken as UTC, like the bridge's."""
+    moment = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    return moment if moment.utcoffset() is not None else moment.replace(tzinfo=timezone.utc)
+
+
+# --------------------------------------------------------------------------
 # Commands
 # --------------------------------------------------------------------------
 
@@ -237,7 +333,8 @@ def cmd_history(args: argparse.Namespace) -> None:
 
 def cmd_raw(args: argparse.Namespace) -> None:
     body, _ = call("GET", f"/api/v1/history/{urllib.parse.quote(args.session_id)}/raw")
-    write_text(body, args.out)
+    # The route doesn't say when the poll was taken, so from the start every poll counts as one from it.
+    show_poll(body, args.out, datetime.now(timezone.utc), args.unredacted)
 
 
 def cmd_latest(args: argparse.Namespace) -> None:
@@ -261,7 +358,7 @@ def cmd_latest(args: argparse.Namespace) -> None:
         our_slots = get_json("/api/v1/slots").get("slots", [])
         print_json(summarize(body.decode("utf-8", errors="replace"), our_slots))
     else:
-        write_text(body, args.out)
+        show_poll(body, args.out, taken_at(newest["started_at"]), args.unredacted)
 
 
 def cmd_request(args: argparse.Namespace) -> None:
@@ -280,7 +377,7 @@ def cmd_poll(args: argparse.Namespace) -> None:
     cached = {k.lower(): v for k, v in headers.items()}.get("x-poll-cached")
     if cached == "true":
         print("note: someone polled in the last 30 seconds; this is their read", file=sys.stderr)
-    write_text(body, args.out)
+    show_poll(body, args.out, datetime.now(timezone.utc), args.unredacted)
 
 
 def write_text(body: bytes, out: str | None) -> None:
@@ -295,6 +392,10 @@ def write_text(body: bytes, out: str | None) -> None:
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+
+UNREDACTED = ("print the whole of a poll from the start, the other team's selections and the "
+              "machine-wide totals too (read docs/integrity.md first)")
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -316,12 +417,14 @@ def build_parser() -> argparse.ArgumentParser:
     raw = commands.add_parser("raw", help="one stored poll as raw EVA-DTS text")
     raw.add_argument("session_id")
     raw.add_argument("--out", help="save to this file instead of printing")
+    raw.add_argument("--unredacted", action="store_true", help=UNREDACTED)
     raw.set_defaults(run=cmd_raw)
 
     latest = commands.add_parser("latest", help="the newest stored poll")
     latest.add_argument("--summary", action="store_true",
                         help="print price and lifetime sales for our slots instead of raw text")
     latest.add_argument("--out", help="save the raw text to this file")
+    latest.add_argument("--unredacted", action="store_true", help=UNREDACTED)
     latest.set_defaults(run=cmd_latest)
 
     request = commands.add_parser("request", help="status of one of our purchase requests")
@@ -331,6 +434,7 @@ def build_parser() -> argparse.ArgumentParser:
     poll = commands.add_parser("poll", help="read the machine live (needs --live)")
     poll.add_argument("--live", action="store_true", help="yes, really read the machine now")
     poll.add_argument("--out", help="save to this file instead of printing")
+    poll.add_argument("--unredacted", action="store_true", help=UNREDACTED)
     poll.set_defaults(run=cmd_poll)
 
     return parser

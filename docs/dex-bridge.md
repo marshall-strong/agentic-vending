@@ -90,6 +90,15 @@ What the machine does **not** tell us:
 `latest --summary` is a quick look only: it does not check the `G85` checksum. The real
 parser belongs in the history sync.
 
+**From the start (3 Dec 2026), the terminal shows only our selections.** A poll then carries
+all 40 selections, and `docs/integrity.md` forbids showing the other team's or a machine-wide
+total. So `raw`, `latest` and `poll` print a poll from the start with only the `ID` records, our
+selections' `PA` blocks and the door counter (`EA2*DO`); the rest is left out and a note on stderr
+says so. Our selections are the stored assignment (`vending.slots.our_slots`, so it needs
+`DATABASE_URL`); without it no selection is printed. `raw` isn't told when its poll was taken, so
+after the start it treats every poll as one from the start. `--out FILE` still saves the whole poll
+byte for byte, and `--unredacted` prints it whole.
+
 ## Purchase requests, in short
 
 As of 29 Oct. **A request describes the machine we want after the restock: for each slot,
