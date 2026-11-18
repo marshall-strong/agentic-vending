@@ -862,30 +862,31 @@ class TestWildcard(unittest.TestCase):
             self.assertTrue(p.ok, [r.message for r in p.refusals])
             self.assertIn("slot 16 holds now", " ".join(p.warnings))
 
-    # The day-one fill: no slot has receipts, and one request names all 20 slots' products.
+    # The day-one fill: no slot has receipts, and one request names all 20 slots' products. The wildcard is
+    # 37, a slot the setter allows (shelf 3, not column 5); tests/test_wildcard_review.py previews it end to end.
     DAY_ONE = {s: SlotState(s, None, None, 0, None, contents_known=False) for s in OUR_SLOTS}
 
     def day_one(self, *kept: str):
         products = (MTDEW, COKE, SPRITE)
-        fill = [DesiredSlot("17", product=PICKLE, sale_price="6.00", fill_to=6)]
+        fill = [DesiredSlot("37", product=PICKLE, sale_price="6.00", fill_to=6)]
         fill += [DesiredSlot(s, product=products[i % 3], sale_price="2.50", fill_to=10)
-                 for i, s in enumerate(s for s in OUR_SLOTS if s != "17" and s not in kept)]
-        return wild(*fill, slots=self.DAY_ONE, sourcing=(SPRITE_SOURCING,), balance=200000)
+                 for i, s in enumerate(s for s in OUR_SLOTS if s != "37" and s not in kept)]
+        return wild(*fill, slot="37", slots=self.DAY_ONE, sourcing=(SPRITE_SOURCING,), balance=200000)
 
     def test_the_day_one_fill_loads_the_wildcard_with_no_receipts_at_all(self):
         p = self.day_one()
         self.assertTrue(p.ok, [r.message for r in p.refusals])
         self.assertEqual(len(p.lines), 20)
-        self.assertEqual(line(p, "17").product, PICKLE)
+        self.assertEqual(line(p, "37").product, PICKLE)
         # If a line comes back unavailable its old stock may stay: the plan says so, it can't refuse it.
         warning = next(w for w in p.warnings if "holds now" in w)
-        self.assertIn("15, 16, 18", warning)
+        self.assertIn("15, 16, 17, 18", warning)
         self.assertIn(PICKLE, warning)
 
     def test_the_day_one_fill_is_refused_if_it_keeps_a_slot_no_receipt_describes(self):
         # 46 keeps whatever is in it, which may be PICKLE.
         p = self.day_one("46")
-        self.assertEqual(where(p), [("wildcard", "17")])
+        self.assertEqual(where(p), [("wildcard", "37")])
         self.assertIn("keeps slot 46", p.refusals[0].message)
         self.assertIn("switch it in this plan", p.refusals[0].message)
 

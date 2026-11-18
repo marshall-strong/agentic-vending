@@ -363,3 +363,47 @@ def test_5_machine_state_reads_no_polls_of_a_slot_no_longer_ours(conn):
     _slot_18_left_us(conn)
     reply = get_machine_state(conn, now=datetime(2026, 10, 27, 2, tzinfo=UTC))
     assert not [w for w in reply.warnings if "slot 18" in w]
+
+
+# --- 9. The day-one fill, previewed end to end with a slot the setter allows --------------------------------
+
+def _day_one(db, keep=()):
+    """No receipts and no polls; the agent picks 37 with set_wildcard_slot, then previews the fill of all 20."""
+    from tests.test_desired_state import FakeBridge, coke_sourcing, desired, ready
+    from vending.planner import OUR_SLOTS
+    from vending.tools.preview import preview_desired_state
+    from vending.tools.wildcard_slot import set_wildcard_slot
+    from vending.write_gate import run_write
+
+    ready(db)
+    reason = "shelf 3, column 7: a middle shelf away from the centre line"
+    assert run_write(db, "set_wildcard_slot", {"slot": "37", "reason": reason},
+                     set_wildcard_slot("37", reason)).success
+    fill = [{"slot": "37", "product": "PICKLE", "sale_price": "6.00", "fill_to": 6}]
+    fill += [{"slot": s, "product": "COKE20", "sale_price": "2.50", "fill_to": 10}
+             for s in OUR_SLOTS if s != "37" and s not in keep]
+    pickle = {"product": "PICKLE", "primary": {"store": "Costco", "units_per_pack": 6, "max_price_per_pack": "12.00"}}
+    bridge = FakeBridge()
+    try:
+        return preview_desired_state(db, desired(*fill, sourcing=[coke_sourcing(), pickle]), bridge.client(),
+                                     datetime(2026, 11, 9, 12, tzinfo=UTC))
+    finally:
+        bridge.server.shutdown()
+        bridge.server.server_close()
+
+
+def test_9_the_day_one_fill_previews_with_a_slot_the_setter_allows(conn):
+    assert conn.execute("select count(*) from purchase_lines").fetchone() == (0,)
+    reply = _day_one(conn)
+    assert reply.ok, [r.message for r in reply.refusals]
+    assert len(reply.lines) == 20
+    assert next(ln for ln in reply.lines if ln.slot == "37").product == "PICKLE"
+    warning = next(w for w in reply.warnings if "holds now" in w)
+    assert "may be PICKLE, the wildcard's new product" in warning
+
+
+def test_9_the_day_one_fill_is_refused_if_it_keeps_a_slot_no_receipt_describes(conn):
+    reply = _day_one(conn, keep=("46",))
+    assert not reply.ok
+    assert [(r.code, r.slot) for r in reply.refusals] == [("wildcard", "37")]
+    assert "keeps slot 46" in reply.refusals[0].message
