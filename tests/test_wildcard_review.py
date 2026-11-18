@@ -407,3 +407,32 @@ def test_9_the_day_one_fill_is_refused_if_it_keeps_a_slot_no_receipt_describes(c
     assert not reply.ok
     assert [(r.code, r.slot) for r in reply.refusals] == [("wildcard", "37")]
     assert "keeps slot 46" in reply.refusals[0].message
+
+
+# --- 10. The docs say what the code does -------------------------------------------------------------------
+
+def _doc(path):
+    from pathlib import Path
+
+    return (Path(__file__).resolve().parent.parent / path).read_text(encoding="utf-8")
+
+
+def test_10_the_wildcard_topic_doesnt_say_naming_the_products_settles_contents():
+    from tests.test_project_rules import words
+
+    doc = _doc("docs/agent/wildcard.md")
+    assert "settles it" not in doc
+    assert "an unavailable line can leave the old product" in doc
+    assert words("wildcard") < 600
+
+
+def test_10_the_tool_contract_lists_the_refusal_the_planner_makes():
+    row = next(ln for ln in _doc("docs/tool-contracts.md").splitlines() if ln.startswith("| `wildcard` |"))
+    assert "while the plan keeps a slot no receipt describes" in row
+    assert "while no receipt says what it holds" in row
+
+
+def test_10_the_capital_plan_has_the_same_friday_switch_and_the_waiting_rate():
+    doc = _doc("docs/opening-capital-plan.md")
+    assert "the wildcard moves on to the next product in the same plan" in doc
+    assert "0.7 units a class day" in doc
