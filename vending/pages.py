@@ -85,6 +85,11 @@ HIDE = {
     "agent_runs": db_explorer.Hide("status", "failed", ("detail",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
+    # VA1, the machine-wide lifetime totals. From the start (`vending.start.START`) they include the other
+    # team's sales, and the total minus ours is theirs (`docs/integrity.md`). Hidden in every row, not
+    # only from the start: `Hide` can't test a time, and nothing on the page needs the pre-start ones.
+    # `raw` is safe as it is: the explorer shows a bytea's size, never its bytes.
+    "polls": db_explorer.Hide("", "", ("total_paid_cents", "total_paid_units"), "(hidden)"),
 }
 
 
