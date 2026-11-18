@@ -340,7 +340,9 @@ class _Health(BaseHTTPRequestHandler):
             # Imported here, so the syncs and /health never depend on the pages' code.
             from vending import pages
 
-            reply = pages.respond(self.path)
+            # The dashboard names failing syncs from the same outcomes /health shows. They live
+            # only in this process's memory, so they are handed over rather than read.
+            reply = pages.respond(self.path, self.state.public())
             if reply is None:
                 return self._not_found()
             cookies = self._count_view(path, self.path) if reply.status == 200 else ()

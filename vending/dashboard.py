@@ -18,7 +18,9 @@ The page, top to bottom:
    the order cutoff countdown, the machine's last poll, what has been spent
    (from the ledger once it has opened; before that, development and test spend),
    and who has looked at the pages (`vending.visits`).
- - Needs attention: each thing that is wrong or about to be, in a sentence.
+ - Needs attention: each thing that is wrong or about to be, in a sentence. On the
+   Container App that includes the worker's latest sync round, which the worker passes in
+   (`syncs`, the same dict as its `/health`): the dashboard itself only reads the database.
  - Money (`vending.money_panel`, #48): the balance, spendable and profit since the
    ledger's opening, where the money has gone, what pending requests could still
    cost, and the proposed budget (#113). Before the opening it says how to record it.
@@ -35,7 +37,8 @@ The page, top to bottom:
  - Runs: each run, how it ended, what it cost, and which slots its plan changed, with the steps
    it took (`agent_steps`): its reasoning, each tool call and what came back.
  - Tool calls: the last calls from `action_log`, filterable to writes or problems.
- - Requests and back stock: purchase and catalog requests, and what is in the closet.
+ - Requests and back stock: purchase requests, every catalog request with counts by status and
+   the places left under the bridge's cap on open requests, and what is in the closet.
 """
 
 from __future__ import annotations
@@ -62,6 +65,7 @@ from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import machine_state
+from vending.tools.catalog_request import OPEN_REQUEST_CAP
 from vending.mascot import svg as mascot_svg  # after the rest: other PRs edit the lines above
 
 HOST = "127.0.0.1"
@@ -69,7 +73,14 @@ PORT = 8765
 REFRESH_SECONDS = 30
 ACTIVITY_ROWS = 50
 RUN_ROWS = 10
+# Purchase requests read. Catalog requests are all read: the team needs every one of them.
 REQUEST_ROWS = 10
+# A catalog request's statuses, in the order the counts show them (`db/migrations/005_product_requests.sql`).
+CATALOG_STATUSES = ("pending", "approved", "rejected", "sending", "unknown")
+# What a sync job's exit code means. The three syncs share them (`vending/sync_history.py` and the others).
+SYNC_EXITS = {1: "finished with problems; the container's log has them",
+              2: "the database is missing migrations; run `python -m vending.db migrate`",
+              3: "couldn't reach the bridge"}
 # Purchase requests shown before the rest fold away.
 REQUESTS_SHOWN = 5
 # Every transaction on the dashboard's connection is read-only; Postgres refuses any write.
@@ -426,18 +437,23 @@ def _recent_calls(conn: psycopg.Connection, now: datetime) -> dict:
     return counts
 
 
-def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool = False) -> dict:
+def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool = False,
+             syncs: dict | None = None) -> dict:
     """Everything the page shows, from one consistent moment. Reads only.
 
     JSON numbers come back as Decimal, so a price stored as a number stays exact.
     `public` is for a page anyone can open: the error text of failures and the selections not
-    assigned to us are left out.
+    assigned to us are left out. `syncs` is the worker's latest sync round, as its `/health` shows
+    it (`vending.worker.State.public`: outcomes and exit codes, never error text). The worker
+    keeps that in memory, not in the database, so only a page the worker serves has it; run
+    on its own, the dashboard has None and says nothing about the syncs.
     """
     now = now or datetime.now(timezone.utc)
     set_json_loads(partial(json.loads, parse_float=Decimal), context=conn)
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
         snap = _snapshot(conn, now)
+    snap["syncs"] = syncs
     if public:
         hide_errors(snap)
         only_ours(snap)
@@ -521,9 +537,29 @@ def _slots_named(warning: str) -> set[str]:
     return named
 
 
+def _catalog_counts(catalog: dict) -> dict:
+    """Catalog requests by status, and the open ones against the bridge's cap, from the rows read.
+
+    Open means `pending`: filed, and not yet approved or rejected. A `sending` or `unknown` row
+    may or may not be open on the bridge too, so the places left may be fewer by that many.
+    """
+    if not catalog["ok"]:
+        return catalog
+    by_status = dict.fromkeys(CATALOG_STATUSES, 0)
+    for r in catalog["data"]:
+        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+    open_ = by_status["pending"]
+    return {"ok": True, "data": {"total": len(catalog["data"]), "by_status": by_status, "open": open_,
+                                 "cap": OPEN_REQUEST_CAP, "left": max(OPEN_REQUEST_CAP - open_, 0),
+                                 "unsettled": by_status["sending"] + by_status["unknown"]}}
+
+
 def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
+    catalog = _panel(lambda: _rows(
+        conn, "select id, requested_at, name, size, status, sku, decision_note"
+              " from product_requests order by requested_at desc, id desc"))
     snap = {
         "as_of": now,
         "ours": ours,
@@ -549,9 +585,8 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
                    count(*) filter (where l.outcome = 'alternate') as alternates
               from purchase_requests r left join purchase_lines l using (request_id)
              group by r.request_id order by r.submitted_at desc, r.request_id desc limit %s""", (REQUEST_ROWS,))),
-        "catalog_requests": _panel(lambda: _rows(
-            conn, "select id, requested_at, name, size, status, decision_note"
-                  " from product_requests order by requested_at desc, id desc limit %s", (REQUEST_ROWS,))),
+        "catalog_requests": catalog,
+        "catalog_counts": _catalog_counts(catalog),
     }
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
     return snap
@@ -628,6 +663,9 @@ def attention(snap: dict) -> list[dict]:
             add("warn", f"The latest machine poll is {_span(now - sales['data']['as_of'])} old: "
                         "the history sync may have stopped.")
 
+    if (failing := _failing_syncs(snap.get("syncs"), now)) is not None:
+        add("bad", failing)
+
     catalog = snap["catalog_requests"]
     if catalog["ok"]:
         for r in catalog["data"]:
@@ -654,6 +692,31 @@ def attention(snap: dict) -> list[dict]:
 
     order = {"bad": 0, "warn": 1, "info": 2}
     return sorted(out, key=lambda a: order[a["level"]])
+
+
+def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
+    """A sentence naming each job of the worker's latest round that didn't exit 0, or None when
+    every job passed, no round has run yet, or the worker didn't pass its rounds in.
+
+    A job that crashed, timed out or was still running has no exit code; the worker counts it as
+    failing too (`State.healthy`), so it is named with its outcome.
+    """
+    if not syncs or not syncs.get("rounds"):
+        return None
+    failed = [r for r in syncs.get("results") or [] if r.get("exit_code") != 0]
+    if not failed:
+        return None
+    jobs = ", ".join(f"`{r.get('job')}` " + (f"exit {r['exit_code']}" if r.get("exit_code") is not None
+                                             else str(r.get("outcome") or "no exit code"))
+                     for r in failed)
+    when = ""
+    try:
+        when = f" ({_span(now - datetime.fromisoformat(syncs['last_round_at']))} ago)"
+    except (KeyError, TypeError, ValueError):
+        pass
+    codes = sorted({r["exit_code"] for r in failed if r.get("exit_code") in SYNC_EXITS})
+    meaning = "".join(f" Exit {c}: {SYNC_EXITS[c]}." for c in codes)
+    return f"The worker's latest sync round{when} failed: {jobs}.{meaning} See `/health`."
 
 
 def verdict(items: list[dict]) -> str:
@@ -1257,6 +1320,25 @@ _REQUEST_TONE = {"pending": "info", "fulfilled": "ok", "rejected": "bad", "sendi
                  "unknown": "warn", "approved": "ok"}
 
 
+def _catalog_lede(counts: dict) -> str:
+    """'40 requests: 22 pending, 15 approved, ...', then the open ones against the bridge's cap."""
+    if not counts["ok"]:
+        return ""
+    c = counts["data"]
+    by = c["by_status"]
+    parts = [f'{by["pending"]} pending', f'{by["approved"]} approved', f'{by["rejected"]} rejected']
+    if c["unsettled"]:
+        parts.append(f'<span class="warn-text">{c["unsettled"]} sending or unknown</span>')
+    left = f'{c["left"]} place{"" if c["left"] == 1 else "s"} left'
+    if c["unsettled"]:
+        left += f', fewer if any of the {c["unsettled"]} sending or unknown reached the bridge'
+    return (f'<p class="lede">{_plural(c["total"], "request")}: {", ".join(parts)}.</p>'
+            f'<p class="lede"><b>Open: {c["open"]} of about {c["cap"]}</b> &middot; '
+            f'<span class="{"bad-text" if not c["left"] else ""}">{left}</span>. '
+            '<span class="dim">The bridge refuses a new request once about that many are pending '
+            '(seen, not documented). Statuses are as our records last stored them.</span></p>')
+
+
 def _requests_html(purchases: dict, catalog: dict, now: datetime) -> str:
     out = '<h3>Purchase requests</h3>'
     if (missing := _missing(purchases)) is not None:
@@ -1288,13 +1370,21 @@ def _requests_html(purchases: dict, catalog: dict, now: datetime) -> str:
     elif not catalog["data"]:
         out += '<p class="empty">None yet.</p>'
     else:
-        out += '<ul class="list">' + "".join(
+        out += _catalog_lede(_catalog_counts(catalog)) + '<ul class="list">' + "".join(
             f'<li><div class="head"><b>{_e(r["name"])}</b> <span class="dim">{_e(r["size"])}</span> '
             f'{_pill(r["status"], _REQUEST_TONE.get(r["status"], "muted"))}</div>'
-            f'<div class="meta">asked {_time(r["requested_at"], "ago", now)}</div>'
+            f'<div class="meta">asked {_time(r["requested_at"], "ago", now)}{_catalog_sku(r)}</div>'
             + (f'<div class="detail">{_e(r["decision_note"])}</div>' if r["decision_note"] else "") + "</li>"
             for r in catalog["data"]) + "</ul>"
     return out
+
+
+def _catalog_sku(r: dict) -> str:
+    """An approved request's SKU, which may not be the one we'd guess from the name; any other's
+    only if one was recorded."""
+    if r.get("sku"):
+        return f' &middot; SKU <code>{_e(r["sku"])}</code>'
+    return " &middot; no SKU recorded yet" if r["status"] == "approved" else ""
 
 
 def _closet_html(stock: dict) -> str:
