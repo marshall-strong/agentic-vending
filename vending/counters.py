@@ -37,6 +37,16 @@ def unsettled(readings: Iterable[tuple[datetime, int]]) -> bool:
     return _walk(readings, False)[1] is not None
 
 
+def restarts(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, datetime]]:
+    """`(last_high, first_low)` around each restart the next poll confirmed, oldest first. Pure.
+
+    The counter went back to zero somewhere between the two, and whatever sold
+    before that went with the old count, so nothing can show how many units sold
+    in that stretch, or that none did. `windows` leaves the stretch out.
+    """
+    return _walk(readings, False)[2]
+
+
 def windows(readings: Iterable[tuple[datetime, int]], zeros: bool = False) -> list[tuple[datetime, datetime, int]]:
     """`(start, at, rise)`: each rise with the poll it is measured from. Pure.
 
@@ -50,10 +60,11 @@ def windows(readings: Iterable[tuple[datetime, int]], zeros: bool = False) -> li
     return _walk(readings, zeros)[0]
 
 
-def _walk(readings: Iterable[tuple[datetime, int]],
-          zeros: bool) -> tuple[list[tuple[datetime, datetime, int]], tuple[datetime, int] | None]:
-    """`windows`, and the lone low reading still waiting for the next poll, if any."""
+def _walk(readings: Iterable[tuple[datetime, int]], zeros: bool) -> tuple[
+        list[tuple[datetime, datetime, int]], tuple[datetime, int] | None, list[tuple[datetime, datetime]]]:
+    """`windows`, the lone low reading still waiting for the next poll if any, and `restarts`."""
     out: list[tuple[datetime, datetime, int]] = []
+    restarted: list[tuple[datetime, datetime]] = []
     previous: tuple[datetime, int] | None = None
     pending: tuple[datetime, int] | None = None   # one reading below `previous`, waiting for the next poll to agree
     for at, value in sorted(readings, key=lambda r: r[0]):
@@ -68,7 +79,8 @@ def _walk(readings: Iterable[tuple[datetime, int]],
             pending = (at, value)
         else:
             # Two polls in a row below the old high: the counter restarted at `pending`.
+            restarted.append((previous[0], pending[0]))
             if value > pending[1] or (zeros and value == pending[1]):
                 out.append((pending[0], at, value - pending[1]))
             previous, pending = (at, value), None
-    return out, pending
+    return out, pending, restarted

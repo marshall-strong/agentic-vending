@@ -116,3 +116,58 @@ def test_8_a_hand_edited_limit_above_the_agreed_one_stops_planning(conn, key, va
     conn.execute("insert into config (key, value, updated_by) values (%s, %s, 'hand')", (key, Jsonb(value)))
     with pytest.raises(planning.NotReady, match=key):
         planning.planner_config(conn)
+
+
+# --- 1. Silence needs the counters to prove it end to end ------------------------------------------------
+
+def _silent_report(conn, now=None, **machine_args):
+    from tests.test_silent_slots import NOW, machine, report
+
+    machine(conn, **machine_args)
+    return report(conn, now=now or NOW)
+
+
+def _why(r, slot):
+    from tests.test_silent_slots import why
+
+    return why(r, slot)
+
+
+def test_1_the_control_slot_16_is_silent(conn):
+    # The baseline the four tests below break one way each.
+    assert [s.slot for s in _silent_report(conn).silent] == ["16"]
+
+
+def test_1_no_reading_of_the_slot_at_or_before_fridays_midnight_is_unknown(conn):
+    # 16 is missing from every poll from Thursday 6 PM to Friday 4 AM Eastern: a sale then can't be ruled out.
+    def edit(t, units):
+        if datetime(2026, 10, 22, 22, tzinfo=UTC) <= t <= datetime(2026, 10, 23, 8, tzinfo=UTC):
+            del units["16"]
+    r = _silent_report(conn, edit=edit)
+    assert "16" not in [s.slot for s in r.silent]
+    assert _why(r, "16").startswith("unknown: no reading of its counter at or before")
+
+
+def test_1_a_confirmed_counter_restart_in_the_window_is_unknown(conn):
+    # Saturday 24 Oct the board is swapped: 16 reads 3 from then on, so 3 may have sold before or after.
+    def edit(t, units):
+        if t >= datetime(2026, 10, 24, 10, tzinfo=UTC):
+            units["16"] = 3
+    r = _silent_report(conn, edit=edit)
+    assert "16" not in [s.slot for s in r.silent]
+    assert _why(r, "16").startswith("unknown: its counter restarted between the polls at 2026-10-24 06:00")
+
+
+def test_1_a_24_hour_polling_outage_is_unknown_not_silent(conn):
+    # No poll from Saturday morning to Sunday morning: no class day is lost, but the stretch wasn't watched.
+    r = _silent_report(conn, gaps=[(datetime(2026, 10, 24, 2, tzinfo=UTC), datetime(2026, 10, 25, 3, tzinfo=UTC))])
+    assert "16" not in [s.slot for s in r.silent]
+    assert _why(r, "16").startswith("unknown: no poll read it from 2026-10-24 02:00 to 2026-10-25 06:00")
+
+
+def test_1_a_stale_closing_reading_is_unknown(conn):
+    from tests.test_silent_slots import THURSDAY_EVENING
+
+    r = _silent_report(conn, now=THURSDAY_EVENING + timedelta(hours=8))
+    assert "16" not in [s.slot for s in r.silent]
+    assert _why(r, "16").startswith("unknown: its latest reading, at 2026-10-29 22:00 UTC, is over 6 hours old")

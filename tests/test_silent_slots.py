@@ -16,12 +16,13 @@ NOW = THURSDAY_EVENING + timedelta(hours=1)
 STEP = timedelta(hours=4)
 
 
-def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None):
+def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit=None):
     """Our slots on a Friday-to-Thursday cycle, polled every 4 hours from Fri 16 Oct to `last`.
 
     At the 16 Oct visit: 15 (the wildcard), 16, 17, 18, 25, 26 and 28 are loaded with 10 each. At the 23 Oct
     visit 16 is topped up with 2 and 25 switches product. `sales` maps slot -> [(when, units)]. No poll is
-    stored inside a gap `(begin, end)`. `drop_at` is when slot 16's units counter reads low once."""
+    stored inside a gap `(begin, end)`. `drop_at` is when slot 16's units counter reads low once. `edit(t,
+    units)` may change a poll's units per slot before it is stored, or drop a slot from it."""
     sales = sales or {}
     fulfilled(conn, "r0", R0, *[(slot, sku, "primary", paid, 10, 0, 0) for slot, sku, paid in (
         ("15", "AAA", "10.00"), ("16", "BBB", "10.00"), ("17", "CCC", "10.00"), ("18", "FFF", "10.00"),
@@ -34,6 +35,8 @@ def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None):
                      for slot in ("15", "16", "17", "18", "25", "26", "28")}
             if drop_at is not None and t == drop_at:
                 units["16"] = 3
+            if edit is not None:
+                edit(t, units)
             store_poll(conn, f"p{n}", t.isoformat(), {slot: (300, u) for slot, u in units.items()})
         t, n = t + STEP, n + 1
 
@@ -103,9 +106,10 @@ def test_a_thursday_morning_run_hasnt_seen_four_class_days(conn):
 
 
 def test_a_day_the_polls_didnt_watch_doesnt_count(conn):
+    # 11 hours without a poll on Tuesday: the stretch wasn't watched, so silence is unknown.
     machine(conn, gaps=[(datetime(2026, 10, 27, 1, tzinfo=UTC), datetime(2026, 10, 27, 12, tzinfo=UTC))])
     r = report(conn)
-    assert r.silent == () and why(r, "16").startswith("3 of 4")
+    assert r.silent == () and why(r, "16").startswith("unknown: no poll read it from 2026-10-26 22:00")
 
 
 def test_a_sale_inside_a_gap_still_counts(conn):

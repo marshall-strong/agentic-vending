@@ -464,9 +464,11 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
     on the Friday of the last Friday visit (`last_friday_visit`) to `now`:
 
     1. Its units counter rose in no poll window ending in it, however long the
-       window: one sale inside a gap must not be missed. A lone drop the next
-       poll hasn't settled, or no good poll since the window began, makes it
-       unknown, not silent.
+       window: one sale inside a gap must not be missed. And the counter proves
+       it end to end (`_unproven`): a reading at or before the window's start,
+       a fresh one at its end, no restart and no stretch longer than
+       `MAX_POLL_GAP` between them. Anything less, or a lone drop the next poll
+       hasn't settled, makes it unknown, not silent.
     2. It held one product the whole window (its last product change is at
        or before the window's start).
     3. Its stock is confirmed: the receipts say it holds units now, and a
@@ -508,6 +510,10 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
         if sold:
             not_silent.append(NotSilent(slot, f"sold {sold} since the window began"))
             continue
+        gap = _unproven(units, start, now)
+        if gap:
+            not_silent.append(NotSilent(slot, f"unknown: {gap}"))
+            continue
         if c.since > start:
             not_silent.append(NotSilent(slot, f"its product changed on {c.since:%Y-%m-%d}"))
             continue
@@ -545,6 +551,37 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
         silent.append(Silent(slot, c.product, days, quiet, margin, evidence))
     silent.sort(key=lambda s: (s.quiet_since, s.unit_margin_cents is None, s.unit_margin_cents or 0, s.slot))
     return SilentReport(start, tuple(silent), tuple(unconfirmed), tuple(not_silent))
+
+
+def _unproven(units: list[tuple[datetime, int]], start: datetime, now: datetime) -> str | None:
+    """Why the units counter can't prove a slot sold nothing from `start` to `now`, or None when it can. Pure.
+
+    It proves it only end to end: a reading at or before `start`, one within
+    `MAX_POLL_GAP` of `now`, no restart in between (what sold before one is
+    lost with the old count), and no stretch between two polls longer than
+    `MAX_POLL_GAP` (the polls stopped, so the stretch wasn't watched).
+    """
+    if not any(at <= start for at, _ in units):
+        return (f"no reading of its counter at or before {start:%Y-%m-%d %H:%M %Z}, when the window began, so a "
+                "sale between then and its first reading can't be ruled out")
+    last = max(at for at, _ in units)
+    if now - last > MAX_POLL_GAP:
+        return (f"its latest reading, at {last:%Y-%m-%d %H:%M} UTC, is over {_hours(MAX_POLL_GAP)} hours old, so "
+                "what sold since is unknown")
+    for high, low in counters.restarts(units):
+        if low > start:
+            return (f"its counter restarted between the polls at {high:%Y-%m-%d %H:%M} and {low:%Y-%m-%d %H:%M} UTC, "
+                    "and what sold before a restart is lost with the old count")
+    times = sorted({at for at, _ in units})
+    for begin, end in zip(times, times[1:]):
+        if end > start and end - begin > MAX_POLL_GAP:
+            return (f"no poll read it from {begin:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M} UTC, over "
+                    f"{_hours(MAX_POLL_GAP)} hours, so that stretch wasn't watched")
+    return None
+
+
+def _hours(span: timedelta) -> int:
+    return int(span.total_seconds() // 3600)
 
 
 def _watched_days(kept: list[Interval]) -> list[date]:
