@@ -99,6 +99,11 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     notes.extend(counted.warnings)
     by_slot = {s.slot: s for s in counted.slots}
     prices, poll_at = _latest_prices(conn, settings.slots)
+    # A slot whose latest priced poll read it above the ceiling is still a price test, so still the wildcard,
+    # until a strictly later poll reads it at or under: a poll with no price doesn't end it, and polls at the
+    # same moment that disagree leave it open (`vending.wildcard_trial.standing_prices`, as the trial reads it).
+    standing = wildcard_trial.standing_prices(conn, settings.slots)
+    price_tests = {slot for slot, st in standing.items() if st.above(settings.price_ceiling_cents) is not False}
     if poll_at is None:
         notes.append("no good poll is stored, so current prices are unknown; every slot's price change "
                      "will look like a change")
@@ -114,6 +119,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
             units=by_slot[slot].units if slot in by_slot else 0,
             unit_cost=by_slot[slot].unit_cost if slot in by_slot else None,
             contents_known=slot in by_slot,
+            price_test=slot in price_tests,
         )
         for slot in settings.slots
     )
@@ -121,7 +127,9 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     if without_receipts:
         notes.append(f"no receipts yet for slots {', '.join(without_receipts)}, so their product and stock "
                      "are unknown and counted as empty for restocking; a new wildcard waits until every slot has "
-                     "receipts")
+                     "receipts, and while one of them is or may be the wildcard (above the ceiling, the wildcard, "
+                     "or at a price no poll has read) every purchase is held to the wildcard cap and no slot may "
+                     "switch product")
     closet = tuple(planner.ClosetStock(c.product, c.units, c.unit_cost) for c in counted.closet)
     pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
@@ -130,8 +138,16 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
     # so the stale-price warnings describe the same rows the planner used.
     table_rows = tuple(sourcing.listed_options(conn))
-    # The wildcard in effect, so a midweek plan can't move it (`vending.wildcard_trial.current_wildcard`).
-    wildcard, _ = wildcard_trial.current_wildcard(conn)
+    # The wildcard in effect, so a midweek plan can't move it, read against the same stored assignment the
+    # planner checks the plan's slots against, as `wildcard_trial.trial` does: one no longer ours is no wildcard.
+    try:
+        named, _ = wildcard_trial.current_wildcard(conn)
+    except wildcard_trial.WildcardUnresolved as error:
+        raise NotReady(str(error)) from None
+    wildcard = named if named in settings.slots else None
+    if named is not None and wildcard is None:
+        notes.append(f"slot {named}, the wildcard the latest Friday visit named, isn't one of ours in the stored "
+                     "slot assignment, so no wildcard is in effect; a Friday plan may name a new one")
     current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
                                    spendable, wildcard)
     return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
@@ -278,12 +294,13 @@ def _int_setting(conn: psycopg.Connection, key: str, default: int) -> int:
 
 
 def _latest_prices(conn: psycopg.Connection, slots: tuple[str, ...]) -> tuple[dict[str, int | None], datetime | None]:
+    """Each slot's price at the latest good poll. Polls at that same moment that disagree give None: unknown."""
     latest = conn.execute(
-        "select session_id, started_at from polls where device_id = %s and crc_ok"
-        " order by started_at desc limit 1", (DEVICE_ID,)).fetchone()
+        "select max(started_at) from polls where device_id = %s and crc_ok", (DEVICE_ID,)).fetchone()[0]
     if latest is None:
         return {}, None
     rows = conn.execute(
-        "select selection, price_cents from poll_selections where session_id = %s and selection = any(%s)",
-        (latest[0], list(slots)))
-    return {selection: price for selection, price in rows}, latest[1]
+        "select s.selection, array_agg(distinct s.price_cents) from poll_selections s join polls p using (session_id)"
+        " where p.device_id = %s and p.crc_ok and p.started_at = %s and s.selection = any(%s) group by s.selection",
+        (DEVICE_ID, latest, list(slots)))
+    return {selection: prices[0] if len(prices) == 1 else None for selection, prices in rows}, latest

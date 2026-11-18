@@ -47,5 +47,6 @@ class DesiredState(BaseModel):
     wildcard: str | None = Field(None, description="The one slot that tests a product for the others, and may sell "
                                  "above the ceiling, up to the wildcard ceiling ($8.00 by default), for a price test; it "
                                  "moves only at a Friday visit, and one purchase for it costs at most $82.00. Name it in "
-                                 "every plan: a midweek plan names the one in effect, and a Friday plan that names none "
-                                 "ends the trial when its visit is done (get_machine_state, wildcard_trial)")
+                                 "every plan: a midweek plan names the one in effect, a slot above the ceiling is named "
+                                 "until a later poll reads it at or under, and a Friday plan that names none ends the "
+                                 "trial when its visit is done (get_machine_state, wildcard_trial)")

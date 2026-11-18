@@ -740,8 +740,10 @@ class TestWildcard(unittest.TestCase):
         above = {"18": SlotState("18", SPRITE, 750, 2, 50)}
         lower_18 = DesiredSlot("18", product=SPRITE, sale_price="6.50", fill_to=10)
         p = wild(pickle_17(price="7.50"), lower_18, wildcard="17", slots=above, sourcing=(SPRITE_SOURCING,))
-        self.assertEqual([(r.code, r.slot) for r in p.refusals], [("wildcard", "17")])
-        self.assertTrue(wild(lower_18, wildcard=None, slots=above, sourcing=(SPRITE_SOURCING,)).ok)
+        self.assertEqual([(r.code, r.slot) for r in p.refusals], [("wildcard", "18")])
+        # Lowering it is no proof it went under, so the plan that lowers it still names it; so does one ending it.
+        self.assertEqual(codes(wild(lower_18, wildcard=None, slots=above, sourcing=(SPRITE_SOURCING,))), ["wildcard"])
+        self.assertTrue(wild(lower_18, wildcard="18", slots=above, sourcing=(SPRITE_SOURCING,)).ok)
 
     def test_a_new_wildcard_needs_every_other_price_known(self):
         unknown = {"18": SlotState("18", SPRITE, None, 10, 50)}
@@ -818,10 +820,10 @@ class TestWildcard(unittest.TestCase):
             p = wild(sprite_17, into_16, wildcard=wildcard, slots=already, sourcing=(extras, SPRITE_SOURCING))
             self.assertIn(("wildcard", "17"), [(r.code, r.slot) for r in p.refusals], wildcard)
             self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals], wildcard)
-        # Lowering it with wildcard=None still caps its own purchase.
+        # Lowering it (the plan still names it until a poll reads it under) still caps its own purchase.
         lower = DesiredSlot("17", product=PICKLE, sale_price="6.50", fill_to=10)
-        self.assertEqual(codes(wild(lower, wildcard=None, slots=already, sourcing=(extras,))), ["wildcard"])
-        self.assertTrue(wild(lower, wildcard=None, slots=already).ok)
+        self.assertEqual(codes(wild(lower, wildcard="17", slots=already, sourcing=(extras,))), ["wildcard"])
+        self.assertTrue(wild(lower, wildcard="17", slots=already).ok)
 
     def test_an_above_ceiling_slot_with_unknown_contents_caps_every_purchase(self):
         mystery = {"17": SlotState("17", None, 750, 2, None)}
@@ -946,6 +948,52 @@ class TestWildcard(unittest.TestCase):
     def test_an_old_duplicate_of_the_wildcard_product_doesnt_block_unrelated_restocks(self):
         dup = {"16": SlotState("16", PICKLE, 650, 2, 250), "17": SlotState("17", PICKLE, 750, 2, 250)}
         self.assertTrue(wild(restock_15(), wildcard="17", slots=dup).ok)
+
+    def test_an_unpriced_poll_doesnt_end_a_price_test(self):
+        # 18's latest priced poll read $7.50; the latest poll read no price. It is still the wildcard: a plan
+        # can't name another slot (or none) while it stays, until a later poll reads it at or under $6.50.
+        open_test = {"18": SlotState("18", SPRITE, None, 10, 50, price_test=True)}
+        p = wild(pickle_17(), wildcard="17", slots=open_test)
+        self.assertEqual([(r.code, r.slot) for r in p.refusals], [("wildcard", "18")])
+        self.assertEqual(codes(wild(pickle_17(), wildcard=None, slots=open_test)), ["wildcard"])
+        self.assertTrue(wild(pickle_17(), wildcard="18", slots=open_test).ok)
+        # It is the wildcard in effect for a midweek plan too, when no Friday visit has named one.
+        self.assertTrue(wild(pickle_17(), wildcard="18", off_cycle=True, slots=open_test).ok)
+        # Once a later poll reads it at or under, the wildcard may move.
+        self.assertTrue(wild(pickle_17(), wildcard="17", slots={"18": SlotState("18", SPRITE, 650, 10, 50)}).ok)
+
+    def test_the_wildcards_product_stays_protected_while_it_switches(self):
+        # 15 is the MTDEW wildcard at $2.50 and switches to PICKLE, while 16 switches to MTDEW with an $85.00
+        # purchase. If 15's switch came back unavailable, MTDEW would be in two slots and over the cap.
+        dear = Sourcing(MTDEW, PurchaseOption("BJs", 24, "85.00"))
+        switch_15 = DesiredSlot("15", product=PICKLE, sale_price="3.00", fill_to=6)
+        into_16 = DesiredSlot("16", product=MTDEW, sale_price="5.00", fill_to=10)
+        p = wild(switch_15, into_16, wildcard="15", wildcard_now="15", sourcing=(dear,))
+        self.assertIn(("wildcard", "15"), [(r.code, r.slot) for r in p.refusals])   # MTDEW can't go into 16
+        self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals])   # nor be bought past the cap
+        self.assertTrue(all(r.code == "wildcard" for r in p.refusals), codes(p))
+        # A plan that moves the wildcard to 17 leaves 15 a regular slot, so its product is free.
+        self.assertTrue(wild(into_16, pickle_17(), wildcard="17", wildcard_now="15").ok)
+
+    def test_a_wildcard_with_unknown_contents_caps_every_purchase(self):
+        # 17 is above the ceiling with no receipts: it may hold PICKLE, so an $85.00 purchase of PICKLE (or of
+        # anything) for another slot is refused, and so is a switch.
+        dear = Sourcing(PICKLE, PurchaseOption("Amazon", 24, "85.00", url=PICKLE_URL))
+        no_receipts = {"17": SlotState("17", None, 750, 0, None, contents_known=False),
+                       "16": SlotState("16", PICKLE, 300, 2, 250)}
+        restock_16 = DesiredSlot("16", product=PICKLE, sale_price="6.00", fill_to=10)
+        p = wild(restock_16, wildcard="17", slots=no_receipts, sourcing=(dear,))
+        self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals])
+        self.assertIn("$85.00", " ".join(r.message for r in p.refusals))
+        p = wild(DesiredSlot("18", product=MTDEW, sale_price="2.50", fill_to=3), wildcard="17", slots=no_receipts)
+        self.assertIn(("wildcard", "18"), [(r.code, r.slot) for r in p.refusals])
+        # So is the wildcard in effect at a regular price when no receipt says what it holds.
+        regular = {**no_receipts, "17": SlotState("17", None, 250, 0, None, contents_known=False)}
+        p = wild(restock_16, wildcard="17", wildcard_now="17", slots=regular, sourcing=(dear,))
+        self.assertIn(("wildcard", "16"), [(r.code, r.slot) for r in p.refusals])
+        # A modest restock of what a slot holds is under the cap, and allowed.
+        self.assertTrue(wild(DesiredSlot("16", product=PICKLE, sale_price="3.00", fill_to=6), wildcard="17",
+                             slots=no_receipts).ok)
 
     def test_the_wildcard_must_be_one_of_ours(self):
         self.assertEqual(codes(wild(restock_15(), wildcard="99")), ["wildcard"])

@@ -2,21 +2,27 @@
 
 One slot tests products for the other 19 and may sell up to $8.00; it moves only at a Friday visit, holds a product no other slot holds, and one purchase for it costs at most $82.00.
 
-**Why** (#100; adopted on #110, item 1). One of our 20 slots is a testing ground: a product we have no sales for gets a trial there, and if it earns its place it moves into a regular slot. Name the slot in every plan's `wildcard` field, and give the reason in `slot_reasons`. A plan's choice takes effect once its Friday visit is done. A Friday plan that names no wildcard ends the trial.
+**Why** (#100; #110, item 1): a new product earns a regular slot there. Name it in every plan's `wildcard`, with a reason in `slot_reasons`.
 
-**A testing ground.** `get_machine_state` shows `wildcard_trial`: the product on trial, its profit per in-stock class day (revenue without tax, less cost of sales), the weakest of our other slots over the same days, and a verdict. Only days the polls saw count; revenue and cost come from the same polls, or the profit is unknown.
+**When it changes.** A Friday plan's choice takes effect once fulfilled. Visits are ordered by `door_closed_at` where that column exists (ours lacks it), else `fulfilled_at`, which may trail the visit; with neither, the wildcard is unknown and preview and submit refuse. Naming none on Friday ends the trial. A slot no longer ours is no wildcard.
 
-- **Price a trial as a regular slot would**, at or under $6.50, so the result carries over. Above $6.50 it is a price test, not a promotion trial. The trial counts again from the first poll that reads $6.50 or less; a poll with no price doesn't count.
-- **Test a product no other slot holds**, at any price, so its sales aren't split. The trial counts from when the product went in or the slot was named, whichever is later.
-- **Judge it at the first Friday visit after 5 in-stock class days**, when its own rate counts (`restocking`). Compare over the class days the polls saw both slots stocked; a slot with fewer than 5 isn't compared.
-- **Promote** when it earns more per day than the weakest other slot. Keep it where it is, now as a regular slot; send the weakest slot's product to the closet; make that slot the wildcard with the next product to test.
-- **Drop** when it doesn't: switch the wildcard to the next product to test. Pick from the catalog, and say why in `slot_reasons`.
+**The trial** (`get_machine_state`, `wildcard_trial`): profit per in-stock class day (revenue without tax, less cost of sales) against the weakest other slot's, with a verdict.
 
-**The $8.00 ceiling** is for a deliberate price test: a premium drink, a seasonal bet or an anchor. Say it is a price test. Every sale should still profit: no loss leaders.
+- **Only watched intervals count.** Money and days share poll intervals; if the counters and stock replay disagree, or a cost is unknown, so is the profit. Left out, days and sales: the interval holding the load, and any over 6 hours (`MAX_POLL_GAP`). A class day counts in the interval spanning its Eastern midnight.
+- **Price it at or under $6.50** so the result carries over; above, it is a price test. The latest priced poll decides (unpriced polls change nothing): a strictly later poll at or under $6.50 ends the test, and the trial counts from it. If polls at that moment disagree, price and verdict are unknown.
+- **It counts** from the later of the load and the naming.
+- **Judge it at the first Friday visit after 5 in-stock class days**, against slots with 5 class days the polls saw both stocked.
+- **Promote** if it beats the weakest: it stays as a regular slot, the weakest's product goes to the closet, and that slot becomes the wildcard. **Drop** if not: test the next product.
 
-- **It moves only at a Friday visit.** A midweek plan names the wildcard in effect and can't raise it above $6.50.
-- **One at a time.** Any slot priced above $6.50 is the wildcard, so a plan that keeps one there must name it, or reprice it. To move it, lower the old slot at one visit and start the new one at the next. A new wildcard waits until receipts show what every other slot holds, and above $6.50 until every price is known.
-- **One purchase for it costs at most $82.00** at the worker's maximum (`wildcard_purchase_cap_cents`, #90).
-- **Its product is in no other slot**, so only its own line buys that product, and `pricing` step 1 (one price per product) still holds. Extras to the closet count toward the $82.00. A slot that was above $6.50 keeps its product to itself until a visit brings it back under, in case its line comes back unavailable. While a slot's contents or price are unknown, the preview caps purchases at $82.00 and blocks risky switches.
+**$8.00** is for a deliberate price test; say so. No loss leaders.
 
-**One known limit.** A price changes only with a load (`price_only_unsupported`), so a full slot above $6.50 can't be lowered until it sells a unit; then restock it at the lower price.
+**Preview and submit check:**
+
+- **Above $6.50** means the latest poll that read its price read it above (or disagreed) and no strictly later poll read it at or under. Every plan names it, even one lowering it (that line may come back unavailable). So lower it, then name a new one on a later Friday, after a poll reads it at or under. A slot goes above only when no other is and every price is known.
+- **Midweek** plans name the wildcard in effect (the latest fulfilled Friday request's if ours, else the only slot above $6.50) and raise nothing above $6.50.
+- **A new wildcard** (another slot, a product switch, or going above $6.50) needs receipts for every other slot, and a product no other slot holds now.
+- **Protected products**: the named wildcard's, any slot above $6.50's, and what the wildcard in effect holds now while the plan keeps it, even if switching. No other slot may switch to one; while a non-owner holds one, nobody buys it; buying one is capped at $82.00 at the worker's maximum, alternate and closet extras included.
+- **Unknown price** (latest poll read none, or disagreed): that slot's product goes into no other slot, and buying it is capped.
+- **Unknown contents** (no receipts or unnamed stock) in a slot above $6.50, in effect, named, or of unknown price: it may hold anything, so every purchase is capped and no other slot switches product.
+
+**Limit:** prices change only with a load, so a full slot above $6.50 can't be lowered until it sells one.

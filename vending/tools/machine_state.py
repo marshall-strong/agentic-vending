@@ -35,7 +35,9 @@ our other slots over the same days (`vending.wildcard_trial`): its profit per
 in-stock class day the polls saw, the weakest other slot's over the class days
 both held stock, and a verdict (too early, promote, drop, price test or
 unknown) with the reason. Null when the latest confirmed Friday visit named no
-wildcard.
+wildcard. Its `slot` is null when the slot named isn't one of ours now, or when a
+fulfilled Friday visit has no recorded end time, so which slot is the wildcard
+can't be settled; the reason says which.
 
 A slot with no receipts yet has `null` for every receipt field: null, not
 zero, so the agent can't mistake "unknown" for "empty". The message names
@@ -98,7 +100,7 @@ class ClosetItem(BaseModel):
 
 class WildcardTrial(BaseModel):
     """The wildcard as a testing ground (`docs/agent/wildcard.md`): is its product worth a regular slot?"""
-    slot: str | None                            # null: the slot named isn't one of ours now
+    slot: str | None                            # null: the slot named isn't one of ours now, or it is unresolved
     product: str | None = None                  # null: no receipts show what the slot holds
     since: datetime | None = None               # when the trial began: loaded, named or back under the ceiling
     class_days_in_stock: int | None = None      # class days it held stock in poll intervals since then
@@ -307,7 +309,7 @@ def _trial_note(trial: WildcardTrial | None) -> str:
     if trial is None:
         return " No wildcard trial: the latest confirmed Friday visit named no wildcard."
     if trial.slot is None:
-        return f" No wildcard trial: {trial.reason}."
+        return f" No wildcard trial can be judged: {trial.reason}."
     on_trial = f"{trial.product} in slot {trial.slot}" if trial.product else f"slot {trial.slot}"
     return f" Wildcard trial ({on_trial}): {trial.verdict}; {trial.reason}."
 

@@ -5,11 +5,16 @@ The rule (`docs/agent/wildcard.md`, "A testing ground"):
 1. **The trial** is the product in the slot the latest Friday visit's plan
    named as the wildcard. A plan's wildcard takes effect when its visit is
    confirmed (the request is fulfilled), not when it is filed, and a midweek
-   visit never moves it. It counts from when that product went in or the slot
-   was first named (in an unbroken run of visits naming it), whichever is
-   later. A visit whose plan named no wildcard, or another slot, ends the
-   trial. A named slot that isn't one of ours now (the stored assignment) is
-   no trial at all.
+   visit never moves it. Visits are put in order by when they ended: the
+   request's `door_closed_at` where that column exists, else its
+   `fulfilled_at`. A fulfilled Friday request with neither can't be put in
+   order, so the wildcard in effect is unresolved (`WildcardUnresolved`), not
+   guessed from when the plan was filed. The trial counts from when that
+   product went in or the slot was first named (in an unbroken run of visits
+   naming it), whichever is later. A visit whose plan named no wildcard, or
+   another slot, ends the trial. A named slot that isn't one of ours now (the
+   stored assignment) is no wildcard at all: no trial, and the planner
+   (`vending.planning.gather`) treats it as none.
 2. **The measure** is profit per in-stock class day: revenue without tax, less
    the cost of what sold, over the class days the slot held stock
    (`vending.demand`). The restock policy ranks slots by the same yardstick.
@@ -18,7 +23,8 @@ The rule (`docs/agent/wildcard.md`, "A testing ground"):
    every sale and agree on where the stretch begins and ends. A stretch the
    polls didn't cover adds no days, and one where the counters disagree (or
    the replay's sales don't match them) makes the profit unknown. An interval
-   with no sales is a zero, not a gap.
+   with no sales is a zero, not a gap. An interval longer than
+   `MAX_POLL_GAP` (the polls stopped) adds neither its days nor its sales.
 4. **After `TRIAL_DAYS` in-stock class days** the polls saw, the point where a
    slot's own rate counts, compare it with each of our other slots over the
    intervals both were seen holding stock: identical poll intervals, so both
@@ -31,22 +37,25 @@ The rule (`docs/agent/wildcard.md`, "A testing ground"):
    Either way the agent acts at a Friday visit.
 6. **A trial priced above the ceiling** at its latest priced poll is a price
    test, not a promotion trial: a regular slot couldn't charge that, so its
-   profit wouldn't carry over. It counts again only from the first poll that
-   reads a price at or under the ceiling, and only intervals whose polls all
-   read such a price count for it. A poll with no price never qualifies one.
+   profit wouldn't carry over (`standing_prices`). It counts again only from
+   the first poll strictly after the last one that read a price above the
+   ceiling, and only intervals whose polls all read a price at or under it
+   count for it. A poll with no price never qualifies one. Polls at the same
+   moment that read different prices settle nothing: when they are the latest
+   priced moment, the price is unknown and so is the verdict.
 
 The interval holding the load mixes the old product's sales with the new one's,
 so it is left out of both money and days. Units sold past what the receipts
 loaded have no cost, so they make the profit unknown rather than free.
 
-`judge`, `compare`, `slot_record` and `intervals` are pure; `current_wildcard` and `trial`
-read the database.
+`judge`, `compare`, `slot_record` and `intervals` are pure; `current_wildcard`,
+`standing_prices` and `trial` read the database.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from fractions import Fraction
 
 import psycopg
@@ -58,6 +67,10 @@ from vending.slots import DEVICE_ID
 from vending.tools.sales_history import tax_cents
 
 TRIAL_DAYS = demand.OWN_RATE_AFTER   # in-stock class days before a trial is judged
+
+# The longest stretch between two polls that still counts as watched. David polls hourly; a longer gap
+# means the polls stopped, and the class days and sales inside it weren't seen, so they count for nothing.
+MAX_POLL_GAP = timedelta(hours=6)
 
 TOO_EARLY, PROMOTE, DROP, PRICE_TEST, UNKNOWN = "too early", "promote", "drop", "price test", "unknown"
 
@@ -91,8 +104,8 @@ class Comparison:
 
 @dataclass(frozen=True)
 class Trial:
-    record: SlotRecord | None         # None: no receipts for the wildcard slot (or it isn't ours), so nothing to measure
-    slot: str | None                  # None: the named slot isn't one of ours now
+    record: SlotRecord | None         # None: nothing to measure (no receipts, not ours, or the price is unknown)
+    slot: str | None                  # None: the named slot isn't one of ours now, or the wildcard is unresolved
     price_test: bool
     compared: Comparison | None       # the trial against the weakest other slot, over the days they share
     verdict: str
@@ -101,7 +114,7 @@ class Trial:
 
 @dataclass(frozen=True)
 class Interval:
-    """One stretch between two polls in which both counters measured every sale of a slot."""
+    """One stretch, at most `MAX_POLL_GAP` long, in which both counters measured every sale of a slot."""
     begin: datetime
     end: datetime
     units: int
@@ -193,13 +206,15 @@ def intervals(readings: list[Reading], start: datetime, product: str, sales: lis
 
     `readings` are the slot's polls from one at or before `start`; `sales` the
     stock replay's for this slot; `spans` when it held stock (`demand.in_stock_spans`).
-    With `ceiling_cents`, an interval counts only if every poll in it read a
-    price at or under it: a missing price doesn't qualify one.
+    An interval longer than `MAX_POLL_GAP` is left out, days and sales: the
+    polls didn't watch it. With `ceiling_cents`, an interval counts only if
+    every poll in it read a price at or under it: a missing price doesn't
+    qualify one.
     """
     in_stock = set(demand.class_days_in_stock(spans))
     out = []
     for begin, end, units, takings in _joint(readings):
-        if begin < start:
+        if begin < start or end - begin > MAX_POLL_GAP:
             continue
         if ceiling_cents is not None and not all(
                 price is not None and price <= ceiling_cents for at, _, _, price in readings if begin <= at <= end):
@@ -245,25 +260,86 @@ def _joint(readings: list[Reading]) -> list[tuple[datetime, datetime, int, int]]
     return out
 
 
+class WildcardUnresolved(RuntimeError):
+    """The wildcard in effect can't be settled from the data. The message says why and what fixes it."""
+
+
 def current_wildcard(conn: psycopg.Connection) -> tuple[str | None, datetime | None]:
     """The wildcard in effect (None: none), and since when.
 
     It is the slot the plan of the latest confirmed Friday visit named: a
     request takes effect when it is fulfilled, so one still pending (or
-    rejected) changes nothing, and a midweek visit can't move it. "Since" is
-    the visit that began the unbroken run naming that slot.
+    rejected) changes nothing, and a midweek visit can't move it. Visits are
+    put in order by when they ended (`_visit_end`). "Since" is the end of the
+    visit that began the unbroken run naming that slot.
+
+    Raises `WildcardUnresolved` when a fulfilled Friday request has no end
+    time: it can't be put in order, so the wildcard in effect isn't known.
     """
+    end = _visit_end(conn)
     rows = conn.execute(
-        "select s.wildcard, coalesce(r.fulfilled_at, s.at), r.off_cycle from purchase_submissions s"
+        f"select s.wildcard, {end}, r.request_id from purchase_submissions s"
         " join purchase_requests r using (request_id)"
-        " where s.status = 'accepted' and r.status = 'fulfilled' order by 2, s.id"
+        " where s.status = 'accepted' and r.status = 'fulfilled' and not r.off_cycle"
+        f" order by {end}, s.id"
     ).fetchall()
+    unresolved = sorted({request_id for _, at, request_id in rows if at is None})
+    if unresolved:
+        column = "door_closed_at and fulfilled_at are" if "door_closed_at" in end else "fulfilled_at is"
+        raise WildcardUnresolved(
+            f"Friday request {', '.join(unresolved)} is fulfilled but its {column} null, so its visit can't be put "
+            "in order with the others and which slot is the wildcard is unknown; run the request sync "
+            "(python -m vending.sync_requests) so the time is recorded, or ask a person to check the request")
     slot, since = None, None
-    for named, at, off_cycle in rows:
-        if named == slot or off_cycle:
+    for named, at, _ in rows:
+        if named == slot:
             continue
         slot, since = named, at
     return slot, since if slot is not None else None
+
+
+def _visit_end(conn: psycopg.Connection) -> str:
+    """SQL for when a fulfilled request's visit ended: `door_closed_at` where that column exists, else `fulfilled_at`."""
+    has_door = conn.execute(
+        "select exists (select 1 from information_schema.columns where table_schema = current_schema()"
+        " and table_name = 'purchase_requests' and column_name = 'door_closed_at')").fetchone()[0]
+    return "coalesce(r.door_closed_at, r.fulfilled_at)" if has_door else "r.fulfilled_at"
+
+
+@dataclass(frozen=True)
+class Standing:
+    """A slot's price as the polls last read one: the latest moment a good poll read a price for it."""
+    at: datetime
+    prices: frozenset[int]      # what the polls at that moment read; more than one means they disagree
+
+    @property
+    def known(self) -> bool:
+        return len(self.prices) == 1
+
+    def above(self, ceiling_cents: int) -> bool | None:
+        """Above the ceiling; None when the polls at that moment disagree."""
+        return max(self.prices) > ceiling_cents if self.known else None
+
+
+def standing_prices(conn: psycopg.Connection, slots: tuple[str, ...] | list[str]) -> dict[str, Standing]:
+    """Each slot's latest priced moment on our machine, over every good poll. A slot no poll priced is left out.
+
+    A poll that read no price leaves the standing price where it was, so a
+    price test ends only when a strictly later poll reads a price at or under
+    the ceiling. Polls at the same moment that disagree leave it unknown.
+    `trial` and the planner (`vending.planning.gather`) both read it here.
+    """
+    out: dict[str, Standing] = {}
+    for selection, at, prices in conn.execute(
+            "select s.selection, p.started_at, array_agg(distinct s.price_cents) from poll_selections s"
+            " join polls p using (session_id)"
+            " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and s.price_cents is not null"
+            " and p.started_at = (select max(p2.started_at) from poll_selections s2 join polls p2 using (session_id)"
+            "   where p2.device_id = %s and p2.crc_ok and s2.selection = s.selection and s2.price_cents is not null)"
+            " group by s.selection, p.started_at",
+            (DEVICE_ID, list(slots), DEVICE_ID)):
+        out[selection] = Standing(at, frozenset(prices))
+    return out
 
 
 def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotCount],
@@ -275,7 +351,10 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
     counts and `loads` every load per slot, as `get_machine_state` reads them;
     `sales` is the stock replay's.
     """
-    slot, named = current_wildcard(conn)
+    try:
+        slot, named = current_wildcard(conn)
+    except WildcardUnresolved as error:
+        return Trial(None, None, False, None, UNKNOWN, str(error))
     if slot is None:
         return None
     if slot not in slots:
@@ -289,13 +368,25 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
     ceiling_cents, tax_percent = _setting(conn, "price_ceiling_cents", 650), _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
     start = max(w.since, named)
     readings = _readings(conn, start, now, list(counts))
+    standing = standing_prices(conn, [slot]).get(slot)
+    if standing is not None and not standing.known:
+        return Trial(None, slot, False, None, UNKNOWN, (
+            f"the polls at {standing.at:%Y-%m-%d %H:%M} UTC read different prices for slot {slot} "
+            f"({', '.join(f'${p // 100}.{p % 100:02d}' for p in sorted(standing.prices))}), so its price is "
+            "unknown and so is whether it is a price test; a later poll that reads one price settles it"))
+    # Above the ceiling at the latest poll that read a price: a poll with no price changes nothing.
+    price_test = standing is not None and bool(standing.above(ceiling_cents))
     priced = [(at, price) for at, _, _, price in readings.get(slot, []) if at >= start and price is not None]
-    price_test = bool(priced) and priced[-1][1] > ceiling_cents   # above the ceiling at the latest poll with a price
     above = [at for at, price in priced if price > ceiling_cents]
     if above and not price_test:
-        # It counts from the first poll that reads a price back at or under the ceiling: the interval before
-        # it may hold sales at the old price. A poll with no price doesn't count as back under.
-        start = next(at for at, price in priced if at > above[-1])
+        # It counts from the first poll strictly after the last one above the ceiling: the interval before it
+        # may hold sales at the old price. A poll with no price doesn't count as back under.
+        back = next((at for at, price in priced if at > above[-1]), None)
+        if back is None:   # can't happen while the standing price is under the ceiling; refuse rather than guess
+            return Trial(None, slot, False, None, UNKNOWN, (
+                f"no poll after the last one that read slot {slot} above the ceiling has read its price, so "
+                "whether its price test has ended is unknown"))
+        start = back
     measured = {s: _measure(c, max(start, c.since), now, loads.get(s, []), sales, readings.get(s, []),
                             None if s != slot or price_test else ceiling_cents)
                 for s, c in counts.items()}
