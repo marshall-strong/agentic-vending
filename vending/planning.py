@@ -139,8 +139,8 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     without_receipts = [s for s in settings.slots if s not in by_slot]
     if without_receipts:
         notes.append(f"no receipts yet for slots {', '.join(without_receipts)}, so their product and stock "
-                     "are unknown and counted as empty; the wildcard can't switch product until every slot has "
-                     "receipts")
+                     "are unknown and counted as empty; the wildcard can't switch product while the plan keeps "
+                     "one of them, so list each with the product it should hold")
     closet = tuple(planner.ClosetStock(c.product, c.units, c.unit_cost) for c in counted.closet)
     pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))

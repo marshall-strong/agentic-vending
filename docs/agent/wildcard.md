@@ -32,5 +32,5 @@ Never promote into a slot that sold. `unconfirmed_slots` sold nothing but may be
 
 - Only the wildcard may go above $6.50, up to $8.00.
 - Its own purchase costs at most $82.00 at the worker's maximum, alternate and closet extras included.
-- No other slot switches to its product, except a promotion. It doesn't switch to a product another slot holds now, or while any slot has no receipts, and doesn't load more of its product while another slot holds it.
+- No other slot switches to its product, except a promotion. It doesn't switch to a product another slot holds now, or while the plan keeps a slot with no receipts, and doesn't load more of its product while another slot holds it. A plan that names a product for each such slot, as the day-one fill does for all 20, settles it.
 - A promotion needs a pass, a silent slot, a Friday visit, and the wildcard switching in the same plan, one slot at a time.

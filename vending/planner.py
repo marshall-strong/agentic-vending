@@ -655,7 +655,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
         ceiling = config.wildcard_ceiling_cents if s.slot == config.wildcard_slot else config.price_ceiling_cents
         refusals.extend(check_price(s.price_cents, floor, ceiling, s.slot))
-    refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle))
+    refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle, warnings))
 
     # 8. The plan, with every refusal found.
     # Only slots with a source get a line. A slot that couldn't be stocked is
@@ -697,9 +697,12 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 # - Its product is in no other slot while it is on trial, so a trial's sales
 #   aren't split:
 #   - no other slot switches to the product it holds now, except as a promotion;
-#   - it switches only to a product no other slot holds now, and only while every
-#     other slot's contents are known: a slot no receipt describes may hold it,
-#     and the line that moves another slot may come back unavailable;
+#   - it switches only to a product no other slot holds now (the line that moves
+#     another slot may come back unavailable), and not while the plan keeps a
+#     slot no receipt describes, which may hold it. A plan that switches such a
+#     slot names its contents, as the day-one fill names all 20; if that line
+#     comes back unavailable its old stock may stay, which, like any unavailable
+#     line, the plan can't foresee, so it is warned of, not refused;
 #   - no other slot switches to the product it switches to;
 #   - it doesn't load more of its product while another slot holds it.
 # - A promotion copies the trial's product into one silent regular slot, which
@@ -713,7 +716,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
 PASS_VERDICT = "pass"   # `vending.wildcard_trial.PASS`; the planner imports nothing that needs a database
 
 
-def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, off_cycle: bool) -> list[Refusal]:
+def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, off_cycle: bool,
+                    warnings: list[str]) -> list[Refusal]:
     w = next((s for s in slots if s.slot == config.wildcard_slot), None)
     if w is None:
         return []
@@ -745,12 +749,19 @@ def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, o
                 f"{w.product} is in slot {', '.join(now_in)} now, so the wildcard, slot {w.slot}, can't take it at "
                 f"this visit: if the line that moves {', '.join(now_in)} came back unavailable, the product would "
                 "be in two slots. Test another product"), w.slot))
-        unsure = sorted(s.slot for s in others if s.state.unsure)
-        if unsure:
+        # A slot the plan switches holds what the plan names; only one it keeps can still hold what no receipt names.
+        kept = sorted(s.slot for s in others if s.state.unsure and not s.changes_product)
+        if kept:
             refusals.append(Refusal("wildcard", (
-                f"the wildcard, slot {w.slot}, can't switch to {w.product} while no receipt shows what slot "
-                f"{', '.join(unsure)} holds, since it may hold the same product; stock it first, so a receipt "
-                "names its product"), w.slot))
+                f"the wildcard, slot {w.slot}, can't switch to {w.product} while this plan keeps slot "
+                f"{', '.join(kept)}, which no receipt describes and so may hold the same product; switch it in "
+                "this plan to the product it should hold, or stock it first so a receipt names its product"), w.slot))
+        switched = sorted(s.slot for s in others if s.state.unsure and s.changes_product)
+        if switched:
+            warnings.append(
+                f"no receipt shows what slot {', '.join(switched)} holds now: if its line comes back unavailable, "
+                f"its old stock may stay and may be {w.product}, the wildcard's new product; its receipt "
+                "(units_pulled, pulled_sku) or a person's count settles it before the trial is read")
         into = sorted(s.slot for s in others if s.changes_product and s.product == w.product)
         if into:
             refusals.append(Refusal("wildcard", (
