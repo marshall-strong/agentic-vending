@@ -169,3 +169,21 @@ def test_a_missing_sourcing_table_blanks_only_this_panel(conn, page_conn):
     snap = dashboard.snapshot(page_conn, MONDAY)
     assert not snap["pricing"]["ok"] and "sourcing_options" in snap["pricing"]["why"]
     assert snap["sales"]["ok"] and "Not available" in section(dashboard.render(snap))
+
+
+def test_price_history_reads_our_slots_itself(conn):
+    # Kevin, 19 Nov: no reader may take a caller's list of selections. Ours come only from the stored
+    # assignment, read inside the reader, so another list can't be passed in (docs/integrity.md).
+    import inspect
+
+    import pytest
+
+    from vending.slots import SlotsNotRecorded
+    from vending.tools import machine_state
+    assert list(inspect.signature(machine_state.price_history).parameters) == ["conn", "until", "since"]
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"12": (876, 1), "15": (250, 1)})
+    seen = {slot for _, slot, _ in machine_state.price_history(conn, MONDAY)}
+    assert "12" not in seen and "15" in seen
+    conn.execute("delete from slot_assignment")
+    with pytest.raises(SlotsNotRecorded):
+        machine_state.price_history(conn, MONDAY)

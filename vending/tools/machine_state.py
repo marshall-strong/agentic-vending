@@ -501,10 +501,13 @@ def _readings(conn: psycopg.Connection, start: datetime, end: datetime,
         (DEVICE_ID, list(slots), end, DEVICE_ID, start, start)).fetchall()
 
 
-def price_history(conn: psycopg.Connection, slots: tuple[str, ...] | list[str], until: datetime,
+def price_history(conn: psycopg.Connection, until: datetime,
                   since: datetime | None = None) -> list[tuple[datetime, str, int]]:
-    """`(polled_at, selection, price_cents)` for `slots` at every good poll of our machine up to `until`,
-    oldest first. With `since`, from the last poll at or before it, so the price at `since` is known.
+    """`(polled_at, selection, price_cents)` for our selections at every good poll of our machine up to
+    `until`, oldest first. With `since`, from the last poll at or before it, so the price at `since` is known.
+
+    Which selections are ours it reads itself (`our_slots`, which raises `SlotsNotRecorded` with none
+    stored): a caller can't hand it another list (docs/integrity.md).
 
     Prices are only seen at polls, so a change shows at the poll that first saw it. A poll with no
     price for a selection is left out. The money series and the dashboard's pricing panel read
@@ -517,7 +520,7 @@ def price_history(conn: psycopg.Connection, slots: tuple[str, ...] | list[str], 
         " where p.device_id = %(device)s and p.crc_ok and s.selection = any(%(slots)s)"
         " and p.started_at <= %(until)s and s.price_cents is not null" + lower +
         " order by p.started_at, p.session_id, s.selection",
-        {"device": DEVICE_ID, "slots": list(slots), "until": until, "since": since}).fetchall()
+        {"device": DEVICE_ID, "slots": list(our_slots(conn)), "until": until, "since": since}).fetchall()
 
 
 def _counters(conn: psycopg.Connection, session_id: str, slots: tuple[str, ...]) -> Counters:

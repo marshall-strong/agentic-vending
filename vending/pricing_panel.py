@@ -80,7 +80,7 @@ def read(conn: psycopg.Connection, now: datetime, slots: tuple[str, ...], skus: 
     return {"ceiling_cents": _setting(conn, "price_ceiling_cents", DEFAULT_CEILING_CENTS),
             "tax_percent": _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT),
             "options": options, "since": since,
-            "history": machine_state.price_history(conn, slots, now, since) if slots else []}
+            "history": machine_state.price_history(conn, now, since) if slots else []}
 
 
 def _setting(conn: psycopg.Connection, key: str, default: int) -> int:
