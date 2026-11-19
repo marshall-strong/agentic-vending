@@ -87,6 +87,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from slots_config import SOURCE_CLI, SOURCE_FALL, SOURCE_SERVER, check_before_start, resolve_run  # noqa: E402
 from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
+from boundary_units import split_boundary  # noqa: E402
 from door_events import is_our_rise, read_receipts  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID  # noqa: E402  (configure() sets the device and slots this run uses)
@@ -1294,12 +1295,20 @@ def main():
     # Price rules (stated, and what the code does):
     #  * price paid on a sale = the listed price in effect when the sale's poll interval began: the slot's last price
     #    reading at or before the interval's opening poll (`prev`); a sale before the slot's first reading takes that reading.
+    #    When the price at the interval's closing poll differs, the units are split between the two prices by the interval's
+    #    units and cents (boundary_units.split_boundary); units the counters can't split are left out of the average
+    #    price and counted in price_unknown_units, never credited to the opening price.
     #  * price on a day (slot_daily.p) = the listed price at 12:00 noon ET: the last reading before noon, or, on a day with
     #    no reading before noon, the day's first reading; days with no reading carry the last price forward.
     prr = rd[["slot", "t", "price_cents"]].rename(columns={"t": "read_t", "price_cents": "price_at_sale"}).sort_values("read_t")
     s2 = pd.merge_asof(sales.sort_values("prev"), prr, left_on="prev", right_on="read_t", by="slot", direction="backward")
     s2b = pd.merge_asof(sales.sort_values("prev"), prr, left_on="prev", right_on="read_t", by="slot", direction="forward")
     s2["price_at_sale"] = s2.price_at_sale.fillna(s2b.price_at_sale)
+    close_price = {(r.slot, r.read_t): int(r.price_at_sale) for r in prr.itertuples()}
+    parts = [split_boundary(int(r.units), int(r.cents), None if pd.isna(r.price_at_sale) else int(r.price_at_sale),
+                            close_price.get((r.slot, r.t))) for r in s2.itertuples()]
+    s2["price_close"] = [close_price.get((r.slot, r.t)) for r in s2.itertuples()]
+    s2["units_open"], s2["units_close"], s2["units_unknown"] = ([p[i] for p in parts] for i in range(3))
     sales = s2.drop(columns=["read_t"]).sort_values(["t", "slot"]).reset_index(drop=True)
     sale_list = {s: list(sales[sales.slot == s].sort_values("t")[["prev", "t", "units"]].itertuples(index=False)) for s in slots}
     rd["date"] = rd.t.dt.date
@@ -1320,7 +1329,9 @@ def main():
         # average price = units-weighted price in effect at each sale on regular-era class days; a slot with no such sale
         # takes the mean of its noon listed price over those days
         sc = su[su.date.isin(set(reg_class))]
-        avg_p = float((sc.price_at_sale * sc.units).sum() / sc.units.sum()) if sc.units.sum() > 0 else float(price_day.loc[reg_class, s].mean())
+        priced = int((sc.units_open + sc.units_close).sum())          # units whose price is known (not boundary-unknown)
+        avg_p = (float(((sc.price_at_sale * sc.units_open).fillna(0) + (sc.price_close * sc.units_close).fillna(0)).sum() / priced)
+                 if priced > 0 else float(price_day.loc[reg_class, s].mean()))
         last_sale = su.t.max() if len(su) else None
         slot_rows.append(dict(
             slot=s, row=int(rowcol.loc[s, "row"]), col=int(rowcol.loc[s, "col"]),
@@ -1329,8 +1340,9 @@ def main():
             units_per_week=su.units.sum() / ((T1 - T0).total_seconds() / 86400 / 7),
             instock_class_days=rate_rows[s]["instock_days_all"], class_days=len(reg_class),
             rate=rate_rows[s]["rate_all"], rate_recent=rate_rows[s]["rate_recent"],
-            avg_price=avg_p / 100, avg_price_rule="units-weighted price in effect at each regular-era class-day sale" if sc.units.sum() > 0
+            avg_price=avg_p / 100, avg_price_rule="units-weighted price in effect at each regular-era class-day sale" if priced > 0
             else "mean noon listed price on regular-era class days (no such sales)",
+            price_unknown_units=int(sc.units_unknown.sum()),
             current_price=int(rd[rd.slot == s].price_cents.iloc[-1]),
             fri_share=float(fri_units / wd_tot) if wd_tot else 0.0,
             zero_week_share=float((wk_units == 0).mean()) if len(wk_units) else None,
