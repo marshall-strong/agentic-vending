@@ -11,7 +11,7 @@ so the container joins it with Tailscale in userspace mode.
 ## What runs in the container
 
 `Dockerfile` builds one image with the package and the Tailscale binaries. Its default command
-is `python -m vending.worker`: every hour it runs `python -m vending.sync_history`,
+is `python -m vending.worker`: every hour, at 5 minutes past (UTC), it runs `python -m vending.sync_history`,
 `python -m vending.sync_requests`, `python -m vending.sync_catalog` and
 `python -m vending.sync_product_requests` (which catalog requests were approved or rejected),
 each with a 30-minute
@@ -24,6 +24,14 @@ names the host and user); the errors are in the log. The page is built from the 
 `/health`, so it can't show more. `docker/entrypoint.sh` joins the tailnet first and
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
+
+**Why 5 minutes past.** The course staff's poller reads the machine on the hour, and the bridge keeps
+every poll. A round at 5 past brings the new poll into our database about 5 minutes after it was
+taken, and the dashboard shows it on its next 30-second refresh. Before, a round ran an hour after
+the last one, at whatever minute the container had started, so a poll could wait up to an hour.
+`SYNC_AT_MINUTE` changes the minute (`off` brings back an hour from the last round), and
+`SYNC_EVERY_MINUTES` the gap. With a minute set, the gap must divide 60 or be a multiple of it
+(15 gives :05, :20, :35 and :50).
 
 **Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
 worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a

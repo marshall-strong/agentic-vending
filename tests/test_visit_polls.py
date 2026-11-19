@@ -693,3 +693,13 @@ def test_a_read_sent_whose_history_copy_outlives_the_timeout_is_not_a_failure(mo
     assert reader.failures == 0
     assert not any("failed in a row" in line for line in said)
     assert any("storage not confirmed" in line for line in said)
+
+
+def test_the_hourly_rounds_keep_to_five_past_while_the_reads_run():
+    # The two schedules share one loop (#177 and SYNC_AT_MINUTE): the reads come every minute in the
+    # window, and the rounds still come at 5 past each hour, never shifted by a read that ran long.
+    calls, rounds = [], []
+    clock = Clock(at(FRI, 14, 50), at(FRI, 17, 10))
+    run_worker(clock, reader_of(calls), job=lambda: rounds.append(clock().astimezone(ET)) or 0)
+    assert rounds == [at(FRI, 14, 50), at(FRI, 15, 5), at(FRI, 16, 5), at(FRI, 17, 5)]
+    assert calls[0] == at(FRI, 14, 50) and len(calls) == 140
