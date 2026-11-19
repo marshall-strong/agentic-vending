@@ -327,7 +327,7 @@ def test_the_series_reads_the_database_the_same_number_of_times_however_long(con
     short, long = Counting(conn), Counting(conn)
     daily(short, date(2026, 11, 7), date(2026, 11, 9), now=AFTER)
     daily(long, date(2026, 11, 7), date(2027, 1, 15), now=AFTER)
-    assert short.queries == long.queries < 20
+    assert short.queries == long.queries < 25   # 20 since the opening filter (#124) reads the ledger twice
 
 
 def test_an_empty_range_is_refused(conn):
