@@ -349,7 +349,9 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
     assert (held["product"], held["loaded"], held["sold"], held["on_hand"]) == ("COKE-20OZ", 8, 5, 3)
     assert held["unit_cost"] == "0.80"                    # $9.60 over 12 units, exact
     assert snap["stock"]["data"]["closet"] == [{"product": "COKE-20OZ", "units": 4, "unit_cost": "0.80"}]
-    assert snap["sales"]["data"]["slots"]["15"] == {"price": "2.50", "sold": 5, "per_day": "1.26"}   # 5 over 3 d 23 h
+    assert snap["sales"]["data"]["slots"]["15"] == {   # 5 over 3 d 23 h; under 5 class days, the fall prior
+        "price": "2.50", "sold": 5, "per_day": "1.26", "per_class_day": "1.701",
+        "rate_basis": "fall prior: fast seller (average $2.63); 1 in-stock class day of our own so far, own rate after 5"}
     assert snap["sales"]["data"]["stale"] is False
     assert snap["spend"]["data"]["drinks"]["paid"] == Decimal("9.60")
     page = dashboard.render(snap)

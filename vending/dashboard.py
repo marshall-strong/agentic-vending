@@ -31,6 +31,9 @@ The page, top to bottom:
    (polls) and the product and units on hand (receipts, or a newer count); Next
    Friday shows the latest plan: the slots it fills, a swap, a pull, a new price.
    Anything without a record says unknown.
+ - Pricing (`vending.pricing_panel`): for each of our selections, the shelf price, the unit cost
+   (receipts, else expected from sourcing), the floor and whether the price is legal, the margin,
+   what sold, the plan's next price and why, and the shelf price over the last four weeks.
  - The plan: what changed since the plan before, then one line per slot that
    opens to the agent's reason, what it was, and what the slot holds and sold.
    Then the agent's weekly update and its notes to itself.
@@ -61,6 +64,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
 from vending import db, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
+from vending import pricing_panel
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
 from vending.slots import DEVICE_ID, SlotsNotRecorded, lock_at, our_slots
@@ -404,7 +408,8 @@ def _sales(conn: psycopg.Connection, now: datetime) -> dict:
     if not reply.success:
         return {"as_of": None, "stale": False, "window_start": None, "slots": {}}
     return {"as_of": reply.as_of, "stale": reply.stale, "window_start": reply.window_start,
-            "slots": {s.slot: {"price": s.price, "sold": s.units_sold_in_window, "per_day": s.units_per_day}
+            "slots": {s.slot: {"price": s.price, "sold": s.units_sold_in_window, "per_day": s.units_per_day,
+                               "per_class_day": s.units_per_class_day, "rate_basis": s.rate_basis}
                       for s in reply.data}}
 
 
@@ -418,7 +423,9 @@ def _stock(conn: psycopg.Connection) -> dict:
     return {"slots": {s.slot: {"product": s.product, "on_hand": s.units, "loaded": s.loaded,
                                "sold": s.sold + s.unattributed,
                                "lost": s.lost, "since": s.since, "last_moved": s.last_moved,
-                               "unit_cost": _dollars(s.unit_cost)}
+                               "unit_cost": _dollars(s.unit_cost),
+                               # Exact cents per unit ("185/2"), for the pricing panel's floor.
+                               "unit_cost_cents": None if s.unit_cost is None else str(s.unit_cost)}
                       for s in found.slots},
             "closet": [{"product": c.product, "units": c.units, "unit_cost": _dollars(c.unit_cost)}
                        for c in found.closet],
@@ -608,7 +615,16 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         snap["weekly_plan"] = snap["plan"]
         snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots)))
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
+    snap["pricing"] = _pricing(conn, now, snap, slots)
     return snap
+
+
+def _pricing(conn: psycopg.Connection, now: datetime, snap: dict, slots: tuple[str, ...]) -> dict:
+    """The pricing panel (`vending.pricing_panel`): its own reads (sourcing, the ceiling, the price history)
+    isolated like an optional panel, then built from the sales, stock and plan panels above. Only `slots`."""
+    return _panel(lambda: pricing_panel.build(
+        snap, slots, _isolated(conn, lambda: pricing_panel.read(conn, now, slots, pricing_panel.products(snap, slots))),
+        now))
 
 
 # Shown when the products read fails, in place of the error's text.
@@ -1665,6 +1681,7 @@ footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8p
 """
 
 STYLE += money_panel.STYLE   # the money panel's own rules (#48)
+STYLE += pricing_panel.STYLE   # the pricing panel's own rules
 
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
@@ -1840,7 +1857,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     money = (f'<section id="money"><h2>Money <span class="hint">from the ledger &middot; exact to the cent'
              " &middot; the competition counts from the ledger's opening; spend before it is development"
              f'</span></h2>{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
-    body = (head + _tiles(snap) + _attention_html(items) + money + _cabinet_html(snap)
+    pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
+    body = (head + _tiles(snap) + _attention_html(items) + money + _cabinet_html(snap) + pricing
             + _plan_section(snap)
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '

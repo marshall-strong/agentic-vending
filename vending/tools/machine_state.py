@@ -501,6 +501,25 @@ def _readings(conn: psycopg.Connection, start: datetime, end: datetime,
         (DEVICE_ID, list(slots), end, DEVICE_ID, start, start)).fetchall()
 
 
+def price_history(conn: psycopg.Connection, slots: tuple[str, ...] | list[str], until: datetime,
+                  since: datetime | None = None) -> list[tuple[datetime, str, int]]:
+    """`(polled_at, selection, price_cents)` for `slots` at every good poll of our machine up to `until`,
+    oldest first. With `since`, from the last poll at or before it, so the price at `since` is known.
+
+    Prices are only seen at polls, so a change shows at the poll that first saw it. A poll with no
+    price for a selection is left out. The money series and the dashboard's pricing panel read
+    prices over time through this, the one place that does."""
+    lower = ("" if since is None else
+             " and p.started_at >= coalesce((select max(started_at) from polls"
+             "   where device_id = %(device)s and crc_ok and started_at <= %(since)s), %(since)s)")
+    return conn.execute(
+        "select p.started_at, s.selection, s.price_cents from poll_selections s join polls p using (session_id)"
+        " where p.device_id = %(device)s and p.crc_ok and s.selection = any(%(slots)s)"
+        " and p.started_at <= %(until)s and s.price_cents is not null" + lower +
+        " order by p.started_at, p.session_id, s.selection",
+        {"device": DEVICE_ID, "slots": list(slots), "until": until, "since": since}).fetchall()
+
+
 def _counters(conn: psycopg.Connection, session_id: str, slots: tuple[str, ...]) -> Counters:
     rows = conn.execute(
         "select selection, price_cents, lifetime_units from poll_selections"
