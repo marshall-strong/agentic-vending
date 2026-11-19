@@ -49,9 +49,10 @@ is cut off. The process is PID 1 in the container, which ignores SIGTERM
 unless a handler is set, so without this a restart would wait out the grace
 period and end in SIGKILL.
 
-On Fridays the loop also asks the bridge to read the machine live, about every minute from 2:45 to
-7 PM Eastern, so a read lands while the door is open during our visit (`vending.visit_polls`). A read
-that fails is logged and skipped. It is not a job of the round, so it never fails the round or /health.
+On Fridays (and the dates in `VISIT_POLL_DATES`) the loop also asks the bridge to read the machine live,
+about every minute from 2:45 to 7 PM Eastern, so a read lands while the door is open during our visit
+(`vending.visit_polls`). A read that fails is logged and skipped. It is not a job of the round, so it
+never fails the round or /health. A read that runs past the round's time delays the round, never ends the loop.
 
 The agent itself (the model loop) does not run here yet; when it does, it
 starts `python -m vending.server` over stdio from the same image.
@@ -528,6 +529,10 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             state.next_round_at = due.isoformat()
             log(f"next round at {due:%Y-%m-%d %H:%M:%S} UTC")
             while True:
+                # A read can run past the round's time: then the round is due now, and a negative sleep
+                # would raise and end the worker.
+                if now >= due:
+                    break
                 # Until the next round, take the visit reads when they are due. They are not jobs of the
                 # round: a read that fails is logged and never reaches `state`, so /health never shows it.
                 wake = due if reads is None else min(due, reads.next_due(now))
