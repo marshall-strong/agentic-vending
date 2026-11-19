@@ -285,8 +285,8 @@ def test_the_spent_tile_rounds_the_exact_total_once(conn, page_conn):
     fulfilled(conn, "pr-s", "15", "RB", units_loaded=1, paid="0.0049", at=OPENED + timedelta(days=1))
     ledger.record_tokens(conn, "0.0049", "claude-opus-5-5", 1, 1, "msg_s", at=OPENED + timedelta(days=2))
     snap = dashboard.snapshot(page_conn, NOW)
-    tile = dashboard._tiles(snap).split("Spent since the opening")[1]
-    assert '<span class="big">$0.01</span>' in tile
+    cell = dashboard._status_bar(snap).split("Spent since the opening")[1]
+    assert cell.startswith(" <b>$0.01</b>")
     assert snap["money"]["data"]["spent"] == "0.01"
 
 

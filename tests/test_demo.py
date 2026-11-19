@@ -170,7 +170,8 @@ def test_the_demo_keeps_its_toggles_under_its_own_storage_keys(no_database):
     for text in (page, live):
         # Every key goes through the prefix: no literal key is left in the script.
         assert not re.search(r"""(?:getItem|save)\(\s*['"]dash-""", text)
-        assert len(re.findall(r"PFX \+ '(?:show|view|changed|shelf)'", text)) == 9
+        # show, view and changed: read once each, saved four times (the ops layout keeps no shelf key).
+        assert len(re.findall(r"PFX \+ '(?:show|view|changed|shelf)'", text)) == 7
     assert "'demo-dash-' + " not in page      # the prefix is a variable, set once
 
 

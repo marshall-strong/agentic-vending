@@ -30,6 +30,11 @@ def plan(*slots, reason="restock what sold"):
     return {"visit": "scheduled", "reason": reason, "slots": list(slots)}
 
 
+def status_cells(snap) -> list[str]:
+    """The status bar's six cells, in order, each from its opening tag."""
+    return dashboard._status_bar(snap).split('<a class="sc')[1:]
+
+
 def read_only(url, schema):
     return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
                            options=f"{dashboard.READ_ONLY} -c search_path={schema}")
@@ -155,7 +160,8 @@ def test_status_and_activity(conn, page_conn, open_ledger):
     assert snap["attention"][0]["level"] == "bad" and "probably died" in snap["attention"][0]["text"]
     assert any("1 refused" in a["text"] for a in snap["attention"])
     page = dashboard.render(snap)
-    assert 'class="write refused problem"' in page and "Probably died" in page and "writes allowed" in page
+    assert 'class="write refused problem"' in page and "writes allowed" in page
+    assert "probably died" in status_cells(snap)[0]       # the Agent cell says so
 
 
 def test_text_from_the_database_is_escaped(conn, page_conn, open_ledger):
@@ -534,7 +540,7 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn, open
     page = dashboard.render(snap)
     assert "3 on hand of COKE-20OZ &middot; the slot sold 5 in the 3 d 23 h to the last poll, whatever it held" in page
     # The tile says how fresh the poll is, never a lone window-start date that reads like an update time (#172).
-    assert "last poll &middot; our slots sold 5 units in the 3 d 23 h to it" in page
+    assert "5 sold in the last 3 d 23 h" in status_cells(snap)[1]
     assert "since the last poll" not in page
     assert "sold since" not in page
     assert "<s>$2.50</s> <b>$2.75</b>" in page             # the tag now, and what the plan sets it to
@@ -627,15 +633,15 @@ def test_the_refresh_keeps_the_tab_title_current():
 
 @pytest.mark.parametrize("halted, at, by, words, absent", [
     (False, None, None, "writes allowed", "by "),
-    (False, MONDAY - timedelta(hours=3), None, "turned off <time", " by"),
-    (False, None, "kevin", "turned off by kevin", "&mdash;"),
-    (True, None, None, "no halt row: counts as halted", "turned on"),
+    (False, MONDAY - timedelta(hours=3), None, "halt switched off <time", " by"),
+    (False, None, "kevin", "halt switched off by kevin", "&mdash;"),
+    (True, None, None, "no halt row: counts as halted", "switched on"),
 ])
-def test_the_halt_tile_reads_cleanly_without_who_or_when(page_conn, halted, at, by, words, absent):
+def test_the_halt_switch_reads_cleanly_without_who_or_when(page_conn, halted, at, by, words, absent):
     snap = dashboard.snapshot(page_conn, MONDAY)
     snap["status"].update(halted=halted, halt_changed_at=at, halt_changed_by=by)
-    tile = dashboard._tiles(snap).split('<div class="tile">')[1]
-    assert words in tile and absent not in tile
+    cell = status_cells(snap)[0]      # the Agent cell
+    assert words in cell and absent not in cell
 
 
 def test_snapshot_is_repeatable_read_even_across_optional_readers(conn, page_conn, monkeypatch):
@@ -1164,9 +1170,9 @@ def test_a_lane_with_no_known_size_draws_no_full_looking_gauge():
     products = {"catalog": {"MILK-CARTON": {"name": "Milk", "line": None, "flavor": None, "size": "11 oz carton"}},
                 "overrides": {}}
     lanes = {"55": machine_art.Lane("55", view["55"], products)}
-    front = machine_art._front(lanes, {"55"})
+    front = machine_art.front_html(lanes, {"55"})
     assert lanes["55"].cap is None
-    assert 'fill="#e3e9f0"' not in front and 'stroke-dasharray="2 2"' in front
+    assert '<i class="v-now"' not in front and 'class="fc-g open"' in front
 
 
 @pytest.mark.parametrize("value, shown", [
@@ -1309,7 +1315,7 @@ def test_failing_syncs_name_each_job_and_what_its_exit_code_means(page_conn):
                     ("sync_catalog", None, "timed out"))
     snap = dashboard.snapshot(page_conn, MONDAY, syncs=failing)
     bad = [a["text"] for a in snap["attention"] if a["level"] == "bad"]
-    assert bad == ["The worker's latest sync round (12 min ago) failed: `sync_history` exit 2, "
+    assert bad == ["The worker's latest hourly sync (12 min ago) failed: `sync_history` exit 2, "
                    "`sync_catalog` timed out. Exit 2: the database is missing migrations; run "
                    "`python -m vending.db migrate`. See `/health`."]
     assert dashboard.verdict(snap["attention"]) == "problem"
@@ -1333,7 +1339,7 @@ def test_a_sync_that_finished_with_problems_is_a_problem_too(page_conn):
 ])
 def test_no_sync_item_unless_the_latest_round_failed(page_conn, given):
     snap = dashboard.snapshot(page_conn, MONDAY, syncs=given)
-    assert not any("sync round" in a["text"] for a in snap["attention"])
+    assert not any("hourly sync" in a["text"] for a in snap["attention"])
     assert snap["syncs"] == given
 
 
@@ -1349,3 +1355,234 @@ def test_the_sales_window_says_how_long_it_really_is():
     assert words(timedelta(days=10)) == "the 10 d"                           # a gap in the polls: not "the 7 days"
     assert words(timedelta(seconds=30)) == "under a minute"
 
+
+# --- The ops layout: the status bar, the front beside Needs attention, and the close-up --------------
+
+def section(page: str, start: str, end: str) -> str:
+    i = page.index(start)
+    return page[i:page.index(end, i)]
+
+
+def front_of(page: str) -> str:
+    return section(page, '<nav class="fm"', "</nav>")
+
+
+def test_the_status_bar_has_six_cells_and_visitors_only_in_the_footer(conn, page_conn):
+    from vending import visits
+    visits.write(conn, [("view", "/dashboard", "0123456789abcdef")])
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    labels = [re.search(r'<span class="label">([^<]+)</span>', c).group(1) for c in status_cells(snap)]
+    assert labels == ["Agent", "Machine poll", "Order cutoff", "Spendable", "Catalog approvals", "Plan"]
+    page = dashboard.render(snap)
+    top, footer = page.split("<footer>")
+    assert "Visitors" not in top and 'class="tile"' not in top
+    assert footer.count('<p class="visitors">') == 1 and '<p class="visitors">Visitors: 1 browser, 1 visit' in footer
+    # The verdict sits in the Agent cell, not the title row; the tab still has it.
+    assert 'class="verdict ' in status_cells(snap)[0] and 'class="verdict ' not in page.split("</header>")[0]
+    assert page.count('<a class="sc') == 6 and "<title>" in page
+
+
+def test_the_machine_poll_cell_says_when_the_poll_was_taken_never_a_lone_window_date(conn, page_conn, monkeypatch):
+    monkeypatch.delenv("SYNC_AT_MINUTE", raising=False)
+    store_poll(conn, "w1", (MONDAY - timedelta(days=8)).isoformat(), {"15": (250, 10)})
+    store_poll(conn, "w2", (MONDAY - timedelta(minutes=34)).isoformat(), {"15": (250, 14)})
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    cell = status_cells(snap)[1]
+    assert "Polled <time" in cell and 'data-f="ago"' in cell and 'data-f="et"' in cell
+    assert "next sync ~<time" in cell and 'data-f="etclock"' in cell and "4 sold in the last 7 days" in cell
+    start = snap["sales"]["data"]["window_start"]
+    assert start is not None and start.isoformat() not in cell and "since" not in cell
+
+
+@pytest.mark.parametrize("now, at", [
+    (datetime(2026, 11, 19, 19, 34, tzinfo=timezone.utc), datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)),
+    (datetime(2026, 11, 19, 19, 3, tzinfo=timezone.utc), datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)),
+    (datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc), datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)),
+])
+def test_the_next_sync_is_the_workers_next_round(now, at, monkeypatch):
+    monkeypatch.delenv("SYNC_AT_MINUTE", raising=False)
+    assert dashboard.next_sync(now) == at
+    # The worker's own word wins when it serves the page; with no schedule there is no time to give.
+    assert dashboard.next_sync(now, {"next_round_at": "2026-11-19T21:05:00+00:00"}) == at.replace(hour=21)
+    monkeypatch.setenv("SYNC_AT_MINUTE", "off")
+    assert dashboard.next_sync(now) is None
+
+
+def test_the_catalog_cell_counts_approvals_places_and_the_deadline(conn, page_conn):
+    for i, status in enumerate(["approved"] * 3 + ["pending"] * 2 + ["rejected"]):
+        conn.execute("insert into product_requests (name, size, words, status) values (%s, '12 oz can', '{x}', %s)",
+                     (f"Drink {i}", status))
+    cell = status_cells(dashboard.snapshot(page_conn, MONDAY))[4]
+    assert "3 approved" in cell and "2 pending" in cell and "1 rejected" in cell and "23 places left" in cell
+    assert "due Wed 25 Nov" in cell
+    after = status_cells(dashboard.snapshot(page_conn, dashboard.APPROVALS_DUE + timedelta(minutes=1)))[4]
+    assert "due" not in after and "3 approved" in after
+
+
+def _first_fill_plan(conn, tmp_path):
+    from tests.test_plan_rounds import day_one, projection, write
+    from vending import plan_store
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, projection())
+    plan_id = plan_store.load(conn, tmp_path, "3", "Test Loader")
+    plan_store.pick(conn, plan_id, "Test Picker")
+
+
+def test_the_plan_cell_says_first_fill_before_the_lock_and_friday_after(conn, page_conn, tmp_path, monkeypatch):
+    _first_fill_plan(conn, tmp_path)
+    first = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 6}, {"slot": "16", "fill_to": 4}))
+    second = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, second, "submitted", plan=plan({"slot": "15", "fill_to": 7}, {"slot": "16", "fill_to": 0}))
+    after = dashboard.snapshot(page_conn, MONDAY)                  # the autouse fixture puts the lock behind us
+    cell = status_cells(after)[5]
+    assert ">For Friday<" in cell and "2 changes" in cell and f"run #{second} submitted" in cell
+    assert "first fill" not in cell.lower()
+    monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
+    before = dashboard.snapshot(page_conn, MONDAY)
+    p = before["plan"]["data"]
+    cell = status_cells(before)[5]
+    assert ">For the first fill<" in cell and "Friday" not in cell
+    assert f"20 slots &middot; {dashboard._cents(p['fill_most_cents'])} of $366" in cell and "not picked" not in cell
+    # Neither "day-one" nor "round" is anywhere on the page, before or after the lock.
+    for snap in (before, after):
+        text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", dashboard.render(snap), flags=re.S)
+        text = re.sub(r"<[^>]+>", " ", text).lower()
+        assert not re.search(r"\bday[- ]one\b", text) and not re.search(r"\bround\b", text)
+
+
+@pytest.mark.parametrize("most, cap, shown, tone", [(36_140, 36_600, "$361.40 of $366", ""),
+                                                    (36_600, 36_600, "$366 of $366", ""),
+                                                    (37_000, 36_600, "$370 of $366", "bad")])
+def test_the_first_fill_cost_reads_against_the_cap(page_conn, monkeypatch, most, cap, shown, tone):
+    monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    snap["plan"] = {"ok": True, "data": {"id": 1, "picked": True, "slots": [{"slot": "15"}] * 20,
+                                         "fill_most_cents": most, "fill_cap_cents": cap}}
+    cell = status_cells(snap)[5]
+    assert shown in cell and cell.startswith(f' {tone}"' if tone else '" href')
+
+
+def test_nothing_is_picked_until_a_viewer_picks_and_the_side_shows_attention_and_changes(conn, page_conn, even_columns):
+    first = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "12", "fill_to": 6}, {"slot": "14", "fill_to": 4}))
+    second = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, second, "submitted", plan=plan(
+        {"slot": "12", "fill_to": 7, "sale_price": "2.75", "reason": "sells out"}, {"slot": "14", "fill_to": 4}))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    assert '<section id="vm" class="vm" data-view="now">' in page              # no pick in the HTML
+    side = section(page, '<div class="ops-side">', '<aside class="vm-panel"')
+    assert side.index('id="attention"') < side.index('id="plan-changes"')
+    # Picking from a plan-change row: the whole row is the link.
+    row = section(side, '<a class="chg" href="#sel-12"', "</a>")
+    assert 'data-sel="12"' in row and "fill 6 to 7" in row and "sells out" in row
+    assert 'href="#sel-14"' not in side                                        # 14 didn't change
+    # Picking from the front: each of ours is a link to its facts, with its whole aria label.
+    front = front_of(page)
+    cells = re.findall(r'<a class="fc[^"]*" href="#sel-(\w+)" data-sel="(\w+)" aria-label="([^"]+)"', front)
+    assert [a for a, b, _ in cells if a == b] == list(EVEN)
+    assert all(label.startswith(f"Selection {s}. ") and label.endswith("Opens its close-up.") for s, _, label in cells)
+    for slot in EVEN:
+        assert f'<div class="sd" id="sel-{slot}" data-sel="{slot}" tabindex="-1">' in page
+        assert f'.vm[data-sel="{slot}"] #sel-{slot}' in page and f'.vm[data-sel="{slot}"] #lane-{slot}' in page
+        assert f'.vm:not([data-js]):has(#sel-{slot}:target) #lane-{slot}' in page
+
+
+def test_picking_from_a_plan_section_row(conn, page_conn, tmp_path, monkeypatch):
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "15", "fill_to": 6}))
+    weekly = section(dashboard.render(dashboard.snapshot(page_conn, MONDAY)), '<section id="plan">', "</section>")
+    assert ('<a class="num" href="#sel-15" data-sel="15" aria-label="Selection 15: show it in the machine">15</a>'
+            in weekly)
+    _first_fill_plan(conn, tmp_path)
+    monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    first = section(page, '<section id="plan">', "</section>")
+    assert first.count('<a class="num" href="#sel-') == 20 and 'data-sel="58"' in first
+    # Before the lock the side lists the first fill, each row picking its selection, and its facts say it.
+    side = section(page, '<div class="ops-side">', '<aside class="vm-panel"')
+    assert "First fill" in side and side.count('<a class="chg" href="#sel-') == 20
+    facts = section(page, '<div class="sd" id="sel-15"', '<div class="sd" id="sel-16"')
+    assert "<dt>First fill</dt><dd>Red Bull Original · $3.50 · 11 units</dd>" in facts
+    assert "Why, for the first fill</span>reason 15" in facts
+    # The script picks from any of them, and brings the machine into view when the pick came from below.
+    script = dashboard.SCRIPT
+    assert "t.closest('a[data-sel]')" in script and "from && !from.closest('.vm')" in script
+
+
+def test_the_close_up_has_a_close_button_and_the_pick_survives_a_refresh(page_conn):
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    panel = section(page, '<aside class="vm-panel"', "</aside>")
+    assert '<a class="vm-x" href="#vm" data-close aria-label="Close the close-up">' in panel
+    assert '<a class="vm-scrim" href="#vm" data-close tabindex="-1" aria-hidden="true"></a>' in page
+    script, style = dashboard.SCRIPT, dashboard.STYLE
+    # Close, Escape or a tap outside return the side to Needs attention and the plan's changes.
+    assert "if (close) { e.preventDefault(); shut(); }" in script and "e.key === 'Escape'" in script
+    assert "sel = ''; sheet = false;" in script
+    assert ".vm[data-sel] .ops-home" in style and ".vm[data-sel] .vm-panel" in style
+    # The pick lives in the script, not the page: the in-place refresh swaps <main> and puts it back.
+    assert "main.innerHTML = fresh.innerHTML;" in script and "if (sel) v.setAttribute('data-sel', sel)" in script
+    assert script.index("main.innerHTML = fresh.innerHTML;") < script.index("failed = false; lastOk = Date.now(); filter();")
+    # Without scripts the link's #target picks, and on a phone opens the sheet.
+    assert ".vm:not([data-js]) .sd:target { display:block }" in dashboard.machine_art.STYLE
+    assert ".vm:not([data-js]):has(.sd:target) .vm-panel" in style
+    assert "@media (prefers-reduced-motion:reduce) { .vm-panel { transition:none !important } }" in style
+
+
+def test_not_ours_is_half_as_wide_on_the_front_and_in_the_close_up():
+    style = dashboard.machine_art.STYLE
+    assert re.search(r"\.fc \{[^}]*flex:2 1 0", style) and re.search(r"\.fc-no \{[^}]*flex:1 1 0", style)
+    assert re.search(r"\.ma-lane \{[^}]*flex:1 1 0", style) and re.search(r"\.ma-notours \{[^}]*flex:\.5 1 0", style)
+    view = {"11": {"now": {"product": None, "units": None, "price": None, "source": None, "counted_at": None},
+                   "next": None, "change": None, "fill_to": None}}
+    front, panels = dashboard.machine_art.split_html(view, None, False)
+    assert front.count('<a class="fc"') == 1 and front.count('<span class="fc fc-no">') == 39
+    assert panels.count('<article class="ma-lane" id="lane-11"') == 1 and panels.count('class="ma-lane ma-notours"') == 7
+
+
+def test_the_front_and_close_up_carry_nothing_about_a_selection_that_is_not_ours(conn, page_conn, even_columns):
+    catalog(conn, ("ZZ-RIVAL-SKU", "Zebra Fizz Rival", "Zebra Fizz", "Mango", "16 oz glass bottle"),
+            ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
+    fulfilled(conn, "pr-15", "15", "ZZ-RIVAL-SKU", units_loaded=6, paid="5.55", at=MONDAY - timedelta(days=3))
+    fulfilled(conn, "pr-12", "12", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
+    store_poll(conn, "p1", (MONDAY - timedelta(days=3)).isoformat(), {"15": (987, 4000), "12": (250, 10)})
+    store_poll(conn, "p2", (MONDAY - timedelta(hours=2)).isoformat(), {"15": (987, 4321), "12": (250, 12)})
+    first = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 2}, {"slot": "12", "fill_to": 5}))
+    second = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, second, "submitted", plan=plan(
+        {"slot": "15", "product": "ZZ-RIVAL-SKU", "fill_to": 9, "sale_price": "8.76", "reason": "Quokka reason"},
+        {"slot": "12", "fill_to": 6, "reason": "ours"}))
+    for public in (True, False):
+        snap = dashboard.snapshot(page_conn, MONDAY, public=public)
+        page, state = dashboard.render(snap), dashboard.to_json(snap)
+        for leak in ("ZZ-RIVAL", "Zebra", "Mango", "Quokka", "$9.87", "$8.76"):
+            assert leak not in page, (public, leak)
+        for leak in ("ZZ-RIVAL", "Zebra", "Quokka", '"9.87"', '"8.76"'):
+            assert leak not in state or not public, leak
+        for anchor in ('data-sel="15"', 'id="sel-15"', '#sel-15', 'id="lane-15" role="group"', '.vm[data-sel="15"]'):
+            assert anchor not in page, anchor
+        # Every not-ours cell on the front is its number and "Not ours", and nothing else.
+        cells = re.findall(r'<span class="fc fc-no">(.*?)</span></span>', front_of(page))
+        assert len(cells) == 20 and all(
+            re.fullmatch(r'<span class="fc-n">\d\d</span><span class="fc-t">Not ours', c) for c in cells)
+        assert '<article class="ma-lane ma-notours" id="lane-15" aria-label="Selection 15: not ours">' in page
+        assert "back Friday" in lane_html(page, "12")
+
+
+def test_the_facts_say_where_each_number_comes_from(conn, page_conn):
+    catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
+    fulfilled(conn, "pr-15", "15", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    ours = section(page, '<div class="sd" id="sel-15"', '<div class="sd" id="sel-16"')
+    assert "5 of 7 &middot; from receipts and polls" in ours and "unknown: no price from the polls" in ours
+    assert "unknown: no sales from the polls" in ours and "No plan yet." in ours
+    blank = section(page, '<div class="sd" id="sel-16"', '<div class="sd" id="sel-17"')
+    assert "unknown: no receipt or count yet" in blank and "<b>No record yet</b>" in blank
+
+
+def test_without_an_assignment_attention_still_shows_beside_an_empty_machine(conn, page_conn):
+    conn.execute("delete from slot_assignment")
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    vm = section(page, '<section id="vm"', "</section>")
+    assert 'id="attention"' in vm and "Which selections are ours isn&#x27;t known" in vm
+    assert '<nav class="fm"' not in vm and 'class="vm-panel"' not in vm

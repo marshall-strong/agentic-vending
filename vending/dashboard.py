@@ -14,26 +14,27 @@ machine that runs it. The Container App serves the same page to anyone at
 read. Both routes scope the data to the ledger opening and current assignment.
 
 The page, top to bottom:
- - Verdict and tiles: OK / check / problem, the halt switch, the latest run,
-   the order cutoff countdown, the machine's last poll, what has been spent
-   (from the ledger once it has opened),
-   and who has looked at the pages (`vending.visits`).
- - Needs attention: each thing that is wrong or about to be, in a sentence. On the
-   Container App that includes the worker's latest sync round, which the worker passes in
-   (`syncs`, the same dict as its `/health`): the dashboard itself only reads the database.
- - Money (`vending.money_panel`, #48): the balance, spendable and profit since the
-   ledger's opening, where the money has gone, what pending requests could still
-   cost, and the proposed budget (#113). Before the opening it says how to record it.
- - In the machine: a close-up of our selections (the stored assignment,
-   `vending.slots.our_slots`), one shelf at a time, each lane drawn from above
-   (`vending.machine_art`), beside the machine's front for picking the shelf; with
-   no assignment stored it says so instead of guessing. Now shows the tag price
-   (polls) and the product and units on hand (receipts, or a newer count); Next
-   Friday shows the latest plan: the slots it fills, a swap, a pull, a new price.
-   Anything without a record says unknown.
+ - The status bar, one row of six cells: the verdict (OK / check / problem) with the halt
+   switch and the latest run; when the machine was last polled and the next sync; the order
+   cutoff countdown; spendable (from the ledger once it has opened; before that, only that
+   it is development spend); catalog approvals; and the plan (for the first fill before the slot lock,
+   for Friday after).
+ - In the machine, one screen: the machine's whole front (`vending.machine_art`), our
+   selections (the stored assignment, `vending.slots.our_slots`) with their package, count,
+   price and Friday badge, the rest half as wide and marked "Not ours"; with no assignment
+   stored it says so instead of guessing. Beside it, Needs attention (each thing that is wrong
+   or about to be, in a sentence; on the Container App that includes the worker's latest sync,
+   which the worker passes in as `syncs`, the same dict as its `/health`) and the plan's
+   changes. Picking one of ours shows its shelf's lanes from above and its facts instead; on a
+   phone that is a sheet. Now shows the tag price (polls) and the product and units on hand
+   (receipts, or a newer count); Next Friday shows the latest plan: the slots it fills, a
+   swap, a pull, a new price. Anything without a record says unknown.
  - Pricing (`vending.pricing_panel`): for each of our selections, the shelf price, the unit cost
    (receipts, else expected from sourcing), the floor and whether the price is legal, the margin,
    what sold, the plan's next price and why, and the shelf price over the last four weeks.
+ - Money (`vending.money_panel`, #48): the balance, spendable and profit since the
+   ledger's opening, where the money has gone, what pending requests could still
+   cost, and the proposed budget (#113). Before the opening it says how to record it.
  - The plan: what changed since the plan before, then one line per slot that
    opens to the agent's reason, what it was, and what the slot holds and sold.
    Then the agent's weekly update and its notes to itself.
@@ -42,12 +43,14 @@ The page, top to bottom:
  - Tool calls: the last calls from `action_log`, filterable to writes or problems.
  - Requests and back stock: purchase requests, every catalog request with counts by status and
    the places left under the bridge's cap on open requests, and what is in the closet.
+ - The footer: one small line on who has looked at the pages (`vending.visits`).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections.abc import Callable
@@ -101,6 +104,12 @@ STALE_RUN = timedelta(hours=2)
 RECENT = timedelta(hours=24)
 # Halted this close to the cutoff means no request can go out in time.
 CUTOFF_SOON = timedelta(hours=24)
+# The worker's hourly sync runs this many minutes past the hour (UTC), just after the course staff's
+# poll on the hour: `SYNC_AT_MINUTE`, as `vending.worker` reads it, else this.
+SYNC_AT_MINUTE = 5
+# The instructors must approve every product for the first fill by Wed 25 Nov 2026. The status bar says
+# so until the end of that day, Eastern. In UTC so the page needs no time-zone data.
+APPROVALS_DUE = datetime(2026, 11, 26, 5, 0, tzinfo=timezone.utc)
 # The machine's face: 5 shelves of 8 selections. Row r, column c is selection "rc".
 SHELVES, COLUMNS = machine_art.SHELVES, machine_art.COLUMNS
 # What a free-text product name says about its package, for a lane named by a count.
@@ -1035,7 +1044,7 @@ def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
         pass
     codes = sorted({r["exit_code"] for r in failed if r.get("exit_code") in SYNC_EXITS})
     meaning = "".join(f" Exit {c}: {SYNC_EXITS[c]}." for c in codes)
-    return f"The worker's latest sync round{when} failed: {jobs}.{meaning} See `/health`."
+    return f"The worker's latest hourly sync{when} failed: {jobs}.{meaning} See `/health`."
 
 
 def verdict(items: list[dict]) -> str:
@@ -1091,7 +1100,8 @@ def _window(sales: dict) -> str:
 def _time(value: datetime | None, form: str = "abs", now: datetime | None = None) -> str:
     """A <time> the page's script keeps current in the viewer's zone. Server text until it runs.
 
-    `abs` is a date and time, `clock` just the time, `ago` and `until` a span from `now`.
+    `abs` is a date and time, `clock` just the time, `ago` and `until` a span from `now`, and `et`,
+    `etclock` and `etday` the time ("2:00 PM ET", "2:00 PM") or the day and time in Eastern, the machine's zone.
     """
     if value is None:
         return "&mdash;"
@@ -1101,6 +1111,12 @@ def _time(value: datetime | None, form: str = "abs", now: datetime | None = None
         text = f"{_span(now - value)} ago"
     elif form == "until" and now is not None:
         text = _span(value - now)
+    elif form in ("et", "etclock", "etday"):
+        local = _eastern(value)
+        eastern = getattr(local.tzinfo, "key", None) == "America/New_York"
+        local = local if eastern else utc       # without the IANA database, say UTC rather than guess
+        clock = f"{local:%I:%M %p}".lstrip("0") + ("" if form == "etclock" and eastern else " ET" if eastern else " UTC")
+        text = (f"{local:%a} {local.day} {local:%b}, " if form == "etday" else "") + clock
     elif form == "clock":
         text = f"{utc:%H:%M} UTC"
     else:
@@ -1276,56 +1292,116 @@ def machine_view(snap: dict) -> dict:
                 labels = (_changes(entry, planned[slot]["before"], now["price"]) if entry is not None
                           else ["dropped"])
                 change = {"labels": labels, "kind": _change_kind(labels), "reason": (entry or {}).get("reason")}
-        out[slot] = {"now": now, "next": nxt, "change": change, "fill_to": _fill(entry)}
+        out[slot] = {"now": now, "next": nxt, "change": change, "fill_to": _fill(entry),
+                     "reason": (entry or {}).get("reason")}
     return out
 
 
-def _cabinet_html(snap: dict) -> str:
-    """In the machine: our lanes close up (`vending.machine_art`), and the plan's changes."""
+def _attention_card(items: list[dict]) -> str:
+    """Needs attention, beside the machine while nothing is picked. Never cut short: the side scrolls first."""
+    bad = sum(1 for a in items if a["level"] == "bad")
+    warn = sum(1 for a in items if a["level"] == "warn")
+    badge = (_pill(_plural(bad, "problem"), "bad") if bad else _pill(_plural(warn, "check"), "warn") if warn
+             else _pill(_plural(len(items), "note"), "info") if items else _pill("all clear", "ok"))
+    return f'<div class="ops-card ops-attn" id="attention"><h3>Needs attention {badge}</h3>{_attention_html(items)}</div>'
+
+
+def _pick(slot: str, inner: str, view: dict) -> str:
+    """A row that picks one of our selections on the machine, or, for one not drawn there, opens its plan row."""
+    if slot in view:
+        return f'<a class="chg" href="#sel-{_e(slot)}" data-sel="{_e(slot)}">{inner}</a>'
+    return f'<a class="chg" href="#slot-{_e(slot)}">{inner}</a>'
+
+
+def _changes_html(snap: dict, view: dict) -> str:
+    """The plan's changes, beside the machine while nothing is picked. Before the slot lock, each line of
+    the plan for the first fill; from the lock, each slot the latest plan changed, with the agent's
+    reason. Each row picks its selection."""
+    jump = '<a class="ops-jump" href="#plan">The plan &darr;</a>'
+    plan = snap["plan"]
+    p = plan["data"] if plan["ok"] else None
+    if "weekly_plan" in snap:
+        title = "First fill"
+        if not plan["ok"]:
+            body = _missing(plan)
+        elif p is None:
+            body = '<p class="dim">No plan for the first fill loaded yet.</p>'
+        elif p.get("message"):
+            body = f'<p class="dim">{_e(p["message"])}</p>'
+        else:
+            title += f' <span class="hint">{"picked plan" if p["picked"] else "latest, not picked"}</span>'
+            rows = "".join(
+                "<li>" + _pick(row["slot"], f'<b>{_e(row["slot"])}</b><span>{_e(row["product"] or "no product")} '
+                                            f'&middot; {plan_rounds.format_cents(row["price_cents"])} &middot; '
+                                            f'{_plural(row["units"], "unit")}</span>', view) + "</li>"
+                for row in p["slots"])
+            body = f'<ul class="changes ff">{rows}</ul>' if rows else '<p class="dim">The plan has no slots.</p>'
+        return f'<div class="ops-card ops-chg" id="plan-changes"><h3>{title}{jump}</h3>{body}</div>'
+    if not plan["ok"]:
+        return f'<div class="ops-card ops-chg" id="plan-changes"><h3>Plan changes{jump}</h3>{_missing(plan)}</div>'
+    if p is None:
+        return (f'<div class="ops-card ops-chg" id="plan-changes"><h3>Plan changes{jump}</h3>'
+                '<p class="dim">No plan yet.</p></div>')
+    run = p["run"]
+    head = f'<h3>Plan changes <span class="hint">run #{run["id"]}</span> {_run_pill(run)}{jump}</h3>'
+    if not p["previous_run"]:
+        body = '<p class="dim">First plan of this mode: nothing earlier to compare with.</p>'
+    else:
+        items = [(slot, v["change"]) for slot, v in view.items() if v["change"]]
+        items += [(s["slot"], {"labels": ["dropped"], "kind": "bad", "reason": None})
+                  for s in p["slots"] if s["changed"] and s["slot"] not in view]
+        rows = "".join(
+            "<li>" + _pick(slot, f'<span class="dotk {c["kind"]}"></span><b>{_e(slot)}</b><span>{_e(", ".join(c["labels"]))}'
+                                 + (f'<span class="why">{_e(c["reason"])}</span>' if c["reason"] else "") + "</span>",
+                           view) + "</li>"
+            for slot, c in items)
+        body = (f'<ul class="changes">{rows}</ul>' if rows else
+                f'<p class="dim">No slot changes since run #{p["previous_run"]}.</p>')
+    return f'<div class="ops-card ops-chg" id="plan-changes">{head}{body}</div>'
+
+
+def _first_fill_lines(snap: dict) -> dict:
+    """Each selection's line in the plan for the first fill, for the close-up's facts. Before the slot lock only."""
+    if "weekly_plan" not in snap or not snap["plan"]["ok"]:
+        return {}
+    p = snap["plan"]["data"]
+    if not p or p.get("message"):
+        return {}
+    return {row["slot"]: {"text": f'{row["product"] or "no product"} · {plan_rounds.format_cents(row["price_cents"])} · '
+                                  f'{_plural(row["units"], "unit")}', "reason": row["reason"]}
+            for row in p["slots"]}
+
+
+def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
+    """In the machine, as one screen: the machine's whole front on the left (`vending.machine_art`);
+    on the right, Needs attention and the plan's changes, or, once one of ours is picked, its shelf
+    close up and its facts. On a phone the front comes first and the close-up is a sheet."""
+    items = attention(snap) if items is None else items
     plan = snap.get("weekly_plan", snap["plan"])
     now, sales, stock = snap["as_of"], snap["sales"], snap["stock"]
+    view = machine_view(snap) if snap["ours"]["ok"] else {}
+    face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
+    shown = {s: v for s, v in view.items() if s in face}
+    home = f'<div class="ops-home">{_attention_card(items)}{_changes_html(snap, shown)}</div>'
     if not snap["ours"]["ok"]:
         return ('<section id="vm" class="vm" data-view="now"><h2>In the machine</h2>'
-                f'{_missing(snap["ours"])}</section>')
+                f'<div class="ops"><div class="ops-front">{_missing(snap["ours"])}</div>'
+                f'<div class="ops-side">{home}</div></div></section>')
     p = plan["data"] if plan["ok"] else None
-    view = machine_view(snap)
-    face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
     products = snap.get("products") or {"ok": False, "why": PRODUCTS_FAILED}
-    cabinet = machine_art.closeup_html({s: v for s, v in view.items() if s in face},
-                                       products["data"] if products["ok"] else None,
-                                       p is not None and "weekly_plan" not in snap)
+    sold, span = {}, "in the last 7 days"
+    if sales["ok"]:
+        sold = {s: v for s, v in sales["data"]["slots"].items() if s in shown}
+        span = _window_words(sales["data"])
+    front, panels = machine_art.split_html(shown, products["data"] if products["ok"] else None,
+                                           p is not None and "weekly_plan" not in snap, sold, span,
+                                           _first_fill_lines(snap))
+    lede = ""
     if p is None:
-        cabinet = '<p class="empty v-next">No plan yet: Next Friday shows the machine as it is now.</p>' + cabinet
+        lede = '<p class="empty v-next">No plan yet: Next Friday shows the machine as it is now.</p>'
     off_face = [s for s in our_selections(snap) if s not in face]
     if off_face:
-        cabinet += f'<p class="sub">Also ours, not on the {SHELVES}&times;{COLUMNS} face: {_e(", ".join(off_face))}</p>'
-
-    # The side: what the plan changes, with the agent's reasons.
-    if not plan["ok"]:
-        changes = _missing(plan)
-    elif p is None:
-        changes = '<div class="label">Next Friday</div><p class="dim">No plan yet.</p>'
-    else:
-        run = p["run"]
-        head = (f'<div class="label">Plan changes &middot; run #{run["id"]} {_run_pill(run)}</div>')
-        if not p["previous_run"]:
-            changes = head + '<p class="dim">First plan of this mode: nothing earlier to compare with.</p>'
-        else:
-            items = [(slot, v["change"]) for slot, v in view.items() if v["change"]]
-            items += [(s["slot"], {"labels": ["dropped"], "kind": "bad", "reason": None})
-                      for s in p["slots"] if s["changed"] and s["slot"] not in view]
-            def slot_link(slot: str) -> str:
-                label = f'<b>{_e(slot)}</b>'
-                return label if "weekly_plan" in snap else f'<a href="#slot-{_e(slot)}">{label}</a>'
-
-            rows = "".join(
-                f'<li><span class="dotk {c["kind"]}"></span>{slot_link(slot)}'
-                f'<span>{_e(", ".join(c["labels"]))}'
-                + (f'<span class="why">{_e(c["reason"])}</span>' if c["reason"] else "") + "</span></li>"
-                for slot, c in items)
-            changes = head + (f'<ul class="changes">{rows}</ul>' if rows else
-                              f'<p class="dim">No slot changes since run #{p["previous_run"]}.</p>')
-    polled = ""
+        lede += f'<p class="sub">Also ours, not on the {SHELVES}&times;{COLUMNS} face: {_e(", ".join(off_face))}</p>'
     if sales["ok"] and sales["data"]["as_of"] is not None:
         polled = f'Prices from the poll {_time(sales["data"]["as_of"], "ago", now)}. '
     elif sales["ok"]:
@@ -1334,22 +1410,40 @@ def _cabinet_html(snap: dict) -> str:
         polled = "Prices aren't available. "
     stock_note = "" if stock["ok"] else "Stock isn't available. "
     shapes = "" if products["ok"] else f"Packages are approximate: {PRODUCTS_FAILED}. "
-    legend = ('<div class="vm-legend"><div><i class="dotk info"></i>swap or fill</div>'
-              '<div><i class="dotk warn"></i>price change</div><div><i class="dotk bad"></i>pull</div>'
-              "<p>Grey lanes aren't ours. The number by a lane is units on hand (Now) or after the plan's "
-              "fill (Next Friday); <b>~3</b> is from a photo count, less sales since, so at least that many were "
-              "seen; <b>?</b> means no receipt or count yet. Dashed slots are empty room, from the capacity on the "
-              "machine's loading chart or a person's count; \"+N back Friday\" is the plan's fill less the "
-              f"units on hand. {polled}{stock_note}{shapes}Packages are drawn from the catalog size; they are not "
-              "photos.</p><p class=\"honest\">Stock is estimated from receipts and polls, not a sensor.</p></div>")
+    legend = ('<details class="vm-legend" data-key="vm-legend"><summary><i class="dotk info"></i>swap or fill '
+              '<i class="dotk warn"></i>price <i class="dotk bad"></i>pull &middot; '
+              '<span class="honest">Stock is estimated from receipts and polls, not a sensor.</span> '
+              '<span class="more">How to read it</span></summary>'
+              "<p>Grey cells aren't ours: they show their number and nothing else, at half the width. On ours, the "
+              "number is units on hand (Now) or after the plan's fill (Next Friday), against the column's capacity; "
+              "<b>~3</b> is from a photo count, less sales since, so at least that many were seen; <b>?</b> means no "
+              "receipt or count yet. The bar is units against capacity: hatched means unknown, outlined means no "
+              "capacity counted. The badge is what Friday does: <b>+N</b> back, swap, new, $ for a new price, pull. "
+              "In the close-up, dashed slots are empty room and \"+N back Friday\" is the plan's fill less the units "
+              f"on hand. {polled}{stock_note}{shapes}Packages are drawn from the catalog size; they are not photos.</p>"
+              "</details>")
     seg = ('<span class="seg" role="group" aria-label="Show" hidden>'
            '<button type="button" data-view="now" aria-pressed="true">Now</button>'
            '<button type="button" data-view="next" aria-pressed="false">Next Friday</button></span>')
-    return (f'<section id="vm" class="vm" data-view="now" data-shelf="{machine_art.default_shelf(view)}">'
-            f'<h2>In the machine <span class="hint">our selections, close up &middot; pick a shelf on the '
-            f'machine</span>{seg}</h2>'
-            f'<div class="vm-wrap"><div class="vm-cab">{cabinet}</div>'
-            f'<div class="vm-side"><div class="card">{changes}</div>{legend}</div></div></section>')
+    panel = ('<aside class="vm-panel" aria-label="Close-up of the picked selection">'
+             '<div class="vm-ph"><span class="vm-grab" aria-hidden="true"></span><span class="label">Close-up</span>'
+             '<a class="vm-x" href="#vm" data-close aria-label="Close the close-up">'
+             '<span aria-hidden="true">&times;</span> Close</a></div>'
+             f'{panels}</aside>')
+    scrim = '<a class="vm-scrim" href="#vm" data-close tabindex="-1" aria-hidden="true"></a>'
+    return (f'<section id="vm" class="vm" data-view="now">{machine_art.selection_css(shown)}'
+            f'<h2>In the machine <span class="hint">our {len(shown)} selections &middot; tap one to see it close up'
+            f'</span>{seg}</h2>{lede}'
+            f'<div class="ops"><div class="ops-front">{front}{legend}</div>'
+            f'<div class="ops-side">{home}{panel}</div></div>{scrim}</section>')
+
+
+def _slot_num(slot: str) -> str:
+    """A plan row's slot number. One on the machine's face is a link that picks it in the close-up."""
+    if re.fullmatch(rf"[1-{SHELVES}][1-{COLUMNS}]", slot):
+        return (f'<a class="num" href="#sel-{_e(slot)}" data-sel="{_e(slot)}" '
+                f'aria-label="Selection {_e(slot)}: show it in the machine">{_e(slot)}</a>')
+    return f'<b class="num">{_e(slot)}</b>'
 
 
 def _fill_check_html(check: str, reason: str | None) -> str:
@@ -1406,7 +1500,7 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
     if on_hand is not None:
         now_bits.append(f"{on_hand} left")
     return (f'<details class="pc{" changed" if changed else ""}" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary><b class="num">{_e(slot)}</b><span class="now">{" &middot; ".join(now_bits)}</span>'
+            f'<summary>{_slot_num(slot)}<span class="now">{" &middot; ".join(now_bits)}</span>'
             f'<span class="what">{what}</span><span class="tags">{tags}</span></summary>{"".join(body)}</details>')
 
 
@@ -1470,7 +1564,7 @@ def _first_fill_cell(row: dict) -> str:
                 price, f"Capacity {cap}", f"Fill cost share {cost}"]
     problems = "".join(f'<div class="sub">{_e(reason)}</div>' for reason in checks["refusals"])
     return (f'<details class="pc" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary><b class="num">{_e(slot)}</b><span class="what">{_e(row["product"])}'
+            f'<summary>{_slot_num(slot)}<span class="what">{_e(row["product"])}'
             f' &middot; {plan_rounds.format_cents(row["price_cents"])}'
             f' &middot; {_plural(row["units"], "unit")}{fill_note}</span></summary>{reason_detail}'
             f'<div class="was"><span class="label">Code checks</span>'
@@ -1515,114 +1609,216 @@ def _switched(verb: str, at: datetime | None, by: str | None, now: datetime) -> 
             + (f" by {_e(by)}" if by else ""))
 
 
-def _tiles(snap: dict, charts: dict[str, str] | None = None) -> str:
+def next_sync(now: datetime, syncs: dict | None = None) -> datetime | None:
+    """When the worker's next sync starts. The worker says so when it serves the page (`syncs`);
+    otherwise it is its schedule: SYNC_AT_MINUTE past the next hour not yet passed. None when the
+    worker keeps no schedule (`SYNC_AT_MINUTE=off`)."""
+    try:
+        due = datetime.fromisoformat(syncs["next_round_at"])
+        if due.tzinfo is not None:
+            return due
+    except (KeyError, TypeError, ValueError):
+        pass
+    raw = (os.environ.get("SYNC_AT_MINUTE") or str(SYNC_AT_MINUTE)).strip().lower()
+    try:
+        minute = float(raw)
+    except ValueError:
+        return None
+    if not 0 <= minute < 60:
+        return None
+    at = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0) + timedelta(minutes=minute)
+    return at if at > now else at + timedelta(hours=1)
+
+
+def _window_words(sales: dict) -> str:
+    """What the polls' sales cover: 'in the last 7 days', or less when the polls began more recently."""
+    start, end = sales.get("window_start"), sales.get("as_of")
+    if start is None or end is None:
+        return "since the first poll"
+    if end - start >= machine_state.WINDOW - timedelta(hours=1):
+        return f"in the last {machine_state.WINDOW.days} days"
+    return f"in the last {_span(end - start)}"
+
+
+def _cell(label: str, value: str, sub: str, href: str, tone: str = "", link: str = "") -> str:
+    """One cell of the status bar: a label, one value and a short line. The cell links to the section
+    with the rest. With a `link` of its own (a chart), the cell is a box and only its label links to the
+    section, since a link can't hold another."""
+    cls = f'sc{" " + tone if tone else ""}'
+    if link:
+        return (f'<div class="{cls}"><a class="label" href="{href}">{label}</a>'
+                f'<span class="sv">{value}</span><span class="sub">{sub}</span><span class="sub">{link}</span></div>')
+    return (f'<a class="{cls}" href="{href}"><span class="label">{label}</span>'
+            f'<span class="sv">{value}</span><span class="sub">{sub}</span></a>')
+
+
+def _cents(cents: int) -> str:
+    """Whole dollars without the cents, like the plan's cap: $366, $361.40."""
+    text = plan_rounds.format_cents(cents)
+    return text[:-3] if text.endswith(".00") else text
+
+
+def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, str] | None = None) -> str:
+    """The status bar: one compact row of six cells. Is the agent OK and on; how fresh the machine's
+    data is and when the next sync comes; the order cutoff; what is spendable; catalog approvals;
+    and the plan. Each cell links to its section. `charts` is where the server serves the chart
+    pages (`render`): the Spendable cell links to the development-spend chart when it is given."""
     now, s = snap["as_of"], snap["status"]
     charts = charts or {}
-    # A link to the weekly chart of development spend, where a server mounts it.
-    spend_link = (f'<br><a href="{_e(charts["spend"])}">Development spend by week</a>' if "spend" in charts else "")
-    tiles = []
+    spend_link = (f'<a href="{_e(charts["spend"])}">Development spend by week</a>' if "spend" in charts else "")
+    items = attention(snap) if items is None else items
+    state = verdict(items)
+    cells = []
 
+    # The agent: the verdict, the halt switch and the latest run.
     if s["halted"]:
-        sub = (_switched("turned on", s["halt_changed_at"], s["halt_changed_by"], now)
-               or "no halt row: counts as halted")
-        tiles.append(("Halt switch", '<span class="big bad-text">Halted</span>', f"no write tool can run &middot; {sub}"))
+        value = f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span> <span class="bad-text">Halted</span>'
+        switch = ("no write tool can run &middot; "
+                  + (_switched("halt switched on", s["halt_changed_at"], s["halt_changed_by"], now)
+                     or "no halt row: counts as halted"))
     else:
-        sub = _switched("turned off", s["halt_changed_at"], s["halt_changed_by"], now)
-        tiles.append(("Halt switch", '<span class="big ok-text">Off</span>',
-                      "writes allowed" + (f" &middot; {sub}" if sub else "")))
-
+        value = f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span> <span class="ok-text">On</span>'
+        switched = _switched("halt switched off", s["halt_changed_at"], s["halt_changed_by"], now)
+        switch = "writes allowed" + (f" &middot; {switched}" if switched else "")
     run = s["latest_run"]
     if run is None:
-        tiles.append(("Latest run", '<span class="big dim">None yet</span>', "the agent loop hasn't recorded a run"))
+        ran = "no run recorded yet"
+    elif run.get("stale"):
+        ran = f'<span class="bad-text">run #{run["id"]} probably died</span>'
+    elif run["status"] == "running":
+        ran = (f'run #{run["id"]} running for <time datetime="{run["started_at"].astimezone(timezone.utc).isoformat()}" '
+               f'data-f="since">{_span(now - run["started_at"])}</time>')
     else:
-        if run["status"] == "running" and not run.get("stale"):
-            big = f'Running <time datetime="{run["started_at"].astimezone(timezone.utc).isoformat()}" ' \
-                  f'data-f="since">{_span(now - run["started_at"])}</time>'
-        elif run.get("stale"):
-            big = "Probably died"
-        else:
-            big = _e(run["status"].capitalize())
-        cost = f' &middot; {_money(run["cost_usd"])}' if run.get("cost_usd") is not None else ""
-        tone = " bad-text" if run.get("stale") or run["status"] == "failed" else ""
-        tiles.append(("Latest run", f'<span class="big{tone}">{big}</span>',
-                      f'#{run["id"]} {_e(run["mode"])} &middot; started {_time(run["started_at"], "ago", now)}{cost}'))
+        ran = (f'<span class="{"bad-text" if run["status"] == "failed" else ""}">run #{run["id"]} '
+               f'{_e(run["status"])}</span> {_time(run["started_at"], "ago", now)}')
+    cells.append(_cell("Agent", value, f"{switch}<br>{ran}", "#attention",
+                       {"problem": "bad", "check": "warn"}.get(state, "")))
 
-    cutoff = s["next_cutoff"]
-    if cutoff is None:
-        tiles.append(("Order cutoff", '<span class="big">Thu 23:59</span>',
-                      "Eastern &middot; install <code>tzdata</code> for a countdown"))
-    else:
-        soon = cutoff - now < CUTOFF_SOON
-        tiles.append(("Order cutoff",
-                      f'<span class="big{" warn-text" if soon else ""}">{_time(cutoff, "until", now)}</span>',
-                      f'{_time(cutoff)} &middot; 23:59 Eastern'))
-
+    # How fresh the machine's data is: when the last poll was taken and when the next sync reads it.
+    # The sales window is said in words, never as a lone date that could read as the last update.
     sales = snap["sales"]
+    tone = ""
     if not sales["ok"]:
-        tiles.append(("Machine data", '<span class="big dim">&mdash;</span>', "polls table missing"))
+        value, sub = '<span class="dim">&mdash;</span>', "polls table missing"
     elif not snap.get("ours", {"ok": True})["ok"]:
         # The poll reader refuses without our assignment, which isn't the same as no polls.
-        tiles.append(("Machine data", '<span class="big dim">&mdash;</span>', "our slots aren't recorded"))
+        value, sub = '<span class="dim">&mdash;</span>', "our slots aren't recorded"
     elif sales["data"]["as_of"] is None:
-        tiles.append(("Machine data", '<span class="big dim">No polls</span>', "run the history sync"))
+        value, sub = '<span class="dim">No polls</span>', "run the history sync"
     else:
         d = sales["data"]
         total = sum(v["sold"] or 0 for v in d["slots"].values())
-        tone = " warn-text" if d["stale"] else ""
-        # The window starts 7 days before the last poll. Its start date is not when the data was
-        # pulled, so it isn't shown here: it read like an old update time.
-        sold = (f"our slots sold {_plural(total, 'unit')} in {_window(sales)} to it" if d["window_start"]
-                else "one poll only, so no sales yet")
-        tiles.append(("Machine data", f'<span class="big{tone}">{_time(d["as_of"], "ago", now)}</span>',
-                      f"last poll &middot; {sold}"))
+        tone = "warn" if d["stale"] else ""
+        due = next_sync(now, snap.get("syncs"))
+        value = f'Polled {_time(d["as_of"], "ago", now)}'
+        sub = (f'{_time(d["as_of"], "et")}' + (f' &middot; next sync ~{_time(due, "etclock")}' if due else "")
+               + " &middot; " + (f'{total} sold {_window_words(d)}' if d["window_start"] else "one poll only"))
+    cells.append(_cell("Machine poll", value, sub, "#vm", tone))
 
+    cutoff = s["next_cutoff"]
+    if cutoff is None:
+        cells.append(_cell("Order cutoff", "Thu 23:59", "Eastern &middot; install <code>tzdata</code> for a countdown",
+                           "#requests"))
+    else:
+        cells.append(_cell("Order cutoff", _time(cutoff, "until", now), _time(cutoff, "etday"), "#requests",
+                           "warn" if cutoff - now < CUTOFF_SOON else ""))
+
+    # Money: spendable from the ledger once it has opened; before that, development and test spend.
     spend, money = snap["spend"], snap.get("money")
     ledgered = money["data"] if money and money["ok"] and money["data"].get("opened") else None
     if ledgered:
-        # Once the ledger is open, one source for money on the whole page: the ledger's.
         # The total is summed exact by the panel and rounded once, not added up from the rounded parts.
-        tiles.append(("Spent since the opening", f'<span class="big">{_money(Decimal(ledgered["spent"]))}</span>',
-                      f'drinks {_money(Decimal(ledgered["receipts"]))}, visits {_money(Decimal(ledgered["visit_fees"]))}, '
-                      f'model {_money(Decimal(ledgered["tokens"]))} &middot; from the ledger{spend_link}'))
-    elif spend["ok"] and spend["data"] is not None:
+        spendable = Decimal(ledgered["spendable"])
+        cells.append(_cell("Spendable", _money(spendable),
+                           f'Spent since the opening <b>{_money(Decimal(ledgered["spent"]))}</b> &middot; model '
+                           f'{_money(Decimal(ledgered["tokens"]))}', "#money", "bad" if spendable < 0 else "",
+                           link=spend_link))
+    elif spend["ok"] and spend["data"] is None:
+        # Before the opening the live page shows no test runs or test purchases (#192): only that this
+        # is development spend, not from the $600, and where its chart is.
+        opens = money["data"].get("opens_at") if money and money["ok"] else None
+        cells.append(_cell("Spendable", '<span class="dim">Before the opening</span>',
+                           "development spend, not from the $600"
+                           + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else ""),
+                           "#money", link=spend_link))
+    elif spend["ok"]:
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
-        unpriced = f' &middot; {m["unpriced"]} without a cost' if m["unpriced"] else ""
-        visits = f' &middot; {_plural(dr["midweek"], "midweek visit")}' if dr["midweek"] else ""
         label, period = "Spent so far", ""
         if money and money["ok"] and not money["data"].get("problem"):
             # No opening yet (or one dated ahead): all of this is development and test spend (#104).
-            # A ledger that can't answer says nothing about the period, so the tile claims none.
+            # A ledger that can't answer says nothing about the period, so the cell claims none.
             opens = money["data"].get("opens_at")
             label = "Spent before the opening"
-            period = ("development and test, not from the $600"
-                      + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else "") + "<br>")
-        tiles.append((label, f'<span class="big">{_money(dr["paid"])}</span>',
-                      f'{period}drinks, {_plural(dr["fulfilled"], "fulfilled request")}{visits}<br>'
-                      f'model {_money(m["total"])} over {_plural(m["runs"], "run")} '
-                      f'({_money(m["last_7_days"])} this week){unpriced}{spend_link}'))
-    elif spend["ok"] and "spend" in charts:
-        # Before the opening the live page shows no test purchases (`dashboard_live_only`), but the
-        # development spend on our keys is real: point to its chart, without the test figures.
-        tiles.append(("Before the opening", '<span class="big dim">Development</span>',
-                      "model calls and test purchases before the ledger opens are not from the $600"
-                      f"{spend_link}"))
-    seen = snap.get("visits")
-    if seen and not seen["ok"]:
-        tiles.append(("Visitors", '<span class="big dim">Unavailable</span>',
-                      "the visit counts couldn't be read just now; the rest of the page could"))
-    elif seen:
-        v = seen["data"]
-        if not v["browsers"]:
-            tiles.append(("Visitors", '<span class="big dim">None yet</span>',
-                          "browsers that open these pages are counted here"))
+            period = (" &middot; development and test, not from the $600"
+                      + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else ""))
+        unpriced = f' ({m["unpriced"]} without a cost)' if m["unpriced"] else ""
+        cells.append(_cell("Spendable", '<span class="dim">Ledger not open</span>',
+                           f'{label}: drinks {_money(dr["paid"])}, model {_money(m["total"])}{unpriced}{period}',
+                           "#money", link=spend_link))
+    else:
+        cells.append(_cell("Spendable", '<span class="dim">&mdash;</span>', "not available", "#money"))
+
+    # Catalog approvals: every product in the first fill needs one, by the deadline.
+    counts = snap.get("catalog_counts") or {"ok": False}
+    if counts["ok"]:
+        c = counts["data"]
+        by = c["by_status"]
+        extra = "".join(f' &middot; <span class="warn-text">{by[k]} {k}</span>' for k in ("sending", "unknown") if by[k])
+        rejected = f' &middot; {by["rejected"]} rejected' if by["rejected"] else ""
+        last = APPROVALS_DUE - timedelta(hours=6)      # the deadline's day, in Eastern
+        due = f" &middot; due {last:%a} {last.day} {last:%b}" if now < APPROVALS_DUE else ""
+        left = f'<span class="{"bad-text" if not c["left"] else ""}">{_plural(c["left"], "place")} left</span>'
+        cells.append(_cell("Catalog approvals", f'{by["approved"]} approved',
+                           f'{by["pending"]} pending{rejected}{extra} &middot; {left}{due}', "#requests"))
+    else:
+        cells.append(_cell("Catalog approvals", '<span class="dim">&mdash;</span>', "not available", "#requests"))
+
+    # The plan: before the slot lock, the plan for the first fill; from it, the agent's plan for Friday.
+    plan = snap["plan"]
+    p = plan["data"] if plan["ok"] else None
+    tone = ""
+    if "weekly_plan" in snap:
+        value = "For the first fill"
+        if not plan["ok"]:
+            sub = "not available"
+        elif p is None:
+            sub = "no plan loaded yet"
+        elif p.get("message"):
+            sub = _e(p["message"])
         else:
-            tiles.append(("Visitors", f'<span class="big">{_plural(v["browsers"], "browser")}</span>',
-                          f'{_plural(v["visits"], "visit")} &middot; {_plural(v["sign_ins"], "sign-in")} '
-                          f'since {_time(v["since"])}<br>this week: {_plural(v["visits_7_days"], "visit")} '
-                          f'from {_plural(v["browsers_7_days"], "browser")}'))
-    body = "".join(f'<div class="tile"><div class="label">{label}</div><div>{big}</div>'
-                   f'<div class="sub">{sub}</div></div>' for label, big, sub in tiles)
-    return f'<div class="tiles">{body}</div>'
+            most, cap = p["fill_most_cents"], p["fill_cap_cents"]
+            cost = f"{_cents(most)} of {_cents(cap)}" if most is not None else "cost unknown"
+            tone = "bad" if most is not None and most > cap else ""
+            sub = (f'{_plural(len(p["slots"]), "slot")} &middot; {cost}'
+                   + ("" if p["picked"] else " &middot; latest, not picked"))
+    else:
+        value = "For Friday"
+        if not plan["ok"]:
+            sub = "not available"
+        elif p is None:
+            sub = "no plan yet"
+        else:
+            run = p["run"]
+            moved = (_plural(sum(1 for x in p["slots"] if x["changed"]), "change") if p["previous_run"]
+                     else f'first plan: {_plural(sum(1 for x in p["slots"] if x["now"] is not None), "slot")}')
+            sub = f'{moved} &middot; run #{run["id"]} {_e(run["status"])} {_time(run["started_at"], "ago", now)}'
+    cells.append(_cell("Plan", value, sub, "#plan", tone))
+    return f'<nav class="strip" aria-label="Status">{"".join(cells)}</nav>'
+
+
+def _visitors_line(snap: dict) -> str:
+    """Who has looked at the pages, as one small line for the footer. Not about running the machine."""
+    seen = snap.get("visits")
+    if not seen:
+        return ""
+    if not seen["ok"]:
+        return '<p class="visitors">Visitors: unavailable just now.</p>'
+    v = seen["data"]
+    if not v["browsers"]:
+        return '<p class="visitors">Visitors: none yet.</p>'
+    return (f'<p class="visitors">Visitors: {_plural(v["browsers"], "browser")}, {_plural(v["visits"], "visit")}, '
+            f'{_plural(v["sign_ins"], "sign-in")} since {_time(v["since"], "day")} &middot; this week: '
+            f'{_plural(v["visits_7_days"], "visit")} from {_plural(v["browsers_7_days"], "browser")}.</p>')
 
 
 def _attention_html(items: list[dict]) -> str:
@@ -1866,7 +2062,7 @@ code { font:12px ui-monospace, "Cascadia Mono", Consolas, monospace; background:
 a { color:var(--accent) }
 .dim, .muted { color:var(--muted) }
 .ok-text { color:var(--ok) } .warn-text { color:var(--warn) } .bad-text { color:var(--bad) }
-header.top { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-bottom:14px }
+header.top { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin-bottom:8px }
 header.top .meta { color:var(--muted); font-size:12px; margin-left:auto }
 .verdict { font-weight:700; font-size:13px; padding:3px 10px; border-radius:999px; border:1px solid currentColor }
 .verdict.ok { color:var(--ok); background:var(--ok-soft) } .verdict.check { color:var(--warn); background:var(--warn-soft) }
@@ -1875,8 +2071,19 @@ header.top .meta { color:var(--muted); font-size:12px; margin-left:auto }
 .demo-banner { position:sticky; top:0; z-index:20; padding:10px 16px; text-align:center; font-size:15px; font-weight:700;
   background:#ffd23f; color:#1a1400; border-bottom:3px solid #b8860b }
 .demo-banner a { color:inherit; text-decoration:underline }
-.tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px }
-.tile { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px 14px; box-shadow:var(--shadow); min-width:0 }
+/* The status bar: one compact row of six cells; each links to its section. */
+.strip { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); background:var(--surface); border:1px solid var(--line);
+  border-radius:10px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:10px }
+.sc { display:flex; flex-direction:column; gap:0; padding:5px 10px 6px; min-width:0; color:var(--ink); text-decoration:none;
+  border-left:1px solid var(--line) }
+.sc:first-child { border-left:0 } .sc:hover { background:var(--sunk) } .sc:focus-visible { outline:2px solid var(--accent); outline-offset:-2px }
+.sc .label { font-size:10px } .sc .sv { font-size:16px; font-weight:700; line-height:1.25; overflow-wrap:anywhere }
+.sc .sv .verdict { font-size:12px; padding:0 8px; vertical-align:2px }
+.sc .sub { font-size:11.5px; line-height:1.35 } .sc .sub b { color:var(--ink); font-weight:600 }
+.sc.warn .sv { color:var(--warn) } .sc.bad .sv { color:var(--bad) }
+.sc.warn { box-shadow:inset 0 3px 0 var(--warn) } .sc.bad { box-shadow:inset 0 3px 0 var(--bad) }
+@media (max-width:1100px) { .strip { grid-template-columns:repeat(3, minmax(0, 1fr)) }
+  .sc:nth-child(3n+1) { border-left:0 } .sc:nth-child(n+4) { border-top:1px solid var(--line) } }
 .label { font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
 .big { display:inline-block; font-size:22px; font-weight:700; margin:2px 0 }
 .sub { color:var(--muted); font-size:12px; overflow-wrap:anywhere }
@@ -1916,10 +2123,67 @@ a.pill { text-decoration:none }
   padding:4px 12px; cursor:pointer }
 .seg button[aria-pressed="true"] { background:var(--accent); color:var(--surface) }
 .vm[data-view="now"] .v-next, .vm[data-view="next"] .v-now { display:none !important }
-.vm-wrap { display:grid; grid-template-columns:minmax(0, 1fr); gap:14px; align-items:start }
+/* In the machine, one screen: the front on the left; on the right Needs attention and the plan's changes,
+   or the picked selection close up. On a phone the front comes first and the close-up is a sheet. */
+.vm > h2 { margin-bottom:6px }
+.ops { display:grid; grid-template-columns:minmax(0, 1fr); gap:12px; align-items:start }
+.ops-front { display:grid; gap:6px; min-width:0 }
+.ops-side, .ops-home { display:flex; flex-direction:column; gap:10px; min-width:0 }
+.ops-card { background:var(--sunk); border:1px solid var(--line); border-radius:10px; padding:8px 10px; min-width:0 }
+.ops-card h3 { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; margin:0 0 6px; font-size:13px; color:var(--ink);
+  text-transform:none; letter-spacing:0 }
+.ops-card h3 .hint { font-weight:400; font-size:11.5px; color:var(--muted) } .ops-jump { margin-left:auto; font-size:11.5px; font-weight:400 }
+.ops-attn .attention, .ops-attn div.attention.clear { margin:0 } .ops-attn .attention { gap:5px }
+.ops-attn .attention li { padding:6px 9px; gap:8px; font-size:12.5px } .ops-attn .attention .dot { width:18px; height:18px; font-size:11px }
+.ops-chg .changes { margin:0; gap:1px } .ops-chg .changes li { display:block }
+a.chg { display:grid; grid-template-columns:auto auto minmax(0, 1fr); gap:2px 6px; align-items:baseline; padding:3px 5px; border-radius:6px;
+  color:var(--ink); text-decoration:none; font-size:12.5px }
+a.chg:hover, a.chg:focus-visible { background:var(--surface); outline:1px solid var(--line) }
+.changes.ff a.chg { grid-template-columns:auto minmax(0, 1fr) }
+a.chg > b { font:800 11px/16px Arial, sans-serif; background:#07080a; color:#fff; border-radius:3px; padding:0 4px }
+a.chg .why { display:block; color:var(--muted); font-size:11.5px; overflow-wrap:anywhere }
+.vm-panel { display:none; min-width:0; background:var(--sunk); border:1px solid var(--line); border-radius:12px; padding:8px 10px 10px }
+.vm-ph { display:flex; align-items:center; gap:8px; margin:0 0 6px }
+.vm-x { margin-left:auto; display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:600; color:var(--ink);
+  text-decoration:none; background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:3px 11px }
+.vm-x:hover, .vm-x:focus-visible { border-color:var(--accent); color:var(--accent); outline:none }
+.vm-grab, .vm-scrim { display:none }
+.vm[data-sel] .vm-panel, .vm:not([data-js]):has(.sd:target) .vm-panel, .vm:not([data-js]):has(.ma-shelf:target) .vm-panel { display:block }
+@media (min-width:980px) {
+  .ops { grid-template-columns:minmax(0, 1fr) minmax(340px, 37%) }
+  .ops-side { position:sticky; top:8px; max-height:calc(100vh - 16px); overflow-y:auto; overscroll-behavior:contain }
+  .ops-attn { flex:none } .ops-chg { flex:0 1 auto; min-height:150px; overflow-y:auto }
+  .vm[data-sel] .ops-home, .vm:not([data-js]):has(.sd:target) .ops-home,
+  .vm:not([data-js]):has(.ma-shelf:target) .ops-home { display:none }
+  .vm-panel { position:relative } .vm-panel .vm-ph .label { display:none }
+  .vm-panel .vm-x { position:absolute; top:7px; right:10px } .vm-panel .ma-sh { padding-right:84px; min-height:24px }
+  .vm-panel .ma-lane svg { max-height:200px }
+  .vm-panel .ma-nm { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-size:11px }
+  .vm-panel .ma-nm span, .vm-panel .ma-chips, .vm-panel .ma-nt, .vm-panel .ma-why, .vm-panel .ma-plan { display:none }
+  .vm-panel .ma-ct b { font-size:16px } }
+@media (max-width:819px) {
+  .vm-panel { display:block; position:fixed; left:0; right:0; bottom:0; z-index:30; max-height:88vh; overflow-y:auto;
+    overscroll-behavior:contain; border:0; border-radius:16px 16px 0 0; background:var(--surface); box-shadow:0 -10px 30px rgba(0,0,0,.35);
+    padding:6px 12px calc(14px + env(safe-area-inset-bottom)); transform:translateY(105%); visibility:hidden;
+    transition:transform .28s cubic-bezier(.2, .8, .3, 1), visibility 0s .28s }
+  .vm[data-open] .vm-panel, .vm:not([data-js]):has(.sd:target) .vm-panel { transform:none; visibility:visible;
+    transition:transform .28s cubic-bezier(.2, .8, .3, 1) }
+  .vm-grab { display:block; position:absolute; left:50%; top:6px; width:40px; height:4px; margin-left:-20px; border-radius:2px;
+    background:var(--line) }
+  .vm-ph { position:sticky; top:-6px; z-index:3; background:var(--surface); padding:12px 0 6px; margin:0 }
+  .vm-x { min-height:44px; padding:0 16px; font-size:14px }
+  .vm[data-open] .vm-scrim, .vm:not([data-js]):has(.sd:target) .vm-scrim { display:block; position:fixed; inset:0; z-index:29;
+    background:rgba(5,8,12,.5) }
+  /* In the sheet: the picked lane big beside its facts, then the whole shelf under it. */
+  .vm-panel .ma-sh { order:-2 } .vm-panel .sd-list { order:-1 } .vm-panel .sd { margin:0 0 10px }
+  .vm-panel .sd-art { display:block; float:left; width:112px; margin:0 10px 4px 0; border-radius:8px; overflow:hidden; background:#0b0e12 }
+  .vm-panel .sd-art:empty { display:none } .vm-panel .sd-art svg { display:block; width:100%; height:auto }
+  .vm-panel .ma-nm, .vm-panel .ma-chips, .vm-panel .ma-nt, .vm-panel .ma-why, .vm-panel .ma-plan, .vm-panel .ma-t { display:none }
+  .vm-panel .ma-meta { padding:3px 2px 5px; text-align:center } .vm-panel .ma-ct { margin:0; font-size:9px }
+  .vm-panel .ma-ct b { font-size:13px } .vm-panel .ma-notours { min-height:0 } .vm-panel .ma-n { font-size:11px }
+  .vm-panel .ma-lane:not(.ma-notours) { flex-grow:1 !important } .vm-panel .ma-strip .ma-lane svg { max-height:170px } }
+@media (prefers-reduced-motion:reduce) { .vm-panel { transition:none !important } }
 .dotk.info { background:var(--info) } .dotk.warn { background:var(--warn) } .dotk.bad { background:var(--bad) }
-.vm-side { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap:10px;
-  min-width:0 }
 details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; margin:6px 0 }
 .card { background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:10px 12px; min-width:0 }
 .card p { margin:4px 0 0 }
@@ -1928,7 +2192,8 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
 .changes .why { display:block; color:var(--muted); font-size:12px; overflow-wrap:anywhere }
 .dotk { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px }
 .vm-legend { font-size:12px; color:var(--muted) } .vm-legend p { margin:6px 0 0 }
-.vm-legend > div { display:inline-block; margin-right:12px }
+.vm-legend > summary .dotk { margin-left:6px } .vm-legend .honest { margin:0 } .vm-legend .more { text-decoration:underline }
+.pc summary a.num { font-weight:700; color:var(--accent) }
 /* The plan: one line per slot; the reason opens beneath. */
 .only { display:inline-flex; gap:6px; align-items:center; font-size:12px; margin:4px 0 8px; cursor:pointer }
 .only[hidden] { display:none }
@@ -2000,10 +2265,12 @@ pre { margin:4px 0 0; font:12px ui-monospace, Consolas, monospace; background:va
 .closet li { display:flex; justify-content:space-between; gap:8px; padding:5px 0; border-bottom:1px solid var(--line); font-size:13px; min-width:0 }
 .closet li b { font-weight:600; overflow-wrap:anywhere } .closet li span { color:var(--muted); white-space:nowrap }
 footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8px }
+footer .visitors { margin:4px 0 0; font-size:11px; opacity:.8 }
 @media (max-width:640px) {
   main { padding:12px } .big { font-size:19px } header.top .meta { margin-left:0; width:100% }
-  .tiles { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px } .tile { padding:10px 12px }
-  .tile:last-child:nth-child(odd) { grid-column:1 / -1 }
+  .strip { grid-template-columns:repeat(2, minmax(0, 1fr)) } .sc { padding:6px 9px }
+  .sc:nth-child(n) { border-left:1px solid var(--line); border-top:1px solid var(--line) }
+  .sc:nth-child(odd) { border-left:0 } .sc:nth-child(-n+2) { border-top:0 } .sc .sv { font-size:15px }
   .plan-head { display:none }
   .pc summary { grid-template-columns:30px minmax(0, 1fr) } .pc summary .now::before { content:"now: " }
   .pc summary .what, .pc summary .tags { grid-column:2 } .pc summary .what::before { content:"Friday: " }
@@ -2021,17 +2288,19 @@ STYLE += leaderboards.STYLE
 
 SCRIPT = """(function () {
   var REFRESH = %d * 1000, FROZEN = %d, show = 'all', view = 'now', only = false, lastOk = Date.now(), failed = false;
-  var shelf = '';
   // The demo copy keeps its toggles under its own keys, so flipping one there never moves the live page's.
   var PFX = '%s';
+  // sel: the selection the close-up shows ('' shows Needs attention and the plan's changes instead);
+  // sheet: whether it is open as a sheet (phones). Kept in memory, so a refresh keeps them and a new visit
+  // starts with Needs attention.
+  var sel = '', sheet = false, opener = null;
   try {
     show = localStorage.getItem(PFX + 'show') || 'all';
     view = localStorage.getItem(PFX + 'view') === 'next' ? 'next' : 'now';
     only = localStorage.getItem(PFX + 'changed') === '1';
-    shelf = localStorage.getItem(PFX + 'shelf') || '';
   } catch (e) {}
-  var picked = /^#shelf-([1-5])$/.exec(location.hash);
-  if (picked) shelf = picked[1];
+  function narrow() { return !!(window.matchMedia && matchMedia('(max-width: 819px)').matches); }
+  function still() { return !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); }
   function span(ms) {
     var m = Math.floor(Math.abs(ms) / 60000);
     if (m < 1) return 'under a minute';
@@ -2049,7 +2318,8 @@ SCRIPT = """(function () {
       var d = new Date(t.getAttribute('datetime')), f = t.getAttribute('data-f');
       if (isNaN(d)) return;
       if (FROZEN && (f === 'ago' || f === 'until' || f === 'since')) return;
-      if (FROZEN) {
+      // The Eastern forms (et, etclock, etday) are absolute already: they format below as on the live page.
+      if (FROZEN && f !== 'et' && f !== 'etclock' && f !== 'etday') {
         var et = {timeZone: 'America/New_York'};
         if (f === 'clock') t.textContent = d.toLocaleTimeString([], Object.assign({hour: 'numeric', minute: '2-digit'}, et)) + ' ET';
         else if (f === 'day') t.textContent = d.toLocaleDateString([], Object.assign({weekday: 'short', day: 'numeric', month: 'short'}, et));
@@ -2061,6 +2331,13 @@ SCRIPT = """(function () {
       if (f === 'ago') t.textContent = span(now - d) + ' ago';
       else if (f === 'until') t.textContent = d > now ? span(d - now) : 'passed';
       else if (f === 'since') t.textContent = span(now - d);
+      else if (f === 'et' || f === 'etclock' || f === 'etday') {
+        // Eastern, the machine's zone, whatever the viewer's own zone is.
+        var clock = d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York'});
+        t.textContent = (f === 'etday' ? d.toLocaleDateString('en-GB', {weekday: 'short', day: 'numeric', month: 'short',
+                                                                         timeZone: 'America/New_York'}) + ', ' : '')
+                        + clock + (f === 'etclock' ? '' : ' ET');
+      }
       else if (f === 'clock') t.textContent = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
       else if (f === 'day') t.textContent = d.toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'});
       else t.textContent = d.toLocaleString([], {weekday: 'short', month: 'short', day: 'numeric',
@@ -2075,18 +2352,27 @@ SCRIPT = """(function () {
     }
   }
   function save(key, value) { try { localStorage.setItem(key, value); } catch (err) {} }
+  function cellFor(s) { return s ? document.querySelector('.vm .fc[data-sel="' + CSS.escape(s) + '"]') : null; }
   // The controls only work with JavaScript, so the page sends them hidden and this shows them.
   function filter() {
     document.querySelectorAll('.feed').forEach(function (f) { f.setAttribute('data-show', show); });
     document.querySelectorAll('.filter button').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b.getAttribute('data-show') === show));
     });
-    // The shelf the close-up shows: the viewer's pick, kept across refreshes, else the page's default.
+    // The picked selection, kept across refreshes. One that isn't ours any more (the assignment
+    // changed) is dropped, and the side shows Needs attention again.
+    if (sel && !cellFor(sel)) { sel = ''; sheet = false; }
+    if (sheet && !narrow()) sheet = false;
     document.querySelectorAll('.vm').forEach(function (v) {
       v.setAttribute('data-view', view);
       v.setAttribute('data-js', '');
-      if (shelf && v.querySelector('.ma-shelf[data-n="' + shelf + '"]')) v.setAttribute('data-shelf', shelf);
+      if (sel) v.setAttribute('data-sel', sel); else v.removeAttribute('data-sel');
+      if (sheet) v.setAttribute('data-open', ''); else v.removeAttribute('data-open');
     });
+    document.querySelectorAll('.vm .fc[data-sel]').forEach(function (c) {
+      if (c.getAttribute('data-sel') === sel) c.setAttribute('aria-current', 'true'); else c.removeAttribute('aria-current');
+    });
+    hero();
     document.querySelectorAll('.vm .seg').forEach(function (s) { s.hidden = false; });
     document.querySelectorAll('.vm .seg button').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b.getAttribute('data-view') === view));
@@ -2094,6 +2380,36 @@ SCRIPT = """(function () {
     var box = document.getElementById('changed-only');
     if (box) { box.checked = only; box.closest('label').hidden = false; }
     document.querySelectorAll('.plan-grid[data-only]').forEach(function (g) { g.setAttribute('data-only', String(only)); });
+  }
+  // On a phone the sheet shows the picked lane big beside its facts, with the whole shelf under it.
+  function hero() {
+    document.querySelectorAll('.vm .sd-art').forEach(function (a) { a.textContent = ''; });
+    if (!sheet || !sel) return;
+    var lane = document.getElementById('lane-' + sel), card = document.getElementById('sel-' + sel);
+    var art = card && card.querySelector('.sd-art'), svg = lane && lane.querySelector('svg');
+    if (art && svg) art.appendChild(svg.cloneNode(true));
+  }
+  // Picking one of ours shows its shelf and facts beside the front; on a phone they slide up as a sheet.
+  function choose(s, from) {
+    if (!cellFor(s)) return false;
+    sel = s; sheet = narrow(); opener = from || null;
+    filter();
+    var panel = document.querySelector('.vm-panel'), card = document.getElementById('sel-' + sel);
+    if (sheet) {
+      if (panel) panel.scrollTop = 0;
+      if (card) card.focus({preventScroll: true});
+    } else if (from && !from.closest('.vm')) {
+      // Picked from the plan below: bring the machine back into view.
+      var vm = document.getElementById('vm');
+      if (vm) vm.scrollIntoView({block: 'start', behavior: still() ? 'auto' : 'smooth'});
+    }
+    return true;
+  }
+  function shut() {
+    if (!sel && !sheet) return;
+    var back = opener;
+    sel = ''; sheet = false; opener = null; filter();
+    if (back && document.contains(back)) back.focus({preventScroll: true});
   }
   function openSlot(id) {
     var d = document.getElementById(id);
@@ -2107,22 +2423,33 @@ SCRIPT = """(function () {
     if (b) { show = b.getAttribute('data-show'); save(PFX + 'show', show); filter(); }
     if (v) { view = v.getAttribute('data-view'); save(PFX + 'view', view); filter(); }
     if (a) openSlot(a.getAttribute('href').slice(1));
-    var pick = t.closest('a[data-shelf]'), lane = t.closest('a[data-lane]');
-    if (pick) { e.preventDefault(); shelf = pick.getAttribute('data-shelf'); save(PFX + 'shelf', shelf); filter(); }
-    if (lane) {
-      var to = document.getElementById('lane-' + lane.getAttribute('data-lane'));
-      if (to) {
-        e.preventDefault();
-        var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-        to.scrollIntoView({block: 'nearest', inline: 'start', behavior: still ? 'auto' : 'smooth'});
-      }
+    var pick = t.closest('a[data-sel]'), shelf = t.closest('a[data-shelf]'), close = t.closest('[data-close]');
+    var lane = !t.closest('a') && t.closest('.vm-panel article.ma-lane:not(.ma-notours)');
+    if (pick && choose(pick.getAttribute('data-sel'), pick)) e.preventDefault();
+    if (shelf) {
+      var first = document.querySelector('.vm .fm-shelf[data-n="' + shelf.getAttribute('data-shelf') + '"] .fc[data-sel]');
+      if (first && choose(first.getAttribute('data-sel'), shelf)) e.preventDefault();
     }
+    if (lane) choose(lane.id.slice(5), opener);
+    if (close) { e.preventDefault(); shut(); }
+    if (t.closest('a[href="#attention"]')) shut();
   });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') shut(); });
   document.addEventListener('change', function (e) {
     if (e.target.id !== 'changed-only') return;
     only = e.target.checked; save(PFX + 'changed', only ? '1' : '0'); filter();
   });
-  window.addEventListener('hashchange', function () { openSlot(location.hash.slice(1)); });
+  function fromHash() {
+    var h = /^#sel-([A-Za-z0-9_]+)$/.exec(location.hash), s = /^#shelf-([1-5])$/.exec(location.hash);
+    if (h) return choose(h[1]);
+    if (s) {
+      var first = document.querySelector('.vm .fm-shelf[data-n="' + s[1] + '"] .fc[data-sel]');
+      return first ? choose(first.getAttribute('data-sel')) : false;
+    }
+    openSlot(location.hash.slice(1));
+    return false;
+  }
+  window.addEventListener('hashchange', fromHash);
   function refresh() {
     if (document.hidden) return;
     // The header tells the visit counter this is a refresh, not someone opening the page.
@@ -2138,16 +2465,25 @@ SCRIPT = """(function () {
       if (doc.title) document.title = doc.title;   // the verdict in the tab follows the page
       var open = Array.prototype.map.call(main.querySelectorAll('details[open][data-key]'),
                                           function (d) { return d.getAttribute('data-key'); });
+      var panel = document.querySelector('.vm-panel'), side = document.querySelector('.ops-side');
+      var scrolled = [panel ? panel.scrollTop : 0, side ? side.scrollTop : 0];
       main.innerHTML = fresh.innerHTML;
       open.forEach(function (k) {
         var d = main.querySelector('details[data-key="' + CSS.escape(k) + '"]');
         if (d) d.open = true;
       });
       failed = false; lastOk = Date.now(); filter(); times();
+      panel = document.querySelector('.vm-panel'); side = document.querySelector('.ops-side');
+      if (panel) panel.scrollTop = scrolled[0];
+      if (side) side.scrollTop = scrolled[1];
     }).catch(function () { failed = true; times(); });
   }
   filter(); times();
-  if (location.hash) openSlot(location.hash.slice(1));
+  // The browser scrolls to a #target after this runs: on a wide screen show the machine from its top
+  // instead of wherever the facts happen to sit.
+  if (location.hash && fromHash() && !sheet) {
+    setTimeout(function () { var vm = document.getElementById('vm'); if (vm) vm.scrollIntoView(); }, 60);
+  }
   if (!FROZEN) {
     setInterval(refresh, REFRESH);
     setInterval(times, 15000);
@@ -2186,8 +2522,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     if items is None:
         items = attention(snap)
     state = verdict(items)
-    head =(f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
-            f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
+    head = (f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
             + (f'<a class="chartlink" href="{_e(charts["money"])}">Money chart</a>' if "money" in charts else "")
             + f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
             + ("fixed snapshot, never refreshes" if demo else f"refreshes every {int(refresh)} s")
@@ -2201,7 +2536,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
     boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
               if "leaderboards" in snap else "")
-    body = (head + _tiles(snap, charts) + _attention_html(items) + money + _cabinet_html(snap) + pricing
+    body = (head + _status_bar(snap, items, charts) + _cabinet_html(snap, items) + pricing + money
             + _plan_section(snap)
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
@@ -2219,7 +2554,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + ('<footer>Made-up data from a fixed snapshot, shown with the live page\'s own code. Nothing here is '
                f'read from our database. The live page is <a href="{DEMO_LIVE_HREF}">{DEMO_LIVE_HREF}</a>.</footer>'
                if demo else
-               '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code></footer>'))
+               '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code>'
+               + _visitors_line(snap) + '</footer>'))
     # The query marks the reload as one, so the visit counter doesn't count it (`vending.visits`).
     # The demo never reloads.
     reload = ("" if demo else
