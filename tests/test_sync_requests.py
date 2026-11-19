@@ -314,6 +314,25 @@ def test_half_a_pair_of_door_times_is_logged_naming_the_request(conn):
     assert door_row(conn) == (None, None)
 
 
+@pytest.mark.parametrize("bad", [1763000000, 17.5, "soon", ["2026-11-07T15:34:00Z"], {"at": OPENED}, True])
+def test_a_door_time_that_is_not_a_time_is_logged_and_the_rest_of_the_batch_still_syncs(conn, bad):
+    # A number (or anything not a time string) used to raise TypeError past the per-request
+    # handler and stop the whole sync. It is treated as missing: logged, neither kept.
+    submit(conn, "r1")
+    submit(conn, "r2")
+    said = []
+    report = sync(conn, FakeBridge({
+        "r1": fulfilled("r1", receipt(), door_opened_at=bad, door_closed_at=CLOSED),
+        "r2": fulfilled("r2", receipt(), door_opened_at=OPENED, door_closed_at=CLOSED),
+    }), NOW, log=said.append)
+    assert (report.checked, report.failed) == (2, 0)
+    assert said == [f"r1: door_opened_at is {bad!r}, not a time; neither door time is kept, "
+                    "so its visit is dated by resolved_at"]
+    assert door_row(conn, "r1") == (None, None)
+    assert door_row(conn, "r2")[1] == datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc)
+    assert conn.execute("select count(*) from purchase_lines where request_id = 'r1'").fetchone()[0] == 1
+
+
 def test_a_door_closed_before_it_opened_is_logged_and_not_stored(conn):
     submit(conn, "r1")
     said = []

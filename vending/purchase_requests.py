@@ -77,7 +77,7 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     else:
         raise ValueError(f"unexpected answer for {request_id}: status {response.get('status')!r} and no lines")
     opened, closed = door_times(request_id, response)
-    warnings = () if opened is not None else tuple(_half_door_times(request_id, response))
+    warnings = () if opened is not None else tuple(_door_time_warnings(request_id, response))
 
     with conn.transaction():
         updated = conn.execute(
@@ -117,11 +117,13 @@ def door_times(request_id: str, response: dict) -> tuple[datetime | None, dateti
     """The request's `door_opened_at` and `door_closed_at`, as a pair or as `(None, None)`.
 
     They are to the minute. Older requests have none, and the worker may leave
-    them out. With only one of the two, neither is kept: the visit needs both
-    ends. The answer is still kept whole in `last_response`. Close before open
-    is a bad receipt: `ValueError`, so `store` writes nothing.
+    them out. With only one of the two, or one that isn't a time (a number, or
+    a string like "soon"), neither is kept: the visit needs both ends, and the
+    receipt itself is still good. The answer is still kept whole in
+    `last_response`. Close before open is a bad receipt: `ValueError`, so
+    `store` writes nothing.
     """
-    opened, closed = _when(response.get("door_opened_at")), _when(response.get("door_closed_at"))
+    opened, closed = _door_when(response.get("door_opened_at")), _door_when(response.get("door_closed_at"))
     if opened is None or closed is None:
         return None, None
     if closed < opened:
@@ -129,13 +131,28 @@ def door_times(request_id: str, response: dict) -> tuple[datetime | None, dateti
     return opened, closed
 
 
-def _half_door_times(request_id: str, response: dict) -> list[str]:
-    """A warning when the answer has one door time but not the other, else nothing.
+def _door_when(value: object) -> datetime | None:
+    """A door time, or None when there is none or it isn't a time the bridge could mean."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return _when(value)
+    except ValueError:
+        return None
+
+
+def _door_time_warnings(request_id: str, response: dict) -> list[str]:
+    """Warnings when the answer has a door time that isn't a time, or one but not the other.
 
     `door_times` keeps neither then, so the visit is dated by `resolved_at` as
-    if the receipt had no door times. A person may want to ask for the other.
+    if the receipt had no door times. A person may want to ask for them.
     """
-    opened, closed = _when(response.get("door_opened_at")), _when(response.get("door_closed_at"))
+    raw = {k: response.get(k) for k in ("door_opened_at", "door_closed_at")}
+    bad = [k for k, v in raw.items() if v is not None and _door_when(v) is None]
+    if bad:
+        return [f"{request_id}: {k} is {raw[k]!r}, not a time; neither door time is kept, "
+                "so its visit is dated by resolved_at" for k in bad]
+    opened, closed = _door_when(raw["door_opened_at"]), _door_when(raw["door_closed_at"])
     if (opened is None) == (closed is None):
         return []
     have, missing = ("door_opened_at", "door_closed_at") if closed is None else ("door_closed_at", "door_opened_at")
