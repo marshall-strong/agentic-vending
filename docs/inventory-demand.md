@@ -21,7 +21,7 @@ Principles: `docs/agent/inventory-belief.md`. Money: `docs/opening-capital-plan.
 | Input | What it gives | Exact? | Source |
 |---|---|---|---|
 | Polls (DEX), hourly since 21 Sep | Lifetime units and cents per selection, price, door-open count (`EA2*DO`) | Counters yes; timing to the poll | `vending/counters.py`; door count only in `analysis/export_sales.py` |
-| Restock receipts | Units loaded, to the closet, lost, pulled; total paid; `resolved_at` | As the worker entered | `vending/stock.py` |
+| Restock receipts | Units loaded, to the closet, lost, pulled; total paid; `resolved_at`; the request's door open and close | As the worker entered; door times to the minute | `vending/stock.py` |
 | Person's counts | Product and units per selection | `door` yes, `photo` no | `vending/slot_counts.py` (PR #80) |
 | Academic calendar | Class days, breaks, closures | Official, "subject to change" | `analysis/golisano_calendar_2026_27.json` |
 

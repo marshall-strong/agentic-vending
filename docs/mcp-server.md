@@ -194,8 +194,9 @@ opening capital + later capital + takings - receipts - midweek visit fees - toke
 Takings are the rise in the polls' lifetime sales counters for our slots since the opening
 entry, tax included; `vending/counters.py` decides what a reading that goes down means (one low
 poll between good ones is a misread, two in a row a counter that restarted). Receipts are
-`purchase_lines.total_paid` on fulfilled requests, timed by each line's `resolved_at`, the same
-clock as the stock they delivered. Every fulfilled off-cycle request costs the midweek visit fee
+`purchase_lines.total_paid` on fulfilled requests, timed by the request's door close when the
+receipt has door times, else by each line's `resolved_at`: the same clock as the stock they
+delivered (`docs/cutover.md`). Every fulfilled off-cycle request costs the midweek visit fee
 stored on it when it was submitted (`purchase_requests.visit_fee_cents`), or `config`
 `midweek_fee_cents` ($25.00 by default) for requests without one, so a later change to the config
 fee never rewrites past visits. The sales tax inside the takings (takings x 8/108, per week,

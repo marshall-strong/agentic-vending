@@ -225,6 +225,51 @@ def test_spend_before_the_opening_is_left_out(conn):
     assert not any("0.80" in note or "development" in note for d in days for note in d.notes)
 
 
+def test_a_receipt_filled_in_before_the_opening_but_closed_after_it_is_charged_on_the_chart_too(conn):
+    # Opening 10:00 Eastern; the worker filled in the line at 09:55, the door closed at 10:05. The
+    # ledger charges it at door close, so the chart's purchases and cash must too.
+    opened = datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
+    ledger.record(conn, "opening", 60000, "opening capital", "marshall", opened)
+    record_request(conn, "r1", opened - timedelta(days=1), False, BODY)
+    store(conn, "r1", fulfilled("r1", receipt(resolved_at="2026-11-07T14:55:00Z"), fulfilled_at="2026-11-07T15:10:00Z",
+                                door_opened_at="2026-11-07T14:58:00Z", door_closed_at="2026-11-07T15:05:00Z"), NOW)
+    days = daily(conn, date(2026, 11, 7), date(2026, 11, 8), now=AFTER)
+    assert days[0].purchases_cents == 1237
+    assert [e.at for e in days[0].events if e.kind == "receipt"] == [datetime(2026, 11, 7, 15, 5, tzinfo=timezone.utc)]
+    assert [e.at for e in days[0].events if e.kind.endswith("visit")] == [
+        datetime(2026, 11, 7, 15, 5, tzinfo=timezone.utc)]
+    assert_cash_is_the_balance(conn, days)
+    assert_adds_up_to_pnl(conn, days, date(2026, 11, 7), date(2026, 11, 8), opened)
+
+
+def test_sales_the_open_minute_no_longer_reads_as_new_keep_their_cost_on_the_chart(conn):
+    # #172: r0 tops up the Arizona at 16:35-16:40 and drops its price to $2.00; r2 swaps in Coke at
+    # $2.00, door open in the 17:30 minute. The poll at 17:30:10 no longer reads as r2's, so its 2 sales
+    # have no product. Before, they were Coke at 80 cents; the chart and the ledger both still count it.
+    from tests.test_machine_state import fulfilled as fulfilled_lines
+    from vending import stock
+
+    open_ledger(conn)
+    fulfilled_lines(conn, "r1", datetime(2026, 11, 7, 15, tzinfo=timezone.utc), ("15", "ARIZONA", "primary", "5.00", 10, 0, 0))
+    fulfilled_lines(conn, "r0", datetime(2026, 11, 7, 16, 36, tzinfo=timezone.utc), ("15", "ARIZONA", "primary", "1.00", 2, 0, 0))
+    fulfilled_lines(conn, "r2", datetime(2026, 11, 7, 18, tzinfo=timezone.utc), ("15", "COKE20", "primary", "8.00", 10, 0, 0))
+    conn.execute("update purchase_lines set units_pulled = 9, pulled_sku = 'ARIZONA', slot_reassigned = true"
+                 " where request_id = 'r2'")
+    for request_id, opened, closed in (("r0", (16, 35), (16, 40)), ("r2", (17, 30), (18, 30))):
+        conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = %s",
+                     (datetime(2026, 11, 7, *opened, tzinfo=timezone.utc),
+                      datetime(2026, 11, 7, *closed, tzinfo=timezone.utc), request_id))
+    store_poll(conn, "a", "2026-11-07T16:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "b", "2026-11-07T17:30:10+00:00", {"15": (200, 100, 25000)})
+    store_poll(conn, "c", "2026-11-07T19:00:00+00:00", {"15": (200, 102, 25400)})
+
+    [sale] = [s for s in stock.stock(conn).sales if s.units]
+    assert (sale.product, sale.units) == (None, 2) and sale.unattributed
+    day = daily(conn, date(2026, 11, 7), date(2026, 11, 7), now=AFTER)[0]
+    assert (day.units_sold, day.units_costed, day.cost_of_sales_cents, day.cost_of_sales_complete) == (2, 2, 160, True)
+    assert_adds_up_to_pnl(conn, [day], date(2026, 11, 7), date(2026, 11, 7))
+
+
 def test_no_opening_says_nothing_is_competition_money(conn):
     ledger.record_tokens(conn, "0.08", "model", 10, 5, "test dry run",
                          at=datetime(2026, 11, 8, 12, tzinfo=EASTERN))

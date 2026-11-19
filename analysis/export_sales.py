@@ -28,6 +28,8 @@ Writes:
     door_events.csv     every poll's EVA-DTS door-open counter (EA2*DO*<since reset>*<lifetime>) and its rise
                         since the previous poll (door_events.door_rows: vending.counters.rises, misread-safe): a rise
                         means the door was opened (a visit) in between
+    receipts.csv        our fulfilled purchase receipts: request id, first line resolved, fulfilled_at. From the start
+                        (3 Dec) a door rise is our visit only when one of these falls with it (door_events.our_visits)
     slots.json          which slots the CSVs cover: {device, slots, source, assigned_slots, resolved_at}, where
                         assigned_slots is our assignment. sales_analysis.py reads it, and stops if it is asked
                         about a different slot list or the assignment is missing or malformed.
@@ -88,6 +90,12 @@ with db.connect() as c:
     raws = c.execute(
         "select started_at, raw from polls where device_id = %s and crc_ok and started_at < %s order by started_at",
         (DEVICE_ID, before)).fetchall()
+    # our fulfilled receipts: when each visit ended and when its first line was resolved (no per-slot values)
+    receipts = c.execute(
+        "select r.request_id, coalesce(min(l.resolved_at), r.fulfilled_at), r.fulfilled_at"
+        " from purchase_requests r left join purchase_lines l using (request_id)"
+        " where r.status = 'fulfilled' and r.fulfilled_at is not null and r.fulfilled_at < %s"
+        " group by r.request_id, r.fulfilled_at order by r.fulfilled_at", (before,)).fetchall()
 
 
 ours = set(RUN_SLOTS)
@@ -146,6 +154,12 @@ with open(out / "door_events.csv", "w", newline="") as f:
     counts = ((at, door_counter(raw)) for at, raw in raws if raw is not None)
     for at, life, since, rise in door_rows((at, *dc) for at, dc in counts if dc is not None):
         w.writerow([at.astimezone(EASTERN).isoformat(), life, since, rise])
+
+with open(out / "receipts.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["request_id", "first_at_eastern", "fulfilled_at_eastern"])
+    for request_id, first, done in receipts:
+        w.writerow([request_id, first.astimezone(EASTERN).isoformat(), done.astimezone(EASTERN).isoformat()])
 
 (out / "slots.json").write_text(json.dumps(dict(
     device=DEVICE_ID, slots=list(RUN_SLOTS), source=SOURCE, assigned_slots=list(ASSIGNED),
