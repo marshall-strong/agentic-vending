@@ -163,7 +163,7 @@ def test_a_dry_run_previews_and_records_what_it_would_submit(connect, conn):
     tools = Tools(replies={"preview_desired_state": {"success": True, "message": "ok", "ok": True,
                                                      "plan_hash": "abc"}})
     run_id, out = go(connect, client, tools)
-    assert [name for name, _ in tools.calls] == ["get_machine_state", "preview_desired_state"]
+    assert [name for name, _ in tools.calls] == ["get_briefing", "get_machine_state", "preview_desired_state"]
     mode, status, plan, update, notes, detail, cost, request_id = stored(conn, run_id)
     assert (mode, status, request_id) == ("dry-run", "skipped", None)
     assert detail.startswith("Dry run: would have submitted the previewed plan.")
@@ -186,7 +186,7 @@ def test_a_dry_run_never_sends_a_write_the_model_makes_up(connect, conn):
                     answer())
     tools = Tools(LIVE_TOOLS)          # the server registers them; the dry run still mustn't call them
     go(connect, client, tools)
-    assert tools.calls == []
+    assert tools.calls == [("get_briefing", {})]
     results = client.sent[1]["messages"][-1]["content"]
     assert len(results) == 2 and all(r["is_error"] for r in results)
 
@@ -292,7 +292,7 @@ def test_a_plan_that_was_not_previewed_is_not_submitted(connect, conn):
     client = Script(tool_turn(submit()), preview(), tool_turn(submit(desired=changed)), answer("skip"))
     tools = Tools(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED})
     go(connect, client, tools, live=True)
-    assert [name for name, _ in tools.calls] == ["preview_desired_state"]
+    assert [name for name, _ in tools.calls] == ["get_briefing", "preview_desired_state"]
     assert "Not sent" in client.sent[1]["messages"][-1]["content"][0]["content"]
     assert "Not sent" in client.sent[3]["messages"][-1]["content"][0]["content"]
 
@@ -361,7 +361,8 @@ def test_a_submit_with_an_unknown_result_is_flagged_unresolved(connect, conn, re
 def test_turning_the_halt_on_mid_run_stops_before_the_next_model_call(connect, conn):
     class HaltsOnCall(Tools):
         async def call(self, name, arguments):
-            set_halted(conn, True, "test")
+            if name != "get_briefing":  # the startup read runs before any model call
+                set_halted(conn, True, "test")
             return await super().call(name, arguments)
 
     client = Script(tool_turn(use("get_pnl")), answer())
@@ -460,7 +461,7 @@ def test_a_submit_in_the_same_response_as_its_preview_is_not_sent(connect, conn)
     tools = Tools(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED, "submit_desired_state": SENT})
     run_id, out = go(connect, client, tools, live=True)
     assert "next turn" in client.sent[1]["messages"][-1]["content"][1]["content"]
-    assert [n for n, _ in tools.calls] == ["preview_desired_state", "submit_desired_state"]   # sent a turn later
+    assert [n for n, _ in tools.calls] == ["get_briefing", "preview_desired_state", "submit_desired_state"]
     assert out.status == "submitted"
 
 
@@ -544,6 +545,9 @@ def test_every_step_is_recorded_in_order_with_the_reasoning(connect, conn):
     tools = Tools(replies={"preview_desired_state": {"success": False, "message": "Plan refused: halted"}})
     run_id, out = go(connect, client, tools)
     got = steps(conn, run_id)
+    assert got[0][:3] == (1, "tool_result", "get_briefing")
+    assert json.loads(got[0][3])["source"] == "startup"
+    got = got[1:]       # the remaining steps were chosen by the model
     assert [(t, k, tool) for t, k, tool, _, _ in got] == [
         (1, "thinking", None), (1, "tool_call", "get_machine_state"), (1, "tool_result", "get_machine_state"),
         (2, "tool_call", "preview_desired_state"), (2, "tool_result", "preview_desired_state"),
@@ -586,7 +590,7 @@ def test_the_dashboard_shows_how_each_run_decided(connect, conn):
     go(connect, Script(first, answer()), Tools())
     snap = dashboard.snapshot(conn)
     run = snap["runs"]["data"][0]
-    assert [s["kind"] for s in run["steps"]] == ["thinking", "tool_call", "tool_result", "text"]
+    assert [s["kind"] for s in run["steps"]] == ["tool_result", "thinking", "tool_call", "tool_result", "text"]
     page = dashboard.render(snap)
     assert "How it decided: 2 turns, 1 tool call" in page
     assert "Look at &lt;the&gt; machine &amp; sales." in page and "Called <b>get_machine_state</b>" in page
@@ -599,3 +603,67 @@ def test_the_dashboard_works_before_the_steps_table_exists(connect, conn):
     conn.execute("drop table agent_steps")
     snap = dashboard.snapshot(conn)
     assert snap["runs"]["ok"] and snap["runs"]["data"][0]["steps"] == []
+
+
+# --- The automatic startup read -----------------------------------------------------
+
+STARTUP = {"success": True, "computed_at": NOW.isoformat(), "snapshot_id": "fixture-snapshot",
+           "text": "Data quality: ok. Fixture briefing."}
+
+
+def test_startup_read_precedes_first_paid_request_and_is_injected_once(connect, conn):
+    tools = Tools(SERVER_TOOLS + ["get_briefing"], replies={"get_briefing": STARTUP})
+
+    class Ordered(Script):
+        def create(self, **body):
+            assert tools.calls and tools.calls[0] == ("get_briefing", {})
+            return super().create(**body)
+
+    client = Ordered(tool_turn(use("get_machine_state")), answer())
+    run_id, out = go(connect, client, tools)
+    assert out.status == "skipped" and tools.calls.count(("get_briefing", {})) == 1
+    for request in client.sent:
+        opening = request["messages"][0]["content"]
+        assert opening.count(STARTUP["text"]) == 1
+        assert opening.index("This is a dry run") < opening.index("Trusted startup read") < opening.index("Your notes")
+        assert "computed_at=" + STARTUP["computed_at"] in opening and "snapshot_id=fixture-snapshot" in opening
+    first = steps(conn, run_id)[0]
+    assert first[:3] == (1, "tool_result", "get_briefing") and not first[4]
+    assert json.loads(first[3]) == {"source": "startup", "tool": "get_briefing", "success": True,
+                                  "computed_at": STARTUP["computed_at"], "snapshot_id": "fixture-snapshot"}
+    assert "fixture-snapshot" not in client.sent[0]["system"]
+
+
+@pytest.mark.parametrize("kind", ["exception", "tool_error", "unsuccessful", "malformed", "text_only"])
+def test_startup_failure_falls_back_and_records_its_source(connect, conn, kind):
+    class StartupTools(Tools):
+        async def call(self, name, arguments):
+            if name != "get_briefing":
+                return await super().call(name, arguments)
+            self.calls.append((name, arguments))
+            if kind == "exception":
+                raise RuntimeError("fixture disconnected")
+            reply = STARTUP if kind == "text_only" else {**STARTUP, "success": False} if kind == "unsuccessful" else {}
+            return SimpleNamespace(isError=kind == "tool_error", structuredContent=None,
+                                   content=[SimpleNamespace(text=json.dumps(reply))])
+    tools, client = StartupTools(), Script(tool_turn(use("get_machine_state")), answer())
+    run_id, out = go(connect, client, tools)
+    assert out.status == "skipped" and tools.calls.count(("get_briefing", {})) == 1
+    opening = client.sent[0]["messages"][0]["content"]
+    if kind == "text_only":
+        assert "Trusted startup read" in opening and not steps(conn, run_id)[0][4]
+    else:
+        assert "Startup read get_briefing failed" in opening and "get_account_balance every run" in opening
+        assert steps(conn, run_id)[0][4] and not json.loads(steps(conn, run_id)[0][3])["success"]
+
+
+def test_different_startup_snapshots_leave_system_prompt_byte_identical(connect, conn):
+    original = agent.system_prompt().encode("utf-8")
+    clients = []
+    for snapshot in ("one", "two"):
+        client = Script(answer())
+        go(connect, client, Tools(replies={"get_briefing": {**STARTUP, "snapshot_id": snapshot,
+                                                          "text": "Fixture " + snapshot}}))
+        clients.append(client)
+    assert clients[0].sent[0]["system"].encode("utf-8") == clients[1].sent[0]["system"].encode("utf-8") == original
+    assert clients[0].sent[0]["messages"][0] != clients[1].sent[0]["messages"][0]

@@ -210,7 +210,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
         slots = our_slots(conn)
     except SlotsNotRecorded as error:
         return MachineState(success=False, message=str(error))
-    latest = _poll(conn, "true")
+    latest = _poll(conn, "started_at <= %s", now)
     if latest is None:
         return MachineState(success=False, message=(
             f"No valid polls for {DEVICE_ID} are stored yet. "
@@ -229,7 +229,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     loads = _loads(receipts, now)
     last_loaded = _last_loaded(loads)
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
-    seen = _seen(conn)
+    seen = _seen(conn, now)
     latest_counters = _counters(conn, latest[0], slots)
     demands = _demands(counts, loads, counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
@@ -295,14 +295,14 @@ def _count_note(states: list[SlotState]) -> str:
     return note
 
 
-def _seen(conn: psycopg.Connection) -> dict[str, dict]:
+def _seen(conn: psycopg.Connection, until: datetime | None = None) -> dict[str, dict]:
     """The latest count per selection, or nothing when `slot_counts` isn't there yet.
 
     A savepoint keeps the caller's transaction usable if the table is missing.
     """
     try:
         with conn.transaction():
-            return slot_counts.latest(conn, DEVICE_ID)
+            return slot_counts.latest(conn, DEVICE_ID, until=until)
     except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         return {}
 

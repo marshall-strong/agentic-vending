@@ -1,6 +1,6 @@
 # The MCP server
 
-The agent's 11 tools, served over stdio by `python -m vending.server`. It's plain Python on the
+The agent's 12 tools, served over stdio by `python -m vending.server`. It's plain Python on the
 official MCP SDK, in the same package as the history sync, so the tools import the parser, the
 pricing gate and the database layer directly. The read tools only read our database, except `get_project_rules`, which reads our notes in `docs/agent/`; the one
 built write tool, `request_catalog_product`, also calls the DEX bridge. Nothing here polls the
@@ -8,6 +8,7 @@ machine.
 
 | Tool | State |
 | --- | --- |
+| `get_briefing` | **Works.** One read-only snapshot: data quality and source ages, current Saturday–Friday ledger week, previous week and competition totals, all assigned slots with stock evidence and sales rates, closet and pending requests. Returns typed data and compact Markdown with `computed_at` and `snapshot_id`. Live API spend starts at the ledger opening. Incomplete sales or costs leave profit unknown. Logged through the normal read path. The agent calls it before its first model request. |
 | `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls; and from the receipts (`vending.stock`), the product, stock on hand (since the product went in), units sold and days since the last load, and days of stock left. The demand to plan with, `units_per_class_day` (`vending.demand`): units sold per class day while the slot held stock, since its product went in (weekends, breaks and closures from `vending.class_days` left out); until a slot has 5 such days, the fall segment rate for its price, with `rate_basis` saying which, `class_days_in_stock` and `class_days_of_stock_left`. The closet per product with its value at cost, and any stock warnings. A slot with no receipts has those fields `null` and is named in the message. Where receipts don't know a slot, or a person's count is newer than its last receipt, `counted_product` and `counted_on_hand` say what the latest count in `slot_counts` saw (units less sales since; an estimate for a photo), with `counted_at`, `counted_days_ago` and `count_source`; a count over 7 days old is weak evidence and the message says so, and where `stock_on_hand` and `counted_on_hand` both appear the count is the newer. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
@@ -40,7 +41,7 @@ Container App, it's the shared Azure database), then run `python -m vending.db m
 
 **For the live run, set `VENDING_TOOLS=built` in the real environment** (it is not read from `.env`). Then only working tools are registered, so the
 agent doesn't pay tokens on every request to describe stubs. The default, `all`, registers all
-11 so the team can see the whole contract in a client.
+12 so the team can see the whole contract in a client.
 
 **The sync needs the class tailnet; the tests don't.** On a laptop also on a personal tailnet,
 sign in to the class account once with `tailscale login`, then move between tailnets with
