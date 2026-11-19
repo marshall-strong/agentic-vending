@@ -237,6 +237,22 @@ https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/db
 at `/dashboard/state.json`. `/db` is the DB explorer ([`db-explorer.md`](db-explorer.md)). The
 home page links to both once they are set up. They are `vending/pages.py`.
 
+Beside the dashboard are its charts, each built per request from the same read-only login:
+
+| Route | What it shows |
+|---|---|
+| `/dashboard/money` | The money chart ([`money-chart.md`](money-chart.md)): competition money by day since the ledger's opening |
+| `/dashboard/pnl` | The weekly P&L ([`pnl-report.md`](pnl-report.md)); `?start`, `?end` and `?view` as in the local report |
+| `/dashboard/spend` | Development spend by week and day ([`dev-spend.md`](dev-spend.md)), up to the ledger's opening |
+| `/dashboard/demo/money` | The money chart with its seeded made-up data, under a DEMO banner. No database |
+| `/dashboard/demo/spend` | Dev spend from the team's run notes, under a DEMO banner. No database |
+
+Before the ledger's opening entry (or before an opening recorded ahead), the money chart and the
+P&L show no figures: they say there is no competition money yet, and the money chart links its
+demo. Only the two demo routes draw made-up data. A rendered chart is kept for 60 seconds, so
+people reloading charts can't keep both page connections busy. Views of the charts are not counted
+as visits: `page_visits.page` accepts only `/login`, `/dashboard` and `/db` (migration 016).
+
 **One shared password** (`vending/gate.py`, since 15 Nov 2026). Every page except `/health`
 asks for it first, at `/login`; a browser that gives it stays signed in for 30 days, and
 `/logout` forgets it in that browser only. The sign-in is a signed cookie the server keeps
@@ -293,6 +309,12 @@ one plain sentence; the detail is in the container's log.
 every row. They may be used only from polls taken before the fall cut (`FALL_CUTOFF`, 18 Nov 2026
 00:00 Eastern when unset; `docs/integrity.md`), and from the cut on the total minus ours is the
 other selections' sales. The explorer can't test a poll's time, so it hides them for every poll.
+The money chart's receipt markers name a slot and product only for selections in the current
+assignment; a line for any other keeps its money in the totals and says only that it isn't ours now.
+
+**Script policies.** The money chart and dev spend carry their data inside the page and fetch
+nothing. Their one inline script runs by its SHA-256 hash in the `Content-Security-Policy`, so no
+other script can run. The P&L has no script; its one form sends a GET back to `/dashboard/pnl`.
 
 ### Setting up the read-only login (once)
 

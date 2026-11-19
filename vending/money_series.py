@@ -124,6 +124,8 @@ from vending.tools.sales_history import tax_cents
 EASTERN = ZoneInfo(ledger.TIMEZONE)
 MICROSECOND = timedelta(microseconds=1)
 NO_OPENING = "the ledger has no opening entry, so none of this is competition money yet"
+# A receipt line's marker for a slot that isn't ours now: no slot, no product.
+NOT_OURS_LINE = "a line for a selection that isn't ours now"
 NO_GOOD_POLL = "no good poll this day, so its sales show on the next day that has one"
 # How the notes about the polls behind the takings begin: ours above, and `ledger.rises_between`'s
 # ("no polls in the window, ..." and "no poll at or before ..."). The table shows these in full.
@@ -394,6 +396,9 @@ class _Book:
             if at >= first:
                 self.visits[_day(at)] += 1
                 self.fees[_day(at)] += fee
+        # A receipt line names its slot and product. A slot that isn't ours by the current assignment
+        # (reassigned since) keeps its money in every total, but its marker names neither.
+        ours = set(our_slots(conn))
         # On the receipt clock the ledger and the stock replay use (`stock.receipt_lines`).
         receipts = stock.receipt_lines(conn)
         for at, ref, _, slot, sku, paid in sorted(
@@ -409,8 +414,8 @@ class _Book:
                     self.unpaid_lines[_day(at)] += 1
                 else:
                     self.purchases[_day(at)] += paid
-                self.events[_day(at)].append(Event(at, "receipt", f"slot {slot}: {sku or 'nothing bought'}",
-                                                   ref, paid))
+                detail = f"slot {slot}: {sku or 'nothing bought'}" if slot in ours else NOT_OURS_LINE
+                self.events[_day(at)].append(Event(at, "receipt", detail, ref, paid))
         self.cash.sort(key=lambda c: c[0])
         self.cash_moments = [at for at, _ in self.cash]
         self._visit_events(conn, stock.request_times(receipts))

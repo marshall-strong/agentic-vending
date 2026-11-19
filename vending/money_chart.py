@@ -81,6 +81,34 @@ def page(payload: dict | None) -> str:
     return html.replace("/*DATA*/null", text, 1)
 
 
+# What `live_page` changes in the page, each found exactly once: the mock switch is turned off for good,
+# and the MOCK banner and tag start hidden, so they can't show even before the script runs.
+_MOCK_SWITCH = "const MOCK = !(REAL && REAL.daily && REAL.daily.length);"
+_LIVE = (
+    (_MOCK_SWITCH, "const MOCK = false;"),
+    ('<div class="banner" id="banner">', '<div class="banner" id="banner" hidden>'),
+    ('<span class="mock" id="mockTag">', '<span class="mock" id="mockTag" hidden>'),
+    ("<title>Money Chart Prototype v2</title>", "<title>Money chart</title>"),
+)
+
+
+class NoData(ValueError):
+    """A payload with no days: the live page draws nothing rather than fall back to MOCK data."""
+
+
+def live_page(payload: dict) -> str:
+    """The page for a served route: `payload` inlined (as `data` returns it, or made-up data of the same
+    shape from a demo), and never the MOCK data. Raises `NoData` for a payload with no days."""
+    if not payload or not payload.get("daily"):
+        raise NoData("no days to chart")
+    html = page(payload)
+    for old, new in _LIVE:
+        if html.count(old) != 1:
+            raise RuntimeError(f"{PAGE.name} has changed: {old!r} isn't there once")
+        html = html.replace(old, new)
+    return html
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vending.money_chart", description=__doc__.splitlines()[0])
     parser.add_argument("--html", type=Path, metavar="PATH", help="write the page, data inside it, to PATH")
