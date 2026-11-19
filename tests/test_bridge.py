@@ -322,3 +322,12 @@ def test_429_backs_off_as_asked_then_gives_up(monkeypatch):
     with pytest.raises(BridgeRateLimited):
         Bridge("http://bridge.test", "key").purchase_request("pr1")
     assert sleeps == [7.0] * bridge_module.RETRIES
+
+
+def test_a_request_read_that_isnt_json_is_a_bridge_error(monkeypatch):
+    from vending.bridge import Bridge, BridgeError
+    b = Bridge.__new__(Bridge)
+    monkeypatch.setattr(b, "_get", lambda path, params=None: b"<html>proxy</html>")
+    for read in (b.product_request, b.purchase_request):
+        with pytest.raises(BridgeError, match="isn't JSON"):
+            read("np_1")

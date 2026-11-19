@@ -115,6 +115,13 @@ def test_the_same_product_again_is_refused_without_sending(db, fake):  # noqa: F
     assert db.execute("select outcome from action_log where tool = 'request_catalog_product' order by id").fetchall() == [("done",), ("refused",)]
 
 
+def test_an_approved_request_tells_the_agent_its_sku(db, fake):  # noqa: F811
+    ask()
+    db.execute("update product_requests set status = 'approved', sku = 'COCA-CHERRY-20BOT'")
+    reply = ask()
+    assert codes(reply) == ["already_requested"] and "order it by SKU COCA-CHERRY-20BOT" in reply["refusals"][0]["message"]
+
+
 def test_a_more_specific_product_is_not_a_duplicate(db, fake):  # noqa: F811
     ask(name="Cherry", size="20 oz")
     fake.answer = (201, {"id": "req-2", "status": "pending"}, 0.0)

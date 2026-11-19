@@ -140,8 +140,8 @@ def _requests(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
 def pipeline(rounds: list[pr.Round], requests: list[dict] | None, catalog: list[dict] | None) -> Pipeline:
     """Each round's wanted drinks matched to what has been filed and what is in the catalog.
 
-    A request's status never moves past `pending` on its own (no sync reads it back from the
-    bridge yet), so a drink counts as approved when it shows up in our copy of the catalog."""
+    `python -m vending.sync_product_requests` reads each request's decision back from the bridge
+    every hour; a drink also counts as approved when it shows up in our copy of the catalog."""
     if requests is None or catalog is None:
         return Pipeline(False, "No database was read, so nothing shows as filed or approved.",
                         {r.id: [Request("wanted", c.get("name") or c.get("sku") or "?", c.get("size"),

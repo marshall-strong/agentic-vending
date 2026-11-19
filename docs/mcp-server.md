@@ -171,8 +171,12 @@ python -m vending.product_requests resolve 7 --not-filed --by kevin             
 
 Check the bridge's Swagger page (`GET /api/v1/product-requests/{id}`) first, and ask the
 instructors before using `--not-filed`, because a resend of a request that was filed would file it
-twice. Each change is logged in `action_log` with the `--by` name. Nothing updates `pending` rows
-yet. A later sync can read `GET /api/v1/product-requests/{id}`.
+twice. Each change is logged in `action_log` with the `--by` name.
+
+`pending` rows are updated by `python -m vending.sync_product_requests`, which the worker runs every
+hour. It reads `GET /api/v1/product-requests/{id}` for each and stores the decision: `approved`
+with the SKU the drink was added under (order it by that SKU; it may differ from what we asked for),
+or `rejected` with the instructors' note. A decided request is not read again.
 
 ### `get_account_balance` and `get_pnl`: the ledger
 

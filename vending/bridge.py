@@ -214,7 +214,26 @@ class Bridge:
         down, and the full listing with a receipt per line once fulfilled.
         A GET only: `submit_desired_state` files requests, through `post`.
         """
-        return json.loads(self._get(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}"))
+        return self._json(f"/api/v1/purchase-requests/{urllib.parse.quote(request_id, safe='')}")
+
+    def product_request(self, request_id: str) -> dict:
+        """One of our catalog requests, as the bridge sees it now (`ProductRequestView`).
+
+        `{id, status, created_at, requested, decision_note, product}`: `status` is
+        `pending`, `approved` (with `product: {sku, name}`, which may differ from
+        what we asked for) or `rejected` (with `decision_note`). A GET only:
+        `request_catalog_product` files requests, through `post`.
+        """
+        return self._json(f"/api/v1/product-requests/{urllib.parse.quote(request_id, safe='')}")
+
+    def _json(self, path: str) -> Any:
+        """A GET whose answer must be JSON. One that isn't (a proxy's page, say) is a BridgeError,
+        so a sync counts it and goes on instead of crashing."""
+        body = self._get(path)
+        try:
+            return json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            raise BridgeError(f"answer from {path} isn't JSON: {body[:200]!r}") from None
 
 
 def _is_listing(body: object) -> bool:
