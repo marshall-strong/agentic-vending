@@ -49,6 +49,10 @@ is cut off. The process is PID 1 in the container, which ignores SIGTERM
 unless a handler is set, so without this a restart would wait out the grace
 period and end in SIGKILL.
 
+On Fridays the loop also asks the bridge to read the machine live, about every minute from 2:45 to
+7 PM Eastern, so a read lands while the door is open during our visit (`vending.visit_polls`). A read
+that fails is logged and skipped. It is not a job of the round, so it never fails the round or /health.
+
 The agent itself (the model loop) does not run here yet; when it does, it
 starts `python -m vending.server` over stdio from the same image.
 """
@@ -287,7 +291,7 @@ def home_page(public: dict, pages: bool = False) -> str:
   <section>
     <h2>Each job in the last round</h2>
     <div class="wrap">{table}</div>
-    <p class="muted">Each round copies the machine's readings, our purchase requests and the product catalog into our database. It reads the bridge's stored history and never polls the machine.</p>
+    <p class="muted">Each round copies the machine's readings, our purchase requests and the product catalog into our database. It reads the bridge's stored history. Only on Friday afternoons, around our visit, does it also ask the bridge to read the machine.</p>
   </section>
   <section>
     <h2>See what the agent is doing</h2>
@@ -483,7 +487,10 @@ def _stop(signum, frame):
 
 
 def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
-         sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print) -> int:
+         sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
+         reads=None, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> int:
+    """`reads` is the visit reader (`vending.visit_polls.Reader`). Left out, the real worker, started with
+    no `jobs`, builds its own from the settings; a test that passes `jobs` gets none, so it can't read the machine."""
     parser = argparse.ArgumentParser(prog="python -m vending.worker", description=__doc__.splitlines()[0])
     parser.add_argument("--once", action="store_true", help="one round, then exit with the worst exit code")
     parser.add_argument("--every", type=float, default=float(os.environ.get("SYNC_EVERY_MINUTES") or 60),
@@ -497,6 +504,10 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         parser.error("--every must be above zero")
     if args.timeout <= 0:
         parser.error("--timeout must be above zero")
+    if reads is None and jobs is None and not args.once:
+        from vending import visit_polls    # imported here: it needs the database driver, and the worker's other code doesn't
+
+        reads = visit_polls.default_reader(log)
     jobs = default_jobs() if jobs is None else jobs
     state = State()
     running: dict[str, threading.Thread] = {}
@@ -512,11 +523,19 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             state.last_round_at = datetime.now(timezone.utc).isoformat()
             if args.once:
                 return max((r.exit_code if r.exit_code is not None else 1) for r in state.results)
-            now = datetime.now(timezone.utc)
+            now = clock()
             due = next_round(now, args.every, _slot_lock())
             state.next_round_at = due.isoformat()
             log(f"next round at {due:%Y-%m-%d %H:%M:%S} UTC")
-            sleep((due - now).total_seconds())
+            while True:
+                # Until the next round, take the visit reads when they are due. They are not jobs of the
+                # round: a read that fails is logged and never reaches `state`, so /health never shows it.
+                wake = due if reads is None else min(due, reads.next_due(now))
+                sleep((wake - now).total_seconds())
+                if wake >= due:
+                    break
+                reads.tick(clock())
+                now = clock()
     except (KeyboardInterrupt, Stopped):
         log("stopping")
         return 0
