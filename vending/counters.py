@@ -29,14 +29,42 @@ def rises(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, int]
     return [(at, rise) for _, at, rise in windows(readings)]
 
 
-def windows(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, datetime, int]]:
+def unsettled(readings: Iterable[tuple[datetime, int]]) -> bool:
+    """True when the latest reading is a lone drop the next poll hasn't settled: a misread or a restart. Pure.
+
+    Until it is settled, nothing can say whether the counter rose since.
+    """
+    return _walk(readings, False)[1] is not None
+
+
+def restarts(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, datetime]]:
+    """`(last_high, first_low)` around each restart the next poll confirmed, oldest first. Pure.
+
+    The counter went back to zero somewhere between the two, and whatever sold
+    before that went with the old count, so nothing can show how many units sold
+    in that stretch, or that none did. `windows` leaves the stretch out.
+    """
+    return _walk(readings, False)[2]
+
+
+def windows(readings: Iterable[tuple[datetime, int]], zeros: bool = False) -> list[tuple[datetime, datetime, int]]:
     """`(start, at, rise)`: each rise with the poll it is measured from. Pure.
 
     The units in a rise sold somewhere between `start` and `at`, so a restock
     inside that window can't be placed before or after them (#97). After a
     misread, `start` is the good poll before it, not the misread.
+
+    `zeros=True` also gives the windows where the counter didn't rise, so a
+    stretch the polls saw sell nothing can be told from one they didn't see.
     """
+    return _walk(readings, zeros)[0]
+
+
+def _walk(readings: Iterable[tuple[datetime, int]], zeros: bool) -> tuple[
+        list[tuple[datetime, datetime, int]], tuple[datetime, int] | None, list[tuple[datetime, datetime]]]:
+    """`windows`, the lone low reading still waiting for the next poll if any, and `restarts`."""
     out: list[tuple[datetime, datetime, int]] = []
+    restarted: list[tuple[datetime, datetime]] = []
     previous: tuple[datetime, int] | None = None
     pending: tuple[datetime, int] | None = None   # one reading below `previous`, waiting for the next poll to agree
     for at, value in sorted(readings, key=lambda r: r[0]):
@@ -44,14 +72,15 @@ def windows(readings: Iterable[tuple[datetime, int]]) -> list[tuple[datetime, da
             previous = (at, value)
             continue
         if value >= previous[1]:
-            if value > previous[1]:
+            if value > previous[1] or zeros:
                 out.append((previous[0], at, value - previous[1]))
             previous, pending = (at, value), None
         elif pending is None:
             pending = (at, value)
         else:
             # Two polls in a row below the old high: the counter restarted at `pending`.
-            if value > pending[1]:
+            restarted.append((previous[0], pending[0]))
+            if value > pending[1] or (zeros and value == pending[1]):
                 out.append((pending[0], at, value - pending[1]))
             previous, pending = (at, value), None
-    return out
+    return out, pending, restarted

@@ -1,4 +1,4 @@
-"""The MCP server: the agent's 12 tools, over stdio.
+"""The MCP server: the agent's 13 tools, over stdio.
 
     python -m vending.server
 
@@ -40,7 +40,7 @@ from vending import db
 from vending.bridge import Bridge
 from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, briefing, catalog, catalog_request,
                            machine_state, pnl, preview, project_rules, purchase_requests, sales_history,
-                           stubs, submit)
+                           stubs, submit, wildcard_slot)
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused, log, run_write
 
@@ -69,7 +69,7 @@ _conn: psycopg.Connection | None = None
 # Transactions can't overlap on one connection, so tool calls take turns.
 _conn_lock = threading.Lock()
 
-WRITE_TOOLS = {"submit_desired_state", "set_price", "request_catalog_product"}
+WRITE_TOOLS = {"submit_desired_state", "set_price", "request_catalog_product", "set_wildcard_slot"}
 
 # The real environment only: a value left in a teammate's `.env` must not
 # silently hide tools from the tests.
@@ -237,6 +237,13 @@ async def request_catalog_product(name: str, size: str, line: str | None = None,
                         catalog_request.request_catalog_product(name, size, line, flavor, note,
                                                                 lambda: bridge(), lambda: connect()),
                         catalog_request.CatalogRequestReply)
+
+
+@_tool(built=True)
+async def set_wildcard_slot(slot: str, reason: str) -> WriteReply:
+    """Pick the one wildcard slot, once; it never moves (get_project_rules wildcard). Asking again for the same slot changes nothing; a different slot is refused once one is set."""
+    return await _write("set_wildcard_slot", {"slot": slot, "reason": reason},
+                        wildcard_slot.set_wildcard_slot(slot, reason))
 
 
 def main() -> None:

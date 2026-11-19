@@ -16,7 +16,9 @@ our database and the bridge:
 - the planner's settings, from the `config` table. None is required. How many
   of a product fit in a column comes from its catalog size and the loading
   chart (`vending.capacity`), or from `capacity_overrides` where a person
-  counted; a product with neither is refused by the planner, not here.
+  counted; a product with neither is refused by the planner, not here. The
+  wildcard slot (`wildcard_slot`, set once) must be one of ours in the stored
+  assignment, or nothing can be planned until a person looks.
 
 Anything missing raises `NotReady` with the command that fixes it, so the tool
 can say exactly what a person has to do before the agent can plan.
@@ -30,7 +32,7 @@ from datetime import datetime
 
 import psycopg
 
-from vending import config, ledger, planner, sourcing, stock
+from vending import config, ledger, planner, sourcing, stock, wildcard_trial
 from vending.bridge import Bridge, BridgeError
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import catalog as catalog_tool
@@ -68,14 +70,36 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
         slots = our_slots(conn)
     except SlotsNotRecorded as error:
         raise NotReady(str(error)) from None
+    ceiling = _limit(conn, "price_ceiling_cents", planner.AGREED_CEILING_CENTS)
     return planner.Config(
+        wildcard_slot=wildcard_slot(conn, slots),
         capacity_overrides=overrides,
         slots=slots,
-        price_ceiling_cents=_int_setting(conn, "price_ceiling_cents", 650),
+        price_ceiling_cents=ceiling,
+        # Never below the ceiling: a lowered wildcard ceiling under the regular one is the regular one.
+        wildcard_ceiling_cents=max(_limit(conn, "wildcard_ceiling_cents", planner.AGREED_WILDCARD_CEILING_CENTS),
+                                   ceiling),
+        wildcard_purchase_cap_cents=_limit(conn, "wildcard_purchase_cap_cents", planner.AGREED_WILDCARD_CAP_CENTS),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
         halted=config.is_halted(conn),
     )
+
+
+def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...]) -> str | None:
+    """The configured wildcard slot (None: none yet). Raises `NotReady` unless it is one of `slots`, ours."""
+    value = config.get_value(conn, "wildcard_slot")
+    if value is None:
+        return None
+    problem = config.KNOWN["wildcard_slot"].check(value)
+    if problem is None and value not in slots:
+        problem = f"is {value}, which isn't one of ours in the stored slot assignment"
+    if problem:
+        # Only a hand edit, or an assignment that changed after it was set, gets here.
+        raise NotReady(f"config wildcard_slot {problem}, so no plan can say which slot may go above the ceiling; "
+                       "a person checks the slot assignment, deletes the row by hand and sets it again "
+                       "(python -m vending.config set wildcard_slot '\"37\"' --by NAME)")
+    return value
 
 
 def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
@@ -95,6 +119,9 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     notes.extend(counted.warnings)
     by_slot = {s.slot: s for s in counted.slots}
     prices, poll_at = _latest_prices(conn, settings.slots)
+    # A slot the latest poll didn't read keeps the last price a poll did read, so a kept slot can't slip past the
+    # ceiling just because one poll left it out (the planner refuses a kept slot whose price was never read).
+    prices.update(_last_known_prices(conn, [s for s in settings.slots if prices.get(s) is None]))
     if poll_at is None:
         notes.append("no good poll is stored, so current prices are unknown; every slot's price change "
                      "will look like a change")
@@ -109,13 +136,15 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
             price_cents=prices.get(slot),
             units=by_slot[slot].units if slot in by_slot else 0,
             unit_cost=by_slot[slot].unit_cost if slot in by_slot else None,
+            contents_known=slot in by_slot,
         )
         for slot in settings.slots
     )
     without_receipts = [s for s in settings.slots if s not in by_slot]
     if without_receipts:
         notes.append(f"no receipts yet for slots {', '.join(without_receipts)}, so their product and stock "
-                     "are unknown and counted as empty")
+                     "are unknown and counted as empty; the wildcard can't switch product while the plan keeps "
+                     "one of them, so list each with the product it should hold")
     closet = tuple(planner.ClosetStock(c.product, c.units, c.unit_cost) for c in counted.closet)
     pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
@@ -124,8 +153,18 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
     # so the stale-price warnings describe the same rows the planner used.
     table_rows = tuple(sourcing.listed_options(conn))
+    verdict, silent = None, frozenset()
+    if settings.wildcard_slot is not None:
+        # For the promotion gate: the same verdict and silent slots get_machine_state shows the agent.
+        counts = {c.slot: c for c in counted.slots if c.slot in settings.slots}
+        loads = stock.loads(conn, now)
+        trial = wildcard_trial.trial(conn, now, counts, loads, counted.sales, settings.slots, settings.wildcard_slot)
+        verdict = trial.verdict if trial is not None else None
+        report = wildcard_trial.silent_slots(conn, now, counts, loads, counted.sales, settings.slots,
+                                             settings.wildcard_slot)
+        silent = frozenset(s.slot for s in report.silent)
     current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
-                                   spendable)
+                                   spendable, verdict, silent)
     return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
 
 
@@ -263,18 +302,50 @@ def _option(o: schema.PurchaseOption) -> planner.PurchaseOption:
                                   o.expected_price_per_pack, o.pack_description)
 
 
+def _limit(conn: psycopg.Connection, key: str, default: int) -> int:
+    """One of the agreed limits from `config`, or `default` when unset. A stored value its check refuses (only a
+    hand edit gets one past `config set`, such as a ceiling above the agreed $6.50) raises `NotReady`."""
+    value = config.get_value(conn, key)
+    if value is None:
+        return default
+    problem = config.KNOWN[key].check(value)
+    if problem:
+        raise NotReady(f"config {key} {problem}, so no plan can be checked against it; a person sets it again "
+                       f"(python -m vending.config set {key} {default} --by NAME)")
+    return value
+
+
 def _int_setting(conn: psycopg.Connection, key: str, default: int) -> int:
     value = config.get_value(conn, key)
     return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
 def _latest_prices(conn: psycopg.Connection, slots: tuple[str, ...]) -> tuple[dict[str, int | None], datetime | None]:
+    """Each slot's price at the latest good poll. Polls at that same moment that disagree give None: unknown."""
     latest = conn.execute(
-        "select session_id, started_at from polls where device_id = %s and crc_ok"
-        " order by started_at desc limit 1", (DEVICE_ID,)).fetchone()
+        "select max(started_at) from polls where device_id = %s and crc_ok", (DEVICE_ID,)).fetchone()[0]
     if latest is None:
         return {}, None
     rows = conn.execute(
-        "select selection, price_cents from poll_selections where session_id = %s and selection = any(%s)",
-        (latest[0], list(slots)))
-    return {selection: price for selection, price in rows}, latest[1]
+        "select s.selection, array_agg(distinct s.price_cents) from poll_selections s join polls p using (session_id)"
+        " where p.device_id = %s and p.crc_ok and p.started_at = %s and s.selection = any(%s) group by s.selection",
+        (DEVICE_ID, latest, list(slots)))
+    return {selection: prices[0] if len(prices) == 1 else None for selection, prices in rows}, latest
+
+
+def _last_known_prices(conn: psycopg.Connection, slots: list[str]) -> dict[str, int]:
+    """Each slot's price at the latest good poll that read one, for slots the latest poll left unread.
+
+    A poll at that moment that disagrees leaves it out: unknown. A price a newer poll didn't read is still the
+    price on the shelf as far as we know, so the planner checks a kept slot against it rather than nothing."""
+    if not slots:
+        return {}
+    rows = conn.execute(
+        "select distinct on (s.selection) s.selection, p.started_at,"
+        " (select array_agg(distinct s2.price_cents) from poll_selections s2 join polls p2 using (session_id)"
+        "  where p2.device_id = %s and p2.crc_ok and p2.started_at = p.started_at and s2.selection = s.selection"
+        "  and s2.price_cents is not null)"
+        " from poll_selections s join polls p using (session_id)"
+        " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and s.price_cents is not null"
+        " order by s.selection, p.started_at desc", (DEVICE_ID, DEVICE_ID, list(slots)))
+    return {selection: prices[0] for selection, _, prices in rows if prices and len(prices) == 1}

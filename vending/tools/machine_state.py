@@ -32,6 +32,17 @@ Built from our database only; it never reads the machine.
   newer) by it. `units_per_day` stays as before: the last 7 calendar days,
   empty days and weekends included, so it reads low for a slot that sold out.
 
+`wildcard_trial` is the product on trial in the wildcard slot
+(`vending.wildcard_trial`): its units over the in-stock class days the polls
+saw, its profit per class day for information, and a verdict (too early,
+price test, pass, extend, drop, promoted or unknown) with the reason. The
+slot is fixed in config (`wildcard_slot`); null when none is set. Its `slot`
+is null when the slot set isn't one of ours now. It lists our silent slots
+(sold nothing since the last Friday visit, stock confirmed, 4 in-stock class
+days watched) and unconfirmed ones (sold nothing, stock not confirmed: maybe
+empty), and on a pass with a silent slot, the promotion to make at the next
+Friday visit (`proposal`). The planner accepts that switch only then.
+
 A slot with no receipts yet has `null` for every receipt field: null, not
 zero, so the agent can't mistake "unknown" for "empty". The message names
 those slots. A count that saw a slot empty gives `counted_on_hand` 0 and
@@ -47,7 +58,8 @@ from fractions import Fraction
 import psycopg
 from pydantic import BaseModel
 
-from vending import counters, demand, slot_counts, stock
+from vending import config, counters, demand, slot_counts, stock, wildcard_trial
+from vending.planner import AGREED_CEILING_CENTS
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
 
@@ -93,6 +105,48 @@ class ClosetItem(BaseModel):
     value_at_cost: str | None    # dollars
 
 
+class SilentSlot(BaseModel):
+    slot: str
+    product: str
+    class_days_seen: int                        # in-stock class days the polls watched since the last Friday visit
+    quiet_since: datetime                       # the later of its last sale and its last load
+    evidence: str                               # what confirms it held stock
+
+
+class UnconfirmedSlot(BaseModel):
+    slot: str
+    product: str
+    why: str
+
+
+class Proposal(BaseModel):
+    into_slot: str                              # the silent slot that switches to the trial's product
+    product: str
+    trial_price: str | None                     # dollars, what it sold at in the wildcard; not binding
+    pulls: str                                  # what that slot holds now, to the closet
+    wildcard_next: str
+    why: str
+
+
+class WildcardTrial(BaseModel):
+    """The wildcard as a testing ground (`docs/agent/wildcard.md`): is its product worth a regular slot?"""
+    slot: str | None                            # null: the slot set isn't one of ours now
+    product: str | None = None                  # null: no receipts show what the slot holds
+    sale_price: str | None = None               # dollars, its standing price; null if the polls disagree
+    since: datetime | None = None               # when the trial began: loaded, or back under the ceiling
+    class_days_in_stock: int | None = None      # class days it held stock in poll intervals since then
+    units_sold: int | None = None               # in those poll intervals
+    profit_per_class_day: str | None = None     # dollars, for information: revenue without tax, less cost
+    price_test: bool = False                    # sold above the ceiling, so not a promotion trial
+    verdict: str                                # too early, price test, pass, extend, drop, promoted, unknown
+    reason: str
+    silent_since: datetime | None = None        # 00:00 Eastern on the Friday of the last Friday visit
+    silent_note: str | None = None              # why silent_since is null
+    silent_slots: list[SilentSlot] = []         # best first: quiet longest, then lowest unit margin
+    unconfirmed_slots: list[UnconfirmedSlot] = []   # sold nothing, but stock unconfirmed: maybe empty
+    proposal: Proposal | None = None            # only on a pass with a silent slot
+
+
 class MachineState(Reply):
     as_of: datetime | None = None
     stale: bool = False
@@ -100,6 +154,7 @@ class MachineState(Reply):
     data: list[SlotState] = []
     closet: list[ClosetItem] = []
     closet_value_at_cost: str | None = None
+    wildcard_trial: WildcardTrial | None = None
     warnings: list[str] = []
 
 
@@ -234,6 +289,14 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     demands = _demands(counts, loads, counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
+    wildcard = config.get_value(conn, "wildcard_slot")
+    # The trial's loads leave out test purchases from before the ledger's opening, as the stock does.
+    trial_loads = stock.loads(conn, now, lines=receipts)
+    trial = trial_reply(wildcard_trial.trial(conn, now, counts, trial_loads, counted.sales, slots, wildcard),
+                        # A slot set that isn't ours has no verdict; nor is any slot judged silent against it.
+                        wildcard_trial.silent_slots(conn, now, counts, trial_loads, counted.sales, slots, wildcard)
+                        if wildcard in slots else None,
+                        counts, _ceiling(conn))
     closet, closet_value = closet_items(counted.closet)
 
     window = f"since {baseline[1]:%Y-%m-%d %H:%M} UTC" if baseline else "unavailable (only one poll stored)"
@@ -245,15 +308,72 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
         success=True,
         stale=stale,
         message=(f"{warning}{len(states)} slots as of the poll at {as_of:%Y-%m-%d %H:%M} UTC; "
-                 f"sales window {window}. {_receipts_note(slots, counts, closet, warnings)}{_count_note(states)}"),
+                 f"sales window {window}. {_receipts_note(slots, counts, closet, warnings)}{_count_note(states)}"
+                 f"{_trial_note(trial)}"),
         count=len(states),
         as_of=as_of,
         window_start=baseline[1] if baseline else None,
         data=states,
         closet=closet,
         closet_value_at_cost=closet_value,
+        wildcard_trial=trial,
         warnings=warnings,
     )
+
+
+def trial_reply(trial: wildcard_trial.Trial | None, report: wildcard_trial.SilentReport | None = None,
+                counts: dict[str, stock.SlotCount] | None = None, ceiling_cents: int = 650) -> WildcardTrial | None:
+    """The trial, the silent slots and any proposal, in dollars for the agent. Pure."""
+    if trial is None:
+        return None
+    r = trial.record
+    report = report or wildcard_trial.SilentReport(None, (), (), (), "not checked")
+    p = wildcard_trial.propose(trial, report, counts or {}, ceiling_cents)
+    return WildcardTrial(
+        slot=trial.slot,
+        product=r.product if r else None,
+        sale_price=_dollars(trial.price_cents),
+        since=r.since if r else None,
+        class_days_in_stock=r.class_days_in_stock if r else None,
+        units_sold=r.units_sold if r else None,
+        profit_per_class_day=_dollars(r.profit_per_class_day_cents) if r else None,
+        price_test=trial.price_test,
+        verdict=trial.verdict,
+        reason=trial.reason,
+        silent_since=report.window_start,
+        silent_note=report.reason,
+        silent_slots=[SilentSlot(slot=s.slot, product=s.product, class_days_seen=s.class_days_seen,
+                                 quiet_since=s.quiet_since, evidence=s.evidence) for s in report.silent],
+        unconfirmed_slots=[UnconfirmedSlot(slot=u.slot, product=u.product, why=u.why) for u in report.unconfirmed],
+        proposal=None if p is None else Proposal(
+            into_slot=p.into_slot, product=p.product, trial_price=_dollars(p.trial_price_cents), pulls=p.pulls,
+            wildcard_next=p.wildcard_next, why=p.why),
+    )
+
+
+def _ceiling(conn: psycopg.Connection) -> int:
+    """The regular ceiling, never above the agreed $6.50 whatever a hand edit stored."""
+    value = config.get_value(conn, "price_ceiling_cents")
+    value = value if isinstance(value, int) and not isinstance(value, bool) else AGREED_CEILING_CENTS
+    return min(value, AGREED_CEILING_CENTS)
+
+
+def _trial_note(trial: WildcardTrial | None) -> str:
+    if trial is None:
+        return (" No wildcard slot is set, so no slot may go above the ceiling; pick one once with "
+                "set_wildcard_slot (get_project_rules wildcard).")
+    if trial.slot is None:
+        return f" No wildcard trial can be judged: {trial.reason}."
+    on_trial = f"{trial.product} in slot {trial.slot}" if trial.product else f"slot {trial.slot}"
+    note = f" Wildcard trial ({on_trial}): {trial.verdict}; {trial.reason}."
+    if trial.proposal is not None:
+        p = trial.proposal
+        note += (f" Proposal for the next Friday plan: switch slot {p.into_slot} to {p.product}, and "
+                 f"{p.wildcard_next}; see wildcard_trial.proposal.")
+    if trial.unconfirmed_slots:
+        note += (f" Sold nothing since the last Friday visit, but stock unconfirmed (maybe empty): "
+                 f"{', '.join(u.slot for u in trial.unconfirmed_slots)}.")
+    return note
 
 
 def _receipts_note(slots: tuple[str, ...], counts: dict, closet: list[ClosetItem], warnings: tuple[str, ...]) -> str:

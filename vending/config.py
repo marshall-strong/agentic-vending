@@ -3,6 +3,7 @@
     python -m vending.config show
     python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 8}' --by marshall
     python -m vending.config set price_ceiling_cents 650 --by marshall
+    python -m vending.config set wildcard_slot '"37"' --by kevin
 
 The halt flag fails closed: a missing row, or anything that isn't JSON
 `false`, counts as halted. Every other key is a JSON value the planner reads
@@ -11,6 +12,10 @@ set, each checked for type and range before it is stored, because a wrong
 value here is charged for real: `midweek_fee_cents 25` (dollars typed) would
 bill 25 cents a visit, and a ceiling over the API's $10.00 would break every
 plan. Every change is logged with who made it. The CLI never migrates.
+
+`wildcard_slot` is write-once: the wildcard never moves (`docs/agent/wildcard.md`),
+so once it is set, `set` refuses any other slot. Changing it takes a person
+deleting the row by hand, and saying why in the team's thread.
 """
 
 from __future__ import annotations
@@ -25,8 +30,10 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending.planner import MAX_SALE_PRICE_CENTS
+from vending.planner import (AGREED_CEILING_CENTS, AGREED_WILDCARD_CAP_CENTS, AGREED_WILDCARD_CEILING_CENTS,
+                             MAX_SALE_PRICE_CENTS)
 from vending.pricing import PRICE_STEP_CENTS
+from vending.slots import COLUMNS, SHELVES, SlotsNotRecorded, our_slots
 
 
 @dataclass(frozen=True)
@@ -53,13 +60,35 @@ def _fee(value: Any) -> str | None:
     return None
 
 
-def _ceiling(value: Any) -> str | None:
-    problem = _whole(value, PRICE_STEP_CENTS, MAX_SALE_PRICE_CENTS, "cents")
-    if problem:
-        return problem + f" (the API refuses any sale price over {MAX_SALE_PRICE_CENTS} cents)"
-    if value % PRICE_STEP_CENTS:
-        return f"must be a multiple of {PRICE_STEP_CENTS} cents, not {value}"
+def _ceiling(agreed: int) -> Callable[[Any], str | None]:
+    """A sale-price ceiling: a multiple of the price step, at most the agreed `agreed` cents (lower is allowed)."""
+    def check(value: Any) -> str | None:
+        problem = _whole(value, PRICE_STEP_CENTS, agreed, "cents")
+        if problem:
+            return problem + (f" (the team agreed at most {agreed} cents; lower is allowed, and the API refuses "
+                              f"any sale price over {MAX_SALE_PRICE_CENTS} cents)")
+        if value % PRICE_STEP_CENTS:
+            return f"must be a multiple of {PRICE_STEP_CENTS} cents, not {value}"
+        return None
+    return check
+
+
+def _cap(value: Any) -> str | None:
+    problem = _whole(value, 100, AGREED_WILDCARD_CAP_CENTS, "cents")
+    return problem and problem + f" (the team agreed at most {AGREED_WILDCARD_CAP_CENTS} cents; lower is allowed)"
+
+
+def _slot(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return f"must be a slot name in quotes, like '\"37\"', not {json.dumps(value)}"
+    # A selection on the machine; whether it is one of ours is checked against the stored assignment in `set`.
+    if not (len(value) == 2 and value[0] in SHELVES and value[1] in COLUMNS):
+        return f"must be a selection, shelf 1-5 then column 1-8 like \"15\", not {json.dumps(value)}"
     return None
+
+
+# Set once, never changed: the wildcard is a fixed slot.
+WRITE_ONCE = frozenset({"wildcard_slot"})
 
 
 # The loading chart's largest figure is 11 a column; a count far above that is almost always a
@@ -86,7 +115,14 @@ def _overrides(value: Any) -> str | None:
 KNOWN: dict[str, Setting] = {
     "capacity_overrides": Setting("units per column for products a person counted; replaces the whole "
                                   "object, wins over the loading chart (default none)", _overrides),
-    "price_ceiling_cents": Setting("highest sale price the planner allows (default 650)", _ceiling),
+    "price_ceiling_cents": Setting("highest sale price the planner allows (default and most 650)",
+                                   _ceiling(AGREED_CEILING_CENTS)),
+    "wildcard_slot": Setting("the one slot that may sell above the ceiling and tests products; set once after "
+                             "the redraw and never changed (default none: no slot above the ceiling)", _slot),
+    "wildcard_ceiling_cents": Setting("highest sale price for the one wildcard slot (default and most 800)",
+                                      _ceiling(AGREED_WILDCARD_CEILING_CENTS)),
+    "wildcard_purchase_cap_cents": Setting("most one purchase for the wildcard slot may cost at the worker's "
+                                           "maximum (default and most 8200)", _cap),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
     "model_run_cap_cents": Setting("most one agent cycle or replay may spend on model calls (default 100)",
@@ -144,7 +180,10 @@ def set_value(conn: psycopg.Connection, key: str, value: Any, who: str) -> None:
     """Set one known setting, after checking its type and range, logged like any other write.
 
     The halt flag has its own function. An unknown key is refused rather than
-    saved silently, so a misspelt key can't sit there doing nothing.
+    saved silently, so a misspelt key can't sit there doing nothing. A key in
+    `WRITE_ONCE` that is already set refuses any other value; setting the same
+    value again changes nothing. `wildcard_slot` must also be one of ours in the
+    stored slot assignment, checked before either.
     """
     if key == "halted":
         raise ValueError("use set_halted (python -m vending.halt) for the halt flag")
@@ -157,6 +196,26 @@ def set_value(conn: psycopg.Connection, key: str, value: Any, who: str) -> None:
     if not who.strip():
         raise ValueError("--by needs your name")
     with conn.transaction():
+        if key in WRITE_ONCE:
+            # The lock makes two first settings take turns, so the second sees the first.
+            conn.execute("select pg_advisory_xact_lock(hashtext('config:' || %s))", (key,))
+            row = conn.execute("select value from config where key = %s", (key,)).fetchone()
+            if row is not None and row[0] != value:
+                raise ValueError(
+                    f"{key} is already {json.dumps(row[0])} and never changes: the wildcard is a fixed slot. "
+                    f"To change it, a person deletes the row by hand (delete from config where key = '{key}') "
+                    "and says why in the team's thread, then sets it again")
+            # One of ours now, by the stored server assignment: checked before the same value is taken as done,
+            # so a slot that has left the assignment is never confirmed.
+            try:
+                ours = our_slots(conn)
+            except SlotsNotRecorded as error:
+                raise ValueError(f"{key}: {error}") from None
+            if value not in ours:
+                raise ValueError(f"{key} {json.dumps(value)} isn't one of ours in the stored slot assignment "
+                                 f"({', '.join(ours)}); check it with python -m vending.slots show")
+            if row is not None:
+                return
         conn.execute(
             "insert into config (key, value, updated_by) values (%s, %s, %s)"
             " on conflict (key) do update set value = excluded.value,"

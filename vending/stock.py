@@ -900,6 +900,15 @@ def request_times(lines: list[dict]) -> dict[str, datetime]:
     return out
 
 
+def counted_lines(conn: psycopg.Connection, lines: list[dict] | None = None) -> list[dict]:
+    """The fulfilled lines the stock counts (`receipt_lines`): once the ledger has an opening entry,
+    lines before it on the receipt clock are test purchases and are left out. `lines` is
+    `receipt_lines(conn)` when the caller has read it already."""
+    since_at = receipts_count_from(conn)
+    return [line for line in (receipt_lines(conn) if lines is None else lines)
+            if since_at is None or (line["at"] is not None and line["at"] >= since_at)]
+
+
 def _receipts(conn: psycopg.Connection, lines: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
     """Every fulfilled line and every loss recorded against one: our own purchases, whatever the assignment.
 
@@ -907,9 +916,7 @@ def _receipts(conn: psycopg.Connection, lines: list[dict] | None = None) -> tupl
     test purchases, and they and their later losses are left out: see the module docstring. `lines`
     is `receipt_lines(conn)` when the caller has read it already.
     """
-    since_at = receipts_count_from(conn)
-    lines = [line for line in (receipt_lines(conn) if lines is None else lines)
-             if since_at is None or (line["at"] is not None and line["at"] >= since_at)]
+    lines = counted_lines(conn, lines)
     kept = {(line["request_id"], line["line_no"]) for line in lines}
     losses = [loss for loss in (dict(zip(_LOSS_COLUMNS, row)) for row in conn.execute(
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
@@ -970,6 +977,37 @@ def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None) ->
         (DEVICE_ID, slots),
     ).fetchall()
     return movements_from_receipts(lines, losses) + sales_from_counters(counters)
+
+
+LOADING = ("primary", "alternate", "loaded")   # line outcomes that put units in the slot
+
+
+def loads(conn: psycopg.Connection, until: datetime | None = None,
+          lines: list[dict] | None = None) -> dict[str, list[tuple[datetime, int]]]:
+    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`, up to `until`.
+
+    Dated on the receipt clock (`receipt_lines`), when the replay puts the units in. Lines before
+    the ledger's opening (test purchases) are left out, as in `_receipts`. `lines` is
+    `receipt_lines(conn)` when the caller has read it already."""
+    out: dict[str, list[tuple[datetime, int]]] = {}
+    for line in counted_lines(conn, lines):
+        if (line["outcome"] in LOADING and line["units_loaded"] and line["at"] is not None
+                and (until is None or line["at"] <= until)):
+            out.setdefault(line["slot"], []).append((line["at"], line["units_loaded"]))
+    return out
+
+
+def request_loads(conn: psycopg.Connection, request_ids: list[str],
+                  lines: list[dict] | None = None) -> dict[str, list[tuple[str, int]]]:
+    """What the receipts of these requests loaded into each slot, as `(sku, units)`: one visit's own loads.
+
+    Lines before the ledger's opening on the receipt clock (test purchases) are left out, as in `_receipts`."""
+    out: dict[str, list[tuple[str, int]]] = {}
+    for line in counted_lines(conn, lines):
+        if line["request_id"] in request_ids and line["outcome"] in LOADING and line["units_loaded"]:
+            out.setdefault(line["slot"], []).append((line["sku"], line["units_loaded"]))
+    return out
+
 
 
 def replay(movements: list[Movement], until: datetime | None = None) -> Stock:

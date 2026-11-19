@@ -100,8 +100,12 @@ def fake(db, monkeypatch):  # noqa: F811
 
 
 def ready(conn, capacity=10):
-    """A ledger opened at $600, both products counted at `capacity` a column, and the halt switch off."""
+    """A ledger opened at $600, both products counted at `capacity` a column, and the halt switch off. An old
+    poll read every other slot's price, as every real poll does: a kept slot whose price no poll ever read, and
+    that no receipt shows empty, is refused (`price_unknown`). Slot 15, the one the tests restock, is left to
+    their own polls, so its counters start where they say."""
     open_ledger(conn)
+    store_poll(conn, "old", "2026-11-01T12:00:00+00:00", {s: (200, 0) for s in TEST_SLOTS if s != "15"})
     set_value(conn, "capacity_overrides", {"COKE20": capacity, "PICKLE": capacity}, "test")
     set_halted(conn, False, "test")
 
@@ -250,6 +254,7 @@ def test_the_planner_counts_a_cost_recorded_just_now_when_the_host_clock_is_behi
 
 def test_with_nothing_counted_the_catalog_size_sets_the_capacity(db, fake):  # noqa: F811
     open_ledger(db)
+    store_poll(db, "old", "2026-11-01T12:00:00+00:00", {s: (200, 0) for s in TEST_SLOTS if s != "15"})
     set_halted(db, False, "test")
     # Slot 15 is empty, and COKE20 is a "20 oz bottle", 7 a column on the loading chart.
     reply = preview_desired_state(db, desired(restock_15(fill_to=10), sourcing=[coke_sourcing()]), fake.client(), NOW)

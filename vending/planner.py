@@ -69,6 +69,12 @@ MAX_PACKS = 20
 MAX_UNITS_PER_PACK = 60
 MAX_PRICE_PER_PACK_CENTS = 20000
 MAX_SALE_PRICE_CENTS = 1000
+
+# The limits the team agreed: the regular ceiling (#100), the wildcard's ceiling (#100) and the most one
+# wildcard purchase may cost (#90). Config and the planner allow these or lower, never higher.
+AGREED_CEILING_CENTS = 650
+AGREED_WILDCARD_CEILING_CENTS = 800
+AGREED_WILDCARD_CAP_CENTS = 8200
 MAX_PACK_DESCRIPTION = 100
 
 # David's cases, one per slot.
@@ -93,12 +99,22 @@ Price = str | Decimal | int
 
 @dataclass(frozen=True)
 class SlotState:
-    """One of our slots as our database sees it now."""
+    """One of our slots as our database sees it now.
+
+    `contents_known` is False when no receipt says what the slot holds: then
+    `product` None and `units` 0 mean "we don't know", not "empty".
+    """
     slot: str
     product: str | None
-    price_cents: int | None             # PA1-02
+    price_cents: int | None             # PA1-02 at the latest poll; None: no price, or polls at that moment disagree
     units: int                          # estimated on hand: loaded - sold
     unit_cost: Fraction | int | None    # actual cents per unit of those units
+    contents_known: bool = True
+
+    @property
+    def unsure(self) -> bool:
+        """We can't say what it holds: no receipts, or stock we can't name."""
+        return not self.contents_known or (self.product is None and self.units > 0)
 
 
 @dataclass(frozen=True)
@@ -175,6 +191,10 @@ class CurrentState:
     catalog: tuple[CatalogProduct, ...] = ()
     sourcing_table: tuple[Sourcing, ...] = ()
     balance_cents: int = 0              # spendable, after the sales-tax set-aside
+    # The wildcard's trial, for the promotion gate (`vending.wildcard_trial`): its verdict now (None: no
+    # trial), and our regular slots that are silent now. `vending.planning.gather` reads both.
+    wildcard_verdict: str | None = None
+    silent: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -246,6 +266,12 @@ class Config:
 
     `timezone` may be a name or a tzinfo. A name needs the IANA database,
     which Windows lacks unless the `tzdata` package is installed.
+
+    `wildcard_slot` is the one fixed wildcard (config `wildcard_slot`, set once;
+    None until then, and then no slot goes above the ceiling). It gets
+    `wildcard_ceiling_cents` instead of the ceiling, and one purchase for it may
+    cost at most `wildcard_purchase_cap_cents` at the worker's maximum ($8.00
+    and $82.00, #100 and #90). See "The wildcard slot" below.
     """
     capacity_overrides: Mapping[str, int] = field(default_factory=dict)
     price_ceiling_cents: int = 650
@@ -260,12 +286,27 @@ class Config:
     soft_cutoff_stores: frozenset[str] = frozenset({AMAZON})
     week_starts: int = 5
     timezone: str | tzinfo = "America/New_York"
+    wildcard_ceiling_cents: int = 800
+    wildcard_purchase_cap_cents: int = 8200
+    wildcard_slot: str | None = None
 
     def __post_init__(self):
-        if self.price_ceiling_cents > MAX_SALE_PRICE_CENTS:
-            raise ValueError(
-                f"price ceiling {_dollars(self.price_ceiling_cents)} is over the API's "
-                f"{_dollars(MAX_SALE_PRICE_CENTS)}")
+        for name, cents in (("price ceiling", self.price_ceiling_cents),
+                            ("wildcard ceiling", self.wildcard_ceiling_cents)):
+            if cents > MAX_SALE_PRICE_CENTS:
+                raise ValueError(f"{name} {_dollars(cents)} is over the API's {_dollars(MAX_SALE_PRICE_CENTS)}")
+        for name, cents, agreed in (("price ceiling", self.price_ceiling_cents, AGREED_CEILING_CENTS),
+                                    ("wildcard ceiling", self.wildcard_ceiling_cents, AGREED_WILDCARD_CEILING_CENTS),
+                                    ("wildcard purchase cap", self.wildcard_purchase_cap_cents,
+                                     AGREED_WILDCARD_CAP_CENTS)):
+            if cents > agreed:
+                raise ValueError(f"{name} {_dollars(cents)} is over the agreed {_dollars(agreed)}; "
+                                 "lower is allowed, higher never")
+        if self.wildcard_ceiling_cents < self.price_ceiling_cents:
+            raise ValueError(f"wildcard ceiling {_dollars(self.wildcard_ceiling_cents)} is below the "
+                             f"ceiling of {_dollars(self.price_ceiling_cents)}")
+        if self.wildcard_slot is not None and self.wildcard_slot not in self.slots:
+            raise ValueError(f"wildcard slot {self.wildcard_slot} is not one of ours")
 
 
 # --- Outputs -----------------------------------------------------------------
@@ -615,8 +656,28 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             f"buy less or cheaper")))
 
     floors: list[SlotFloor] = []
+    # A slot whose own line was refused is held as it is; that refusal already says what to fix.
+    refused = {r.slot for r in refusals if r.slot is not None}
     for s in slots:
         if s.action == NO_CHANGE:
+            if s.price_cents is None:
+                # No poll ever read its price (`vending.planning` falls back to the last one that did), so nothing
+                # shows what it holds sells at or under its ceiling. Only a slot the receipts show empty sells nothing;
+                # one no receipt describes may hold anything at any price.
+                if (s.state.units > 0 or s.state.unsure) and s.slot not in refused:
+                    held = (f"with {s.state.units} units" if not s.state.unsure
+                            else "and no receipt says what it holds")
+                    refusals.append(Refusal("price_unknown", (
+                        f"slot {s.slot} is kept {held}, but no poll has read its price, so it can't be shown to be "
+                        "at or under the ceiling; give it a product, a sale_price and a load at this visit, or ask a "
+                        "person to check the polls"), s.slot))
+                continue
+            # A kept regular slot is held to the regular ceiling too: only the one wildcard may sell above it.
+            if s.slot != config.wildcard_slot and s.price_cents > config.price_ceiling_cents:
+                refusals.append(Refusal("above_ceiling", (
+                    f"slot {s.slot} stays at {_dollars(s.price_cents)}, above the ceiling of "
+                    f"{_dollars(config.price_ceiling_cents)}; only the wildcard slot may sell above it, so price "
+                    "it at or under the ceiling at this visit"), s.slot))
             continue
         if s.action == PRICE_ONLY:
             refusals.append(Refusal("price_only_unsupported", (
@@ -625,7 +686,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 f"or keep the old price"), s.slot))
         floor = slot_floor_cents([p.floor_cents for p in s.parts]) if s.parts else 0
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
-        refusals.extend(check_price(s.price_cents, floor, config.price_ceiling_cents, s.slot))
+        ceiling = config.wildcard_ceiling_cents if s.slot == config.wildcard_slot else config.price_ceiling_cents
+        refusals.extend(check_price(s.price_cents, floor, ceiling, s.slot))
+    refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle, warnings))
 
     # 8. The plan, with every refusal found.
     # Only slots with a source get a line. A slot that couldn't be stocked is
@@ -652,6 +715,129 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                        "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents}, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
                 hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle)
+
+
+# --- The wildcard slot ---------------------------------------------------------
+# One fixed slot, `config.wildcard_slot`, tests products for the other 19 and may
+# sell up to the wildcard ceiling (Kevin, #100; #110 item 1; fixed role, 18 Nov).
+# It is set once and never moves, so every other slot keeps the ceiling and only
+# it can be above: nothing is inferred from prices, and no plan names it. With
+# none set, no slot goes above the ceiling. The floor is every slot's floor.
+#
+# - Kept unchanged, it stays under the wildcard ceiling (a lowered setting).
+# - Its own line costs at most the purchase cap at the worker's maximum, primary
+#   or alternate, extras to the closet included.
+# - Its product is in no other slot while it is on trial, so a trial's sales
+#   aren't split:
+#   - no other slot switches to the product it holds now, except as a promotion;
+#   - it switches only to a product no other slot holds now (the line that moves
+#     another slot may come back unavailable), and not while the plan keeps a
+#     slot no receipt describes, which may hold it. A plan that switches such a
+#     slot names its contents, as the day-one fill names all 20; if that line
+#     comes back unavailable its old stock may stay, which, like any unavailable
+#     line, the plan can't foresee, so it is warned of, not refused;
+#   - no other slot switches to the product it switches to;
+#   - it doesn't load more of its product while another slot holds it;
+#   - while no receipt says what it holds, no other slot loads anything unless
+#     the plan sets its product too (the day-one fill does).
+# - A promotion copies the trial's product into one silent regular slot, which
+#   switches to it at a regular price the agent picks. Only when the trial's
+#   verdict is a pass, the slot is silent now, the wildcard switches to its next
+#   product in the same plan (so the product isn't on trial in two slots), and
+#   the visit is a Friday one. Anything unknown refuses it. If the wildcard's
+#   switch came back unavailable, the trial reads "promoted" and it can't load
+#   more of the product until it switches.
+
+PASS_VERDICT = "pass"   # `vending.wildcard_trial.PASS`; the planner imports nothing that needs a database
+
+
+def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, off_cycle: bool,
+                    warnings: list[str]) -> list[Refusal]:
+    w = next((s for s in slots if s.slot == config.wildcard_slot), None)
+    if w is None:
+        return []
+    refusals: list[Refusal] = []
+    if w.action == NO_CHANGE and w.price_cents is not None and w.price_cents > config.wildcard_ceiling_cents:
+        refusals.append(Refusal("wildcard", (
+            f"slot {w.slot} is the wildcard and stays at {_dollars(w.price_cents)}, above the wildcard ceiling of "
+            f"{_dollars(config.wildcard_ceiling_cents)}; price it at or under that at this visit"), w.slot))
+    if w.purchase is not None and _most(w.purchase) > config.wildcard_purchase_cap_cents:
+        refusals.append(Refusal("wildcard", (
+            f"slot {w.slot} is the wildcard, and its purchase could cost {_dollars(_most(w.purchase))} at the "
+            f"worker's maximum, over the {_dollars(config.wildcard_purchase_cap_cents)} cap; buy fewer or a "
+            "cheaper pack"), w.slot))
+    others = [s for s in slots if s.slot != w.slot]
+    if w.state.unsure and not (w.changes_product and w.product):
+        # No receipt says what the wildcard holds, so any load elsewhere may put its product in two slots.
+        loading = sorted(s.slot for s in others if s.need > 0 or s.changes_product)
+        if loading:
+            refusals.append(Refusal("wildcard", (
+                f"no receipt says what the wildcard, slot {w.slot}, holds, so the load into slot "
+                f"{', '.join(loading)} may put the same product in two slots; set the wildcard's product in this "
+                "plan, as the day-one fill does, or stock it first so a receipt names its product"), w.slot))
+    held = w.state.product
+    if held:
+        into = sorted(s.slot for s in others if s.changes_product and s.product == held)
+        if into:
+            refusals.extend(_check_promotion(w, into, current, off_cycle))
+        dup = sorted(s.slot for s in others if s.state.product == held)
+        if dup and w.need and not w.changes_product:
+            refusals.append(Refusal("wildcard", (
+                f"{held} is in slot {', '.join(dup)} too, so its trial is over: don't load more of it in the "
+                f"wildcard, slot {w.slot}; switch the wildcard to the next product to test"), w.slot))
+    if w.changes_product and w.product:
+        now_in = sorted(s.slot for s in others if s.state.product == w.product)
+        if now_in:
+            refusals.append(Refusal("wildcard", (
+                f"{w.product} is in slot {', '.join(now_in)} now, so the wildcard, slot {w.slot}, can't take it at "
+                f"this visit: if the line that moves {', '.join(now_in)} came back unavailable, the product would "
+                "be in two slots. Test another product"), w.slot))
+        # A slot the plan switches holds what the plan names; only one it keeps can still hold what no receipt names.
+        kept = sorted(s.slot for s in others if s.state.unsure and not s.changes_product)
+        if kept:
+            refusals.append(Refusal("wildcard", (
+                f"the wildcard, slot {w.slot}, can't switch to {w.product} while this plan keeps slot "
+                f"{', '.join(kept)}, which no receipt describes and so may hold the same product; switch it in "
+                "this plan to the product it should hold, or stock it first so a receipt names its product"), w.slot))
+        switched = sorted(s.slot for s in others if s.state.unsure and s.changes_product)
+        if switched:
+            warnings.append(
+                f"no receipt shows what slot {', '.join(switched)} holds now: if its line comes back unavailable, "
+                f"its old stock may stay and may be {w.product}, the wildcard's new product; its receipt "
+                "(units_pulled, pulled_sku) or a person's count settles it before the trial is read")
+        into = sorted(s.slot for s in others if s.changes_product and s.product == w.product)
+        if into:
+            refusals.append(Refusal("wildcard", (
+                f"{w.product} goes on trial in the wildcard, slot {w.slot}, so slot {', '.join(into)} can't switch "
+                "to it; the wildcard's product is in no other slot"), w.slot))
+    return refusals
+
+
+def _check_promotion(w: _Slot, into: list[str], current: CurrentState, off_cycle: bool) -> list[Refusal]:
+    """Slots `into` switch to the wildcard's product: refused unless it is a promotion the data backs."""
+    held = w.state.product
+    why = []
+    if len(into) > 1:
+        why.append("one slot at a time")
+    if current.wildcard_verdict != PASS_VERDICT:
+        why.append(f"its trial's verdict is {current.wildcard_verdict or 'unknown'}, not pass")
+    quiet = [t for t in into if t not in current.silent]
+    if quiet:
+        why.append(f"slot {', '.join(quiet)} isn't a silent slot (get_machine_state, wildcard_trial.silent_slots)")
+    if not (w.changes_product and w.product and w.product != held):
+        why.append(f"slot {w.slot} must switch to the next product to test in the same plan")
+    if off_cycle:
+        why.append("a promotion happens only at a Friday visit")
+    if not why:
+        return []
+    return [Refusal("wildcard", (
+        f"{held} is on trial in the wildcard, slot {w.slot}, so slot {', '.join(into)} can switch to it only as a "
+        f"promotion, and this isn't one: {'; '.join(why)}"), into[0])]
+
+
+def _most(purchase: Purchase) -> int:
+    """The most one line's purchase could cost at the worker's maximum, primary or alternate."""
+    return max(o.packs * o.max_price_per_pack_cents for o in (purchase.primary, purchase.alternate) if o is not None)
 
 
 # --- Step 1 helpers ----------------------------------------------------------
@@ -689,7 +875,7 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
     """
     sizes = sizes or {}
     counted = counted or {}
-    state = state or SlotState(slot, None, None, 0, None)
+    state = state or SlotState(slot, None, None, 0, None, contents_known=False)
     on_hand = max(0, state.units)   # loaded - sold can drift below zero
     held = _Slot(slot, state, on_hand, state.product, state.price_cents, on_hand, on_hand)
     if target is None or target.keep:

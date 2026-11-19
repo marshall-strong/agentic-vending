@@ -1,15 +1,15 @@
 # The MCP server
 
-The agent's 12 tools, served over stdio by `python -m vending.server`. It's plain Python on the
+The agent's 13 tools, served over stdio by `python -m vending.server`. It's plain Python on the
 official MCP SDK, in the same package as the history sync, so the tools import the parser, the
-pricing gate and the database layer directly. The read tools only read our database, except `get_project_rules`, which reads our notes in `docs/agent/`; the one
-built write tool, `request_catalog_product`, also calls the DEX bridge. Nothing here polls the
+pricing gate and the database layer directly. The read tools only read our database, except `get_project_rules`, which reads our notes in `docs/agent/`; of the
+built write tools, `request_catalog_product` also calls the DEX bridge. Nothing here polls the
 machine.
 
 | Tool | State |
 | --- | --- |
 | `get_briefing` | **Works.** One read-only snapshot: data quality and source ages, current Saturday–Friday ledger week, previous week and competition totals, all assigned slots with stock evidence and sales rates, closet and pending requests. Returns typed data and compact Markdown with `computed_at` and `snapshot_id`. Live API spend starts at the ledger opening. Incomplete sales or costs leave profit unknown. Logged through the normal read path. The agent calls it before its first model request. |
-| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls; and from the receipts (`vending.stock`), the product, stock on hand (since the product went in), units sold and days since the last load, and days of stock left. The demand to plan with, `units_per_class_day` (`vending.demand`): units sold per class day while the slot held stock, since its product went in (weekends, breaks and closures from `vending.class_days` left out); until a slot has 5 such days, the fall segment rate for its price, with `rate_basis` saying which, `class_days_in_stock` and `class_days_of_stock_left`. The closet per product with its value at cost, and any stock warnings. A slot with no receipts has those fields `null` and is named in the message. Where receipts don't know a slot, or a person's count is newer than its last receipt, `counted_product` and `counted_on_hand` say what the latest count in `slot_counts` saw (units less sales since; an estimate for a photo), with `counted_at`, `counted_days_ago` and `count_source`; a count over 7 days old is weak evidence and the message says so, and where `stock_on_hand` and `counted_on_hand` both appear the count is the newer. Sets `stale: true` and says so when the latest poll is over 3 hours old. |
+| `get_machine_state` | **Works.** Per slot: price, lifetime units, units sold and units/day over the last 7 days, from stored polls; and from the receipts (`vending.stock`), the product, stock on hand (since the product went in), units sold and days since the last load, and days of stock left. The demand to plan with, `units_per_class_day` (`vending.demand`): units sold per class day while the slot held stock, since its product went in (weekends, breaks and closures from `vending.class_days` left out); until a slot has 5 such days, the fall segment rate for its price, with `rate_basis` saying which, `class_days_in_stock` and `class_days_of_stock_left`. The closet per product with its value at cost, and any stock warnings. A slot with no receipts has those fields `null` and is named in the message. Where receipts don't know a slot, or a person's count is newer than its last receipt, `counted_product` and `counted_on_hand` say what the latest count in `slot_counts` saw (units less sales since; an estimate for a photo), with `counted_at`, `counted_days_ago` and `count_source`; a count over 7 days old is weak evidence and the message says so, and where `stock_on_hand` and `counted_on_hand` both appear the count is the newer. Sets `stale: true` and says so when the latest poll is over 3 hours old. `wildcard_trial` (null until a wildcard slot is set): the product on trial in the fixed wildcard slot, its units over the in-stock class days the polls saw, a verdict (`vending.wildcard_trial`), our silent and unconfirmed slots, and on a pass with a silent slot the promotion to make (`docs/agent/wildcard.md`). |
 | `get_sales_history` | **Works.** Per slot over any window: units, revenue (includes the 8% tax) and revenue ex-tax, plus totals. Says which two polls the window actually spans. |
 | `get_account_balance` | **Works.** The balance from the ledger (opening and later capital, plus revenue, minus receipts, midweek visit fees, token spend and sales tax remitted, plus or minus adjustments), the sales tax set aside and still owed, and the spendable balance after it. Fails with the command to run until a person has recorded the opening capital. |
 | `get_pnl` | **Works.** Over any window of Eastern calendar days: revenue ex tax, units sold and how many of them could be costed, cost of sales at weighted-average cost, shrinkage, visit fees, token spend, adjustments, net, purchases, and inventory at cost in the machine and the closet. Capital and tax remittances are shown but are not in net. Model calls before the opening are development spend and are left out of token spend and net, with a note giving the amount. |
@@ -19,6 +19,7 @@ machine.
 | `get_project_rules` | **Works.** Our own notes on the project brief, from [`agent/`](agent/README.md). With no topic, the list of topics and their one-line summaries; with a topic, that file's text. A topic is a plain name from the list: paths, `..` and unknown names are refused with the list. Logged like any read. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state` | **Works.** Plans the desired state again on live data inside the write gate, refuses with every problem at once, otherwise POSTs it once and records the request. Saves what it is about to send before sending, so a lost answer leaves a row a person settles with `python -m vending.submissions resolve`. |
+| `set_wildcard_slot` | **Works.** Sets config `wildcard_slot` once, through the write gate: one of our slots, on shelf 2 to 4, not column 5, with a reason. Asking again for the same slot changes nothing; a different slot is refused once one is set, and only a person can change it (`python -m vending.config`). |
 | `set_price` | **Dropped.** Prices change only at a worker visit (free Friday, $25 midweek), through `submit_desired_state`. The stub stays so a call gets that answer. |
 
 ## Run it
@@ -279,10 +280,13 @@ warns about a count for a SKU that isn't in the catalog, and about one more than
 chart's figure for that package.
 
 The other keys the planner reads are `price_ceiling_cents` (650), `tax_percent` (8) and
-`midweek_fee_cents` (2500). **Only those four keys can be set**, and each value is checked for
+`midweek_fee_cents` (2500). **Only the keys in `KNOWN` can be set**, and each value is checked for
 type and range before it is stored (`KNOWN` in `vending/config.py`): a fee under a dollar is
-refused as dollars typed by mistake, a ceiling over the API's $10.00 is refused, and a misspelt key
-is refused rather than saved silently. Until the ledger is open, the
+refused as dollars typed by mistake, a misspelt key is refused rather than saved silently, and the
+agreed limits are maxima: `price_ceiling_cents` at most 650, `wildcard_ceiling_cents` at most 800 and
+`wildcard_purchase_cap_cents` at most 8200 (lower is allowed). A row hand-edited above one stops
+planning until a person sets it again. `wildcard_slot` must be one of ours in the stored slot
+assignment, checked again even when the same value is set twice. Until the ledger is open, the
 tool answers `success: false` with the command to run. Delisted products count as not in the
 catalog, and so do products the bridge marks inactive. A copy last synced over 36 hours ago (the
 same limit as `get_catalog`) is still used, with a `STALE` note saying to run
