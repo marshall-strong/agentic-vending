@@ -50,7 +50,9 @@ Key data choices (each is also written to lab_data.json meta.notes):
     In the backtests each plan date re-spreads the lumps with a profile built only from
     regular-era sales reported before that date, so no training window sees later data.
   * Visits come from the machine's door-open counter (EVA-DTS EA2*DO, exported to door_events.csv):
-    every rise between two polls is a door opening; rises within 3 h are one visit.  Refill evidence
+    every rise between two polls is a door opening; rises within 3 h are one visit.  From the start
+    (3 Dec) a rise counts only when a fulfilled receipt of ours falls with it (receipts.csv); other rises
+    are left out, not merged.  Before the start every rise counts.  Refill evidence
     per visit uses the door counter and OUR slots only: "proven refill" = capacity proof (one of our slots
     sold more than the largest rail holds, 11, over an interval that contains exactly one visit);
     "likely refill" = >= 2 of our slots that looked empty resume within 4 days; "possible top-up" = 1.
@@ -85,6 +87,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from slots_config import SOURCE_CLI, SOURCE_FALL, SOURCE_SERVER, check_before_start, resolve_run  # noqa: E402
 from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
+from boundary_units import price_sales, slot_average_price  # noqa: E402
+from door_events import START, our_visits, read_receipts  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID  # noqa: E402  (configure() sets the device and slots this run uses)
 
@@ -359,6 +363,8 @@ def main():
                     help="machine-wide units and cents per poll (aggregates only)")
     ap.add_argument("--doors", default=str(root / "data" / "door_events.csv"),
                     help="door-open counter per poll (export_sales.py); if missing, visits are assumed Fridays 08:00")
+    ap.add_argument("--receipts", default=str(root / "data" / "receipts.csv"),
+                    help="our fulfilled receipts (export_sales.py); from 3 Dec only a door rise with one is our visit")
     ap.add_argument("--calendar", default=str(root / "golisano_calendar_2026_27.json"))
     ap.add_argument("--photos", default=str(root / "planograms_photos.json"))
     ap.add_argument("--planogram", default=str(root / "planogram_2026-10-08.json"))
@@ -535,24 +541,28 @@ def main():
 
     # ---------------------------------------------------------- visits from the door-open counter
     # A rise in the lifetime door-open counter between two polls = the door was opened in (previous poll, poll].
-    # Rises within VISIT_MERGE_H hours are one visit.  Without door data: one assumed visit every Friday 08:00.
-    vis = []
+    # Rises within VISIT_MERGE_H hours are one visit.  From the start (3 Dec) a rise is ours only when a fulfilled receipt
+    # of ours claims it (door_events.our_visits: one candidate counter window); any other rise is skipped, not merged into
+    # ours.  A receipt with several candidate rises, or none, is still our visit but has no door window: it is listed in
+    # visits_without_window and takes no part in the window-based evidence below.  Before the start every rise counts.
+    # Without door data: one assumed visit every Friday 08:00.
+    vis, unplaced = [], []
     if doors is not None:
-        dr = doors.copy()
-        dr["prev"] = dr.t.shift()
-        for r in dr[dr.rise > 0].itertuples():
-            prev = r.prev if pd.notna(r.prev) else r.t
-            if vis and (r.t - vis[-1]["end"]).total_seconds() / 3600 <= VISIT_MERGE_H:
+        found, unplaced = our_visits(list(zip(doors.t, doors.door_open_lifetime.astype(int))), read_receipts(args.receipts))
+        for prev, at, rise in found:
+            if vis and (at - vis[-1]["end"]).total_seconds() / 3600 <= VISIT_MERGE_H:
                 v = vis[-1]
-                v["end"] = r.t
-                v["openings"] += int(r.rise)
-                v["rise_polls"].append(r.t)
+                v["end"] = at
+                v["openings"] += rise
+                v["rise_polls"].append(at)
             else:
-                vis.append(dict(start=prev, first_rise=r.t, end=r.t, openings=int(r.rise), rise_polls=[r.t], source="door counter"))
+                vis.append(dict(start=prev, first_rise=at, end=at, openings=rise, rise_polls=[at], source="door counter"))
     else:
+        # assumed Fridays only for the history before the start; from it, our receipts are our visits (no door window)
+        unplaced = our_visits([], read_receipts(args.receipts))[1]
         fr = sorted({d for d in dates if d.weekday() == 4})
         vis = [dict(start=f, first_rise=f, end=f, openings=None, rise_polls=[f], source=f"assumed Friday {VISIT_HOUR:02d}:00 (no door data)")
-               for f in (local_at(d, VISIT_HOUR) for d in fr) if T0 < f <= T1]
+               for f in (local_at(d, VISIT_HOUR) for d in fr) if T0 < f <= T1 and f < START]
     for i, v in enumerate(vis):
         v["id"] = i + 1
         v["window_h"] = (v["end"] - v["start"]).total_seconds() / 3600
@@ -1283,14 +1293,22 @@ def main():
         price_hist[r.slot].append(dict(from_=r.t.isoformat(timespec="minutes"), cents=int(r.price_cents)))
     # Price rules (stated, and what the code does):
     #  * price paid on a sale = the listed price in effect when the sale's poll interval began: the slot's last price
-    #    reading at or before the interval's opening poll (`prev`); a sale before the slot's first reading takes that reading.
+    #    reading at or before the interval's opening poll (`prev`, or the good poll before a misread: where the unit counter's
+    #    window really starts); a sale before the slot's first reading takes that reading.
+    #    When the price at the interval's closing poll differs, the units are split between the two prices by the interval's
+    #    units and cents (boundary_units.price_sales), if the unit and cents counters rose over the same window (a misread
+    #    in one of them moves its window's start); units the counters can't split are left out of the average price and
+    #    counted in price_unknown_units, never credited to the opening price. Takings (cents) are never changed.
     #  * price on a day (slot_daily.p) = the listed price at 12:00 noon ET: the last reading before noon, or, on a day with
     #    no reading before noon, the day's first reading; days with no reading carry the last price forward.
-    prr = rd[["slot", "t", "price_cents"]].rename(columns={"t": "read_t", "price_cents": "price_at_sale"}).sort_values("read_t")
-    s2 = pd.merge_asof(sales.sort_values("prev"), prr, left_on="prev", right_on="read_t", by="slot", direction="backward")
-    s2b = pd.merge_asof(sales.sort_values("prev"), prr, left_on="prev", right_on="read_t", by="slot", direction="forward")
-    s2["price_at_sale"] = s2.price_at_sale.fillna(s2b.price_at_sale)
-    sales = s2.drop(columns=["read_t"]).sort_values(["t", "slot"]).reset_index(drop=True)
+    priced = {}
+    for s, g in sales.groupby("slot"):
+        r_ = rd[rd.slot == s]
+        priced.update(zip(g.index, price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
+                                               list(zip(g.prev, g.t, g.units, g.cents)))))
+    for k, col in enumerate(["price_at_sale", "price_close", "units_open", "units_close", "units_unknown"]):
+        sales[col] = [priced[i][k] for i in sales.index]
+    sales = sales.sort_values(["t", "slot"]).reset_index(drop=True)
     sale_list = {s: list(sales[sales.slot == s].sort_values("t")[["prev", "t", "units"]].itertuples(index=False)) for s in slots}
     rd["date"] = rd.t.dt.date
     noon_last = rd[rd.t.dt.hour < 12].groupby(["date", "slot"]).price_cents.last()
@@ -1310,7 +1328,8 @@ def main():
         # average price = units-weighted price in effect at each sale on regular-era class days; a slot with no such sale
         # takes the mean of its noon listed price over those days
         sc = su[su.date.isin(set(reg_class))]
-        avg_p = float((sc.price_at_sale * sc.units).sum() / sc.units.sum()) if sc.units.sum() > 0 else float(price_day.loc[reg_class, s].mean())
+        avg_p, avg_rule, unknown = slot_average_price(zip(sc.price_at_sale, sc.price_close, sc.units_open, sc.units_close, sc.units_unknown),
+                                                      lambda: price_day.loc[reg_class, s].mean())
         last_sale = su.t.max() if len(su) else None
         slot_rows.append(dict(
             slot=s, row=int(rowcol.loc[s, "row"]), col=int(rowcol.loc[s, "col"]),
@@ -1319,8 +1338,7 @@ def main():
             units_per_week=su.units.sum() / ((T1 - T0).total_seconds() / 86400 / 7),
             instock_class_days=rate_rows[s]["instock_days_all"], class_days=len(reg_class),
             rate=rate_rows[s]["rate_all"], rate_recent=rate_rows[s]["rate_recent"],
-            avg_price=avg_p / 100, avg_price_rule="units-weighted price in effect at each regular-era class-day sale" if sc.units.sum() > 0
-            else "mean noon listed price on regular-era class days (no such sales)",
+            avg_price=avg_p / 100, avg_price_rule=avg_rule, price_unknown_units=int(unknown),
             current_price=int(rd[rd.slot == s].price_cents.iloc[-1]),
             fri_share=float(fri_units / wd_tot) if wd_tot else 0.0,
             zero_week_share=float((wk_units == 0).mean()) if len(wk_units) else None,
@@ -2008,6 +2026,8 @@ def main():
                 f"the first opening. Likely refill = >= {LIKELY_MIN} resumed slots"
                 f"{'; possible top-up = 1' if LIKELY_MIN > 1 else ' (with this few slots, one resumed slot is already likely)'}."),
         capacity_max=CAPACITY_MAX, silent_days=SILENT_DAYS, resume_days=RESUME_DAYS, likely_min=LIKELY_MIN,
+        visits_without_window=[dict(fulfilled_at=iso(done), window=kind, candidate_rises=[iso(c) for c in cands])
+                               for done, kind, cands in unplaced],
         per_visit={str(v["id"]): dict(evidence=v["evidence"], proven_slots=v["proven_slots"], pair_proof_slots=v["pair_proof_slots"],
                                       resumed_slots=v["resumed_slots"], outcome_refill_slots=v["outcome_refill_slots"]) for v in vis},
         per_slot=per_slot_ev,
@@ -2535,7 +2555,10 @@ def write_report(path, L):
           f"Counts are small ({pc['units_per_side']}).")
         w("")
         w("Price rules: the price paid on a sale is the listed price in effect when its poll interval began (the slot's last price reading at "
-          "or before that poll); the price on a day is the listed price at 12:00 noon ET (last reading before noon, else the day's first reading).")
+          "or before that poll). When the price changed within the interval, the units and cents counters split its units between the two "
+          "prices if one whole split fits; units they can't split are left out of the average price. The price on a day is the listed price "
+          "at 12:00 noon ET (last reading before noon, else the day's first reading); a slot with no sale at a known price takes that "
+          "noon price as its average.")
         w("")
     w("## Slow-seller rule: what to change in the agent's guideline")
     w("")

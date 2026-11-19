@@ -12,7 +12,12 @@ What it measures (hourly-polling era only, from 21 Sep 2026, when polls came eve
     visits        door-counter rises (EA2*DO) between two polls, merged when within 3 hours, as
                   analysis/sales_analysis.py does. Rises come from the lifetime count with vending.counters.rises,
                   so a misread door reading isn't a visit. The window is the time we can't see into: from the last
-                  poll before the first opening to the poll that saw the last one.
+                  poll before the first opening to the poll that saw the last one. From 3 Dec (the start) a rise
+                  counts only when a fulfilled receipt of ours claims it (receipts.csv, door_events.our_visits):
+                  the counter windows overlapping [fulfilled - 1 h, first line resolved] are its candidates. One is
+                  claimed. With several, or none, the receipt is still a visit of ours, with `window` "ambiguous" or
+                  "unknown" and no window, openings or sales inside, and no candidate rise is in any window.
+                  Other rises are left out of our windows, not merged into them. Before 3 Dec every rise counts.
     grades        the analysis's refill grade for each visit (proven, likely, possible top-up, no sign).
     poll gaps     how often a gap between polls is longer than an hour: a longer gap widens any window.
     exposure      our units sold inside a visit window (the units a product or price change would make
@@ -36,7 +41,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from vending.counters import rises  # noqa: E402  (standard library only)
+from door_events import our_visits, read_receipts  # noqa: E402  (standard library only)
+from slots_config import START  # noqa: E402
 
 MERGE_H = 3                                        # rises within 3 h are one visit (sales_analysis.VISIT_MERGE_H)
 HOURLY_FROM = datetime.fromisoformat("2026-09-21T01:00:00-04:00")
@@ -65,28 +71,32 @@ def when(text: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
-def find_visits(door_rows: list[dict]) -> list[dict]:
+def find_visits(door_rows: list[dict], receipts=(), start: datetime = START) -> list[dict]:
     """Door-counter rises merged into visits. Each visit: from (poll before), first and last rise polls,
     openings, and the rise polls themselves.
+
+    From `start`, a rise is ours only when a fulfilled receipt of ours claims it (door_events.our_visits); any
+    other rise is skipped, so it neither makes a visit nor widens ours. Before `start` every rise counts.
+    A receipt whose candidate rises are several, or none, is still a visit of ours, with `window` "ambiguous" or
+    "unknown": `from`, `last` and `openings` are None, `first` is its fulfilment, and no rise is in a window.
 
     The rises are recomputed from `door_open_lifetime` with vending.counters.rises, not read from the `rise`
     column: exports written before export_sales.py used that rule turned a single misread (1000, 5, 1000) into a
     rise of 995 at the next poll."""
-    readings = sorted(((when(r["at_eastern"]), int(r["door_open_lifetime"])) for r in door_rows), key=lambda r: r[0])
-    up = dict(rises(readings))
-    rows = [{"t": t, "rise": up.get(t, 0)} for t, _ in readings]
+    readings = [(when(r["at_eastern"]), int(r["door_open_lifetime"])) for r in door_rows]
     visits: list[dict] = []
-    for prev, r in zip(rows, rows[1:]):
-        if r["rise"] <= 0:
-            continue
-        if visits and (r["t"] - visits[-1]["last"]).total_seconds() / 3600 <= MERGE_H:
+    found, unplaced = our_visits(readings, receipts, start)
+    for prev, at, rise in found:
+        if visits and (at - visits[-1]["last"]).total_seconds() / 3600 <= MERGE_H:
             v = visits[-1]
-            v["last"] = r["t"]
-            v["openings"] += r["rise"]
-            v["rise_polls"].append(r["t"])
+            v["last"] = at
+            v["openings"] += rise
+            v["rise_polls"].append(at)
         else:
-            visits.append({"from": prev["t"], "first": r["t"], "last": r["t"], "openings": r["rise"], "rise_polls": [r["t"]]})
-    return visits
+            visits.append({"from": prev, "first": at, "last": at, "openings": rise, "rise_polls": [at], "window": "known"})
+    visits += [{"from": None, "first": done, "last": None, "openings": None, "rise_polls": [], "window": kind}
+               for done, kind, _ in unplaced]
+    return sorted(visits, key=lambda v: v["first"])
 
 
 def poll_gaps(poll_times: list[datetime], since: datetime) -> dict:
@@ -125,7 +135,7 @@ def grade_of(visit: dict, lab: dict | None) -> str | None:
     return None
 
 
-def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> dict:
+def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM, receipts=()) -> dict:
     sales = sorted(((when(r["at_eastern"]), int(r["units"]), r["slot"]) for r in sales_rows), key=lambda s: s[0])
     units_at: dict[datetime, int] = defaultdict(int)
     for t, u, _ in sales:
@@ -133,14 +143,19 @@ def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> di
     our_units = sum(u for t, u, _ in sales if t >= since)
 
     visits = []
-    for v in find_visits(door_rows):
+    for v in find_visits(door_rows, receipts):
         if v["first"] < since:
+            continue
+        if v["window"] != "known":      # a receipt of ours with no door window: nothing is placed in or around it
+            visits.append({"weekday": DAYS[v["first"].weekday()], "window": v["window"], "from": None, "to": None,
+                           "mid_hour": None, "window_min": None, "openings": None, "our_units_inside": None,
+                           "minutes_to_next_sale": None, "grade": None})
             continue
         inside = sum(u for t, u, _ in sales if v["from"] < t <= v["last"])   # can't be placed before or after
         nxt = next((t for t, u, _ in sales if t > v["last"] and u > 0), None)
         mid = v["from"] + (v["last"] - v["from"]) / 2
         visits.append({
-            "weekday": DAYS[v["first"].weekday()],
+            "weekday": DAYS[v["first"].weekday()], "window": "known",
             "from": v["from"].isoformat(timespec="minutes"), "to": v["last"].isoformat(timespec="minutes"),
             "mid_hour": round(mid.hour + mid.minute / 60, 2),
             "window_min": round((v["last"] - v["from"]).total_seconds() / 60),
@@ -149,7 +164,7 @@ def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> di
             "grade": grade_of(v, lab),
         })
 
-    windows = [v["window_min"] for v in visits]
+    windows = [v["window_min"] for v in visits if v["window_min"] is not None]
     restocks = [v for v in visits if v["grade"] in RESTOCK_GRADES]
     restock_dates = sorted({v["from"][:10] for v in restocks})
     between = [(datetime.fromisoformat(b) - datetime.fromisoformat(a)).days for a, b in zip(restock_dates, restock_dates[1:])]
@@ -181,9 +196,10 @@ def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> di
             "window_median_min": round(statistics.median(windows)) if windows else None,
             "window_max_min": max(windows) if windows else None,
             "windows_over_65_min": sum(1 for w in windows if w > 65),
-            "openings_median": statistics.median([v["openings"] for v in visits]) if visits else None,
-            "visits_with_our_sales_inside": sum(1 for v in visits if v["our_units_inside"] > 0),
-            "our_units_inside": sum(v["our_units_inside"] for v in visits),
+            "visits_without_door_window": sum(1 for v in visits if v["window"] != "known"),   # a receipt of ours, window ambiguous or unknown
+            "openings_median": _median([v["openings"] for v in visits]),
+            "visits_with_our_sales_inside": sum(1 for v in visits if (v["our_units_inside"] or 0) > 0),
+            "our_units_inside": sum(v["our_units_inside"] or 0 for v in visits),
             "our_units": our_units,
             "graded": lab is not None,
             "grades": dict(Counter(v["grade"] or "ungraded" for v in visits)),
@@ -213,7 +229,8 @@ def main(argv=None):
     data = Path(args.data)
     lab_path = Path(args.lab_data)
     lab = json.loads(lab_path.read_text(encoding="utf-8")) if lab_path.exists() else None
-    result = analyse(read_csv(data / "door_events.csv"), read_csv(data / "polls.csv"), read_csv(data / "sales_events.csv"), lab)
+    result = analyse(read_csv(data / "door_events.csv"), read_csv(data / "polls.csv"), read_csv(data / "sales_events.csv"), lab,
+                     receipts=read_receipts(data / "receipts.csv"))
     if lab and any(v["grade"] is None for v in result["visits"]):
         print("WARNING: some visits have no refill grade: lab_data.json may be older than the CSVs; rerun the analysis")
     out = Path(args.out)
