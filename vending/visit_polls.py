@@ -8,12 +8,15 @@ receipt's door times prove the read fell inside the visit (`vending.stock._split
 
 So on Fridays, from `VISIT_POLL_FROM` to `VISIT_POLL_TO` Eastern (unset: 14:45 to 19:00), the worker
 asks the bridge to read the machine every `VISIT_POLL_EVERY_MINUTES` (unset: 1; 0 turns it off; anything
-else under 1 is refused). `VISIT_POLL_DATES` (unset: none) lists more Eastern days that get the same
-window and stop rule, such as the day-one fill, which is a visit of ours on a Monday. The
-bridge stores each read in its history, and the worker copies the day's history into our database
-straight after (`vending.sync_history`), so the read reaches the stock replay like any other poll. A read
-only counts when that copy stored a usable row for the session the bridge named: a failed listing or
-fetch, or a bad checksum, makes it a failure like any other.
+else under 1 or over `MAX_EVERY_MINUTES`, a day, is refused). `VISIT_POLL_DATES` (unset: none) lists more
+Eastern days that get the same window and stop rule, such as the day-one fill, which is a visit of ours on
+a Monday. The bridge stores each read in its history, and the worker copies the day's history into our
+database straight after (`vending.sync_history`), so the read reaches the stock replay like any other poll.
+Whether that copy holds a usable row for the session the bridge named is only logged ("storage not
+confirmed"): nothing in the repo shows the header's id is the history's id, so a read that went out is not
+counted as a failure for it. What counts is the stored rows: the stop rule and the stock replay use their
+`started_at`, whichever read they came from (a cached document, `X-Poll-Cached`, is another caller's and is
+just a row at its own time).
 A visit lasts a few minutes, so the interval has to be short for a read to land inside it.
 
 It stops for the day once a request of ours was fulfilled that day and a read taken after its door
@@ -27,7 +30,8 @@ A read is a live poll, about 8.5 s on the bridge's one serial line, so it is gen
   because reading our receipts first can take a while;
 - one try: a busy answer (409), a timeout or a bridge that is down is logged and skipped, and the next
   try is a whole interval later, never a retry;
-- after 3 failures in a row, 5 minutes pass before the next try.
+- after 3 failures in a row, 5 minutes pass before the next try, counted from the POST that failed (from
+  the failure, when none was sent). A read that went out but whose row isn't confirmed is not a failure.
 
 A read that fails never fails the worker's round or `/health`: reads are not jobs of the round and
 are never in its results. Only the log shows them.
@@ -54,6 +58,9 @@ DEFAULT_EVERY, DEFAULT_FROM, DEFAULT_TO = "1", "14:45", "19:00"
 FRIDAY = 4
 FAILS_BEFORE_BACKOFF = 3
 BACKOFF = timedelta(minutes=5)
+# The window is inside one Eastern day, so a longer interval means one read a day at most; and a huge one
+# (1e12 minutes passes `timedelta`) overflows when the scheduler adds it to a time.
+MAX_EVERY_MINUTES = 24 * 60
 # The read (30 s at the bridge) plus copying the history afterwards.
 STEP_TIMEOUT_SECONDS = 90
 # What a step returns: it read the machine, the visit is over, or it sent nothing and nothing failed
@@ -93,8 +100,9 @@ def schedule() -> Schedule | None:
         gap = timedelta(minutes=every)      # inf, nan and absurdly large values raise here
     except (ValueError, OverflowError):
         gap = None
-    if gap is None or (every != 0 and every < 1):    # tiny values would round to 0, and under a minute is too often
-        raise settings.SettingsError(f"{EVERY_SETTING} is {value!r}, not 0 (off) or a number of minutes from 1 up")
+    if gap is None or (every != 0 and every < 1) or every > MAX_EVERY_MINUTES:   # under a minute is too often
+        raise settings.SettingsError(
+            f"{EVERY_SETTING} is {value!r}, not 0 (off) or a number of minutes from 1 to {MAX_EVERY_MINUTES}")
     start, end = clock(FROM_SETTING, DEFAULT_FROM), clock(TO_SETTING, DEFAULT_TO)
     if end <= start:
         raise settings.SettingsError(f"{TO_SETTING} ({end:%H:%M}) is not after {FROM_SETTING} ({start:%H:%M})")
@@ -173,18 +181,14 @@ def refresh_pending(conn, bridge: Bridge, now: datetime, log: Callable[[str], No
             log(f"visit reads: could not read {request_id} ({error}); left for the hourly round")
 
 
-class ReadNotStored(RuntimeError):
-    """The machine was read, but no usable row for that read is in our database."""
-
-
-def _not_stored(conn, session_id: str | None, sent: datetime) -> str | None:
-    """Why the read isn't stored usable (a checksum that passed, our device), or None when it is.
-    Without a session id the best check left is a usable poll taken since the POST (a minute's grace
-    for the bridge's clock)."""
+def _not_confirmed(conn, session_id: str | None, sent: datetime) -> str | None:
+    """Why this read's row can't be matched to a usable stored one (a checksum that passed, our device), or
+    None when it is. Without a session id the best check left is a usable poll taken since the POST: an
+    earlier row, even from a few seconds before, is an observation at its own time and not this read."""
     if session_id is None:
         found = conn.execute("select exists (select 1 from polls where device_id = %s and crc_ok and started_at >= %s)",
-                             (DEVICE_ID, sent - _MINUTE)).fetchone()[0]
-        return None if found else "the bridge named no session and no usable poll since then is stored"
+                             (DEVICE_ID, sent)).fetchone()[0]
+        return None if found else "the bridge named no session and no usable poll taken since the read was sent is stored"
     row = conn.execute("select crc_ok, device_id from polls where session_id = %s", (session_id,)).fetchone()
     if row is None:
         return "it isn't stored (the history listing or the fetch failed, or the poll isn't in the listing)"
@@ -197,8 +201,11 @@ def _not_stored(conn, session_id: str | None, sent: datetime) -> str | None:
 
 def step(now: datetime, log: Callable[[str], None] = print, sched: Schedule | None = None) -> int:
     """One turn: read pending requests back, stop if the visit is over, else read the machine and
-    copy the history. `READ`, `VISIT_OVER` or `SKIPPED`; a failed read, or one that isn't stored
-    usable, raises. Never migrates. `sched` is the schedule the settings give, unless one is passed."""
+    copy the history. `READ`, `VISIT_OVER` or `SKIPPED`; a read that failed (an error status, a timeout, a
+    bridge that is down) raises. A read that went out but whose row can't be matched is logged ("storage
+    not confirmed") and is still `READ`: the header's id may not be the history's id, and the stop rule
+    works from the stored rows anyway. Never migrates. `sched` is the schedule the settings give, unless
+    one is passed."""
     global _last_post
     if sched is None:
         sched = schedule()
@@ -223,14 +230,22 @@ def step(now: datetime, log: Callable[[str], None] = print, sched: Schedule | No
             return SKIPPED
         _last_post = sent
         read = bridge.poll()
+        named = read.session_id or "(no session id)"
+        cached = "?" if read.cached is None else str(read.cached).lower()
+        age = "?" if read.age_seconds is None else f"{read.age_seconds:g}"
+        log(f"visit reads: read {named} cached={cached} age_seconds={age}")
         # The read is in the bridge's history by now. Two UTC days, since 7 PM Eastern is past midnight UTC.
-        sync_history.sync(conn, bridge, (sent - timedelta(days=1)).astimezone(timezone.utc).date(),
-                          (sent + _MINUTE).astimezone(timezone.utc).date(),
-                          log=lambda line: None if line.endswith(" listed") else log(line))
-        problem = _not_stored(conn, read.session_id, sent)
+        try:
+            sync_history.sync(conn, bridge, (sent - timedelta(days=1)).astimezone(timezone.utc).date(),
+                              (sent + _MINUTE).astimezone(timezone.utc).date(),
+                              log=lambda line: None if line.endswith(" listed") else log(line))
+        except BridgeError as error:        # the POST worked; only the copy didn't
+            log(f"visit reads: could not copy the history ({error})")
+        problem = _not_confirmed(conn, read.session_id, sent)
         if problem:
-            raise ReadNotStored(f"read {read.session_id or '(no session id)'} not stored usable: {problem}")
-        log(f"visit reads: stored read {read.session_id or '(no session id)'}")
+            log(f"visit reads: storage not confirmed for read {named}: {problem}")
+        else:
+            log(f"visit reads: stored read {named}")
     return READ
 
 
@@ -238,8 +253,10 @@ class Reader:
     """Decides when the next read is due and takes it. The worker's loop asks `next_due` and calls `tick`."""
 
     def __init__(self, sched: Schedule, run: Callable[[datetime], int] = step,
-                 log: Callable[[str], None] = print, timeout: float = STEP_TIMEOUT_SECONDS):
-        self.sched, self.run, self.log, self.timeout = sched, run, log, timeout
+                 log: Callable[[str], None] = print, timeout: float = STEP_TIMEOUT_SECONDS,
+                 clock: Callable[[], datetime] | None = None):
+        # `clock` tells when a step failed, when it sent no POST to date the failure by; without one, `now`.
+        self.sched, self.run, self.log, self.timeout, self.clock = sched, run, log, timeout, clock
         self.failures = 0                       # in a row
         self.not_before: datetime | None = None
         self.over_on: date | None = None        # the Eastern day the visit ended
@@ -280,7 +297,10 @@ class Reader:
         else:
             self.failures += 1
             wait = BACKOFF if self.failures >= FAILS_BEFORE_BACKOFF else self.sched.every
-            self.not_before = now + wait
+            # The wait runs from the POST this step sent (the receipts may have taken a while first), or
+            # from the failure when it sent none.
+            sent = _last_post is not None and _last_post >= now
+            self.not_before = (_last_post if sent else max(now, self.clock() if self.clock else now)) + wait
             detail = result.error or result.outcome
             self.log(f"visit reads: skipped ({detail}); {self.failures} failed in a row, "
                      f"next try in {wait.total_seconds() / 60:g} min")
@@ -296,4 +316,4 @@ def default_reader(log: Callable[[str], None] = print) -> Reader | None:
     if sched is None:
         log(f"visit reads are off ({EVERY_SETTING} is 0)")
         return None
-    return Reader(sched, lambda now: step(now, log, sched), log)
+    return Reader(sched, lambda now: step(now, log, sched), log, clock=lambda: _utcnow())

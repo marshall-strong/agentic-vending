@@ -36,7 +36,7 @@ minutes, so the reads have to be close together for one to land inside it.
 
 | Setting | Default | |
 |---|---|---|
-| `VISIT_POLL_EVERY_MINUTES` | `1` | Minutes between reads: `0` turns them off, otherwise a number from `1` up. Under a minute, `inf` or text is a wrong value |
+| `VISIT_POLL_EVERY_MINUTES` | `1` | Minutes between reads: `0` turns them off, otherwise a number from `1` to `1440` (a day). Under a minute, over a day, `inf` or text is a wrong value (`1e12` would overflow a date) |
 | `VISIT_POLL_FROM` | `14:45` | First read, Eastern time (the window follows the wall clock through daylight saving) |
 | `VISIT_POLL_TO` | `19:00` | No read from this time on |
 | `VISIT_POLL_DATES` | empty | Comma-separated ISO dates (Eastern), such as `2026-11-30`. These days get the reads too, with the same window and the same stop rule as a Friday. For a visit of ours that isn't on a Friday, the day-one fill. Remove the date afterwards (a past date does nothing) |
@@ -45,13 +45,20 @@ A wrong value turns the reads off, with a line in the log; it never stops the wo
 every read in its history, so after each read the worker copies the two latest UTC days of history into
 our database (`vending.sync_history`, idempotent) and the read reaches the stock replay like the hourly
 ones. The worker keeps the session id the bridge names in the `X-Poll-Session-Id` header of the read and
-checks that the copy stored a usable row for it (checksum passed, our device). If not (the history
-couldn't be listed or fetched, the checksum failed, or the poll isn't in the listing), the read counts
-as a failure, and the log says "not stored usable". When it is stored, the log says "visit reads: stored
-read <session id>". That the header's id is the id the history lists is what `docs/snapshot-archive.md`
-suggests ("identifies the serial conversation"), and no one has checked it against the live bridge yet. If
-every read is reported "not stored usable" while polls do appear in the history, that is the first suspect.
-Without a header, the check falls back to any usable poll of ours taken since the read was sent.
+checks that the copy stored a usable row for it (checksum passed, our device). This check only logs. If
+no such row is found (the history couldn't be listed or fetched, the checksum failed, the poll isn't in
+the listing, or the header's id is not the history's id), the log says "visit reads: storage not
+confirmed ..." and the read is still a read: it does not count toward the back-off. When it is stored,
+the log says "visit reads: stored read <session id>". Nothing in the repo shows that the header's id is
+the id the history lists (`docs/snapshot-archive.md` says only that it "identifies the serial
+conversation", for correlating with the bridge's logs), and no one has checked it against the live
+bridge yet. If every read says "storage not confirmed" while polls do appear in the history, that is
+the first suspect, and nothing is lost: the stop rule and the stock replay use the stored rows'
+`started_at`, not the header. Without a header, the check falls back to a usable poll of ours taken at or
+after the moment the read was sent; an earlier row is an observation at its own time, and not this read.
+Each read also logs `cached=` and `age_seconds=` from `X-Poll-Cached` and `X-Poll-Age-Seconds`. A response
+with `cached=true` is another caller's recent document: it counts for the stop rule and for attributing a
+read to our visit only by the `started_at` of the row it is stored as, like any other row.
 
 The window and the spacing are checked again when the read is sent, after the receipts have been read
 back: no read goes out after `VISIT_POLL_TO`, and none within an interval of the last one actually sent.
@@ -61,8 +68,10 @@ A read holds the bridge's one serial line, and anyone else's poll gets a `409` w
 - one read at a time: a read is never started while the last one is still running;
 - one try each: a `409`, a timeout or a bridge that is down is logged ("visit reads: skipped ...")
   and skipped, with no retry, and the next try is a whole interval later;
-- after **3 failures in a row**, 5 minutes pass before the next try (and again after each further
-  failure, until one works);
+- after **3 failures in a row**, 5 minutes pass before the next try, counted from the POST that failed
+  (from the failure, when no POST was sent), and again after each further failure, until one works. A
+  failure is an error status, a timeout, a bridge that is down, or a step that broke; a read that went
+  out but whose row is "not confirmed" is not one;
 - **a failed read never fails the round or `/health`.** Reads are not jobs of the round and appear in
   neither. Only the log shows them.
 

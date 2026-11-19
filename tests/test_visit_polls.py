@@ -104,6 +104,8 @@ def test_the_window_and_interval_are_settings(monkeypatch):
     # Under a minute, or not a finite number: never rounded to zero, never an OverflowError at startup.
     (visit_polls.EVERY_SETTING, "0.5"), (visit_polls.EVERY_SETTING, "1e-9"), (visit_polls.EVERY_SETTING, "inf"),
     (visit_polls.EVERY_SETTING, "nan"), (visit_polls.EVERY_SETTING, "1e30"),
+    # Finite and inside timedelta's range, but too big for a datetime to add to: capped at a day (1440 minutes).
+    (visit_polls.EVERY_SETTING, "1e12"), (visit_polls.EVERY_SETTING, "1441"),
     (DATES_SETTING, "30 Nov"), (DATES_SETTING, "2026-11-30, soon"), (DATES_SETTING, "2026-13-01"),
 ])
 def test_a_wrong_setting_turns_the_reads_off_and_never_stops_the_worker(monkeypatch, name, value):
@@ -112,6 +114,16 @@ def test_a_wrong_setting_turns_the_reads_off_and_never_stops_the_worker(monkeypa
     said = []
     assert visit_polls.default_reader(said.append) is None
     assert said and "off" in said[0] and name in said[0]
+
+
+def test_the_longest_interval_is_a_day_and_the_scheduler_can_add_it_to_a_time(monkeypatch):
+    monkeypatch.setattr(settings, "_FILE", {})
+    monkeypatch.setenv(visit_polls.EVERY_SETTING, "1440")
+    sched = visit_polls.schedule()
+    assert sched.every == timedelta(days=1)
+    reader = Reader(sched, lambda now: READ, lambda _: None)
+    reader.tick(at(FRI, 15).astimezone(timezone.utc))        # adds the interval to a datetime: no OverflowError
+    assert reader.not_before == at(FRI, 15).astimezone(timezone.utc) + timedelta(days=1)
 
 
 def test_an_interval_of_zero_turns_the_reads_off(monkeypatch):
@@ -326,6 +338,8 @@ class Bridge:
     def __init__(self, answers, clock):
         self.answers, self.polls, self.stored, self.asked = answers, 0, [], []
         self.clock, self.refresh_takes, self.sends_session_id = clock, timedelta(0), True
+        self.header_prefix = "live"             # what the header's id starts with; the history's ids start with "live"
+        self.cached, self.age_seconds = False, 0.0
 
     def purchase_request(self, request_id):
         self.asked.append(request_id)
@@ -337,7 +351,11 @@ class Bridge:
         session_id = f"live{self.polls}"
         self.stored.append((session_id, self.clock.now))
         self.clock.now += timedelta(seconds=8.5)
-        return LiveRead(b"DXS*", session_id if self.sends_session_id else None)
+        named = f"{self.header_prefix}{self.polls}" if self.sends_session_id else None
+        read = LiveRead(b"DXS*", named)
+        if "cached" in LiveRead._fields:
+            read = read._replace(cached=self.cached, age_seconds=self.age_seconds)
+        return read
 
     def history(self, day):
         return [{"session_id": s, "started_at": t.isoformat(), "device_id": "vmc1"} for s, t in self.stored]
@@ -475,6 +493,39 @@ def test_a_step_that_sent_nothing_is_not_a_failure_and_the_next_try_is_an_interv
     assert len(calls) == 2 and reader.failures == 0
 
 
+def test_the_back_off_counts_from_the_post_that_failed_not_from_the_start_of_the_step(conn, machine, monkeypatch):
+    said = []
+    # Reading the receipts takes 45 s, so each POST goes out 45 s into its step, and each is a busy answer.
+    monkeypatch.setattr(visit_polls, "refresh_pending",
+                        lambda *a: setattr(machine.clock, "now", machine.clock.now + timedelta(seconds=45)))
+    machine.poll = lambda: (_ for _ in ()).throw(BridgeAnswered(409, "busy"))
+    reader = Reader(SCHEDULE, lambda now: visit_polls.step(now, said.append), said.append)
+    for minute in (25, 27, 29):
+        machine.clock.now = POLL_AT(15, minute, 0)
+        reader.tick(POLL_AT(15, minute, 0))
+    assert reader.failures == 3
+    assert reader.not_before == POLL_AT(15, 29, 45) + timedelta(minutes=5)      # five whole minutes after the POST
+
+
+def test_a_failure_before_any_post_backs_off_from_when_it_happened(conn, machine, monkeypatch):
+    said = []
+    monkeypatch.setattr(settings, "_FILE", {})
+    for name in (visit_polls.EVERY_SETTING, visit_polls.FROM_SETTING, visit_polls.TO_SETTING, DATES_SETTING):
+        monkeypatch.delenv(name, raising=False)
+
+    def slow_and_broken(conn, now):
+        machine.clock.now += timedelta(seconds=45)
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(visit_polls, "visit_over", slow_and_broken)
+    reader = visit_polls.default_reader(said.append)
+    for minute in (25, 27, 29):
+        machine.clock.now = POLL_AT(15, minute, 0)
+        reader.tick(POLL_AT(15, minute, 0))
+    assert machine.polls == 0 and reader.failures == 3                       # no POST was ever sent
+    assert reader.not_before == POLL_AT(15, 29, 45) + timedelta(minutes=5)   # from the failure, not the step's start
+
+
 # --- A read has to be stored usable, or it counts as a failure ----------------------------------
 
 def _history_fails(machine):
@@ -495,25 +546,89 @@ def _fetch_fails(machine):
     lambda m: setattr(m, "raw", lambda session_id: build(SAMPLE, corrupt=True)),       # a bad checksum
     lambda m: setattr(m, "history", lambda day: []),                                   # the poll isn't in the listing
     lambda m: setattr(m, "raw", lambda session_id: b"<html>502 Bad Gateway</html>"),   # not EVA-DTS at all
-], ids=["history down", "fetch fails", "bad checksum", "not listed", "not EVA-DTS"])
-def test_a_read_the_sync_could_not_store_usable_is_a_failure_not_a_read(conn, machine, break_it):
+    lambda m: setattr(m, "history", lambda day: (_ for _ in ()).throw(BridgeUnreachable("down"))),   # down right after
+], ids=["history down", "fetch fails", "bad checksum", "not listed", "not EVA-DTS", "history unreachable"])
+def test_a_read_whose_storage_is_not_confirmed_is_logged_and_still_a_read(conn, machine, break_it):
     said = []
     break_it(machine)
-    with pytest.raises(RuntimeError, match="live1"):
-        machine.clock.now = POLL_AT(15, 25)
-        visit_polls.step(POLL_AT(15, 25), said.append)
-    assert not any("stored" in line and "live1" in line for line in said)
+    machine.clock.now = POLL_AT(15, 25)
+    assert visit_polls.step(POLL_AT(15, 25), said.append) == READ       # the POST worked: not a failure
+    assert any("storage not confirmed" in line and "live1" in line for line in said)
+    assert not any("stored read" in line for line in said)
 
 
-def test_failed_stores_back_off_like_failed_reads(conn, machine):
+def test_unconfirmed_storage_never_counts_toward_the_back_off(conn, machine):
     said = []
     _history_fails(machine)
     reader = Reader(SCHEDULE, lambda now: visit_polls.step(now, said.append), said.append)
-    for minute in (25, 28, 31):
+    for minute in (25, 28, 31, 34):
         machine.clock.now = POLL_AT(15, minute)
         reader.tick(POLL_AT(15, minute))
-    assert reader.failures == 3 and reader.not_before == POLL_AT(15, 31) + timedelta(minutes=5)
-    assert "3 failed in a row, next try in 5 min" in said[-1]
+    assert machine.polls == 4                                  # a try every time it was due, no 5 minute wait
+    assert reader.failures == 0 and reader.not_before == POLL_AT(15, 34) + timedelta(minutes=1)
+    assert not any("failed in a row" in line for line in said)
+
+
+def test_real_poll_failures_still_back_off_after_unconfirmed_storage(conn, machine):
+    said = []
+    _history_fails(machine)
+    reader = Reader(SCHEDULE, lambda now: visit_polls.step(now, said.append), said.append)
+    machine.clock.now = POLL_AT(15, 25)
+    reader.tick(POLL_AT(15, 25))                               # unconfirmed: no failure
+    machine.poll = lambda: (_ for _ in ()).throw(BridgeAnswered(409, "busy"))
+    for minute in (28, 31, 34):
+        machine.clock.now = POLL_AT(15, minute)
+        reader.tick(POLL_AT(15, minute))
+    assert reader.failures == 3 and "3 failed in a row, next try in 5 min" in said[-1]
+
+
+def test_a_header_id_that_is_not_the_history_id_keeps_the_one_minute_cadence_and_the_stop_rule(conn, machine):
+    said = []
+    machine.header_prefix = "header"            # the header's ids are never the history's ids
+    reader = Reader(SCHEDULE, lambda now: visit_polls.step(now, said.append), said.append)
+    for minute in (25, 26, 27):                 # three successful POSTs, each with a usable row stored
+        machine.clock.now = POLL_AT(15, minute)
+        reader.tick(POLL_AT(15, minute))
+    assert machine.polls == 3 and reader.failures == 0
+    assert reader.not_before == POLL_AT(15, 27) + timedelta(minutes=1)      # not five minutes
+    assert sum("storage not confirmed" in line for line in said) == 3
+    # The rows the bridge stored still end the visit: a read after the close minute (3:32 PM) is in.
+    for minute in (40, 41):
+        machine.clock.now = POLL_AT(15, minute)
+        result = visit_polls.step(POLL_AT(15, minute), said.append)
+    assert result == VISIT_OVER
+
+
+def test_a_usable_row_from_before_the_post_does_not_confirm_a_read_without_a_session_id(conn, machine):
+    said = []
+    machine.sends_session_id = False
+    machine.history = lambda day: []                                    # this read never reaches storage
+    store_poll(conn, "earlier", (POLL_AT(15, 25) - timedelta(seconds=59)).isoformat(), {"15": (200, 100)})
+    machine.clock.now = POLL_AT(15, 25)
+    assert visit_polls.step(POLL_AT(15, 25), said.append) == READ
+    assert any("storage not confirmed" in line for line in said)        # the row is its own observation, at its own time
+    assert not any("stored read" in line for line in said)
+
+
+def test_a_read_with_no_session_id_is_confirmed_by_a_row_taken_since_the_post(conn, machine):
+    said = []
+    machine.sends_session_id = False
+    machine.clock.now = POLL_AT(15, 25)
+    assert visit_polls.step(POLL_AT(15, 25), said.append) == READ
+    assert any("stored read" in line for line in said) and not any("not confirmed" in line for line in said)
+
+
+def test_every_read_logs_whether_the_bridge_served_a_cached_document_and_how_old(conn, machine):
+    said = []
+    machine.cached, machine.age_seconds = True, 12.5
+    machine.clock.now = POLL_AT(15, 25)
+    visit_polls.step(POLL_AT(15, 25), said.append)
+    assert any("cached=true" in line and "age_seconds=12.5" in line for line in said)
+    said.clear()
+    machine.cached, machine.age_seconds = False, 0.0
+    machine.clock.now = POLL_AT(15, 27)
+    visit_polls.step(POLL_AT(15, 27), said.append)
+    assert any("cached=false" in line and "age_seconds=0" in line for line in said)
 
 
 def test_a_stored_read_is_logged_with_its_session_id(conn, machine):
@@ -529,8 +644,9 @@ def test_a_bridge_that_sends_no_session_id_is_checked_by_the_time_of_the_read(co
     assert visit_polls.step(POLL_AT(15, 25), lambda _: None) == READ          # a usable poll after the POST is stored
     machine.history = lambda day: []
     machine.clock.now = POLL_AT(15, 27)
-    with pytest.raises(RuntimeError, match="not stored"):
-        visit_polls.step(POLL_AT(15, 27), lambda _: None)
+    said = []
+    assert visit_polls.step(POLL_AT(15, 27), said.append) == READ             # the POST worked; the row is not there
+    assert any("storage not confirmed" in line for line in said)
 
 
 # --- Which day a receipt belongs to -------------------------------------------------------------

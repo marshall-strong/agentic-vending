@@ -55,6 +55,27 @@ def test_a_busy_slow_or_missing_bridge_is_one_try_and_a_plain_error(monkeypatch,
         assert raised.value.status == 409
 
 
+def test_poll_reports_a_cached_document_and_its_age(monkeypatch):
+    class Cached(FakeResponse):
+        headers = {"X-Poll-Session-Id": "abc", "X-Poll-Cached": "true", "X-Poll-Age-Seconds": "12.5"}
+
+    monkeypatch.setattr(bridge_module.urllib.request, "urlopen", lambda request, timeout: Cached(DOCUMENT))
+    read = Bridge("http://bridge.test", "key").poll()
+    assert read.cached is True and read.age_seconds == 12.5
+    monkeypatch.setattr(bridge_module.urllib.request, "urlopen", lambda request, timeout: PolledResponse(DOCUMENT))
+    read = Bridge("http://bridge.test", "key").poll()
+    assert read.cached is False and read.age_seconds is None       # no age header, no age
+
+
+def test_poll_says_so_when_it_cannot_tell_whether_the_document_was_cached(monkeypatch):
+    class Odd(FakeResponse):
+        headers = {"X-Poll-Cached": "maybe", "X-Poll-Age-Seconds": "soon"}
+
+    monkeypatch.setattr(bridge_module.urllib.request, "urlopen", lambda request, timeout: Odd(DOCUMENT))
+    read = Bridge("http://bridge.test", "key").poll()
+    assert read.cached is None and read.age_seconds is None
+
+
 def test_poll_names_no_session_when_the_bridge_sent_none(monkeypatch):
     class NoHeaders(FakeResponse):
         headers = {}

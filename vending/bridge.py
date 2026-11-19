@@ -33,13 +33,19 @@ TIMEOUT_SECONDS = 20
 POLL_TIMEOUT_SECONDS = 30
 # The header a live read names its session in (docs/snapshot-archive.md).
 SESSION_HEADER = "X-Poll-Session-Id"
+# `true` means another caller's recent document, `X-Poll-Age-Seconds` how old it was (docs/snapshot-archive.md).
+CACHED_HEADER, AGE_HEADER = "X-Poll-Cached", "X-Poll-Age-Seconds"
 RETRIES = 4
 
 
 class LiveRead(NamedTuple):
-    """What `Bridge.poll` got: the document, and the session id the bridge named (None if it named none)."""
+    """What `Bridge.poll` got: the document, the session id the bridge named (None if it named none), and
+    whether it was another caller's cached document (None if the header was missing or not true/false) and
+    how old it was (None if not given or not a number)."""
     document: bytes
     session_id: str | None
+    cached: bool | None = None
+    age_seconds: float | None = None
 
 
 class BridgeError(RuntimeError):
@@ -117,7 +123,14 @@ class Bridge:
         headers: dict[str, str] = {}
         document = self._once("POST", "/api/v1/poll", expect_json=False, timeout=POLL_TIMEOUT_SECONDS,
                               headers_out=headers)
-        return LiveRead(document, headers.get(SESSION_HEADER.lower()) or None)
+        cached = {"true": True, "false": False}.get(headers.get(CACHED_HEADER.lower(), "").strip().lower())
+        try:
+            age = float(headers[AGE_HEADER.lower()])
+        except (KeyError, ValueError):
+            age = None
+        if age is not None and age != age:      # nan
+            age = None
+        return LiveRead(document, headers.get(SESSION_HEADER.lower()) or None, cached, age)
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
               timeout: float | None = None, headers_out: dict[str, str] | None = None) -> bytes:
