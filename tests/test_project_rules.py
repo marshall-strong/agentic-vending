@@ -101,3 +101,11 @@ def test_the_prompt_gives_each_store_cutoff_the_planner_uses():
     for store, cutoff in (("Amazon items", AMAZON_CUTOFF), ("in-store items", IN_STORE_CUTOFF)):
         assert f"{store} by {days[cutoff.weekday]} {cutoff.at:%H:%M}" in SYSTEM, store
     assert "main run is Thursday" not in SYSTEM
+
+
+
+def test_the_card_says_the_season_opens_empty_and_day_one_fills_it():
+    """Simulated seasons (closed PR #151): with no receipts the agent called the slots unknown and waited."""
+    card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
+    assert "opens empty" in card and "day one fills it" in card and "end stock counts at cost" in card
+    assert "except before the first fill, when our slots are empty" in (RULES_DIR / "inventory-belief.md").read_text(encoding="utf-8").lower()
