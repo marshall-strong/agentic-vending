@@ -171,6 +171,18 @@ def test_a_friday_visit_with_no_time_leaves_every_slot_unknown(conn):
 
 
 
+def test_an_undated_friday_request_with_no_lines_still_blocks_after_the_opening(conn):
+    """A request with no lines can't be dated by its lines; with no fulfilled_at, the visit stays unknown."""
+    from tests.test_ledger import open_ledger
+
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=UTC))
+    machine(conn)
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status)"
+                 " values ('r9', %s, false, '{}', 'fulfilled')", (VISIT,))
+    r = report(conn)
+    assert r.window_start is None and r.silent == () and "r9" in r.reason
+
+
 def test_a_test_purchase_before_the_ledger_opened_is_no_friday_visit(conn):
     """Main's rule (stock._receipts): receipts from before the ledger's opening don't count, so an old test
     request with no fulfilled_at neither hides the last Friday visit nor counts as a load at one."""
