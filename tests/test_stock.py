@@ -466,6 +466,32 @@ def test_without_door_times_every_pull_at_one_moment_goes_before_any_load_as_on_
     assert (slot16.product, slot16.units, slot16.unit_cost) == ("ARIZONA", 5, 50)
 
 
+def test_a_door_timed_pull_goes_before_a_closet_load_without_door_times_at_the_same_moment():
+    # r2 pulls 9 Arizona at its door open, 17:30; r3, with no door times, loads 5 Arizona from
+    # the closet into slot 16 at the same instant. As on main, the pull goes first.
+    sent = {"r1": hours(-2), "r2": hours(-1), "r3": hours(0)}
+    lines = with_door(swap()) + [line(slot="16", sku="ARIZONA", outcome="loaded", total_paid=None, units_loaded=5,
+                                      units_from_back_stock=5, at=2.5, request_id="r3")]
+    stock = book([{**l, "submitted_at": sent[l["request_id"]]} for l in lines])
+    assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("ARIZONA", 4, 50)]
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.product, slot16.units, slot16.unit_cost) == ("ARIZONA", 5, 50)
+
+
+def test_visits_sharing_a_minute_are_found_by_scanning_in_door_open_order():
+    from itertools import combinations
+
+    from vending.stock import _MINUTE, _sharing_a_minute
+
+    # Nested, chained and separate visits: the scan finds exactly the pairs every-pair-against-every-pair finds.
+    visits = {"a": (hours(1), hours(4), None), "b": (hours(1.5), hours(2), None), "c": (hours(3), hours(3.5), None),
+              "d": (hours(4), hours(4.5), None), "e": (hours(6), hours(7), None), "f": (hours(7), hours(7), None)}
+    every = [((p, pv), (q, qv)) for (p, pv), (q, qv) in combinations(sorted(visits.items()), 2)
+             if pv[0] < qv[1] + _MINUTE and qv[0] < pv[1] + _MINUTE]
+    assert _sharing_a_minute(visits) == every
+    assert [(p, q) for (p, _), (q, _) in every] == [("a", "b"), ("a", "c"), ("a", "d"), ("e", "f")]
+
+
 def test_door_times_split_once_however_often_the_replay_splits():
     moves = movements_from_receipts(with_door(swap()), []) + sales_from_counters(
         [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])

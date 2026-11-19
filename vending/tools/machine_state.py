@@ -222,13 +222,16 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     start = baseline[1] if baseline else None
     window_sold = sold_in_window(_readings(conn, start, as_of, slots), start) if start else {}
 
-    counted = stock.stock(conn, until=now)
+    receipts = stock.receipt_lines(conn)       # read once: the stock, the loads and their dates share it
+    counted = stock.stock(conn, until=now, lines=receipts)
+    warnings = [w for w in counted.warnings if stock.warning_is_ours(w, set(slots))]
     counts = {c.slot: c for c in counted.slots if c.slot in slots}
-    last_loaded = _last_loaded(conn)
+    loads = _loads(receipts, now)
+    last_loaded = _last_loaded(loads)
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
     seen = _seen(conn)
     latest_counters = _counters(conn, latest[0], slots)
-    demands = _demands(counts, _loads(conn), counted.sales, latest_counters, now)
+    demands = _demands(counts, loads, counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     closet, closet_value = closet_items(counted.closet)
@@ -242,14 +245,14 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
         success=True,
         stale=stale,
         message=(f"{warning}{len(states)} slots as of the poll at {as_of:%Y-%m-%d %H:%M} UTC; "
-                 f"sales window {window}. {_receipts_note(slots, counts, closet, counted.warnings)}{_count_note(states)}"),
+                 f"sales window {window}. {_receipts_note(slots, counts, closet, warnings)}{_count_note(states)}"),
         count=len(states),
         as_of=as_of,
         window_start=baseline[1] if baseline else None,
         data=states,
         closet=closet,
         closet_value_at_cost=closet_value,
-        warnings=list(counted.warnings),
+        warnings=warnings,
     )
 
 
@@ -304,24 +307,24 @@ def _seen(conn: psycopg.Connection) -> dict[str, dict]:
         return {}
 
 
-def _last_loaded(conn: psycopg.Connection) -> dict[str, datetime]:
+def _last_loaded(loads: dict[str, list[tuple[datetime, int]]]) -> dict[str, datetime]:
     """When each slot last had units put in it, from fulfilled receipts.
 
     A load is dated on the receipt clock (`stock.receipt_lines`), the same
     moment `vending.stock` puts the units in: door close when the replay uses
     the receipt's door times, else the line's `resolved_at`.
     """
-    last: dict[str, datetime] = {}
-    for slot, loads in _loads(conn).items():
-        last[slot] = max(at for at, _ in loads)
-    return last
+    return {slot: max(at for at, _ in slot_loads) for slot, slot_loads in loads.items()}
 
 
-def _loads(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
-    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`, dated like `_last_loaded`."""
+def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime, int]]]:
+    """Every time each slot had units put in it, from fulfilled receipts (`stock.receipt_lines`), as
+    `(at, units)`, dated like `_last_loaded`. A load dated after `now` hasn't happened yet, as in
+    the stock as of `now`, so it is left out: it can't make `days_since_loaded` negative."""
     loads: dict[str, list[tuple[datetime, int]]] = {}
-    for line in stock.receipt_lines(conn):
-        if line["outcome"] in LOADING and line["units_loaded"] and line["at"] is not None:
+    for line in receipts:
+        if (line["outcome"] in LOADING and line["units_loaded"] and line["at"] is not None
+                and line["at"] <= now):
             loads.setdefault(line["slot"], []).append((line["at"], line["units_loaded"]))
     return loads
 

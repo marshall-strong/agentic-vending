@@ -59,7 +59,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from fractions import Fraction
-from itertools import combinations
+import re
 from typing import TYPE_CHECKING
 
 from vending import counters
@@ -68,11 +68,14 @@ from vending.slots import DEVICE_ID, our_slots
 if TYPE_CHECKING:  # the replay itself needs no database, so its tests run without psycopg
     import psycopg
 
-# Within one moment: receipt movements come first, request by request in the
-# order they were submitted (`Movement.seq`), and losses and sales are only
-# ever recorded after them. Within one request, pulls happen before loads (the
-# old product comes out first), and the old product's share of a window split
-# at the request's product change sold before the door opened, so it goes first.
+# Within one moment: receipt movements come first, and losses and sales are
+# only ever recorded after them. Among receipt movements, as on main, every
+# pull goes before any load (the old product comes out first), and the old
+# product's share of a window split at a product change sold before that, so
+# it goes first of all. Door-timed movements (`Movement.seq` set: the request's
+# place in submission order) sit between the other pulls and the other loads,
+# request by request in submission order, so a visit that closed in the minute
+# the next one opened still goes first (`_replay_order`).
 _ORDER = {"sale_before_change": -1, "pull": 0, "purchase": 1, "load": 1, "loss": 2, "sale": 3}
 _GROUP = {"sale_before_change": 0, "pull": 0, "purchase": 0, "load": 0, "loss": 1, "sale": 2}
 
@@ -200,6 +203,43 @@ class Stock:
     shrinkage: tuple[Shrinkage, ...] = ()
 
 
+# How a warning names a selection: "slot 15". Plurals, lists and ranges ("slots 15-17",
+# "slots 12, 15", "slot 12 and 15") are read too, so a new wording can't slip one past.
+_SLOT_NAMED = re.compile(r"\b(?:slot|selection) (\w+)", re.IGNORECASE)
+_SLOT_LIST = re.compile(r"\b(?:slots?|selections?) (\d+(?:\s*(?:,|-|–|and|or)\s*(?:(?:slot|selection)\s+)?\d+)*)",
+                        re.IGNORECASE)
+_LIST_SEP = re.compile(r"\s*(?:,|\band\b|\bor\b)\s*(?:(?:slot|selection)\s+)?", re.IGNORECASE)
+
+
+def warning_is_ours(warning: str, ours: set[str]) -> bool:
+    """Keep a warning only when this module attached a selection to it (`StockWarning.slot`), that
+    selection is ours or it is about the closet (None), and its text names no other. A warning with
+    nothing attached is dropped: no caller guesses the selection from the text alone. The dashboard
+    and the agent's machine state both filter by this, so neither shows a slot we don't hold."""
+    if not hasattr(warning, "slot"):
+        return False
+    if warning.slot is not None and warning.slot not in ours:
+        return False
+    return _slots_named(warning) <= ours
+
+
+def _slots_named(warning: str) -> set[str]:
+    """Every selection a warning names. A warning that mentions slots but names none we can read
+    counts as naming one that isn't ours."""
+    named = set(_SLOT_NAMED.findall(warning))
+    for listed in _SLOT_LIST.findall(warning):
+        for part in _LIST_SEP.split(listed):
+            low, _, high = (x.strip() for x in part.replace("–", "-").partition("-"))
+            if high.isdigit() and low.isdigit():
+                a, b = sorted((int(low), int(high)))
+                named.update(str(n) for n in range(a, b + 1))
+            elif low:
+                named.add(low)
+    if not named and re.search(r"\b(?:slots?|selections?)\b", warning, re.IGNORECASE):
+        named.add("?")
+    return named
+
+
 def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movement]:
     """Movements for fulfilled lines (receipt fields plus `request_id`, `line_no`, `slot`)
     and their later losses (`request_id`, `line_no`, `slot`, `location`, `sku`, `units`, `recorded_at`).
@@ -270,10 +310,7 @@ def _usable_door_times(lines: list[dict]) -> list[dict]:
             visits.setdefault(line["slot"], {})[line["request_id"]] = (opened, closed, line.get("submitted_at"))
     notes: dict[str, dict[str, StockWarning]] = {}
     for slot, by_request in sorted(visits.items()):
-        for (p, (p_open, p_close, p_sent)), (q, (q_open, q_close, q_sent)) in combinations(
-                sorted(by_request.items()), 2):
-            if not (p_open < q_close + _MINUTE and q_open < p_close + _MINUTE):
-                continue   # no minute in common, so the door times order them
+        for (p, (p_open, p_close, p_sent)), (q, (q_open, q_close, q_sent)) in _sharing_a_minute(by_request):
             if p_sent is not None and q_sent is not None and p_sent != q_sent:
                 early_close, late_open = (p_close, q_open) if p_sent < q_sent else (q_close, p_open)
                 if early_close <= late_open:
@@ -287,6 +324,25 @@ def _usable_door_times(lines: list[dict]) -> list[dict]:
     return [{**line, "door_opened_at": None, "door_closed_at": None,
              "door_notes": tuple(notes[line["request_id"]].values())} if line["request_id"] in notes else line
             for line in lines]
+
+
+def _sharing_a_minute(by_request: dict[str, tuple]) -> list[tuple[tuple, tuple]]:
+    """Each pair of visits to one slot that share a minute, `((p, visit), (q, visit))` with p < q.
+
+    Sorted by door open, a visit can only share a minute with the ones after it
+    that open before its close minute ends, so the scan stops there: linear in
+    the visits plus the pairs found, not every pair.
+    """
+    by_open = sorted(by_request.items(), key=lambda item: (item[1][0], item[0]))
+    pairs = []
+    for i, (p, (p_open, p_close, p_sent)) in enumerate(by_open):
+        for q, (q_open, q_close, q_sent) in by_open[i + 1:]:
+            if q_open >= p_close + _MINUTE:
+                break
+            # q opened no earlier than p, so p opened before q's close minute ended too.
+            pair = sorted(((p, (p_open, p_close, p_sent)), (q, (q_open, q_close, q_sent))))
+            pairs.append(tuple(pair))
+    return sorted(pairs)
 
 
 def sales_from_counters(rows: list[tuple]) -> list[Movement]:
@@ -483,8 +539,12 @@ def _shares(m: Movement, change: Movement, old: int | None) -> list[Movement]:
     return out
 
 
-def _replay_order(m: Movement) -> tuple[datetime, int, int, int]:
-    return m.at, _GROUP[m.kind], m.seq, _ORDER[m.kind]
+def _replay_order(m: Movement) -> tuple[datetime, int, int, int, int]:
+    """Sort key: see the note at `_ORDER`. Within one moment's receipt movements, tier 0 is the
+    pulls (and old-product shares) without a submission order, tier 1 the door-timed ones by
+    request, tier 2 the other loads and purchases."""
+    tier = 1 if m.seq else 0 if _ORDER[m.kind] <= 0 else 2
+    return m.at, _GROUP[m.kind], tier, m.seq, _ORDER[m.kind]
 
 
 def cents(amount: Decimal | str | None) -> Fraction | None:
@@ -745,14 +805,15 @@ def request_times(lines: list[dict]) -> dict[str, datetime]:
     return out
 
 
-def _receipts(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
+def _receipts(conn: psycopg.Connection, lines: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
     """Every fulfilled line and every loss recorded against one: our own purchases, whatever the assignment.
 
     Once the ledger has an opening entry, lines before it on the receipt clock (`receipt_lines`) are
-    test purchases, and they and their later losses are left out: see the module docstring.
+    test purchases, and they and their later losses are left out: see the module docstring. `lines`
+    is `receipt_lines(conn)` when the caller has read it already.
     """
     since_at = receipts_count_from(conn)
-    lines = [line for line in receipt_lines(conn)
+    lines = [line for line in (receipt_lines(conn) if lines is None else lines)
              if since_at is None or (line["at"] is not None and line["at"] >= since_at)]
     kept = {(line["request_id"], line["line_no"]) for line in lines}
     losses = [loss for loss in (dict(zip(_LOSS_COLUMNS, row)) for row in conn.execute(
@@ -781,16 +842,17 @@ def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetC
                  for c in weighted_average(movements_from_receipts(lines, losses)).closet)
 
 
-def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
+def stock(conn: psycopg.Connection, until: datetime | None = None, lines: list[dict] | None = None) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll.
 
     Once the ledger has an opening entry, receipt lines resolved before it (test purchases) and their
-    later losses are left out (`_receipts`): see the module docstring.
+    later losses are left out (`_receipts`): see the module docstring. `lines` is
+    `receipt_lines(conn)` when the caller has read it already.
     """
-    return replay(load_movements(conn), until)
+    return replay(load_movements(conn, lines), until)
 
 
-def load_movements(conn: psycopg.Connection) -> list[Movement]:
+def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None) -> list[Movement]:
     """Every stock movement on record, unsorted: what `stock()` replays.
 
     Separate so a caller that needs the stock at many moments (the daily money
@@ -800,7 +862,7 @@ def load_movements(conn: psycopg.Connection) -> list[Movement]:
     (#97) before it cuts.
     """
     assigned = set(our_slots(conn))
-    lines, losses = _receipts(conn)
+    lines, losses = _receipts(conn, lines)
     # Receipts preserve our purchases, but cannot authorize counter reads after reassignment.
     slots = sorted({line["slot"] for line in lines} & assigned)
     # poll_selections only has rows for polls whose checksum passed. The sync
