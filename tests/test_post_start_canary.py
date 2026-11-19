@@ -18,13 +18,9 @@ machine-wide total is in what comes back, and the rows it shows are exactly ours
   from the stored assignment.
 
 It runs once for each assignment in `tests.test_post_start.ASSIGNMENTS`: four in each row, like a
-redraw could give us. On main, `our_slots` refuses any assignment that isn't columns 5-8 (the
-hard-coded `vending.slots.SLOTS`), so those runs are strict xfails that expect `SlotsNotRecorded`
-and name #146, which removes it.
-
-The local dashboard and `slot_counts.latest` still show the other team's counts on main; #146
-(use_server_slots) cuts `slot_counts.latest` to our assignment. Those two are strict xfails that
-expect `Leak`, so they fail loudly once #146 lands and the marks should come off.
+redraw could give us. #146 (use_server_slots) made every one of them work and cut
+`slot_counts.latest` and the local dashboard's counts to our assignment, so every run is a plain
+positive test.
 """
 
 import html
@@ -42,10 +38,10 @@ psycopg = pytest.importorskip("psycopg")
 from tests.conftest import open_in  # noqa: E402
 from tests.test_pages import _get, fresh, reader, site  # noqa: E402, F401 (fixtures)
 from tests.test_post_start import (  # noqa: E402, F401 (script is a fixture)
-    ASSIGNMENTS, COLUMNS_5_TO_8, OUR_PRICE, SENTINEL_PRICE, SENTINEL_UNITS, leaked, machine_poll, others, script)
+    ASSIGNMENTS, OUR_PRICE, SENTINEL_PRICE, SENTINEL_UNITS, leaked, machine_poll, others, script)
 from tests.test_server import call  # noqa: E402
 from vending import dashboard, db, db_explorer, ledger, server, slot_counts, stock  # noqa: E402
-from vending.slots import SlotsNotRecorded, our_slots  # noqa: E402
+from vending.slots import our_slots  # noqa: E402
 from vending.start import START  # noqa: E402
 from vending.sync_history import store  # noqa: E402
 from vending.tools import catalog, machine_state, pnl, purchase_requests  # noqa: E402
@@ -64,29 +60,14 @@ TOTALS = (VA1_CENTS, VA1_UNITS, N * SENTINEL_UNITS, N * SENTINEL_PRICE * SENTINE
 
 
 class Leak(AssertionError):
-    """The other team's data or a machine-wide total shows. The #146 xfails expect exactly this."""
+    """The other team's data or a machine-wide total shows."""
 
 
-UNTIL_146 = pytest.mark.xfail(strict=True, raises=SlotsNotRecorded,
-                              reason="on main our_slots refuses an assignment that isn't columns 5-8 "
-                                     "(vending.slots.SLOTS); #146 (use_server_slots) removes that bound")
-
-
-@pytest.fixture(params=[pytest.param(ours, id=name, marks=() if ours == COLUMNS_5_TO_8 else UNTIL_146)
-                        for name, ours in ASSIGNMENTS.items()])
+@pytest.fixture(params=[pytest.param(ours, id=name) for name, ours in ASSIGNMENTS.items()])
 def assignment(request) -> tuple[str, ...]:
     """Our selections in this test, stored as the server's assignment by `machine`."""
     assert len(request.param) == N
     return request.param
-
-
-def leaks_until_146(reason: str):
-    """Run a test over every assignment, as a strict xfail expecting `Leak` on columns 5-8 and
-    `SlotsNotRecorded` (UNTIL_146) on the rest, so each run expects exactly one exception."""
-    leak = pytest.mark.xfail(strict=True, raises=Leak, reason=reason)
-    return pytest.mark.parametrize(
-        "assignment", [pytest.param(ours, id=name, marks=leak if ours == COLUMNS_5_TO_8 else UNTIL_146)
-                       for name, ours in ASSIGNMENTS.items()], indirect=True)
 
 
 def clean(text: str) -> None:
@@ -348,19 +329,14 @@ def test_the_bridge_summary_with_the_stored_assignment(machine, assignment, scri
 
 
 # --- Fixed by #146 --------------------------------------------------------------------------------
-# After #146 lands, `clean` passes, the asserts after it run, and these strict xfails XPASS and fail:
-# take the marks off. They are then positive assertions: our count is there, the rival's is not.
+# #146 cut these to our assignment: our count is there, the other team's is not.
 
-@leaks_until_146("slot_counts.latest reads every selection counted; #146 (use_server_slots) cuts it to "
-                 "our assignment")
 def test_slot_counts_latest(machine, assignment):
     latest = slot_counts.latest(machine)
     clean(json.dumps(latest, default=str))
     assert set(latest) == {assignment[0]} and others(assignment)[0] not in latest
 
 
-@leaks_until_146("the local dashboard's counts come from slot_counts.latest; #146 (use_server_slots) cuts "
-                 "it to our assignment")
 def test_the_local_dashboard(machine, assignment):
     snap = dashboard.snapshot(machine, NOW)
     clean(dashboard.to_json(snap))
