@@ -14,7 +14,7 @@ script or another agent.
 
 ![The dashboard with sample data](dashboard/current.png)
 
-*Sample data from a throwaway database, not a real run. **The highlighted columns in this picture are not our real slots.** For the screenshot our slots were set to columns 2, 4, 6 and 8, to show the page follows `vending.slots`. Our real slots are the ones the stored server assignment names (`python -m vending.slots`).*
+*Made-up data from a throwaway database, not a real run, and the purple banner says so. **The selections lit in this picture are not our real slots.** For the screenshot the stored assignment was set to 20 scattered selections, to show the page follows `vending.slots`. Our real slots are the ones the stored server assignment names (`python -m vending.slots`).*
 
 The money panel (#48), with seeded test data rendered at a fixed time (9 Dec): an opening of $600, two fulfilled
 requests, three model calls and one pending request. Light, dark and phone:
@@ -45,18 +45,18 @@ what changed and why.
 
 ### The machine close-up
 
-![In the machine, dark theme](dashboard/machine-closeup-dark.png)
+![In the machine with selection 31 picked, dark theme](dashboard/machine-closeup-dark.png)
 
 | | |
 |---|---|
 | ![Light theme](dashboard/machine-closeup-light.png) | ![Next Friday](dashboard/machine-closeup-next-friday.png) |
-| Light theme | Next Friday: a swap (12), a price change (13) |
+| Light theme, before the slot lock: 31 picked | After the lock, Next Friday: a swap (31), new prices (13, 43, 58), a pull (51) |
 
-![A 390 px phone](dashboard/machine-closeup-phone-390.png)
+![A 390 px phone, with the close-up open as a sheet](dashboard/machine-closeup-phone-390.png)
 
-*Sample data in a throwaway local database, not a real run: the products, prices, plan and reasons
-are made up, and our selections were set to columns 1 to 4 for the picture. Seeded the evening of
-15 Nov 2026.*
+*Made-up data in a throwaway local database, not a real run, and the purple banner says so: the
+slot assignment (20 scattered selections), products, prices, sales, plans, reasons, requests and
+visits are invented. Seeded 19 Nov 2026.*
 
 How to read a lane:
 
