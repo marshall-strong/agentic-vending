@@ -357,7 +357,8 @@ def html(panel: dict) -> str:
             f'<h3>Where the money has gone</h3>{_split_bar(d)}{pend}'
             f'<h3>Against the proposed budget</h3>{meters}'
             f'<div class="grid2 mlow"><div><h3>Profit and loss since the opening</h3><table class="mpnl">{pnl_rows}</table>'
-            '<p class="sub">Weekly detail: <code>python -m vending.pnl_report</code>.</p></div>'
+            '<p class="sub">Weekly detail: <a href="/dashboard/pnl">the weekly P&amp;L</a> on the team&#39;s '
+            'dashboard, or <code>python -m vending.pnl_report</code> on a laptop.</p></div>'
             f'<div>{plan}' + (f'<h3>Ledger notes</h3><ul class="mnotes">{notes}</ul>' if notes else "") + "</div></div>")
 
 

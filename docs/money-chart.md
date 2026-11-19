@@ -86,3 +86,9 @@ The Container App serves it at `/dashboard/money`, behind the team password, bui
 from the ledger. Before the opening it shows no chart: it says there is no competition money yet and
 links `/dashboard/demo/money`, this page with its MOCK data under a DEMO banner. The live route never
 draws the MOCK data (`money_chart.live_page`). See [`dashboard.md`](dashboard.md#the-charts-beside-it).
+
+| `/dashboard/demo/money` (MOCK data, DEMO banner) | `/dashboard/money` before the opening | `/dashboard/money` with an opened ledger |
+|---|---|---|
+| ![Demo](money-chart/served-demo-1280-light.png) | ![Before the opening](money-chart/served-before-opening-1280-light.png) | ![Opened, made-up data](money-chart/served-opened-madeup-1280-light.png) |
+
+*All three are from throwaway local databases with made-up data (the red strip says so); none is the team's data.*
