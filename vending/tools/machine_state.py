@@ -291,7 +291,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     wildcard = config.get_value(conn, "wildcard_slot")
     # The trial's loads leave out test purchases from before the ledger's opening, as the stock does.
-    trial_loads = stock.loads(conn)
+    trial_loads = stock.loads(conn, now, lines=receipts)
     trial = trial_reply(wildcard_trial.trial(conn, now, counts, trial_loads, counted.sales, slots, wildcard),
                         # A slot set that isn't ours has no verdict; nor is any slot judged silent against it.
                         wildcard_trial.silent_slots(conn, now, counts, trial_loads, counted.sales, slots, wildcard)

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from tests.conftest import store_poll
 from tests.test_machine_state import fulfilled
 from vending import counters, stock
-from vending.wildcard_trial import SILENT_DAYS, silent_slots
+from vending.wildcard_trial import SILENT_DAYS, pulls, silent_slots
 
 UTC = timezone.utc
 R0 = datetime(2026, 10, 16, 20, tzinfo=UTC)       # a Friday visit, 4 PM Eastern
@@ -247,6 +247,20 @@ def test_a_test_purchase_before_the_ledger_opened_is_no_friday_visit(conn):
     assert stock.request_loads(conn, ["t0"]) == {}
     assert all(at >= opened for slot_loads in stock.loads(conn).values() for at, _ in slot_loads)
 
+
+
+def test_loads_and_pulls_are_on_the_receipt_clock(conn):
+    """With door times the stock replay pulls at door open and loads at door close (#168), not at resolved_at.
+    The trial's loads and pulls read the same clock, so a swap's pull can't land after its load, and a load
+    after `until` hasn't happened yet."""
+    machine(conn)
+    opened, closed = VISIT - timedelta(hours=2), VISIT - timedelta(hours=1, minutes=30)
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
+                 (opened, closed))
+    conn.execute("update purchase_lines set units_pulled = 10, pulled_sku = 'EEE' where request_id = 'r1' and slot = '25'")
+    assert stock.loads(conn)["25"] == [(R0, 10), (closed, 10)]
+    assert stock.loads(conn, until=closed - timedelta(minutes=1))["25"] == [(R0, 10)]
+    assert pulls(conn)["25"] == [(opened, 10)]
 
 def test_a_slot_emptied_by_a_recorded_loss_isnt_in_stock_until_it_is_refilled(conn):
     """16 holds 12 BBB after the 23 Oct visit, loses all 12 the next day (a recorded coil loss), and gets 6 more

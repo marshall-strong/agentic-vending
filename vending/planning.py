@@ -157,7 +157,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     if settings.wildcard_slot is not None:
         # For the promotion gate: the same verdict and silent slots get_machine_state shows the agent.
         counts = {c.slot: c for c in counted.slots if c.slot in settings.slots}
-        loads = stock.loads(conn)
+        loads = stock.loads(conn, now)
         trial = wildcard_trial.trial(conn, now, counts, loads, counted.sales, settings.slots, settings.wildcard_slot)
         verdict = trial.verdict if trial is not None else None
         report = wildcard_trial.silent_slots(conn, now, counts, loads, counted.sales, settings.slots,

@@ -501,28 +501,32 @@ def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list
 def coil_losses(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, str, int]]]:
     """Units recorded lost from each slot after loading, as `(recorded_at, sku, units)`, from fulfilled receipts.
 
-    Lines resolved before the ledger's opening are left out, as in `stock._receipts`."""
+    Losses on lines before the ledger's opening on the receipt clock are left out, as in `stock._receipts`."""
+    kept = {(line["request_id"], line["line_no"]) for line in stock.counted_lines(conn)}
     out: dict[str, list[tuple[datetime, str, int]]] = {}
-    since = stock.receipts_count_from(conn)
-    for slot, at, sku, units in conn.execute(
-            "select l.slot, o.recorded_at, o.sku, o.units from purchase_line_losses o"
+    for request_id, line_no, slot, at, sku, units in conn.execute(
+            "select o.request_id, o.line_no, l.slot, o.recorded_at, o.sku, o.units from purchase_line_losses o"
             " join purchase_lines l using (request_id, line_no) join purchase_requests r using (request_id)"
-            " where r.status = 'fulfilled' and o.location = 'coil' and o.units > 0"
-            " and (%s::timestamptz is null or l.resolved_at >= %s)", (since, since)):
-        out.setdefault(slot, []).append((at, sku, units))
+            " where r.status = 'fulfilled' and o.location = 'coil' and o.units > 0"):
+        if (request_id, line_no) in kept:
+            out.setdefault(slot, []).append((at, sku, units))
     return out
 
 
 def pulls(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
-    """Units pulled from each slot by fulfilled receipts, as `(resolved_at, units)`, in time order.
+    """Units pulled from each slot by fulfilled receipts, as `(at, units)`, in time order.
 
-    Lines resolved before the ledger's opening are left out, as in `stock._receipts`."""
+    Dated as the stock replay pulls them: at door open when it uses the receipt's door times
+    (`stock.receipt_lines`), else at `resolved_at`. Lines before the ledger's opening on the receipt
+    clock are left out, as in `stock._receipts`."""
+    timed = []
+    for line in stock.counted_lines(conn):
+        door = line["door_opened_at"] is not None and line["door_closed_at"] is not None
+        at = line["door_opened_at"] if door else line["resolved_at"]
+        if line["units_pulled"] and at is not None:
+            timed.append((at, line["slot"], line["units_pulled"]))
     out: dict[str, list[tuple[datetime, int]]] = {}
-    since = stock.receipts_count_from(conn)
-    for slot, at, units in conn.execute(
-            "select l.slot, l.resolved_at, l.units_pulled from purchase_lines l join purchase_requests r"
-            " using (request_id) where r.status = 'fulfilled' and l.units_pulled > 0 and l.resolved_at is not null"
-            " and (%s::timestamptz is null or l.resolved_at >= %s) order by l.resolved_at", (since, since)):
+    for at, slot, units in sorted(timed):
         out.setdefault(slot, []).append((at, units))
     return out
 
