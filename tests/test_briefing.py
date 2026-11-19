@@ -254,20 +254,22 @@ def test_eastern_week_and_dst_boundaries(conn, now, week, days):
     assert w.days == days
 
 
-def test_week_boundary_entry_belongs_only_to_new_week(conn):
+@pytest.mark.parametrize("offset,previous,current", [(timedelta(0), "0.25", "1.50"),
+                                                     (-timedelta(microseconds=1), "1.25", "0.50")])
+def test_week_boundary_entry_belongs_to_exactly_one_week(conn, offset, previous, current):
     sample(conn)
-    boundary = datetime(2026, 11, 7, 5, tzinfo=timezone.utc)
-    ledger.record_tokens(conn, "1.00", "fixture", 1, 1, "at-boundary", at=boundary)
+    boundary = datetime(2026, 11, 7, 5, tzinfo=timezone.utc)   # Saturday 00:00 Eastern; the other case is Friday 23:59:59.999999
+    ledger.record_tokens(conn, "1.00", "fixture", 1, 1, "at-boundary", at=boundary + offset)
     b = briefing.build(conn, NOW)
-    assert b.money["previous"].live_api_spend == "0.25"
-    assert b.money["current"].live_api_spend == "1.50"
+    assert (b.money["previous"].live_api_spend, b.money["current"].live_api_spend) == (previous, current)
 
 
-def test_a_sale_at_the_week_boundary_poll_lands_in_exactly_one_week(conn):
+@pytest.mark.parametrize("friday", [102, 5])   # 5: a misread the ledger's counter guard rejects
+def test_a_sale_at_the_week_boundary_poll_lands_in_exactly_one_week(conn, friday):
     sample(conn)
     boundary = datetime(2026, 11, 7, 5, tzinfo=timezone.utc)   # Saturday 00:00 Eastern
-    # Friday 23:55 at 102 (as the 6 Nov poll), Saturday 00:00 sharp at 103: one sale per slot across the boundary.
-    store_poll(conn, "fri-2355", (boundary - timedelta(minutes=5)).isoformat(), {s: (270, 102) for s in SLOTS})
+    # Friday 23:55 (after the 6 Nov poll's 102), Saturday 00:00 sharp at 103: one sale per slot across the boundary.
+    store_poll(conn, "fri-2355", (boundary - timedelta(minutes=5)).isoformat(), {s: (270, friday) for s in SLOTS})
     store_poll(conn, "sat-0000", boundary.isoformat(), {s: (270, 103) for s in SLOTS})
     m = briefing.build(conn, NOW).money
     # 100 -> 102 in the previous week, 102 -> 106 in this one (the 00:00 poll's sale included): 20 slots at $2.50 ex tax.

@@ -158,10 +158,12 @@ def _section(conn, b: Briefing, name: str, lookup: str, fn):
 
 
 def _window(conn, start: datetime, end: datetime, partial: bool, ours: tuple[str, ...],
-            since: datetime | None = None) -> MoneyWindow:
-    """The window from `start` to `end`. `since` is `ledger.pnl`'s start when it isn't `start`: see `_money`."""
-    p = ledger.pnl(conn, start if since is None else since, end)
+            week: ledger.WeekPnl | None = None) -> MoneyWindow:
+    """The window from `start` to `end`. With `week`, the money is that week's row (see `_money`); the polls
+    that say whether its sales are complete are still the window's own."""
+    p = ledger.pnl(conn, start, end)
     first, last = p.takings.start_poll, p.takings.end_poll
+    m = p if week is None else week
     available = first is not None and last is not None and first < last
     covered = False
     if available:
@@ -172,16 +174,16 @@ def _window(conn, start: datetime, end: datetime, partial: bool, ours: tuple[str
             (DEVICE_ID, [first, last], list(ours))).fetchall()
         covered = len(counts) == 2 and all(n == len(ours) for _, n in counts)
     complete = available and covered and first <= start
-    costs_complete = p.cost_of_sales_complete and p.shrinkage_complete
+    costs_complete = m.cost_of_sales_complete and m.shrinkage_complete
     profit_complete = complete and costs_complete
-    gross = p.gross_margin_cents if profit_complete else None
+    gross = m.revenue_ex_tax_cents - m.cost_of_sales_cents if profit_complete else None
     share = None
     if not profit_complete:
         reason = "incomplete sales, cost of sales, or shrinkage"
     elif gross <= 0:
         reason = "gross profit is not positive"
     else:
-        share = str((Decimal(p.token_spend_cents.numerator) / p.token_spend_cents.denominator
+        share = str((Decimal(m.token_spend_cents.numerator) / m.token_spend_cents.denominator
                      / (Decimal(gross.numerator) / gross.denominator) * 100).quantize(
                          Decimal("0.1"), rounding=ROUND_HALF_UP))
         reason = None
@@ -189,13 +191,13 @@ def _window(conn, start: datetime, end: datetime, partial: bool, ours: tuple[str
         start=start, end=end, days=(end.astimezone(EASTERN).date() - start.astimezone(EASTERN).date()).days + 1,
         partial=partial, start_poll=first, end_poll=last,
         unavailable=None if available else "fewer than two usable polls",
-        revenue_ex_tax=ledger.money(p.revenue_ex_tax_cents) if available else None,
-        known_cost_of_sales=ledger.money(p.cost_of_sales_cents), known_shrinkage=ledger.money(p.shrinkage_cents),
-        visit_fees=ledger.money(p.visit_fees_cents), adjustments=ledger.money(p.adjustments_cents),
-        cost_of_sales_complete=p.cost_of_sales_complete, shrinkage_complete=p.shrinkage_complete,
+        revenue_ex_tax=ledger.money(m.revenue_ex_tax_cents) if available else None,
+        known_cost_of_sales=ledger.money(m.cost_of_sales_cents), known_shrinkage=ledger.money(m.shrinkage_cents),
+        visit_fees=ledger.money(m.visit_fees_cents), adjustments=ledger.money(m.adjustments_cents),
+        cost_of_sales_complete=m.cost_of_sales_complete, shrinkage_complete=m.shrinkage_complete,
         sales_complete=complete, gross_profit=ledger.money(gross),
-        net_profit=ledger.money(p.net_cents) if profit_complete else None,
-        live_api_spend=ledger.money(p.token_spend_cents), api_share_of_gross_profit=share, api_share_reason=reason)
+        net_profit=ledger.money(m.net_cents) if profit_complete else None,
+        live_api_spend=ledger.money(m.token_spend_cents), api_share_of_gross_profit=share, api_share_reason=reason)
 
 
 def _money(conn, b: Briefing, ours: tuple[str, ...]) -> None:
@@ -207,19 +209,20 @@ def _money(conn, b: Briefing, ours: tuple[str, ...]) -> None:
     week = ledger.week_of(now.astimezone(EASTERN))
     current = datetime.combine(week, time.min, EASTERN).astimezone(timezone.utc)
     previous = datetime.combine(week - timedelta(days=7), time.min, EASTERN).astimezone(timezone.utc)
-    # Adjacent weeks share one boundary, as in `vending.money_series`: a week runs from just before its
-    # midnight to just before the next. `ledger.pnl` counts a sale at a poll after its start, so a poll at
-    # Saturday 00:00 sharp, and the sales it shows since Friday's last poll, land in the new week, once.
-    edge = timedelta(microseconds=1)
-    for name, start, end in (("current", current, now),
-                             ("previous", previous, current - edge),
-                             ("competition", opened.at, now)):
+    # The two weeks' money is `ledger.pnl_by_week` from the opening: one counter series, misreads guarded
+    # as in `ledger.pnl`, never restarted from a reading at a week's edge. Each sale is booked to the week
+    # of the poll that showed it (a poll at Saturday 00:00 sharp is the new week's), and each entry, visit
+    # and loss to the week it happened in, so no line lands in both weeks or in neither.
+    weeks = {w.week: w for w in ledger.pnl_by_week(conn, opened.at, now)}
+    for name, start, end, row in (("current", current, now, weeks.get(week)),
+                                  ("previous", previous, current - timedelta(microseconds=1),
+                                   weeks.get(week - timedelta(days=7))),
+                                  ("competition", opened.at, now, None)):
         if end < opened.at:
             b.money[name] = MoneyWindow(unavailable="before ledger opening")
             continue
         clipped = max(start, opened.at)
-        since = clipped if clipped == opened.at else clipped - edge   # the opening's poll is the baseline
-        b.money[name] = _window(conn, clipped, end, name != "previous" or clipped != start, ours, since)
+        b.money[name] = _window(conn, clipped, end, name != "previous" or clipped != start, ours, row)
     # Competition figures count from the ledger opening; the balance is only read for its spendable total.
     balance = ledger.balance(conn, now)
     if b.money["competition"].sales_complete and not any("receipt lines have no total_paid" in n for n in balance.notes):
