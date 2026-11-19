@@ -513,7 +513,7 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     else:
         if guessed:
             notes.append(f"{guessed} of {units} units sold across a product change the counters can't split; "
-                         "cost of sales includes them at the new product's average cost, which may be the wrong "
+                         "cost of sales includes them at the cost of the new product's oldest units, which may be the wrong "
                          "product's")
         if units_costed < units:
             notes.append(f"{units - units_costed} of {units} units sold have no known cost (sold from a slot before "
