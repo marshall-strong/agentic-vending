@@ -119,6 +119,9 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     notes.extend(counted.warnings)
     by_slot = {s.slot: s for s in counted.slots}
     prices, poll_at = _latest_prices(conn, settings.slots)
+    # A slot the latest poll didn't read keeps the last price a poll did read, so a kept slot can't slip past the
+    # ceiling just because one poll left it out (the planner refuses a kept slot whose price was never read).
+    prices.update(_last_known_prices(conn, [s for s in settings.slots if prices.get(s) is None]))
     if poll_at is None:
         notes.append("no good poll is stored, so current prices are unknown; every slot's price change "
                      "will look like a change")
@@ -328,3 +331,21 @@ def _latest_prices(conn: psycopg.Connection, slots: tuple[str, ...]) -> tuple[di
         " where p.device_id = %s and p.crc_ok and p.started_at = %s and s.selection = any(%s) group by s.selection",
         (DEVICE_ID, latest, list(slots)))
     return {selection: prices[0] if len(prices) == 1 else None for selection, prices in rows}, latest
+
+
+def _last_known_prices(conn: psycopg.Connection, slots: list[str]) -> dict[str, int]:
+    """Each slot's price at the latest good poll that read one, for slots the latest poll left unread.
+
+    A poll at that moment that disagrees leaves it out: unknown. A price a newer poll didn't read is still the
+    price on the shelf as far as we know, so the planner checks a kept slot against it rather than nothing."""
+    if not slots:
+        return {}
+    rows = conn.execute(
+        "select distinct on (s.selection) s.selection, p.started_at,"
+        " (select array_agg(distinct s2.price_cents) from poll_selections s2 join polls p2 using (session_id)"
+        "  where p2.device_id = %s and p2.crc_ok and p2.started_at = p.started_at and s2.selection = s.selection"
+        "  and s2.price_cents is not null)"
+        " from poll_selections s join polls p using (session_id)"
+        " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and s.price_cents is not null"
+        " order by s.selection, p.started_at desc", (DEVICE_ID, DEVICE_ID, list(slots)))
+    return {selection: prices[0] for selection, _, prices in rows if prices and len(prices) == 1}

@@ -758,6 +758,15 @@ class TestWildcard(unittest.TestCase):
         at_ceiling = {"18": SlotState("18", SPRITE, 650, 10, 50)}
         self.assertTrue(wild(pickle_17(price="7.50"), slots=at_ceiling).ok)
 
+    def test_a_kept_slot_of_unknown_price_holding_units_is_refused(self):
+        # No poll ever read its price (planning falls back to the last one that did), so nothing shows it is under
+        # its ceiling: refused, regular or wildcard, with or without a wildcard set. Empty, it sells nothing.
+        unread = {"18": SlotState("18", SPRITE, None, 10, 50)}
+        self.assertEqual(where(wild(pickle_17(price="7.50"), slots=unread)), [("price_unknown", "18")])
+        self.assertEqual(where(wild(restock_15(), slot=None, slots=unread)), [("price_unknown", "18")])
+        self.assertEqual(where(wild(restock_15(), slot="18", slots=unread)), [("price_unknown", "18")])
+        self.assertTrue(wild(restock_15(), slots={"18": SlotState("18", SPRITE, None, 0, 50)}).ok)
+
     def test_a_kept_wildcard_stays_under_the_wildcard_ceiling(self):
         # A lowered setting, or a price set before it: keeping it there is refused too.
         over = {"18": SlotState("18", SPRITE, 900, 10, 50)}
@@ -920,7 +929,8 @@ class TestWildcard(unittest.TestCase):
     def test_a_regular_slot_of_unknown_price_or_contents_is_just_a_regular_slot(self):
         # Only the configured slot is the wildcard, so nothing about another slot makes it one: no cap on others'
         # purchases, and they may switch.
-        state = {"15": SlotState("15", None, None, 2, None), "16": SlotState("16", SPRITE, None, 2, 50),
+        # 15 holds nothing the receipts know of, so its unknown price sells nothing (test_a_kept_slot_of_unknown_price).
+        state = {"15": SlotState("15", None, None, 0, None), "16": SlotState("16", SPRITE, None, 2, 50),
                  "18": SlotState("18", None, 750, 0, None, contents_known=False)}
         dear = Sourcing(MTDEW, PurchaseOption("BJs", 24, "85.00"))
         mtdew_16 = DesiredSlot("16", product=MTDEW, sale_price="6.00", fill_to=10)

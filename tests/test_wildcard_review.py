@@ -444,3 +444,22 @@ def test_10_the_capital_plan_has_the_same_friday_switch_and_the_waiting_rate():
     doc = _doc("docs/opening-capital-plan.md")
     assert "the wildcard moves on to the next product in the same plan" in doc
     assert "0.7 units a class day" in doc
+
+
+# --- 10. A price a poll left out ------------------------------------------------------------------------
+
+def test_10_a_poll_that_leaves_a_price_out_keeps_the_last_price_read(conn):
+    """18 last read $7.50; the newest poll reads no price for it (left out, or read empty). Planning keeps $7.50, so
+    the planner's ceiling check sees it; a slot no poll ever priced stays unknown, which the planner refuses when
+    it holds units (tests/test_planner.py)."""
+    from tests.test_ledger import open_ledger
+    from vending import planning
+
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=UTC))
+    fulfilled(conn, "r0", datetime(2026, 10, 16, 20, tzinfo=UTC), ("16", "BBB", "primary", "10.00", 10, 0, 0),
+              ("17", "CCC", "primary", "10.00", 10, 0, 0), ("18", "FFF", "primary", "10.00", 10, 0, 0))
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"16": (200, 50), "18": (750, 100)})
+    store_poll(conn, "p1", "2026-10-26T18:00:00+00:00", {"16": (200, 50), "18": (None, 100)})
+    store_poll(conn, "p2", "2026-10-27T01:00:00+00:00", {"16": (200, 50)})
+    by_slot = {s.slot: s for s in planning.gather(conn, [], datetime(2026, 10, 27, 2, tzinfo=UTC)).current.slots}
+    assert (by_slot["16"].price_cents, by_slot["18"].price_cents, by_slot["17"].price_cents) == (200, 750, None)
