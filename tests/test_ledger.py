@@ -122,8 +122,8 @@ NOW = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
 UNIT_COST = Fraction(1237, 11)
 
 
-def open_ledger(conn, cents=60000):
-    return ledger.record(conn, "opening", cents, "opening capital", "marshall", OPENED)
+def open_ledger(conn, cents=60000, at=OPENED):
+    return ledger.record(conn, "opening", cents, "opening capital", "marshall", at)
 
 
 def deliver(conn, request_id, off_cycle=False, resolved_at="2026-11-07T16:00:00Z", visit_fee_cents=None, losses=()):

@@ -24,7 +24,7 @@ def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit
     stored inside a gap `(begin, end)`. `drop_at` is when slot 16's units counter reads low once. `edit(t,
     units)` may change a poll's units per slot before it is stored, or drop a slot from it. `full` loads our
     other 13 slots at the 16 Oct visit too (no poll reads them), so a receipt names what every slot holds."""
-    from vending.slots import SLOTS
+    from tests.conftest import TEST_SLOTS as SLOTS
 
     sales = sales or {}
     lines = [(slot, sku, "primary", paid, 10, 0, 0) for slot, sku, paid in (
@@ -224,7 +224,7 @@ def test_the_planner_gets_the_verdict_and_the_silent_slots(conn):
     from vending import config, planner, planning, wildcard_trial
 
     assert planner.PASS_VERDICT == wildcard_trial.PASS
-    open_ledger(conn)
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=UTC))  # before the October receipts, which it would drop
     machine(conn, sales=trial_sales(), full=True)
     gathered = planning.gather(conn, [], NOW)
     assert (gathered.current.wildcard_verdict, gathered.current.silent) == (None, frozenset())   # no wildcard set

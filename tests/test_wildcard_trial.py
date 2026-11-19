@@ -125,7 +125,7 @@ def polls(conn, rows, after=None):
 def stock_the_rest(conn, at=SINCE, leave=()):
     """Our other 18 slots loaded at `at` with a product each of their own, so a receipt names what every slot
     holds; a slot in `leave` has no receipt. A trial with a slot no receipt describes has no verdict."""
-    from vending.slots import SLOTS
+    from tests.conftest import TEST_SLOTS as SLOTS
 
     lines = [(slot, f"X{slot}", "primary", "5.00", 5, 0, 0) for slot in SLOTS if slot not in ("15", "16", *leave)]
     fulfilled(conn, "rest", at, *lines)
@@ -190,10 +190,10 @@ def test_a_wildcard_no_longer_in_our_assignment_has_no_verdict_and_blocks_planni
     from tests.test_ledger import open_ledger
     from vending import planning
 
-    open_ledger(conn)
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=timezone.utc))  # before the October receipts, which it would drop
     week_of_sales(conn)
     set_wildcard(conn, "15")
-    conn.execute("update slot_assignment set slots = array_remove(slots, '15')")
+    conn.execute("update slot_assignment set slots = array_replace(slots, '15', '11')")
     reply = get_machine_state(conn, now=NOW)
     t = reply.wildcard_trial
     assert (t.slot, t.product, t.verdict, t.class_days_in_stock) == (None, None, UNKNOWN, None)
@@ -369,7 +369,7 @@ def test_the_planner_gets_the_wildcard_from_config_and_which_slots_it_cant_see(c
     from tests.test_ledger import open_ledger
     from vending import planning
 
-    open_ledger(conn)
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=timezone.utc))  # before the October receipts, which it would drop
     week_of_sales(conn, leave=("17",))
     assert planning.gather(conn, [], NOW).config.wildcard_slot is None
     set_wildcard(conn, "15")

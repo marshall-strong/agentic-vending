@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from tests.conftest import open_in, store_poll
+from tests.conftest import TEST_SLOTS, open_in, store_poll
 from tests.test_machine_state import fulfilled
 from vending import config
 
@@ -24,7 +24,7 @@ def test_7_asking_again_for_a_slot_that_left_our_assignment_is_refused(conn):
 
     set_halted(conn, False, "test")
     config.set_value(conn, "wildcard_slot", "37", "kevin")
-    conn.execute("update slot_assignment set slots = array_remove(slots, '37')")
+    conn.execute("update slot_assignment set slots = array_replace(slots, '37', '11')")
     with pytest.raises(Refused) as caught:
         run_write(conn, "set_wildcard_slot", {"slot": "37", "reason": "again"}, set_wildcard_slot("37", "again"))
     assert "isn't one of ours" in " ".join(r.message for r in caught.value.refusals)
@@ -43,7 +43,7 @@ def test_7_asking_again_still_needs_a_reason(conn):
 
 
 def test_7_the_config_path_checks_the_stored_assignment(conn):
-    conn.execute("update slot_assignment set slots = array_remove(slots, '37')")
+    conn.execute("update slot_assignment set slots = array_replace(slots, '37', '11')")
     with pytest.raises(ValueError, match="isn't one of ours in the stored slot assignment"):
         config.set_value(conn, "wildcard_slot", "37", "kevin")
     assert config.get_value(conn, "wildcard_slot") is None
@@ -51,7 +51,7 @@ def test_7_the_config_path_checks_the_stored_assignment(conn):
 
 def test_7_the_config_path_refuses_the_same_value_once_it_left_the_assignment(conn):
     config.set_value(conn, "wildcard_slot", "37", "kevin")
-    conn.execute("update slot_assignment set slots = array_remove(slots, '37')")
+    conn.execute("update slot_assignment set slots = array_replace(slots, '37', '11')")
     with pytest.raises(ValueError, match="isn't one of ours"):
         config.set_value(conn, "wildcard_slot", "37", "kevin")
 
@@ -61,7 +61,7 @@ def test_7_the_cli_checks_the_stored_assignment(schema_url, monkeypatch, capsys)
 
     monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
     with open_in(*schema_url) as c:
-        c.execute("update slot_assignment set slots = array_remove(slots, '37')")
+        c.execute("update slot_assignment set slots = array_replace(slots, '37', '11')")
     assert config.main(["set", "wildcard_slot", '"37"', "--by", "kevin"]) == 1
     assert "isn't one of ours" in capsys.readouterr().err
 
@@ -95,13 +95,13 @@ def test_8_the_planner_refuses_a_limit_above_the_agreed_one(kwargs):
     from vending.planner import Config
 
     with pytest.raises(ValueError, match="agreed"):
-        Config(**kwargs)
+        Config(slots=TEST_SLOTS, **kwargs)
 
 
 def test_8_the_planner_allows_lower_limits():
     from vending.planner import Config
 
-    c = Config(price_ceiling_cents=600, wildcard_ceiling_cents=700, wildcard_purchase_cap_cents=5000)
+    c = Config(slots=TEST_SLOTS, price_ceiling_cents=600, wildcard_ceiling_cents=700, wildcard_purchase_cap_cents=5000)
     assert (c.price_ceiling_cents, c.wildcard_ceiling_cents, c.wildcard_purchase_cap_cents) == (600, 700, 5000)
 
 
@@ -275,7 +275,7 @@ def test_4_the_planner_gets_no_pass_while_a_regular_slot_has_no_receipt(conn):
     from tests.test_wildcard_trial import FRESH, set_wildcard, week_of_sales
     from vending import planning
 
-    open_ledger(conn)
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=UTC))  # before the October receipts, which it would drop
     week_of_sales(conn, leave=("27",))
     set_wildcard(conn, "15")
     assert planning.gather(conn, [], FRESH).current.wildcard_verdict == "unknown"
@@ -344,14 +344,14 @@ def _slot_18_left_us(conn):
               ("18", "FFF", "primary", "10.00", 10, 0, 0))
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"16": (200, 50), "18": (200, 100)})
     store_poll(conn, "p1", "2026-10-27T01:00:00+00:00", {"16": (200, 50), "18": (200, 130)})
-    conn.execute("update slot_assignment set slots = array_remove(slots, '18')")
+    conn.execute("update slot_assignment set slots = array_replace(slots, '18', '11')")
 
 
 def test_5_planning_reads_no_polls_of_a_slot_no_longer_ours(conn):
     from tests.test_ledger import open_ledger
     from vending import planning
 
-    open_ledger(conn)
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=UTC))  # before the October receipts, which it would drop
     _slot_18_left_us(conn)
     gathered = planning.gather(conn, [], datetime(2026, 10, 27, 2, tzinfo=UTC))
     assert not [n for n in gathered.notes if "slot 18" in n]
@@ -370,7 +370,6 @@ def test_5_machine_state_reads_no_polls_of_a_slot_no_longer_ours(conn):
 def _day_one(db, keep=()):
     """No receipts and no polls; the agent picks 37 with set_wildcard_slot, then previews the fill of all 20."""
     from tests.test_desired_state import FakeBridge, coke_sourcing, desired, ready
-    from vending.planner import OUR_SLOTS
     from vending.tools.preview import preview_desired_state
     from vending.tools.wildcard_slot import set_wildcard_slot
     from vending.write_gate import run_write
@@ -381,7 +380,7 @@ def _day_one(db, keep=()):
                      set_wildcard_slot("37", reason)).success
     fill = [{"slot": "37", "product": "PICKLE", "sale_price": "6.00", "fill_to": 6}]
     fill += [{"slot": s, "product": "COKE20", "sale_price": "2.50", "fill_to": 10}
-             for s in OUR_SLOTS if s != "37" and s not in keep]
+             for s in TEST_SLOTS if s != "37" and s not in keep]
     pickle = {"product": "PICKLE", "primary": {"store": "Costco", "units_per_pack": 6, "max_price_per_pack": "12.00"}}
     bridge = FakeBridge()
     try:

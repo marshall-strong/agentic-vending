@@ -33,7 +33,7 @@ from psycopg.types.json import Jsonb
 from vending.planner import (AGREED_CEILING_CENTS, AGREED_WILDCARD_CAP_CENTS, AGREED_WILDCARD_CEILING_CENTS,
                              MAX_SALE_PRICE_CENTS)
 from vending.pricing import PRICE_STEP_CENTS
-from vending.slots import SLOTS, SlotsNotRecorded, our_slots
+from vending.slots import COLUMNS, SHELVES, SlotsNotRecorded, our_slots
 
 
 @dataclass(frozen=True)
@@ -81,8 +81,9 @@ def _cap(value: Any) -> str | None:
 def _slot(value: Any) -> str | None:
     if not isinstance(value, str):
         return f"must be a slot name in quotes, like '\"37\"', not {json.dumps(value)}"
-    if value not in SLOTS:
-        return f"must be one of our slots ({', '.join(SLOTS)}), not {json.dumps(value)}"
+    # A selection on the machine; whether it is one of ours is checked against the stored assignment in `set`.
+    if not (len(value) == 2 and value[0] in SHELVES and value[1] in COLUMNS):
+        return f"must be a selection, shelf 1-5 then column 1-8 like \"15\", not {json.dumps(value)}"
     return None
 
 

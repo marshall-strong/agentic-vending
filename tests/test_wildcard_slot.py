@@ -98,7 +98,7 @@ def test_the_slot_must_still_be_ours_when_planning(conn):
 
     config.set_value(conn, "wildcard_slot", "37", "kevin")
     assert planning.planner_config(conn).wildcard_slot == "37"
-    conn.execute("update slot_assignment set slots = array_remove(slots, '37')")
+    conn.execute("update slot_assignment set slots = array_replace(slots, '37', '11')")
     with pytest.raises(planning.NotReady, match="isn't one of ours"):
         planning.planner_config(conn)
     # A hand edit that isn't a slot name is refused too.

@@ -740,15 +740,15 @@ class TestWildcard(unittest.TestCase):
 
     def test_the_wildcard_must_be_one_of_ours(self):
         with self.assertRaises(ValueError):
-            Config(wildcard_slot="99")
+            Config(slots=TEST_SLOTS, wildcard_slot="99")
         with self.assertRaises(ValueError):
             Config(slots=("15", "16"), wildcard_slot="17")
 
     def test_the_wildcard_ceiling_is_between_the_ceiling_and_the_api_limit(self):
         with self.assertRaises(ValueError):
-            Config(wildcard_ceiling_cents=1005)
+            Config(slots=TEST_SLOTS, wildcard_ceiling_cents=1005)
         with self.assertRaises(ValueError):
-            Config(price_ceiling_cents=650, wildcard_ceiling_cents=600)
+            Config(slots=TEST_SLOTS, price_ceiling_cents=650, wildcard_ceiling_cents=600)
 
     def test_a_kept_wildcard_stays_under_the_wildcard_ceiling(self):
         # A lowered setting, or a price set before it: keeping it there is refused too.
@@ -864,13 +864,13 @@ class TestWildcard(unittest.TestCase):
 
     # The day-one fill: no slot has receipts, and one request names all 20 slots' products. The wildcard is
     # 37, a slot the setter allows (shelf 3, not column 5); tests/test_wildcard_review.py previews it end to end.
-    DAY_ONE = {s: SlotState(s, None, None, 0, None, contents_known=False) for s in OUR_SLOTS}
+    DAY_ONE = {s: SlotState(s, None, None, 0, None, contents_known=False) for s in TEST_SLOTS}
 
     def day_one(self, *kept: str):
         products = (MTDEW, COKE, SPRITE)
         fill = [DesiredSlot("37", product=PICKLE, sale_price="6.00", fill_to=6)]
         fill += [DesiredSlot(s, product=products[i % 3], sale_price="2.50", fill_to=10)
-                 for i, s in enumerate(s for s in OUR_SLOTS if s != "37" and s not in kept)]
+                 for i, s in enumerate(s for s in TEST_SLOTS if s != "37" and s not in kept)]
         return wild(*fill, slot="37", slots=self.DAY_ONE, sourcing=(SPRITE_SOURCING,), balance=200000)
 
     def test_the_day_one_fill_loads_the_wildcard_with_no_receipts_at_all(self):
