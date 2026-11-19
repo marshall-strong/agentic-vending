@@ -31,7 +31,9 @@ def price_sales(readings, sales) -> list[tuple[int | None, int | None, int, int,
 
     `readings`: `(at, lifetime units, lifetime cents, price)` for each poll of the slot. `sales`: `(prev, at, units,
     cents)` for each poll `at` where the counters rose, `prev` the poll before it. The opening price is the last
-    reading at or before `prev` (the first reading when there is none), the closing price the reading at `at`.
+    reading at or before the unit counter's window start (the first reading when there is none), the closing price the
+    reading at `at`. After a misread that start is the good poll before it, not `prev` (vending.counters.windows): the
+    units may have sold at the price before the misread, which a misread poll's own price would hide.
 
     The units and cents of a poll can be measured from different polls (vending.counters.windows: a misread in one
     counter and not the other). Then the cents do not cover the same units, so a sale whose prices differ is not
@@ -43,7 +45,7 @@ def price_sales(readings, sales) -> list[tuple[int | None, int | None, int, int,
     cents_from = {at: s for s, at, _ in windows((at, c) for at, _, c, _ in readings)}
     out = []
     for prev, at, units, cents in sales:
-        i = bisect_right(times, prev)
+        i = bisect_right(times, unit_from.get(at, prev))
         opening = readings[max(i - 1, 0)][3] if readings else None
         same = unit_from.get(at) is not None and unit_from.get(at) == cents_from.get(at)
         out.append((opening, close.get(at), *split_boundary(int(units), int(cents) if same else None, opening, close.get(at))))

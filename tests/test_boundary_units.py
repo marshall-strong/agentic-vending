@@ -86,6 +86,14 @@ def test_a_misread_both_counters_share_does_not_stop_the_split():
     assert price_sales(readings, [(T[1], T[2], 3, 650)])[0][2:] == (1, 2, 0)
 
 
+def test_a_shared_misread_does_not_hide_a_price_change_before_it():
+    # prices 150, 250, 250; both counters misread at T[1] and agree on the window from T[0]. The three units and 650 cents
+    # fit one at 150 and two at 250 uniquely: the opening price is the price at the window's start, not at the misread poll
+    readings = [(T[0], 10, 1000, 150), (T[1], 4, 500, 250), (T[2], 13, 1650, 250)]
+    assert price_sales(readings, [(T[1], T[2], 3, 650)])[0] == (150, 250, 1, 2, 0)
+    assert average(readings, [(T[1], T[2], 3, 650)]) == ((150 + 2 * 250) / 3, 0)       # not 250 for all three
+
+
 
 def test_a_sale_before_the_slots_first_reading_takes_that_reading():
     readings = [(T[1], 5, 750, 150)]

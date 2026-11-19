@@ -1288,7 +1288,8 @@ def main():
         price_hist[r.slot].append(dict(from_=r.t.isoformat(timespec="minutes"), cents=int(r.price_cents)))
     # Price rules (stated, and what the code does):
     #  * price paid on a sale = the listed price in effect when the sale's poll interval began: the slot's last price
-    #    reading at or before the interval's opening poll (`prev`); a sale before the slot's first reading takes that reading.
+    #    reading at or before the interval's opening poll (`prev`, or the good poll before a misread: where the unit counter's
+    #    window really starts); a sale before the slot's first reading takes that reading.
     #    When the price at the interval's closing poll differs, the units are split between the two prices by the interval's
     #    units and cents (boundary_units.price_sales), if the unit and cents counters rose over the same window (a misread
     #    in one of them moves its window's start); units the counters can't split are left out of the average price and
