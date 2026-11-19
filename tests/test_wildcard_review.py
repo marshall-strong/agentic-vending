@@ -334,3 +334,32 @@ def test_6_the_friday_cutoff_is_the_one_before_the_friday_planned_for():
     assert judged_by(datetime(2026, 10, 29, 20, tzinfo=EASTERN)) == friday_23     # Thursday evening, for the 30th
     assert judged_by(datetime(2026, 10, 30, 9, tzinfo=EASTERN)) == friday_23      # Friday morning, for that day
     assert judged_by(datetime(2026, 10, 31, 9, tzinfo=EASTERN)) == friday_23 + timedelta(days=7)   # Saturday
+
+
+# --- 5. Planning reads the polls of today's slots only -------------------------------------------------
+
+def _slot_18_left_us(conn):
+    """We stocked 18 with 10 on 16 Oct; it is the other team's now, and its counter shows their 30 sales."""
+    fulfilled(conn, "r0", datetime(2026, 10, 16, 20, tzinfo=UTC), ("16", "BBB", "primary", "10.00", 10, 0, 0),
+              ("18", "FFF", "primary", "10.00", 10, 0, 0))
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"16": (200, 50), "18": (200, 100)})
+    store_poll(conn, "p1", "2026-10-27T01:00:00+00:00", {"16": (200, 50), "18": (200, 130)})
+    conn.execute("update slot_assignment set slots = array_remove(slots, '18')")
+
+
+def test_5_planning_reads_no_polls_of_a_slot_no_longer_ours(conn):
+    from tests.test_ledger import open_ledger
+    from vending import planning
+
+    open_ledger(conn)
+    _slot_18_left_us(conn)
+    gathered = planning.gather(conn, [], datetime(2026, 10, 27, 2, tzinfo=UTC))
+    assert not [n for n in gathered.notes if "slot 18" in n]
+
+
+def test_5_machine_state_reads_no_polls_of_a_slot_no_longer_ours(conn):
+    from vending.tools.machine_state import get_machine_state
+
+    _slot_18_left_us(conn)
+    reply = get_machine_state(conn, now=datetime(2026, 10, 27, 2, tzinfo=UTC))
+    assert not [w for w in reply.warnings if "slot 18" in w]
