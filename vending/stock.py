@@ -735,23 +735,28 @@ def _known(layers: list[_Layer]) -> tuple[int, Fraction | None]:
     return sum(layer.units for layer in known), sum((layer.unit_cost * layer.units for layer in known), Fraction(0))
 
 
-def _less_lost(layers: list[_Layer], lost: int) -> list[_Layer]:
-    """Layers drawn from the closet for a load, less `lost` units dropped on the way.
+def _less_lost(layers: list[_Layer], lost: int) -> tuple[list[_Layer], list[_Layer]]:
+    """Layers drawn from the closet for a load, less `lost` units dropped on the way, and the lost
+    layers when no unit that made it can carry their cost (else empty).
 
     The lost units come out of the oldest layers, and their known cost is
     spread evenly over the known units that made it, so the load still costs
     what was drawn and the layers keep their order and differences: a dearer
-    layer stays dearer for later sales and floors.
+    layer stays dearer for later sales and floors. If none of the units that
+    made it has a known cost, the lost layers go back to be written off.
     """
     pool = _Pool()
     pool.add_layers(layers)
-    _, cost = _known(pool.take_layers(lost))
+    dropped = pool.take_layers(lost)
+    _, cost = _known(dropped)
     known = sum(layer.units for layer in pool.layers if layer.unit_cost is not None)
-    if cost and known:
+    if cost and not known:
+        return pool.layers, dropped
+    if cost:
         for layer in pool.layers:
             if layer.unit_cost is not None:
                 layer.unit_cost += cost / known
-    return pool.layers
+    return pool.layers, []
 
 
 @dataclass
@@ -763,7 +768,6 @@ class _Slot:
     sold: int = 0
     lost: int = 0
     oversold: int = 0
-    last_unit_cost: Fraction | None = None
     last_moved: datetime | None = None
     replaced: str | None = None   # the product this one replaced, if the slot changed
     written_off: int = 0          # units of `replaced` written off as shrinkage at the change
@@ -820,9 +824,8 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
             slot.at_most = max(0, slot.at_most - m.units)
             if taken < m.units:
                 warn(m.slot, f"{m.ref}: {m.units} units pulled from slot {m.slot} but we counted only {taken}")
-                # Sales can have emptied the count; the units still cost what the last ones did.
-                each = layers[-1].unit_cost if layers else slot.last_unit_cost
-                shelf(m.sku).add(m.units - taken, None if each is None else each * (m.units - taken))
+                # Every recorded layer has moved; any cost on the rest would be counted twice or made up.
+                shelf(m.sku).add(m.units - taken, None)
             slot.last_moved = m.at
         elif m.kind in ("purchase", "load"):
             changed = slot is not None and slot.product != m.sku
@@ -856,7 +859,12 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                     warn(m.slot, f"{m.ref}: loaded {wanted} units of {m.sku} from the closet "
                                     f"but we counted only {taken} there")
                     layers.append(_Layer(wanted - taken, None))   # the ones we didn't count: cost unknown
-                slot.pool.add_layers(_less_lost(layers, m.lost))
+                kept, stranded = _less_lost(layers, m.lost)
+                slot.pool.add_layers(kept)
+                if stranded:
+                    warn(m.slot, f"{m.ref}: no unit of {m.sku} loaded into slot {m.slot} has a known cost to carry "
+                                    "the units lost on the way; they are written off as shrinkage")
+                    write_off(m.at, f"slot {m.slot}", m.sku, stranded)
             slot.loaded += m.to_slot
             slot.at_most += m.to_slot
             slot.last_moved = m.at
@@ -892,7 +900,8 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 warn(m.slot, f"slot {m.slot}: {m.units} units sold between the polls at {m.since.isoformat()} "
                              f"and {m.at.isoformat()}, while {m.door_conflict}'s door times say the door was "
                              "open; a sale with the door open contradicts the receipt, so they are left "
-                             f"unattributed, costed at {slot.product}'s average, which may be the wrong product's")
+                             "unattributed, costed at the oldest units taken from "
+                             f"{slot.product}'s count, which may be the wrong product's")
                 slot.unattributed += m.units
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
                                       unattributed=f"sold while {m.door_conflict}'s door times say the door was open"))
@@ -913,7 +922,8 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                                else "")
                 warn(m.slot, f"slot {m.slot}: {m.units} units sold between the polls at {m.since.isoformat()} "
                                 f"and {m.at.isoformat()}, {across}; the counters can't split them, so they are "
-                                f"costed at {slot.product}'s average, which may be the wrong product's{written_off}")
+                                f"costed at the oldest units taken from {slot.product}'s count, which may be the wrong "
+                                f"product's{written_off}")
                 slot.unattributed += m.units
                 # Main costed a window it read as all new in cost_cents; it stays there (see `SaleCost`).
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, cost if m.read_as_new else None,
@@ -924,8 +934,6 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 slot.at_most = max(0, slot.at_most - m.units)
                 sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, costed, cost,
                                       taken_at=m.at if m.booked_at else None))
-        if slot is not None and slot.pool.units:
-            slot.last_unit_cost = slot.pool.layers[-1].unit_cost   # the newest units, the last to go
 
     for name, slot in sorted(slots.items()):
         if slot.oversold:

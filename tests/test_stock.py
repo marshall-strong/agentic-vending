@@ -495,9 +495,9 @@ def summary(stock):
 # by running main's vending/stock.py on them. Null door times must give exactly this.
 _WRITTEN_OFF = "r2 line 0: 1 units of ARIZONA still counted in slot 15 when it changed to REDBULL; written off as shrinkage"
 _UNSPLIT = ("slot 15: 2 units sold between the polls at {} and 2026-11-07T20:00:00+00:00, across the change from "
-            "ARIZONA to REDBULL; the counters can't split them, so they are costed at REDBULL's average, which may "
-            "be the wrong product's; the 1 units of ARIZONA written off as shrinkage at the change may be some of "
-            "these sales, not losses")
+            "ARIZONA to REDBULL; the counters can't split them, so they are costed at the oldest units taken from "
+            "REDBULL's count, which may be the wrong product's; the 1 units of ARIZONA written off as shrinkage at the "
+            "change may be some of these sales, not losses")
 _MAIN_SLOT_AFTER_2_SOLD = [("15", "REDBULL", 8, 150, 10, 2, 0, 3.0, 3.0)]
 # Where main can't split the window, #172 changes one thing: its 2 units are unattributed, in neither
 # product's sales and not in REDBULL's sold. Every other figure is main's.
@@ -733,7 +733,7 @@ def test_a_sale_while_the_door_was_open_is_flagged_and_left_unattributed():
     [sale] = [s for s in stock.sales if s.units]
     assert (sale.at, sale.units, sale.cost_cents) == (hours(3.25), 1, None)
     assert any("r2's door times say the door was open" in w and "contradicts the receipt" in w
-               for w in stock.warnings)
+               and "costed at the oldest units taken from" in w for w in stock.warnings)
 
 
 def test_a_window_from_inside_one_visit_to_inside_the_next_is_the_first_visits_product():
@@ -868,3 +868,43 @@ def test_a_back_stock_load_with_a_loss_keeps_the_dearer_layer_apart():
     slot16 = next(s for s in stock.slots if s.slot == "16")
     assert slot16.layers == ((1, Fraction(400, 3)), (2, Fraction(1000, 3)))
     assert sum(units * cost for units, cost in slot16.layers) == 800
+
+
+def _known_cents(stock):
+    """Known cost in inventory, shrinkage and cost of sales: what conservation compares with the known cost paid."""
+    from vending.ledger import _inventory
+    machine, closet, _ = _inventory(stock)
+    return ((machine or 0) + (closet or 0) + sum(x.cost_cents or 0 for x in stock.shrinkage)
+            + sum((s.cost_cents or 0) + (s.unattributed_cost_cents or 0) for s in stock.sales))
+
+
+@pytest.mark.parametrize("loaded, drawn", [(1, 2), (0, 1)])
+def test_a_load_loss_no_known_unit_survives_to_carry_is_shrinkage(loaded, drawn):
+    """The closet holds 1 unit at $2; the load draws `drawn` (any past the count come in unknown) and the
+    oldest, the $2 one, is dropped. No unit of known cost made it to carry the $2, so it is shrinkage."""
+    stock = book([
+        line(units_loaded=0, units_to_back_stock=1, total_paid="2.00"),              # 1 at 200 in the closet
+        line(slot="16", outcome="loaded", total_paid=None, units_loaded=loaded,
+             units_from_back_stock=drawn, at=2, request_id="r2"),
+    ])
+    assert [(x.units, x.cost_cents) for x in stock.shrinkage if x.cost_cents is not None] == [(1, 200)]
+    assert _known_cents(stock) == 200
+
+
+def test_a_pull_past_the_count_brings_the_extra_units_in_at_unknown_cost():
+    """Slot 17 counts 1 unknown OLDCOLA, then 1 at $2; 3 are pulled. The two counted move at their own cost;
+    the third has no layer, so its cost is unknown rather than another $2."""
+    stock = book(_unknown_then_two_dollars() + [
+        line(slot="17", sku="WATER", units_loaded=1, total_paid="1.00", units_pulled=3, pulled_sku="OLDCOLA",
+             slot_reassigned=True, at=3, request_id="r4"),
+    ])
+    [cola] = [c for c in stock.closet if c.product == "OLDCOLA"]
+    assert cola.layers == ((1, None), (1, 200), (1, None))
+    assert _known_cents(stock) == 800 + 200 + 100
+    assert any("counted only 2" in w for w in stock.warnings)
+
+
+def test_unattributed_sales_say_they_are_costed_at_the_oldest_units_taken():
+    stock = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 250)])
+    unsplit = [w for w in stock.warnings if "can't split" in w]
+    assert unsplit and all("oldest units taken from" in w and "average" not in w for w in unsplit)
