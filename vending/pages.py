@@ -285,9 +285,11 @@ def _problem(path: str, status: int, text: str) -> Reply:
     return Reply(status, HTML, _notice("DB explorer" if path == EXPLORER else "Agent dashboard", text))
 
 
-def respond(target: str) -> Reply | None:
+def respond(target: str, syncs: dict | None = None) -> Reply | None:
     """The reply to a GET of `target` (path and query), or None when the path isn't one of ours.
 
+    `syncs` is the worker's latest sync round as `/health` shows it (no error text), for the
+    dashboard's Needs attention; the worker keeps it in memory, so it can only be handed over.
     Never raises, and never puts an error's own text in a reply.
     """
     parts = urlsplit(target)
@@ -309,7 +311,7 @@ def respond(target: str) -> Reply | None:
                 status, body = db_explorer.render(
                     conn, request, hide, (("Home", "/"), ("Agent dashboard", DASHBOARD)), rows)
                 return Reply(status, HTML, body)
-            snap = dashboard.snapshot(conn, public=True)
+            snap = dashboard.snapshot(conn, public=True, syncs=syncs)
     except Busy:
         return _problem(path, 503, BUSY)
     except CanWrite as error:

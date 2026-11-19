@@ -60,7 +60,7 @@ MAX_NOTE = 500
 #   requests filed since the current week began count, so requests made before
 #   go-live, or late in the week before, never use up a later week's share.
 # The numbers are a starting point the team can tune. The bridge's own 429 for
-# too many open requests (about 24, seen 15 Nov) still applies before go-live.
+# too many open requests (`vending.dashboard.OPEN_REQUEST_CAP`) still applies before go-live.
 # MACHINE_LIVE is the 3 Dec go-live, not the ledger's opening (which comes
 # before the day-one fill; `vending/usage.py` calls that "the competition start").
 MACHINE_LIVE = START

@@ -946,3 +946,121 @@ def test_a_product_look_falls_back_to_a_steady_hash():
                                          ("1.255", "$1.255"), (None, None)])
 def test_tag_prices_are_exact_text(value, text):
     assert dashboard.machine_art.money(value) == text
+
+
+# --- catalog requests and the worker's syncs --------------------------------------------------------
+
+def catalog_request(conn, name, status, at, sku=None, note=None):
+    conn.execute("insert into product_requests (requested_at, name, size, words, status, sku, decision_note)"
+                 " values (%s, %s, '12 oz can', %s, %s, %s, %s)",
+                 (at, name, name.lower().split(), status, sku, note))
+
+
+def test_every_catalog_request_shows_with_counts_and_the_places_left(conn, page_conn):
+    # 40 requests, the oldest first: a `sending` one far past the old limit of 10, then
+    # 22 pending, 14 approved, 2 rejected and an `unknown`.
+    statuses = ["sending"] + ["pending"] * 22 + ["approved"] * 14 + ["rejected"] * 2 + ["unknown"]
+    for i, status in enumerate(statuses):
+        sku = "DRPEP-12OZ-CAN" if (status, i) == ("approved", 30) else None
+        catalog_request(conn, f"Drink {i:02d}", status, MONDAY - timedelta(hours=len(statuses) - i), sku=sku,
+                        note="added as Dr Pepper 12 oz" if sku else None)
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    rows = snap["catalog_requests"]["data"]
+    assert len(rows) == 40 and rows[0]["name"] == "Drink 39" and rows[-1]["name"] == "Drink 00"
+    counts = snap["catalog_counts"]["data"]
+    assert counts["by_status"] == {"pending": 22, "approved": 14, "rejected": 2, "sending": 1, "unknown": 1}
+    assert (counts["total"], counts["open"], counts["cap"], counts["left"], counts["unsettled"]) == (40, 22, 25, 3, 2)
+    assert dashboard.OPEN_REQUEST_CAP == 25
+    # Both unsettled rows need checking, the old one too.
+    warns = [a["text"] for a in snap["attention"] if a["level"] == "warn"]
+    assert any("Drink 00" in t and "`sending`" in t for t in warns)
+    assert any("Drink 39" in t and "`unknown`" in t for t in warns)
+    page = dashboard.render(snap)
+    assert ('40 requests: 22 pending, 14 approved, 2 rejected, <span class="warn-text">1 sending</span>, '
+            '<span class="warn-text">1 unknown</span>.') in page
+    assert "<b>Open: 22 of about 25</b>" in page
+    assert "3 places left, fewer if any of the 2 sending or unknown reached the bridge" in page
+    panel = page.split("<h3>Catalog requests</h3>", 1)[1]
+    assert all(f"<b>Drink {i:02d}</b>" in panel for i in range(40))
+    # An approved request shows its SKU, which may not be the name's; one without says so.
+    assert "SKU <code>DRPEP-12OZ-CAN</code>" in page and "added as Dr Pepper 12 oz" in page
+    assert page.count("no SKU recorded yet") == 13
+    assert '"sku": "DRPEP-12OZ-CAN"' in dashboard.to_json(snap)
+
+
+@pytest.mark.parametrize("pending", [dashboard.OPEN_REQUEST_CAP, dashboard.OPEN_REQUEST_CAP + 1])
+def test_at_the_cap_no_places_are_left(conn, page_conn, pending):
+    for i in range(pending):
+        catalog_request(conn, f"Drink {i:02d}", "pending", MONDAY - timedelta(minutes=i))
+    catalog_request(conn, "Drink unsure", "unknown", MONDAY - timedelta(hours=2))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert (snap["catalog_counts"]["data"]["open"], snap["catalog_counts"]["data"]["left"]) == (pending, 0)
+    page = dashboard.render(snap)
+    assert f'<b>Open: {pending} of about 25</b>' in page and '<span class="bad-text">0 places left</span>' in page
+    assert "fewer if any" not in page
+
+
+def test_no_catalog_requests_still_shows_the_counts(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    page = dashboard.render(snap).split("<h3>Catalog requests</h3>", 1)[1]
+    assert "0 requests: 0 pending, 0 approved, 0 rejected." in page and "<b>Open: 0 of about 25</b>" in page
+    assert "25 places left" in page and "None yet." in page
+
+
+def test_a_missing_catalog_column_blanks_its_counts_too(conn, page_conn):
+    conn.execute("alter table product_requests drop column sku")
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["catalog_requests"]["ok"] is False and snap["catalog_counts"]["ok"] is False
+    assert snap["purchase_requests"]["ok"] is True
+    dashboard.render(snap)
+
+
+def test_a_missing_catalog_table_blanks_only_its_panel(conn, page_conn):
+    conn.execute("drop table product_requests cascade")   # the request backlog (#140) references it
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["catalog_requests"]["ok"] is False and snap["catalog_counts"]["ok"] is False
+    assert snap["purchase_requests"]["ok"] is True
+    dashboard.render(snap)
+
+
+def syncs(*results, rounds=1):
+    """The worker's /health, as `vending.worker.State.public` builds it."""
+    from vending import worker
+
+    state = worker.State(rounds=rounds, last_round_at=(MONDAY - timedelta(minutes=12)).isoformat())
+    state.results = [worker.JobResult(job, MONDAY.isoformat(), 1.0, code, outcome, "secret error text")
+                     for job, code, outcome in results]
+    return state.public()
+
+
+def test_failing_syncs_name_each_job_and_what_its_exit_code_means(page_conn):
+    failing = syncs(("sync_history", 2, "finished"), ("sync_requests", 0, "finished"),
+                    ("sync_catalog", None, "timed out"))
+    snap = dashboard.snapshot(page_conn, MONDAY, syncs=failing)
+    bad = [a["text"] for a in snap["attention"] if a["level"] == "bad"]
+    assert bad == ["The worker's latest sync round (12 min ago) failed: `sync_history` exit 2, "
+                   "`sync_catalog` timed out. Exit 2: the database is missing migrations; run "
+                   "`python -m vending.db migrate`. See `/health`."]
+    assert dashboard.verdict(snap["attention"]) == "problem"
+    page = dashboard.render(snap)
+    assert "<code>sync_history</code> exit 2" in page and "<code>python -m vending.db migrate</code>" in page
+    assert "sync_requests" not in bad[0]
+    assert snap["syncs"]["results"][0]["exit_code"] == 2 and "secret error text" not in dashboard.to_json(snap)
+
+
+def test_a_sync_that_finished_with_problems_is_a_problem_too(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY, syncs=syncs(("sync_history", 1, "finished")))
+    bad = [a["text"] for a in snap["attention"] if a["level"] == "bad"]
+    assert len(bad) == 1 and "`sync_history` exit 1" in bad[0] and "finished with problems" in bad[0]
+    assert dashboard.verdict(snap["attention"]) == "problem"
+
+
+@pytest.mark.parametrize("given", [
+    None,                                                       # run on its own, not by the worker
+    syncs(rounds=0),                                            # the first round hasn't finished
+    syncs(("sync_history", 0, "finished"), ("sync_catalog", 0, "finished")),
+])
+def test_no_sync_item_unless_the_latest_round_failed(page_conn, given):
+    snap = dashboard.snapshot(page_conn, MONDAY, syncs=given)
+    assert not any("sync round" in a["text"] for a in snap["attention"])
+    assert snap["syncs"] == given

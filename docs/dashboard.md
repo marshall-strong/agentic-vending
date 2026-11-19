@@ -32,13 +32,13 @@ what changed and why.
 |---|---|---|
 | Verdict | **OK**, **Check** or **Problem** next to the title (and in the browser tab), from the worst item in Needs attention | everything below |
 | Tiles | The halt switch and who last changed it; the latest run and how long it has run; a countdown to the Thursday 23:59 Eastern cutoff; how old the last machine poll is and units sold since; what has been spent on drinks (fulfilled requests) and on the model (run costs), labelled as development and test spend before the opening, not from the \$600; once the ledger's opening entry is in the past, what has been spent since the opening, from the ledger, so the page gives one figure; on the container, who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `config`, `agent_runs`, `polls`, `purchase_requests`, `vending.ledger`, `page_visits`, `page_visit_totals` |
-| Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours. **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot |
+| Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours; on the Container App, a job in the worker's latest sync round didn't exit 0 (see [Sync health](#sync-health)). **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot, and the worker's latest round |
 | In the machine | A close-up of our selections, one shelf at a time, beside a small drawing of the machine's front (5 shelves of 8; row r, column c is selection "rc") that picks the shelf. Which selections are ours comes only from the stored assignment (`vending.slots.our_slots`, kept by `python -m vending.slots record`), read on every page; with none stored the panel says so and draws nothing. Each of ours is a lane seen from above the front edge: the packages on the rail, dashed empty slots, its number plate and price tag, then the product, the count and what Friday does to it. Every other selection is a grey card with its number and "Not ours", and nothing else about it is in the page or `/state.json`. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next Friday** is the latest plan: the empty slots fill in, a swap draws the new product's package and colours, a pull empties the lane, a new price shows the old one struck through, and the agent's reason sits under the lane on one line. Beside it, each change with the agent's reason. "plan row" opens the selection in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs`, `catalog_products`, `config.capacity_overrides` |
 | The plan | "N of 20 slots changed since run #X", a chip per change that jumps to the slot and opens its reason, a "Show changed slots only" switch, then one line per slot (product, price, fill, change tags) that opens to the reason, what it was, and what the slot holds and sold this week. Under it, the weekly update for the team and the notes to itself | `agent_runs`, `vending.stock`, `get_machine_state` |
 | Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it. Under each, **How it decided** opens the run's steps in order: the model's reasoning (a summary the API returns, never the raw chain of thought), anything it wrote, each tool call and what came back, with failed replies in red. A run in progress shows the steps so far | `agent_runs`, `agent_steps` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
 | Money | **Balance**, **spendable** (balance less the sales tax set aside) and **profit since the opening**. One bar shows where the money in (opening, capital, takings) has gone: drinks bought, midweek visits, model spend, tax handed over, tax set aside, and what is still spendable. Then model spend against the proposed \$9 and visit fees against the proposed \$50, the profit and loss since the opening, the proposed split of the \$600 (#113), and the ledger's notes, such as development spend from before the opening. **Committed:** what the pending purchase requests could still cost at most (the dearer of each line's primary and alternate at `packs x max_price_per_pack`, plus an off-cycle request's visit fee), since the ledger counts a purchase only once it is fulfilled. If any pending line has no price we can read, the most is unknown, never counted as \$0, and so is what stays spendable after it. The competition counts from the ledger's opening entry; anything before it is development and test spend, not from the \$600, and no figure here counts it. Before the opening entry, it says how to record it; an opening entry dated in the future (recorded ahead with `--at`) keeps that view and says when the ledger opens. Receipts and visit fees from before the opening are test purchases: once the opening is recorded, stock on hand and cost of sales leave them out too (`stock.receipts_count_from`, #150). A submission sent with no usable answer (`sending` or `unknown` in `purchase_submissions`) counts as committed too, since it may exist at the bridge. Needs attention adds: **Problem** if spendable is below zero, or if pending requests could cost more than is spendable; **Check** if spendable would fall under the proposed \$53 floor, if requests are pending with no opening entry or before an opening dated ahead (the date in Eastern), if a submission is unsettled, if a pending line has no price we can read, or if the ledger can't give a balance (for example, our slot assignment isn't recorded); **Info** if model spend passes \$9. If reading the ledger passes the statement timeout, only this panel says it isn't available; the rest of the page still shows | `vending.ledger` (`balance`, `pnl`), `purchase_requests`, `purchase_submissions` |
-| Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates) and catalog requests | `purchase_requests`, `purchase_lines`, `product_requests` |
+| Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates). Then every catalog request, newest first: counts by status, the open (`pending`) ones against the bridge's cap and the places left, and each request's status, its SKU once it has one (an approved product may be added under a SKU we wouldn't guess), and the decision note | `purchase_requests`, `purchase_lines`, `product_requests` |
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
 
 ### The machine close-up
@@ -118,6 +118,49 @@ changed-only switch, and the verdict in the tab title. Without JavaScript the ma
 (the shelf links still work), the plan shows every slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
 page and says how old it is. Without JavaScript it reloads the whole page instead.
 
+## Catalog requests
+
+The instructors must approve every day-one product by Wed 25 Nov 2026, so the panel lists all of
+our catalog requests, not the newest few. They are our own team's records, so the public page
+shows them too. Above the list:
+
+- **Counts by status:** pending, approved, rejected, and any sending or unknown (a request we
+  sent but can't tell whether the bridge filed; settle it with `python -m vending.product_requests
+  resolve`).
+- **Open: N of about 25, and the places left.** The bridge answers `429` once a team has about 25
+  open (pending) requests. That number is observed, not documented: it refused a filing at 25 open
+  on 17 Nov, and at 24 on 15 Nov, though that day's count was inferred. It is
+  `OPEN_REQUEST_CAP` in `vending/dashboard.py`. A sending or unknown request may hold
+  a place too, so while places are left the page says they may be fewer by that many. With no
+  requests yet the counts still show, all zero.
+
+Statuses and SKUs are what `product_requests` last stored, so on `main` an approval made on the
+bridge still shows as pending until someone stores it. Today a person or the tool writes
+them; the request sync in PR #147 (`vending/sync_product_requests.py`) fills in `status`, `sku` and
+`decision_note` from the bridge, and the panel reads those same columns, so it needs no change
+when that merges. `/state.json` carries the rows in `catalog_requests` and the counts in
+`catalog_counts`.
+
+## Sync health
+
+The worker (`vending/worker.py`) runs the three syncs every hour and keeps each round's outcome
+and exit code in memory, not in the database: `/health` shows them, and says `failing` when any
+job didn't exit 0. The dashboard on the Container App runs in that same process, so the worker
+hands the same dict to it (`snapshot(..., syncs=...)`). When a job in the latest round didn't exit
+0, Needs attention says so as a **Problem**, naming each job with its exit code (or `crashed`,
+`timed out`, `still running`) and what the code means:
+
+| Exit | Meaning |
+|---|---|
+| 1 | finished with problems; the container's log has them |
+| 2 | the database is missing migrations; run `python -m vending.db migrate` |
+| 3 | a bridge error: unreachable, or it refused our key or answered with an error |
+
+Like `/health`, it shows no error text. `/state.json` carries the round as `syncs`. Run on its own
+(`python -m vending.dashboard`), the dashboard has no worker beside it, so `syncs` is `null` and
+the page says nothing about the syncs; look at the Container App's `/health`. The poll-age
+warning still covers a history sync that has stopped.
+
 ## Honesty rules
 
 The page shows only what something recorded, and says so when nothing did.
@@ -163,8 +206,9 @@ visible description.
 
 - **It can't write.** Its connection sets `default_transaction_read_only`, so Postgres refuses
   any write, and it never migrates. A table that doesn't exist yet blanks only its own panel.
-- **On the container it is public, on purpose (#53).** `/dashboard` on the Container App shows
-  this page to anyone with the link, with `/dashboard/state.json` beside it. There it connects as a
+- **On the container it is behind the team password (#136).** `/dashboard` on the Container App,
+  with `/dashboard/state.json` beside it, shows this page to anyone who signs in with the team's
+  shared password; only `/health` is open without it. There it connects as a
   login that can only read, and the error text of failed tool calls and failed runs is left out,
   on the page and in the JSON. So are the selections not assigned to us: the JSON's counts hold only ours. [`deploy.md`](deploy.md#the-public-pages) has the rules.
 - **Run locally, it listens on 127.0.0.1 only, and has no login.** It answers only requests addressed to

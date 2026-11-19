@@ -217,6 +217,24 @@ def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
         assert "db.example.net" in db_explorer.render(local, db_explorer.Request(schema, "action_log", 0))[1]
 
 
+def test_the_served_dashboard_names_the_workers_failing_syncs_without_their_error_text(site):
+    # The worker keeps its rounds in memory; the dashboard it serves gets them as /health has them.
+    assert not any("sync round" in a["text"] for a in json.loads(_get(site, "/dashboard/state.json")[2])["attention"])
+    state = site.RequestHandlerClass.state
+    state.results = worker.run_round([("sync_history", lambda: 2), ("sync_requests", lambda: 0),
+                                      ("sync_catalog", lambda: 1 / 0)], log=lambda line: None)
+    state.rounds, state.last_round_at = 1, state.started_at
+    status, _, body = _get(site, "/dashboard/state.json")
+    found = [a for a in json.loads(body)["attention"] if "sync round" in a["text"]]
+    assert status == 200 and [a["level"] for a in found] == ["bad"]
+    assert "`sync_history` exit 2, `sync_catalog` crashed" in found[0]["text"]
+    assert "python -m vending.db migrate" in found[0]["text"]
+    # The crash's own text stays in the log, as on /health.
+    assert "ZeroDivisionError" not in body and "division by zero" not in body
+    page = _get(site, "/dashboard")[2]
+    assert "<code>sync_history</code> exit 2" in page and "division by zero" not in page
+
+
 def test_a_hidden_value_never_leaves_postgres_and_null_stays_null(schema_url, conn):
     _, schema = schema_url
     log(conn, "read", "get_pnl", {}, "failed", None)
