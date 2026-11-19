@@ -90,3 +90,14 @@ def test_no_agent_topic_gives_the_interloper_prices():
 def test_the_interloper_price_rule_is_where_the_agent_reads_pricing_rules(topic):
     text = (RULES_DIR / f"{topic}.md").read_text(encoding="utf-8").lower()
     assert "never use the interloper's prices" in text or "ignore the interloper's prices" in text, topic
+
+
+def test_the_prompt_gives_each_store_cutoff_the_planner_uses():
+    """Simulated seasons (closed PR #151): "the main run is Thursday" missed the Amazon cutoff every week."""
+    from vending.agent import SYSTEM
+    from vending.planner import AMAZON_CUTOFF, IN_STORE_CUTOFF
+
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    for store, cutoff in (("Amazon items", AMAZON_CUTOFF), ("in-store items", IN_STORE_CUTOFF)):
+        assert f"{store} by {days[cutoff.weekday]} {cutoff.at:%H:%M}" in SYSTEM, store
+    assert "main run is Thursday" not in SYSTEM
