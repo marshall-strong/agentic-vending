@@ -60,8 +60,9 @@ A read holds the bridge's one serial line, and anyone else's poll gets a `409` w
 Each step first re-reads our pending purchase requests (plain GETs, not machine reads), so a receipt
 is seen within a minute. The reads stop for the day once a request of ours was fulfilled that day and a
 read taken after its door closed (the close minute is over) is stored. A receipt with no door times is
-dated by `fulfilled_at`. David allowed a read about every 10 minutes around a visit (12 Nov); a read
-every minute is Kevin's choice, tighter than that. Only Fridays: a midweek visit has no day the data
+dated by `fulfilled_at`. David set no limit on how often: on 12 Nov he said a read about every 10 minutes "won't break
+anything", and named a poll every 15 seconds as what would get our container switched off. A read
+every minute is Kevin's choice (19 Nov). Only Fridays: a midweek visit has no day the data
 can tell us, since a pending request can be filled on any day, so those get the hourly reads only.
 
 **Never point an HTTP liveness probe at `/health`.** Its `503` means a sync failed, for example
