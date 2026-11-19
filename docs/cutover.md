@@ -73,6 +73,8 @@ For a window between two polls, in a slot whose product changed at the visit (`v
 - **From inside one visit to inside the next** (same slot, two changes): the product loaded at the first, since nothing else could have sold between them. A window that could hold two or more products across two or more visits is left unattributed.
 - **Two visits to one slot that share a minute** (one closes at 15:34 and the next opens at 15:34, or a visit opens and closes within 15:34 next to another): they go in the order the requests were submitted. If that doesn't settle it (submitted at the same moment, door times that overlap, or door times that disagree with the submission order), neither visit's door times are used. Their lines are timed by `resolved_at`, as before, with a warning.
 
+One limit we accept: a poll a few seconds before the door really opened, but inside the open minute, can follow an old-product sale, and when that window's prices match the reading before it, the rule for a window that starts during a visit books those sales to the new product.
+
 When the timing can't settle which product sold, we fall back to what we did before door times: the price solve, or units left unattributed and flagged. We never guess.
 
 ## What we checked, and what David answered

@@ -478,6 +478,19 @@ def test_a_door_timed_pull_goes_before_a_closet_load_without_door_times_at_the_s
     assert (slot16.product, slot16.units, slot16.unit_cost) == ("ARIZONA", 5, 50)
 
 
+def test_a_pull_goes_before_a_load_at_one_minute_even_from_a_later_submitted_visit():
+    # r3, submitted first, loads 5 Arizona from the closet into slot 16, its door closing at
+    # 17:30. r2, submitted later, opens slot 15 at 17:30 and pulls 9 Arizona. Different slots, so
+    # submission order doesn't decide: the pull goes first and the load takes the pulled units.
+    sent = {"r1": hours(-2), "r3": hours(-1), "r2": hours(0)}
+    load = with_door([line(slot="16", sku="ARIZONA", outcome="loaded", total_paid=None, units_loaded=5,
+                           units_from_back_stock=5, at=2.6, request_id="r3")], opened=2, closed=2.5, request_id="r3")
+    stock = book([{**l, "submitted_at": sent[l["request_id"]]} for l in with_door(swap()) + load])
+    assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("ARIZONA", 4, 50)]
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.product, slot16.units, slot16.unit_cost) == ("ARIZONA", 5, 50)
+
+
 def test_visits_sharing_a_minute_are_found_by_scanning_in_door_open_order():
     from itertools import combinations
 

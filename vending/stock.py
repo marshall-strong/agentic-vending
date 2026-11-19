@@ -70,12 +70,13 @@ if TYPE_CHECKING:  # the replay itself needs no database, so its tests run witho
 
 # Within one moment: receipt movements come first, and losses and sales are
 # only ever recorded after them. Among receipt movements, as on main, every
-# pull goes before any load (the old product comes out first), and the old
-# product's share of a window split at a product change sold before that, so
-# it goes first of all. Door-timed movements (`Movement.seq` set: the request's
-# place in submission order) sit between the other pulls and the other loads,
-# request by request in submission order, so a visit that closed in the minute
-# the next one opened still goes first (`_replay_order`).
+# pull goes before every load, across visits and whatever the submission order
+# (the old product comes out first, and a pull can stock the closet a load
+# takes from), and the old product's share of a window split at a product
+# change sold before that, so it goes first of all. The one exception is two
+# door-timed visits to the same slot that share the minute: the later-submitted
+# one (`Movement.seq`) goes wholly after the earlier one's load there, since it
+# pulls what that load put in (`_in_replay_order`).
 _ORDER = {"sale_before_change": -1, "pull": 0, "purchase": 1, "load": 1, "loss": 2, "sale": 3}
 _GROUP = {"sale_before_change": 0, "pull": 0, "purchase": 0, "load": 0, "loss": 1, "sale": 2}
 
@@ -335,13 +336,12 @@ def _sharing_a_minute(by_request: dict[str, tuple]) -> list[tuple[tuple, tuple]]
     """
     by_open = sorted(by_request.items(), key=lambda item: (item[1][0], item[0]))
     pairs = []
-    for i, (p, (p_open, p_close, p_sent)) in enumerate(by_open):
-        for q, (q_open, q_close, q_sent) in by_open[i + 1:]:
-            if q_open >= p_close + _MINUTE:
-                break
-            # q opened no earlier than p, so p opened before q's close minute ended too.
-            pair = sorted(((p, (p_open, p_close, p_sent)), (q, (q_open, q_close, q_sent))))
-            pairs.append(tuple(pair))
+    for i, p in enumerate(by_open):
+        j = i + 1
+        # q opened no earlier than p, so p opened before q's close minute ended too.
+        while j < len(by_open) and by_open[j][1][0] < p[1][1] + _MINUTE:
+            pairs.append(tuple(sorted((p, by_open[j]))))
+            j += 1
     return sorted(pairs)
 
 
@@ -438,7 +438,7 @@ def _split_at_changes(movements: list[Movement]) -> list[Movement]:
     # Per slot, each product change (the purchase or load that made it), in replay order.
     changes: dict[str, list[Movement]] = {}
     holds: dict[str, str] = {}
-    for m in sorted(movements, key=_replay_order):
+    for m in _in_replay_order(movements):
         if m.kind in ("purchase", "load"):
             if holds.get(m.slot, m.sku) != m.sku:
                 changes.setdefault(m.slot, []).append(m)
@@ -539,12 +539,30 @@ def _shares(m: Movement, change: Movement, old: int | None) -> list[Movement]:
     return out
 
 
-def _replay_order(m: Movement) -> tuple[datetime, int, int, int, int]:
-    """Sort key: see the note at `_ORDER`. Within one moment's receipt movements, tier 0 is the
-    pulls (and old-product shares) without a submission order, tier 1 the door-timed ones by
-    request, tier 2 the other loads and purchases."""
-    tier = 1 if m.seq else 0 if _ORDER[m.kind] <= 0 else 2
-    return m.at, _GROUP[m.kind], tier, m.seq, _ORDER[m.kind]
+def _in_replay_order(movements: list[Movement]) -> list[Movement]:
+    """The movements sorted for the replay: see the note at `_ORDER`.
+
+    Within one moment's receipt movements, rank 0 is every pull (and old
+    product's share), rank 1 every load and purchase. A door-timed visit to a
+    slot where an earlier-submitted visit loaded at the same moment goes after
+    that load, all of it (rank 2), in submission order.
+    """
+    first_load: dict[tuple[datetime, str | None], int] = {}
+    for m in movements:
+        if m.kind in ("purchase", "load") and m.seq:
+            key = (m.at, m.slot)
+            first_load[key] = min(first_load.get(key, m.seq), m.seq)
+
+    def order(m: Movement) -> tuple[datetime, int, int, int, int]:
+        if _GROUP[m.kind]:
+            rank = 0
+        elif m.seq and first_load.get((m.at, m.slot), m.seq) < m.seq:
+            rank = 2
+        else:
+            rank = 1 if m.kind in ("purchase", "load") else 0
+        return m.at, _GROUP[m.kind], rank, m.seq, _ORDER[m.kind]
+
+    return sorted(movements, key=order)
 
 
 def cents(amount: Decimal | str | None) -> Fraction | None:
@@ -625,7 +643,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
     def shelf(sku: str) -> _Pool:
         return closet.setdefault(sku, _Pool())
 
-    for m in sorted(_split_at_changes(movements), key=_replay_order):
+    for m in _in_replay_order(_split_at_changes(movements)):
         slot = slots.get(m.slot) if m.slot else None
         for note in m.notes:
             if note not in warnings:
