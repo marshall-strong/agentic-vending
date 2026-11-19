@@ -29,7 +29,7 @@ Writes:
                         since the previous poll (door_events.door_rows: vending.counters.rises, misread-safe): a rise
                         means the door was opened (a visit) in between
     receipts.csv        our fulfilled purchase receipts: request id, first line resolved, fulfilled_at. From the start
-                        (3 Dec) a door rise is our visit only when one of these falls with it (door_events.is_our_rise)
+                        (3 Dec) a door rise is our visit only when one of these falls with it (door_events.our_windows)
     slots.json          which slots the CSVs cover: {device, slots, source, assigned_slots, resolved_at}, where
                         assigned_slots is our assignment. sales_analysis.py reads it, and stops if it is asked
                         about a different slot list or the assignment is missing or malformed.

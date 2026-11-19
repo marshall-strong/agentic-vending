@@ -13,7 +13,7 @@ What it measures (hourly-polling era only, from 21 Sep 2026, when polls came eve
                   analysis/sales_analysis.py does. Rises come from the lifetime count with vending.counters.rises,
                   so a misread door reading isn't a visit. The window is the time we can't see into: from the last
                   poll before the first opening to the poll that saw the last one. From 3 Dec (the start) a rise
-                  counts only when a fulfilled receipt of ours falls with it (receipts.csv, door_events.is_our_rise);
+                  counts only when a fulfilled receipt of ours falls with it (receipts.csv, door_events.our_windows);
                   other rises are left out of our windows, not merged into them. Before 3 Dec every rise counts.
     grades        the analysis's refill grade for each visit (proven, likely, possible top-up, no sign).
     poll gaps     how often a gap between polls is longer than an hour: a longer gap widens any window.
@@ -38,9 +38,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from door_events import is_our_rise, read_receipts  # noqa: E402  (standard library only)
+from door_events import our_windows, read_receipts  # noqa: E402  (standard library only)
 from slots_config import START  # noqa: E402
-from vending.counters import rises  # noqa: E402  (standard library only)
 
 MERGE_H = 3                                        # rises within 3 h are one visit (sales_analysis.VISIT_MERGE_H)
 HOURLY_FROM = datetime.fromisoformat("2026-09-21T01:00:00-04:00")
@@ -73,26 +72,22 @@ def find_visits(door_rows: list[dict], receipts=(), start: datetime = START) -> 
     """Door-counter rises merged into visits. Each visit: from (poll before), first and last rise polls,
     openings, and the rise polls themselves.
 
-    From `start`, a rise is ours only when a fulfilled receipt of ours falls with it (door_events.is_our_rise); any
+    From `start`, a rise is ours only when a fulfilled receipt of ours falls with it (door_events.our_windows); any
     other rise is skipped, so it neither makes a visit nor widens ours. Before `start` every rise counts.
 
     The rises are recomputed from `door_open_lifetime` with vending.counters.rises, not read from the `rise`
     column: exports written before export_sales.py used that rule turned a single misread (1000, 5, 1000) into a
     rise of 995 at the next poll."""
-    readings = sorted(((when(r["at_eastern"]), int(r["door_open_lifetime"])) for r in door_rows), key=lambda r: r[0])
-    up = dict(rises(readings))
-    rows = [{"t": t, "rise": up.get(t, 0)} for t, _ in readings]
+    readings = [(when(r["at_eastern"]), int(r["door_open_lifetime"])) for r in door_rows]
     visits: list[dict] = []
-    for prev, r in zip(rows, rows[1:]):
-        if r["rise"] <= 0 or not is_our_rise(prev["t"], r["t"], receipts, start):
-            continue
-        if visits and (r["t"] - visits[-1]["last"]).total_seconds() / 3600 <= MERGE_H:
+    for prev, at, rise in our_windows(readings, receipts, start):
+        if visits and (at - visits[-1]["last"]).total_seconds() / 3600 <= MERGE_H:
             v = visits[-1]
-            v["last"] = r["t"]
-            v["openings"] += r["rise"]
-            v["rise_polls"].append(r["t"])
+            v["last"] = at
+            v["openings"] += rise
+            v["rise_polls"].append(at)
         else:
-            visits.append({"from": prev["t"], "first": r["t"], "last": r["t"], "openings": r["rise"], "rise_polls": [r["t"]]})
+            visits.append({"from": prev, "first": at, "last": at, "openings": rise, "rise_polls": [at]})
     return visits
 
 

@@ -14,10 +14,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from slots_config import START
-from vending.counters import rises
+from vending.counters import rises, windows
 
 # The longest a restock visit runs, as vending/stock.py _VISIT_MAX: the door opened no more than this before the
-# receipt's first line was resolved.
+# receipt's fulfilment.
 VISIT_MAX = timedelta(hours=1)
 
 
@@ -56,13 +56,26 @@ def read_receipts(path) -> list[tuple[datetime, datetime]]:
                 for r in csv.DictReader(f)]
 
 
-def is_our_rise(prev: datetime, at: datetime, receipts, start: datetime = START) -> bool:
-    """Is the door-counter rise seen at poll `at` (the poll before it was `prev`) a visit of ours?
+def our_windows(readings, receipts, start: datetime = START) -> list[tuple[datetime, datetime, int]]:
+    """`(from, at, rise)` for each door-counter rise (`readings`: `(poll time, lifetime count)`) that is a visit of ours.
 
-    Before the start, yes: nobody's receipts exist yet and the history is read as before. From the start, only when a
-    fulfilled receipt of ours falls with it: the door opened in (prev, at], and a visit ends at its `fulfilled_at`
-    and runs at most VISIT_MAX, so the receipt's span must reach that interval. Any other rise is left out of our
-    visit windows. It isn't merged into ours and nothing is read from it."""
-    if at < start:
-        return True
-    return any(prev < done and at > first - VISIT_MAX for first, done in receipts)
+    Before `start` every rise is ours: nobody's receipts exist yet and the history is read as before, from the poll
+    before it. From `start`, a rise is ours only when a fulfilled receipt of ours falls with it, and `from` is the
+    counter window's real start (vending.counters.windows: after a misread, the good poll before it). Each receipt claims:
+    - the rises whose window contains the receipt (opened before its first line was resolved, seen no earlier than
+      its fulfilment); else
+    - the one rise whose window ends after the visit began, a visit running at most VISIT_MAX before `fulfilled_at`.
+      With two such rises nothing says which is ours, so the receipt claims neither.
+    A rise no receipt claims is left out of our visit windows. It isn't merged into ours and nothing is read from it."""
+    readings = sorted(readings, key=lambda r: r[0])
+    found = windows(readings)
+    before = {t: p for (p, _), (t, _) in zip(readings, readings[1:])}
+    ours = {at for _, at, _ in found if at < start}
+    for first, done in receipts:
+        later = [(s, at) for s, at, _ in found if at >= start]
+        claimed = [at for s, at in later if s < first and done <= at]
+        if not claimed:
+            claimed = [at for s, at in later if s < done and at > done - VISIT_MAX]
+            claimed = claimed if len(claimed) == 1 else []
+        ours.update(claimed)
+    return [(s if at >= start else before[at], at, rise) for s, at, rise in found if at in ours]

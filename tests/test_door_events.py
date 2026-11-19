@@ -46,22 +46,32 @@ def test_the_door_counter_is_read_from_the_ea2_do_record():
     assert door_counter(b"EA2*DO*x*1\r\n") is None
 
 
-# --- is_our_rise and read_receipts: which rises are ours from the start (3 Dec) ---
+# --- our_windows and read_receipts: which rises are ours from the start (3 Dec) ---
 
-def test_before_the_start_every_rise_is_ours():
-    from door_events import is_our_rise
-    assert is_our_rise(T0, T0 + timedelta(hours=1), [])
+def _hourly(counts, t0):
+    return [(t0 + timedelta(hours=h), c) for h, c in enumerate(counts)]
+
+
+def test_before_the_start_every_rise_is_ours_and_starts_at_the_poll_before():
+    from door_events import our_windows
+    assert our_windows(_hourly([5, 6, 6, 8], T0), []) == [(T0, T0 + timedelta(hours=1), 1),
+                                                          (T0 + timedelta(hours=2), T0 + timedelta(hours=3), 2)]
 
 
 def test_from_the_start_only_a_rise_with_a_receipt_is_ours(tmp_path):
-    from door_events import is_our_rise, read_receipts
+    from door_events import our_windows, read_receipts
     from slots_config import START
-    prev, at = START + timedelta(hours=10), START + timedelta(hours=11)
-    assert not is_our_rise(prev, at, [])
-    assert is_our_rise(prev, at, [(at - timedelta(minutes=20), at + timedelta(minutes=10))])
-    # a receipt that ended before the poll before, or began more than a visit's length after the rise: not this rise
-    assert not is_our_rise(prev, at, [(prev - timedelta(hours=2), prev - timedelta(hours=1))])
-    assert not is_our_rise(prev, at, [(at + timedelta(hours=2), at + timedelta(hours=3))])
+    t0 = START + timedelta(hours=10)
+    readings = _hourly([5, 6, 6, 8], t0)                      # rises seen at +1 h and +3 h
+    assert our_windows(readings, []) == []
+    one = (t0 + timedelta(hours=2, minutes=15), t0 + timedelta(hours=2, minutes=30))      # inside the +3 h window
+    assert our_windows(readings, [one]) == [(t0 + timedelta(hours=2), t0 + timedelta(hours=3), 2)]
+    # fulfilled after the rise was seen: the bounded lookback finds it
+    late = (t0 + timedelta(minutes=45), t0 + timedelta(hours=1, minutes=10))
+    assert our_windows(readings, [late]) == [(t0, t0 + timedelta(hours=1), 1)]
+    # a receipt that ended before the window opened, or began long after the rise: not this rise
+    assert our_windows(readings, [(t0 - timedelta(hours=3), t0 - timedelta(hours=2))]) == []
+    assert our_windows(readings, [(t0 + timedelta(hours=7), t0 + timedelta(hours=8))]) == []
     f = tmp_path / "receipts.csv"
     f.write_text("request_id,first_at_eastern,fulfilled_at_eastern\nr1,2026-12-04T15:00:00-05:00,2026-12-04T15:20:00-05:00\n")
     assert read_receipts(f) == [(datetime.fromisoformat("2026-12-04T15:00:00-05:00"), datetime.fromisoformat("2026-12-04T15:20:00-05:00"))]

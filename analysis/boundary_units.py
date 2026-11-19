@@ -1,8 +1,12 @@
 """Units sold in one poll interval whose two ends show different prices: which price did they sell at?
 
-Pure and standard library only, so the tests run without a database. analysis/sales_analysis.py uses it for the
-average price. The same rule as vending/stock.py `_old_units`, which splits a sale at a product change."""
+Pure and standard library only (plus vending.counters), so the tests run without a database. analysis/sales_analysis.py
+uses it for the average price. The same rule as vending/stock.py `_old_units`, which splits a sale at a product change."""
 from __future__ import annotations
+
+from bisect import bisect_right
+
+from vending.counters import windows
 
 
 def split_boundary(units: int, cents: int | None, p_open: int | None, p_close: int | None) -> tuple[int, int, int]:
@@ -20,3 +24,36 @@ def split_boundary(units: int, cents: int | None, p_open: int | None, p_close: i
         return 0, 0, units
     old, rest = divmod(p_close * units - cents, p_close - p_open)
     return (old, units - old, 0) if not rest and 0 <= old <= units else (0, 0, units)
+
+
+def price_sales(readings, sales) -> list[tuple[int | None, int | None, int, int, int]]:
+    """What each sale of one slot sold at: `(opening price, closing price, units at opening, at closing, unknown)`.
+
+    `readings`: `(at, lifetime units, lifetime cents, price)` for each poll of the slot. `sales`: `(prev, at, units,
+    cents)` for each poll `at` where the counters rose, `prev` the poll before it. The opening price is the last
+    reading at or before `prev` (the first reading when there is none), the closing price the reading at `at`.
+
+    The units and cents of a poll can be measured from different polls (vending.counters.windows: a misread in one
+    counter and not the other). Then the cents do not cover the same units, so a sale whose prices differ is not
+    split: its units are unknown, and the cents stay in the slot's takings."""
+    readings = sorted(readings, key=lambda r: r[0])
+    times = [r[0] for r in readings]
+    close = {at: price for at, _, _, price in readings}
+    unit_from = {at: s for s, at, _ in windows((at, u) for at, u, _, _ in readings)}
+    cents_from = {at: s for s, at, _ in windows((at, c) for at, _, c, _ in readings)}
+    out = []
+    for prev, at, units, cents in sales:
+        i = bisect_right(times, prev)
+        opening = readings[max(i - 1, 0)][3] if readings else None
+        same = unit_from.get(at) is not None and unit_from.get(at) == cents_from.get(at)
+        out.append((opening, close.get(at), *split_boundary(int(units), int(cents) if same else None, opening, close.get(at))))
+    return out
+
+
+def priced_average(parts) -> tuple[float | None, int]:
+    """`(average price in cents, units unknown)` over `(opening price, closing price, at opening, at closing, unknown)`
+    parts of `price_sales`. Unknown units are left out of the average; it is None when no unit has a known price."""
+    parts = list(parts)
+    units = sum(uo + uc for _, _, uo, uc, _ in parts)
+    total = sum((p_open * uo if uo else 0) + (p_close * uc if uc else 0) for p_open, p_close, uo, uc, _ in parts)
+    return (total / units if units else None), sum(p[4] for p in parts)
