@@ -241,6 +241,10 @@ server migrates on its own: on a database that is behind, each refuses to run an
 Run the tests with `pytest`, or `pytest -n 6` to spread them over six processes (about 1.5 to 2
 minutes instead of 4 on a laptop; more workers than that was slower on Kevin's laptop).
 
+If Docker hangs (new containers never start, or stay in "Created"), run
+`scripts\docker_recover.ps1`. [`docs/docker-recovery.md`](docs/docker-recovery.md) says what
+it does and how to make throwaway containers that clean up after themselves.
+
 Before the live run starts, a person records the opening capital once with
 `python -m vending.ledger open --amount 600.00 --by NAME`; until then `get_account_balance`
 refuses and names that command. See "the ledger" in `docs/mcp-server.md`.
