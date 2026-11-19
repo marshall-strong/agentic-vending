@@ -25,7 +25,8 @@ Read-only in three layers, so that a bug in our code still can't write:
     choose are a table Postgres already lists and a row offset.
 
 Load limits, because the address is public: at most `MAX_CONNECTIONS` page
-connections at once (the server's 50 are shared with the other team), a request
+connections at once (the server's 50 are shared with the other team; the visit
+counter's writer borrows one of these, only when it is free: `spare_slot`), a request
 that can't get one within `WAIT_SECONDS` is told the page is busy, every
 statement is cancelled after `STATEMENT_TIMEOUT_MS`, and the explorer shows 100
 rows a page. Hammering the pages makes the pages slow, not the syncs.
@@ -218,6 +219,27 @@ def _connection() -> Iterator[psycopg.Connection]:
                     raise CanWrite(", ".join(found[:5]) + (f" and {len(found) - 5} more" if len(found) > 5 else ""))
                 _read_only_until = time.monotonic() + RECHECK_SECONDS
             yield conn
+    finally:
+        _slots.release()
+
+
+@contextmanager
+def spare_slot(wait: float, every: float) -> Iterator[bool]:
+    """One of the `MAX_CONNECTIONS` page connections for background work (the visit counter's
+    writer, `vending.visits`), so that work never adds a connection of its own. Yields whether
+    one came free within `wait` seconds.
+
+    It only ever takes a free one, looking every `every` seconds instead of queueing, so a page
+    already waiting gets the next one that frees up. The caller opens its own connection and must
+    keep it bounded (statement timeout and `KEEPALIVES`), since a page may wait on it."""
+    deadline = time.monotonic() + wait
+    while not _slots.acquire(blocking=False):
+        if time.monotonic() >= deadline:
+            yield False
+            return
+        time.sleep(every)
+    try:
+        yield True
     finally:
         _slots.release()
 

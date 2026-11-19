@@ -70,6 +70,16 @@ def _no_password_gate(request, monkeypatch):
         monkeypatch.setattr(gate, "ENABLED", False)
 
 
+@pytest.fixture(autouse=True)
+def _no_visit_counting(request, monkeypatch):
+    """The pages' visit counter writes nothing except in the tests about it (tests/test_visits.py),
+    so a test that opens a page never writes to the database `.env` names."""
+    if request.module.__name__.rsplit(".", 1)[-1] != "test_visits":
+        from vending import visits
+
+        monkeypatch.setattr(visits, "ENABLED", False)
+
+
 def local_database_url() -> str:
     """`DATABASE_URL`, or skip the test unless every host it names is this machine.
 

@@ -172,6 +172,21 @@ line it prints into `vending/gate.py` and deploy; that signs every browser out. 
 sign-in (Container Apps' built-in one) was tried first, but the institute's tenant makes an
 administrator approve each app, so it would need IT.
 
+**Visits are counted** (`vending/visits.py`, migrations 016 and 018). Each right password is a
+sign-in, and each browser opening `/dashboard` or `/db` is a visit, at most once per page per half
+hour; the dashboard's own 30-second refresh never counts, with or without scripts (the no-script
+reload goes to `?refresh=1`). A browser is a random id in a cookie of its own (`vend_browser`), so
+there are no names, and no IP address or browser string is kept; the browser counts are the ones
+that opened a page. The dashboard's **Visitors** tile shows the counts, and
+`python -m vending.visits` prints them. The worker writes them in the background with the syncs'
+login (the pages' login stays read-only), on one of the pages' own two connections and only while
+one is free, so the pages still use at most two. That connection has the pages' 5-second statement
+timeout and keepalives. If no connection comes free within 30 seconds, the tables aren't there yet
+or the database is down, the counts are dropped with a line in the log and the pages work as
+before, so run `python -m vending.db migrate` before or after the deploy that brings them. The
+tile reads running totals and the last week's rows only, gives up after a second, and if it can't
+read them it says "Unavailable" while the rest of the dashboard shows as usual. No model is called.
+
 **Nobody can change anything through them, in three layers:**
 
 1. **A login that can only read.** The pages connect with their own secret,
