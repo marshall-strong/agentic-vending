@@ -178,6 +178,9 @@ hour. It reads `GET /api/v1/product-requests/{id}` for each and stores the decis
 with the SKU the drink was added under (order it by that SKU; it may differ from what we asked for),
 or `rejected` with the instructors' note. A decided request is not read again.
 
+When the bridge refuses because too many requests are open, the next drinks wait in the
+**backlog** (`python -m vending.request_backlog`, migration 017). See [`request-backlog.md`](request-backlog.md).
+
 ### `get_account_balance` and `get_pnl`: the ledger
 
 Both read `vending/ledger.py`. **The balance is computed, never stored:**
