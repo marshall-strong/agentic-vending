@@ -115,6 +115,7 @@ class Movement:
     changes: int = 0                     # sale: product changes inside a window left unsplit
     opened_at: datetime | None = None    # purchase, load: the door opened then; `at` is door close (None: no door times)
     seq: int = 0                         # receipt movements: the request's place in submission order (0: unknown)
+    door: tuple[datetime, datetime] | None = None   # receipt movements: the receipt's door times, even if not used
     notes: tuple[StockWarning, ...] = ()  # warnings to pass on when this movement is replayed, each with its slot
     door_conflict: str = ""              # sale: the receipt it contradicts, by selling with the door open
     split: bool = False                  # sale: already split at its changes; another pass leaves it alone
@@ -280,6 +281,7 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
         ref = f"{line['request_id']} line {line['line_no']}"
         slot, first = line["slot"], len(moves)
         opened, closed = line.get("door_opened_at"), line.get("door_closed_at")
+        door = line.get("door_recorded") or (None if opened is None or closed is None else (opened, closed))
         if opened is None or closed is None:
             opened, seq = None, 0
             pulled_at = loaded_at = line["resolved_at"]
@@ -287,18 +289,18 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
             pulled_at, loaded_at, seq = opened, closed, seqs.get(line["request_id"], 0)
         if line["units_pulled"]:
             moves.append(Movement(pulled_at, "pull", slot, line["pulled_sku"], units=line["units_pulled"], ref=ref,
-                                  seq=seq))
+                                  seq=seq, door=door))
         if line["outcome"] in ("primary", "alternate"):
             moves.append(Movement(
                 loaded_at, "purchase", slot, line["sku"], to_slot=line["units_loaded"],
                 to_closet=line["units_to_back_stock"], lost=line["units_lost"],
                 paid_cents=cents(line["total_paid"]), reassigned=line["slot_reassigned"], ref=ref,
-                opened_at=opened, seq=seq))
+                opened_at=opened, seq=seq, door=door))
         elif line["outcome"] == "loaded":
             moves.append(Movement(
                 loaded_at, "load", slot, line["sku"], to_slot=line["units_loaded"],
                 lost=line["units_from_back_stock"] - line["units_loaded"],
-                reassigned=line["slot_reassigned"], ref=ref, opened_at=opened, seq=seq))
+                reassigned=line["slot_reassigned"], ref=ref, opened_at=opened, seq=seq, door=door))
         if len(moves) > first and line.get("door_notes"):
             # Each note names its own slot, which may not be this line's (the replay passes each on once).
             moves[first] = replace(moves[first], notes=line["door_notes"])
@@ -320,7 +322,8 @@ def _usable_door_times(lines: list[dict]) -> list[dict]:
     the submission order) neither visit's door times are used: their lines are
     timed by `resolved_at`, as without door times. Each of those lines carries
     `door_notes`, one warning per slot where its visit clashed, each about that
-    slot. Running this again on its own output changes nothing.
+    slot, and `door_recorded`, the door times it had: the visit still happened
+    then, which `_visits` needs. Running this again on its own output changes nothing.
     """
     visits: dict[str, dict[str, tuple]] = {}
     for line in lines:
@@ -341,6 +344,7 @@ def _usable_door_times(lines: list[dict]) -> list[dict]:
     if not notes:
         return lines
     return [{**line, "door_opened_at": None, "door_closed_at": None,
+             "door_recorded": (line["door_opened_at"], line["door_closed_at"]),
              "door_notes": tuple(notes[line["request_id"]].values())} if line["request_id"] in notes else line
             for line in lines]
 
@@ -432,10 +436,11 @@ def _request(m: Movement) -> str:
 def _visits(movements: list[Movement]) -> list[tuple[str, datetime, datetime]]:
     """`(request, start, end)` for each receipt movement: when that visit could have set a price.
 
-    With door times, from the start of the door-open minute to the end of the
-    close minute. Without them, the instant `resolved_at`.
+    With door times on the receipt, from the start of the door-open minute to
+    the end of the close minute, even when the replay times the movement by
+    `resolved_at` instead (`Movement.door`). Without them, the instant `resolved_at`.
     """
-    return [(_request(m), m.opened_at or m.at, m.at + (_MINUTE if m.opened_at else timedelta(0)))
+    return [(_request(m), m.door[0], m.door[1] + _MINUTE) if m.door else (_request(m), m.at, m.at)
             for m in movements if m.kind in ("pull", "purchase", "load")]
 
 

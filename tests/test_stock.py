@@ -737,3 +737,21 @@ def test_confirmed_sales_after_unattributed_ones_lower_the_most_that_can_be_on_h
                            ("15", hours(8), 114, 22800, 200)])
     [slot] = stock.slots
     assert (slot.loaded, slot.sold, slot.unattributed, slot.units, slot.at_most) == (10, 6, 8, 0, 4)
+
+
+def test_visits_whose_door_times_the_replay_drops_still_count_as_setting_the_price():
+    # As the test above, but r0's top-up is two requests, r0 and r1, whose door times share the 16:40
+    # minute and were submitted together. The replay times their lines by resolved_at (15:30, before
+    # the 16:00 poll), but the doors were open between the 16:00 and 17:30:10 polls, so either may have
+    # set the $2.00 price: the 17:30:10 poll doesn't show r2 had started.
+    lines = [line(sku="ARIZONA", units_loaded=10, total_paid="5.00")]
+    for request_id, opened, closed in (("r0", 1 + 35 / 60, 1 + 40 / 60), ("r1", 1 + 40 / 60, 1 + 42 / 60)):
+        lines = with_door(lines + [line(sku="ARIZONA", units_loaded=1, total_paid="0.50", at=0.5,
+                                        request_id=request_id)], opened=opened, closed=closed, request_id=request_id)
+    lines = lines + with_door([swap(sku="COKE20", total_paid="8.00")[1]])
+    counters = [("15", hours(1), 100, 25000, 250), ("15", seconds(2.5, 10), 100, 25000, 200),
+                ("15", hours(4), 102, 25400, 200)]
+    stock = book(lines, counters=counters)
+    assert any("share a minute" in w for w in stock.warnings)
+    [sale] = [s for s in stock.sales if s.units]
+    assert (sale.product, sale.units) == (None, 2) and "can't split" in sale.unattributed
