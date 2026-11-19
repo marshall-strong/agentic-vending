@@ -13,7 +13,27 @@ python -m vending.plan_page --rounds DIR --no-db                               #
 python -m vending.plan_page --rounds DIR --write plan.html                      # one file, no server
 ```
 
-The page runs on your own machine only. The round files live outside the repo, so the Container App can't see them. Once the `sim_rounds` table exists, the page can move to `/dashboard/plan` and read from that table. Until then, the team sees it through the claude.ai copy listed in [`artifacts.md`](artifacts.md). Make that copy with `--write` and publish it again after each round.
+The planning page runs on your own machine. Use `--write` to make a copy for the team, as listed in
+[`artifacts.md`](artifacts.md).
+
+## Put a plan on the dashboard
+
+The Container App reads the first-fill plan from `first_fill_plans`. Migration 020 creates this
+table. Run these commands from a laptop with the round files and the database writer login.
+
+```
+python -m vending.plan_store load DIR --round 3 --by NAME
+python -m vending.plan_store list
+python -m vending.plan_store pick ID --by NAME
+```
+
+`DIR` can be the folder with the plan file or the folder with the round folders. The loader checks
+the plan and projection against the current server assignment. It saves those files' JSON and
+the assignment. Load and pick each record a write in `action_log`.
+
+Before the slot lock, **The plan** on the dashboard shows the picked plan. With no pick, it
+shows the latest plan and labels it "latest, not picked". After a redraw, load and pick a plan
+for the new assignment. At the lock, the dashboard switches to the agent's Friday plan.
 
 | Whole page (seeded test data, light) | Top of the page (dark) | Phone (390 px) |
 |---|---|---|
@@ -37,7 +57,9 @@ When the page's own count disagrees with a file, it says so under **Notes**: for
 
 ## Rounds
 
-A round is one plan file. If a projection file has the same suffix, it is that round's projection: `round1/plan1.json` with `round1/projection1.json`, `round2/plan2a.json` with `round2/projection2a.json`. The page ignores every other file in the folder, such as `plan1_sku.json`, the raw model answers and the briefs.
+A round is one plan file. Pair files by their round ID, for example `plan2a.json` with
+`projection2a.json` or `r4.plan.json` with `projection4.json`. The loader ignores other files
+such as `plan1_sku.json`, raw model answers and briefs.
 
 **Plan files** may use either round shape:
 - Round 1: the full plan, with floats for prices.
@@ -61,4 +83,3 @@ The page reads float prices through their decimal text and refuses any that isn'
 
 - **The money panel (#48)** on `/dashboard`: balance, spend and token spend against $600. This is next.
 - **Forecast against actual** once the run starts: needs the projection stored with its `plan_hash`.
-- **Reading `sim_rounds`** instead of the folder, once that table exists.

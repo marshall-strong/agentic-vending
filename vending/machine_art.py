@@ -143,7 +143,7 @@ def lane_products(snap: Mapping, ours: Iterable[str]) -> list[str]:
     counts = snap.get("counts") or {}
     if counts.get("ok"):
         found.update(v.get("product") for s, v in counts["data"].items() if s in ours)
-    plan = snap.get("plan") or {}
+    plan = snap.get("weekly_plan", snap.get("plan")) or {}
     if plan.get("ok") and plan["data"]:
         found.update((s.get("now") or {}).get("product") for s in plan["data"]["slots"] if s["slot"] in ours)
     return sorted(p for p in found if isinstance(p, str) and p)

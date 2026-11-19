@@ -133,6 +133,17 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 python -m vending.db migrate
 ```
 
+Apply migration 020 before deploying the dashboard that reads the first-fill plan. Use the same
+owner login that ran `python -m vending.pages grant` so the page login inherits read access.
+From a laptop with the plan files and the writer login, load the plan and pick the ID it prints.
+
+```
+python -m vending.plan_store load DIR --round 3 --by NAME
+python -m vending.plan_store pick ID --by NAME
+```
+
+Use `python -m vending.plan_store list` to find the ID of a plan already loaded.
+
 **After the migration that adds `slot_assignment` (013, from #69), record our slots once.** Every
 agent tool, `preview_desired_state` and the ledger CLI read which selections are ours from that
 table, and until it has a row they refuse and name this command (the dashboard says our slots

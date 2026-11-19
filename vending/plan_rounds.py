@@ -1,12 +1,12 @@
 """Day-one planning rounds, read from a folder of round files, for the planning page.
 
 A *round* is one answer from our agent to the day-one planning brief: which product goes in each of
-our 20 slots, at what price, and which catalog requests it wants. Rounds are written outside the repo
-(for now `C:\\Users\\KevinSykes\\vending-day1\\roundN\\`; later the `sim_rounds` table) like this:
+our 20 slots, at what price, and which catalog requests it wants. Round files live outside the repo:
 
     round1/plan1.json        + round1/projection1.json
     round2/plan2a.json       + round2/projection2a.json
     round2/plan2b.json       + round2/projection2b.json
+    round4/r4.plan.json      + round4/projection4.json
 
 A plan is paired with the projection that has the same suffix. Other files are ignored, including
 `plan1_sku.json` (round 1 re-keyed to SKUs, which is the projection's input) and the raw answers.
@@ -52,7 +52,7 @@ START_CENTS = 60_000
 CEILING_CENTS = 650           # config.price_ceiling_cents on main (12 Nov decision)
 SCENARIOS = ("low", "base", "high")
 
-_PLAN = re.compile(r"^plan(?P<id>\d+[a-z]?)\.json$")
+_PLAN = re.compile(r"^(?:plan(?P<legacy>\d+[a-z]?)|r(?P<new>\d+[a-z]?)\.plan)\.json$")
 _PROJECTION = re.compile(r"^projection(?P<id>\d+[a-z]?)\.json$")
 _ROUND_DIR = re.compile(r"^round\d+$")
 
@@ -100,6 +100,7 @@ class Slot:
     needs_request: bool | None
     interloper: bool | None              # the projection's flag: the Interloper sells this drink
     floor_cents: int | None              # None when the round has no pack for this product
+    legal_price: bool | None              # None when the floor is unknown
     capacity: int | None                 # units per column: the chart, else the projection's assumed figure
     capacity_assumed: bool
     most_cents: Fraction | None          # this slot's share of the fill at the most-we-pay pack price
@@ -222,12 +223,19 @@ def discover(root: Path) -> list[tuple[str, Path, Path | None]]:
     found: dict[str, tuple[Path, Path | None]] = {}
     if not root.is_dir():
         raise RoundError(f"{root}: not a folder")
-    for folder in sorted(p for p in root.iterdir() if p.is_dir() and _ROUND_DIR.match(p.name)):
-        plans = {m.group("id"): p for p in folder.iterdir() if (m := _PLAN.match(p.name))}
-        projections = {m.group("id"): p for p in folder.iterdir() if (m := _PROJECTION.match(p.name))}
-        for rid, plan in plans.items():
+    folders = [root, *sorted(p for p in root.iterdir() if p.is_dir() and _ROUND_DIR.fullmatch(p.name))]
+    for folder in folders:
+        files = sorted(p for p in folder.iterdir() if p.is_file())
+        projections = {m["id"]: p for p in files if (m := _PROJECTION.fullmatch(p.name))}
+        for plan in files:
+            match = _PLAN.fullmatch(plan.name)
+            if match is None:
+                continue
+            rid = match["legacy"] or match["new"]
             if rid in found:
-                raise RoundError(f"round {rid} is in two folders: {found[rid][0].parent.name} and {folder.name}")
+                old = found[rid][0]
+                raise RoundError(f"round {rid} has two plan files: {old.parent.name}/{old.name} and "
+                                 f"{folder.name}/{plan.name}")
             found[rid] = (plan, projections.get(rid))
     return [(rid, *found[rid]) for rid in sorted(found, key=_round_key)]
 
@@ -292,8 +300,30 @@ def _check_note_slots(value: Any, name: str, ours: tuple[str, ...]) -> None:
 def load_round(round_id: str, plan_path: Path, projection_path: Path | None, ours: tuple[str, ...]) -> Round:
     """One round, checked against `ours` (our slots, from `vending.slots.our_slots`), or RoundError
     naming the file when a plan or projection has an unexpected shape."""
+    return read_round(round_id, plan_path, projection_path, ours)[0]
+
+
+def read_round(round_id: str, plan_path: Path, projection_path: Path | None,
+               ours: tuple[str, ...]) -> tuple[Round, dict, dict]:
+    """Read once and return the checked round and the two JSON objects used to check it."""
+    plan = _load(plan_path)
+    projection = _load(projection_path) if projection_path else {}
+    checked = parse_round(round_id, plan, projection, ours,
+                          saved_at=datetime.fromtimestamp(plan_path.stat().st_mtime).astimezone(),
+                          folder=plan_path.parent.name, plan_file=f"{plan_path.parent.name}/{plan_path.name}",
+                          projection_file=(f"{projection_path.parent.name}/{projection_path.name}"
+                                           if projection_path else None))
+    return checked, plan, projection
+
+
+def parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, ...], *,
+                saved_at: datetime, folder: str = "", plan_file: str = "plan",
+                projection_file: str | None = None) -> Round:
+    """Check a round from JSON objects, with no dependency on where they were stored."""
     try:
-        return _load_round(round_id, plan_path, projection_path, ours)
+        if not isinstance(plan, dict) or not isinstance(projection, dict):
+            raise RoundError(f"round {round_id}: the plan and projection must be JSON objects")
+        return _parse_round(round_id, plan, projection, ours, saved_at, folder, plan_file, projection_file)
     except RoundError:
         raise
     except (AttributeError, TypeError, KeyError, ValueError) as error:
@@ -301,12 +331,10 @@ def load_round(round_id: str, plan_path: Path, projection_path: Path | None, our
                          f"({type(error).__name__}: {error})") from None
 
 
-def _load_round(round_id: str, plan_path: Path, projection_path: Path | None, ours: tuple[str, ...]) -> Round:
+def _parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, ...],
+                 saved_at: datetime, folder: str, pname: str, projection_file: str | None) -> Round:
     ours = tuple(sorted(ours, key=_slot_key))
-    plan = _load(plan_path)
-    pname = f"{plan_path.parent.name}/{plan_path.name}"
-    projection = _load(projection_path) if projection_path else {}
-    jname = f"{projection_path.parent.name}/{projection_path.name}" if projection_path else ""
+    jname = projection_file or "projection"
     warnings: list[str] = []
 
     packs = _packs(projection, jname) if projection else {}
@@ -360,9 +388,12 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None, ou
             price = _cents(entry.get("price"), f"{pname}: slot {slot} price")
         problems: list[str] = []
         floor = most = expected = None
+        legal_price = None
         if pack:
             floor = pricing.pack_floor_cents(pack.max_cents, pack.units_per_pack)
-            problems += [r.message for r in pricing.check_price(price, floor, CEILING_CENTS)]
+            price_problems = pricing.check_price(price, floor, CEILING_CENTS)
+            legal_price = not price_problems
+            problems.extend(r.message for r in price_problems)
             most = Fraction(units * pack.max_cents, pack.units_per_pack)
             expected = Fraction(units * pack.expected_cents, pack.units_per_pack)
         chart = capacity.from_size(size)
@@ -377,7 +408,8 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None, ou
         for scen, rows in scen_rows.items():
             pc = _opt_int(rows.get(slot, {}).get("price_cents"))
             if pc is not None and pc != price:
-                warnings.append(f"slot {slot}: the plan prices it at {_d(price)} but the {scen} projection used {_d(pc)}")
+                warnings.append(f"slot {slot}: the plan prices it at {format_cents(price)} but the {scen} projection "
+                                f"used {format_cents(pc)}")
         if projection and slot not in proj_slots and not projected:
             warnings.append(f"slot {slot}: not in the projection")
         slots[slot] = Slot(
@@ -386,7 +418,7 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None, ou
             units=units, price_cents=price, why=entry.get("why"),
             needs_request=entry.get("needs_request") if isinstance(entry.get("needs_request"), bool) else None,
             interloper=ps.get("interloper") if isinstance(ps.get("interloper"), bool) else None,
-            floor_cents=floor, capacity=cap, capacity_assumed=assumed,
+            floor_cents=floor, legal_price=legal_price, capacity=cap, capacity_assumed=assumed,
             most_cents=most, expected_cents=expected, refusals=tuple(problems), projected=projected)
     missing = [s for s in ours if s not in slots]
     if missing:
@@ -421,7 +453,8 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None, ou
             for label, mine, theirs in (("expected", fill_expected, projection.get("fill_expected_cents")),
                                         ("most-we-pay", fill_most, projection.get("fill_most_cents"))):
                 if isinstance(theirs, int) and theirs != mine:
-                    warnings.append(f"fill {label}: the projection says {_d(theirs)}, this page counts {_d(mine)}")
+                    warnings.append(f"fill {label}: the projection says {format_cents(theirs)}, "
+                                    f"this page counts {format_cents(mine)}")
         for p in projection.get("purchase") or []:
             mine = next((q for q in purchases if q.sku == p.get("sku")), None)
             if mine and isinstance(p.get("packs"), int) and p["packs"] != mine.packs:
@@ -435,8 +468,7 @@ def _load_round(round_id: str, plan_path: Path, projection_path: Path | None, ou
     if isinstance(plan.get("totals"), dict) and plan["totals"].get("cap_note"):
         notes["cap_note"] = plan["totals"]["cap_note"]
     return Round(
-        id=round_id, folder=plan_path.parent.name, plan_file=pname, projection_file=jname or None,
-        saved_at=datetime.fromtimestamp(plan_path.stat().st_mtime).astimezone(),
+        id=round_id, folder=folder, plan_file=pname, projection_file=projection_file, saved_at=saved_at,
         slots=dict(sorted(slots.items(), key=lambda kv: _slot_key(kv[0]))),
         catalog_requests=[r for r in plan.get("catalog_requests") or [] if isinstance(r, dict)],
         purchases=purchases, fill_expected_cents=fill_expected, fill_most_cents=fill_most,
@@ -487,7 +519,8 @@ def same_assumptions(a: Round, b: Round) -> bool:
     return bool(a.assumptions) and a.assumptions == b.assumptions
 
 
-def _d(cents: int) -> str:
+def format_cents(cents: int) -> str:
+    """Format an integer number of cents as exact dollars."""
     sign = "-" if cents < 0 else ""
     cents = abs(cents)
     return f"{sign}${cents // 100:,}.{cents % 100:02d}"

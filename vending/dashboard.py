@@ -59,10 +59,10 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import db, machine_art, money_panel, settings, slot_counts, visits
+from vending import db, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
-from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.slots import DEVICE_ID, SlotsNotRecorded, lock_at, our_slots
 from vending.tools import machine_state
 from vending.mascot import svg as mascot_svg  # after the rest: other PRs edit the lines above
 
@@ -270,6 +270,43 @@ def _plan(conn: psycopg.Connection, ours: tuple[str, ...] = ()) -> dict | None:
             "previous_run": previous and previous["id"],
             "visit": plan.get("visit"), "reason": plan.get("reason"),
             "update": latest["team_update"], "notes": latest["notes"], "slots": slots}
+
+
+_FILE_REFERENCE = re.compile(r"(?i)\bfile:|(?<!\w)[a-z]:[\\/]|\\\\|(?<![\w:/])/(?:[^/\s]+/)")
+
+
+def _plan_text(value: str | None) -> str | None:
+    """The plan's display text can cite a local file. Omit that text from the page and JSON."""
+    if value is None:
+        return None
+    text = str(value)
+    return "(local file reference omitted)" if _FILE_REFERENCE.search(text) else text
+
+
+def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
+    with conn.cursor(row_factory=dict_row) as cur:
+        # Use the same JSON decoder as the laptop-file loader.
+        set_json_loads(json.loads, context=cur)
+        row = cur.execute("select id, loaded_at, label, plan, projection, slots, picked from first_fill_plans"
+                          " order by picked desc, loaded_at desc, id desc limit 1").fetchone()
+    if row is None:
+        return None
+    current = {"id": row["id"], "picked": row["picked"], "slots": []}
+    if not ours:
+        return {**current, "message": "Our slot assignment is not available."}
+    if set(row["slots"]) != set(ours):
+        return {**current, "message": "planned for an earlier slot assignment: load a new plan"}
+    checked = plan_rounds.parse_round(row["label"], row["plan"], row["projection"], ours, saved_at=row["loaded_at"])
+    return {**current, "fill_expected_cents": checked.fill_expected_cents,
+            "fill_most_cents": checked.fill_most_cents, "fill_cap_cents": plan_rounds.FILL_CAP_CENTS,
+            "slots": [{"slot": s.slot, "product": _plan_text(s.product), "price_cents": s.price_cents,
+                       "units": s.units, "reason": _plan_text(s.why),
+                       "checks": {"floor_cents": s.floor_cents, "legal_price": s.legal_price,
+                                  "capacity": s.capacity, "capacity_assumed": s.capacity_assumed,
+                                  "expected_fill_share": _dollars(s.expected_cents),
+                                  "max_fill_share": _dollars(s.most_cents),
+                                  "refusals": [_plan_text(message) for message in s.refusals]}}
+                      for s in checked.slots.values()]}
 
 
 def _tags(conn: psycopg.Connection, now: datetime) -> dict:
@@ -561,6 +598,9 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         "catalog_requests": catalog,
         "catalog_counts": _catalog_counts(catalog),
     }
+    if now < lock_at():
+        snap["weekly_plan"] = snap["plan"]
+        snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots)))
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
     return snap
 
@@ -873,7 +913,7 @@ def machine_view(snap: dict) -> dict:
     plan's product, price and fill, falling back to Now for what the plan leaves as is. `next` is
     None when there is no plan.
     """
-    plan, sales, stock = snap["plan"], snap["sales"], snap["stock"]
+    plan, sales, stock = snap.get("weekly_plan", snap["plan"]), snap["sales"], snap["stock"]
     p = plan["data"] if plan["ok"] else None
     planned = {s["slot"]: s for s in p["slots"]} if p else {}
     prices = sales["data"]["slots"] if sales["ok"] else {}
@@ -918,7 +958,8 @@ def machine_view(snap: dict) -> dict:
 
 def _cabinet_html(snap: dict) -> str:
     """In the machine: our lanes close up (`vending.machine_art`), and the plan's changes."""
-    now, plan, sales, stock = snap["as_of"], snap["plan"], snap["sales"], snap["stock"]
+    plan = snap.get("weekly_plan", snap["plan"])
+    now, sales, stock = snap["as_of"], snap["sales"], snap["stock"]
     if not snap["ours"]["ok"]:
         return ('<section id="vm" class="vm" data-view="now"><h2>In the machine</h2>'
                 f'{_missing(snap["ours"])}</section>')
@@ -927,7 +968,8 @@ def _cabinet_html(snap: dict) -> str:
     face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
     products = snap.get("products") or {"ok": False, "why": PRODUCTS_FAILED}
     cabinet = machine_art.closeup_html({s: v for s, v in view.items() if s in face},
-                                       products["data"] if products["ok"] else None, p is not None)
+                                       products["data"] if products["ok"] else None,
+                                       p is not None and "weekly_plan" not in snap)
     if p is None:
         cabinet = '<p class="empty v-next">No plan yet: Next Friday shows the machine as it is now.</p>' + cabinet
     off_face = [s for s in our_selections(snap) if s not in face]
@@ -948,8 +990,12 @@ def _cabinet_html(snap: dict) -> str:
             items = [(slot, v["change"]) for slot, v in view.items() if v["change"]]
             items += [(s["slot"], {"labels": ["dropped"], "kind": "bad", "reason": None})
                       for s in p["slots"] if s["changed"] and s["slot"] not in view]
+            def slot_link(slot: str) -> str:
+                label = f'<b>{_e(slot)}</b>'
+                return label if "weekly_plan" in snap else f'<a href="#slot-{_e(slot)}">{label}</a>'
+
             rows = "".join(
-                f'<li><span class="dotk {c["kind"]}"></span><a href="#slot-{_e(slot)}"><b>{_e(slot)}</b></a>'
+                f'<li><span class="dotk {c["kind"]}"></span>{slot_link(slot)}'
                 f'<span>{_e(", ".join(c["labels"]))}'
                 + (f'<span class="why">{_e(c["reason"])}</span>' if c["reason"] else "") + "</span></li>"
                 for slot, c in items)
@@ -1070,6 +1116,59 @@ def _plan_html(snap: dict) -> str:
     columns = ('<div class="plan-head" aria-hidden="true"><span>Slot</span><span>Now</span>'
                '<span>Next Friday</span><span></span></div>')
     return head + controls + f'<div class="plan-grid" data-only="false">{columns}{cells}</div>'
+
+
+def _first_fill_cell(row: dict) -> str:
+    slot, checks = row["slot"], row["checks"]
+    floor = checks["floor_cents"]
+    legal = checks["legal_price"]
+    price = "legal price" if legal else "price refused" if legal is False else "price check unavailable"
+    capacity = checks["capacity"]
+    cap = f"{capacity} units" if capacity is not None else "unknown"
+    if checks["capacity_assumed"]:
+        cap += " (assumed)"
+    expected, maximum = checks["expected_fill_share"], checks["max_fill_share"]
+    cost = f"${expected} expected, ${maximum} at most" if expected is not None else "unknown"
+    findings = [f'Floor {plan_rounds.format_cents(floor) if floor is not None else "unknown"}',
+                price, f"Capacity {cap}", f"Fill cost share {cost}"]
+    problems = "".join(f'<div class="sub">{_e(reason)}</div>' for reason in checks["refusals"])
+    return (f'<details class="pc" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
+            f'<summary><b class="num">{_e(slot)}</b><span class="what">{_e(row["product"])}'
+            f' &middot; {plan_rounds.format_cents(row["price_cents"])}'
+            f' &middot; {_plural(row["units"], "unit")}</span></summary>'
+            f'<div class="why">{_e(row["reason"] or "No reason given.")}</div>'
+            f'<div class="was"><span class="label">Code checks</span>'
+            f'<div>{" &middot; ".join(_e(finding) for finding in findings)}</div>{problems}</div></details>')
+
+
+def _plan_section(snap: dict) -> str:
+    plan = snap["plan"]
+    p = plan["data"] if plan["ok"] else None
+    if "weekly_plan" not in snap:
+        hint = ("outlined slots changed &middot; open a slot for the agent's reason"
+                if p and p["previous_run"] else "open a slot for the agent's reason" if p else "")
+        return (f'<section id="plan"><h2>The plan <span class="hint">{hint}</span></h2>'
+                + _plan_html(snap) + _words_html(plan) + "</section>")
+
+    hint = ""
+    if not plan["ok"]:
+        body = _missing(plan)
+    elif p is None:
+        body = '<p class="empty">No first-fill plan loaded.</p>'
+    else:
+        hint = "Picked plan" if p["picked"] else "latest, not picked"
+        if p.get("message"):
+            body = f'<p class="empty">{_e(p["message"])}</p>'
+        else:
+            cap = plan_rounds.format_cents(p["fill_cap_cents"])
+            expected, maximum = p["fill_expected_cents"], p["fill_most_cents"]
+            cost = (f"{plan_rounds.format_cents(expected)} expected, {plan_rounds.format_cents(maximum)} at most"
+                    if expected is not None and maximum is not None else "unknown")
+            hint += f" &middot; Fill cost {cost} against the proposed {cap} cap"
+            cells = "".join(_first_fill_cell(row) for row in p["slots"])
+            body = f'<div class="plan-grid first-fill">{cells}</div>'
+    return ('<section id="plan"><h2>Plan for the first fill (stocked ~30 Nov) '
+            f'<span class="hint">{hint}</span></h2>{body}</section>')
 
 
 def _switched(verb: str, at: datetime | None, by: str | None, now: datetime) -> str:
@@ -1494,6 +1593,10 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
 .pc .tags { display:inline-flex; flex-wrap:wrap; gap:3px; justify-content:flex-end }
 .pc .why { font-size:13px; margin-top:4px; overflow-wrap:anywhere }
 .pc .was { font-size:12px; color:var(--muted); margin-top:3px; border-top:1px dashed var(--line); padding-top:3px; overflow-wrap:anywhere }
+.first-fill .pc summary { grid-template-columns:30px minmax(0, 1fr) auto }
+.first-fill .pc summary .what::before { content:none }
+.first-fill .pc summary::after { content:"▸"; color:var(--muted) }
+.first-fill .pc[open] summary::after { content:"▾" }
 .pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px; margin-top:12px }
 .words { background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:10px 12px }
 .text { white-space:pre-wrap; overflow-wrap:anywhere; margin-top:4px }
@@ -1618,7 +1721,7 @@ SCRIPT = """(function () {
     });
     var box = document.getElementById('changed-only');
     if (box) { box.checked = only; box.closest('label').hidden = false; }
-    document.querySelectorAll('.plan-grid').forEach(function (g) { g.setAttribute('data-only', String(only)); });
+    document.querySelectorAll('.plan-grid[data-only]').forEach(function (g) { g.setAttribute('data-only', String(only)); });
   }
   function openSlot(id) {
     var d = document.getElementById(id);
@@ -1692,9 +1795,6 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     if items is None:
         items = attention(snap)
     state = verdict(items)
-    p = snap["plan"]["data"] if snap["plan"]["ok"] else None
-    plan_hint = ("outlined slots changed &middot; open a slot for the agent's reason"
-                 if p and p["previous_run"] else "open a slot for the agent's reason" if p else "")
     head =(f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
             f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
             f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
@@ -1703,8 +1803,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
              " &middot; the competition counts from the ledger's opening; spend before it is development"
              f'</span></h2>{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
     body = (head + _tiles(snap) + _attention_html(items) + money + _cabinet_html(snap)
-            + f'<section id="plan"><h2>The plan <span class="hint">{plan_hint}</span></h2>'
-            + _plan_html(snap) + _words_html(snap["plan"]) + "</section>"
+            + _plan_section(snap)
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
               f'changed</span></h2>{_runs_html(snap["runs"], now)}</section>'

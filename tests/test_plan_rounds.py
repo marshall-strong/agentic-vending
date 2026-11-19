@@ -64,10 +64,14 @@ def test_rounds_pair_by_suffix_in_round_order_and_ignore_other_files(tmp_path):
     write(tmp_path, "round10", "10", {"day_one": day_one()})
     write(tmp_path, "round1", "1", {"day_one": day_one()}, projection())
     (tmp_path / "round1" / "plan1_sku.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "round2" / "r2a.plan.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "round2" / "r2a.answer.json").write_text("{}", encoding="utf-8")
+    write(tmp_path, "round4", "4", {"day_one": day_one()}, projection())
+    folder = tmp_path / "round4"
+    (folder / "plan4.json").rename(folder / "r4.plan.json")
     found = pr.discover(tmp_path)
-    assert [rid for rid, _, _ in found] == ["1", "2a", "2b", "10"]
+    assert [rid for rid, _, _ in found] == ["1", "2a", "2b", "4", "10"]
     assert found[1][2] is None and found[2][2].name == "projection2b.json"
+    assert found[3] == ("4", folder / "r4.plan.json", folder / "projection4.json")
 
 
 def test_floor_and_fill_cost_are_recomputed_from_the_pack_list(tmp_path):
