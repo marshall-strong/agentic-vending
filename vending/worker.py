@@ -56,6 +56,10 @@ never fails the round or /health. A read that runs past the round's time delays 
 
 The agent itself (the model loop) does not run here yet; when it does, it
 starts `python -m vending.server` over stdio from the same image.
+
+`GET /dashboard/demo/simulations` shows simulated seasons from committed files
+(`vending.simulate.demo`), behind the same password. It never opens a database
+connection, and every page of it says it is simulated.
 """
 
 from __future__ import annotations
@@ -171,6 +175,8 @@ REPO = "https://github.com/marshall-strong/agentic-vending"
 # The setting `vending.pages` connects with. Named here too, so the home page can say whether the
 # pages are set up without importing them (and the database driver) to draw itself.
 PAGES_SETTING = "READONLY_DATABASE_URL"
+# The simulated seasons on the dashboard's demo copy (`vending.simulate.demo.ROOT`): files only, no database.
+SIMULATIONS = "/dashboard/demo/simulations"
 OUTCOMES = ("finished", "crashed", "timed out", "still running")
 JOB_NAMES = {"slots_check": "Our slot assignment", "sync_history": "Machine readings (sales history)",
              "sync_requests": "Purchase requests and receipts", "sync_catalog": "Product catalog",
@@ -341,6 +347,12 @@ class _Health(BaseHTTPRequestHandler):
             self._send(200 if self.state.healthy else 503, "application/json", body)
         elif path == "":
             self._send(200, "text/html; charset=utf-8", home_page(self.state.public(), pages_ready()).encode())
+        elif path == SIMULATIONS or path.startswith(SIMULATIONS + "/"):
+            # Before the other /dashboard pages, which read the database; these never do.
+            from vending.simulate import demo
+
+            status, kind, body, csp = demo.respond(self.path)
+            self._send(status, kind, body.encode(), csp)
         elif path.startswith(("/dashboard", "/db")):
             # Imported here, so the syncs and /health never depend on the pages' code.
             from vending import pages
