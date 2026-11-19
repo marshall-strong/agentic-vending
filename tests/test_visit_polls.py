@@ -368,6 +368,7 @@ class Bridge:
 def _fresh_post_record(monkeypatch):
     """When the machine was last asked to read is process-wide state: every test starts with none."""
     monkeypatch.setattr(visit_polls, "_last_post", None, raising=False)
+    monkeypatch.setattr(visit_polls, "_last_post_ok", None, raising=False)
 
 
 @pytest.fixture
@@ -660,3 +661,35 @@ def test_a_receipt_filed_after_midnight_counts_on_the_day_it_was_fulfilled(conn)
     store_poll(conn, "s1", POLL_AT(14, 50).isoformat(), {"15": (200, 100)})
     assert visit_polls.visit_over(conn, POLL_AT(15, 0))               # a read after the close is stored: Friday is done
     assert not visit_polls.visit_over(conn, POLL_AT(15, 0) - timedelta(days=1))
+
+def test_a_step_that_outlived_its_timeout_before_sending_sends_nothing(machine):
+    """A step the reader gave up on keeps running in the background. If reading the receipts took it past
+    the step's timeout, it must not send a read then: the reader may already be backing off."""
+    machine.refresh_takes = timedelta(seconds=visit_polls.STEP_TIMEOUT_SECONDS + 5)
+    machine.clock.now = POLL_AT(15, 20, 0)
+    result = visit_polls.step(machine.clock.now, lambda _: None)
+    assert machine.polls == 0
+    assert result == SKIPPED
+
+
+def test_a_read_sent_whose_history_copy_outlives_the_timeout_is_not_a_failure(monkeypatch):
+    """The POST went out and was answered; only the copy of the history ran long. That leaves storage
+    unconfirmed, like a copy that failed, and keeps the one-minute cadence instead of backing off."""
+    import time
+
+    said = []
+    first = at(FRI, 15, 0).astimezone(timezone.utc)
+
+    def run(now):
+        monkeypatch.setattr(visit_polls, "_last_post", now + timedelta(seconds=1), raising=False)
+        monkeypatch.setattr(visit_polls, "_last_post_ok", now + timedelta(seconds=1), raising=False)
+        time.sleep(0.1)                                     # the copy, past the reader's timeout
+        return READ
+
+    reader = Reader(SCHEDULE, run, said.append, timeout=0.02)
+    for minute in range(3):
+        reader.tick(first + timedelta(minutes=minute))
+        time.sleep(0.15)                                    # let the background copy finish
+    assert reader.failures == 0
+    assert not any("failed in a row" in line for line in said)
+    assert any("storage not confirmed" in line for line in said)

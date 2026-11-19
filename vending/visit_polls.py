@@ -70,6 +70,7 @@ _MINUTE = timedelta(minutes=1)
 # When this process last asked the bridge to read the machine. There is one serial line and one worker,
 # so one record; the spacing is measured from it, not from when a step began.
 _last_post: datetime | None = None
+_last_post_ok: datetime | None = None   # when a read last went out and was answered
 
 
 def _utcnow() -> datetime:
@@ -206,7 +207,7 @@ def step(now: datetime, log: Callable[[str], None] = print, sched: Schedule | No
     not confirmed") and is still `READ`: the header's id may not be the history's id, and the stop rule
     works from the stored rows anyway. Never migrates. `sched` is the schedule the settings give, unless
     one is passed."""
-    global _last_post
+    global _last_post, _last_post_ok
     if sched is None:
         sched = schedule()
     if sched is None:
@@ -222,6 +223,10 @@ def step(now: datetime, log: Callable[[str], None] = print, sched: Schedule | No
         # Reading the receipts took time (and a step that outlived its timeout can run very late), so
         # look at the clock again, right before the POST.
         sent = _utcnow()
+        if (sent - now).total_seconds() >= STEP_TIMEOUT_SECONDS:
+            # The reader gave up on this step already and may be backing off; it must not send now.
+            log("visit reads: skipped, this step outlived its timeout before the read could be sent")
+            return SKIPPED
         if not window_open(sched, sent):
             log("visit reads: skipped, the window closed before the read could be sent")
             return SKIPPED
@@ -230,6 +235,7 @@ def step(now: datetime, log: Callable[[str], None] = print, sched: Schedule | No
             return SKIPPED
         _last_post = sent
         read = bridge.poll()
+        _last_post_ok = sent
         named = read.session_id or "(no session id)"
         cached = "?" if read.cached is None else str(read.cached).lower()
         age = "?" if read.age_seconds is None else f"{read.age_seconds:g}"
@@ -294,6 +300,11 @@ class Reader:
             self.failures, self.not_before = 0, self._after_post(now)
         elif result.exit_code == SKIPPED:       # sent nothing, so nothing failed
             self.not_before = self._after_post(now)
+        elif result.outcome == "timed out" and _last_post_ok is not None and _last_post_ok >= now:
+            # The read went out and was answered; only the copy of the history ran long. Like a copy that
+            # failed, that leaves storage unconfirmed, and it isn't a failure of the read.
+            self.failures, self.not_before = 0, self._after_post(now)
+            self.log("visit reads: the read was sent, but copying the history outlived the step; storage not confirmed")
         else:
             self.failures += 1
             wait = BACKOFF if self.failures >= FAILS_BEFORE_BACKOFF else self.sched.every
