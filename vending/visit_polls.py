@@ -7,9 +7,13 @@ open, so everything before that read is the old product, everything after it is 
 receipt's door times prove the read fell inside the visit (`vending.stock._split_by_door`).
 
 So on Fridays, from `VISIT_POLL_FROM` to `VISIT_POLL_TO` Eastern (unset: 14:45 to 19:00), the worker
-asks the bridge to read the machine every `VISIT_POLL_EVERY_MINUTES` (unset: 1; 0 turns it off). The
+asks the bridge to read the machine every `VISIT_POLL_EVERY_MINUTES` (unset: 1; 0 turns it off; anything
+else under 1 is refused). `VISIT_POLL_DATES` (unset: none) lists more Eastern days that get the same
+window and stop rule, such as the day-one fill, which is a visit of ours on a Monday. The
 bridge stores each read in its history, and the worker copies the day's history into our database
-straight after (`vending.sync_history`), so the read reaches the stock replay like any other poll.
+straight after (`vending.sync_history`), so the read reaches the stock replay like any other poll. A read
+only counts when that copy stored a usable row for the session the bridge named: a failed listing or
+fetch, or a bad checksum, makes it a failure like any other.
 A visit lasts a few minutes, so the interval has to be short for a read to land inside it.
 
 It stops for the day once a request of ours was fulfilled that day and a read taken after its door
@@ -19,6 +23,8 @@ pending requests (a few cheap GETs, not machine reads).
 A read is a live poll, about 8.5 s on the bridge's one serial line, so it is gentle by construction:
 
 - never started while an earlier one is still running (`run_round` skips a job that is);
+- the window and the spacing are checked again at the POST itself, from the last POST actually sent,
+  because reading our receipts first can take a while;
 - one try: a busy answer (409), a timeout or a bridge that is down is logged and skipped, and the next
   try is a whole interval later, never a retry;
 - after 3 failures in a row, 5 minutes pass before the next try.
@@ -26,7 +32,7 @@ A read is a live poll, about 8.5 s on the bridge's one serial line, so it is gen
 A read that fails never fails the worker's round or `/health`: reads are not jobs of the round and
 are never in its results. Only the log shows them.
 
-Only Fridays. A midweek visit (off-cycle request, $25) has no day we can read from the data: a pending
+Only Fridays, and the dates in `VISIT_POLL_DATES`. A midweek visit (off-cycle request, $25) has no day we can read from the data: a pending
 request can be filled on any day, and reading every day until it is would be about 250 live reads a day.
 """
 
@@ -43,15 +49,24 @@ from vending.slots import DEVICE_ID
 
 EASTERN = ZoneInfo("America/New_York")
 EVERY_SETTING, FROM_SETTING, TO_SETTING = "VISIT_POLL_EVERY_MINUTES", "VISIT_POLL_FROM", "VISIT_POLL_TO"
+DATES_SETTING = "VISIT_POLL_DATES"
 DEFAULT_EVERY, DEFAULT_FROM, DEFAULT_TO = "1", "14:45", "19:00"
 FRIDAY = 4
 FAILS_BEFORE_BACKOFF = 3
 BACKOFF = timedelta(minutes=5)
 # The read (30 s at the bridge) plus copying the history afterwards.
 STEP_TIMEOUT_SECONDS = 90
-# What a step returns: it read the machine, or the visit is over and it read nothing.
-READ, VISIT_OVER = 0, 2
+# What a step returns: it read the machine, the visit is over, or it sent nothing and nothing failed
+# (the window closed, or the last POST was too recent). 1 is for a failure.
+READ, VISIT_OVER, SKIPPED = 0, 2, 3
 _MINUTE = timedelta(minutes=1)
+# When this process last asked the bridge to read the machine. There is one serial line and one worker,
+# so one record; the spacing is measured from it, not from when a step began.
+_last_post: datetime | None = None
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -59,6 +74,7 @@ class Schedule:
     every: timedelta
     start: time       # Eastern, the first minute of the window
     end: time         # Eastern, the window closes then
+    dates: frozenset[date] = frozenset()    # Eastern days that get the window besides Fridays
 
 
 def schedule() -> Schedule | None:
@@ -74,34 +90,47 @@ def schedule() -> Schedule | None:
     value = settings.get(EVERY_SETTING, DEFAULT_EVERY)
     try:
         every = float(value)
-    except ValueError:
-        every = -1.0
-    if every < 0 or every != every:
-        raise settings.SettingsError(f"{EVERY_SETTING} is {value!r}, not a number of minutes")
+        gap = timedelta(minutes=every)      # inf, nan and absurdly large values raise here
+    except (ValueError, OverflowError):
+        gap = None
+    if gap is None or (every != 0 and every < 1):    # tiny values would round to 0, and under a minute is too often
+        raise settings.SettingsError(f"{EVERY_SETTING} is {value!r}, not 0 (off) or a number of minutes from 1 up")
     start, end = clock(FROM_SETTING, DEFAULT_FROM), clock(TO_SETTING, DEFAULT_TO)
     if end <= start:
         raise settings.SettingsError(f"{TO_SETTING} ({end:%H:%M}) is not after {FROM_SETTING} ({start:%H:%M})")
-    return Schedule(timedelta(minutes=every), start, end) if every else None
+    dates = set()
+    for part in (settings.get(DATES_SETTING) or "").split(","):
+        if part.strip():
+            try:
+                dates.add(date.fromisoformat(part.strip()))
+            except ValueError:
+                raise settings.SettingsError(
+                    f"{DATES_SETTING} has {part.strip()!r}, not a date like 2026-11-30") from None
+    return Schedule(gap, start, end, frozenset(dates)) if every else None
 
 
 def _window(sched: Schedule, day: date) -> tuple[datetime, datetime]:
     return datetime.combine(day, sched.start, EASTERN), datetime.combine(day, sched.end, EASTERN)
 
 
+def _visit_day(sched: Schedule, day: date) -> bool:
+    return day.weekday() == FRIDAY or day in sched.dates
+
+
 def window_open(sched: Schedule, now: datetime) -> bool:
-    """Whether `now` is on a Friday, inside the window (Eastern; the end is not in it)."""
+    """Whether `now` is on a Friday (or a listed date), inside the window (Eastern; the end is not in it)."""
     day = now.astimezone(EASTERN).date()
-    if day.weekday() != FRIDAY:
+    if not _visit_day(sched, day):
         return False
     opens, closes = _window(sched, day)
     return opens <= now < closes
 
 
 def next_open(sched: Schedule, now: datetime) -> datetime:
-    """The start of the next Friday window after `now`."""
+    """The start of the next window (a Friday or a listed date) after `now`."""
     day = now.astimezone(EASTERN).date()
     while True:
-        if day.weekday() == FRIDAY and _window(sched, day)[0] > now:
+        if _visit_day(sched, day) and _window(sched, day)[0] > now:
             return _window(sched, day)[0].astimezone(timezone.utc)
         day += timedelta(days=1)
 
@@ -114,15 +143,17 @@ def _eastern_day(now: datetime) -> tuple[datetime, datetime]:
 def visit_over(conn, now: datetime) -> bool:
     """Whether a request of ours was fulfilled today (Eastern) and a good poll taken after its
     door closed is stored. The close is a minute, so the poll must be taken after that minute ends;
-    a receipt with no door times is dated by `fulfilled_at`. With more than one, the latest counts."""
+    a receipt with no door times is dated by `fulfilled_at`. The day is the one the receipt was
+    fulfilled on, so a receipt filed after Eastern midnight counts on the day it arrived. With more than
+    one, the latest counts."""
     first, last = _eastern_day(now)
     [close] = conn.execute(
         """
         select max(case when door_closed_at is not null then door_closed_at + interval '1 minute'
                         else fulfilled_at end)
           from purchase_requests
-         where status = 'fulfilled' and coalesce(door_closed_at, fulfilled_at) >= %s
-           and coalesce(door_closed_at, fulfilled_at) < %s
+         where status = 'fulfilled' and coalesce(fulfilled_at, door_closed_at) >= %s
+           and coalesce(fulfilled_at, door_closed_at) < %s
         """,
         (first, last)).fetchone()
     if close is None:
@@ -142,9 +173,37 @@ def refresh_pending(conn, bridge: Bridge, now: datetime, log: Callable[[str], No
             log(f"visit reads: could not read {request_id} ({error}); left for the hourly round")
 
 
-def step(now: datetime, log: Callable[[str], None] = print) -> int:
+class ReadNotStored(RuntimeError):
+    """The machine was read, but no usable row for that read is in our database."""
+
+
+def _not_stored(conn, session_id: str | None, sent: datetime) -> str | None:
+    """Why the read isn't stored usable (a checksum that passed, our device), or None when it is.
+    Without a session id the best check left is a usable poll taken since the POST (a minute's grace
+    for the bridge's clock)."""
+    if session_id is None:
+        found = conn.execute("select exists (select 1 from polls where device_id = %s and crc_ok and started_at >= %s)",
+                             (DEVICE_ID, sent - _MINUTE)).fetchone()[0]
+        return None if found else "the bridge named no session and no usable poll since then is stored"
+    row = conn.execute("select crc_ok, device_id from polls where session_id = %s", (session_id,)).fetchone()
+    if row is None:
+        return "it isn't stored (the history listing or the fetch failed, or the poll isn't in the listing)"
+    if not row[0]:
+        return "its checksum failed or it isn't EVA-DTS"
+    if row[1] != DEVICE_ID:
+        return f"it is stored under device {row[1]!r}, not {DEVICE_ID!r}"
+    return None
+
+
+def step(now: datetime, log: Callable[[str], None] = print, sched: Schedule | None = None) -> int:
     """One turn: read pending requests back, stop if the visit is over, else read the machine and
-    copy the history. `READ` or `VISIT_OVER`; a failed read raises. Never migrates."""
+    copy the history. `READ`, `VISIT_OVER` or `SKIPPED`; a failed read, or one that isn't stored
+    usable, raises. Never migrates. `sched` is the schedule the settings give, unless one is passed."""
+    global _last_post
+    if sched is None:
+        sched = schedule()
+    if sched is None:
+        return SKIPPED
     with db.connect() as conn:
         behind = db.pending(conn)
         if behind:
@@ -153,11 +212,25 @@ def step(now: datetime, log: Callable[[str], None] = print) -> int:
         refresh_pending(conn, bridge, now, log)
         if visit_over(conn, now):
             return VISIT_OVER
-        bridge.poll()
+        # Reading the receipts took time (and a step that outlived its timeout can run very late), so
+        # look at the clock again, right before the POST.
+        sent = _utcnow()
+        if not window_open(sched, sent):
+            log("visit reads: skipped, the window closed before the read could be sent")
+            return SKIPPED
+        if _last_post is not None and sent < _last_post + sched.every:
+            log(f"visit reads: skipped, the last read was sent {(sent - _last_post).total_seconds():.0f} s ago")
+            return SKIPPED
+        _last_post = sent
+        read = bridge.poll()
         # The read is in the bridge's history by now. Two UTC days, since 7 PM Eastern is past midnight UTC.
-        sync_history.sync(conn, bridge, (now - timedelta(days=1)).astimezone(timezone.utc).date(),
-                          (now + _MINUTE).astimezone(timezone.utc).date(),
+        sync_history.sync(conn, bridge, (sent - timedelta(days=1)).astimezone(timezone.utc).date(),
+                          (sent + _MINUTE).astimezone(timezone.utc).date(),
                           log=lambda line: None if line.endswith(" listed") else log(line))
+        problem = _not_stored(conn, read.session_id, sent)
+        if problem:
+            raise ReadNotStored(f"read {read.session_id or '(no session id)'} not stored usable: {problem}")
+        log(f"visit reads: stored read {read.session_id or '(no session id)'}")
     return READ
 
 
@@ -183,6 +256,10 @@ class Reader:
                 return due
         return next_open(self.sched, now)
 
+    def _after_post(self, now: datetime) -> datetime:
+        """An interval after the last POST actually sent, which is later than `now` when the receipts were slow."""
+        return max(now, _last_post or now) + self.sched.every
+
     def tick(self, now: datetime) -> None:
         """Take a read if one is due at `now`. Never raises, and never retries."""
         from vending.worker import run_round    # the worker imports this module
@@ -197,7 +274,9 @@ class Reader:
             self.over_on = now.astimezone(EASTERN).date()
             self.log("visit reads: our receipt is in and a read after the door closed is stored; done for today")
         elif result.exit_code == READ:
-            self.failures, self.not_before = 0, now + self.sched.every
+            self.failures, self.not_before = 0, self._after_post(now)
+        elif result.exit_code == SKIPPED:       # sent nothing, so nothing failed
+            self.not_before = self._after_post(now)
         else:
             self.failures += 1
             wait = BACKOFF if self.failures >= FAILS_BEFORE_BACKOFF else self.sched.every
@@ -217,4 +296,4 @@ def default_reader(log: Callable[[str], None] = print) -> Reader | None:
     if sched is None:
         log(f"visit reads are off ({EVERY_SETTING} is 0)")
         return None
-    return Reader(sched, lambda now: step(now, log), log)
+    return Reader(sched, lambda now: step(now, log, sched), log)

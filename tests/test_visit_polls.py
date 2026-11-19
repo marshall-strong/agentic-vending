@@ -16,7 +16,7 @@ from tests.conftest import store_poll  # noqa: E402
 from tests.test_evadts import SAMPLE, build  # noqa: E402
 from tests.test_sync_requests import fulfilled, pending, receipt  # noqa: E402
 from vending import settings, visit_polls, worker  # noqa: E402
-from vending.bridge import BridgeAnswered, BridgeNoAnswer, BridgeUnreachable  # noqa: E402
+from vending.bridge import BridgeAnswered, BridgeNoAnswer, BridgeUnreachable, LiveRead  # noqa: E402
 from vending.purchase_requests import record, store  # noqa: E402
 from vending.visit_polls import READ, VISIT_OVER, Reader, Schedule  # noqa: E402
 
@@ -24,6 +24,9 @@ ET = ZoneInfo("America/New_York")
 # Thu 3 Dec 2026 is the first day of the competition, so Fri 4 Dec is the first regular Friday.
 THU, FRI, SAT, NEXT_FRI = (datetime(2026, 12, d, tzinfo=ET) for d in (3, 4, 5, 11))
 SCHEDULE = Schedule(timedelta(minutes=1), datetime(2026, 1, 1, 14, 45).time(), datetime(2026, 1, 1, 19, 0).time())
+DATES_SETTING = "VISIT_POLL_DATES"
+MON_FILL = datetime(2026, 11, 30, tzinfo=ET)     # the day-one fill is about this day, a Monday
+SKIPPED = getattr(visit_polls, "SKIPPED", 3)     # what a step returns when it sent no POST and nothing failed
 
 
 def at(day, hour, minute=0, second=0):
@@ -98,6 +101,10 @@ def test_the_window_and_interval_are_settings(monkeypatch):
 @pytest.mark.parametrize("name, value", [
     (visit_polls.EVERY_SETTING, "often"), (visit_polls.EVERY_SETTING, "-1"),
     (visit_polls.FROM_SETTING, "afternoon"), (visit_polls.TO_SETTING, "14:00"),   # the end before the start
+    # Under a minute, or not a finite number: never rounded to zero, never an OverflowError at startup.
+    (visit_polls.EVERY_SETTING, "0.5"), (visit_polls.EVERY_SETTING, "1e-9"), (visit_polls.EVERY_SETTING, "inf"),
+    (visit_polls.EVERY_SETTING, "nan"), (visit_polls.EVERY_SETTING, "1e30"),
+    (DATES_SETTING, "30 Nov"), (DATES_SETTING, "2026-11-30, soon"), (DATES_SETTING, "2026-13-01"),
 ])
 def test_a_wrong_setting_turns_the_reads_off_and_never_stops_the_worker(monkeypatch, name, value):
     monkeypatch.setattr(settings, "_FILE", {})
@@ -122,6 +129,61 @@ def test_the_window_follows_eastern_time_through_the_clock_change():
         assert visit_polls.window_open(SCHEDULE, at(friday, 18, 59, 59))
         assert not visit_polls.window_open(SCHEDULE, at(friday, 19))
     assert visit_polls.next_open(SCHEDULE, at(FRI, 19, 1)) == at(NEXT_FRI, 14, 45).astimezone(timezone.utc)
+
+
+def test_a_read_that_runs_past_the_hourly_round_does_not_take_the_worker_down():
+    rounds = []
+    clock = Clock(at(FRI, 14, 40, 5), at(FRI, 15, 50))      # the rounds are due at 3:40:05 PM and 4:40:10 PM
+
+    def run(now):
+        clock.now += timedelta(seconds=10)                    # every read takes 10 s
+        return READ
+
+    def sleep(seconds):
+        if seconds < 0:                                       # as `time.sleep` does
+            raise ValueError("sleep length must be non-negative")
+        clock.sleep(seconds)
+
+    # The read that starts at 3:40:00 PM, five seconds before the round is due, ends five seconds after it.
+    run_worker(clock, Reader(SCHEDULE, run, lambda _: None), job=lambda: rounds.append(clock.now) or 0, sleep=sleep)
+    assert len(rounds) == 2 and rounds[1] - rounds[0] < timedelta(minutes=61)    # the round ran, right after the read
+
+
+# --- Extra days for the reads (the day-one fill) ----------------------------------------
+
+def dates_schedule(monkeypatch, dates):
+    monkeypatch.setattr(settings, "_FILE", {})
+    monkeypatch.setenv(DATES_SETTING, dates)
+    return visit_polls.schedule()
+
+
+def test_the_reads_also_run_on_the_dates_in_the_setting_and_nowhere_else(monkeypatch):
+    sched = dates_schedule(monkeypatch, "2026-11-30, 2026-12-14")
+    assert visit_polls.window_open(sched, at(MON_FILL, 15)) and not visit_polls.window_open(sched, at(MON_FILL, 14, 44))
+    assert not visit_polls.window_open(sched, at(MON_FILL, 19))
+    assert not visit_polls.window_open(sched, at(MON_FILL + timedelta(days=7), 15))     # a Monday not in the list
+    assert visit_polls.window_open(sched, at(FRI, 15))                                   # Fridays stay
+    # Eastern dates: 7 PM on the 30th is already the 1st in UTC, and it is no more in the window than 7 PM on a Friday.
+    assert not visit_polls.window_open(sched, at(MON_FILL, 19).astimezone(timezone.utc))
+    assert visit_polls.next_open(sched, at(datetime(2026, 11, 27, tzinfo=ET), 19, 1)) == \
+        at(MON_FILL, 14, 45).astimezone(timezone.utc)
+    assert visit_polls.next_open(sched, at(MON_FILL, 19, 1)) == at(FRI, 14, 45).astimezone(timezone.utc)
+    monkeypatch.setenv(DATES_SETTING, "")
+    assert visit_polls.schedule().dates == frozenset() and not visit_polls.window_open(visit_polls.schedule(), at(MON_FILL, 15))
+
+
+def test_a_listed_date_gets_the_same_reads_and_the_same_stop_rule(monkeypatch):
+    sched = dates_schedule(monkeypatch, "2026-11-30")
+    calls = []
+
+    def run(now):
+        calls.append(now.astimezone(ET))
+        return VISIT_OVER if len(calls) == 20 else READ
+
+    run_worker(Clock(at(MON_FILL, 12) - timedelta(days=1), at(MON_FILL, 12) + timedelta(days=2)),
+               Reader(sched, run, lambda _: None))
+    # Sunday has none; Monday's reads run from 2:45 PM until the 20th finds the visit over; Tuesday has none.
+    assert calls == [at(MON_FILL, 14, 45) + timedelta(minutes=n) for n in range(20)]
 
 
 # --- Stopping early -----------------------------------------------------------------
@@ -247,20 +309,35 @@ POLL_AT = lambda h, m, s=5: at(FRI, h, m, s).astimezone(timezone.utc)   # noqa: 
 DOOR = {"door_opened_at": "2026-12-04T20:12:00+00:00", "door_closed_at": "2026-12-04T20:31:00+00:00"}   # 15:12-15:31 ET
 
 
-class Bridge:
-    """The bridge as `step` uses it: a request that is pending, then fulfilled; reads that land in history."""
+class Now:
+    """The clock `step` looks at. Only the fake bridge moves it, the way a slow answer would."""
 
-    def __init__(self, answers):
+    def __init__(self, moment):
+        self.now = moment
+
+    def __call__(self):
+        return self.now
+
+
+class Bridge:
+    """The bridge as `step` uses it: a request that is pending, then fulfilled; reads that land in history.
+    Each call takes the time in `takes` (a receipt read) or 8.5 s (the machine read) on the fake clock."""
+
+    def __init__(self, answers, clock):
         self.answers, self.polls, self.stored, self.asked = answers, 0, [], []
+        self.clock, self.refresh_takes, self.sends_session_id = clock, timedelta(0), True
 
     def purchase_request(self, request_id):
         self.asked.append(request_id)
+        self.clock.now += self.refresh_takes
         return self.answers[request_id].pop(0) if len(self.answers[request_id]) > 1 else self.answers[request_id][0]
 
     def poll(self):
         self.polls += 1
-        self.stored.append((f"live{self.polls}", self.taken))
-        return b"DXS*"
+        session_id = f"live{self.polls}"
+        self.stored.append((session_id, self.clock.now))
+        self.clock.now += timedelta(seconds=8.5)
+        return LiveRead(b"DXS*", session_id if self.sends_session_id else None)
 
     def history(self, day):
         return [{"session_id": s, "started_at": t.isoformat(), "device_id": "vmc1"} for s, t in self.stored]
@@ -269,20 +346,29 @@ class Bridge:
         return build(SAMPLE)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_post_record(monkeypatch):
+    """When the machine was last asked to read is process-wide state: every test starts with none."""
+    monkeypatch.setattr(visit_polls, "_last_post", None, raising=False)
+
+
 @pytest.fixture
 def machine(conn, monkeypatch):
     from contextlib import nullcontext
 
     monkeypatch.setattr(visit_polls.db, "connect", lambda: nullcontext(conn))
     record(conn, "r1", at(THU, 20).astimezone(timezone.utc), False, {"off_cycle": False, "lines": []})
+    clock = Now(POLL_AT(15, 0))
     bridge = Bridge({"r1": [pending("r1"), fulfilled("r1", receipt(slot_reassigned=False), fulfilled_at="2026-12-04T20:40:00Z",
-                                                  **DOOR)]})
+                                                  **DOOR)]}, clock)
     monkeypatch.setattr(visit_polls, "Bridge", lambda: bridge)
+    # `raising=False`: the clock is what `step` asks for the time of its POST, after the receipts are read.
+    monkeypatch.setattr(visit_polls, "_utcnow", clock, raising=False)
     return bridge
 
 
 def step(bridge, now):
-    bridge.taken = now + timedelta(seconds=5)       # when the machine is read: just after the step starts
+    bridge.clock.now = now + timedelta(seconds=5)   # the machine is read just after the step starts
     return visit_polls.step(now, lambda _: None)
 
 
@@ -341,3 +427,120 @@ def test_a_busy_bridge_stops_the_step_before_anything_is_stored(conn, machine):
     with pytest.raises(BridgeAnswered):
         step(machine, POLL_AT(15, 25))
     assert conn.execute("select count(*) from polls").fetchone()[0] == 0
+
+
+# --- The window and the spacing are checked at the POST, not at the start of the step ------
+
+def test_no_read_is_sent_once_the_window_has_closed_while_the_receipts_were_read(machine):
+    machine.refresh_takes = timedelta(seconds=10)
+    machine.clock.now = at(FRI, 18, 59, 55).astimezone(timezone.utc)
+    result = visit_polls.step(machine.clock.now, lambda _: None)       # began inside the window; 19:00:05 at the POST
+    assert machine.polls == 0
+    assert result == SKIPPED
+
+
+def test_two_reads_are_never_sent_closer_than_the_interval_whatever_the_receipts_took(machine):
+    said = []
+    machine.refresh_takes = timedelta(seconds=50)
+    machine.clock.now = POLL_AT(15, 20, 0)
+    visit_polls.step(machine.clock.now, said.append)                    # slow: the POST goes at 3:20:50 PM
+    machine.refresh_takes = timedelta(seconds=30)
+    machine.clock.now = POLL_AT(15, 21, 0)
+    result = visit_polls.step(machine.clock.now, said.append)           # the next step's POST would be at 3:21:30 PM
+    assert machine.polls == 1                                           # 40 s after the last one: not sent
+    assert result == SKIPPED and any("skipped" in line for line in said)
+    machine.refresh_takes = timedelta(0)
+    machine.clock.now = POLL_AT(15, 21, 50)
+    assert visit_polls.step(machine.clock.now, said.append) == READ and machine.polls == 2    # a minute after 3:20:50
+    gaps = [b - a for (_, a), (_, b) in zip(machine.stored, machine.stored[1:])]
+    assert all(gap >= timedelta(minutes=1) for gap in gaps)
+
+
+def test_a_step_that_sent_nothing_is_not_a_failure_and_the_next_try_is_an_interval_after_the_last_post(monkeypatch):
+    calls = []
+    first = at(FRI, 15, 0).astimezone(timezone.utc)
+
+    def run(now):
+        calls.append(now)
+        monkeypatch.setattr(visit_polls, "_last_post", now + timedelta(seconds=20), raising=False)
+        return SKIPPED if len(calls) == 1 else READ
+
+    reader = Reader(SCHEDULE, run, lambda _: None)
+    reader.tick(first)
+    assert reader.failures == 0 and reader.not_before is not None
+    assert reader.next_due(first) == first + timedelta(seconds=20) + timedelta(minutes=1)
+    reader.tick(first + timedelta(minutes=1))                            # too soon after the POST at 3:00:20
+    assert len(calls) == 1
+    reader.tick(first + timedelta(minutes=1, seconds=20))
+    assert len(calls) == 2 and reader.failures == 0
+
+
+# --- A read has to be stored usable, or it counts as a failure ----------------------------------
+
+def _history_fails(machine):
+    def history(day):
+        raise BridgeAnswered(500, "history is down")
+    machine.history = history
+
+
+def _fetch_fails(machine):
+    def raw(session_id):
+        raise BridgeAnswered(502, "bad gateway")
+    machine.raw = raw
+
+
+@pytest.mark.parametrize("break_it", [
+    _history_fails,                                                                    # can't list the day
+    _fetch_fails,                                                                      # can't fetch the poll
+    lambda m: setattr(m, "raw", lambda session_id: build(SAMPLE, corrupt=True)),       # a bad checksum
+    lambda m: setattr(m, "history", lambda day: []),                                   # the poll isn't in the listing
+    lambda m: setattr(m, "raw", lambda session_id: b"<html>502 Bad Gateway</html>"),   # not EVA-DTS at all
+], ids=["history down", "fetch fails", "bad checksum", "not listed", "not EVA-DTS"])
+def test_a_read_the_sync_could_not_store_usable_is_a_failure_not_a_read(conn, machine, break_it):
+    said = []
+    break_it(machine)
+    with pytest.raises(RuntimeError, match="live1"):
+        machine.clock.now = POLL_AT(15, 25)
+        visit_polls.step(POLL_AT(15, 25), said.append)
+    assert not any("stored" in line and "live1" in line for line in said)
+
+
+def test_failed_stores_back_off_like_failed_reads(conn, machine):
+    said = []
+    _history_fails(machine)
+    reader = Reader(SCHEDULE, lambda now: visit_polls.step(now, said.append), said.append)
+    for minute in (25, 28, 31):
+        machine.clock.now = POLL_AT(15, minute)
+        reader.tick(POLL_AT(15, minute))
+    assert reader.failures == 3 and reader.not_before == POLL_AT(15, 31) + timedelta(minutes=5)
+    assert "3 failed in a row, next try in 5 min" in said[-1]
+
+
+def test_a_stored_read_is_logged_with_its_session_id(conn, machine):
+    said = []
+    machine.clock.now = POLL_AT(15, 25)
+    assert visit_polls.step(POLL_AT(15, 25), said.append) == READ
+    assert any("live1" in line and "stored" in line for line in said)
+
+
+def test_a_bridge_that_sends_no_session_id_is_checked_by_the_time_of_the_read(conn, machine):
+    machine.sends_session_id = False
+    machine.clock.now = POLL_AT(15, 25)
+    assert visit_polls.step(POLL_AT(15, 25), lambda _: None) == READ          # a usable poll after the POST is stored
+    machine.history = lambda day: []
+    machine.clock.now = POLL_AT(15, 27)
+    with pytest.raises(RuntimeError, match="not stored"):
+        visit_polls.step(POLL_AT(15, 27), lambda _: None)
+
+
+# --- Which day a receipt belongs to -------------------------------------------------------------
+
+def test_a_receipt_filed_after_midnight_counts_on_the_day_it_was_fulfilled(conn):
+    record(conn, "r1", at(THU, 20).astimezone(timezone.utc), False, {})
+    # The door closed at 11:58 PM Thursday (04:58 UTC); the receipt came in at 12:05 AM Friday.
+    store(conn, "r1", fulfilled("r1", receipt(), fulfilled_at="2026-12-04T05:05:00Z",
+                                door_opened_at="2026-12-04T04:40:00+00:00",
+                                door_closed_at="2026-12-04T04:58:00+00:00"), POLL_AT(0, 10))
+    store_poll(conn, "s1", POLL_AT(14, 50).isoformat(), {"15": (200, 100)})
+    assert visit_polls.visit_over(conn, POLL_AT(15, 0))               # a read after the close is stored: Friday is done
+    assert not visit_polls.visit_over(conn, POLL_AT(15, 0) - timedelta(days=1))

@@ -24,14 +24,22 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, NamedTuple
 
 from vending import settings
 
 TIMEOUT_SECONDS = 20
 # A live read takes about 8.5 s, and may wait its turn for the serial line first.
 POLL_TIMEOUT_SECONDS = 30
+# The header a live read names its session in (docs/snapshot-archive.md).
+SESSION_HEADER = "X-Poll-Session-Id"
 RETRIES = 4
+
+
+class LiveRead(NamedTuple):
+    """What `Bridge.poll` got: the document, and the session id the bridge named (None if it named none)."""
+    document: bytes
+    session_id: str | None
 
 
 class BridgeError(RuntimeError):
@@ -95,8 +103,9 @@ class Bridge:
         """
         return json.loads(self._once("POST", path, body))
 
-    def poll(self) -> bytes:
-        """Read the machine now (`POST /api/v1/poll`, about 8.5 s) and return the document.
+    def poll(self) -> LiveRead:
+        """Read the machine now (`POST /api/v1/poll`, about 8.5 s): the document, and the session id
+        the bridge named in its `X-Poll-Session-Id` header (None if it sent none).
 
         One try, never retried: the read holds the bridge's serial line, so another caller
         gets a `409` while it runs, and a retry would only keep it busy. The bridge stores
@@ -105,10 +114,13 @@ class Bridge:
         `BridgeNoAnswer` for a timeout, and `BridgeUnreachable` when the bridge is down.
         Only `vending.visit_polls` calls it.
         """
-        return self._once("POST", "/api/v1/poll", expect_json=False, timeout=POLL_TIMEOUT_SECONDS)
+        headers: dict[str, str] = {}
+        document = self._once("POST", "/api/v1/poll", expect_json=False, timeout=POLL_TIMEOUT_SECONDS,
+                              headers_out=headers)
+        return LiveRead(document, headers.get(SESSION_HEADER.lower()) or None)
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
-              timeout: float | None = None) -> bytes:
+              timeout: float | None = None, headers_out: dict[str, str] | None = None) -> bytes:
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -119,6 +131,8 @@ class Bridge:
         try:
             with urllib.request.urlopen(request, timeout=timeout or TIMEOUT_SECONDS) as response:
                 data = response.read()
+                if headers_out is not None:    # names lower-cased: HTTP header names have no case
+                    headers_out.update({k.lower(): v for k, v in response.headers.items()})
         except urllib.error.HTTPError as error:
             # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
             raise BridgeAnswered(error.code, _start_of_body(error, 300).decode(errors="replace")) from None
