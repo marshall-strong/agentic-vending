@@ -133,7 +133,7 @@ def test_unusable_assignment_refuses_every_section(conn, device, stored_slots):
     assert b.requests.unavailable and b.closet_unavailable
 
 
-def test_other_device_unassigned_polls_receipts_counts_excluded(conn):
+def test_other_device_polls_and_counts_and_unassigned_slots_excluded(conn):
     sample(conn)
     # A full assignment of 20 that shares only 15 with the fixture's receipts and polls, and leaves out 11.
     ours = sorted(["15"] + [f"{shelf}{col}" for shelf in "12345" for col in "1234" if f"{shelf}{col}" != "11"])
@@ -275,6 +275,17 @@ def test_a_sale_at_the_week_boundary_poll_lands_in_exactly_one_week(conn, friday
     # 100 -> 102 in the previous week, 102 -> 106 in this one (the 00:00 poll's sale included): 20 slots at $2.50 ex tax.
     assert (m["previous"].revenue_ex_tax, m["current"].revenue_ex_tax) == ("100.00", "200.00")
     assert m["competition"].revenue_ex_tax == "300.00"
+
+
+def test_a_sale_at_a_midnight_poll_that_is_the_latest_counts_in_the_new_week(conn):
+    sample(conn)
+    boundary = datetime(2026, 11, 7, 5, tzinfo=timezone.utc)   # Saturday 00:00 Eastern
+    store_poll(conn, "fri-2355", (boundary - timedelta(minutes=5)).isoformat(), {s: (270, 102) for s in SLOTS})
+    store_poll(conn, "sat-0000", boundary.isoformat(), {s: (270, 103) for s in SLOTS})
+    m = briefing.build(conn, boundary + timedelta(hours=3)).money    # the midnight poll is the latest
+    assert (m["previous"].revenue_ex_tax, m["current"].revenue_ex_tax, m["competition"].revenue_ex_tax) == (
+        "100.00", "50.00", "150.00")
+    assert m["current"].sales_complete and m["current"].start_poll == boundary - timedelta(minutes=5)
 
 
 def test_future_polls_counts_receipts_do_not_leak_into_frozen_read(conn):

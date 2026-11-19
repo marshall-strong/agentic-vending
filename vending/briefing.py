@@ -158,10 +158,10 @@ def _section(conn, b: Briefing, name: str, lookup: str, fn):
 
 
 def _window(conn, start: datetime, end: datetime, partial: bool, ours: tuple[str, ...],
-            week: ledger.WeekPnl | None = None) -> MoneyWindow:
-    """The window from `start` to `end`. With `week`, the money is that week's row (see `_money`); the polls
-    that say whether its sales are complete are still the window's own."""
-    p = ledger.pnl(conn, start, end)
+            week: ledger.WeekPnl | None = None, since: datetime | None = None) -> MoneyWindow:
+    """The window from `start` to `end`. With `week`, the money is that week's row (see `_money`), and
+    `since` picks the polls that say whether its sales are complete: see `_money`."""
+    p = ledger.pnl(conn, start if since is None else since, end)
     first, last = p.takings.start_poll, p.takings.end_poll
     m = p if week is None else week
     available = first is not None and last is not None and first < last
@@ -222,7 +222,11 @@ def _money(conn, b: Briefing, ours: tuple[str, ...]) -> None:
             b.money[name] = MoneyWindow(unavailable="before ledger opening")
             continue
         clipped = max(start, opened.at)
-        b.money[name] = _window(conn, clipped, end, name != "previous" or clipped != start, ours, row)
+        # A week's sales are those at its polls, measured from the last poll before it (pnl_by_week's
+        # series), so that poll, not one at midnight sharp, is the week's start poll. From the opening,
+        # the opening's own poll is the baseline, as in the competition window.
+        since = clipped if row is None or clipped == opened.at else clipped - timedelta(microseconds=1)
+        b.money[name] = _window(conn, clipped, end, name != "previous" or clipped != start, ours, row, since)
     # Competition figures count from the ledger opening; the balance is only read for its spendable total.
     balance = ledger.balance(conn, now)
     if b.money["competition"].sales_complete and not any("receipt lines have no total_paid" in n for n in balance.notes):
