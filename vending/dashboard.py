@@ -728,6 +728,16 @@ def _span(delta: timedelta) -> str:
     return f"{days} d {hours} h" if hours else f"{days} d"
 
 
+def _window(sales: dict) -> str:
+    """The sales window as words: "the 7 days" when it is full, or how long it is when the polls
+    don't reach back that far. It ends at the last poll (`machine_state.WINDOW`)."""
+    d = sales["data"] if sales.get("ok") else {}
+    start, end = d.get("window_start"), d.get("as_of")
+    if not start or not end:
+        return "the window"
+    span = end - start
+    return "the 7 days" if span >= timedelta(days=7) - timedelta(hours=1) else f"the {_span(span)}"
+
 def _time(value: datetime | None, form: str = "abs", now: datetime | None = None) -> str:
     """A <time> the page's script keeps current in the viewer's zone. Server text until it runs.
 
@@ -968,7 +978,8 @@ def _cabinet_html(snap: dict) -> str:
             f'<div class="vm-side"><div class="card">{changes}</div>{legend}</div></div></section>')
 
 
-def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None) -> str:
+def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
+               window: str = "the window") -> str:
     """One slot of the plan as a <details>: what it asks for in the summary; the reason, what it was
     and what the slot holds and sold inside."""
     slot, entry, changed = s["slot"], s["now"], compared and s["changed"]
@@ -997,10 +1008,13 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None) ->
     on_hand = (held or {}).get("on_hand")
     stock_text = f"{on_hand} on hand" if on_hand is not None else "stock unknown"
     sold_n = (sold or {}).get("sold")
-    sales_text = f"{sold_n} sold" if sold_n is not None else "sales unknown"
+    # The window's count is the slot's, not the product's: a swap at a visit inside the 7 days adds the
+    # old product's sales to the new one's (#172). Say so, so nobody reads it as this product's demand.
+    sales_text = (f"the slot sold {sold_n} in {window} to the last poll, whatever it held" if sold_n is not None
+                  else "sales unknown")
     holds = f' of {_e(held["product"])}' if held is not None and held.get("product") else ""
     tag = f"${_e(price_now)} on the tag &middot; " if price_now is not None else ""
-    body.append(f'<div class="sub">now: {tag}{stock_text}{holds} &middot; {sales_text} this week</div>')
+    body.append(f'<div class="sub">now: {tag}{stock_text}{holds} &middot; {sales_text}</div>')
     now_bits = [_e(held["product"]) if held is not None and held.get("product") else
                 ('<span class="dim">empty</span>' if on_hand == 0 else '<span class="dim">product unknown</span>')]
     if price_now is not None:
@@ -1047,7 +1061,7 @@ def _plan_html(snap: dict) -> str:
         controls = (f'<div class="chips">{chips}</div>'
                     '<label class="only" hidden><input type="checkbox" id="changed-only"> '
                     'Show changed slots only</label>')
-    cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]))
+    cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]), _window(sales))
                     for s in p["slots"])
     columns = ('<div class="plan-head" aria-hidden="true"><span>Slot</span><span>Now</span>'
                '<span>Next Friday</span><span></span></div>')
@@ -1113,9 +1127,12 @@ def _tiles(snap: dict) -> str:
         d = sales["data"]
         total = sum(v["sold"] or 0 for v in d["slots"].values())
         tone = " warn-text" if d["stale"] else ""
-        since = f'since {_time(d["window_start"])}' if d["window_start"] else "one poll only"
+        # The window starts 7 days before the last poll. Its start date is not when the data was
+        # pulled, so it isn't shown here: it read like an old update time.
+        sold = (f"our slots sold {_plural(total, 'unit')} in {_window(sales)} to it" if d["window_start"]
+                else "one poll only, so no sales yet")
         tiles.append(("Machine data", f'<span class="big{tone}">{_time(d["as_of"], "ago", now)}</span>',
-                      f"last poll &middot; {_plural(total, 'unit')} sold {since}"))
+                      f"since the last poll &middot; {sold}"))
 
     spend, money = snap["spend"], snap.get("money")
     ledgered = money["data"] if money and money["ok"] and money["data"].get("opened") else None

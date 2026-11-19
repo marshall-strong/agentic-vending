@@ -347,7 +347,10 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
     assert snap["sales"]["data"]["stale"] is False
     assert snap["spend"]["data"]["drinks"]["paid"] == Decimal("9.60")
     page = dashboard.render(snap)
-    assert "3 on hand of COKE-20OZ &middot; 5 sold this week" in page
+    assert "3 on hand of COKE-20OZ &middot; the slot sold 5 in the 3 d 23 h to the last poll, whatever it held" in page
+    # The tile says how fresh the poll is, never a lone window-start date that reads like an update time (#172).
+    assert "since the last poll &middot; our slots sold 5 units in the 3 d 23 h to it" in page
+    assert "sold since" not in page
     assert "<s>$2.50</s> <b>$2.75</b>" in page             # the tag now, and what the plan sets it to
     assert '"paid": "9.60"' in dashboard.to_json(snap)
 
