@@ -12,7 +12,9 @@ What it measures (hourly-polling era only, from 21 Sep 2026, when polls came eve
     visits        door-counter rises (EA2*DO) between two polls, merged when within 3 hours, as
                   analysis/sales_analysis.py does. Rises come from the lifetime count with vending.counters.rises,
                   so a misread door reading isn't a visit. The window is the time we can't see into: from the last
-                  poll before the first opening to the poll that saw the last one.
+                  poll before the first opening to the poll that saw the last one. From 3 Dec (the start) a rise
+                  counts only when a fulfilled receipt of ours falls with it (receipts.csv, door_events.is_our_rise);
+                  other rises are left out of our windows, not merged into them. Before 3 Dec every rise counts.
     grades        the analysis's refill grade for each visit (proven, likely, possible top-up, no sign).
     poll gaps     how often a gap between polls is longer than an hour: a longer gap widens any window.
     exposure      our units sold inside a visit window (the units a product or price change would make
@@ -36,6 +38,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from door_events import is_our_rise, read_receipts  # noqa: E402  (standard library only)
+from slots_config import START  # noqa: E402
 from vending.counters import rises  # noqa: E402  (standard library only)
 
 MERGE_H = 3                                        # rises within 3 h are one visit (sales_analysis.VISIT_MERGE_H)
@@ -65,9 +69,12 @@ def when(text: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
-def find_visits(door_rows: list[dict]) -> list[dict]:
+def find_visits(door_rows: list[dict], receipts=(), start: datetime = START) -> list[dict]:
     """Door-counter rises merged into visits. Each visit: from (poll before), first and last rise polls,
     openings, and the rise polls themselves.
+
+    From `start`, a rise is ours only when a fulfilled receipt of ours falls with it (door_events.is_our_rise); any
+    other rise is skipped, so it neither makes a visit nor widens ours. Before `start` every rise counts.
 
     The rises are recomputed from `door_open_lifetime` with vending.counters.rises, not read from the `rise`
     column: exports written before export_sales.py used that rule turned a single misread (1000, 5, 1000) into a
@@ -77,7 +84,7 @@ def find_visits(door_rows: list[dict]) -> list[dict]:
     rows = [{"t": t, "rise": up.get(t, 0)} for t, _ in readings]
     visits: list[dict] = []
     for prev, r in zip(rows, rows[1:]):
-        if r["rise"] <= 0:
+        if r["rise"] <= 0 or not is_our_rise(prev["t"], r["t"], receipts, start):
             continue
         if visits and (r["t"] - visits[-1]["last"]).total_seconds() / 3600 <= MERGE_H:
             v = visits[-1]
@@ -125,7 +132,7 @@ def grade_of(visit: dict, lab: dict | None) -> str | None:
     return None
 
 
-def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> dict:
+def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM, receipts=()) -> dict:
     sales = sorted(((when(r["at_eastern"]), int(r["units"]), r["slot"]) for r in sales_rows), key=lambda s: s[0])
     units_at: dict[datetime, int] = defaultdict(int)
     for t, u, _ in sales:
@@ -133,7 +140,7 @@ def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM) -> di
     our_units = sum(u for t, u, _ in sales if t >= since)
 
     visits = []
-    for v in find_visits(door_rows):
+    for v in find_visits(door_rows, receipts):
         if v["first"] < since:
             continue
         inside = sum(u for t, u, _ in sales if v["from"] < t <= v["last"])   # can't be placed before or after
@@ -213,7 +220,8 @@ def main(argv=None):
     data = Path(args.data)
     lab_path = Path(args.lab_data)
     lab = json.loads(lab_path.read_text(encoding="utf-8")) if lab_path.exists() else None
-    result = analyse(read_csv(data / "door_events.csv"), read_csv(data / "polls.csv"), read_csv(data / "sales_events.csv"), lab)
+    result = analyse(read_csv(data / "door_events.csv"), read_csv(data / "polls.csv"), read_csv(data / "sales_events.csv"), lab,
+                     receipts=read_receipts(data / "receipts.csv"))
     if lab and any(v["grade"] is None for v in result["visits"]):
         print("WARNING: some visits have no refill grade: lab_data.json may be older than the CSVs; rerun the analysis")
     out = Path(args.out)

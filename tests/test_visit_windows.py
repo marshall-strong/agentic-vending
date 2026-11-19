@@ -9,23 +9,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "analysis"))
 import visit_windows as vw  # noqa: E402
 
 T0 = datetime.fromisoformat("2026-10-05T07:00:00-04:00")     # a Monday, in the hourly era
+FRIDAY = datetime.fromisoformat("2026-12-04T07:00:00-05:00")  # after the start (3 Dec), a Friday
+WEDNESDAY = datetime.fromisoformat("2026-12-09T07:00:00-05:00")
 
 
-def at(h):
-    return (T0 + timedelta(hours=h)).isoformat()
+def at(h, t0=T0):
+    return (t0 + timedelta(hours=h)).isoformat()
 
 
-def polls(hours):
-    return [{"at_eastern": at(h)} for h in hours]
+def polls(hours, t0=T0):
+    return [{"at_eastern": at(h, t0)} for h in hours]
 
 
-def door(rises):
+def door(rises, t0=T0):
     """rises: {hour: rise} on an hourly poll grid from 0 to 12, as export_sales.py writes them (lifetime and rise)."""
     rows, life = [], 1000
     for h in range(0, 13):
         life += rises.get(h, 0)
-        rows.append({"at_eastern": at(h), "door_open_lifetime": str(life), "rise": str(rises.get(h, 0))})
+        rows.append({"at_eastern": at(h, t0), "door_open_lifetime": str(life), "rise": str(rises.get(h, 0))})
     return rows
+
+
+def receipt(first_h, done_h, t0=FRIDAY):
+    """One fulfilled receipt of ours: (first line resolved, fulfilled_at), as door_events.read_receipts gives them."""
+    return (t0 + timedelta(hours=first_h), t0 + timedelta(hours=done_h))
 
 
 def sale(h, units=1, slot="15"):
@@ -113,3 +120,26 @@ def test_a_door_opening_after_a_misread_counts_from_the_old_high():
             for h in range(0, 13)]
     (v,) = vw.analyse(rows, polls(range(13)), [])["visits"]
     assert v["openings"] == 2 and v["to"].startswith("2026-10-05T13:00")
+
+
+# --- after the start (3 Dec): a rise is our visit only when a fulfilled receipt of ours falls with it ---
+
+def test_a_midweek_door_only_rise_after_the_start_is_not_our_visit():
+    r = vw.analyse(door({6: 1}, WEDNESDAY), polls(range(13), WEDNESDAY), [], receipts=[])
+    assert r["visits"] == [] and r["summary"]["visits"] == 0
+
+
+def test_a_door_only_rise_near_our_friday_visit_is_not_merged_into_it():
+    # rise at 10:00 with no receipt, our visit seen at the 13:00 poll (receipt 12:15, fulfilled 12:30)
+    rows = door({3: 1, 6: 2}, FRIDAY)
+    (v,) = vw.analyse(rows, polls(range(13), FRIDAY), [], receipts=[receipt(5.25, 5.5)])["visits"]
+    assert v["openings"] == 2 and v["window_min"] == 60          # old code: 3 openings, 240 min (10:00 poll before to 13:00)
+    assert v["from"].startswith("2026-12-04T12:00") and v["to"].startswith("2026-12-04T13:00")
+
+
+def test_our_visit_with_a_receipt_is_found_and_rises_before_the_start_still_merge():
+    (v,) = vw.analyse(door({6: 1}, FRIDAY), polls(range(13), FRIDAY), [], receipts=[receipt(5.25, 5.5)])["visits"]
+    assert v["openings"] == 1 and v["weekday"] == "Fri"
+    # before 3 Dec nothing is ours or not ours: no receipts needed, merged as before
+    (old,) = vw.analyse(door({4: 2, 6: 3}), polls(range(13)), [])["visits"]
+    assert old["openings"] == 5 and old["window_min"] == 180

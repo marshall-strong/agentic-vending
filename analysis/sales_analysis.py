@@ -50,7 +50,9 @@ Key data choices (each is also written to lab_data.json meta.notes):
     In the backtests each plan date re-spreads the lumps with a profile built only from
     regular-era sales reported before that date, so no training window sees later data.
   * Visits come from the machine's door-open counter (EVA-DTS EA2*DO, exported to door_events.csv):
-    every rise between two polls is a door opening; rises within 3 h are one visit.  Refill evidence
+    every rise between two polls is a door opening; rises within 3 h are one visit.  From the start
+    (3 Dec) a rise counts only when a fulfilled receipt of ours falls with it (receipts.csv); other rises
+    are left out, not merged.  Before the start every rise counts.  Refill evidence
     per visit uses the door counter and OUR slots only: "proven refill" = capacity proof (one of our slots
     sold more than the largest rail holds, 11, over an interval that contains exactly one visit);
     "likely refill" = >= 2 of our slots that looked empty resume within 4 days; "possible top-up" = 1.
@@ -85,6 +87,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from slots_config import SOURCE_CLI, SOURCE_FALL, SOURCE_SERVER, check_before_start, resolve_run  # noqa: E402
 from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
+from door_events import is_our_rise, read_receipts  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID  # noqa: E402  (configure() sets the device and slots this run uses)
 
@@ -359,6 +362,8 @@ def main():
                     help="machine-wide units and cents per poll (aggregates only)")
     ap.add_argument("--doors", default=str(root / "data" / "door_events.csv"),
                     help="door-open counter per poll (export_sales.py); if missing, visits are assumed Fridays 08:00")
+    ap.add_argument("--receipts", default=str(root / "data" / "receipts.csv"),
+                    help="our fulfilled receipts (export_sales.py); from 3 Dec only a door rise with one is our visit")
     ap.add_argument("--calendar", default=str(root / "golisano_calendar_2026_27.json"))
     ap.add_argument("--photos", default=str(root / "planograms_photos.json"))
     ap.add_argument("--planogram", default=str(root / "planogram_2026-10-08.json"))
@@ -535,13 +540,18 @@ def main():
 
     # ---------------------------------------------------------- visits from the door-open counter
     # A rise in the lifetime door-open counter between two polls = the door was opened in (previous poll, poll].
-    # Rises within VISIT_MERGE_H hours are one visit.  Without door data: one assumed visit every Friday 08:00.
+    # Rises within VISIT_MERGE_H hours are one visit.  From the start (3 Dec) a rise is ours only when a fulfilled receipt
+    # of ours falls with it (door_events.is_our_rise); any other rise is skipped, not merged into ours.  Before the
+    # start every rise counts.  Without door data: one assumed visit every Friday 08:00.
     vis = []
     if doors is not None:
         dr = doors.copy()
         dr["prev"] = dr.t.shift()
+        receipts = read_receipts(args.receipts)
         for r in dr[dr.rise > 0].itertuples():
             prev = r.prev if pd.notna(r.prev) else r.t
+            if not is_our_rise(prev.to_pydatetime(), r.t.to_pydatetime(), receipts):
+                continue
             if vis and (r.t - vis[-1]["end"]).total_seconds() / 3600 <= VISIT_MERGE_H:
                 v = vis[-1]
                 v["end"] = r.t
