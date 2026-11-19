@@ -225,6 +225,23 @@ def test_spend_before_the_opening_is_left_out(conn):
     assert not any("0.80" in note or "development" in note for d in days for note in d.notes)
 
 
+def test_a_receipt_filled_in_before_the_opening_but_closed_after_it_is_charged_on_the_chart_too(conn):
+    # Opening 10:00 Eastern; the worker filled in the line at 09:55, the door closed at 10:05. The
+    # ledger charges it at door close, so the chart's purchases and cash must too.
+    opened = datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
+    ledger.record(conn, "opening", 60000, "opening capital", "marshall", opened)
+    record_request(conn, "r1", opened - timedelta(days=1), False, BODY)
+    store(conn, "r1", fulfilled("r1", receipt(resolved_at="2026-11-07T14:55:00Z"), fulfilled_at="2026-11-07T15:10:00Z",
+                                door_opened_at="2026-11-07T14:58:00Z", door_closed_at="2026-11-07T15:05:00Z"), NOW)
+    days = daily(conn, date(2026, 11, 7), date(2026, 11, 8), now=AFTER)
+    assert days[0].purchases_cents == 1237
+    assert [e.at for e in days[0].events if e.kind == "receipt"] == [datetime(2026, 11, 7, 15, 5, tzinfo=timezone.utc)]
+    assert [e.at for e in days[0].events if e.kind.endswith("visit")] == [
+        datetime(2026, 11, 7, 15, 5, tzinfo=timezone.utc)]
+    assert_cash_is_the_balance(conn, days)
+    assert_adds_up_to_pnl(conn, days, date(2026, 11, 7), date(2026, 11, 8), opened)
+
+
 def test_no_opening_says_nothing_is_competition_money(conn):
     ledger.record_tokens(conn, "0.08", "model", 10, 5, "test dry run",
                          at=datetime(2026, 11, 8, 12, tzinfo=EASTERN))

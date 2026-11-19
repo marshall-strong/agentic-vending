@@ -446,8 +446,24 @@ _MAIN_SHRINKAGE = [(3.0, "slot 15", "ARIZONA", 1, 50)]
 ])
 def test_null_door_times_give_mains_answer(counters, main):
     # Older requests, or a worker who left them out: exactly what main gave before door times.
-    nulls = [{**l, "door_opened_at": None, "door_closed_at": None} for l in swap()]
+    # Submitted in the opposite order to the visits: without door times that must change nothing.
+    sent = {"r1": hours(1), "r2": hours(-1)}
+    nulls = [{**l, "door_opened_at": None, "door_closed_at": None, "submitted_at": sent[l["request_id"]]}
+             for l in swap()]
     assert summary(book(nulls, counters=counters)) == main
+
+
+def test_without_door_times_every_pull_at_one_moment_goes_before_any_load_as_on_main():
+    # r3, submitted before r2, loads 5 Arizona from the closet at the same resolved_at as r2's
+    # pull of 9 Arizona. As on main, the pull goes first: the load takes the pulled units at 50c.
+    sent = {"r1": hours(-2), "r3": hours(-1), "r2": hours(0)}
+    lines = swap() + [line(slot="16", sku="ARIZONA", outcome="loaded", total_paid=None, units_loaded=5,
+                           units_from_back_stock=5, at=3, request_id="r3")]
+    stock = book([{**l, "door_opened_at": None, "door_closed_at": None, "submitted_at": sent[l["request_id"]]}
+                  for l in lines])
+    assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("ARIZONA", 4, 50)]
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.product, slot16.units, slot16.unit_cost) == ("ARIZONA", 5, 50)
 
 
 def test_door_times_split_once_however_often_the_replay_splits():
@@ -567,6 +583,19 @@ def test_two_visits_sharing_a_minute_whose_order_cant_be_told_fall_back_to_resol
     assert slot.since == hours(3.4)   # r3's resolved_at, not its door close
     assert sorted(w.split(":")[0] for w in stock.warnings if "can't be told" in w) == ["r2", "r3"]
     assert not any("never loaded" in w for w in stock.warnings)
+
+
+def test_a_clash_warning_names_its_own_slot_when_the_request_first_moved_another_slot():
+    # r3's first line loads slot 14 (say, a former slot); its clash with r2 is in slot 15. The
+    # dashboard keeps a warning only for our slots, by its `slot`, so it must say 15.
+    lines = two_visits(sent=(1, 1))
+    r3 = next(l for l in lines if l["request_id"] == "r3")
+    lines.insert(lines.index(r3), {**r3, "slot": "14", "line_no": 1, "sku": "COKE20", "total_paid": "2.00",
+                                   "units_loaded": 2, "units_pulled": 0, "pulled_sku": None,
+                                   "slot_reassigned": False})
+    stock = book(lines)
+    clashes = [w for w in stock.warnings if "can't be told" in w]
+    assert sorted((w.split(":")[0], w.slot) for w in clashes) == [("r2", "15"), ("r3", "15")]
 
 
 def test_two_visits_that_overlap_fall_back_to_resolved_at_even_in_submission_order():

@@ -371,14 +371,14 @@ class _Book:
             if at >= first:
                 self.visits[_day(at)] += 1
                 self.fees[_day(at)] += fee
-        for at, ref, line, slot, sku, paid in conn.execute(
-                "select l.resolved_at, l.request_id, l.line_no, l.slot, l.sku, l.total_paid from purchase_lines l"
-                " join purchase_requests r using (request_id) where r.status = 'fulfilled'"
-                " and l.resolved_at >= %s and l.resolved_at <= %s order by l.resolved_at, l.request_id, l.line_no",
-                (opened.at, until)):
+        # On the receipt clock the ledger and the stock replay use (`stock.receipt_lines`).
+        receipts = stock.receipt_lines(conn)
+        for at, ref, _, slot, sku, paid in sorted(
+                ((r["at"], r["request_id"], r["line_no"], r["slot"], r["sku"], r["total_paid"]) for r in receipts
+                 if r["at"] is not None and opened.at <= r["at"] <= until), key=lambda r: r[:3]):
             paid = stock.cents(paid)
             if paid is None:
-                self.unpaid_moments.append(at)          # in order: the query sorts by resolved_at
+                self.unpaid_moments.append(at)          # in order: sorted by the receipt clock
             else:
                 self.cash.append((at, -paid))
             if at >= first:
@@ -390,7 +390,7 @@ class _Book:
                                                    ref, paid))
         self.cash.sort(key=lambda c: c[0])
         self.cash_moments = [at for at, _ in self.cash]
-        self._visit_events(conn)
+        self._visit_events(conn, stock.request_times(receipts))
         self._price_changes(conn)
 
         # Stock: one read of every movement. Each day's end replays them with
@@ -436,14 +436,14 @@ class _Book:
         set_aside = sum(tax_cents(c, DEFAULT_TAX_PERCENT) for c in weeks.values())
         return set_aside - sum((c for at, c in self.remitted if at <= moment), Fraction(0))
 
-    def _visit_events(self, conn: psycopg.Connection) -> None:
-        """Each fulfilled request, timed at its first receipt line as the ledger times a visit."""
-        for ref, off_cycle, at in conn.execute(
-                "select request_id, off_cycle, at from ("
-                " select r.request_id, r.off_cycle, coalesce(min(l.resolved_at), r.fulfilled_at) as at"
-                " from purchase_requests r left join purchase_lines l using (request_id)"
-                " where r.status = 'fulfilled' group by r.request_id, r.off_cycle, r.fulfilled_at) v"
-                " where at >= %s and at <= %s", (self.first, self.until)):
+    def _visit_events(self, conn: psycopg.Connection, times: dict[str, datetime]) -> None:
+        """Each fulfilled request, timed at its first line on the receipt clock (`times`) as the ledger
+        times a visit, or at `fulfilled_at` with no lines."""
+        for ref, off_cycle, fulfilled_at in conn.execute(
+                "select request_id, off_cycle, fulfilled_at from purchase_requests where status = 'fulfilled'"):
+            at = times.get(ref, fulfilled_at)
+            if at is None or not self.first <= at <= self.until:
+                continue
             self.events[_day(at)].append(Event(at, "midweek_visit" if off_cycle else "restock_visit",
                                                "midweek visit fulfilled" if off_cycle else "restock fulfilled", ref))
 

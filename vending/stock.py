@@ -41,8 +41,9 @@ A slot's count starts again whenever its product changes, so `loaded` and
 made before the opening are tests: they never came out of the $600 (#104), so
 they are not our stock and cost nothing in the competition. `vending.ledger`
 leaves their purchases and visit fees out at the same boundary,
-`receipts_count_from`, read on the same clock: door close when the receipt has
-door times, else the line's `resolved_at`. Until the opening
+`receipts_count_from`, read on the same clock (`receipt_lines`): door close
+when the replay uses the receipt's door times, else the line's `resolved_at`.
+Until the opening
 is recorded every receipt counts, so the planner and the tools can be tested
 on test purchases. Sales counters are read as before; a sale from a slot with
 no counted receipt is sold but not costed.
@@ -104,7 +105,7 @@ class Movement:
     changes: int = 0                     # sale: product changes inside a window left unsplit
     opened_at: datetime | None = None    # purchase, load: the door opened then; `at` is door close (None: no door times)
     seq: int = 0                         # receipt movements: the request's place in submission order (0: unknown)
-    note: str = ""                       # a warning to pass on when this movement is replayed
+    notes: tuple[StockWarning, ...] = ()  # warnings to pass on when this movement is replayed, each with its slot
     door_conflict: str = ""              # sale: the receipt it contradicts, by selling with the door open
     split: bool = False                  # sale: already split at its changes; another pass leaves it alone
 
@@ -207,22 +208,24 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
     A line may also carry its request's `door_opened_at` and `door_closed_at`.
     With both, the pull is at door open and the purchase or load at door close.
     Without them, all of it is at `resolved_at`. A line may also carry its
-    request's `submitted_at`, which orders requests whose movements share a moment.
+    request's `submitted_at`, which orders door-timed requests whose movements
+    share a moment. Lines without door times keep main's order at one moment:
+    every pull before any load, whichever request it came from.
     """
-    lines, notes = _usable_door_times(lines)
+    lines = _usable_door_times(lines)
     submitted = sorted({(line["submitted_at"], line["request_id"]) for line in lines
                         if line.get("submitted_at") is not None})
     seqs = {request_id: n for n, (_, request_id) in enumerate(submitted, start=1)}
     moves = []
     for line in lines:
         ref = f"{line['request_id']} line {line['line_no']}"
-        slot, seq, first = line["slot"], seqs.get(line["request_id"], 0), len(moves)
+        slot, first = line["slot"], len(moves)
         opened, closed = line.get("door_opened_at"), line.get("door_closed_at")
         if opened is None or closed is None:
-            opened = None
+            opened, seq = None, 0
             pulled_at = loaded_at = line["resolved_at"]
         else:
-            pulled_at, loaded_at = opened, closed
+            pulled_at, loaded_at, seq = opened, closed, seqs.get(line["request_id"], 0)
         if line["units_pulled"]:
             moves.append(Movement(pulled_at, "pull", slot, line["pulled_sku"], units=line["units_pulled"], ref=ref,
                                   seq=seq))
@@ -237,8 +240,9 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
                 loaded_at, "load", slot, line["sku"], to_slot=line["units_loaded"],
                 lost=line["units_from_back_stock"] - line["units_loaded"],
                 reassigned=line["slot_reassigned"], ref=ref, opened_at=opened, seq=seq))
-        if len(moves) > first and line["request_id"] in notes:
-            moves[first] = replace(moves[first], note=notes.pop(line["request_id"]))
+        if len(moves) > first and line.get("door_notes"):
+            # Each note names its own slot, which may not be this line's (the replay passes each on once).
+            moves[first] = replace(moves[first], notes=line["door_notes"])
     for loss in losses:
         moves.append(Movement(
             loss["recorded_at"], "loss", loss["slot"], loss["sku"], units=loss["units"],
@@ -246,8 +250,8 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
     return moves
 
 
-def _usable_door_times(lines: list[dict]) -> tuple[list[dict], dict[str, str]]:
-    """The lines, without door times on visits whose order in a slot can't be told, and a note for each.
+def _usable_door_times(lines: list[dict]) -> list[dict]:
+    """The lines, without door times on visits whose order in a slot can't be told.
 
     Two requests' visits to one slot that share a minute leave the replay
     unsure which went first: say one closed at 15:34 and the next opened at
@@ -255,14 +259,16 @@ def _usable_door_times(lines: list[dict]) -> tuple[list[dict], dict[str, str]]:
     the earlier one's door closed no later than the later one's opened.
     Otherwise (submitted together, or door times that overlap or disagree with
     the submission order) neither visit's door times are used: their lines are
-    timed by `resolved_at`, as without door times, and the note says so.
+    timed by `resolved_at`, as without door times. Each of those lines carries
+    `door_notes`, one warning per slot where its visit clashed, each about that
+    slot. Running this again on its own output changes nothing.
     """
     visits: dict[str, dict[str, tuple]] = {}
     for line in lines:
         opened, closed = line.get("door_opened_at"), line.get("door_closed_at")
         if opened is not None and closed is not None:
             visits.setdefault(line["slot"], {})[line["request_id"]] = (opened, closed, line.get("submitted_at"))
-    notes: dict[str, str] = {}
+    notes: dict[str, dict[str, StockWarning]] = {}
     for slot, by_request in sorted(visits.items()):
         for (p, (p_open, p_close, p_sent)), (q, (q_open, q_close, q_sent)) in combinations(
                 sorted(by_request.items()), 2):
@@ -273,13 +279,14 @@ def _usable_door_times(lines: list[dict]) -> tuple[list[dict], dict[str, str]]:
                 if early_close <= late_open:
                     continue   # the earlier request's door closed in the minute the later one's opened
             for request_id, other in ((p, q), (q, p)):
-                notes.setdefault(request_id, (
+                notes.setdefault(request_id, {}).setdefault(slot, StockWarning(
                     f"{request_id}: its door times share a minute with {other}'s in slot {slot}, and which "
-                    "visit came first can't be told; its lines are timed by resolved_at instead"))
+                    "visit came first can't be told; its lines are timed by resolved_at instead", slot))
     if not notes:
-        return lines, notes
-    return [{**line, "door_opened_at": None, "door_closed_at": None} if line["request_id"] in notes else line
-            for line in lines], notes
+        return lines
+    return [{**line, "door_opened_at": None, "door_closed_at": None,
+             "door_notes": tuple(notes[line["request_id"]].values())} if line["request_id"] in notes else line
+            for line in lines]
 
 
 def sales_from_counters(rows: list[tuple]) -> list[Movement]:
@@ -560,8 +567,9 @@ def weighted_average(movements: list[Movement]) -> Stock:
 
     for m in sorted(_split_at_changes(movements), key=_replay_order):
         slot = slots.get(m.slot) if m.slot else None
-        if m.note and m.note not in warnings:
-            warn(m.slot, m.note)
+        for note in m.notes:
+            if note not in warnings:
+                warnings.append(note)
         if m.kind == "pull":
             if slot is None or slot.product != m.sku:
                 warn(m.slot, f"{m.ref}: {m.units} units of {m.sku} pulled from slot {m.slot}, "
@@ -707,24 +715,51 @@ def receipts_count_from(conn: psycopg.Connection, start: datetime | None = None)
     return opened if start is None else max(start, opened)
 
 
+def receipt_lines(conn: psycopg.Connection) -> list[dict]:
+    """Every fulfilled line, each with `at`: the one moment it counts from, the receipt clock.
+
+    That is its request's door close when the replay can use the receipt's
+    door times, else the line's own `resolved_at`. The replay falls back to
+    `resolved_at` for visits whose order in a slot can't be told
+    (`_usable_door_times`), so a line with door times isn't always at door
+    close. The opening boundary here, the ledger's purchases and visit fees,
+    the money chart and the machine state's load dates all read this clock, so
+    a line can't be in one figure at 10:05 and in another at 09:55.
+    """
+    lines = _usable_door_times([dict(zip(_LINE_COLUMNS + _REQUEST_COLUMNS, row)) for row in conn.execute(
+        f"select {', '.join('l.' + c for c in _LINE_COLUMNS)}, {', '.join('r.' + c for c in _REQUEST_COLUMNS)}"
+        " from purchase_lines l join purchase_requests r using (request_id) where r.status = 'fulfilled'"
+        " order by l.request_id, l.line_no")])
+    for line in lines:
+        door = line["door_opened_at"] is not None and line["door_closed_at"] is not None
+        line["at"] = line["door_closed_at"] if door else line["resolved_at"]
+    return lines
+
+
+def request_times(lines: list[dict]) -> dict[str, datetime]:
+    """Each request's visit on the receipt clock: its earliest line's `at` (`receipt_lines`)."""
+    out: dict[str, datetime] = {}
+    for line in lines:
+        if line["at"] is not None and (line["request_id"] not in out or line["at"] < out[line["request_id"]]):
+            out[line["request_id"]] = line["at"]
+    return out
+
+
 def _receipts(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
     """Every fulfilled line and every loss recorded against one: our own purchases, whatever the assignment.
 
-    Once the ledger has an opening entry, lines timed before it (test purchases) and their later
-    losses are left out: see the module docstring. A line is timed at its request's door close when
-    the receipt has door times, else at its own `resolved_at`, the clock `vending.ledger` uses too.
+    Once the ledger has an opening entry, lines before it on the receipt clock (`receipt_lines`) are
+    test purchases, and they and their later losses are left out: see the module docstring.
     """
     since_at = receipts_count_from(conn)
-    since, args = ((" and coalesce(r.door_closed_at, l.resolved_at) >= %s", (since_at,)) if since_at is not None
-                   else ("", ()))
-    lines = [dict(zip(_LINE_COLUMNS + _REQUEST_COLUMNS, row)) for row in conn.execute(
-        f"select {', '.join('l.' + c for c in _LINE_COLUMNS)}, {', '.join('r.' + c for c in _REQUEST_COLUMNS)}"
-        " from purchase_lines l join purchase_requests r using (request_id) where r.status = 'fulfilled'"
-        + since, args)]
-    losses = [dict(zip(_LOSS_COLUMNS, row)) for row in conn.execute(
+    lines = [line for line in receipt_lines(conn)
+             if since_at is None or (line["at"] is not None and line["at"] >= since_at)]
+    kept = {(line["request_id"], line["line_no"]) for line in lines}
+    losses = [loss for loss in (dict(zip(_LOSS_COLUMNS, row)) for row in conn.execute(
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
-        " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + since, args)]
+        " join purchase_requests r using (request_id) where r.status = 'fulfilled'"))
+        if (loss["request_id"], loss["line_no"]) in kept]
     return lines, losses
 
 
