@@ -333,6 +333,20 @@ def test_a_door_time_that_is_not_a_time_is_logged_and_the_rest_of_the_batch_stil
     assert conn.execute("select count(*) from purchase_lines where request_id = 'r1'").fetchone()[0] == 1
 
 
+def test_a_door_time_with_a_date_and_no_time_is_logged_and_the_receipt_kept(conn):
+    # Read as midnight, "2026-11-07" would close the door before its 15:34 open, and the whole
+    # receipt would be refused. It isn't a time: neither door time is kept, the receipt is.
+    submit(conn, "r1")
+    said = []
+    report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED,
+                                                    door_closed_at="2026-11-07")}), NOW, log=said.append)
+    assert (report.checked, report.failed) == (1, 0)
+    assert said == ["r1: door_closed_at is '2026-11-07', not a time; neither door time is kept, "
+                    "so its visit is dated by resolved_at"]
+    assert door_row(conn) == (None, None)
+    assert conn.execute("select count(*) from purchase_lines").fetchone()[0] == 1
+
+
 def test_a_door_closed_before_it_opened_is_logged_and_not_stored(conn):
     submit(conn, "r1")
     said = []

@@ -118,7 +118,7 @@ def door_times(request_id: str, response: dict) -> tuple[datetime | None, dateti
 
     They are to the minute. Older requests have none, and the worker may leave
     them out. With only one of the two, or one that isn't a time (a number, or
-    a string like "soon"), neither is kept: the visit needs both ends, and the
+    a string like "soon" or a date with no time), neither is kept: the visit needs both ends, and the
     receipt itself is still good. The answer is still kept whole in
     `last_response`. Close before open is a bad receipt: `ValueError`, so
     `store` writes nothing.
@@ -132,8 +132,12 @@ def door_times(request_id: str, response: dict) -> tuple[datetime | None, dateti
 
 
 def _door_when(value: object) -> datetime | None:
-    """A door time, or None when there is none or it isn't a time the bridge could mean."""
-    if not isinstance(value, str):
+    """A door time, or None when there is none or it isn't a time the bridge could mean.
+
+    A date with no time of day ("2026-11-07") isn't one: read as midnight it would
+    put the door's close before its open, and the whole receipt would be refused.
+    """
+    if not isinstance(value, str) or not any(sep in value.strip() for sep in ("T", "t", " ")):
         return None
     try:
         return _when(value)
