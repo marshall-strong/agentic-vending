@@ -94,8 +94,8 @@ with db.connect() as c:
     receipts = c.execute(
         "select r.request_id, coalesce(min(l.resolved_at), r.fulfilled_at), r.fulfilled_at"
         " from purchase_requests r left join purchase_lines l using (request_id)"
-        " where r.status = 'fulfilled' and r.fulfilled_at is not null"
-        " group by r.request_id, r.fulfilled_at order by r.fulfilled_at").fetchall()
+        " where r.status = 'fulfilled' and r.fulfilled_at is not null and r.fulfilled_at < %s"
+        " group by r.request_id, r.fulfilled_at order by r.fulfilled_at", (before,)).fetchall()
 
 
 ours = set(RUN_SLOTS)

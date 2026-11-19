@@ -94,6 +94,14 @@ def test_a_rise_seen_after_the_first_line_was_resolved_is_ruled_out():
     assert windows == [] and unplaced == [(t0 + timedelta(hours=2, minutes=10), "unknown", ())]
 
 
+def test_a_receipt_whose_first_line_came_over_an_hour_before_its_fulfilment_claims_no_rise():
+    from door_events import our_visits
+    t0, readings = _from_start([5, 6, 6, 6])                   # one rise, seen at +1 h (window 0 to +1 h)
+    # first line at +0:06, fulfilled +1:30: the opening was by +0:06 and within an hour of +1:30, which can't both hold
+    windows, unplaced = our_visits(readings, [(t0 + timedelta(minutes=6), t0 + timedelta(hours=1, minutes=30))])
+    assert windows == [] and unplaced == [(t0 + timedelta(hours=1, minutes=30), "unknown", ())]
+
+
 def test_one_candidate_is_claimed_and_two_are_an_ambiguous_visit_that_claims_neither():
     from door_events import our_visits
     t0, readings = _from_start([5, 6, 7, 7])                   # rises seen at +1 h and +2 h

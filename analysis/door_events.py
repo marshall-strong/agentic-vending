@@ -84,6 +84,9 @@ def our_visits(readings, receipts, start: datetime = START):
     for first, done in sorted(receipts, key=lambda r: r[1]):
         if done < start:
             continue
+        if first < done - VISIT_MAX:                                # [done - VISIT_MAX, first] is empty: no rise fits
+            unplaced.setdefault(done, (done, "unknown", ()))
+            continue
         candidates = tuple(at for s, at, _ in found if at >= start and s < first and at >= done - VISIT_MAX)
         if len(candidates) == 1:
             ours.update(candidates)

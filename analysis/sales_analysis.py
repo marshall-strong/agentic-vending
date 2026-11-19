@@ -88,7 +88,7 @@ from slots_config import SOURCE_CLI, SOURCE_FALL, SOURCE_SERVER, check_before_st
 from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
 from boundary_units import price_sales, slot_average_price  # noqa: E402
-from door_events import our_visits, read_receipts  # noqa: E402
+from door_events import START, our_visits, read_receipts  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID  # noqa: E402  (configure() sets the device and slots this run uses)
 
@@ -558,9 +558,11 @@ def main():
             else:
                 vis.append(dict(start=prev, first_rise=at, end=at, openings=rise, rise_polls=[at], source="door counter"))
     else:
+        # assumed Fridays only for the history before the start; from it, our receipts are our visits (no door window)
+        unplaced = our_visits([], read_receipts(args.receipts))[1]
         fr = sorted({d for d in dates if d.weekday() == 4})
         vis = [dict(start=f, first_rise=f, end=f, openings=None, rise_polls=[f], source=f"assumed Friday {VISIT_HOUR:02d}:00 (no door data)")
-               for f in (local_at(d, VISIT_HOUR) for d in fr) if T0 < f <= T1]
+               for f in (local_at(d, VISIT_HOUR) for d in fr) if T0 < f <= T1 and f < START]
     for i, v in enumerate(vis):
         v["id"] = i + 1
         v["window_h"] = (v["end"] - v["start"]).total_seconds() / 3600
