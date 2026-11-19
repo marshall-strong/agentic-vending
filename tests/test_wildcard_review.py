@@ -270,15 +270,22 @@ def test_4_no_verdict_while_a_regular_slot_has_no_receipt(conn):
     assert t.verdict == "unknown" and "slot 27, 48 holds" in t.reason
 
 
-def test_4_the_planner_gets_no_pass_while_a_regular_slot_has_no_receipt(conn):
+def test_4_the_planner_gets_no_pass_while_a_regular_slot_has_no_receipt(conn, monkeypatch):
     from tests.test_ledger import open_ledger
     from tests.test_wildcard_trial import FRESH, set_wildcard, week_of_sales
-    from vending import planning
+    from vending import planning, wildcard_trial
 
     open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=UTC))  # before the October receipts, which it would drop
     week_of_sales(conn, leave=("27",))
     set_wildcard(conn, "15")
-    assert planning.gather(conn, [], FRESH).current.wildcard_verdict == "unknown"
+    # The trial planning judged: unknown because of slot 27 alone, not because every receipt was left out.
+    judged, real = [], wildcard_trial.trial
+    monkeypatch.setattr(wildcard_trial, "trial", lambda *a, **k: judged.append(real(*a, **k)) or judged[-1])
+    gathered = planning.gather(conn, [], FRESH)
+    assert gathered.current.wildcard_verdict == "unknown"
+    assert "slot 27 holds" in judged[-1].reason, judged[-1].reason
+    # Every other slot's receipts were read: 27 is the only slot without one.
+    assert any(n.startswith("no receipts yet for slots 27, so ") for n in gathered.notes), gathered.notes
 
 
 def test_4_no_regular_load_while_the_wildcards_contents_are_unknown():
@@ -362,6 +369,8 @@ def test_5_machine_state_reads_no_polls_of_a_slot_no_longer_ours(conn):
 
     _slot_18_left_us(conn)
     reply = get_machine_state(conn, now=datetime(2026, 10, 27, 2, tzinfo=UTC))
+    # A full reply, not an early refusal that would carry no warnings either.
+    assert reply.success and [s.slot for s in reply.data if s.slot == "16"] == ["16"], reply.message
     assert not [w for w in reply.warnings if "slot 18" in w]
 
 
