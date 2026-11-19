@@ -7,17 +7,25 @@ When the page opens it lists every schema and table. Choose a table to see its
 columns (type, whether it can be null, default, primary key) and its rows, 100
 at a time, highest primary key first (for a numeric id, the newest).
 
-It knows nothing about vending: no pricing, stock, ledger or planner code, only
-what Postgres says is there. It reads the database DATABASE_URL points at and
-never writes: the session is read-only, so Postgres refuses any write, every
-page is one read-only transaction, and a slow query is cancelled after
-STATEMENT_TIMEOUT_MS. It never migrates.
+`render` knows nothing about vending: no pricing, stock, ledger or planner
+code, only what Postgres says is there. What a page leaves out is passed in.
+Both ways of serving it pass the same rules, `vending.pages.explorer_rules`
+(`docs/integrity.md`): `poll_selections` and `slot_counts` show only our
+selections, by the stored assignment (`vending.slots.our_slots`), and no row of
+them when it can't be read; `polls.total_paid_cents` and `total_paid_units`,
+the machine-wide totals, are hidden in every row.
+
+It reads the database DATABASE_URL points at and never writes: the session is
+read-only, so Postgres refuses any write, every page is one read-only
+transaction, and a slow query is cancelled after STATEMENT_TIMEOUT_MS. It never
+migrates.
 
 Run this way it listens on 127.0.0.1 and answers only a Host of 127.0.0.1 or
 localhost, the same rule as the agent dashboard, so another site can't rebind
 its name to us. The Container App serves the same page to anyone at `/db`,
-through `vending.pages`, which connects as a login that can only read and passes
-`render` the columns to leave out (`Hide`). Every link on the page is relative
+through `vending.pages`, which connects as a login that can only read. It passes
+`render` the same rules, and also hides the error text of failures and the dev
+machines' hostnames (`Hide`). Every link on the page is relative
 (`?schema=...`), so it works under any path.
 """
 
@@ -509,7 +517,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, "text/plain; charset=utf-8", str(error))
         try:
             with connect() as conn:
-                code, body = render(conn, request)
+                # Imported here: vending.pages imports this module. The same rules as the public page's.
+                from vending.pages import explorer_rules
+
+                hide, only = explorer_rules(conn, public=False)
+                code, body = render(conn, request, hide, only=only)
         except (psycopg.Error, settings.SettingsError) as error:
             message = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
             return self._send(503, "text/html; charset=utf-8", page([], None, f'<p class="error">{_e(message)}</p>'))

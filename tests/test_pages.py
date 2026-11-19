@@ -414,7 +414,7 @@ def test_the_public_explorer_shows_only_our_rows_of_the_selection_tables(site, s
             table = db_explorer.Table(schema, name, "table")
             assert db_explorer.rows(local, table, only=pages.only(_stored(local))[name]).total == shown
             assert db_explorer.rows(local, table).total == 2 + (name == "poll_selections")
-    # The explorer run locally still shows everything.
+    # `render` without rules shows everything; both explorers pass them (`pages.explorer_rules`).
     with open_in(*schema_url) as local:
         assert NOT_OURS in db_explorer.render(local, db_explorer.Request(schema, "slot_counts", 0))[1]
 

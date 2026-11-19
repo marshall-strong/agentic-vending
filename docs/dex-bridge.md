@@ -34,8 +34,8 @@ the tailnet is down, not the bridge.
 | `slots` | `GET /api/v1/slots` | The selections the server currently assigns us on `vmc1`; it may change before 3 Dec |
 | `products` | `GET /api/v1/products` | What we can order, as single items: `sku`, `name`, `line`, `flavor`, `size`. No prices and no pack sizes. Three products on 29 Oct, one of them a test entry |
 | `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes`. **At most 500 per request**: a longer range comes back with `truncated: true`, so ask a day or a week at a time |
-| `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text |
-| `latest [--summary]` | history + raw | The newest stored poll. `--summary` prints price and lifetime sales for our slots |
+| `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text (from the start, only our selections; see [below](#from-the-start-what-each-command-prints)) |
+| `latest [--summary] [--out FILE]` | history + raw | The newest stored poll. `--summary` prints price and lifetime sales for our slots, from the stored assignment |
 | `request REQUEST_ID` | `GET /api/v1/purchase-requests/{id}` | `pending`, `rejected` with a `decision_note`, or the full receipts |
 | `poll --live [--out FILE]` | `POST /api/v1/poll` | Reads the machine right now. Refuses without `--live` |
 
@@ -89,6 +89,43 @@ What the machine does **not** tell us:
 
 `latest --summary` is a quick look only: it does not check the `G85` checksum. The real
 parser belongs in the history sync.
+
+## From the start: what each command prints
+
+From the start (3 Dec 2026 00:00 Eastern, `vending/start.py`), a poll carries all 40
+selections, the other team's 20 too. Nothing we run may show their per-selection data, or any
+machine-wide total, to a person, the agent or a page (`docs/integrity.md`). Storing the raw poll
+is fine. "Ours" means the stored assignment (`vending.slots.our_slots`, so the script needs
+`DATABASE_URL`), never a fresh `slots` answer. A poll is "from the start" when its `started_at`
+is at or after the start. `raw` isn't told when its poll was taken, so on or after 3 Dec it
+treats every poll as one from the start.
+
+| Command | Poll from before the start | Poll from the start |
+|---|---|---|
+| `raw SESSION_ID` | The whole poll, as stored | A rebuilt view (below) on stdout, and a note on stderr saying how many lines were left out |
+| `latest` | The whole poll | The rebuilt view, and the note |
+| `poll --live` | The whole poll | The rebuilt view, and the note |
+| `latest --summary` | JSON price and lifetime sales for our selections only | The same. The stored assignment is read first, before any poll. A selection that isn't ours is skipped at its `PA1`, before any of its fields are read. With no readable assignment it prints `[]`, reads no poll, and says why on stderr |
+| `--out FILE` (with `raw`, `latest` or `poll --live`) | Saves the whole poll, byte for byte | Saves the whole poll byte for byte, to a regular file only. It refuses `-`, a device (`/dev/stdout`, `/dev/tty`, `CON`, `NUL`, `COM1`, `\\.\...`), a pipe, a directory, or a link to any of them, exits 6 and writes nothing. Nothing is printed on stdout |
+
+**The rebuilt view** is written anew from checked fields. No line is copied from the poll:
+
+- `ID4*<decimal places>`, so a price can be read;
+- for each of our selections, `PA1*<selection>*<price>` and `PA2*<counts>`;
+- the door counter, `EA2*DO*<counts>`.
+
+A field counts only if it is a plain number. The first field that isn't ends its record.
+Everything else is left out: the other team's selections, the machine-wide totals (`VA1`, the
+cash and card records), `ID1`, the other `PA` records, the envelope and `G85` (its checksum
+wouldn't match). With no readable assignment, the view has no `PA` records and stderr says
+"no selection is printed".
+
+**Nothing prints the whole of a poll from the start.** The `--unredacted` flag is gone. To look
+at the raw bytes for archiving, save them with `--out`.
+
+**Errors.** From `history`, `raw`, `latest` and `poll`, an error shows only the status and its
+standard phrase, for example `404: Not Found`, never the bridge's reply. Other routes still
+show what the bridge said.
 
 ## Purchase requests, in short
 

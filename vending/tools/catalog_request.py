@@ -38,14 +38,13 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from vending.bridge import Bridge, BridgeAnswered, BridgeError, BridgeNoAnswer, BridgeUnreachable
-from vending.ledger import TIMEZONE
 from vending.pricing import Refusal
+from vending.start import START
 from vending.tools import WriteReply
 from vending.write_gate import Refused
 
@@ -64,7 +63,7 @@ MAX_NOTE = 500
 # too many open requests (about 24, seen 15 Nov) still applies before go-live.
 # MACHINE_LIVE is the 3 Dec go-live, not the ledger's opening (which comes
 # before the day-one fill; `vending/usage.py` calls that "the competition start").
-MACHINE_LIVE = datetime(2026, 12, 3, tzinfo=ZoneInfo(TIMEZONE))
+MACHINE_LIVE = START
 WEEKLY_LIMITS = (20, 15, 10, 5)
 FINAL_WEEKLY_LIMIT = 3
 # Statuses the bridge can give a request that our table stores as they are.

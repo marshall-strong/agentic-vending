@@ -210,6 +210,8 @@ and `slot_counts`, and none while nothing is stored; the dashboard's JSON counts
 runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed), because a
 database error names the host and the user. Refusals keep their text. The pages' own errors show
 one plain sentence; the detail is in the container's log.
+`/db` also hides the machine-wide totals in `polls` (`total_paid_cents` and `total_paid_units`) in
+every row: from the start they include the other team's sales, and the total minus ours is theirs.
 
 ### Setting up the read-only login (once)
 

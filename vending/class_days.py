@@ -16,14 +16,13 @@ Days are Eastern calendar dates, the Institute's own.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
 
-EASTERN = ZoneInfo("America/New_York")
+from vending.start import EASTERN, START
 
 # (first day, last day) of each term: classes run on weekdays between them.
 TERMS = (
     (date(2026, 9, 9), date(2026, 11, 17)),    # Fall Quarter 2026
-    (date(2026, 12, 3), date(2027, 2, 19)),    # Winter Quarter 2026-2027: the competition
+    (START.date(), date(2027, 2, 19)),         # Winter Quarter 2026-2027: the competition (vending.start)
     (date(2027, 3, 8), date(2027, 5, 14)),     # Spring Quarter 2027
 )
 
