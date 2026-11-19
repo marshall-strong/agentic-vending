@@ -12,13 +12,17 @@ Steps, each stops the run if it fails:
     1. analysis/export_sales.py        (skipped with --no-export)
     2. analysis/sales_analysis.py      writes analysis/out/lab_data.json and analysis_report.md
     3. analysis/labs/*_lab.py          write analysis/out/labs/<lab>/index.html and standalone.html
-    4. copy analysis_report.md to analysis/REPORT.md (only when every check passed and the run covers all our slots)
+    4. the fall run, all 40 selections, polls before the fall cut only (FALL_CUTOFF, never after the 3 Dec 2026
+       start; skipped with --no-fall):
+       export_sales.py --fall-all to analysis/data/fall40/ (skipped with --no-export), sales_analysis.py on it to
+       analysis/out/fall40/, then analysis/fall_rates.py, which writes fall_rates.md
+    5. REPORT.md = analysis_report.md + fall_rates.md (only when every check passed and the run covers all our
+       slots). With --no-fall it is analysis_report.md alone: the rollback when the fall data may not be used (A21).
 
 Full output of every step goes to analysis/out/rebuild_log.txt. Exits 1 if a step fails or all_ok is false.
 """
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 import time
@@ -31,7 +35,7 @@ LABS = [("forecast-lab", "forecast_lab.py"), ("rhythm-lab", "rhythm_lab.py"), ("
 TURF = "Not our turf"
 TURF_PARTIAL = "Not in this run"
 sys.path.insert(0, str(ANALYSIS))
-from slots_config import SLOTS as ASSIGNED  # noqa: E402
+from slots_config import check_assignment  # noqa: E402
 
 
 def project_python():
@@ -49,6 +53,8 @@ def main():
     ap.add_argument("--export-python", default=project_python(),
                     help="python with psycopg for the export (default: the project's .venv if there is one, else this one)")
     ap.add_argument("--no-report-copy", action="store_true", help="leave analysis/REPORT.md as it is")
+    ap.add_argument("--no-fall", action="store_true",
+                    help="skip the fall run over all 40 selections, and write REPORT.md without its fall section")
     args = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
@@ -59,6 +65,16 @@ def main():
         steps.append(("export", [args.export_python, str(ANALYSIS / "export_sales.py")] + slots_arg))
     steps.append(("analysis", [sys.executable, "-I", str(ANALYSIS / "sales_analysis.py")] + slots_arg))
     steps += [(name, [sys.executable, "-I", str(ANALYSIS / "labs" / script)]) for name, script in LABS]
+    if not args.no_fall:
+        fdata, fout = ANALYSIS / "data" / "fall40", OUT / "fall40"
+        if not args.no_export:
+            steps.append(("fall export", [args.export_python, str(ANALYSIS / "export_sales.py"), "--fall-all", str(fdata)]))
+        steps.append(("fall analysis", [sys.executable, "-I", str(ANALYSIS / "sales_analysis.py"),
+                                        "--slots-file", str(fdata / "slots.json"), "--sales", str(fdata / "sales_events.csv"),
+                                        "--readings", str(fdata / "poll_readings.csv"), "--polls", str(fdata / "polls.csv"),
+                                        "--machine", str(fdata / "machine_hourly.csv"), "--doors", str(fdata / "door_events.csv"),
+                                        "--out", str(fout)]))
+        steps.append(("fall rates", [sys.executable, "-I", str(ANALYSIS / "fall_rates.py"), "--out", str(fout)]))
 
     results = []
     for name, cmd in steps:
@@ -80,7 +96,8 @@ def main():
     all_ok = bool(checks.get("all_ok"))
     n = len(sc["our_slots"])
     rival = sc["machine"]["shelves"] * sc["machine"]["columns"] - n
-    partial = set(sc["our_slots"]) != set(ASSIGNED)     # a narrowed --slots run
+    assigned = check_assignment(sc.get("assigned_slots"), "lab_data.json scope: assigned_slots")   # our assignment
+    partial = set(sc["our_slots"]) != set(assigned)     # a narrowed --slots run
     turf = TURF_PARTIAL if partial else TURF
     print()
     print(f"slots     {n} on {sc['device']}: {sc['slots_text']}")
@@ -89,19 +106,36 @@ def main():
     print(f"all_ok    {all_ok}")
     print(f"data      {lab['meta']['first_poll']} to {lab['meta']['last_poll']}, {lab['meta']['polls']} polls")
     if partial:
-        print(f"narrowed  {n} of our {len(ASSIGNED)} slots; the other {rival} rails are hatched as '{turf}' with no values")
+        print(f"narrowed  {n} of our {len(assigned)} slots; the other {rival} rails are hatched as '{turf}' with no values")
     else:
         print(f"not ours  {rival} rails, drawn hatched as '{turf}' with no values")
     for name, _ in LABS:
         page = (OUT / "labs" / name / "index.html").read_text(encoding="utf-8")
         print(f"{name:13s} {OUT / 'labs' / name / 'index.html'}  (+ standalone.html)  '{turf}' in source: {page.count(turf)}")
+    fall_ok = None
+    if not args.no_fall:
+        fall = json.loads((OUT / "fall40" / "lab_data.json").read_text(encoding="utf-8"))
+        fall_ok = bool(fall["meta"]["checks"].get("all_ok"))
+        print(f"fall      {len(fall['scope']['our_slots'])} selections, {fall['meta']['first_poll']} to {fall['meta']['last_poll']}, "
+              f"all_ok {fall_ok}: {OUT / 'fall40' / 'fall_rates.md'}")
     if partial:
         print(f"report    left as is: a narrowed run's report stays in {OUT / 'analysis_report.md'}")
-    elif all_ok and not args.no_report_copy:
-        shutil.copyfile(OUT / "analysis_report.md", ANALYSIS / "REPORT.md")
-        print(f"report    copied to {ANALYSIS / 'REPORT.md'}")
+    elif all_ok and (args.no_fall or fall_ok) and not args.no_report_copy:
+        (ANALYSIS / "REPORT.md").write_text(report_text(args.no_fall), encoding="utf-8", newline="\n")
+        print(f"report    written to {ANALYSIS / 'REPORT.md'} "
+              + ("(the report alone: --no-fall leaves the fall section out)" if args.no_fall else "(the report + the fall section)"))
+    all_ok = all_ok and fall_ok is not False
     print(f"log       {OUT / 'rebuild_log.txt'}")
     return 0 if all_ok else 1
+
+
+def report_text(no_fall, out=OUT):
+    """REPORT.md's text: the analysis report, plus the fall section unless `no_fall`."""
+    report = (out / "analysis_report.md").read_text(encoding="utf-8").rstrip("\n") + "\n"
+    if no_fall:
+        return report
+    section = (out / "fall40" / "fall_rates.md").read_text(encoding="utf-8")
+    return report + "\n" + section.rstrip("\n") + "\n"
 
 
 if __name__ == "__main__":

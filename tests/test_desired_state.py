@@ -18,7 +18,7 @@ from tests.test_server import call, db  # noqa: E402,F401  (db is a fixture)
 from vending import ledger, planning, server  # noqa: E402
 from vending.bridge import Bridge  # noqa: E402
 from vending.config import set_halted, set_value  # noqa: E402
-from vending.planner import OUR_SLOTS  # noqa: E402
+from tests.conftest import TEST_SLOTS  # noqa: E402
 from vending.purchase_requests import record as record_request  # noqa: E402
 from vending.sync_catalog import sync as catalog_sync  # noqa: E402
 from vending.tools import desired_state as schema  # noqa: E402
@@ -116,7 +116,7 @@ def desired(*changes: dict, off_cycle=False, sourcing=()) -> schema.DesiredState
     """Every slot kept, except the ones given."""
     by_slot = {c["slot"]: c for c in changes}
     return schema.DesiredState(
-        slots=[by_slot.get(s, {"slot": s, "keep": True}) for s in OUR_SLOTS],
+        slots=[by_slot.get(s, {"slot": s, "keep": True}) for s in TEST_SLOTS],
         off_cycle=off_cycle, sourcing=list(sourcing))
 
 

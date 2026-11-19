@@ -444,11 +444,12 @@ def test_the_recorded_plan_carries_the_visit_and_each_slots_reason():
 
 def test_the_dashboard_shows_the_recorded_reasons(connect, conn):
     from vending import dashboard
+    from vending.slots import our_slots
 
     said = [{"slot": "15", "reason": "Sold out by Tuesday."}]
     tools = Tools(replies={"preview_desired_state": PREVIEWED})
     go(connect, Script(preview(), answer("submit", reason="restock 15", slot_reasons=said)), tools)
-    shown = dashboard._plan(conn)
+    shown = dashboard._plan(conn, our_slots(conn))     # rows are our stored selections
     assert (shown["visit"], shown["reason"]) == ("scheduled", "restock 15")
     assert {s["slot"]: s["now"] for s in shown["slots"]}["15"]["reason"] == "Sold out by Tuesday."
 

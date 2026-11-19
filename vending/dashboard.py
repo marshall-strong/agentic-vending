@@ -17,8 +17,9 @@ The page, top to bottom:
  - Verdict and tiles: OK / check / problem, the halt switch, the latest run,
    the order cutoff countdown, the machine's last poll, and what has been spent.
  - Needs attention: each thing that is wrong or about to be, in a sentence.
- - In the machine: the machine's face, upright, with our selections (from
-   `vending.slots.SLOTS`) lit. Now shows the tag price (polls) and the product
+ - In the machine: the machine's face, upright, with our selections (the stored
+   assignment, `vending.slots.our_slots`) lit; with none stored it says so instead
+   of guessing. Now shows the tag price (polls) and the product
    and units on hand (receipts); Next Friday shows the latest plan. Anything
    without a record says unknown.
  - The plan: what changed since the plan before, then one line per slot that
@@ -53,7 +54,7 @@ from psycopg.types.json import set_json_loads
 from vending import db, settings, slot_counts
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import machine_state
 
 HOST = "127.0.0.1"
@@ -176,7 +177,27 @@ def _status(conn: psycopg.Connection, now: datetime) -> dict:
             "last_action": last, "next_cutoff": next_cutoff(now)}
 
 
-def _plan(conn: psycopg.Connection) -> dict | None:
+def _our_slots(conn: psycopg.Connection) -> dict:
+    """Our selections as a panel: the stored assignment (`vending.slots.our_slots`), or why there is none.
+
+    Read once per snapshot, and everything the page draws for "ours" comes from it. With nothing
+    stored (or a malformed row) the page says so and lights nothing, rather than guess.
+    """
+    try:
+        return {"ok": True, "data": _guarded(conn, lambda: our_slots(conn))}
+    except Missing as error:
+        return {"ok": False, "why": f"{error}. Run `python -m vending.db migrate` on this database."}
+    except SlotsNotRecorded as error:
+        return {"ok": False, "why": str(error)}
+
+
+def our_selections(snap: dict) -> tuple[str, ...]:
+    """Our selections as the snapshot read them; empty when no assignment is stored."""
+    ours = snap.get("ours") or {}
+    return tuple(ours["data"]) if ours.get("ok") else ()
+
+
+def _plan(conn: psycopg.Connection, ours: tuple[str, ...] = ()) -> dict | None:
     columns = "id, started_at, finished_at, mode, model, status, plan, team_update, notes"
     found = _rows(conn, f"select {columns} from agent_runs where plan is not null and mode = any(%s)"
                         " order by started_at desc, id desc limit 1", (list(WATCHED_MODES),))
@@ -189,9 +210,11 @@ def _plan(conn: psycopg.Connection) -> dict | None:
                          (latest["mode"], latest["started_at"], latest["id"]))
     now_slots = _by_slot(latest["plan"])
     before = _by_slot(previous["plan"]) if previous else {}
+    # One row per selection assigned to us now, in the assignment's order. A stored plan can name
+    # selections that are no longer ours (or the assignment can be missing): those aren't drawn.
     slots = [{"slot": slot, "now": now_slots.get(slot), "before": before.get(slot),
               "changed": previous is not None and _what(now_slots.get(slot)) != _what(before.get(slot))}
-             for slot in sorted(set(SLOTS) | now_slots.keys(), key=_slot_order)]
+             for slot in ours]
     plan = latest["plan"] if isinstance(latest["plan"], dict) else {}
     return {"run": {k: latest[k] for k in ("id", "started_at", "finished_at", "mode", "model", "status")},
             "previous_run": previous and previous["id"],
@@ -207,7 +230,8 @@ def _tags(conn: psycopg.Connection, now: datetime) -> dict:
         return {}
 
 
-def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None) -> list[dict]:
+def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
+          ours: tuple[str, ...] = ()) -> list[dict]:
     """The last runs, newest first, each with the slots its plan changed from the plan before it.
 
     The newest run with a plan compares a "keep" against `tags`, the prices on the tags now, as
@@ -227,7 +251,7 @@ def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None) -> 
         plan, previous = r.pop("plan"), r.pop("previous_plan")
         r["has_plan"] = plan is not None
         r["compared"] = plan is not None and previous is not None
-        r["changes"] = _plan_changes(plan, previous, tags if newest else None) if r["compared"] else []
+        r["changes"] = _plan_changes(plan, previous, tags if newest else None, ours) if r["compared"] else []
         newest = newest and plan is None
         r["stale"] = r["status"] == "running" and now - r["started_at"] > STALE_RUN
     return rows
@@ -248,21 +272,21 @@ def _steps(conn: psycopg.Connection, run_ids: list[int]) -> dict[int, list[dict]
     return out
 
 
-def _plan_changes(plan: Any, previous: Any, tags: dict | None = None) -> list[dict]:
-    """Each slot whose ask moved between two plans, with short labels for how."""
+def _plan_changes(plan: Any, previous: Any, tags: dict | None = None, ours: tuple[str, ...] = ()) -> list[dict]:
+    """Each of our slots whose ask moved between two plans, with short labels for how, in `ours`' order.
+
+    Only selections assigned to us now: a slot an older plan named but that isn't ours any more
+    isn't listed.
+    """
     tags = tags or {}
     now_slots, before = _by_slot(plan), _by_slot(previous)
     out = []
-    for slot in sorted(now_slots.keys() | before.keys(), key=_slot_order):
+    for slot in ours:
         if _what(now_slots.get(slot)) != _what(before.get(slot)):
             labels = (_changes(now_slots.get(slot), before.get(slot), tags.get(slot)) if slot in now_slots
                       else ["dropped"])
             out.append({"slot": slot, "labels": labels})
     return out
-
-
-def _slot_order(slot: str) -> tuple[int, str]:
-    return (SLOTS.index(slot), "") if slot in SLOTS else (len(SLOTS), slot)
 
 
 def _by_slot(plan: Any) -> dict[str, dict]:
@@ -308,6 +332,15 @@ def _stock(conn: psycopg.Connection) -> dict:
             "warnings": list(found.warnings)}
 
 
+def _closet_only(conn: psycopg.Connection) -> dict:
+    """The stock panel when no assignment is readable: no slot is ours, but the closet isn't a selection,
+    so it is still counted from the receipts (`vending.stock.closet`), never shown as empty."""
+    found = _guarded(conn, lambda: stock_mod.closet(conn))
+    return {"slots": {}, "closet": [{"product": c.product, "units": c.units, "unit_cost": _dollars(c.unit_cost)}
+                                    for c in found],
+            "warnings": []}
+
+
 def _dollars(cents: Fraction | None) -> str | None:
     """Exact cents as dollars text, rounded half up to the cent. Never a float."""
     if cents is None:
@@ -349,8 +382,8 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
     """Everything the page shows, from one consistent moment. Reads only.
 
     JSON numbers come back as Decimal, so a price stored as a number stays exact.
-    `public` is for a page anyone can open: the error text of failures and the other team's
-    selections are left out.
+    `public` is for a page anyone can open: the error text of failures and the selections not
+    assigned to us are left out.
     """
     now = now or datetime.now(timezone.utc)
     set_json_loads(partial(json.loads, parse_float=Decimal), context=conn)
@@ -386,28 +419,77 @@ def hide_errors(snap: dict) -> None:
 
 
 def only_ours(snap: dict) -> None:
-    """Drop every selection that isn't one of `SLOTS` from the counts, in place.
+    """Drop every selection not assigned to us (the stored assignment) from the counts and stock, in place.
 
-    `slot_counts.latest` returns every selection counted, the other team's too (a photo count
-    covers the whole machine), and the page only draws ours. The JSON would still carry the rest.
+    `slot_counts.latest` returns every selection counted (a photo count covers the whole
+    machine), and `vending.stock` every slot our fulfilled receipts name, which after a
+    reassignment includes slots that aren't ours any more. The page only draws ours; the JSON
+    would still carry the rest. With no assignment stored, none is ours, so every count, every
+    slot's stock and every warning that names a slot is dropped. The closet isn't a selection,
+    so it stays.
     """
+    ours = set(our_selections(snap))
     if snap["counts"]["ok"]:
-        snap["counts"]["data"] = {s: c for s, c in snap["counts"]["data"].items() if s in SLOTS}
+        snap["counts"]["data"] = {s: c for s, c in snap["counts"]["data"].items() if s in ours}
+    if snap["stock"]["ok"]:
+        stock = snap["stock"]["data"]
+        stock["slots"] = {s: v for s, v in stock["slots"].items() if s in ours}
+        stock["warnings"] = [w for w in stock["warnings"] if _warning_is_ours(w, ours)]
+
+
+# How `vending.stock` names a selection in a warning: "slot 15". Plurals, lists and ranges
+# ("slots 15-17", "slots 12, 15", "slot 12 and 15") are read too, so a new wording can't slip one past.
+_SLOT_NAMED = re.compile(r"\b(?:slot|selection) (\w+)", re.IGNORECASE)
+_SLOT_LIST = re.compile(r"\b(?:slots?|selections?) (\d+(?:\s*(?:,|-|–|and|or)\s*(?:(?:slot|selection)\s+)?\d+)*)",
+                        re.IGNORECASE)
+_LIST_SEP = re.compile(r"\s*(?:,|\band\b|\bor\b)\s*(?:(?:slot|selection)\s+)?", re.IGNORECASE)
+
+
+def _warning_is_ours(warning: str, ours: set[str]) -> bool:
+    """Keep a warning only when `vending.stock` attached a selection to it (`StockWarning.slot`), that
+    selection is ours or it is about the closet (None), and its text names no other. A warning with
+    nothing attached is dropped: the public page never guesses the selection from the text alone."""
+    if not hasattr(warning, "slot"):
+        return False
+    if warning.slot is not None and warning.slot not in ours:
+        return False
+    return _slots_named(warning) <= ours
+
+
+def _slots_named(warning: str) -> set[str]:
+    """Every selection a warning names. A warning that mentions slots but names none we can read
+    counts as naming one that isn't ours, so it stays off the public page."""
+    named = set(_SLOT_NAMED.findall(warning))
+    for listed in _SLOT_LIST.findall(warning):
+        for part in _LIST_SEP.split(listed):
+            low, _, high = (x.strip() for x in part.replace("–", "-").partition("-"))
+            if high.isdigit() and low.isdigit():
+                a, b = sorted((int(low), int(high)))
+                named.update(str(n) for n in range(a, b + 1))
+            elif low:
+                named.add(low)
+    if not named and re.search(r"\b(?:slots?|selections?)\b", warning, re.IGNORECASE):
+        named.add("?")
+    return named
 
 
 def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
+    ours = _our_slots(conn)
+    slots = tuple(ours["data"]) if ours["ok"] else ()
     return {
         "as_of": now,
+        "ours": ours,
         "status": _status(conn, now),
-        "plan": _panel(lambda: _plan(conn)),
-        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now))),
+        "plan": _panel(lambda: _plan(conn, slots)),
+        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots)),
         "activity": _panel(lambda: _rows(
             conn, "select id, at, kind, tool, outcome, detail, arguments from action_log"
                   " order by at desc, id desc limit %s", (ACTIVITY_ROWS,))),
         "recent_calls": _panel(lambda: _recent_calls(conn, now)),
         "sales": _panel(lambda: _sales(conn, now)),
-        "stock": _panel(lambda: _stock(conn)),
-        "counts": _panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))),
+        "stock": _panel(lambda: _stock(conn) if ours["ok"] else _closet_only(conn)),
+        "counts": (_panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))) if ours["ok"] else
+                   {"ok": True, "data": {}}),
         "spend": _panel(lambda: _spend(conn, now)),
         "purchase_requests": _panel(lambda: _rows(conn, """
             select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,
@@ -464,9 +546,15 @@ def attention(snap: dict) -> list[dict]:
                                                 ("failed", calls["data"]["failed"])) if n]
         add("warn", f"Tool calls in the last 24 hours: {' and '.join(parts)}. See Tool calls below.")
 
+    ours = snap.get("ours") or {"ok": True}
+    if not ours["ok"]:
+        add("warn", "Which selections are ours isn't known, so the machine, prices and stock are blank: "
+                    + ours["why"])
+
     sales = snap["sales"]
     if sales["ok"]:
-        if sales["data"]["as_of"] is None:
+        # Without our assignment the poll reader refuses, which isn't the same as no polls.
+        if sales["data"]["as_of"] is None and ours["ok"]:
             add("info", "No machine polls stored yet, so there are no prices or sales. "
                         "Run `python -m vending.sync_history`.")
         elif sales["data"]["stale"]:
@@ -717,7 +805,7 @@ def machine_view(snap: dict) -> dict:
     held = stock["data"]["slots"] if stock["ok"] else {}
     counted = snap["counts"]["data"] if snap.get("counts", {}).get("ok") else {}
     out = {}
-    for slot in SLOTS:
+    for slot in our_selections(snap):
         h = held.get(slot) or {}
         now = {"product": h.get("product"), "units": h.get("on_hand"),
                "price": (prices.get(slot) or {}).get("price"), "source": "receipt" if h else None,
@@ -806,6 +894,9 @@ def _ours(slot: str, v: dict, linked: bool) -> str:
 def _cabinet_html(snap: dict) -> str:
     """In the machine: the whole machine face, upright, with our selections lit, and the plan's changes."""
     now, plan, sales, stock = snap["as_of"], snap["plan"], snap["sales"], snap["stock"]
+    if not snap["ours"]["ok"]:
+        return ('<section id="vm" class="vm" data-view="now"><h2>In the machine</h2>'
+                f'{_missing(snap["ours"])}</section>')
     p = plan["data"] if plan["ok"] else None
     view = machine_view(snap)
     face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
@@ -826,7 +917,7 @@ def _cabinet_html(snap: dict) -> str:
                f'<span class="v-next">FRI</span></div><div class="bill"></div><div class="keys">{keys}</div>'
                f'<div class="coin"></div></div>'
                f'<div class="bin" aria-hidden="true">PUSH</div><div class="coinret" aria-hidden="true"></div></div>')
-    off_face = [s for s in SLOTS if s not in face]
+    off_face = [s for s in our_selections(snap) if s not in face]
     if off_face:
         cabinet += f'<p class="sub">Also ours, not on the {SHELVES}&times;{COLUMNS} face: {_e(", ".join(off_face))}</p>'
 
@@ -937,7 +1028,8 @@ def _plan_html(snap: dict) -> str:
     head = (f'<p class="lede">Plan from run <b>#{run["id"]}</b> ({_e(run["mode"])}, '
             f'{_e(run["model"] or "model not recorded")}) {_run_pill(run)} '
             f'started {_time(run["started_at"], "ago", now)}. '
-            + (f'<b>{len(changed)} of {len(SLOTS)} slots changed</b> since run #{p["previous_run"]}.'
+            + (f'<b>{len(changed)} of {len(our_selections(snap)) or len(p["slots"])} slots changed</b> '
+               f'since run #{p["previous_run"]}.'
                if p["previous_run"] else "No earlier plan of this mode to compare with.") + "</p>")
     if p["visit"] or p["reason"]:
         head += (f'<p class="lede">Visit: <b>{_e(p["visit"] or "not given")}</b>'
@@ -1009,6 +1101,9 @@ def _tiles(snap: dict) -> str:
     sales = snap["sales"]
     if not sales["ok"]:
         tiles.append(("Machine data", '<span class="big dim">&mdash;</span>', "polls table missing"))
+    elif not snap.get("ours", {"ok": True})["ok"]:
+        # The poll reader refuses without our assignment, which isn't the same as no polls.
+        tiles.append(("Machine data", '<span class="big dim">&mdash;</span>', "our slots aren't recorded"))
     elif sales["data"]["as_of"] is None:
         tiles.append(("Machine data", '<span class="big dim">No polls</span>', "run the history sync"))
     else:

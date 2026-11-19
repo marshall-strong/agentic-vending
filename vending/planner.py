@@ -59,12 +59,6 @@ from vending.pricing import (
     slot_floor_cents,
     to_cents,
 )
-from vending.slots import SLOTS
-
-# The default for `Config.slots`, for code and tests with no database. Live
-# planning (`vending.planning.planner_config`) passes the stored assignment from
-# `vending.slots.our_slots` instead. Kept under this name because the tests use it.
-OUR_SLOTS: tuple[str, ...] = SLOTS
 
 # Spelled exactly as the API wants them.
 AMAZON = "Amazon"
@@ -258,7 +252,9 @@ class Config:
     tax_percent: int = DEFAULT_TAX_PERCENT
     midweek_fee_cents: int = 2500
     halted: bool = False
-    slots: tuple[str, ...] = OUR_SLOTS
+    # Ours, from `vending.slots.our_slots` (`vending.planning.planner_config`). No default:
+    # the assignment may change before the start, so a list written here would go stale.
+    slots: tuple[str, ...] = field(kw_only=True)
     stores: frozenset[str] = STORES
     cutoffs: Mapping[str, Cutoff] = field(default_factory=_default_cutoffs)
     soft_cutoff_stores: frozenset[str] = frozenset({AMAZON})

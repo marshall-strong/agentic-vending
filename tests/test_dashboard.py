@@ -103,7 +103,7 @@ def test_plan_compares_with_the_run_before(conn, page_conn):
     page = dashboard.render(dashboard.snapshot(page_conn))
     assert "Swapping 16 to Mountain Dew." in page and "see if 16 sells" in page and "MTDEW-20OZ" in page
     assert "$2.25 &middot; fill to 4" in page and "was: keep as is" in page
-    assert f"1 of {len(dashboard.SLOTS)} slots changed</b> since run #{first}" in page
+    assert f"1 of 20 slots changed</b> since run #{first}" in page
     assert page.count('class="pc changed"') == 1
     assert '<a class="pill info" href="#slot-16">16 swap</a>' in page and 'id="slot-16"' in page
 
@@ -350,6 +350,23 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
     assert '"paid": "9.60"' in dashboard.to_json(snap)
 
 
+def test_without_an_assignment_the_closet_still_counts_from_the_receipts(conn, page_conn):
+    """No slot is ours without an assignment, but the closet isn't a slot: its 4 units are still there."""
+    fulfilled(conn, "pr-1", "15", "COKE-20OZ", units_loaded=8, paid="9.60", to_back_stock=4,
+              at=MONDAY - timedelta(days=3))
+    store_poll(conn, "p1", (MONDAY - timedelta(days=4)).isoformat(), {"15": (250, 100)})
+    store_poll(conn, "p2", (MONDAY - timedelta(days=2)).isoformat(), {"15": (250, 103)})
+    conn.execute("delete from slot_assignment")
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["ours"]["ok"] is False
+    assert snap["stock"]["ok"] is True
+    assert snap["stock"]["data"]["slots"] == {}
+    assert snap["stock"]["data"]["closet"] == [{"product": "COKE-20OZ", "units": 4, "unit_cost": "0.80"}]
+    page = dashboard.render(snap)
+    assert "Nothing in back stock" not in page
+    assert "4 units of 1 product" in page
+
+
 def test_a_fresh_database_is_ok_but_explains_every_empty_panel(page_conn):
     snap = dashboard.snapshot(page_conn, MONDAY)
     assert dashboard.verdict(snap["attention"]) == "ok"   # halted, no polls: worth knowing, not wrong
@@ -456,18 +473,16 @@ def test_optional_readers_roll_back_only_their_panel(conn, page_conn, table, col
     assert {k for k in panels if not snap[k]["ok"]} == broken
     page = dashboard.render(snap)
     assert "Not available" in page or "isn&#x27;t available" in page
-    assert page.count('class="slot ours') == len(dashboard.SLOTS)    # the machine still draws
+    assert page.count('class="slot ours') == len(dashboard.our_selections(snap)) == 20  # the machine still draws
 
 
 EVEN = tuple(f"{r}{c}" for r in range(1, 6) for c in (2, 4, 6, 8))
 
 
 @pytest.fixture
-def even_columns(monkeypatch, conn):
-    """Our slots on every other column, so nothing assumes columns 5 to 8."""
-    from vending import slots
-    monkeypatch.setattr(dashboard, "SLOTS", EVEN)
-    monkeypatch.setattr(slots, "SLOTS", EVEN)         # the bound on the stored assignment moves with it
+def even_columns(conn):
+    """Our slots on every other column, so nothing assumes any particular columns. Only the stored
+    assignment moves: the dashboard reads that, never a fixed list."""
     conn.execute("update slot_assignment set slots = %s", (list(EVEN),))
     return EVEN
 
@@ -567,7 +582,7 @@ def test_the_plan_agrees_with_the_machine_about_a_counted_slot(conn, page_conn):
 
 
 def _view(held, counted):
-    snap = {"plan": {"ok": False}, "sales": {"ok": False},
+    snap = {"ours": {"ok": True, "data": ("15",)}, "plan": {"ok": False}, "sales": {"ok": False},
             "stock": {"ok": True, "data": {"slots": {"15": held}}},
             "counts": {"ok": True, "data": {"15": counted}}}
     return dashboard.machine_view(snap)["15"]["now"]
@@ -617,3 +632,77 @@ def test_runs_chips_read_a_keep_against_the_tag_like_the_plan_panel(conn, page_c
     runs = {r["id"]: r for r in dashboard.snapshot(page_conn, MONDAY)["runs"]["data"]}
     # Without the tag this read "set $3.00" here and "$2.50 to $3.00" in the Plan panel.
     assert runs[b]["changes"] == [{"slot": "28", "labels": ["$2.50 to $3.00"]}]
+
+
+@pytest.mark.parametrize("warning, kept", [
+    ("slot 16: the polls show 2 more sales", True),
+    ("slot 15: the polls show 2 more sales", False),
+    ("slots 15-17 sold across a change", False),      # a range reaching a slot not ours
+    ("slots 12, 16 sold across a change", False),
+    ("slot 16 and 15 were pulled", False),
+    ("slot 16 and slot 18 were pulled", True),
+    ("the slots were miscounted", False),             # names a slot we can't read
+    ("loaded 4 units of X from the closet but we counted only 2 there", True),
+])
+def test_only_ours_reads_plural_list_and_range_slot_names_in_warnings(warning, kept):
+    """The text check, behind the slot each warning carries (here one that is ours, or None for the closet)."""
+    from vending import dashboard
+    from vending.stock import StockWarning
+
+    warning = StockWarning(warning, None)
+    snap = {"ours": {"ok": True, "data": ["16", "18"]}, "counts": {"ok": False},
+            "stock": {"ok": True, "data": {"slots": {}, "warnings": [warning]}}}
+    dashboard.only_ours(snap)
+    assert (snap["stock"]["data"]["warnings"] == [warning]) is kept
+
+
+@pytest.mark.parametrize("text, slot, kept", [
+    ("Slot 11: the polls show 2 more sales", "11", False),     # the wordings the review found slipping through
+    ("selection 11 oversold", "11", False),
+    ("slots 27-11 sold across a change", "27", False),
+    ("r1 line 2: 4 units of X lost in the closet but we counted only 2", None, True),   # the closet is no selection
+    ("r1 line 2: loaded 4 units of X from the closet but we counted only 2 there", "16", True),
+    ("r1 line 2: loaded 4 units of X from the closet but we counted only 2 there", "15", False),
+    ("slot 16: but it says slot 15 too", "16", False),          # the text is still checked
+    ("Slot 11 x", "16", False),                                 # the text check is case-blind
+    ("selection 11 oversold", "16", False),
+    ("selections 18-15 sold across a change", "16", False),    # a reversed range is read too
+])
+def test_only_ours_goes_by_the_slot_the_stock_warning_carries(text, slot, kept):
+    from vending import dashboard
+    from vending.stock import StockWarning
+
+    warning = StockWarning(text, slot)
+    snap = {"ours": {"ok": True, "data": ["16", "18"]}, "counts": {"ok": False},
+            "stock": {"ok": True, "data": {"slots": {}, "warnings": [warning]}}}
+    dashboard.only_ours(snap)
+    assert (snap["stock"]["data"]["warnings"] == [warning]) is kept
+
+
+def test_every_stock_warning_carries_its_slot():
+    from vending.stock import Movement, StockWarning, replay
+
+    T = datetime(2026, 11, 2, 15, tzinfo=timezone.utc)
+    found = replay([Movement(at=T, kind="pull", slot="27", sku="COKE20", units=3, ref="r1 line 1")])
+    assert found.warnings and all(isinstance(w, StockWarning) and w.slot == "27" for w in found.warnings)
+
+
+
+def test_a_warning_with_no_slot_attached_is_never_public():
+    from vending import dashboard
+
+    snap = {"ours": {"ok": True, "data": ["16", "18"]}, "counts": {"ok": False},
+            "stock": {"ok": True, "data": {"slots": {}, "warnings": ["slot 16: plain text", "no slot named"]}}}
+    dashboard.only_ours(snap)
+    assert snap["stock"]["data"]["warnings"] == []
+
+
+def test_a_stock_warning_keeps_its_slot_through_copies():
+    import copy
+    import pickle
+
+    from vending.stock import StockWarning
+
+    w = StockWarning("slot 16: x", "16")
+    for again in (copy.copy(w), copy.deepcopy(w), pickle.loads(pickle.dumps(w))):
+        assert again == "slot 16: x" and again.slot == "16"

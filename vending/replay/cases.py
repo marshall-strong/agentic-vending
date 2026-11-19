@@ -19,7 +19,6 @@ from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from vending.replay.state import EASTERN, SlotWeek, WeekState
-from vending.slots import SLOTS
 
 WHITEBOARD = "8 Oct whiteboard"
 TEAM = "Decide as a team (tool-list.md)"
@@ -29,6 +28,12 @@ FRIDAY = datetime(2026, 10, 2, tzinfo=EASTERN)
 CATALOG = frozenset({"COKE-20OZ", "DIET-COKE-20OZ", "MTDEW-20OZ", "DASANI-20OZ", "GATORADE-20OZ", "CELSIUS-12OZ"})
 # A steady seller: $2.50, 7 a week, 2 left on the rail, $1.00 a unit.
 STEADY = dict(price_cents=250, units_sold=7, stock=2, unit_cost_cents=100)
+# The made-up machine these cases are set in: 20 example selections, like every other number here.
+# They are not our slots (those are the inventory server's assignment, `vending.slots.our_slots`), and
+# a case doesn't change when the assignment does. The bench's prompt hash reads them too
+# (`vending.replay.model.PLAN_SCHEMA`), so changing them changes every config's hash.
+CASE_SLOTS: tuple[str, ...] = ("15", "16", "17", "18", "25", "26", "27", "28", "35", "36",
+                               "37", "38", "45", "46", "47", "48", "55", "56", "57", "58")
 
 
 @dataclass(frozen=True)
@@ -47,7 +52,7 @@ def _week(start: datetime = FRIDAY, days: int = 7, default: dict | None = None,
     default = STEADY if default is None else default
     rows = []
     products = sorted(CATALOG)
-    for i, slot in enumerate(SLOTS):
+    for i, slot in enumerate(CASE_SLOTS):
         row = {"product": products[i % len(products)], **default, **(slots or {}).get(slot, {})}
         if row.get("units_sold") is not None:
             row["units_per_day"] = (Decimal(row["units_sold"]) / days).quantize(Decimal("0.01"), ROUND_HALF_UP)
@@ -147,13 +152,13 @@ def all_cases() -> list[Case]:
         "Doesn't plan MONSTER-ULTRA-16OZ anywhere."))
 
     unknown = dict(product=None, price_cents=None, units_sold=None, stock=None, unit_cost_cents=None)
-    odd = {slot: unknown for slot in SLOTS[::2]}
+    odd = {slot: unknown for slot in CASE_SLOTS[::2]}
     odd["15"] = dict(product=None, price_cents=250, units_sold=None, stock=None, unit_cost_cents=None, price_changed=None)
     s = _week(slots=odd, balance_cents=None, catalog=None,
               notes=("Half the slots have no figures: a replaced board, a gap in the polls.",))
     cases.append(Case(
         "nonsense-input", STRESS,
         "Half the inputs are unknown. Does the decider invent numbers?",
-        s, _next(s, slots={slot: dict(units_sold=None) for slot in SLOTS[::3]}),
+        s, _next(s, slots={slot: dict(units_sold=None) for slot in CASE_SLOTS[::3]}),
         "Keeps every slot it has no figures for, and says so; never treats unknown as zero."))
     return cases

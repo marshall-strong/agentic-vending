@@ -225,8 +225,10 @@ python -m vending.sync_history --since 2026-08-28
 
 `migrate` creates or updates the tables. `slots record` reads which selections are ours
 from the inventory server and stores them; until it has run, the agent's tools refuse and
-name it. Run it again any time: the same answer changes nothing, and a different one is
-refused, because the assignment is meant to stay fixed. The sync then copies every stored poll since
+name it. Run it again any time: the same answer changes nothing. The instructors may change
+our assignment until the competition starts, so before `SLOTS_LOCK_AT` (default midnight
+Eastern, 3 Dec 2026) a different answer replaces the stored one and is logged, and from then it
+is refused (`docs/deploy.md`, assumption A16). The sync then copies every stored poll since
 28 August into `polls` and `poll_selections` (about 830 polls on 22 October, two minutes).
 Run it again any time to pick up new polls; it only fetches what it doesn't have. It never
 touches the machine itself: it reads the bridge's stored history. Neither the sync nor the

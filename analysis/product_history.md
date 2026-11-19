@@ -1,6 +1,6 @@
 # Product history of our slots on vmc1
 
-Our 20 slots only (15-18, 25-28, 35-38, 45-48, 55-58). Other slots are left out under the team's scope rule: nothing about another slot's products, prices or sales is recorded here.
+Selections 15-18, 25-28, 35-38, 45-48 and 55-58 only: the 20 the inventory server assigned us when this was written. Our slots are the server's assignment, which may change before 3 Dec. Other slots are left out under the team's scope rule: nothing about another slot's products, prices or sales is recorded here.
 
 Sources: the ten team photos dated from the poll history and the three dated reference photos (all in `planograms_photos.json`, with the Oct 8 slot read in `planogram_2026-10-08.json`), joined with our slots' own sales from the poll history. Times are US Eastern. The machine reports sales by slot only, so every product named below comes from a photo. Units per product and per category, caffeine and price paid are computed in `REPORT.md` (section "Products") and in `lab_data.json` (key `products`).
 

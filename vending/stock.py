@@ -44,7 +44,7 @@ from fractions import Fraction
 from typing import TYPE_CHECKING
 
 from vending import counters
-from vending.slots import DEVICE_ID
+from vending.slots import DEVICE_ID, our_slots
 
 if TYPE_CHECKING:  # the replay itself needs no database, so its tests run without psycopg
     import psycopg
@@ -144,11 +144,28 @@ class Shrinkage:
     cost_cents: Fraction | None
 
 
+class StockWarning(str):
+    """A warning's text, with the selection it is about (`slot`; None for the closet).
+
+    Still a `str` everywhere it is shown. The public dashboard keeps a warning only when its
+    `slot` is one of ours (`vending.dashboard.only_ours`), instead of reading the slot out of the text."""
+
+    slot: str | None
+
+    def __new__(cls, text: str, slot: str | None) -> StockWarning:
+        made = super().__new__(cls, text)
+        made.slot = slot
+        return made
+
+    def __getnewargs__(self) -> tuple[str, str | None]:     # copy, deepcopy and pickle keep the slot
+        return str(self), self.slot
+
+
 @dataclass(frozen=True)
 class Stock:
     closet: tuple[ClosetCount, ...]
     slots: tuple[SlotCount, ...]
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[StockWarning, ...] = ()
     sales: tuple[SaleCost, ...] = ()
     shrinkage: tuple[Shrinkage, ...] = ()
 
@@ -357,7 +374,10 @@ def weighted_average(movements: list[Movement]) -> Stock:
     """
     closet: dict[str, _Pool] = {}
     slots: dict[str, _Slot] = {}
-    warnings: list[str] = []
+    warnings: list[StockWarning] = []
+
+    def warn(slot: str | None, text: str) -> None:
+        warnings.append(StockWarning(text, slot))
     sales: list[SaleCost] = []
     shrinkage: list[Shrinkage] = []
 
@@ -368,7 +388,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
         slot = slots.get(m.slot) if m.slot else None
         if m.kind == "pull":
             if slot is None or slot.product != m.sku:
-                warnings.append(f"{m.ref}: {m.units} units of {m.sku} pulled from slot {m.slot}, "
+                warn(m.slot, f"{m.ref}: {m.units} units of {m.sku} pulled from slot {m.slot}, "
                                 "which we never loaded with it; their cost is unknown")
                 shelf(m.sku).add(m.units, None)
                 continue
@@ -376,16 +396,16 @@ def weighted_average(movements: list[Movement]) -> Stock:
             each = slot.pool.unit_cost() if slot.pool.units else slot.last_unit_cost
             taken, _ = slot.pool.take(m.units)
             if taken < m.units:
-                warnings.append(f"{m.ref}: {m.units} units pulled from slot {m.slot} but we counted only {taken}")
+                warn(m.slot, f"{m.ref}: {m.units} units pulled from slot {m.slot} but we counted only {taken}")
             shelf(m.sku).add(m.units, None if each is None else each * m.units)
             slot.last_moved = m.at
         elif m.kind in ("purchase", "load"):
             changed = slot is not None and slot.product != m.sku
             if changed != m.reassigned and slot is not None:
-                warnings.append(f"{m.ref}: slot {m.slot} went from {slot.product} to {m.sku} "
+                warn(m.slot, f"{m.ref}: slot {m.slot} went from {slot.product} to {m.sku} "
                                 f"but slot_reassigned is {str(m.reassigned).lower()}")
             if changed and slot.pool.units:
-                warnings.append(f"{m.ref}: {slot.pool.units} units of {slot.product} still counted in slot "
+                warn(m.slot, f"{m.ref}: {slot.pool.units} units of {slot.product} still counted in slot "
                                 f"{m.slot} when it changed to {m.sku}; written off as shrinkage")
                 shrinkage.append(Shrinkage(m.at, f"slot {m.slot}", slot.product, slot.pool.units, slot.pool.cost))
             if slot is None or changed:
@@ -395,9 +415,9 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 survivors = m.to_slot + m.to_closet
                 each = None if m.paid_cents is None or not survivors else m.paid_cents / survivors
                 if m.paid_cents is None:
-                    warnings.append(f"{m.ref}: bought {m.sku} with no total_paid; its cost is unknown")
+                    warn(m.slot, f"{m.ref}: bought {m.sku} for slot {m.slot} with no total_paid; its cost is unknown")
                 elif not survivors and m.lost:
-                    warnings.append(f"{m.ref}: every unit of {m.sku} was lost before loading; "
+                    warn(m.slot, f"{m.ref}: every unit of {m.sku} for slot {m.slot} was lost before loading; "
                                     "the whole line is written off as shrinkage")
                     shrinkage.append(Shrinkage(m.at, f"slot {m.slot}", m.sku, m.lost, m.paid_cents))
                 shelf(m.sku).add(m.to_closet, None if each is None else each * m.to_closet)
@@ -406,7 +426,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 wanted = m.to_slot + m.lost
                 taken, cost = shelf(m.sku).take(wanted)
                 if taken < wanted:
-                    warnings.append(f"{m.ref}: loaded {wanted} units of {m.sku} from the closet "
+                    warn(m.slot, f"{m.ref}: loaded {wanted} units of {m.sku} from the closet "
                                     f"but we counted only {taken} there")
                     cost = None
                 slot.pool.add(m.to_slot, cost)
@@ -422,20 +442,21 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 slot.last_moved = m.at
                 where = f"slot {m.slot}"
             else:
-                warnings.append(f"{m.ref}: {m.units} units of {m.sku} lost in slot {m.slot}, "
+                warn(m.slot, f"{m.ref}: {m.units} units of {m.sku} lost in slot {m.slot}, "
                                 "which no longer holds it; ignored")
                 continue
             if gone:
                 shrinkage.append(Shrinkage(m.at, where, m.sku, gone, cost))
             if gone < m.units:
-                warnings.append(f"{m.ref}: {m.units} units of {m.sku} lost in {where} but we counted only {gone}")
+                warn(None if where == "the closet" else m.slot,
+                     f"{m.ref}: {m.units} units of {m.sku} lost in {where} but we counted only {gone}")
         elif m.kind in ("sale", "sale_before_change") and slot is not None:
             taken, cost = slot.pool.take(m.units)
             slot.sold += m.units
             slot.oversold += m.units - taken
             if m.kind == "sale_before_change" and taken < m.units:
                 # The old slot is replaced next, so the oversold check at the end never sees it.
-                warnings.append(f"slot {m.slot}: the counters split {m.units} units of {slot.product} to before "
+                warn(m.slot, f"slot {m.slot}: the counters split {m.units} units of {slot.product} to before "
                                 f"the change at {m.at.isoformat()}, but we counted only {taken}")
             if m.kind == "sale" and slot.replaced and m.since is not None and m.since < slot.since:
                 # Still taken from the new count, so on hand errs low, but their
@@ -445,7 +466,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
                           if m.changes > 1 else f"across the change from {slot.replaced} to {slot.product}")
                 written_off = (f"; the {slot.written_off} units of {slot.replaced} written off as shrinkage at the "
                                "change may be some of these sales, not losses" if slot.written_off else "")
-                warnings.append(f"slot {m.slot}: {m.units} units sold between the polls at {m.since.isoformat()} "
+                warn(m.slot, f"slot {m.slot}: {m.units} units sold between the polls at {m.since.isoformat()} "
                                 f"and {m.at.isoformat()}, {across}; the counters can't split them, so they are "
                                 f"costed at {slot.product}'s average, which may be the wrong product's{written_off}")
                 sales.append(SaleCost(m.at, m.slot, slot.product, m.units, taken, None,
@@ -458,7 +479,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
 
     for name, slot in sorted(slots.items()):
         if slot.oversold:
-            warnings.append(f"slot {name}: the polls show {slot.oversold} more sales than units we loaded "
+            warn(name, f"slot {name}: the polls show {slot.oversold} more sales than units we loaded "
                             f"since {slot.since.isoformat()}; counted as 0 on hand")
     return Stock(
         closet=tuple(ClosetCount(sku, pool.units, pool.unit_cost())
@@ -472,8 +493,8 @@ def weighted_average(movements: list[Movement]) -> Stock:
     )
 
 
-def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
-    """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
+def _receipts(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
+    """Every fulfilled line and every loss recorded against one: our own purchases, whatever the assignment."""
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
@@ -481,8 +502,33 @@ def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
         " join purchase_requests r using (request_id) where r.status = 'fulfilled'")]
-    # Every slot our fulfilled receipts name: those are the slots we stocked.
-    slots = sorted({line["slot"] for line in lines})
+    return lines, losses
+
+
+def closet(conn: psycopg.Connection) -> tuple[ClosetCount, ...]:
+    """The closet now, from the receipts alone: no slot assignment and no counters needed.
+
+    The closet isn't a selection, so it can be counted when no assignment is stored. The units are
+    exactly what `stock` counts: only purchases, loads, pulls and closet losses move them, never a sale.
+    A product pulled from a slot came out at that slot's cost, and sales between its loads change
+    that cost, so its unit cost here is unknown (None) rather than a figure that skipped the sales.
+    """
+    return closet_from_receipts(*_receipts(conn))
+
+
+def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetCount, ...]:
+    """`closet` without the database: the same receipt fields as `movements_from_receipts`."""
+    pulled = {line["pulled_sku"] for line in lines if line["units_pulled"]}
+    return tuple(ClosetCount(c.product, c.units, None if c.product in pulled else c.unit_cost)
+                 for c in weighted_average(movements_from_receipts(lines, losses)).closet)
+
+
+def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
+    """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
+    assigned = set(our_slots(conn))
+    lines, losses = _receipts(conn)
+    # Receipts preserve our purchases, but cannot authorize counter reads after reassignment.
+    slots = sorted({line["slot"] for line in lines} & assigned)
     # poll_selections only has rows for polls whose checksum passed. The sync
     # stores every device's polls, so read only our machine's counters.
     # Cents and price too, to split a window that spans a product change (#97).

@@ -44,7 +44,7 @@ adjustments, and the simple view says so under the table.
 
 | Column | Where it comes from |
 |---|---|
-| Units sold | Rises in our 20 slots' unit counters |
+| Units sold | Rises in our slots' unit counters |
 | Takings (incl. tax) | Rises in the sales counters, tax included |
 | Sales tax set aside | Takings x 8/108, rounded half up per week |
 | Revenue ex tax | Takings less the tax set aside |

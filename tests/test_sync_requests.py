@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("psycopg")
 
 # These import psycopg too, so they come after the skip.
-from tests.test_sync_history import conn  # noqa: E402,F401 - the throwaway-schema fixture
+from tests.conftest import conn  # noqa: E402,F401 - migrated schema with a server assignment
 from vending.bridge import BridgeError, BridgeRateLimited, BridgeUnreachable  # noqa: E402
 from vending.purchase_requests import get_purchase_requests, record, store  # noqa: E402
 from vending.stock import stock  # noqa: E402
@@ -255,13 +255,10 @@ def test_main_runs_on_a_migrated_schema(schema_url, monkeypatch, capsys):
     assert "0 read" in capsys.readouterr().out
 
 
-def test_stock_counts_sales_for_a_receipt_slot_outside_the_slot_list(conn, monkeypatch):
-    # Which slots are ours is not settled (vending/slots.py is a placeholder), so the
-    # stock count follows our receipts, not the slot list.
-    from vending import slots
-    fewer = tuple(s for s in slots.SLOTS if s != "15")
-    monkeypatch.setattr(slots, "SLOTS", fewer)
-    monkeypatch.setattr("vending.stock.SLOTS", fewer, raising=False)   # in case stock imports it by name
+def test_stock_preserves_receipts_but_does_not_count_removed_selections_sales(conn):
+    # Historical receipts stay on the books, but do not authorize reads of a removed selection.
+    from tests.conftest import TEST_SLOTS
+    conn.execute("update slot_assignment set slots = %s", ([s for s in TEST_SLOTS if s != "15"] + ["11"],))
     submit(conn, "r1")
     sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(total_paid="12.00"))}), NOW, log=quiet)
     for session_id, started_at, lifetime in (("p1", "2026-11-07T15:00:00Z", 40), ("p2", "2026-11-08T15:00:00Z", 43)):
@@ -270,4 +267,4 @@ def test_stock_counts_sales_for_a_receipt_slot_outside_the_slot_list(conn, monke
         conn.execute("insert into poll_selections (session_id, selection, price_cents, lifetime_units,"
                      " lifetime_sales_cents) values (%s, '15', 250, %s, 0)", (session_id, lifetime))
     [slot] = stock(conn).slots
-    assert (slot.units, slot.sold) == (5, 3)
+    assert (slot.units, slot.sold) == (8, 0)

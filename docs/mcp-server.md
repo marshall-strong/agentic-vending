@@ -183,7 +183,7 @@ opening capital + later capital + takings - receipts - midweek visit fees - toke
 - tax remitted +/- adjustments
 ```
 
-Takings are the rise in the polls' lifetime sales counters for our 20 slots since the opening
+Takings are the rise in the polls' lifetime sales counters for our slots since the opening
 entry, tax included; `vending/counters.py` decides what a reading that goes down means (one low
 poll between good ones is a misread, two in a row a counter that restarted). Receipts are
 `purchase_lines.total_paid` on fulfilled requests, timed by each line's `resolved_at`, the same
@@ -221,7 +221,7 @@ plan against a balance nobody has set. The harness records every model call with
 day one. Every entry is logged in `action_log` with who recorded it.
 
 `get_pnl` takes its window as Eastern calendar days, inclusive, so a Friday evening sale lands in
-Friday. `units_sold` counts every rise in our 20 slots' unit counters; cost of sales covers the
+Friday. `units_sold` counts every rise in our slots' unit counters; cost of sales covers the
 units the receipts can cost (weighted average, `vending.stock`), and `units_costed`,
 `cost_of_sales_complete: false` and a note say how many could not be (sold before we first loaded
 the slot, or past what we loaded). Units sold across a product change that the counters can't split

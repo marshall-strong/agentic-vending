@@ -30,7 +30,8 @@ that can't get one within `WAIT_SECONDS` is told the page is busy, every
 statement is cancelled after `STATEMENT_TIMEOUT_MS`, and the explorer shows 100
 rows a page. Hammering the pages makes the pages slow, not the syncs.
 
-What the pages leave out: the other team's selections (`ONLY`, and `dashboard.only_ours`), and the error text of failures (`HIDE`, and
+What the pages leave out: the selections not assigned to us, by the stored assignment
+(`only`, and `dashboard.only_ours`), and the error text of failures (`HIDE`, and
 `dashboard.hide_errors`), because a database error names the host and the user.
 Their own errors are answered with a plain sentence, and the detail goes to the
 container's log. No table holds a password or a key.
@@ -53,7 +54,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from vending import dashboard, db, db_explorer, settings
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 
 READER = "READONLY_DATABASE_URL"
 DASHBOARD, STATE, EXPLORER = "/dashboard", "/dashboard/state.json", "/db"
@@ -87,22 +88,39 @@ HIDE = {
 
 
 
-def _ours(column: str) -> sql.Composable:
-    """`t.<column>` is one of our selections, as a condition."""
+def _ours(column: str, slots: tuple[str, ...]) -> sql.Composable:
+    """`t.<column>` is one of `slots`, as a condition. False for no slots."""
+    if not slots:
+        return sql.SQL("false")
     return sql.SQL("t.{} in ({})").format(
-        sql.Identifier(column), sql.SQL(", ").join(sql.Literal(slot) for slot in SLOTS))
+        sql.Identifier(column), sql.SQL(", ").join(sql.Literal(slot) for slot in slots))
 
 
-# The rows the explorer shows, by table name. The machine's other selections belong to the other
-# team (`docs/integrity.md`): the dashboard shows only `SLOTS`, so these two tables, which store
-# every selection, are cut to them. `poll_selections` has no device column, so it goes through its poll.
-ONLY = {
-    "poll_selections": db_explorer.Only(("session_id", "selection"), lambda table: _ours("selection") + sql.SQL(
-        " and t.session_id in (select session_id from {} where device_id = {})").format(
-            sql.Identifier(table.schema, "polls"), sql.Literal(DEVICE_ID))),
-    "slot_counts": db_explorer.Only(("device_id", "selection"), lambda table: _ours("selection") + sql.SQL(
-        " and t.device_id = {}").format(sql.Literal(DEVICE_ID))),
-}
+def only(slots: tuple[str, ...]) -> dict[str, db_explorer.Only]:
+    """The rows the explorer shows, by table name, for our selections `slots`.
+
+    The pages show only the selections assigned to us (`docs/integrity.md`), so these two tables,
+    which store every selection, are cut to them. `poll_selections` has no device column, so it
+    goes through its poll. With no slots, neither shows a row.
+    """
+    return {
+        "poll_selections": db_explorer.Only(("session_id", "selection"), lambda table: _ours("selection", slots)
+                                            + sql.SQL(" and t.session_id in (select session_id from {}"
+                                                      " where device_id = {})").format(
+                                                sql.Identifier(table.schema, "polls"), sql.Literal(DEVICE_ID))),
+        "slot_counts": db_explorer.Only(("device_id", "selection"), lambda table: _ours("selection", slots)
+                                        + sql.SQL(" and t.device_id = {}").format(sql.Literal(DEVICE_ID))),
+    }
+
+
+def stored_slots(conn: psycopg.Connection) -> tuple[str, ...]:
+    """Our selections from the stored assignment (`vending.slots.our_slots`), read per page.
+    Empty when nothing usable is stored or the table isn't there yet: then no selection is ours."""
+    try:
+        return our_slots(conn)
+    except (SlotsNotRecorded, psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+        return ()
+
 
 NOT_SET_UP = ("This page isn't set up here yet. It needs a database login that can only read "
               f"({READER}); see docs/deploy.md in the repository.")
@@ -240,8 +258,8 @@ def respond(target: str) -> Reply | None:
     try:
         with _connection() as conn:
             if request is not None:
-                status, body = db_explorer.render(
-                    conn, request, HIDE, (("Home", "/"), ("Agent dashboard", DASHBOARD)), ONLY)
+                status, body = db_explorer.render(conn, request, HIDE, (("Home", "/"), ("Agent dashboard", DASHBOARD)),
+                                                  only(stored_slots(conn)))
                 return Reply(status, HTML, body)
             snap = dashboard.snapshot(conn, public=True)
     except Busy:

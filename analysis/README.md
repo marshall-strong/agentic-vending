@@ -1,22 +1,23 @@
 # Sales analysis
 
-What the machine's sales history says about demand for **our 20 slots** (15-18, 25-28, 35-38, 45-48, 55-58), the academic calendar, slot position, price, products, and when a slot is really a slow seller. It uses standard forecasting practice: seasonal naive as the bar to beat, walk-forward backtests, and MAE as the headline error.
+What the machine's sales history says about demand for **our 20 slots** (the inventory server's assignment), the academic calendar, slot position, price, products, and when a slot is really a slow seller. It uses standard forecasting practice: seasonal naive as the bar to beat, walk-forward backtests, and MAE as the headline error.
 
-**Read [REPORT.md](REPORT.md) first.** It has the findings, the forecast backtest, the products our slots held, the slow-seller rule simulation and the guideline we recommend for the agent.
+**Read [REPORT.md](REPORT.md) first.** It has the findings, the forecast backtest, the products our slots held, the slow-seller rule simulation and the guideline we recommend for the agent. Its last section, **All 40 selections, fall**, gives starting rates by price band, shelf and half from every selection, so they don't depend on which 20 we get.
 
 ## Scope
 
-Anything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller flags, experiments) uses only our slots on `vending.slots.DEVICE_ID` (see [Which slots are ours](#which-slots-are-ours)), and no slot is ever judged by another slot's state (`docs/integrity.md`). Machine-wide data is used only as totals over the whole machine, and only for the calendar and day-off effects, the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. That history is from before the competition, when course staff stocked every slot, so it reflects no rival strategy. The export never writes a per-slot value of another slot, and the analysis stops if its lab data would carry one.
+Anything per slot (products, prices, position, segments, stock-outs, refill evidence, slow-seller flags, experiments) uses only our slots on `vending.slots.DEVICE_ID` (see [Which slots are ours](#which-slots-are-ours)), and no slot is ever judged by another slot's state (`docs/integrity.md`). Totals over the whole machine (`machine_hourly.csv`) cover every selection for polls before the fall cut, and only the current server assignment from the cut on. They are used only for the calendar and day-off effects, the time-of-day and day-of-week profiles, the overall trend, the machine-total forecast and dating door visits. That history is from before the day-one fill, when course staff stocked every slot, so it reflects no team's strategy. The export never writes a per-slot value of another slot, and the analysis stops if its lab data would carry one.
+
+**The fall run is the one exception.** Before the fall cut no selection is either team's: course staff stocked and priced the whole machine, and the inventory server changes our assignment exactly once before the 3 Dec start (`docs/integrity.md`). The cut is `slots_config.fall_end()`: the setting `FALL_CUTOFF` (unset, 18 Nov 2026 00:00 Eastern, before the day-one fill), never later than the start. So `export_sales.py --fall-all` writes per-selection rows for all 40 selections, from polls before the cut only, to `analysis/data/fall40/`. `slots_config.check_before_start` refuses every row of the fall run from the cut on, in the export and again when `sales_analysis.py` loads it. `fall_rates.py` summarizes that run as groups only (bands, shelves, halves), so the committed report names no single selection's fall figures.
 
 ## Which slots are ours
 
-The assignment from the inventory server (`GET /api/v1/slots`) is team group-b on `vmc1`: slots 15-18, 25-28, 35-38, 45-48, 55-58, the same as `vending.slots.SLOTS`. The scripts take the slot list from the first of these that is set:
+Our slots are the inventory server's assignment (`GET /api/v1/slots`), stored by `python -m vending.slots record`. There is no fixed list in the code: the assignment may change before the start (#75). The scripts take the slot list from:
 
-1. `--slots` on the command line, comma or space separated. It can only narrow the list: a code outside `vending.slots.SLOTS` is refused (a stored server answer is held to it too), so the export never writes another team's per-slot values.
-2. The assignment stored from the inventory server, read with `vending.slots.our_slots(conn)`, once that function exists and a row is stored.
-3. `vending.slots.SLOTS`.
+1. `--slots` on the command line, comma or space separated. It can only narrow the list: a code outside our assignment is refused, so the export never writes another team's per-slot values.
+2. Otherwise all of the stored assignment, read with `vending.slots.stored(conn)` and checked by shape (20 different selections of the 40). A malformed one stops the run, and so does an empty table: the export says to run `python -m vending.slots record`.
 
-The export writes the list it used to `analysis/data/slots.json`. The analysis reads it, and stops with a re-export message if it is asked for a different list. The labs take the list, the rails that are not ours and the source line in their footer from `lab_data.json`.
+The export writes the list it used, and our assignment as `assigned_slots`, to `analysis/data/slots.json`; a file without `assigned_slots` is refused (re-export). The analysis reads it, and stops with a re-export message if it is asked for a different list. The labs take the list, the rails that are not ours and the source line in their footer from `lab_data.json`.
 
 ## The interactive labs
 
@@ -32,10 +33,11 @@ Three pages built on this analysis, as step-by-step labs: step tabs, toggles, sl
 
 | File | What it is |
 |---|---|
-| `export_sales.py` | Reads the database (read-only) and writes `analysis/data/*.csv`: our slots' poll readings and sales events (filtered like `vending.ledger._counter_rows`), every poll time, `machine_hourly.csv` (units and cents the whole machine sold since the previous poll; totals only) and `door_events.csv` (the EVA-DTS `EA2*DO` door-open counter at every poll and its rise). |
+| `export_sales.py` | Reads the database (read-only) and writes `analysis/data/*.csv`: our slots' poll readings and sales events (filtered like `vending.ledger._counter_rows`), every poll time, `machine_hourly.csv` (units and cents sold by our assigned selections, or all 40 in the fall run; totals only) and `door_events.csv` (the EVA-DTS `EA2*DO` door-open counter at every poll and its rise). |
 | `door_events.py` | Reads the door-open counter out of a raw poll and finds its rises with `vending.counters.rises`, so a misread door reading isn't a visit. `export_sales.py` writes `door_events.csv` with it; `visit_windows.py` and `sales_analysis.py` recompute the rises from the lifetime column the same way, so an older export is safe too. |
 | `sales_analysis.py` | The whole analysis in one script with fixed seeds. It writes `analysis/out/lab_data.json` (the labs' data) and `analysis/out/analysis_report.md`. |
-| `slots_config.py` | Decides which slots are ours (see above) and checks the list. |
+| `slots_config.py` | Decides which slots are ours (see above) and checks the list. Holds the start date (`START`) and the date guard for the fall run (`check_before_start`). |
+| `fall_rates.py` | The fall run's summary: each selection's in-stock rate (from `sales_analysis.py` on the all-40 export) by price band, shelf and half, left vs right with bootstrap and permutation tests. Writes `analysis/out/fall40/fall_rates.md` and `.json`; `rebuild.py` adds the `.md` to `REPORT.md`. Advice for people setting starting rates: `vending.demand`'s prior doesn't read it yet. |
 | `rebuild.py` | Runs the export, the analysis and the three lab builds in one go, then prints a short summary. |
 | `labs/` | The three labs: one build script each (`forecast_lab.py`, `rhythm_lab.py`, `slot_lab.py`), their templates and scripts, and `labkit.py` (shared paths, the slot text filled into the templates, the two page forms). |
 | `visit_windows.py` | Dark periods: when the door opened, how long each visit window was, how often polls ran late, and how many of our sales fell inside a window. Reads the exported CSVs (and the visit grades in `lab_data.json` if present), standard library only, and writes `analysis/out/visit_windows.json`. See `docs/cutover.md`. |
@@ -62,7 +64,7 @@ Then one command does it all. Run it from the repo root with the analysis venv; 
 analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe
 ```
 
-When every check passes it copies the report to `REPORT.md`. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/`.
+It also runs the fall pass (all 40 selections, polls before the fall cut only; see Scope). When every check passes in both runs it writes `REPORT.md`: the report plus the fall section. It exits with an error if any step fails or a check does not reconcile. `--no-export` reuses the CSVs in `analysis/data/` and `analysis/data/fall40/`. `--no-fall` skips the fall pass and writes `REPORT.md` without its fall section.
 
 To look at only some of our slots, say shelves 1 and 2, narrow the list:
 
@@ -70,7 +72,7 @@ To look at only some of our slots, say shelves 1 and 2, narrow the list:
 analysis\.venv\Scripts\python.exe analysis\rebuild.py --export-python .venv\Scripts\python.exe --slots 15,16,17,18,25,26,27,28
 ```
 
-`--slots` can only narrow our list, never add to it. A narrowed run leaves `REPORT.md` as it is (its report stays in `analysis/out/`), and the labs hatch the rest as "Not in this run", not "Not our turf". Run it again without `--slots` to go back to all our slots. If our assignment ever changes, change `vending.slots.SLOTS` (with #69) instead of passing `--slots`.
+`--slots` can only narrow our list, never add to it. A narrowed run leaves `REPORT.md` as it is (its report stays in `analysis/out/`), and the labs hatch the rest as "Not in this run", not "Not our turf". Run it again without `--slots` to go back to all our slots. If our assignment changes, record it (`python -m vending.slots record`, which the worker runs every round) and run `python analysis/rebuild.py` again: the export reads the stored assignment.
 
 The steps by hand:
 

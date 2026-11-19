@@ -74,8 +74,8 @@ python -m vending.db migrate
 
 **After the migration that adds `slot_assignment` (013, from #69), record our slots once.** Every
 agent tool, `preview_desired_state` and the ledger CLI read which selections are ours from that
-table, and until it has a row they refuse and name this command (the dashboard's sales panel just
-shows no polls). It
+table, and until it has a row they refuse and name this command (the dashboard says our slots
+aren't recorded, names the same command and leaves the machine, prices and stock blank). It
 reads `GET /api/v1/slots` from the bridge, so run it from a laptop on the class tailnet, with the
 same `DATABASE_URL`:
 
@@ -83,12 +83,64 @@ same `DATABASE_URL`:
 python -m vending.slots record
 ```
 
-It should print `recorded: team group-b, device vmc1, 20 slots: 15, 16, ...`, and
-`python -m vending.slots` shows what is stored. Running it again is safe: the same answer only
-updates when it was last checked. It stores an answer only if it names exactly `vending.slots.SLOTS`,
-and once a row is stored it refuses a different answer and changes nothing (exit 1). If that
-happens, ask the instructors before anything else; a real change goes through a reviewed PR to
-`SLOTS` first (assumption A16).
+It should print `recorded: team group-b, device vmc1, 20 slots: ...` with the server's answer,
+and `python -m vending.slots` shows what is stored. Running it again is safe: the same answer only
+updates when it was last checked.
+
+**Only a person stores or changes our slots.** The worker runs `python -m vending.slots check`
+first in every round (`slots_check`). It only confirms: the same answer updates when it was last
+checked; a different answer, or nothing stored, changes nothing and fails the round, so `/health`
+answers 503 until a person looks. The instructors change our assignment exactly once, through the
+server, and that change is what the competition uses (David, 16 Nov; assumption A16). So a failed
+`slots_check` before the start most likely means the change has come: check it with the
+instructors, then run `python -m vending.slots record`, and replan the day-one fill if it is
+already bought.
+
+**Our team.** Every answer must name our team, `SLOTS_TEAM` (unset: `group-b`, the name the server
+has given since 12 Nov). An answer for another team, or with no team, is refused, so a swapped key
+or a misconfigured bridge can't hand us the other half of the machine.
+
+**The lock.** The assignment is fixed from the start. The lock time is the setting `SLOTS_LOCK_AT`,
+an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern,
+Thu 3 Dec, the first day of Winter Quarter on the Institute's calendar and the start David gave on
+12 Nov). If the instructors move the start (to Wed 2 Dec, say), set it on the Container App, for
+example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
+Each process reads these settings itself: when you run `record` or `confirm` from a laptop, set the
+same `SLOTS_LOCK_AT` and `SLOTS_TEAM` as the Container App. Every `record`, `check` and `confirm`
+prints the lock and team it used, so a difference shows.
+
+- **Before the lock time**, `record` takes a different answer in. It prints `changed: ...`, and
+  `action_log` (tool `slots.record`) says what it was and what it is now.
+- **At the lock**, the worker runs extra rounds 1, 5 and 15 minutes after it. If the server still gives the
+  stored answer, that check confirms it for the competition, and `action_log` says so. A check
+  counts from when it asked the server, so one that asked before the lock and got its answer after
+  it confirms nothing.
+- **Until something confirms it**, every reader refuses: the agent's tools, the planner, the
+  ledger, replay and the analysis ask for `python -m vending.slots check`, and the dashboard shows
+  no assigned selections (back stock still shows, from the receipts).
+- **After the start**, a confirmed assignment is never changed by `record` alone (exit 1). If the
+  instructors say the confirmed one is wrong, a person runs `python -m vending.slots record --replace`.
+- **Always refused**, before or after: an answer that isn't 20 different selections on `vmc1`,
+  each a shelf 1-5 then a column 1-8 (11 to 58), or isn't for our team.
+
+**On the morning of the start** (just after midnight Eastern, or first thing before the 7:30 AM
+opening), one of us checks `/health`. `slots_check` passed at an extra round: nothing to do. It
+failed with a different assignment: ask the instructors, then run `record` (nothing has been
+confirmed since the lock, so `record` takes the server's answer then). The bridge is down: run
+`python -m vending.slots confirm` from a laptop with `DATABASE_URL`, which confirms the stored
+assignment without the server; run `check` once the bridge is back.
+
+**A change after the day-one fill.** Stock follows the receipts, but sales are read only for our
+current slots. If our slots change after the fill is loaded, the fill's receipts on the old slots
+stay counted as stock while their sales stop being read, so the P&L and the stock count go wrong.
+Plan on that not happening (the change comes before the start), but if it does, record a ledger
+adjustment for the units on the old slots (`docs/pnl-report.md`) and say so in the week's notes.
+
+The dashboard and `/db` read the stored assignment on every page, so they follow a change at
+once. With nothing stored, the dashboard lights no selection and says so, and `/db` shows no
+row of `poll_selections` or `slot_counts`. The sales analysis reads the stored assignment when it
+exports, so after a change the next `python analysis/rebuild.py` follows it. No code holds a fixed
+list of our slots.
 
 ## The public pages
 
@@ -135,9 +187,9 @@ statement is cancelled after 5 seconds. The role's own `connection limit` (below
 on the server.
 
 **What anyone with the password sees:** every table, including the plans, the purchase requests and the ledger. No
-table holds a password or a key. **Left out:** the other team's selections (the machine stores
-every selection, and `/db` shows only ours in `poll_selections` and `slot_counts`; the dashboard's
-JSON counts likewise), the dev machines' hostnames in `model_calls.host`, and the error text of failed tool calls and failed
+table holds a password or a key. **Left out:** the selections not assigned to us (the machine
+stores every selection, and `/db` shows only those in the stored assignment in `poll_selections`
+and `slot_counts`, and none while nothing is stored; the dashboard's JSON counts likewise), the dev machines' hostnames in `model_calls.host`, and the error text of failed tool calls and failed
 runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed), because a
 database error names the host and the user. Refusals keep their text. The pages' own errors show
 one plain sentence; the detail is in the container's log.

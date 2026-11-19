@@ -3,10 +3,19 @@
     python -m vending.worker            # every SYNC_EVERY_MINUTES (60), forever
     python -m vending.worker --once     # one round, then exit with the worst exit code
 
-Each round runs, in order, `python -m vending.sync_history`,
-`python -m vending.sync_requests` and `python -m vending.sync_catalog`, in this
-process. None of them migrates: on a database that is behind each refuses
-(exit 2), the round is logged as failed, and the worker tries again next round,
+Each round runs, in order, `python -m vending.slots check`,
+`python -m vending.sync_history`, `python -m vending.sync_requests` and
+`python -m vending.sync_catalog`, in this process. `slots check` goes first. It
+only confirms our slot assignment: if the server gives a different one, or none
+is stored, it changes nothing and fails the round until a person runs
+`python -m vending.slots record` (`vending.slots`). Besides the hourly rounds,
+rounds run 1, 5 and 15 minutes after the slot lock (`SLOTS_LOCK_AT`, the start),
+so the check that confirms the assignment for the competition doesn't wait up to
+an hour, with every reader refusing meanwhile. The schedule uses this host's
+clock and the check the database's; the later rounds cover a host clock a few
+minutes ahead, or a round still running at the first.
+None of them migrates: on a database that is behind each refuses (exit 2), the
+round is logged as failed, and the worker tries again next round,
 so a deploy can never change the shared database's schema. A person runs
 `python -m vending.db migrate`.
 
@@ -64,9 +73,10 @@ Job = tuple[str, Callable[[], int]]
 
 
 def default_jobs() -> list[Job]:
-    from vending import sync_catalog, sync_history, sync_requests
+    from vending import slots, sync_catalog, sync_history, sync_requests
 
-    return [("sync_history", lambda: sync_history.main([])),
+    return [("slots_check", lambda: slots.main(["check"])),
+            ("sync_history", lambda: sync_history.main([])),
             ("sync_requests", lambda: sync_requests.main([])),
             ("sync_catalog", lambda: sync_catalog.main([]))]
 
@@ -154,8 +164,8 @@ REPO = "https://github.com/marshall-strong/agentic-vending"
 # pages are set up without importing them (and the database driver) to draw itself.
 PAGES_SETTING = "READONLY_DATABASE_URL"
 OUTCOMES = ("finished", "crashed", "timed out", "still running")
-JOB_NAMES = {"sync_history": "Machine readings (sales history)", "sync_requests": "Purchase requests and receipts",
-             "sync_catalog": "Product catalog"}
+JOB_NAMES = {"slots_check": "Our slot assignment", "sync_history": "Machine readings (sales history)",
+             "sync_requests": "Purchase requests and receipts", "sync_catalog": "Product catalog"}
 
 
 def _eastern(moment: str | None) -> str:
@@ -417,6 +427,31 @@ def serve_health(state: State, port: int) -> ThreadingHTTPServer:
     return server
 
 
+# When the extra rounds after the slot lock run (see the module docstring).
+AFTER_LOCK = (timedelta(minutes=1), timedelta(minutes=5), timedelta(minutes=15))
+
+
+def _slot_lock() -> datetime | None:
+    """The slot lock (`vending.slots.lock_at`), or None when the setting is malformed (the slot check fails then)."""
+    from vending import settings, slots
+
+    try:
+        return slots.lock_at()
+    except settings.SettingsError:
+        return None
+
+
+def next_round(now: datetime, every_minutes: float, lock: datetime | None) -> datetime:
+    """When the next round runs: `every_minutes` from `now`, or sooner, at the next of the extra rounds after the
+    slot lock (AFTER_LOCK) that falls in between. Their check confirms our assignment for the competition."""
+    due = now + timedelta(minutes=every_minutes)
+    if lock is not None:
+        extra = [lock + after for after in AFTER_LOCK if now < lock + after < due]
+        if extra:
+            return min(extra)
+    return due
+
+
 class Stopped(Exception):
     """SIGTERM arrived; raised in the main thread to end the loop."""
 
@@ -455,10 +490,11 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             state.last_round_at = datetime.now(timezone.utc).isoformat()
             if args.once:
                 return max((r.exit_code if r.exit_code is not None else 1) for r in state.results)
-            due = datetime.now(timezone.utc) + timedelta(minutes=args.every)
+            now = datetime.now(timezone.utc)
+            due = next_round(now, args.every, _slot_lock())
             state.next_round_at = due.isoformat()
             log(f"next round at {due:%Y-%m-%d %H:%M:%S} UTC")
-            sleep(args.every * 60)
+            sleep((due - now).total_seconds())
     except (KeyboardInterrupt, Stopped):
         log("stopping")
         return 0

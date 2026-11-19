@@ -49,7 +49,7 @@ python scripts/bridge.py latest --summary
 ```
 
 - `health` should print `"status": "ok"` again, this time through the script.
-- `slots` proves the key works: it lists our 20 slots, 15-18, 25-28, 35-38, 45-48 and 55-58.
+- `slots` proves the key works: it lists the slots the server currently assigns us.
 - `latest --summary` shows each of our slots' current price and lifetime sales from the newest stored poll.
 
 If all three work, you're set up. The rest of the commands:
@@ -116,4 +116,4 @@ Two things the machine doesn't tell us:
 - **Stock on hand.** We work it out as units loaded, from purchase-request receipts, minus units sold.
 - **Sales for a period.** Every counter is a lifetime total, so a week's sales are the difference between two polls.
 
-**Our slots are columns 5-8 of every row:** 15-18, 25-28, 35-38, 45-48 and 55-58. Columns 1-4 belong to group A.
+**Our slots are the ones the inventory server assigns.** `python -m vending.slots record` stores its answer, and code reads it with `vending.slots.our_slots`. It may change before the competition starts on Thu 3 Dec 2026, and it is fixed from then on.

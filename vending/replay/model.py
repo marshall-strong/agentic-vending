@@ -32,8 +32,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 
 from vending import config, db, harness, settings
+from vending.replay.cases import CASE_SLOTS
 from vending.replay.state import EASTERN, WeekState
-from vending.slots import SLOTS
 
 DEFAULT_MODEL = "claude-opus-5-5"   # pending a group decision
 DEFAULT_EFFORT = "medium"
@@ -69,10 +69,25 @@ The user message is the state of one week as JSON. Return the plan.
 
 {PLAN_RULES}"""
 
+def plan_schema(slots: tuple[str, ...]) -> dict:
+    """The plan's JSON schema, its slot names limited to `slots`: the week's own (our slots, or a case's)."""
+    return {
+        "type": "object",
+        "properties": {
+            "visit": {"type": "string", "enum": ["scheduled", "midweek"]},
+            "reason": {"type": "string"},
+            "slots": {"type": "array", "items": {**_SLOT, "properties": {
+                **_SLOT["properties"], "slot": {"type": "string", "enum": list(slots)}}}},
+        },
+        "required": ["visit", "reason", "slots"],
+        "additionalProperties": False,
+    }
+
+
 _SLOT = {
     "type": "object",
     "properties": {
-        "slot": {"type": "string", "enum": list(SLOTS)},
+        "slot": {"type": "string", "enum": list(CASE_SLOTS)},
         "keep": {"type": "boolean"},
         "fill_to": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
         "sale_price": {"anyOf": [{"type": "string"}, {"type": "null"}]},
@@ -82,16 +97,9 @@ _SLOT = {
     "required": ["slot", "keep", "fill_to", "sale_price", "product", "reason"],
     "additionalProperties": False,
 }
-PLAN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "visit": {"type": "string", "enum": ["scheduled", "midweek"]},
-        "reason": {"type": "string"},
-        "slots": {"type": "array", "items": _SLOT},
-    },
-    "required": ["visit", "reason", "slots"],
-    "additionalProperties": False,
-}
+# The schema for the made-up cases' slots. Requests use `plan_schema` with the week's own slots;
+# this is kept for the bench's prompt hash (`vending.bench.store.prompt_hash`), which must not move.
+PLAN_SCHEMA = plan_schema(CASE_SLOTS)
 
 
 class BudgetError(ValueError):
@@ -259,7 +267,8 @@ class ModelDecider:
             "system": SYSTEM,
             "messages": [{"role": "user", "content": "The week:\n" + json.dumps(state_json(state), indent=1)}],
             "output_config": {"effort": self.budget.effort,
-                              "format": {"type": "json_schema", "schema": PLAN_SCHEMA}},
+                              "format": {"type": "json_schema",
+                                         "schema": plan_schema(tuple(s.slot for s in state.slots))}},
         }
         response, _ = self.budget.send(self.budget.client(), request,
                                        label={"kind": "exam", "week_start": state.start.isoformat(), **self.tag})

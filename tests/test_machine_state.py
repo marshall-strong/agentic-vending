@@ -3,10 +3,15 @@
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 
-from tests.conftest import store_poll
-from vending.slots import SLOTS
+from tests.conftest import TEST_SLOTS, store_poll
 from vending.stock import ClosetCount, SlotCount
-from vending.tools.machine_state import build, closet_items, get_machine_state, sold_in_window
+from vending.tools import machine_state
+from vending.tools.machine_state import closet_items, get_machine_state, sold_in_window
+
+
+def build(*args, **kwargs):
+    """`machine_state.build` for the test assignment: the live tool passes `our_slots(conn)`."""
+    return machine_state.build(*args, slots=TEST_SLOTS, **kwargs)
 
 NOW = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
 
@@ -67,7 +72,7 @@ def test_reads_stored_polls(conn):
     store_poll(conn, "other-device", "2026-10-30T12:00:00+00:00", {"15": (1, 1)}, device_id="vmc2")
     reply = get_machine_state(conn, now=NOW + timedelta(hours=1))
     assert reply.success and reply.count == 20 and not reply.stale
-    assert [s.slot for s in reply.data] == list(SLOTS)  # slot 11 isn't ours
+    assert [s.slot for s in reply.data] == list(TEST_SLOTS)  # slot 11 isn't ours
     assert reply.as_of == NOW  # the vmc2 poll is ignored
     assert reply.window_start == NOW - timedelta(days=7)
     states = by_slot(reply.data)

@@ -171,9 +171,9 @@ def test_the_default_jobs_never_migrate(monkeypatch):
     monkeypatch.setattr(db, "pending", lambda conn: ["999_not_yet_applied.sql"])
     monkeypatch.setattr(db, "migrate", lambda conn: migrated.append(conn) or [])
     results = worker.run_round(worker.default_jobs(), log=lambda _: None)
-    assert [r.job for r in results] == ["sync_history", "sync_requests", "sync_catalog"]
+    assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog"]
     assert migrated == []
-    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 3
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 4
 
 
 # --- The home page at / (#54) -----------------------------------------------------
@@ -255,3 +255,33 @@ def test_health_is_still_json_and_the_root_is_not():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_a_round_runs_a_minute_after_the_slot_lock():
+    from datetime import datetime, timedelta, timezone
+
+    lock = datetime(2026, 12, 3, 5, tzinfo=timezone.utc)
+    now = lock - timedelta(minutes=20)
+    assert worker.next_round(now, 60, lock) == lock + timedelta(minutes=1)
+    assert worker.next_round(now, 10, lock) == now + timedelta(minutes=10)          # the hourly round comes first
+    after = lock + timedelta(minutes=1)
+    assert worker.next_round(after, 60, lock) == lock + timedelta(minutes=5)         # then 5 and 15 minutes after
+    assert worker.next_round(lock + timedelta(minutes=3), 60, lock) == lock + timedelta(minutes=5)
+    assert worker.next_round(lock + timedelta(minutes=5), 60, lock) == lock + timedelta(minutes=15)
+    later = lock + timedelta(minutes=15)
+    assert worker.next_round(later, 60, lock) == later + timedelta(hours=1)          # then hourly again
+    assert worker.next_round(now, 60, None) == now + timedelta(hours=1)             # a malformed setting
+
+
+def test_the_loop_sleeps_until_the_round_after_the_lock(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    lock = datetime.now(timezone.utc) + timedelta(minutes=10)
+    monkeypatch.setattr(worker, "_slot_lock", lambda: lock)
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        raise KeyboardInterrupt
+    worker.main(["--every", "60", "--port", "0"], jobs=[("a", lambda: 0)], sleep=sleep, log=lambda _: None)
+    assert 600 < sleeps[0] < 680

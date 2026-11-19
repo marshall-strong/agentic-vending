@@ -4,10 +4,12 @@ projected to earn, which catalog requests it needs, and where the Interloper sel
     python -m vending.plan_page --rounds C:\\Users\\KevinSykes\\vending-day1      # http://127.0.0.1:8768
     python -m vending.plan_page --rounds DIR --write plan.html                    # one file, no server
 
-The rounds come from a folder of round files (see `vending.plan_rounds`); the catalog requests come
-from our database when DATABASE_URL is set (`product_requests` and `catalog_products`, read-only), and
-the Interloper's prices from the dated files in `analysis/interloper/`. Without a database the page
-still renders, and the catalog panel says the requests weren't checked.
+The rounds come from a folder of round files (see `vending.plan_rounds`); our slots (the inventory
+server's assignment, `vending.slots.our_slots`) and the catalog requests come from our database
+(`slot_assignment`, `product_requests` and `catalog_products`, read-only), and the Interloper's prices
+from the dated files in `analysis/interloper/`. With nothing recorded in `slot_assignment`, or no
+database, the page refuses and says what to run: it can't tell which slots are ours. `--no-db` skips
+only the catalog requests, and the catalog panel says they weren't checked.
 
 What the page computes and what it only shows:
 - Floors, legal prices, column fit and the fill's cost are recomputed by `vending.plan_rounds` with
@@ -17,9 +19,10 @@ What the page computes and what it only shows:
   round's projection file as written by the projection script, and shown next to that file's
   `assumptions`. The page has no demand model and makes no model calls.
 
-Only the 20 selections in our current assignment (`vending.slots.SLOTS`, the inventory server's split) have values;
-the rest are drawn hatched with their number only. Before the 3 Dec start no selection is either team's and the
-split may be redrawn once; if it is, a round's products must be placed again.
+Only the selections in our current assignment (the inventory server's split, read from the database by
+`vending.slots.our_slots`) have values; the rest are drawn hatched with their number only. Before the
+3 Dec start no selection is either team's and the split may be redrawn once; if it is, a round's
+products must be placed again (docs/integrity.md).
 The Interloper is an outside seller, so its prices may be shown; nothing here
 feeds them to pricing.
 
@@ -51,7 +54,7 @@ from psycopg.rows import dict_row
 
 from vending import db, settings
 from vending import plan_rounds as pr
-from vending.slots import DEVICE_ID, SLOTS
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools.catalog_request import same_drink, words
 
 HOST = "127.0.0.1"
@@ -226,9 +229,11 @@ def overlapping_slots(rnd: pr.Round, observations: list[Observation]) -> set[str
     return {s.slot for row in overlap(rnd, observations) for s in row["ours"]}
 
 
-def build(root: Path, conn_factory: Callable[[], psycopg.Connection] | None,
+def build(root: Path, ours: tuple[str, ...], conn_factory: Callable[[], psycopg.Connection] | None,
           interloper_dir: Path = INTERLOPER_DIR) -> Page:
-    rounds = pr.load_all(root)
+    """The page for the rounds under `root`, checked against `ours` (our slots, from `read_our_slots`).
+    `conn_factory` reads the catalog requests; None skips them."""
+    rounds = pr.load_all(root, ours)
     errors = []
     requests = catalog = None
     if conn_factory is not None:
@@ -451,7 +456,7 @@ def _face(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str]) -> st
         for col in range(1, COLUMNS + 1):
             slot = f"{row}{col}"
             s = r.slots.get(slot)
-            if slot not in SLOTS:
+            if slot not in r.ours:
                 cells.append(f'<span class="cell theirs" title="{slot}: not in our current assignment"><span class="num">{slot}</span></span>')
                 continue
             if s is None:
@@ -478,7 +483,7 @@ def _face(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str]) -> st
     return (f'<div class="pcab"><div class="brand">{_e(DEVICE_ID.upper())} &middot; ROUND {_e(r.id.upper())}</div>'
             f'<div class="glass">{"".join(shelves)}</div></div>'
             f'<div class="legend">{legend}</div>'
-            '<p class="sub">Striped selections aren\'t in our current assignment, which the inventory server may redraw before the 3 Dec start; the day-one products would then move to the new slots. Each lit slot shows units loaded, the product, the '
+            '<p class="sub">Striped selections aren\'t in our current assignment, which the inventory server changes once before the 3 Dec start; the day-one products would then move to the new slots. Each lit slot shows units loaded, the product, the '
             'shelf price and, struck through, its floor. <b class="flag req">R</b> needs a catalog request, '
             '<b class="flag int">I</b> the Interloper sells the same drink, <b class="flag bad">!</b> a price or '
             'column problem. A blue dot: changed since the round before.</p>')
@@ -508,7 +513,7 @@ def _change_list(r: pr.Round, before: pr.Round | None, changed: dict[str, pr.Cha
             if pr.same_assumptions(r, before) else
             f'<p class="sub warn-text">The projection\'s assumptions differ from round {_e(before.id)}\'s, so the totals '
             'don\'t compare like for like. See the assumptions below.</p>' if r.assumptions and before.assumptions else "")
-    return (f'<div class="label">{len(changed)} of {len(SLOTS)} slots changed since round {_e(before.id)}</div>'
+    return (f'<div class="label">{len(changed)} of {len(r.ours)} slots changed since round {_e(before.id)}</div>'
             f'<ul class="changes">{"".join(items)}</ul>{same}')
 
 
@@ -516,7 +521,7 @@ def _slot_table(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str])
     tid = _tab(r.id)
     gp_peak = max([1] + [s.projected["base"].gross_profit_cents or 0 for s in r.slots.values() if "base" in s.projected])
     rows = []
-    for slot in SLOTS:
+    for slot in r.ours:
         s = r.slots.get(slot)
         if s is None:
             rows.append(f'<tr id="{tid}-s{slot}" class="{"changed" if slot in changed else "same"}"><td>{slot}</td><td colspan="11" class="dim">No product.</td></tr>')
@@ -939,6 +944,25 @@ def _connect() -> psycopg.Connection:
 connect: Callable[[], psycopg.Connection] = _connect
 
 
+class NoSlots(RuntimeError):
+    """Our slots couldn't be read, so the page can't tell which are ours. The message says what to do."""
+
+
+def read_our_slots() -> tuple[str, ...]:
+    """Our slots (the inventory server's assignment) from the database, or NoSlots saying what to do."""
+    try:
+        with connect() as conn:
+            return our_slots(conn)
+    except SlotsNotRecorded as error:
+        raise NoSlots(str(error)) from None
+    except settings.SettingsError as error:
+        raise NoSlots(f"Our slots weren't read: {error}") from None
+    except psycopg.Error as error:
+        # Only the error's kind: a driver message can quote DATABASE_URL, password included.
+        raise NoSlots(f"Our slots weren't read ({type(error).__name__}). They are the inventory server's "
+                      "assignment, stored in our database: check DATABASE_URL and that the database is up.") from None
+
+
 def _handler(root: Path, use_db: bool) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "vending-plan-page"
@@ -950,7 +974,9 @@ def _handler(root: Path, use_db: bool) -> type[BaseHTTPRequestHandler]:
             if self.path.split("?", 1)[0] != "/":
                 return self._send(404, "text/plain; charset=utf-8", "not found")
             try:
-                page = build(root, connect if use_db else None)
+                page = build(root, read_our_slots(), connect if use_db else None)
+            except NoSlots as error:
+                return self._send(500, "text/plain; charset=utf-8", f"can't tell which slots are ours: {error}")
             except pr.RoundError as error:
                 return self._send(500, "text/plain; charset=utf-8", f"can't read the rounds: {error}")
             self._send(200, "text/html; charset=utf-8", render(page))
@@ -975,13 +1001,17 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m vending.plan_page", description=__doc__.splitlines()[0])
     parser.add_argument("--rounds", required=True, type=Path, help="folder holding round1/, round2/, ...")
     parser.add_argument("--port", type=int, default=PORT)
-    parser.add_argument("--no-db", action="store_true", help="don't read catalog requests from DATABASE_URL")
+    parser.add_argument("--no-db", action="store_true",
+                        help="don't read catalog requests (our slots still come from DATABASE_URL)")
     parser.add_argument("--write", type=Path, help="write the page to this file and exit, instead of serving it")
     args = parser.parse_args(argv)
     use_db = not args.no_db
     if args.write:
         try:
-            page = build(args.rounds, connect if use_db else None)
+            page = build(args.rounds, read_our_slots(), connect if use_db else None)
+        except NoSlots as error:
+            print(f"can't tell which slots are ours: {error}", file=sys.stderr)
+            return 1
         except pr.RoundError as error:
             print(f"can't read the rounds: {error}", file=sys.stderr)
             return 1
