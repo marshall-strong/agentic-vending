@@ -77,7 +77,7 @@ A poll inside the open minute may have come a few seconds before the door really
 
 When the timing can't settle which product sold, we fall back to what we did before door times: the price solve, or units left unattributed and flagged. We never guess.
 
-**Unattributed units belong to neither product** (#172). The stock replay books them as sold, with the reason, but not as the old product's sales or the new one's (`SaleCost.unattributed`, `SlotCount.unattributed`). They are out of the slot's known count, so on hand is that count up to `SlotCount.at_most`: what would be left if none of them were the new product's. Later sales, pulls and losses lower that bound too. What still treats them as the new product's, for now: cost of sales (their cost is taken at the new product's average), machine state's demand and units sold since the load, the dashboard's sold column, and the planner's on-hand count. Items 2 to 5 of #172 fix those.
+**Unattributed units belong to neither product** (#172). The stock replay books them as sold, with the reason, but not as the old product's sales or the new one's (`SaleCost.unattributed`, `SlotCount.unattributed`). They are out of the slot's known count, so on hand is that count up to `SlotCount.at_most`: what would be left if none of them were the new product's. Later sales, pulls and losses lower that bound too. What still treats them as the new product's, for now: cost of sales (their cost is taken from the new product's oldest units), machine state's demand and units sold since the load, the dashboard's sold column, and the planner's on-hand count. Items 2 to 5 of #172 fix those.
 
 ## What we checked, and what David answered
 

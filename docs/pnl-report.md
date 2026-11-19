@@ -48,7 +48,7 @@ adjustments, and the simple view says so under the table.
 | Takings (incl. tax) | Rises in the sales counters, tax included |
 | Sales tax set aside | Takings x 8/108, rounded half up per week |
 | Revenue ex tax | Takings less the tax set aside |
-| Cost of sales | The units sold, at weighted-average cost from the receipts |
+| Cost of sales | The units sold, at first-in, first-out cost from the receipts: the oldest units go first |
 | Shrinkage | The cost of units lost without a sale |
 | Visit fees | Fulfilled midweek visits, $25 each unless the request stored another fee |
 | Token spend | Model calls recorded in the ledger. $0 until the harness records them (#51) |

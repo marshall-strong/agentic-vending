@@ -1367,7 +1367,7 @@ def _closet_html(stock: dict) -> str:
         return '<p class="empty">Nothing in back stock, by the receipts.</p>'
     total = sum(c["units"] for c in closet)
     return (f'<p class="lede">{_plural(total, "unit")} of {_plural(len(closet), "product")}, '
-            'at what they cost us (weighted average).</p><ul class="closet">' + "".join(
+            'at what they cost us (oldest first; a product bought at more than one price shows the average of what is left).</p><ul class="closet">' + "".join(
                 f'<li><b>{_e(c["product"])}</b><span>{c["units"]} &times; '
                 f'{"cost unknown" if c["unit_cost"] is None else _money(c["unit_cost"])}</span></li>'
                 for c in closet) + "</ul>")

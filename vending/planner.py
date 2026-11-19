@@ -110,6 +110,9 @@ class SlotState:
     units: int                          # estimated on hand: loaded - sold
     unit_cost: Fraction | int | None    # actual cents per unit of those units
     contents_known: bool = True
+    # Those units by arrival, as (units, cents per unit), when they cost different amounts. Each sets
+    # its own floor, since a price must clear every cost the slot carries. Empty: all at `unit_cost`.
+    layers: tuple[tuple[int, Fraction | int | None], ...] = ()
 
     @property
     def unsure(self) -> bool:
@@ -560,8 +563,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 f"slot {s.slot}: fill_to {s.fill_to} is below the {s.staying} units already there; "
                 f"they stay, because a visit only pulls units when the slot switches product")
         if s.staying and (s.need or s.price_changed):
-            # Units staying in the slot sell at its new price too.
-            _add_part(s, "on hand", s.state.unit_cost, config, warnings, s.staying)
+            # Units staying in the slot sell at its new price too, so each cost among them sets a floor.
+            for units, cost in s.state.layers or ((s.staying, s.state.unit_cost),):
+                _add_part(s, "on hand", cost, config, warnings, units)
         if not s.need:
             continue
         lots = closet.get(s.product, [])

@@ -600,10 +600,10 @@ def test_a_refill_after_a_count_beats_the_count():
 def test_last_moved_is_the_latest_load_not_the_last_product_change():
     from fractions import Fraction
 
-    from vending.stock import Movement, weighted_average
+    from vending.stock import Movement, first_in_first_out
     utc = timezone.utc
     first, refill = datetime(2026, 11, 1, tzinfo=utc), datetime(2026, 11, 13, tzinfo=utc)
-    found = weighted_average([
+    found = first_in_first_out([
         Movement(first, "purchase", "15", "COKE-20OZ", to_slot=6, paid_cents=Fraction(600)),
         Movement(refill, "purchase", "15", "COKE-20OZ", to_slot=2, paid_cents=Fraction(200))])
     (slot,) = found.slots

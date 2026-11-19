@@ -198,7 +198,7 @@ def test_sold_since_load_follows_the_counter_misread_rule():
 
     def sold(*readings):
         polls = [("15", t0 + (n if n < 2 else n + 1) * h, v) for n, v in enumerate(readings)]  # no poll at the load
-        replay = stock.weighted_average(stock.movements_from_receipts([line], []) + stock.sales_from_counters(polls))
+        replay = stock.first_in_first_out(stock.movements_from_receipts([line], []) + stock.sales_from_counters(polls))
         return _sold_since_load(replay.sales, {"15": t0 + 2 * h})["15"]
 
     assert sold(1000, 5, 1010) == 10      # a misread just before the load is not 1005 sold
@@ -218,7 +218,7 @@ def test_the_old_products_share_of_a_split_window_is_not_sold_since_the_swap():
     lines = [base, {**base, "request_id": "r2", "sku": "REDBULL", "total_paid": "15.00", "units_pulled": 9,
                     "pulled_sku": "ARIZONA", "slot_reassigned": True, "resolved_at": t0 + 3 * h}]
     polls = [("15", t0 + h, 100, 20000, 200), ("15", t0 + 5 * h, 102, 20600, 400)]
-    replay = stock.weighted_average(stock.movements_from_receipts(lines, []) + stock.sales_from_counters(polls))
+    replay = stock.first_in_first_out(stock.movements_from_receipts(lines, []) + stock.sales_from_counters(polls))
     assert _sold_since_load(replay.sales, {"15": t0 + 3 * h})["15"] == 1
 
 

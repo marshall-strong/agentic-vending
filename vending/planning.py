@@ -137,6 +137,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
             units=by_slot[slot].units if slot in by_slot else 0,
             unit_cost=by_slot[slot].unit_cost if slot in by_slot else None,
             contents_known=slot in by_slot,
+            layers=by_slot[slot].layers if slot in by_slot else (),
         )
         for slot in settings.slots
     )
@@ -145,7 +146,9 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
         notes.append(f"no receipts yet for slots {', '.join(without_receipts)}, so their product and stock "
                      "are unknown and counted as empty; the wildcard can't switch product while the plan keeps "
                      "one of them, so list each with the product it should hold")
-    closet = tuple(planner.ClosetStock(c.product, c.units, c.unit_cost) for c in counted.closet)
+    # One lot per layer, oldest first: the planner draws them in that order, as the stock replay does.
+    closet = tuple(planner.ClosetStock(c.product, units, cost)
+                   for c in counted.closet for units, cost in c.layers or ((c.units, c.unit_cost),))
     pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
     products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))

@@ -503,7 +503,7 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     counted = stock.stock(conn, until=end)
     # A rise is booked to the later poll, so the window's sales are the rises at polls after `start`.
     sales = [s for s in counted.sales if start < s.at <= end]
-    # Sold across a product change the counters can't split: costed at the new product's average (#112).
+    # Sold across a product change the counters can't split: costed at the new product's oldest units (#112).
     # They count as costed, since their cost is in cost of sales; the note says the product may be wrong.
     guessed = sum(s.costed_units for s in sales if s.unattributed_cost_cents is not None)
     units_costed = sum(s.costed_units for s in sales if _has_cost(s))
@@ -513,7 +513,7 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     else:
         if guessed:
             notes.append(f"{guessed} of {units} units sold across a product change the counters can't split; "
-                         "cost of sales includes them at the new product's average cost, which may be the wrong "
+                         "cost of sales includes them at the cost of the new product's oldest units, which may be the wrong "
                          "product's")
         if units_costed < units:
             notes.append(f"{units - units_costed} of {units} units sold have no known cost (sold from a slot before "
@@ -642,21 +642,25 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
 
 
 def _inventory(counted: stock.Stock) -> tuple[Fraction | None, Fraction | None, bool]:
-    """(machine, closet) at cost, and whether every unit on hand had a known cost."""
+    """(machine, closet) at cost, and whether every unit on hand had a known cost.
+
+    Each count is valued by its layers, so units of unknown cost leave out
+    only themselves, not the known units sharing a slot or shelf with them.
+    """
     complete = True
     machine = closet = None
     for s in counted.slots:
-        if not s.units:
-            continue
-        if s.unit_cost is None:
-            complete = False
-            continue
-        machine = (machine or 0) + s.unit_cost * s.units
+        for units, each in (s.layers or ((s.units, s.unit_cost),)) if s.units else ():
+            if each is None:
+                complete = False
+                continue
+            machine = (machine or 0) + each * units
     for c in counted.closet:
-        if c.unit_cost is None:
-            complete = False
-            continue
-        closet = (closet or 0) + c.unit_cost * c.units
+        for units, each in c.layers or ((c.units, c.unit_cost),):
+            if each is None:
+                complete = False
+                continue
+            closet = (closet or 0) + each * units
     if counted.slots and machine is None and complete:
         machine = Fraction(0)
     if counted.closet and closet is None and complete:

@@ -13,8 +13,8 @@ turns receipts into stock movements and replays them in time order:
 - `units_pulled` of `pulled_sku` go from the slot to the closet at the cost
   they had in the slot.
 - `later_losses` take units out of where the receipt says they were found
-  (`coil` is the slot, `back_stock` the closet), at their average cost at that
-  moment. That cost is **shrinkage**: expensed, so the P&L sees it and the
+  (`coil` is the slot, `back_stock` the closet), oldest units first, at what
+  those units cost. That cost is **shrinkage**: expensed, so the P&L sees it and the
   units left keep their unit cost. Units still counted in a slot when its
   product changes, and a purchase line that lost every unit, are shrinkage too.
 - sales come from the polls' lifetime counters, one movement per rise between
@@ -32,8 +32,8 @@ turns receipts into stock movements and replays them in time order:
   counter and the price at each end split them. Units it can't split are
   unattributed (#172): booked to neither product, with the reason
   (`SaleCost.unattributed`, `SlotCount.unattributed`). They still leave the
-  slot's known count and keep the cost taken from it (`unattributed_cost_cents`),
-  the new product's average, which may be the wrong product's; the ledger
+  slot's known count and keep the cost taken from it (`unattributed_cost_cents`):
+  that of the new product's oldest units, which may be the wrong product's; the ledger
   counts it in cost of sales and says so in a note, so profit isn't overstated.
 
 A slot's count starts again whenever its product changes, so `loaded` and
@@ -53,9 +53,13 @@ is recorded every receipt counts, so the planner and the tools can be tested
 on test purchases. Sales counters are read as before; a sale from a slot with
 no counted receipt is sold but not costed.
 
-The cost method is weighted average. The team hasn't chosen between that and
-FIFO, so the method lives in `weighted_average` and nowhere else: replace that
-one function to change it. Money is exact cents (`Fraction`), never a float.
+The cost method is first in, first out by load, the team's choice since
+19 Nov (#128; it came in with #172, replacing weighted average): sales,
+pulls, losses and loads take the oldest units first, so a sale is costed at
+the stock that was there. What is left is valued at its remaining layers'
+costs, and a count's `unit_cost` is the exact mean of them. The method lives in
+`first_in_first_out` and `_Pool`, nowhere else. Money is exact cents
+(`Fraction`), never a float.
 """
 
 from __future__ import annotations
@@ -127,11 +131,14 @@ class ClosetCount:
     """Units of one product in the closet. Fields match the planner's `ClosetStock`.
 
     `unit_cost` is None when some of the units have no known cost (old
-    product pulled from a slot we never loaded).
+    product pulled from a slot we never loaded). Otherwise it is the exact
+    mean of `layers`, the units by arrival, oldest first, the order loads
+    take them in.
     """
     product: str
     units: int
     unit_cost: Fraction | None   # cents per unit
+    layers: tuple[tuple[int, Fraction | None], ...] = ()   # (units, cents per unit), oldest first
 
 
 @dataclass(frozen=True)
@@ -148,7 +155,7 @@ class SlotCount:
     slot: str
     product: str
     units: int                   # loaded - sold - unattributed - lost, never below 0
-    unit_cost: Fraction | None   # cents per unit of those units
+    unit_cost: Fraction | None   # cents per unit of those units: the mean of `layers`, None if one is unknown
     loaded: int
     sold: int
     lost: int
@@ -156,14 +163,16 @@ class SlotCount:
     last_moved: datetime | None = None   # the slot's latest purchase, load, pull or loss
     unattributed: int = 0                # sold, but which product is unknown; see above
     at_most: int | None = None           # the most that can be on hand; see above (None: `units`)
+    layers: tuple[tuple[int, Fraction | None], ...] = ()   # `units` by arrival as (units, cents per unit), oldest first
 
 
 @dataclass(frozen=True)
 class SaleCost:
     """Units sold from one slot between two polls, and what they had cost us.
 
-    `cost_cents` is None when their cost was unknown; `costed_units` is how
-    many of them we had counted in the slot (sales past the count are oversold).
+    `cost_cents` is what those of known cost cost, and `costed_units` is how
+    many of them that is; the rest had no known cost or were past the count
+    (oversold). `cost_cents` is None only when every unit counted had no known cost.
     The ledger's cost of sales is the sum of these, plus `unattributed_cost_cents`:
     for units sold across a product change the counters can't split, the cost
     they took out of the new product's count. Their product is unknown, so
@@ -191,8 +200,9 @@ class SaleCost:
 class Shrinkage:
     """Units gone without a sale, and what they had cost us: a later loss, units
     still counted in a slot when its product changed, or a purchase line that
-    lost every unit. `cost_cents` is None when their cost was unknown.
-    The ledger's shrinkage line is the sum of these."""
+    lost every unit. `cost_cents` is None when their cost was unknown; units
+    of known and unknown cost lost together are two of these, so the known
+    part still counts. The ledger's shrinkage line is the sum of these."""
     at: datetime
     where: str                   # "slot 15" or "the closet"
     product: str
@@ -378,10 +388,10 @@ def sales_from_counters(rows: list[tuple]) -> list[Movement]:
     baseline instead of producing negative sales.
 
     Each sale carries its window, the cents rise over it and the price at both
-    ends, so `weighted_average` can split a window that spans a product change.
+    ends, so `first_in_first_out` can split a window that spans a product change.
     Rows of just `(selection, polled_at, lifetime_units)` still work; a window
-    that spans a change then can't be split, and its sales keep the new
-    product's average cost as `unattributed_cost_cents`.
+    that spans a change then can't be split, and its sales keep the cost of
+    the new product's oldest units as `unattributed_cost_cents`.
     """
     by_selection: dict[str, list[tuple[datetime, int]]] = {}
     cents_by_selection: dict[str, list[tuple[datetime, int]]] = {}
@@ -490,8 +500,8 @@ def _split_at_changes(movements: list[Movement]) -> list[Movement]:
     The old product's units are replayed at the change, just before the pull,
     so they come out of the old count instead of being written off as
     shrinkage, but they keep the window's poll as `booked_at`. A window that
-    can't be split is left whole, and `weighted_average` costs it at the
-    average of what the slot holds then, kept as `unattributed_cost_cents`.
+    can't be split is left whole, and `first_in_first_out` costs it at the
+    oldest units the slot holds then, kept as `unattributed_cost_cents`.
     Splitting twice changes nothing.
 
     Without door times, the change is the receipt's `resolved_at`, when the
@@ -637,43 +647,118 @@ def cents(amount: Decimal | str | None) -> Fraction | None:
 
 
 @dataclass
-class _Pool:
-    """Units of one product in one place and their total cost in cents.
+class _Layer:
+    """Units of one product that arrived together, at one cost per unit (None: unknown)."""
+    units: int
+    unit_cost: Fraction | None
 
-    `cost` is None once any unit in the pool has no known cost, and stays so
-    until the pool is empty, since an average over part of it would be a guess.
+
+@dataclass
+class _Pool:
+    """Units of one product in one place, in layers by arrival, oldest first.
+
+    Units leave first in, first out: the oldest layer goes first. A layer whose
+    cost is unknown taints only the units in it: what leaves with it still
+    books the known layers' cost (`_known`). The pool's `cost` and `unit_cost`
+    are None while any layer here has no known cost, since an average over
+    part of it would be a guess.
     """
-    units: int = 0
-    cost: Fraction | None = Fraction(0)
+    layers: list[_Layer] = field(default_factory=list)
+
+    @property
+    def units(self) -> int:
+        return sum(layer.units for layer in self.layers)
+
+    @property
+    def cost(self) -> Fraction | None:
+        return _cost(self.layers)
 
     def unit_cost(self) -> Fraction | None:
-        return None if not self.units or self.cost is None else self.cost / self.units
+        cost = self.cost
+        return None if not self.units or cost is None else cost / self.units
 
     def add(self, units: int, cost: Fraction | None) -> None:
-        if not units:
-            return  # nothing arrived, so an unknown cost on nothing can't taint what is here
-        self.units += units
-        self.cost = None if cost is None or self.cost is None else self.cost + cost
-        self._settle()
+        """Put `units` in as one layer that cost `cost` in all."""
+        if units:  # nothing arrived, so an unknown cost on nothing can't taint what is here
+            self.add_layers([_Layer(units, None if cost is None else cost / units)])
 
-    def take(self, units: int) -> tuple[int, Fraction | None]:
-        """Move units out at their average cost. Returns how many there were, and their cost."""
-        taken = min(units, self.units)
-        each = self.unit_cost()
-        cost = None if each is None and taken else (each or 0) * taken
-        self.units -= taken
-        if self.cost is not None:
-            self.cost -= cost
-        self._settle()
-        return taken, cost
+    def add_layers(self, layers: list[_Layer]) -> None:
+        for layer in layers:
+            if not layer.units:
+                continue
+            if self.layers and self.layers[-1].unit_cost == layer.unit_cost:
+                self.layers[-1].units += layer.units
+            else:
+                self.layers.append(_Layer(layer.units, layer.unit_cost))
 
-    def lose(self, units: int) -> tuple[int, Fraction | None]:
-        """Units gone without a sale, at their average cost: shrinkage, not a cost the rest carry."""
-        return self.take(units)
+    def take_layers(self, units: int) -> list[_Layer]:
+        """Move up to `units` out, oldest first, as the layers they came from."""
+        out = []
+        while units > 0 and self.layers:
+            oldest = self.layers[0]
+            n = min(units, oldest.units)
+            out.append(_Layer(n, oldest.unit_cost))
+            oldest.units -= n
+            units -= n
+            if not oldest.units:
+                self.layers.pop(0)
+        return out
 
-    def _settle(self) -> None:
-        if self.units == 0:
-            self.cost = Fraction(0)  # nothing left to carry a cost, known or not
+    def take(self, units: int) -> tuple[int, int, Fraction | None]:
+        """Move units out, oldest first. Returns how many there were, how many of them had a known
+        cost, and what those cost (`_known`)."""
+        layers = self.take_layers(units)
+        return (sum(layer.units for layer in layers), *_known(layers))
+
+    def counted(self) -> tuple[tuple[int, Fraction | None], ...]:
+        """`(units, unit_cost)` per layer, oldest first: `SlotCount.layers` and `ClosetCount.layers`."""
+        return tuple((layer.units, layer.unit_cost) for layer in self.layers)
+
+
+def _cost(layers: list[_Layer]) -> Fraction | None:
+    """What the layers cost in all, or None if any of them has no known cost."""
+    known, cost = _known(layers)
+    return cost if known == sum(layer.units for layer in layers) else None
+
+
+def _known(layers: list[_Layer]) -> tuple[int, Fraction | None]:
+    """How many of the units have a known cost, and what those cost in all.
+
+    The cost is None only when there are units and none of them has a known
+    cost. Otherwise a few unknown units don't hide what the rest cost: a sale
+    of an unknown unit and a $2 one books $2 whether one poll or two see it,
+    and the count of known units says the rest are missing.
+    """
+    known = [layer for layer in layers if layer.unit_cost is not None and layer.units]
+    if not known and any(layer.units for layer in layers):
+        return 0, None
+    return sum(layer.units for layer in known), sum((layer.unit_cost * layer.units for layer in known), Fraction(0))
+
+
+def _less_lost(layers: list[_Layer], lost: int) -> tuple[list[_Layer], list[_Layer]]:
+    """Layers drawn from the closet for a load, less `lost` units dropped on the way, and the lost
+    layers that go to be written off as shrinkage.
+
+    The lost units come out of the oldest layers, and their known cost is
+    spread evenly over the known units that made it, so the load still costs
+    what was drawn and the layers keep their order and differences: a dearer
+    layer stays dearer for later sales and floors. If none of the units that
+    made it has a known cost, every lost layer is written off, a $0 one too.
+    Lost units of unknown cost are always written off, so shrinkage shows
+    they are missing a cost instead of leaving them out.
+    """
+    pool = _Pool()
+    pool.add_layers(layers)
+    dropped = [layer for layer in pool.take_layers(lost) if layer.units]
+    known = sum(layer.units for layer in pool.layers if layer.unit_cost is not None)
+    if not known:
+        return pool.layers, dropped
+    _, cost = _known(dropped)
+    if cost:
+        for layer in pool.layers:
+            if layer.unit_cost is not None:
+                layer.unit_cost += cost / known
+    return pool.layers, [layer for layer in dropped if layer.unit_cost is None]
 
 
 @dataclass
@@ -685,7 +770,6 @@ class _Slot:
     sold: int = 0
     lost: int = 0
     oversold: int = 0
-    last_unit_cost: Fraction | None = None
     last_moved: datetime | None = None
     replaced: str | None = None   # the product this one replaced, if the slot changed
     written_off: int = 0          # units of `replaced` written off as shrinkage at the change
@@ -693,11 +777,14 @@ class _Slot:
     at_most: int = 0              # on hand if none of those were this product: loaded less everything else out
 
 
-def weighted_average(movements: list[Movement]) -> Stock:
-    """Replay movements in time order and value what is left at weighted-average cost.
+def first_in_first_out(movements: list[Movement]) -> Stock:
+    """Replay movements in time order and value what is left, first in, first out.
 
-    This is the one place the cost method lives. Each pool's cost is the sum
-    of what went in, and units leave it at the pool's average at that moment.
+    This is the one place the cost method lives. Each pool keeps its units in
+    layers by arrival (`_Pool`), and sales, pulls, losses and loads take the
+    oldest first. So a sale in a window that also holds a top-up of the same
+    product is costed at the stock that was there, not at an average with the
+    top-up (#172).
     """
     closet: dict[str, _Pool] = {}
     slots: dict[str, _Slot] = {}
@@ -711,6 +798,17 @@ def weighted_average(movements: list[Movement]) -> Stock:
     def shelf(sku: str) -> _Pool:
         return closet.setdefault(sku, _Pool())
 
+    def write_off(at: datetime, where: str, product: str, layers: list[_Layer]) -> int:
+        """Book units gone without a sale as shrinkage: those of known cost with it, the rest
+        apart with None, so the known part still counts. Returns how many units there were."""
+        units = sum(layer.units for layer in layers)
+        known, cost = _known(layers)
+        if known:
+            shrinkage.append(Shrinkage(at, where, product, known, cost))
+        if units > known:
+            shrinkage.append(Shrinkage(at, where, product, units - known, None))
+        return units
+
     for m in _in_replay_order(_split_at_changes(movements)):
         slot = slots.get(m.slot) if m.slot else None
         for note in m.notes:
@@ -722,13 +820,14 @@ def weighted_average(movements: list[Movement]) -> Stock:
                                 "which we never loaded with it; their cost is unknown")
                 shelf(m.sku).add(m.units, None)
                 continue
-            # Sales can have emptied the count; the units still cost what the last ones did.
-            each = slot.pool.unit_cost() if slot.pool.units else slot.last_unit_cost
-            taken, _ = slot.pool.take(m.units)
+            layers = slot.pool.take_layers(m.units)
+            taken = sum(layer.units for layer in layers)
+            shelf(m.sku).add_layers(layers)
             slot.at_most = max(0, slot.at_most - m.units)
             if taken < m.units:
                 warn(m.slot, f"{m.ref}: {m.units} units pulled from slot {m.slot} but we counted only {taken}")
-            shelf(m.sku).add(m.units, None if each is None else each * m.units)
+                # Every recorded layer has moved; any cost on the rest would be counted twice or made up.
+                shelf(m.sku).add(m.units - taken, None)
             slot.last_moved = m.at
         elif m.kind in ("purchase", "load"):
             changed = slot is not None and slot.product != m.sku
@@ -738,7 +837,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
             if changed and slot.pool.units:
                 warn(m.slot, f"{m.ref}: {slot.pool.units} units of {slot.product} still counted in slot "
                                 f"{m.slot} when it changed to {m.sku}; written off as shrinkage")
-                shrinkage.append(Shrinkage(m.at, f"slot {m.slot}", slot.product, slot.pool.units, slot.pool.cost))
+                write_off(m.at, f"slot {m.slot}", slot.product, slot.pool.layers)
             if slot is None or changed:
                 slot = slots[m.slot] = _Slot(product=m.sku, since=m.at, replaced=slot.product if changed else None,
                                              written_off=slot.pool.units if changed else 0)
@@ -756,22 +855,29 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 slot.pool.add(m.to_slot, None if each is None else each * m.to_slot)
             else:
                 wanted = m.to_slot + m.lost
-                taken, cost = shelf(m.sku).take(wanted)
+                layers = shelf(m.sku).take_layers(wanted)
+                taken = sum(layer.units for layer in layers)
                 if taken < wanted:
                     warn(m.slot, f"{m.ref}: loaded {wanted} units of {m.sku} from the closet "
                                     f"but we counted only {taken} there")
-                    cost = None
-                slot.pool.add(m.to_slot, cost)
+                    layers.append(_Layer(wanted - taken, None))   # the ones we didn't count: cost unknown
+                kept, stranded = _less_lost(layers, m.lost)
+                slot.pool.add_layers(kept)
+                if any(layer.unit_cost is not None for layer in stranded):
+                    warn(m.slot, f"{m.ref}: no unit of {m.sku} loaded into slot {m.slot} has a known cost to carry "
+                                    "the units lost on the way; they are written off as shrinkage")
+                if stranded:
+                    write_off(m.at, f"slot {m.slot}", m.sku, stranded)
             slot.loaded += m.to_slot
             slot.at_most += m.to_slot
             slot.last_moved = m.at
         elif m.kind == "loss":
             if m.location == "back_stock":
-                gone, cost = shelf(m.sku).lose(m.units)
+                layers = shelf(m.sku).take_layers(m.units)
                 where = "the closet"
             elif slot is not None and slot.product == m.sku:
-                gone, cost = slot.pool.lose(m.units)
-                slot.lost += gone
+                layers = slot.pool.take_layers(m.units)
+                slot.lost += sum(layer.units for layer in layers)
                 slot.at_most = max(0, slot.at_most - m.units)
                 slot.last_moved = m.at
                 where = f"slot {m.slot}"
@@ -779,13 +885,12 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 warn(m.slot, f"{m.ref}: {m.units} units of {m.sku} lost in slot {m.slot}, "
                                 "which no longer holds it; ignored")
                 continue
-            if gone:
-                shrinkage.append(Shrinkage(m.at, where, m.sku, gone, cost))
+            gone = write_off(m.at, where, m.sku, layers)
             if gone < m.units:
                 warn(None if where == "the closet" else m.slot,
                      f"{m.ref}: {m.units} units of {m.sku} lost in {where} but we counted only {gone}")
         elif m.kind in ("sale", "sale_before_change") and slot is not None:
-            taken, cost = slot.pool.take(m.units)
+            taken, costed, cost = slot.pool.take(m.units)
             slot.oversold += m.units - taken
             if m.kind == "sale_before_change" and taken < m.units:
                 # The old slot is replaced next, so the oversold check at the end never sees it.
@@ -798,9 +903,10 @@ def weighted_average(movements: list[Movement]) -> Stock:
                 warn(m.slot, f"slot {m.slot}: {m.units} units sold between the polls at {m.since.isoformat()} "
                              f"and {m.at.isoformat()}, while {m.door_conflict}'s door times say the door was "
                              "open; a sale with the door open contradicts the receipt, so they are left "
-                             f"unattributed, costed at {slot.product}'s average, which may be the wrong product's")
+                             "unattributed, costed at the oldest units taken from "
+                             f"{slot.product}'s count, which may be the wrong product's")
                 slot.unattributed += m.units
-                sales.append(SaleCost(m.at, m.slot, None, m.units, taken, None, unattributed_cost_cents=cost,
+                sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
                                       unattributed=f"sold while {m.door_conflict}'s door times say the door was open"))
             elif m.kind == "sale" and (across_change or m.changes):
                 # Still taken from the count (the new one, unless the door times show the
@@ -819,29 +925,28 @@ def weighted_average(movements: list[Movement]) -> Stock:
                                else "")
                 warn(m.slot, f"slot {m.slot}: {m.units} units sold between the polls at {m.since.isoformat()} "
                                 f"and {m.at.isoformat()}, {across}; the counters can't split them, so they are "
-                                f"costed at {slot.product}'s average, which may be the wrong product's{written_off}")
+                                f"costed at the oldest units taken from {slot.product}'s count, which may be the wrong "
+                                f"product's{written_off}")
                 slot.unattributed += m.units
                 # Main costed a window it read as all new in cost_cents; it stays there (see `SaleCost`).
-                sales.append(SaleCost(m.at, m.slot, None, m.units, taken, cost if m.read_as_new else None,
+                sales.append(SaleCost(m.at, m.slot, None, m.units, costed, cost if m.read_as_new else None,
                                       unattributed_cost_cents=None if m.read_as_new else cost,
                                       unattributed=f"sold {across}; the counters can't split them"))
             else:
                 slot.sold += m.units
                 slot.at_most = max(0, slot.at_most - m.units)
-                sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, taken, cost,
+                sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, costed, cost,
                                       taken_at=m.at if m.booked_at else None))
-        if slot is not None and slot.pool.units:
-            slot.last_unit_cost = slot.pool.unit_cost()
 
     for name, slot in sorted(slots.items()):
         if slot.oversold:
             warn(name, f"slot {name}: the polls show {slot.oversold} more sales than units we loaded "
                             f"since {slot.since.isoformat()}; counted as 0 on hand")
     return Stock(
-        closet=tuple(ClosetCount(sku, pool.units, pool.unit_cost())
+        closet=tuple(ClosetCount(sku, pool.units, pool.unit_cost(), pool.counted())
                      for sku, pool in sorted(closet.items()) if pool.units),
         slots=tuple(SlotCount(name, s.product, s.pool.units, s.pool.unit_cost(), s.loaded, s.sold, s.lost, s.since,
-                              s.last_moved, s.unattributed, s.at_most)
+                              s.last_moved, s.unattributed, s.at_most, s.pool.counted())
                     for name, s in sorted(slots.items())),
         warnings=tuple(warnings),
         sales=tuple(sales),
@@ -940,8 +1045,8 @@ def closet(conn: psycopg.Connection) -> tuple[ClosetCount, ...]:
 def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetCount, ...]:
     """`closet` without the database: the same receipt fields as `movements_from_receipts`."""
     pulled = {line["pulled_sku"] for line in lines if line["units_pulled"]}
-    return tuple(ClosetCount(c.product, c.units, None if c.product in pulled else c.unit_cost)
-                 for c in weighted_average(movements_from_receipts(lines, losses)).closet)
+    return tuple(ClosetCount(c.product, c.units, None, ((c.units, None),)) if c.product in pulled else c
+                 for c in first_in_first_out(movements_from_receipts(lines, losses)).closet)
 
 
 def stock(conn: psycopg.Connection, until: datetime | None = None, lines: list[dict] | None = None) -> Stock:
@@ -1011,7 +1116,7 @@ def request_loads(conn: psycopg.Connection, request_ids: list[str],
 
 
 def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
-    """`weighted_average` of the movements up to `until`. Pure.
+    """`first_in_first_out` of the movements up to `until`. Pure.
 
     Windows that span a product change are split before the cut (#97). A
     period can end between a swap and the poll that measures the window; the
@@ -1023,8 +1128,8 @@ def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
     """
     movements = _split_at_changes(movements)
     if until is None:
-        return weighted_average(movements)
-    counted = weighted_average([m for m in movements if m.at <= until])
+        return first_in_first_out(movements)
+    counted = first_in_first_out([m for m in movements if m.at <= until])
     return replace(counted, sales=tuple(s for s in counted.sales if s.at <= until))
 
 
