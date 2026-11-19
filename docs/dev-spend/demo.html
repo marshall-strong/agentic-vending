@@ -1,0 +1,624 @@
+<!doctype html>
+<!-- The page `python -m vending.dev_spend --html PATH` writes: the data is inlined where DATA is, so it
+     opens from a file with no server, and the CSP lets it fetch nothing. Every figure is summed in
+     vending/dev_spend.py and arrives as an exact decimal string; this script draws and shows them, and the
+     few sums it makes (a bar's parts, an average) stay exact. Text goes in with textContent. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>Development spend on our Anthropic keys</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  /* --muted is text: at least 4.5:1 on --surface-1 and --page in both themes (here 5.0 and 4.9; dark 4.9 and 5.4). */
+  --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #6f6d66;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10); --banner: #fff4d6; --banner-ink: #5c4300;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6;
+  --unconf: #b5b3ab; --unconf-ink: #6f6d66; --marker: #52514e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --banner: #3a2f10; --banner-ink: #f5dc9a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9;
+    --unconf: #5f5e5a; --unconf-ink: #8f8d86; --marker: #c3c2b7;
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --banner: #3a2f10; --banner-ink: #f5dc9a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9;
+  --unconf: #5f5e5a; --unconf-ink: #8f8d86; --marker: #c3c2b7;
+}
+html, body { margin: 0; }
+.viz-root { background: var(--page); color: var(--text-primary); min-height: 100vh;
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 20px 20px 40px; }
+h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 10px; font-weight: 600; }
+.sub, .period { color: var(--text-secondary); margin: 0 0 6px; }
+.banner { background: var(--banner); color: var(--banner-ink); border-radius: 8px; padding: 8px 12px; margin: 10px 0;
+  font-weight: 600; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin: 14px 0; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg label { padding: 5px 12px; cursor: pointer; color: var(--text-secondary); }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg input:checked + span { color: var(--text-primary); font-weight: 600; }
+.seg label:has(input:checked) { background: var(--surface-1); box-shadow: inset 0 0 0 1px var(--axis); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--s1); outline-offset: -2px; }
+.ctl-name { color: var(--muted); margin-right: 6px; }
+.check { color: var(--text-secondary); cursor: pointer; }
+.check small { color: var(--muted); }
+.tiles { display: grid; grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(150px, 1fr)); gap: 10px; }
+@media (max-width: 900px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .tile.hero { grid-column: 1 / -1; } }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .label { color: var(--text-secondary); font-size: 13px; }
+.tile .value { font-size: 22px; font-weight: 600; margin-top: 2px; overflow-wrap: anywhere; }
+.tile.hero .value { font-size: 48px; line-height: 1.05; }
+.tile .note { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-top: 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: -4px 0 8px; color: var(--text-secondary); font-size: 13px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.legend i.hatch, .key.hatch { background-image: repeating-linear-gradient(45deg, var(--unconf-ink) 0 1.5px, transparent 1.5px 5px); }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart text.mark-label { fill: var(--text-secondary); font-size: 12px; font-variant-numeric: normal;
+  paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; }
+.chart text.end-label { fill: var(--text-primary); font-size: 12px; font-weight: 600; }
+/* Only the transparent .hit rects take the pointer: a bar or label painted over one must not swallow its hover. */
+.chart svg * { pointer-events: none; }
+.chart svg .hit { pointer-events: all; }
+.hit { fill: transparent; cursor: default; outline: none; }
+.hit:hover + g .seg-mark, .hit:focus-visible + g .seg-mark { filter: brightness(1.12); }
+.hit:focus-visible { stroke: var(--s1); stroke-width: 2px; }
+.empty { color: var(--muted); padding: 30px 0; text-align: center; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 600; border-top: none; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.later td { color: var(--text-secondary); }
+.tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--axis);
+  color: var(--text-secondary); margin-left: 4px; }
+.key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+details summary { cursor: pointer; font-weight: 600; }
+details[open] summary { margin-bottom: 10px; }
+.notes { color: var(--text-secondary); font-size: 13px; }
+.notes h2 { color: var(--text-primary); }
+.notes li { margin: 3px 0; }
+.scroll { overflow-x: auto; }
+#tip { position: fixed; z-index: 10; pointer-events: none; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.14); min-width: 170px; max-width: 300px; }
+#tip .t-head { color: var(--text-secondary); margin-bottom: 4px; }
+#tip .t-row { display: grid; grid-template-columns: 14px auto 1fr; gap: 6px; align-items: center; }
+#tip .t-row b { font-variant-numeric: tabular-nums; }
+#tip .t-row span { color: var(--text-secondary); }
+#tip .t-line { width: 12px; height: 2px; border-radius: 1px; }
+#tip .t-foot { color: var(--muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="viz-root"><div class="wrap">
+  <h1>Development spend on our Anthropic keys</h1>
+  <p class="sub">What building and testing the agent cost before the competition. For the team and the teachers;
+    none of it comes out of the $600.</p>
+  <p class="banner" id="source" hidden></p>
+  <p class="period" id="period"></p>
+
+  <div class="controls" role="group" aria-label="What the charts show">
+    <div><span class="ctl-name">Split by</span>
+      <span class="seg"><label><input type="radio" name="split" value="purpose" checked><span>Purpose</span></label><label><input type="radio" name="split" value="model"><span>Model</span></label></span></div>
+    <div><span class="ctl-name">Per</span>
+      <span class="seg"><label><input type="radio" name="unit" value="weekly" checked><span>Week</span></label><label><input type="radio" name="unit" value="daily"><span>Day</span></label></span></div>
+    <label class="check"><input type="checkbox" id="after"> Test calls after the opening (there should be none) <small id="after-note"></small></label>
+  </div>
+
+  <section class="tiles" id="tiles" aria-label="Headline figures"></section>
+
+  <section class="card">
+    <h2 id="bars-title">Spend per week</h2>
+    <div class="legend" id="legend"></div>
+    <div class="chart" id="bars"></div>
+  </section>
+
+  <section class="card">
+    <h2>Development spend so far</h2>
+    <div class="chart" id="cumulative"></div>
+  </section>
+
+  <section class="card">
+    <h2>Runs</h2>
+    <div class="scroll"><table id="runs"></table></div>
+  </section>
+
+  <details class="card">
+    <summary id="table-title">Table view: every week</summary>
+    <div class="scroll"><table id="buckets"></table></div>
+  </details>
+
+  <section class="card notes">
+    <h2>How it is counted</h2>
+    <ul>
+      <li>Development ends at the ledger's opening entry. A model call before it, live or test, doesn't come out of
+        the $600 (docs/opening-capital-plan.md, #104). The opening is recorded before the day-one fill is fulfilled,
+        about 30 Nov, not on 3 Dec.</li>
+      <li>Every call the harness sends is a row in <code>model_calls</code>; ledger token entries with no such row
+        (older code, or recorded by hand) are added. A call never corrected from its worst case is shown hatched as
+        <b>unconfirmed</b>: it may have cost less, or nothing.</li>
+      <li>Weeks run Saturday to Friday in Eastern time, the ledger's week. Costs are list prices from
+        <code>vending/model_prices.json</code>; the Claude Console's Usage and Cost pages are Anthropic's own record.</li>
+      <li>Live calls after the opening are the competition's money and are not on this page.</li>
+      <li>Testing finishes before the opening, so there should be no test calls after it. If one is recorded, the
+        box above says so; the page keeps it out of every figure and shows it only when the box is ticked.</li>
+    </ul>
+  </section>
+</div>
+<div id="tip" role="tooltip" hidden></div>
+</div>
+<script>
+"use strict";
+const DATA = {"weekly":{"unit":"week","source":"from run notes, not the ledger","as_of":"2026-11-15T22:22:00-05:00","opening_at":null,"totals":{"start":"2026-11-07","calls":99,"calls_unknown":2,"tokens_in":0,"tokens_out":0,"tokens_unknown":101,"total_usd":"3.734956","confirmed_usd":"3.734956","unconfirmed_usd":"0","by_purpose":{"live":"0.4","test":"3.334956"},"by_model":{"claude-haiku-5-5":"0.049","claude-opus-5-5":"2.975956","claude-sonnet-5-5":"0.71"},"by_label":{"agent run 1, dry run":"0.8","agent run 2, live test (pr_v8hB_h3gQatc)":"0.4","agent run 3, dry run":"0.08","agent run 4, halt switch test":"0.024956","sweep 20261111-173503 haiku@high":"0.019","sweep 20261111-173503 haiku@low":"0.014","sweep 20261111-173503 haiku@medium":"0.016","sweep 20261111-173503 opus@high":"0.609","sweep 20261111-173503 opus@low":"0.492","sweep 20261111-173503 opus@medium":"0.57","sweep 20261111-173503 sonnet@high":"0.279","sweep 20261111-173503 sonnet@low":"0.214","sweep 20261111-173503 sonnet@medium":"0.217"},"cumulative_usd":"0","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0","runs":13},"buckets":[{"start":"2026-11-07","calls":99,"calls_unknown":2,"tokens_in":0,"tokens_out":0,"tokens_unknown":101,"total_usd":"3.734956","confirmed_usd":"3.734956","unconfirmed_usd":"0","by_purpose":{"live":"0.4","test":"3.334956"},"by_model":{"claude-haiku-5-5":"0.049","claude-opus-5-5":"2.975956","claude-sonnet-5-5":"0.71"},"by_label":{"agent run 1, dry run":"0.8","agent run 2, live test (pr_v8hB_h3gQatc)":"0.4","agent run 3, dry run":"0.08","agent run 4, halt switch test":"0.024956","sweep 20261111-173503 haiku@high":"0.019","sweep 20261111-173503 haiku@low":"0.014","sweep 20261111-173503 haiku@medium":"0.016","sweep 20261111-173503 opus@high":"0.609","sweep 20261111-173503 opus@low":"0.492","sweep 20261111-173503 opus@medium":"0.57","sweep 20261111-173503 sonnet@high":"0.279","sweep 20261111-173503 sonnet@low":"0.214","sweep 20261111-173503 sonnet@medium":"0.217"},"cumulative_usd":"3.734956","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0"},{"start":"2026-11-14","calls":0,"calls_unknown":0,"tokens_in":0,"tokens_out":0,"tokens_unknown":0,"total_usd":"0","confirmed_usd":"0","unconfirmed_usd":"0","by_purpose":{},"by_model":{},"by_label":{},"cumulative_usd":"3.734956","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0"}],"runs":[{"first_at":"2026-11-12T01:34:25-05:00","purpose":"test","label":"agent run 4, halt switch test","models":["claude-opus-5-5"],"calls":1,"tokens_in":null,"tokens_out":null,"total_usd":"0.024956","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-12T00:30:00-05:00","purpose":"test","label":"agent run 3, dry run","models":["claude-opus-5-5"],"calls":null,"tokens_in":null,"tokens_out":null,"total_usd":"0.08","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-12T00:02:00-05:00","purpose":"live","label":"agent run 2, live test (pr_v8hB_h3gQatc)","models":["claude-opus-5-5"],"calls":null,"tokens_in":null,"tokens_out":null,"total_usd":"0.4","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T23:30:00-05:00","purpose":"test","label":"agent run 1, dry run","models":["claude-opus-5-5"],"calls":8,"tokens_in":null,"tokens_out":null,"total_usd":"0.8","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:43:00-05:00","purpose":"test","label":"sweep 20261111-173503 haiku@low","models":["claude-haiku-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.014","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:42:00-05:00","purpose":"test","label":"sweep 20261111-173503 haiku@high","models":["claude-haiku-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.019","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:41:00-05:00","purpose":"test","label":"sweep 20261111-173503 sonnet@medium","models":["claude-sonnet-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.217","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:40:00-05:00","purpose":"test","label":"sweep 20261111-173503 sonnet@low","models":["claude-sonnet-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.214","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:39:00-05:00","purpose":"test","label":"sweep 20261111-173503 opus@high","models":["claude-opus-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.609","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:38:00-05:00","purpose":"test","label":"sweep 20261111-173503 opus@medium","models":["claude-opus-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.57","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:37:00-05:00","purpose":"test","label":"sweep 20261111-173503 haiku@medium","models":["claude-haiku-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.016","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:36:00-05:00","purpose":"test","label":"sweep 20261111-173503 sonnet@high","models":["claude-sonnet-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.279","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:35:00-05:00","purpose":"test","label":"sweep 20261111-173503 opus@low","models":["claude-opus-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.492","unconfirmed_usd":"0","after_opening":false}]},"daily":{"unit":"day","source":"from run notes, not the ledger","as_of":"2026-11-15T22:22:00-05:00","opening_at":null,"totals":{"start":"2026-11-11","calls":99,"calls_unknown":2,"tokens_in":0,"tokens_out":0,"tokens_unknown":101,"total_usd":"3.734956","confirmed_usd":"3.734956","unconfirmed_usd":"0","by_purpose":{"live":"0.4","test":"3.334956"},"by_model":{"claude-haiku-5-5":"0.049","claude-opus-5-5":"2.975956","claude-sonnet-5-5":"0.71"},"by_label":{"agent run 1, dry run":"0.8","agent run 2, live test (pr_v8hB_h3gQatc)":"0.4","agent run 3, dry run":"0.08","agent run 4, halt switch test":"0.024956","sweep 20261111-173503 haiku@high":"0.019","sweep 20261111-173503 haiku@low":"0.014","sweep 20261111-173503 haiku@medium":"0.016","sweep 20261111-173503 opus@high":"0.609","sweep 20261111-173503 opus@low":"0.492","sweep 20261111-173503 opus@medium":"0.57","sweep 20261111-173503 sonnet@high":"0.279","sweep 20261111-173503 sonnet@low":"0.214","sweep 20261111-173503 sonnet@medium":"0.217"},"cumulative_usd":"0","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0","runs":13},"buckets":[{"start":"2026-11-11","calls":98,"calls_unknown":0,"tokens_in":0,"tokens_out":0,"tokens_unknown":98,"total_usd":"3.23","confirmed_usd":"3.23","unconfirmed_usd":"0","by_purpose":{"test":"3.23"},"by_model":{"claude-haiku-5-5":"0.049","claude-opus-5-5":"2.471","claude-sonnet-5-5":"0.71"},"by_label":{"agent run 1, dry run":"0.8","sweep 20261111-173503 haiku@high":"0.019","sweep 20261111-173503 haiku@low":"0.014","sweep 20261111-173503 haiku@medium":"0.016","sweep 20261111-173503 opus@high":"0.609","sweep 20261111-173503 opus@low":"0.492","sweep 20261111-173503 opus@medium":"0.57","sweep 20261111-173503 sonnet@high":"0.279","sweep 20261111-173503 sonnet@low":"0.214","sweep 20261111-173503 sonnet@medium":"0.217"},"cumulative_usd":"3.23","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0"},{"start":"2026-11-12","calls":1,"calls_unknown":2,"tokens_in":0,"tokens_out":0,"tokens_unknown":3,"total_usd":"0.504956","confirmed_usd":"0.504956","unconfirmed_usd":"0","by_purpose":{"live":"0.4","test":"0.104956"},"by_model":{"claude-opus-5-5":"0.504956"},"by_label":{"agent run 2, live test (pr_v8hB_h3gQatc)":"0.4","agent run 3, dry run":"0.08","agent run 4, halt switch test":"0.024956"},"cumulative_usd":"3.734956","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0"},{"start":"2026-11-13","calls":0,"calls_unknown":0,"tokens_in":0,"tokens_out":0,"tokens_unknown":0,"total_usd":"0","confirmed_usd":"0","unconfirmed_usd":"0","by_purpose":{},"by_model":{},"by_label":{},"cumulative_usd":"3.734956","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0"},{"start":"2026-11-14","calls":0,"calls_unknown":0,"tokens_in":0,"tokens_out":0,"tokens_unknown":0,"total_usd":"0","confirmed_usd":"0","unconfirmed_usd":"0","by_purpose":{},"by_model":{},"by_label":{},"cumulative_usd":"3.734956","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0"},{"start":"2026-11-15","calls":0,"calls_unknown":0,"tokens_in":0,"tokens_out":0,"tokens_unknown":0,"total_usd":"0","confirmed_usd":"0","unconfirmed_usd":"0","by_purpose":{},"by_model":{},"by_label":{},"cumulative_usd":"3.734956","after_opening_test_usd":"0","after_opening_test_calls":0,"after_opening_test_unconfirmed_usd":"0"}],"runs":[{"first_at":"2026-11-12T01:34:25-05:00","purpose":"test","label":"agent run 4, halt switch test","models":["claude-opus-5-5"],"calls":1,"tokens_in":null,"tokens_out":null,"total_usd":"0.024956","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-12T00:30:00-05:00","purpose":"test","label":"agent run 3, dry run","models":["claude-opus-5-5"],"calls":null,"tokens_in":null,"tokens_out":null,"total_usd":"0.08","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-12T00:02:00-05:00","purpose":"live","label":"agent run 2, live test (pr_v8hB_h3gQatc)","models":["claude-opus-5-5"],"calls":null,"tokens_in":null,"tokens_out":null,"total_usd":"0.4","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T23:30:00-05:00","purpose":"test","label":"agent run 1, dry run","models":["claude-opus-5-5"],"calls":8,"tokens_in":null,"tokens_out":null,"total_usd":"0.8","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:43:00-05:00","purpose":"test","label":"sweep 20261111-173503 haiku@low","models":["claude-haiku-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.014","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:42:00-05:00","purpose":"test","label":"sweep 20261111-173503 haiku@high","models":["claude-haiku-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.019","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:41:00-05:00","purpose":"test","label":"sweep 20261111-173503 sonnet@medium","models":["claude-sonnet-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.217","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:40:00-05:00","purpose":"test","label":"sweep 20261111-173503 sonnet@low","models":["claude-sonnet-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.214","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:39:00-05:00","purpose":"test","label":"sweep 20261111-173503 opus@high","models":["claude-opus-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.609","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:38:00-05:00","purpose":"test","label":"sweep 20261111-173503 opus@medium","models":["claude-opus-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.57","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:37:00-05:00","purpose":"test","label":"sweep 20261111-173503 haiku@medium","models":["claude-haiku-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.016","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:36:00-05:00","purpose":"test","label":"sweep 20261111-173503 sonnet@high","models":["claude-sonnet-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.279","unconfirmed_usd":"0","after_opening":false},{"first_at":"2026-11-11T17:35:00-05:00","purpose":"test","label":"sweep 20261111-173503 opus@low","models":["claude-opus-5-5"],"calls":10,"tokens_in":null,"tokens_out":null,"total_usd":"0.492","unconfirmed_usd":"0","after_opening":false}]}};
+const SVGNS = "http://www.w3.org/2000/svg";
+const MODEL_ORDER = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];      // --s7 is kept for test calls after the opening
+const state = { split: "purpose", unit: "weekly", after: false };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function el(tag, attrs, text) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function svg(tag, attrs, text) {
+  const node = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function cssVar(name) { return getComputedStyle(document.querySelector(".viz-root")).getPropertyValue(name).trim(); }
+function day(iso) { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return new Date(Date.UTC(y, m - 1, d)); }
+function dateLabel(iso, withYear) {
+  const d = day(iso);
+  return `${DAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}${withYear ? " " + d.getUTCFullYear() : ""}`;
+}
+function short(iso) { const d = day(iso); return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`; }
+function when(iso) { return `${short(iso)} ${iso.slice(11, 16)}`; }
+// --- Money ----------------------------------------------------------------------------------
+// Every amount arrives as an exact decimal string ("0.1234499") and becomes { v: BigInt, s: places }.
+// Sums and rounding stay exact; a Number is made only for a chart coordinate (num).
+const ZERO = { v: 0n, s: 0 };
+function dec(text) {
+  const neg = text.startsWith("-"), [whole, frac = ""] = text.replace(/^-/, "").split(".");
+  const v = BigInt(whole + frac);
+  return { v: neg ? -v : v, s: frac.length };
+}
+function rescale(a, s) { return a.v * 10n ** BigInt(s - a.s); }
+function plus(a, b) { const s = Math.max(a.s, b.s); return { v: rescale(a, s) + rescale(b, s), s }; }
+function minus(a, b) { return plus(a, { v: -b.v, s: b.s }); }
+function cmp(a, b) { const s = Math.max(a.s, b.s), d = rescale(a, s) - rescale(b, s); return d < 0n ? -1 : d > 0n ? 1 : 0; }
+function isZero(a) { return a.v === 0n; }
+function abs(a) { return a.v < 0n ? { v: -a.v, s: a.s } : a; }
+function sum(list) { return list.reduce(plus, ZERO); }
+function num(a) { return Number(a.v) / 10 ** a.s; }       // chart coordinates only, never a figure shown
+// Rounded once, half up as vending/dev_spend.py rounds: four places (two from $100), or `places`.
+// `per` divides first, exactly: an average is rounded only after the division.
+function usd(a, places, per) {
+  const n = BigInt(per || 1), mag = a.v < 0n ? -a.v : a.v, den = 10n ** BigInt(a.s) * n;
+  const p = places === undefined ? (mag >= 100n * den ? 2 : 4) : places;
+  const scaled = mag * 10n ** BigInt(p);
+  let q = scaled / den;
+  if ((scaled % den) * 2n >= den) q += 1n;
+  const digits = q.toString().padStart(p + 1, "0"), cut = digits.length - p;
+  const whole = BigInt(digits.slice(0, cut)).toLocaleString("en-US");
+  return (a.v < 0n && q ? "-" : "") + "$" + whole + (p ? "." + digits.slice(cut) : "");
+}
+function usdShort(a) { return usd(a, 2); }
+// Turn the data's amount strings into exact amounts, once, when the page loads.
+function money(node) {
+  if (Array.isArray(node)) { node.forEach(money); return; }
+  if (!node || typeof node !== "object") return;
+  for (const [k, v] of Object.entries(node)) {
+    if (k.endsWith("_usd")) node[k] = dec(v);
+    else if (k.startsWith("by_")) for (const name of Object.keys(v)) v[name] = dec(v[name]);
+    else money(v);
+  }
+}
+function count(n) { return n.toLocaleString("en-US"); }
+
+function report() { return DATA[state.unit]; }
+function weeksReport() { return DATA.weekly; }
+function bucketMs(r) { return r.unit === "week" ? 7 * 864e5 : 864e5; }
+// The bucket that holds the opening, and how far into it the opening falls (0 to 1).
+function openingPlace(r) {
+  if (!r.opening_at) return null;
+  const local = Date.UTC(...r.opening_at.slice(0, 19).split(/[-T:]/).map((v, i) => i === 1 ? v - 1 : Number(v)));
+  for (let i = 0; i < r.buckets.length; i++) {
+    const start = day(r.buckets[i].start).getTime();
+    if (local >= start && local < start + bucketMs(r)) return { index: i, frac: (local - start) / bucketMs(r) };
+  }
+  return null;
+}
+function shown(r) {
+  // Without the after-opening series, the charts stop at the opening's bucket.
+  const place = openingPlace(r);
+  if (state.after || !place) return r.buckets;
+  return r.buckets.slice(0, place.index + 1);
+}
+function models(r) {
+  const seen = new Set();
+  for (const b of r.buckets) for (const m of Object.keys(b.by_model)) seen.add(m);
+  const known = MODEL_ORDER.filter(m => seen.has(m));
+  const rest = [...seen].filter(m => !MODEL_ORDER.includes(m)).sort();
+  const all = known.concat(rest);
+  // Six slots at most: past five models, the rest fold into "Other". Colours follow the model, not its rank.
+  if (all.length <= 6) return { list: all, other: [] };
+  return { list: all.slice(0, 5), other: all.slice(5) };
+}
+function series(r) {
+  let out;
+  if (state.split === "purpose") {
+    out = [{ name: "Live", color: "--s1", get: b => b.by_purpose.live || ZERO },
+           { name: "Test", color: "--s2", get: b => b.by_purpose.test || ZERO }];
+  } else {
+    const m = models(r);
+    out = m.list.map((name, i) => ({ name, color: SLOTS[i], get: b => b.by_model[name] || ZERO }));
+    if (m.other.length) out.push({ name: "Other models", color: SLOTS[5],
+                                   get: b => sum(m.other.map(k => b.by_model[k] || ZERO)) });
+  }
+  if (r.buckets.some(b => !isZero(b.unconfirmed_usd))) {
+    out.push({ name: "Unconfirmed (worst case, never corrected)", color: "--unconf", hatch: true, get: b => b.unconfirmed_usd });
+  }
+  if (state.after) {
+    out.push({ name: "Test, after the opening (shouldn't happen)", color: "--s7", get: b => minus(b.after_opening_test_usd, b.after_opening_test_unconfirmed_usd) });
+    if (r.buckets.some(b => !isZero(b.after_opening_test_unconfirmed_usd)))
+      out.push({ name: "After opening: unconfirmed (worst case)", color: "--unconf", hatch: true, get: b => b.after_opening_test_unconfirmed_usd });
+  }
+  return out;
+}
+function niceTicks(max) {
+  if (max <= 0) return [0, 1];
+  const rough = max / 4, mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const step = [1, 2, 2.5, 5, 10].map(s => s * mag).find(s => s >= rough);
+  const ticks = [];
+  for (let v = 0; v <= max + step * 1e-9; v += step) ticks.push(+v.toFixed(10));
+  if (ticks[ticks.length - 1] < max) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
+  return ticks;
+}
+function tickLabel(v, top) { return top < 1 ? "$" + v.toFixed(2) : top < 10 ? "$" + v.toFixed(v % 1 ? 2 : 0) : "$" + count(Math.round(v)); }
+
+// --- Tooltip ------------------------------------------------------------------------
+const tip = document.getElementById("tip");
+function showTip(event, head, rows, foot) {
+  tip.replaceChildren(el("div", { class: "t-head" }, head));
+  for (const row of rows) {
+    const line = el("div", { class: "t-row" });
+    const key = el("i", { class: "t-line" });
+    key.style.background = row.color ? cssVar(row.color) : "transparent";
+    line.append(key, el("b", {}, row.value), el("span", {}, row.name));
+    tip.append(line);
+  }
+  if (foot) tip.append(el("div", { class: "t-foot" }, foot));
+  tip.hidden = false;
+  let x, y;
+  if (event.clientX !== undefined && event.type !== "focus") { x = event.clientX; y = event.clientY; }
+  else { const box = event.target.getBoundingClientRect(); x = box.right; y = box.top + box.height / 2; }
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(window.innerWidth - w - 8, x + 14) + "px";
+  tip.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, y - h / 2)) + "px";
+}
+function hideTip() { tip.hidden = true; }
+
+// --- Charts ---------------------------------------------------------------------------
+const M = { left: 58, right: 18, top: 30, bottom: 34 };
+const MARK_LINE = ["Ledger opened: competition money starts"];
+const MARK_WRAPPED = ["Ledger opened:", "competition money starts"];
+const MARK_LEADING = 14;
+// Where the opening's label goes: on one line beside the marker if it fits, else on two lines, on whichever
+// side has room. With room on neither side (a narrow screen, the opening mid-chart), it is moved in from the
+// edge and crosses the marker, over a halo, rather than running off the page.
+function markerLayout(root, x, width) {
+  const PAD = 6, EDGE = 4;
+  const measure = lines => Math.max(...lines.map(line => {
+    const t = svg("text", { class: "mark-label" }, line);
+    root.append(t);
+    const w = t.getComputedTextLength();
+    t.remove();
+    return w;
+  }));
+  for (const lines of [MARK_LINE, MARK_WRAPPED]) {
+    const w = measure(lines);
+    if (x + PAD + w <= width - EDGE) return { lines, anchor: "start", x: x + PAD };
+    if (x - PAD - w >= EDGE) return { lines, anchor: "end", x: x - PAD };
+  }
+  const w = measure(MARK_WRAPPED);
+  return { lines: MARK_WRAPPED, anchor: "start", x: Math.max(EDGE, Math.min(x + PAD, width - EDGE - w)) };
+}
+function frame(host, height, buckets, max, r) {
+  host.replaceChildren();
+  const width = Math.max(320, host.clientWidth);
+  const root = svg("svg", { viewBox: `0 0 ${width} ${height}`, height, role: "img" });
+  host.append(root);      // in the page before anything is measured
+  const plotW = width - M.left - M.right;
+  const band = plotW / Math.max(1, buckets.length);
+  const place = openingPlace(r);
+  let marker = null;
+  if (place) {
+    const x = M.left + band * (place.index + place.frac);
+    marker = { x, ...markerLayout(root, x, width) };
+  }
+  // A wrapped label takes a second line of the top margin.
+  const plotTop = M.top + (marker ? (marker.lines.length - 1) * MARK_LEADING : 0);
+  const plotH = height - plotTop - M.bottom;
+  const ticks = niceTicks(max), top = ticks[ticks.length - 1];
+  const y = v => plotTop + plotH - (v / top) * plotH;
+  const grid = svg("g");
+  for (const t of ticks) {
+    grid.append(svg("line", { x1: M.left, x2: width - M.right, y1: y(t), y2: y(t), stroke: t ? cssVar("--grid") : cssVar("--axis"), "stroke-width": 1 }));
+    grid.append(svg("text", { x: M.left - 8, y: y(t) + 4, "text-anchor": "end" }, tickLabel(t, top)));
+  }
+  const every = Math.ceil(buckets.length / Math.max(1, Math.floor(plotW / 64)));
+  buckets.forEach((b, i) => {
+    if (i % every) return;
+    grid.append(svg("text", { x: M.left + band * (i + 0.5), y: height - M.bottom + 18, "text-anchor": "middle" }, short(b.start)));
+  });
+  root.append(grid);
+  return { root, width, height, plotW, plotH, plotTop, band, y, top, marker, x: i => M.left + band * (i + 0.5) };
+}
+function openingMarker(f) {
+  const m = f.marker;
+  if (!m) return;
+  f.root.append(svg("line", { x1: m.x, x2: m.x, y1: M.top - 14, y2: f.height - M.bottom, stroke: cssVar("--marker"), "stroke-width": 1.5 }));
+  const label = svg("text", { x: m.x, "text-anchor": m.anchor, class: "mark-label" });
+  // The last line sits where a one-line label would; a wrapped label's first line is one line higher.
+  m.lines.forEach((line, i) => label.append(svg("tspan", { x: m.x, y: f.plotTop - 16 - (m.lines.length - 1 - i) * MARK_LEADING }, line)));
+  f.root.append(label);
+}
+function roundedTop(x, y, w, h, r) {
+  const rr = Math.min(r, h, w / 2);
+  return `M${x},${y + h}V${y + rr}Q${x},${y} ${x + rr},${y}H${x + w - rr}Q${x + w},${y} ${x + w},${y + rr}V${y + h}Z`;
+}
+
+function drawBars() {
+  const r = report(), host = document.getElementById("bars"), buckets = shown(r), list = series(r);
+  document.getElementById("bars-title").textContent = r.unit === "week" ? "Spend per week (Saturday to Friday, Eastern)" : "Spend per day (Eastern)";
+  const legend = document.getElementById("legend");
+  legend.replaceChildren();
+  for (const s of list) {
+    const key = el("i", { class: s.hatch ? "hatch" : "" });
+    key.style.backgroundColor = cssVar(s.color);
+    const item = el("span"); item.append(key, document.createTextNode(s.name)); legend.append(item);
+  }
+  if (!buckets.length) { host.replaceChildren(el("p", { class: "empty" }, "No model calls recorded yet.")); return; }
+  const totals = buckets.map(b => sum(list.map(x => x.get(b))));
+  const f = frame(host, 280, buckets, Math.max(...totals.map(num)), r);
+  f.root.setAttribute("aria-label", `Spend per ${r.unit}, stacked by ${state.split}. The table view below lists every value.`);
+  const defs = svg("defs");
+  const pattern = svg("pattern", { id: "hatch", width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" });
+  pattern.append(svg("rect", { width: 6, height: 6, fill: cssVar("--unconf") }),
+                 svg("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: cssVar("--unconf-ink"), "stroke-width": 2 }));
+  defs.append(pattern); f.root.append(defs);
+  const barW = Math.min(24, f.band * 0.7), GAP = 2;
+  buckets.forEach((b, i) => {
+    const x = f.x(i) - barW / 2;
+    const parts = list.map(s => ({ s, v: s.get(b) })).filter(p => cmp(p.v, ZERO) > 0);
+    const hit = svg("rect", { x: M.left + f.band * i, y: f.plotTop, width: f.band, height: f.plotH, class: "hit", tabindex: 0,
+                              "aria-label": `${r.unit === "week" ? "Week of " : ""}${dateLabel(b.start)}: ${usd(totals[i])}` });
+    const g = svg("g");
+    let base = ZERO;
+    parts.forEach((p, k) => {
+      const y0 = f.y(num(base));
+      base = plus(base, p.v);
+      const y1 = f.y(num(base));
+      const isTop = k === parts.length - 1;
+      const h = Math.max(isTop ? 1 : 0, y0 - y1 - (isTop ? 0 : GAP));
+      const fill = p.s.hatch ? "url(#hatch)" : cssVar(p.s.color);
+      const attrs = { fill, class: "seg-mark" };
+      g.append(isTop ? svg("path", { ...attrs, d: roundedTop(x, y0 - h, barW, h, 4) })
+                     : svg("rect", { ...attrs, x, y: y0 - h, width: barW, height: h }));
+    });
+    const rows = list.slice().reverse().map(s => ({ name: s.name, color: s.color, value: usd(s.get(b)) }));
+    const calls = b.calls + (b.calls_unknown ? ` + ${b.calls_unknown} run(s) not noted` : "");
+    const foot = `${calls} calls${b.after_opening_test_calls && state.after ? `; ${b.after_opening_test_calls} after the opening` : ""}`;
+    const head = `${r.unit === "week" ? "Week of " : ""}${dateLabel(b.start, true)} · ${usd(totals[i])}`;
+    const on = e => showTip(e, head, rows, foot);
+    hit.addEventListener("pointermove", on); hit.addEventListener("focus", on);
+    hit.addEventListener("pointerleave", hideTip); hit.addEventListener("blur", hideTip);
+    f.root.append(hit, g);
+  });
+  // A direct label on the dearest bar only.
+  const most = totals.reduce((m, v, i) => cmp(v, totals[m]) > 0 ? i : m, 0);
+  if (!isZero(totals[most])) {
+    f.root.append(svg("text", { x: f.x(most), y: f.y(num(totals[most])) - 6, "text-anchor": "middle", class: "end-label" }, usdShort(totals[most])));
+  }
+  openingMarker(f);
+}
+
+function drawCumulative() {
+  const r = report(), host = document.getElementById("cumulative"), buckets = shown(r);
+  if (!buckets.length) { host.replaceChildren(el("p", { class: "empty" }, "No model calls recorded yet.")); return; }
+  const place = openingPlace(r);
+  const last = place ? place.index : buckets.length - 1;
+  const dev = buckets.slice(0, last + 1);
+  const f = frame(host, 220, buckets, Math.max(...dev.map(b => num(b.cumulative_usd))), r);
+  f.root.setAttribute("aria-label", "Development spend so far, at the end of each " + r.unit + ". The table view below lists every value.");
+  const color = cssVar("--s1"), surface = cssVar("--surface-1");
+  // Each total is drawn where its bucket ends, and the opening's bucket ends at the opening.
+  const xEnd = i => M.left + f.band * (place && i === place.index ? i + place.frac : i + 1);
+  const pts = [[M.left, f.y(0)]].concat(dev.map((b, i) => [xEnd(i), f.y(num(b.cumulative_usd))]));
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0] + "," + p[1]).join("");
+  const area = line + `L${pts[pts.length - 1][0]},${f.y(0)}Z`;
+  f.root.append(svg("path", { d: area, fill: color, "fill-opacity": 0.1 }));
+  f.root.append(svg("path", { d: line, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  const end = pts[pts.length - 1];
+  f.root.append(svg("circle", { cx: end[0], cy: end[1], r: 4, fill: color, stroke: surface, "stroke-width": 2 }));
+  const right = end[0] > f.width - 90;
+  f.root.append(svg("text", { x: right ? end[0] - 8 : end[0] + 8, y: end[1] - 8, "text-anchor": right ? "end" : "start", class: "end-label" },
+                    usdShort(dev[dev.length - 1].cumulative_usd)));
+  openingMarker(f);
+  // The crosshair finds the nearest bucket.
+  const cross = svg("line", { y1: f.plotTop, y2: f.height - M.bottom, stroke: cssVar("--axis"), "stroke-width": 1, visibility: "hidden" });
+  const dot = svg("circle", { r: 4, fill: color, stroke: surface, "stroke-width": 2, visibility: "hidden" });
+  const hit = svg("rect", { x: M.left, y: f.plotTop, width: f.plotW, height: f.plotH, class: "hit", tabindex: 0,
+                            "aria-label": `Development spend so far: ${usd(dev[dev.length - 1].cumulative_usd)}` });
+  f.root.append(cross, dot, hit);
+  let focusIndex = dev.length - 1;
+  function at(i, event) {
+    const b = dev[i];
+    cross.setAttribute("x1", xEnd(i)); cross.setAttribute("x2", xEnd(i)); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", xEnd(i)); dot.setAttribute("cy", f.y(num(b.cumulative_usd))); dot.setAttribute("visibility", "visible");
+    const atOpening = place && i === place.index;
+    showTip(event, atOpening ? `At the ledger's opening (${r.unit === "week" ? "week of " : ""}${dateLabel(b.start, true)})`
+                             : `End of ${r.unit === "week" ? "the week of " : ""}${dateLabel(b.start, true)}`,
+            [{ name: "so far", color: "--s1", value: usd(b.cumulative_usd) }, { name: "this " + r.unit, value: usd(b.total_usd) }]);
+  }
+  hit.addEventListener("pointermove", e => {
+    const box = f.root.getBoundingClientRect(), scale = f.width / box.width;
+    const i = Math.round(((e.clientX - box.left) * scale - M.left) / f.band - 1);
+    at(Math.max(0, Math.min(dev.length - 1, i)), e);
+  });
+  hit.addEventListener("focus", e => at(focusIndex, e));
+  hit.addEventListener("keydown", e => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    focusIndex = Math.max(0, Math.min(dev.length - 1, focusIndex + (e.key === "ArrowRight" ? 1 : -1)));
+    at(focusIndex, e); e.preventDefault();
+  });
+  const off = () => { hideTip(); cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); };
+  hit.addEventListener("pointerleave", off); hit.addEventListener("blur", off);
+}
+
+// --- Tiles and tables ---------------------------------------------------------------------
+function tile(label, value, note, hero) {
+  const node = el("div", { class: "tile" + (hero ? " hero" : "") });
+  node.append(el("div", { class: "label" }, label), el("div", { class: "value" }, value));
+  if (note) node.append(el("div", { class: "note" }, note));
+  return node;
+}
+function drawTiles() {
+  const r = weeksReport(), t = r.totals, host = document.getElementById("tiles");
+  host.replaceChildren();
+  const dev = r.runs.filter(x => !x.after_opening);
+  const demo = r.source.includes("not the ledger");
+  const unconf = !isZero(t.unconfirmed_usd) ? `${usd(t.unconfirmed_usd)} of it unconfirmed (worst case)` :
+                 demo ? "as the run notes give it" : "all of it as the API billed";
+  host.append(tile("Total development spend", usdShort(t.total_usd), unconf, true));
+  host.append(tile("Calls", count(t.calls) + (t.calls_unknown ? "+" : ""),
+                   t.calls_unknown ? `${t.calls_unknown} run${t.calls_unknown === 1 ? "" : "s"} in the notes don't say how many`
+                   : t.tokens_unknown ? `tokens not known for ${t.tokens_unknown}` : `${count(t.tokens_in)} tokens in, ${count(t.tokens_out)} out`));
+  host.append(tile("Average per run", dev.length ? usd(t.total_usd, 2, dev.length) : "–", dev.length ? `${dev.length} runs` : "no runs yet"));
+  const dear = dev.slice().sort((a, b) => cmp(b.total_usd, a.total_usd))[0];
+  host.append(tile("Dearest run", dear ? usdShort(dear.total_usd) : "–", dear ? `${dear.label || "(no label)"}, ${short(dear.first_at)}` : ""));
+  const place = openingPlace(r);
+  const weeks = place ? r.buckets.slice(0, place.index + 1) : r.buckets;
+  const cur = weeks[weeks.length - 1], prev = weeks[weeks.length - 2];
+  if (cur) {
+    const name = place ? "Last week of development" : "This week";
+    const delta = prev ? minus(cur.total_usd, prev.total_usd) : null;
+    const note = prev ? `${cmp(delta, ZERO) >= 0 ? "up" : "down"} ${usdShort(abs(delta))} from the week of ${short(prev.start)} (${usdShort(prev.total_usd)})`
+                      : "no week before it";
+    host.append(tile(`${name} (from ${short(cur.start)})`, usdShort(cur.total_usd), note));
+  }
+}
+function cell(text, cls) { return el("td", cls ? { class: cls } : {}, text); }
+function drawRuns() {
+  const r = report(), table = document.getElementById("runs");
+  const rows = r.runs.filter(x => state.after || !x.after_opening);
+  table.replaceChildren();
+  const head = el("tr");
+  for (const [h, cls] of [["When (Eastern)"], ["Run"], ["Purpose"], ["Model"], ["Calls", "num"], ["Tokens in", "num"], ["Tokens out", "num"], ["Cost", "num"]]) {
+    head.append(el("th", cls ? { class: cls } : {}, h));
+  }
+  const thead = el("thead"); thead.append(head); table.append(thead);
+  const body = el("tbody");
+  if (!rows.length) { const tr = el("tr"); const td = cell("No runs yet."); td.colSpan = 8; tr.append(td); body.append(tr); }
+  for (const x of rows) {
+    const tr = el("tr", x.after_opening ? { class: "later" } : {});
+    const label = cell(x.label || "(no label)");
+    if (x.after_opening) label.append(el("span", { class: "tag" }, "after the opening"));
+    if (!isZero(x.unconfirmed_usd)) label.append(el("span", { class: "tag" }, "unconfirmed"));
+    tr.append(cell(when(x.first_at)), label, cell(x.purpose), cell(x.models.join(", ")),
+              cell(x.calls === null ? "not noted" : count(x.calls), "num"),
+              cell(x.tokens_in === null ? "–" : count(x.tokens_in), "num"),
+              cell(x.tokens_out === null ? "–" : count(x.tokens_out), "num"), cell(usd(x.total_usd), "num"));
+    body.append(tr);
+  }
+  table.append(body);
+}
+function drawTable() {
+  const r = report(), list = series(r), buckets = shown(r), table = document.getElementById("buckets");
+  document.getElementById("table-title").textContent = `Table view: every ${r.unit}`;
+  table.replaceChildren();
+  const head = el("tr");
+  head.append(el("th", {}, r.unit === "week" ? "Week of" : "Day"));
+  for (const s of list) {
+    const th = el("th", { class: "num" });
+    const key = el("i", { class: "key" + (s.hatch ? " hatch" : "") }); key.style.backgroundColor = cssVar(s.color);
+    th.append(key, document.createTextNode(s.name)); head.append(th);
+  }
+  for (const h of ["Calls", "Tokens in", "Tokens out", "Spend", "So far"]) head.append(el("th", { class: "num" }, h));
+  const thead = el("thead"); thead.append(head); table.append(thead);
+  const body = el("tbody");
+  for (const b of buckets) {
+    const tr = el("tr");
+    tr.append(cell(dateLabel(b.start, true)));
+    for (const s of list) tr.append(cell(usd(s.get(b)), "num"));
+    tr.append(cell(count(b.calls) + (b.calls_unknown ? "+" : ""), "num"),
+              cell(count(b.tokens_in) + (b.tokens_unknown ? "*" : ""), "num"),
+              cell(count(b.tokens_out) + (b.tokens_unknown ? "*" : ""), "num"),
+              cell(usd(b.total_usd), "num"), cell(usd(b.cumulative_usd), "num"));
+    body.append(tr);
+  }
+  table.append(body);
+  if (buckets.some(b => b.tokens_unknown)) {
+    const tr = el("tr"); const td = cell("* Tokens not known for every call (unconfirmed calls, or runs from the notes)."); td.colSpan = list.length + 6;
+    tr.append(td); body.append(tr);
+  }
+}
+
+function header() {
+  const r = weeksReport();
+  const source = document.getElementById("source");
+  source.hidden = !r.source.includes("not the ledger");
+  source.textContent = "Demo data, " + r.source + ": each run as the team wrote it down (docs/agent.md, docs/sample-directive.md, docs/benchmark.md, docs/guardrail-evidence.md). Times the notes don't give are placed late on the day they give.";
+  document.getElementById("period").textContent = r.opening_at
+    ? `Development ended at the ledger's opening, ${dateLabel(r.opening_at, true)} ${r.opening_at.slice(11, 16)} Eastern: the competition's money starts there. As of ${when(r.as_of)}.`
+    : `No ledger opening yet, so every call so far is development spend, none of it from the $600. As of ${dateLabel(r.as_of, true)} ${r.as_of.slice(11, 16)} Eastern.`;
+  const later = r.buckets.reduce((s, b) => s + b.after_opening_test_calls, 0);
+  document.getElementById("after-note").textContent = later
+    ? `(warning: ${later} call${later === 1 ? "" : "s"}, ${usd(sum(r.buckets.map(b => b.after_opening_test_usd)))}; testing should finish before the opening)`
+    : (r.opening_at ? "(none recorded)" : "(none: the ledger isn't open yet)");
+}
+function draw() { hideTip(); drawTiles(); drawBars(); drawCumulative(); drawRuns(); drawTable(); }
+
+if (!DATA) {
+  document.querySelector(".wrap").replaceChildren(el("p", { class: "empty" }, "No data: write this page with python -m vending.dev_spend --html PATH."));
+} else {
+  money(DATA);
+  // A link can choose the view: #model, #day, #after (any of them, joined with &).
+  const wanted = location.hash.slice(1).split("&");
+  if (wanted.includes("model")) state.split = "model";
+  if (wanted.includes("day")) state.unit = "daily";
+  if (wanted.includes("after")) state.after = true;
+  document.querySelector(`input[name=split][value=${state.split}]`).checked = true;
+  document.querySelector(`input[name=unit][value=${state.unit}]`).checked = true;
+  document.getElementById("after").checked = state.after;
+  header();
+  for (const input of document.querySelectorAll("input[name=split], input[name=unit]")) {
+    input.addEventListener("change", () => { state[input.name] = input.value; draw(); });
+  }
+  document.getElementById("after").addEventListener("change", e => { state.after = e.target.checked; draw(); });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+  let pending = 0;
+  new ResizeObserver(() => { cancelAnimationFrame(pending); pending = requestAnimationFrame(draw); }).observe(document.querySelector(".wrap"));
+  draw();
+}
+</script>
+</body>
+</html>
