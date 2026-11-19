@@ -36,16 +36,25 @@ minutes, so the reads have to be close together for one to land inside it.
 
 | Setting | Default | |
 |---|---|---|
-| `VISIT_POLL_EVERY_MINUTES` | `1` | Minutes between reads. `0` turns them off |
+| `VISIT_POLL_EVERY_MINUTES` | `1` | Minutes between reads: `0` turns them off, otherwise a number from `1` up. Under a minute, `inf` or text is a wrong value |
 | `VISIT_POLL_FROM` | `14:45` | First read, Eastern time (the window follows the wall clock through daylight saving) |
 | `VISIT_POLL_TO` | `19:00` | No read from this time on |
+| `VISIT_POLL_DATES` | empty | Comma-separated ISO dates (Eastern), such as `2026-11-30`. These days get the reads too, with the same window and the same stop rule as a Friday. For a visit of ours that isn't on a Friday, the day-one fill. Remove the date afterwards (a past date does nothing) |
 
 A wrong value turns the reads off, with a line in the log; it never stops the worker. The bridge stores
 every read in its history, so after each read the worker copies the two latest UTC days of history into
 our database (`vending.sync_history`, idempotent) and the read reaches the stock replay like the hourly
-ones. That a live read lands in the history is what `docs/dex-bridge.md` says ("the bridge stores every
-poll anyone makes") and what the poll's `X-Poll-Session-Id` header suggests. No one has checked it
-against the live bridge yet, so on the first Friday check that the log shows a new poll after a read.
+ones. The worker keeps the session id the bridge names in the `X-Poll-Session-Id` header of the read and
+checks that the copy stored a usable row for it (checksum passed, our device). If not (the history
+couldn't be listed or fetched, the checksum failed, or the poll isn't in the listing), the read counts
+as a failure, and the log says "not stored usable". When it is stored, the log says "visit reads: stored
+read <session id>". That the header's id is the id the history lists is what `docs/snapshot-archive.md`
+suggests ("identifies the serial conversation"), and no one has checked it against the live bridge yet. If
+every read is reported "not stored usable" while polls do appear in the history, that is the first suspect.
+Without a header, the check falls back to any usable poll of ours taken since the read was sent.
+
+The window and the spacing are checked again when the read is sent, after the receipts have been read
+back: no read goes out after `VISIT_POLL_TO`, and none within an interval of the last one actually sent.
 
 A read holds the bridge's one serial line, and anyone else's poll gets a `409` while it runs, so:
 
@@ -62,8 +71,9 @@ is seen within a minute. The reads stop for the day once a request of ours was f
 read taken after its door closed (the close minute is over) is stored. A receipt with no door times is
 dated by `fulfilled_at`. David set no limit on how often: on 12 Nov he said a read about every 10 minutes "won't break
 anything", and named a poll every 15 seconds as what would get our container switched off. A read
-every minute is Kevin's choice (19 Nov). Only Fridays: a midweek visit has no day the data
-can tell us, since a pending request can be filled on any day, so those get the hourly reads only.
+every minute is Kevin's choice (19 Nov). Only Fridays and the dates in `VISIT_POLL_DATES`: a midweek
+visit has no day the data can tell us, since a pending request can be filled on any day, so those get
+the hourly reads only unless a person lists the day.
 
 **Never point an HTTP liveness probe at `/health`.** Its `503` means a sync failed, for example
 while the bridge is unreachable, not that the worker is stuck, so Azure would restart a healthy
