@@ -38,8 +38,9 @@ turns receipts into stock movements and replays them in time order:
 
 A slot's count starts again whenever its product changes, so `loaded` and
 `sold` are since the last change, and on hand is loaded - sold - unattributed
-- lost: what we know is there. Up to `unattributed` more may be, if those
-sales were the old product's.
+- lost: what we know is there. More may be, if unattributed sales were the old
+product's, but never more than `at_most`: what is left if none of them were
+this product's.
 
 **Receipts before the ledger's opening don't count once it exists.** Purchases
 made before the opening are tests: they never came out of the $600 (#104), so
@@ -138,7 +139,9 @@ class SlotCount:
     `unattributed` units sold in windows that span a product change the
     counters and door times can't split. They are not in `sold`, since they
     may have been the old product's. They are out of `units` (the units we
-    know are there), so on hand is `units` to `units + unattributed`.
+    know are there), so on hand is `units` to `at_most`: what would be left if
+    none of them were this product's. Later sales, pulls and losses lower
+    `at_most` too; `unattributed` stays the count of those sales.
     """
     slot: str
     product: str
@@ -150,6 +153,7 @@ class SlotCount:
     since: datetime
     last_moved: datetime | None = None   # the slot's latest purchase, load, pull or loss
     unattributed: int = 0                # sold, but which product is unknown; see above
+    at_most: int | None = None           # the most that can be on hand; see above (None: `units`)
 
 
 @dataclass(frozen=True)
@@ -667,6 +671,7 @@ class _Slot:
     replaced: str | None = None   # the product this one replaced, if the slot changed
     written_off: int = 0          # units of `replaced` written off as shrinkage at the change
     unattributed: int = 0         # sold in windows that can't be split; not in `sold`
+    at_most: int = 0              # on hand if none of those were this product: loaded less everything else out
 
 
 def weighted_average(movements: list[Movement]) -> Stock:
@@ -701,6 +706,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
             # Sales can have emptied the count; the units still cost what the last ones did.
             each = slot.pool.unit_cost() if slot.pool.units else slot.last_unit_cost
             taken, _ = slot.pool.take(m.units)
+            slot.at_most = max(0, slot.at_most - m.units)
             if taken < m.units:
                 warn(m.slot, f"{m.ref}: {m.units} units pulled from slot {m.slot} but we counted only {taken}")
             shelf(m.sku).add(m.units, None if each is None else each * m.units)
@@ -737,6 +743,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
                     cost = None
                 slot.pool.add(m.to_slot, cost)
             slot.loaded += m.to_slot
+            slot.at_most += m.to_slot
             slot.last_moved = m.at
         elif m.kind == "loss":
             if m.location == "back_stock":
@@ -745,6 +752,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
             elif slot is not None and slot.product == m.sku:
                 gone, cost = slot.pool.lose(m.units)
                 slot.lost += gone
+                slot.at_most = max(0, slot.at_most - m.units)
                 slot.last_moved = m.at
                 where = f"slot {m.slot}"
             else:
@@ -797,6 +805,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
                                       unattributed=f"sold {across}; the counters can't split them"))
             else:
                 slot.sold += m.units
+                slot.at_most = max(0, slot.at_most - m.units)
                 sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, taken, cost,
                                       taken_at=m.at if m.booked_at else None))
         if slot is not None and slot.pool.units:
@@ -810,7 +819,7 @@ def weighted_average(movements: list[Movement]) -> Stock:
         closet=tuple(ClosetCount(sku, pool.units, pool.unit_cost())
                      for sku, pool in sorted(closet.items()) if pool.units),
         slots=tuple(SlotCount(name, s.product, s.pool.units, s.pool.unit_cost(), s.loaded, s.sold, s.lost, s.since,
-                              s.last_moved, s.unattributed)
+                              s.last_moved, s.unattributed, s.at_most)
                     for name, s in sorted(slots.items())),
         warnings=tuple(warnings),
         sales=tuple(sales),

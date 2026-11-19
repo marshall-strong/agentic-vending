@@ -727,3 +727,13 @@ def test_a_poll_in_the_open_minute_after_an_earlier_price_change_is_not_read_as_
     # Without r0 the price change at 17:30:10 can only be r2's, so the door was open: all Coke, as before.
     alone = book(with_door(swap(sku="COKE20", total_paid="8.00")), counters=counters)
     assert [(s.product, s.units, s.unattributed) for s in alone.sales if s.units] == [("COKE20", 2, "")]
+
+
+def test_confirmed_sales_after_unattributed_ones_lower_the_most_that_can_be_on_hand():
+    # 10 Coke loaded at a same-price swap; 8 sold in the window across it (unattributed), then 6 more,
+    # all Coke. If the 8 were Arizonas, 10 - 6 = 4 Coke are left; if they were Coke, none are.
+    stock = book(swap(sku="COKE20", total_paid="8.00"),
+                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 108, 21600, 200),
+                           ("15", hours(8), 114, 22800, 200)])
+    [slot] = stock.slots
+    assert (slot.loaded, slot.sold, slot.unattributed, slot.units, slot.at_most) == (10, 6, 8, 0, 4)
