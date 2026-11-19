@@ -157,8 +157,10 @@ def _section(conn, b: Briefing, name: str, lookup: str, fn):
         return None
 
 
-def _window(conn, start: datetime, end: datetime, partial: bool, ours: tuple[str, ...]) -> MoneyWindow:
-    p = ledger.pnl(conn, start, end)
+def _window(conn, start: datetime, end: datetime, partial: bool, ours: tuple[str, ...],
+            since: datetime | None = None) -> MoneyWindow:
+    """The window from `start` to `end`. `since` is `ledger.pnl`'s start when it isn't `start`: see `_money`."""
+    p = ledger.pnl(conn, start if since is None else since, end)
     first, last = p.takings.start_poll, p.takings.end_poll
     available = first is not None and last is not None and first < last
     covered = False
@@ -205,14 +207,19 @@ def _money(conn, b: Briefing, ours: tuple[str, ...]) -> None:
     week = ledger.week_of(now.astimezone(EASTERN))
     current = datetime.combine(week, time.min, EASTERN).astimezone(timezone.utc)
     previous = datetime.combine(week - timedelta(days=7), time.min, EASTERN).astimezone(timezone.utc)
+    # Adjacent weeks share one boundary, as in `vending.money_series`: a week runs from just before its
+    # midnight to just before the next. `ledger.pnl` counts a sale at a poll after its start, so a poll at
+    # Saturday 00:00 sharp, and the sales it shows since Friday's last poll, land in the new week, once.
+    edge = timedelta(microseconds=1)
     for name, start, end in (("current", current, now),
-                             ("previous", previous, current - timedelta(microseconds=1)),
+                             ("previous", previous, current - edge),
                              ("competition", opened.at, now)):
         if end < opened.at:
             b.money[name] = MoneyWindow(unavailable="before ledger opening")
             continue
         clipped = max(start, opened.at)
-        b.money[name] = _window(conn, clipped, end, name != "previous" or clipped != start, ours)
+        since = clipped if clipped == opened.at else clipped - edge   # the opening's poll is the baseline
+        b.money[name] = _window(conn, clipped, end, name != "previous" or clipped != start, ours, since)
     # Competition figures count from the ledger opening; the balance is only read for its spendable total.
     balance = ledger.balance(conn, now)
     if b.money["competition"].sales_complete and not any("receipt lines have no total_paid" in n for n in balance.notes):
@@ -243,10 +250,17 @@ def _inventory(conn, b: Briefing, ours: tuple[str, ...]) -> None:
     b.closet, b.closet_value_at_cost = machine_state.closet_items(replay.closet)
     b.sales_window_start, b.sales_window_end = m.window_start, m.as_of
     states = {s.slot: s for s in m.data}
+    # With no usable poll, get_machine_state stops before it reads the counts. A recorded count is still
+    # a physical observation, so read the counts here, by the same rule (a count newer than the receipts).
+    seen = {} if m.success else machine_state._seen(conn, b.computed_at)
     for slot in ours:
         s = states.get(slot, machine_state.SlotState(slot=slot, price=None, lifetime_units=None,
                                                     units_sold_in_window=None, units_per_day=None))
         r = receipts.get(slot)
+        looked = machine_state._newer_count(seen.get(slot), r) if seen else None
+        if looked:
+            s = s.model_copy(update={"counted_product": looked["product"], "counted_on_hand": looked["on_hand"],
+                                     "counted_at": looked["counted_at"], "count_source": looked["source"]})
         observed = s.counted_at is not None
         at = s.counted_at if observed else (r.last_moved or r.since) if r else None
         count = s.counted_on_hand if observed else r.units if r else None

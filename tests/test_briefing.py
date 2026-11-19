@@ -101,6 +101,16 @@ def test_no_polls_and_one_poll_never_claim_zero_sales_or_profit(conn):
     assert b.money["competition"].gross_profit is None
 
 
+def test_a_count_shows_when_no_poll_is_usable(conn):
+    ledger.record(conn, "opening", 60000, "capital", "fixture", OPEN)
+    observe(conn, at=NOW - timedelta(hours=1), units=9)
+    b = briefing.build(conn, NOW)
+    assert "polls_unavailable" in codes(b)
+    s = b.slots[0]
+    assert (s.slot, s.effective_stock, s.stock_basis, s.product) == ("15", 9, "door", "Observed cola")
+    assert s.days_of_cover is None and all(t.effective_stock is None for t in b.slots[1:])
+
+
 @pytest.mark.parametrize("missing", ["slot_assignment", "polls", "ledger_entries", "catalog_syncs", "purchase_submissions"])
 def test_missing_schema_is_explicit_and_transaction_ends(conn, missing):
     conn.execute(f"drop table {missing} cascade")
@@ -144,6 +154,29 @@ def test_other_device_unassigned_polls_receipts_counts_excluded(conn):
     assert b.money["competition"].end_poll == NOW - timedelta(hours=1)
 
 
+def test_a_receipt_from_another_machine_is_not_our_stock(conn):
+    sample(conn)
+
+    def seen():
+        b = briefing.build(conn, NOW)
+        return b.closet, b.closet_value_at_cost, b.slots[0].effective_stock, b.money["competition"].known_shrinkage
+
+    def bought(request, device):
+        purchase_requests.record(conn, request, OPEN, False, BODY)
+        response = fulfilled(request, receipt(resolved_at=(OPEN + timedelta(hours=1)).isoformat()),
+                             fulfilled_at=(OPEN + timedelta(hours=1)).isoformat())
+        response["device_id"] = device
+        purchase_requests.store(conn, request, response, NOW)
+
+    before = seen()
+    bought("other-machine", "vmc2")
+    assert seen() == before
+    # The same receipt for our machine does change our stock: the filter is what kept the other one out.
+    bought("our-machine", "vmc1")
+    ours = seen()
+    assert ours[0] != before[0] and ours[2] != before[2]
+
+
 def test_assignment_changes_snapshot_identity(conn):
     sample(conn)
     a = briefing.build(conn, NOW)
@@ -179,8 +212,11 @@ def test_request_freshness_and_settlement_both_ways(conn, hours, stale):
 @pytest.mark.parametrize("source,days,weak", [("door", 7, False), ("door", 8, True), ("photo", 0, False)])
 def test_newer_count_controls_effective_stock_and_cover(conn, source, days, weak):
     sample(conn)
-    # Move receipt earlier so even the stale count is the later physical observation.
+    # Move the receipts earlier so even the stale count is the later physical observation. The opening moves
+    # back with them: receipts before the opening are test purchases and wouldn't count, so nothing would compete.
+    conn.execute("update ledger_entries set at = %s where kind = 'opening'", (OPEN - timedelta(days=11),))
     conn.execute("update purchase_lines set resolved_at = %s", (OPEN - timedelta(days=10),))
+    assert briefing.build(conn, NOW).slots[0].stock_basis == "receipts"
     observe(conn, source=source, at=NOW - timedelta(days=days), units=9)
     b = briefing.build(conn, NOW)
     s = b.slots[0]
@@ -248,6 +284,18 @@ def test_week_boundary_entry_belongs_only_to_new_week(conn):
     b = briefing.build(conn, NOW)
     assert b.money["previous"].live_api_spend == "0.25"
     assert b.money["current"].live_api_spend == "1.50"
+
+
+def test_a_sale_at_the_week_boundary_poll_lands_in_exactly_one_week(conn):
+    sample(conn)
+    boundary = datetime(2026, 11, 7, 5, tzinfo=timezone.utc)   # Saturday 00:00 Eastern
+    # Friday 23:55 at 102 (as the 6 Nov poll), Saturday 00:00 sharp at 103: one sale per slot across the boundary.
+    store_poll(conn, "fri-2355", (boundary - timedelta(minutes=5)).isoformat(), {s: (270, 102) for s in SLOTS})
+    store_poll(conn, "sat-0000", boundary.isoformat(), {s: (270, 103) for s in SLOTS})
+    m = briefing.build(conn, NOW).money
+    # 100 -> 102 in the previous week, 102 -> 106 in this one (the 00:00 poll's sale included): 20 slots at $2.50 ex tax.
+    assert (m["previous"].revenue_ex_tax, m["current"].revenue_ex_tax) == ("100.00", "200.00")
+    assert m["competition"].revenue_ex_tax == "300.00"
 
 
 def test_future_polls_counts_receipts_do_not_leak_into_frozen_read(conn):

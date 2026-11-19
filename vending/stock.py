@@ -528,17 +528,22 @@ def _receipts(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
     """Every fulfilled line and every loss recorded against one: our own purchases, whatever the assignment.
 
     Once the ledger has an opening entry, lines resolved before it (test purchases) and their later
-    losses are left out: see the module docstring.
+    losses are left out: see the module docstring. A receipt whose answer names another machine
+    (`device_id`) stocked that machine, not ours, so it is left out too; an answer with no
+    `device_id` is taken as ours.
     """
     since_at = receipts_count_from(conn)
-    since, args = (" and l.resolved_at >= %s", (since_at,)) if since_at is not None else ("", ())
+    where = " and coalesce(r.last_response->>'device_id', %s) = %s"
+    args: tuple = (DEVICE_ID, DEVICE_ID)
+    if since_at is not None:
+        where, args = where + " and l.resolved_at >= %s", args + (since_at,)
     lines = [dict(zip(_LINE_COLUMNS, row)) for row in conn.execute(
         f"select {', '.join('l.' + c for c in _LINE_COLUMNS)} from purchase_lines l"
-        " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + since, args)]
+        " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + where, args)]
     losses = [dict(zip(_LOSS_COLUMNS, row)) for row in conn.execute(
         "select o.request_id, o.line_no, l.slot, o.location, o.sku, o.units, o.recorded_at"
         " from purchase_line_losses o join purchase_lines l using (request_id, line_no)"
-        " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + since, args)]
+        " join purchase_requests r using (request_id) where r.status = 'fulfilled'" + where, args)]
     return lines, losses
 
 
