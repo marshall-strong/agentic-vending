@@ -16,6 +16,13 @@ script or another agent.
 
 *Sample data from a throwaway database, not a real run. **The highlighted columns in this picture are not our real slots.** For the screenshot our slots were set to columns 2, 4, 6 and 8, to show the page follows `vending.slots`. Our real slots are the ones the stored server assignment names (`python -m vending.slots`).*
 
+The money panel (#48), with seeded test data rendered at a fixed time (9 Dec): an opening of $600, two fulfilled
+requests, three model calls and one pending request. Light, dark and phone:
+
+| Light | Dark | Phone |
+|---|---|---|
+| ![Money panel, light](dashboard/money-1280-light.png) | ![Money panel, dark](dashboard/money-1280-dark.png) | ![Money panel, phone](dashboard/money-390-light.png) |
+
 ## What it shows
 
 The page answers four questions, top to bottom: is it OK, what is it doing, what did it plan, and
@@ -24,12 +31,13 @@ what changed and why.
 | Part | What's in it | Where it comes from |
 |---|---|---|
 | Verdict | **OK**, **Check** or **Problem** next to the title (and in the browser tab), from the worst item in Needs attention | everything below |
-| Tiles | The halt switch and who last changed it; the latest run and how long it has run; a countdown to the Thursday 23:59 Eastern cutoff; how old the last machine poll is and units sold since; what has been spent on drinks (fulfilled requests) and on the model (run costs); on the container, who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `config`, `agent_runs`, `polls`, `purchase_requests`, `page_visits`, `page_visit_totals` |
+| Tiles | The halt switch and who last changed it; the latest run and how long it has run; a countdown to the Thursday 23:59 Eastern cutoff; how old the last machine poll is and units sold since; what has been spent on drinks (fulfilled requests) and on the model (run costs), labelled as development and test spend before the opening, not from the \$600; once the ledger's opening entry is in the past, what has been spent since the opening, from the ledger, so the page gives one figure; on the container, who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `config`, `agent_runs`, `polls`, `purchase_requests`, `vending.ledger`, `page_visits`, `page_visit_totals` |
 | Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours. **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot |
 | In the machine | A close-up of our selections, one shelf at a time, beside a small drawing of the machine's front (5 shelves of 8; row r, column c is selection "rc") that picks the shelf. Which selections are ours comes only from the stored assignment (`vending.slots.our_slots`, kept by `python -m vending.slots record`), read on every page; with none stored the panel says so and draws nothing. Each of ours is a lane seen from above the front edge: the packages on the rail, dashed empty slots, its number plate and price tag, then the product, the count and what Friday does to it. Every other selection is a grey card with its number and "Not ours", and nothing else about it is in the page or `/state.json`. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next Friday** is the latest plan: the empty slots fill in, a swap draws the new product's package and colours, a pull empties the lane, a new price shows the old one struck through, and the agent's reason sits under the lane on one line. Beside it, each change with the agent's reason. "plan row" opens the selection in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs`, `catalog_products`, `config.capacity_overrides` |
 | The plan | "N of 20 slots changed since run #X", a chip per change that jumps to the slot and opens its reason, a "Show changed slots only" switch, then one line per slot (product, price, fill, change tags) that opens to the reason, what it was, and what the slot holds and sold this week. Under it, the weekly update for the team and the notes to itself | `agent_runs`, `vending.stock`, `get_machine_state` |
 | Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it. Under each, **How it decided** opens the run's steps in order: the model's reasoning (a summary the API returns, never the raw chain of thought), anything it wrote, each tool call and what came back, with failed replies in red. A run in progress shows the steps so far | `agent_runs`, `agent_steps` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
+| Money | **Balance**, **spendable** (balance less the sales tax set aside) and **profit since the opening**. One bar shows where the money in (opening, capital, takings) has gone: drinks bought, midweek visits, model spend, tax handed over, tax set aside, and what is still spendable. Then model spend against the proposed \$9 and visit fees against the proposed \$50, the profit and loss since the opening, the proposed split of the \$600 (#113), and the ledger's notes, such as development spend from before the opening. **Committed:** what the pending purchase requests could still cost at most (the dearer of each line's primary and alternate at `packs x max_price_per_pack`, plus an off-cycle request's visit fee), since the ledger counts a purchase only once it is fulfilled. If any pending line has no price we can read, the most is unknown, never counted as \$0, and so is what stays spendable after it. The competition counts from the ledger's opening entry; anything before it is development and test spend, not from the \$600, and no figure here counts it. Before the opening entry, it says how to record it; an opening entry dated in the future (recorded ahead with `--at`) keeps that view and says when the ledger opens. Receipts and visit fees from before the opening are test purchases: once the opening is recorded, stock on hand and cost of sales leave them out too (`stock.receipts_count_from`, #150). A submission sent with no usable answer (`sending` or `unknown` in `purchase_submissions`) counts as committed too, since it may exist at the bridge. Needs attention adds: **Problem** if spendable is below zero, or if pending requests could cost more than is spendable; **Check** if spendable would fall under the proposed \$53 floor, if requests are pending with no opening entry or before an opening dated ahead (the date in Eastern), if a submission is unsettled, if a pending line has no price we can read, or if the ledger can't give a balance (for example, our slot assignment isn't recorded); **Info** if model spend passes \$9. If reading the ledger passes the statement timeout, only this panel says it isn't available; the rest of the page still shows | `vending.ledger` (`balance`, `pnl`), `purchase_requests`, `purchase_submissions` |
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates) and catalog requests | `purchase_requests`, `purchase_lines`, `product_requests` |
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
 
@@ -120,10 +128,11 @@ The page shows only what something recorded, and says so when nothing did.
   what a worker loaded.
 - **Unknown stays unknown.** A selection with no receipt shows `?` and "unknown", never a guess
   from the plan. A price with no poll shows a dash. Without a plan, Next Friday says "No plan yet".
-- **No balance or profit shown yet: the ledger (#35) has landed, and its panel is the next step.**
 
-**Not shown yet:** the balance and profit and loss. They arrive with the ledger (#35); a tile is a
-small addition once it merges. "Spent so far" is only what the receipts and run costs record.
+**Money is the ledger's, exact to the cent.** The balance counts a purchase only once it is
+fulfilled, so the panel adds what pending requests could still cost, read from their own bodies.
+The \$600 split and the \$53 floor are the team's *proposed* capital plan (#113), shown as reference
+lines only.
 
 ## What is in the machine: counts
 
@@ -194,9 +203,8 @@ Times on the page show in your browser's time zone. On Windows, the cutoff date 
 
 Ideas for the team to react to. None of this is built.
 
-**A. Headline numbers and stock.** Tiles for the halt switch, the cutoff countdown, the balance
-and the week's profit, and a stock bar in each slot. The tiles need the ledger (#35) and token
-spend (#40); the stock bars can use `vending.stock` today.
+**A. The week's profit.** The Money panel shows profit since the opening; a week-by-week view
+(`ledger.pnl_by_week`, as `python -m vending.pnl_report` prints it) isn't on the page yet.
 
 **B. Plan history.** One card per week: the update, the slots that changed, the notes, what it
 cost. Everything it needs is in `agent_runs` once #39 writes it.

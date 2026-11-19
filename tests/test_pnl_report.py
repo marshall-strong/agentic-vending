@@ -450,6 +450,19 @@ def test_a_range_with_no_end_shows_the_balance_now_whatever_the_clocks_say(conn,
     assert "Balance now" in pr.render(report)[1]
 
 
+def test_a_range_spanning_the_opening_shows_no_test_purchase_or_its_fee(conn):
+    """A $12.37 off-cycle test purchase with a $25 visit fee before the opening is not ours: the printed
+    range that spans it shows neither, in the totals or in any week."""
+    deliver(conn, "test", off_cycle=True, visit_fee_cents=2500, resolved_at="2026-10-25T16:00:00Z")
+    open_ledger(conn)
+    report = pr.load(conn, date(2026, 10, 20), END)
+    t = report.totals
+    assert (t.purchases, t.visit_fees, t.visits, t.net) == ("0.00", "0.00", 0, "0.00")
+    assert [w.visit_fees_cents for w in report.weeks if w.visit_fees_cents] == []
+    _, body = pr.render(replace(report, view="detailed"))
+    assert "$25.00" not in body and "$12.37" not in body
+
+
 def test_a_range_that_ends_before_the_opening_shows_no_balance(conn):
     open_ledger(conn)
     report = pr.load(conn, date(2026, 10, 1), date(2026, 10, 20))

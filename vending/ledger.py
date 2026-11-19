@@ -19,7 +19,10 @@ included, counted from the last good poll at or before the opening entry
 `purchase_lines.total_paid` on fulfilled requests. A midweek visit fee is
 charged for every fulfilled off-cycle request: the fee stored on the request
 when it was submitted, or `config.midweek_fee_cents` ($25.00 by default) for
-requests that predate that column. Only what has no other record lives in
+requests that predate that column. Once the opening is recorded, receipts and
+visits from before it are test purchases: no figure counts them, whatever
+range is asked for, the same boundary the stock count uses
+(`stock.receipts_count_from`). Only what has no other record lives in
 `ledger_entries`: the one opening entry, later capital, each model call's
 cost, tax remittances and adjustments.
 
@@ -595,13 +598,15 @@ def _receipts(conn: psycopg.Connection, start: datetime, end: datetime) -> tuple
     """(total paid in cents, lines counted, lines with no total) for receipt lines resolved in the window.
 
     Lines go by their own `resolved_at`, the same clock the stock replay uses,
-    so a purchase and the sales it costs can't fall in different windows.
+    so a purchase and the sales it costs can't fall in different windows. Lines
+    before the opening are test purchases and left out, at the boundary the
+    stock replay uses (`stock.receipts_count_from`).
     """
     total, lines, missing = conn.execute(
         "select coalesce(sum(l.total_paid), 0), count(l.total_paid), count(*) - count(l.total_paid)"
         " from purchase_lines l join purchase_requests r using (request_id)"
         " where r.status = 'fulfilled' and l.resolved_at >= %s and l.resolved_at <= %s",
-        (start, end),
+        (stock.receipts_count_from(conn, start), end),
     ).fetchone()
     return Fraction(Decimal(total)) * 100, lines, missing
 
@@ -617,7 +622,9 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
 
     Each request is charged the fee stored on it at submission; requests from
     before that column existed fall back to `config.midweek_fee_cents`. A visit
-    is timed at its first receipt line, like the stock it delivered.
+    is timed at its first receipt line, like the stock it delivered, so a visit
+    timed before the opening brought test purchases and its fee is left out
+    (`stock.receipts_count_from`).
     """
     fee = config.get_value(conn, "midweek_fee_cents", DEFAULT_MIDWEEK_FEE_CENTS)
     if not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
@@ -628,7 +635,7 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
         "                 r.fulfilled_at) as at, coalesce(r.visit_fee_cents, %s) as fee"
         " from purchase_requests r where r.off_cycle and r.status = 'fulfilled') v"
         " where v.at between %s and %s order by v.at",
-        (fee, start, end),
+        (fee, stock.receipts_count_from(conn, start), end),
     ).fetchall()
     return [(at, int(cents)) for at, cents in rows]
 

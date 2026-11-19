@@ -549,3 +549,92 @@ def test_the_public_explorer_hides_the_hostnames_of_the_dev_machines(site, schem
     assert "KEVINS-LAPTOP" not in page and "(hidden)" in page and "kevin" in page
     with open_in(*schema_url) as local:
         assert "KEVINS-LAPTOP" in db_explorer.render(local, db_explorer.Request(schema, "model_calls", 0))[1]
+
+
+def _leaves(value, path=()):
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            yield from _leaves(inner, (*path, key))
+    elif isinstance(value, list):
+        for inner in value:
+            yield from _leaves(inner, (*path, "[]"))
+    else:
+        yield path, value
+
+
+def test_the_public_json_money_panel_carries_only_counts_and_dollar_strings(schema_url, reader, conn, monkeypatch):
+    """`/dashboard/state.json` through `pages.respond`: the money panel's figures, never a request body."""
+    from datetime import datetime, timedelta, timezone
+
+    from psycopg.types.json import Jsonb
+
+    from tests.test_dashboard import fulfilled
+    from vending import ledger
+
+    url, schema = schema_url
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "connect", lambda: _as(url, schema, reader))
+    opened = datetime.now(timezone.utc) - timedelta(days=5)
+    fulfilled(conn, "pr-test", "15", "RB", units_loaded=0, to_back_stock=4, paid="9.99", at=opened - timedelta(days=3))
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=opened)
+    fulfilled(conn, "pr-1", "15", "RB", units_loaded=11, paid="34.99", at=opened + timedelta(days=1))
+    secret = {"off_cycle": False, "lines": [{"slot": "15", "source": "purchase", "primary": {
+        "sku": "ZZ-SECRET-SKU", "store": "SecretMart", "packs": 2, "units_per_pack": 24,
+        "max_price_per_pack": "40.50", "sale_price": "3.50", "change_product": True}}]}
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body)"
+                 " values ('pr-2', now(), false, %s)", (Jsonb(secret),))
+
+    reply = pages.respond(pages.STATE)
+    assert reply.status == 200 and reply.content_type == pages.JSON
+    text = reply.body if isinstance(reply.body, str) else reply.body.decode()
+    money = json.loads(text)["money"]
+    assert money["ok"] and money["data"]["opened"] is True and money["data"]["balance"] == "565.01"
+    assert money["data"]["committed"] == {"requests": 1, "unsettled": 0, "max": "81.00", "unpriced_lines": 0}
+    blob = json.dumps(money)
+    assert "ZZ-SECRET-SKU" not in blob and "SecretMart" not in blob and "request_body" not in blob
+    _only_counts_dollars_and_times(money["data"])
+
+
+def _only_counts_dollars_and_times(data):
+    """Every leaf of the money panel's data is a count, a flag, a dollar string, a timestamp (the
+    opening, or when a future-dated opening opens) or a ledger note."""
+    import re
+    from datetime import datetime
+
+    dollars = re.compile(r"-?\d+\.\d{2}")
+    for path, value in _leaves(data):
+        if path in (("opening_at",), ("opens_at",)):
+            datetime.fromisoformat(value)
+        elif path[:1] == ("notes",):
+            assert isinstance(value, str)       # the ledger's own sentences
+        else:
+            assert value is None or isinstance(value, (bool, int)) or dollars.fullmatch(value), (path, value)
+
+
+def test_the_public_json_money_panel_before_a_future_dated_opening(schema_url, reader, conn, monkeypatch):
+    """An opening recorded ahead: the public JSON says when it opens, plus counts, and nothing else."""
+    from datetime import datetime, timedelta, timezone
+
+    from psycopg.types.json import Jsonb
+
+    from vending import ledger
+
+    url, schema = schema_url
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "connect", lambda: _as(url, schema, reader))
+    opens = datetime.now(timezone.utc) + timedelta(days=3)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=opens)
+    secret = {"off_cycle": False, "lines": [{"slot": "15", "source": "purchase", "primary": {
+        "sku": "ZZ-SECRET-SKU", "store": "SecretMart", "packs": 1, "units_per_pack": 24,
+        "max_price_per_pack": "40.50", "sale_price": "3.50", "change_product": True}}]}
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body)"
+                 " values ('pr-ahead', now(), false, %s)", (Jsonb(secret),))
+
+    reply = pages.respond(pages.STATE)
+    assert reply.status == 200 and reply.content_type == pages.JSON
+    text = reply.body if isinstance(reply.body, str) else reply.body.decode()
+    money = json.loads(text)["money"]
+    assert money["ok"] and money["data"]["opened"] is False
+    assert datetime.fromisoformat(money["data"]["opens_at"]) == opens
+    assert "ZZ-SECRET-SKU" not in text and "SecretMart" not in text
+    _only_counts_dollars_and_times(money["data"])
