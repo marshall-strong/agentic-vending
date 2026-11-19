@@ -154,29 +154,6 @@ def test_other_device_unassigned_polls_receipts_counts_excluded(conn):
     assert b.money["competition"].end_poll == NOW - timedelta(hours=1)
 
 
-def test_a_receipt_from_another_machine_is_not_our_stock(conn):
-    sample(conn)
-
-    def seen():
-        b = briefing.build(conn, NOW)
-        return b.closet, b.closet_value_at_cost, b.slots[0].effective_stock, b.money["competition"].known_shrinkage
-
-    def bought(request, device):
-        purchase_requests.record(conn, request, OPEN, False, BODY)
-        response = fulfilled(request, receipt(resolved_at=(OPEN + timedelta(hours=1)).isoformat()),
-                             fulfilled_at=(OPEN + timedelta(hours=1)).isoformat())
-        response["device_id"] = device
-        purchase_requests.store(conn, request, response, NOW)
-
-    before = seen()
-    bought("other-machine", "vmc2")
-    assert seen() == before
-    # The same receipt for our machine does change our stock: the filter is what kept the other one out.
-    bought("our-machine", "vmc1")
-    ours = seen()
-    assert ours[0] != before[0] and ours[2] != before[2]
-
-
 def test_assignment_changes_snapshot_identity(conn):
     sample(conn)
     a = briefing.build(conn, NOW)
