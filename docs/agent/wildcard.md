@@ -21,7 +21,7 @@ One fixed slot tests products for the other 19 and may sell up to $8.00; it neve
 
 - sold nothing since the last Friday visit, one product throughout, proven by its counter: read at or before that Friday's midnight and within 6 hours of now, with no restart or gap over 6 hours;
 - was watched for 4 in-stock class days, Monday to Thursday, each to 6 PM (so run Thursday evening);
-- has stock confirmed: that visit's own receipt loaded it, or a count since its last load names its SKU and its receipted units. A disagreeing count makes it unknown.
+- has stock confirmed: that visit's own receipt loaded it, or a count since its last load names its SKU and units receipts allow. A disagreeing count makes it unknown.
 
 Never into a slot that sold. `unconfirmed_slots` may be empty: ask for a count before Friday.
 
