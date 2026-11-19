@@ -58,20 +58,34 @@ _SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*-?\s*(fl\.?\s*oz\.?|oz\.?|ounces?|ml)
 ML_SLACK = Fraction(1, 100)
 
 
-def from_size(size: str | None) -> int | None:
-    """Units per column for a catalog `size`, or None when the chart doesn't cover it."""
+def parse_size(size: str | None) -> tuple[str, Fraction, str | None, bool] | None:
+    """A catalog `size` read as (container, ounces, the word before the container, metric), or None.
+
+    "12 fl oz sleek can" is ("can", 12, "sleek", False); "250 ml can" is ("can", 250/29.5735, None,
+    True). The container is lower case: bottle, can or carton. The dashboard's machine close-up
+    picks a package drawing from this, so both read a size the same way.
+    """
     match = _SIZE.match(size or "")
     if not match:
         return None
     amount, unit, word, container = match.groups()
     metric = unit.lower() == "ml"
     oz = Fraction(amount) / ML_PER_OZ if metric else Fraction(amount)
+    return container.lower(), oz, word.lower() if word else None, metric
+
+
+def from_size(size: str | None) -> int | None:
+    """Units per column for a catalog `size`, or None when the chart doesn't cover it."""
+    parsed = parse_size(size)
+    if parsed is None:
+        return None
+    container, oz, word, metric = parsed
     slack = ML_SLACK if metric else 0
     # The chart's 20 oz and 14 oz bottles are PET; a glass one may not fit as many.
-    if word and word.lower() == "glass" and container.lower() == "bottle" and oz != 16:
+    if word == "glass" and container == "bottle" and oz != 16:
         return None
     for kind, low, high, units in CHART:
-        if container.lower() == kind and low * (1 - slack) <= oz <= high * (1 + slack):
+        if container == kind and low * (1 - slack) <= oz <= high * (1 + slack):
             return units
     return None
 

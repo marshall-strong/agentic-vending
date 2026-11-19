@@ -2,7 +2,9 @@
 
 import pytest
 
-from vending.capacity import for_product, from_size
+from fractions import Fraction
+
+from vending.capacity import ML_PER_OZ, for_product, from_size, parse_size
 
 
 @pytest.mark.parametrize("size, units", [
@@ -51,3 +53,21 @@ def test_a_count_wins_over_the_chart_and_fills_its_gaps():
     assert for_product("MONSTER-WHITE-16CAN", "16 oz can", counted) == 6
     assert for_product("BUBLY-LIME-12CAN", "12 oz can", counted) == 8
     assert for_product("PREMIER-CHOCOLAT-11CAR", "11 oz carton", counted) is None
+
+
+@pytest.mark.parametrize("size, parsed", [
+    ("12 oz can", ("can", Fraction(12), None, False)),
+    ("12 fl oz sleek can", ("can", Fraction(12), "sleek", False)),
+    ("16 OZ Glass Bottle", ("bottle", Fraction(16), "glass", False)),
+    ("20-oz. bottles", ("bottle", Fraction(20), None, False)),
+    ("11 oz carton", ("carton", Fraction(11), None, False)),
+    ("250 ml can", ("can", 250 / ML_PER_OZ, None, True)),
+    ("16.9 oz bottle", ("bottle", Fraction("16.9"), None, False)),
+])
+def test_parse_size_reads_container_ounces_and_word(size, parsed):
+    assert parse_size(size) == parsed
+
+
+@pytest.mark.parametrize("size", [None, "", "1 L bottle", "large", "12 oz", "can"])
+def test_parse_size_gives_none_for_what_it_cannot_read(size):
+    assert parse_size(size) is None

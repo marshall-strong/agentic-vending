@@ -26,18 +26,78 @@ what changed and why.
 | Verdict | **OK**, **Check** or **Problem** next to the title (and in the browser tab), from the worst item in Needs attention | everything below |
 | Tiles | The halt switch and who last changed it; the latest run and how long it has run; a countdown to the Thursday 23:59 Eastern cutoff; how old the last machine poll is and units sold since; what has been spent on drinks (fulfilled requests) and on the model (run costs) | `config`, `agent_runs`, `polls`, `purchase_requests` |
 | Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours. **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot |
-| In the machine | The machine's face, upright: 5 shelves of 8 selections (row r, column c is selection "rc"), with our selections lit and the rest striped. Which selections are ours comes only from the stored assignment (`vending.slots.our_slots`, kept by `python -m vending.slots record`), read on every page; with none stored the panel says so and lights nothing. Each of ours shows its number, a bottle filled to the units on hand with the count on it, the product under it and the price tag. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next Friday** is the latest plan: its product, price (the tag now struck through when it changes) and fill; slots the plan changed are outlined, with a dot for the kind (blue swap or fill, amber price, red pull). Beside it, each change with the agent's reason. Click a selection to open it in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs` |
+| In the machine | A close-up of our selections, one shelf at a time, beside a small drawing of the machine's front (5 shelves of 8; row r, column c is selection "rc") that picks the shelf. Which selections are ours comes only from the stored assignment (`vending.slots.our_slots`, kept by `python -m vending.slots record`), read on every page; with none stored the panel says so and draws nothing. Each of ours is a lane seen from above the front edge: the packages on the rail, dashed empty slots, its number plate and price tag, then the product, the count and what Friday does to it. Every other selection is a grey card with its number and "Not ours", and nothing else about it is in the page or `/state.json`. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next Friday** is the latest plan: the empty slots fill in, a swap draws the new product's package and colours, a pull empties the lane, a new price shows the old one struck through, and the agent's reason sits under the lane on one line. Beside it, each change with the agent's reason. "plan row" opens the selection in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs`, `catalog_products`, `config.capacity_overrides` |
 | The plan | "N of 20 slots changed since run #X", a chip per change that jumps to the slot and opens its reason, a "Show changed slots only" switch, then one line per slot (product, price, fill, change tags) that opens to the reason, what it was, and what the slot holds and sold this week. Under it, the weekly update for the team and the notes to itself | `agent_runs`, `vending.stock`, `get_machine_state` |
 | Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it. Under each, **How it decided** opens the run's steps in order: the model's reasoning (a summary the API returns, never the raw chain of thought), anything it wrote, each tool call and what came back, with failed replies in red. A run in progress shows the steps so far | `agent_runs`, `agent_steps` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates) and catalog requests | `purchase_requests`, `purchase_lines`, `product_requests` |
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
 
-A bottle's level is the units over the package's capacity from the machine's loading label
-(`PACKAGE_CAPACITY`: 20 oz PET 7, 16 oz glass 7, 16 oz PET 8, 12 oz can 8, 16 oz can 8 (estimated), 240/250 ml can 11,
-14 oz PET 8; approximate), used only when the product name states the package. Otherwise it is
-drawn against the plan's fill, or the count itself. Bottle colours come from a hash of the product
-name, so there is no brand table to keep up.
+### The machine close-up
+
+![In the machine, dark theme](dashboard/machine-closeup-dark.png)
+
+| | |
+|---|---|
+| ![Light theme](dashboard/machine-closeup-light.png) | ![Next Friday](dashboard/machine-closeup-next-friday.png) |
+| Light theme | Next Friday: a swap (12), a price change (13) |
+
+![A 390 px phone](dashboard/machine-closeup-phone-390.png)
+
+*Sample data in a throwaway local database, not a real run: the products, prices, plan and reasons
+are made up, and our selections were set to columns 1 to 4 for the picture. Seeded the evening of
+15 Nov 2026.*
+
+How to read a lane:
+
+- **Count.** The big number is units on hand (Now) or after the plan's fill (Next Friday). **~4**
+  is from a photo count: units seen down the rail, less sales since, so at least that many. **?**
+  means no receipt or count yet; the rail behind the front item is then hatched, never drawn full or
+  empty.
+- **+N back Friday** is the plan's `fill_to` less the units on hand, when both are known. With
+  units unknown it is **+?**. With no plan there is no number, only "no plan yet". It is never
+  capacity less units.
+- **Dashed slots** are empty room in the column. How many fit comes from
+  `capacity.for_product`: a person's count in `config.capacity_overrides`, else the machine's
+  loading chart for the catalog size. With neither (a carton, a 16.9 oz bottle), the lane draws no
+  empty slots beyond what the plan fills and says "capacity not counted yet".
+- **Swap, pull, price.** On Next Friday a swap draws the new product, a pull shows the lane empty,
+  and a price change strikes the old tag through. The agent's reason is cut to one line; the full
+  text is in the plan row.
+- **Named from a count.** Photo and door counts name a product in free text, not a SKU, so it
+  can't be looked up in the catalog. The package is then read from the name ("Coke 20 oz bottle"),
+  with a hash colour, and the lane says "named from a photo count".
+
+Where the drawing comes from (`vending/machine_art.py`; no photos, no images, no model calls):
+
+- **Package shape**: `SHAPES`, one entry per package with real millimetre sizes (typical retail
+  figures, not measured on our packages), picked by the catalog `size` through
+  `capacity.parse_size`, the same reading the capacity chart uses. A size it can't read gets the
+  generic bottle, can or carton (`FALLBACK`).
+- **Colours and label**: `LOOKS`, by SKU, then `line|flavor`, then line, all lower case. Anything
+  else gets a steady colour from a hash of the SKU and the first word of its line as its label, so
+  a product added to the catalog today draws without any change here.
+- **The one extra read**: the snapshot's `products` entry reads `catalog_products` (sku, name,
+  line, flavor, size) for the products our lanes hold now or next, and the capacity overrides for
+  them, in the same read-only, repeatable-read snapshot. If that read fails, the page still draws:
+  packages are guessed from names, capacities are unknown, and the legend says so.
+
+To make a product look right, add a row to `LOOKS` in `vending/machine_art.py`, keyed by its line
+and flavor as the catalog spells them, lower case (`"bubly|strawberry"`), or by its line alone for
+every flavor:
+
+```python
+"bubly|strawberry": {"c1": "#94c93a", "c2": "#f6d3d6", "c3": "#e23b4f", "ink": "#8a1a2a", "label": "bubly"},
+```
+
+`c1` is the body, `c2` the label band, `c3` the cap or stripe, `ink` the label text, and `label` a
+word or two printed on the front package. A new package size (a 1 L bottle, say) is a new `SHAPES`
+entry with its diameter and height; anything else in the page needs no change.
+
+On a phone the shelf is a strip that shows two lanes at a time: swipe, drag its scroll bar, use the
+arrows on each lane, or focus it and use the arrow keys. From 820 px wide the whole shelf of 8
+shows at once. Every lane has an aria label that reads it out (product, count, Friday, price,
+reason); with reduced motion set, the Friday fill doesn't animate.
 
 A slot counts as changed when what the plan asks for changes (product, fill, price, keep). A
 reworded reason alone is not a change. Status and the machine follow `live` and `dry-run` runs
@@ -45,9 +105,9 @@ only, and a plan is compared only with the last plan of the same mode; replays o
 under Runs, dimmed. Model spend counts `live` and `dry-run` runs.
 
 The page refreshes itself in place every 30 seconds, keeping your scroll position, any open
-slot or arguments, the tool-call filter, the Now / Next Friday choice and the changed-only switch,
-and the verdict in the tab title. Without JavaScript the machine shows Now, the plan shows every
-slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
+slot or arguments, the tool-call filter, the Now / Next Friday choice, the shelf you picked and the
+changed-only switch, and the verdict in the tab title. Without JavaScript the machine shows Now
+(the shelf links still work), the plan shows every slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
 page and says how old it is. Without JavaScript it reloads the whole page instead.
 
 ## Honesty rules

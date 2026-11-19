@@ -17,11 +17,13 @@ The page, top to bottom:
  - Verdict and tiles: OK / check / problem, the halt switch, the latest run,
    the order cutoff countdown, the machine's last poll, and what has been spent.
  - Needs attention: each thing that is wrong or about to be, in a sentence.
- - In the machine: the machine's face, upright, with our selections (the stored
-   assignment, `vending.slots.our_slots`) lit; with none stored it says so instead
-   of guessing. Now shows the tag price (polls) and the product
-   and units on hand (receipts); Next Friday shows the latest plan. Anything
-   without a record says unknown.
+ - In the machine: a close-up of our selections (the stored assignment,
+   `vending.slots.our_slots`), one shelf at a time, each lane drawn from above
+   (`vending.machine_art`), beside the machine's front for picking the shelf; with
+   no assignment stored it says so instead of guessing. Now shows the tag price
+   (polls) and the product and units on hand (receipts, or a newer count); Next
+   Friday shows the latest plan: the slots it fills, a swap, a pull, a new price.
+   Anything without a record says unknown.
  - The plan: what changed since the plan before, then one line per slot that
    opens to the agent's reason, what it was, and what the slot holds and sold.
    Then the agent's weekly update and its notes to itself.
@@ -37,7 +39,6 @@ import argparse
 import json
 import re
 import sys
-import zlib
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, localcontext
@@ -51,7 +52,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import db, settings, slot_counts
+from vending import db, machine_art, settings, slot_counts
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
@@ -77,13 +78,10 @@ STALE_RUN = timedelta(hours=2)
 RECENT = timedelta(hours=24)
 # Halted this close to the cutoff means no request can go out in time.
 CUTOFF_SOON = timedelta(hours=24)
-# Units a selection holds, by package, from the machine's loading label, plus the 16 oz can,
-# estimated from its width (`vending/capacity.py`, A20). Approximate: it only scales the bottle
-# drawn in "In the machine", and only when the product name says the package.
-PACKAGE_CAPACITY = {"20oz PET": 7, "16oz glass": 7, "16oz PET": 8, "12oz can": 8, "240/250ml can": 11,
-                    "14oz PET": 8, "16oz can": 8}
 # The machine's face: 5 shelves of 8 selections. Row r, column c is selection "rc".
-SHELVES, COLUMNS = 5, 8
+SHELVES, COLUMNS = machine_art.SHELVES, machine_art.COLUMNS
+# What a free-text product name says about its package, for a lane named by a count.
+_package = machine_art.package_from_name
 
 
 def _connect() -> psycopg.Connection:
@@ -476,7 +474,7 @@ def _slots_named(warning: str) -> set[str]:
 def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
-    return {
+    snap = {
         "as_of": now,
         "ours": ours,
         "status": _status(conn, now),
@@ -503,6 +501,23 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
             conn, "select id, requested_at, name, size, status, decision_note"
                   " from product_requests order by requested_at desc, id desc limit %s", (REQUEST_ROWS,))),
     }
+    snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
+    return snap
+
+
+# Shown when the products read fails, in place of the error's text.
+PRODUCTS_FAILED = ("the catalog couldn't be read, so packages are guessed from product names and capacities "
+                   "are unknown")
+
+
+def _products(conn: psycopg.Connection, skus: list[str]) -> dict:
+    """The catalog rows and counted capacities for the products our lanes hold now or next, for the
+    close-up's package shapes. A failure only costs the drawings their exactness: it rolls back to
+    its savepoint, and the page draws packages from their names with unknown capacity."""
+    try:
+        return _panel(lambda: _guarded(conn, lambda: machine_art.read_products(conn, skus)))
+    except (psycopg.Error, ValueError, TypeError, KeyError):
+        return {"ok": False, "why": PRODUCTS_FAILED}
 
 
 def attention(snap: dict) -> list[dict]:
@@ -727,53 +742,6 @@ def _same_price(a: Any, b: Any) -> bool:
         return str(a) == str(b)
 
 
-def _package(product: str | None) -> str | None:
-    """The loading-label package a product name states, like `20oz PET`, or None when it doesn't say
-    clearly enough. Reads names such as `COKE-20OZ`, `Red Bull 250ml can` or `Jarritos 12.5 oz glass`."""
-    if not product:
-        return None
-    text = product.lower()
-    found = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*-?\s*(fl\.?\s*oz|oz|ounces?|ml)(?![a-z])", text)
-    if not found:
-        return None
-    size, unit = Decimal(found.group(1)), found.group(2)
-    glass = re.search(r"\bglass\b", text) is not None
-    can = re.search(r"\bcans?\b", text) is not None
-    pet = re.search(r"\b(pet|plastic)\b", text) is not None
-    if unit == "ml":
-        return "240/250ml can" if size in (240, 250) and not glass and "bottle" not in text else None
-    if size == 20 and not glass and not can:
-        return "20oz PET"
-    if size == 14 and not glass and not can:
-        return "14oz PET"
-    if size == 16:
-        if can and not glass and not pet:
-            return "16oz can"
-        return "16oz glass" if glass and not pet else "16oz PET" if pet and not glass else None
-    if size == 12 and can:
-        return "12oz can"
-    return None
-
-
-def _level(units: int | None, product: str | None, fill_to: Any) -> int:
-    """How full to draw a bottle, in percent: units over the package's capacity when the name gives
-    the package, otherwise over the larger of the units and the plan's fill."""
-    if not units:
-        return 0
-    capacity = PACKAGE_CAPACITY.get(_package(product) or "")
-    if capacity is None:
-        fill = fill_to if isinstance(fill_to, int) and not isinstance(fill_to, bool) else 0
-        capacity = max(units, fill)
-    return min(100, round(100 * units / capacity))
-
-
-def _colour(product: str | None) -> str:
-    """A steady colour per product, from a hash of its name, so no brand table needs keeping."""
-    if not product:
-        return "var(--muted)"
-    return f"hsl({zlib.crc32(product.strip().lower().encode('utf-8')) % 360}, 62%, 46%)"
-
-
 def _change_kind(labels: list[str]) -> str:
     """The tone of a slot's change dot: a pull is `bad`, a price change `warn`, a swap or fill `info`."""
     if "pull" in labels or "dropped" in labels:
@@ -841,58 +809,8 @@ def machine_view(snap: dict) -> dict:
     return out
 
 
-def _bottle(units: int | None, product: str | None, fill_to: Any, view: str, estimate: bool = False) -> str:
-    if units is None:
-        return (f'<span class="bottle unknown v-{view}" role="img" aria-label="units unknown">'
-                '<b>?</b></span>')
-    shown = f"~{units}" if estimate else str(units)
-    return (f'<span class="bottle v-{view}" role="img" aria-label="{"about " if estimate else ""}{units} units">'
-            f'<i style="height:{_level(units, product, fill_to)}%;background:{_colour(product)}"></i>'
-            f'<b>{shown}</b></span>')
-
-
-def _price_text(price: Any) -> str:
-    return "&mdash;" if price is None else _e(price)
-
-
-def _ours(slot: str, v: dict, linked: bool) -> str:
-    """One of our selections: number, bottle, product label and price tag, for Now and Next Friday."""
-    now, nxt, change = v["now"], v["next"], v["change"]
-    classes = ["slot", "ours"]
-    if change:
-        classes.append("changed")
-    if now["units"] == 0:
-        classes.append("empty-now")
-    title = [f"{slot}: {now['product'] or 'product unknown'}",
-             "price unknown" if now["price"] is None else f"${now['price']} on the tag",
-             "units unknown" if now["units"] is None else f"{now['units']} on hand"]
-    if now["source"] in ("photo", "door"):
-        title.append(f"counted from a {now['source']} on {_eastern(now['counted_at']):%d %b}, less sales since")
-    parts = [f'<span class="num">{_e(slot)}</span>']
-    if change:
-        parts.append(f'<span class="chg {change["kind"]}"></span>')
-        title.append("next: " + ", ".join(change["labels"]) + (f" ({change['reason']})" if change["reason"] else ""))
-    counted_empty = now["source"] in ("photo", "door") and now["product"] is None and now["units"] == 0
-    parts.append(_bottle(now["units"], now["product"], v["fill_to"], "now",
-                         estimate=now["source"] == "photo" and not counted_empty))
-    parts.append(f'<span class="lbl v-now">{"empty" if counted_empty else (_e(now["product"]) or "unknown")}</span>')
-    parts.append(f'<span class="tag v-now">{_price_text(now["price"])}</span>')
-    if nxt is not None:
-        if nxt["pulled"]:
-            classes.append("empty-next")
-        parts.append(_bottle(nxt["units"], nxt["product"], nxt["fill_to"], "next"))
-        label = "pulled" if nxt["pulled"] else (_e(nxt["product"]) or "unknown") if nxt["in_plan"] else "not in plan"
-        parts.append(f'<span class="lbl v-next">{label}</span>')
-        old = f'<s>{_e(nxt["old_price"])}</s>' if nxt["old_price"] is not None else ""
-        parts.append(f'<span class="tag v-next">{old}{_price_text(nxt["price"])}</span>')
-    tag = "a" if linked else "span"
-    href = f' href="#slot-{_e(slot)}"' if linked else ""
-    return (f'<{tag} class="{" ".join(classes)}" data-slot="{_e(slot)}"{href} title="{_e("; ".join(title))}">'
-            + "".join(parts) + f"</{tag}>")
-
-
 def _cabinet_html(snap: dict) -> str:
-    """In the machine: the whole machine face, upright, with our selections lit, and the plan's changes."""
+    """In the machine: our lanes close up (`vending.machine_art`), and the plan's changes."""
     now, plan, sales, stock = snap["as_of"], snap["plan"], snap["sales"], snap["stock"]
     if not snap["ours"]["ok"]:
         return ('<section id="vm" class="vm" data-view="now"><h2>In the machine</h2>'
@@ -900,23 +818,11 @@ def _cabinet_html(snap: dict) -> str:
     p = plan["data"] if plan["ok"] else None
     view = machine_view(snap)
     face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
-    shelves = []
-    for r in range(1, SHELVES + 1):
-        cells = []
-        for c in range(1, COLUMNS + 1):
-            slot = f"{r}{c}"
-            cells.append(_ours(slot, view[slot], p is not None) if slot in view else
-                         f'<span class="slot theirs" title="{slot}: not our selection"><span class="num">{slot}</span></span>')
-        shelves.append(f'<div class="shelf">{"".join(cells)}</div>')
-    noplan = '' if p is not None else '<div class="noplan v-next">No plan yet</div>'
-    keys = "".join(f"<span>{k}</span>" for k in "123456789")
-    cabinet = (f'<div class="cab" aria-label="The machine, {SHELVES} shelves of {COLUMNS} selections">'
-               f'<div class="brand">ROYAL VISION VENDER &middot; {_e(DEVICE_ID.upper())}</div>'
-               f'<div class="glass">{"".join(shelves)}{noplan}</div>'
-               f'<div class="ctl" aria-hidden="true"><div class="lcd"><span class="v-now">NOW</span>'
-               f'<span class="v-next">FRI</span></div><div class="bill"></div><div class="keys">{keys}</div>'
-               f'<div class="coin"></div></div>'
-               f'<div class="bin" aria-hidden="true">PUSH</div><div class="coinret" aria-hidden="true"></div></div>')
+    products = snap.get("products") or {"ok": False, "why": PRODUCTS_FAILED}
+    cabinet = machine_art.closeup_html({s: v for s, v in view.items() if s in face},
+                                       products["data"] if products["ok"] else None, p is not None)
+    if p is None:
+        cabinet = '<p class="empty v-next">No plan yet: Next Friday shows the machine as it is now.</p>' + cabinet
     off_face = [s for s in our_selections(snap) if s not in face]
     if off_face:
         cabinet += f'<p class="sub">Also ours, not on the {SHELVES}&times;{COLUMNS} face: {_e(", ".join(off_face))}</p>'
@@ -950,17 +856,21 @@ def _cabinet_html(snap: dict) -> str:
     else:
         polled = "Prices aren't available. "
     stock_note = "" if stock["ok"] else "Stock isn't available. "
+    shapes = "" if products["ok"] else f"Packages are approximate: {PRODUCTS_FAILED}. "
     legend = ('<div class="vm-legend"><div><i class="dotk info"></i>swap or fill</div>'
               '<div><i class="dotk warn"></i>price change</div><div><i class="dotk bad"></i>pull</div>'
-              f'<p>Striped selections aren\'t ours. The number on a bottle is units on hand (Now) or the plan\'s '
-              f'fill (Next Friday); <b>~3</b> is an estimate from a photo count, less sales since; <b>?</b> and "unknown" mean no receipt or count yet. {polled}{stock_note}'
-              'Bottle levels use approximate capacities from the loading label.</p>'
-              '<p class="honest">Stock is estimated from receipts and polls, not a sensor.</p></div>')
+              "<p>Grey lanes aren't ours. The number by a lane is units on hand (Now) or after the plan's "
+              "fill (Next Friday); <b>~3</b> is from a photo count, less sales since, so at least that many were "
+              "seen; <b>?</b> means no receipt or count yet. Dashed slots are empty room, from the capacity on the "
+              "machine's loading chart or a person's count; \"+N back Friday\" is the plan's fill less the "
+              f"units on hand. {polled}{stock_note}{shapes}Packages are drawn from the catalog size; they are not "
+              "photos.</p><p class=\"honest\">Stock is estimated from receipts and polls, not a sensor.</p></div>")
     seg = ('<span class="seg" role="group" aria-label="Show" hidden>'
            '<button type="button" data-view="now" aria-pressed="true">Now</button>'
            '<button type="button" data-view="next" aria-pressed="false">Next Friday</button></span>')
-    return (f'<section id="vm" class="vm" data-view="now"><h2>In the machine '
-            f'<span class="hint">lit selections are ours</span>{seg}</h2>'
+    return (f'<section id="vm" class="vm" data-view="now" data-shelf="{machine_art.default_shelf(view)}">'
+            f'<h2>In the machine <span class="hint">our selections, close up &middot; pick a shelf on the '
+            f'machine</span>{seg}</h2>'
             f'<div class="vm-wrap"><div class="vm-cab">{cabinet}</div>'
             f'<div class="vm-side"><div class="card">{changes}</div>{legend}</div></div></section>')
 
@@ -1375,7 +1285,7 @@ section > h2 .hint { font-weight:400; font-size:12px; color:var(--muted) }
 .pill.muted { background:var(--sunk); color:var(--muted); border:1px solid var(--line) }
 .honest { font-size:12px; color:var(--muted); font-style:italic; margin:0 0 8px }
 a.pill { text-decoration:none }
-/* In the machine: the cabinet is painted metal, dark in both themes. */
+/* In the machine: the close-up's own styles are `machine_art.STYLE`, added after these. */
 .vm > h2 .seg { margin-left:auto }
 .seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; font-weight:400 }
 .seg[hidden] { display:none }
@@ -1383,51 +1293,10 @@ a.pill { text-decoration:none }
   padding:4px 12px; cursor:pointer }
 .seg button[aria-pressed="true"] { background:var(--accent); color:var(--surface) }
 .vm[data-view="now"] .v-next, .vm[data-view="next"] .v-now { display:none !important }
-.vm-wrap { display:grid; grid-template-columns:minmax(0, 560px) minmax(0, 1fr); gap:14px; align-items:start }
-.cab { background:linear-gradient(90deg, var(--cab), var(--cab-2) 60%, var(--cab)); border-radius:14px 14px 6px 6px;
-  padding:10px; display:grid; grid-template-columns:minmax(0, 1fr) 56px; gap:8px; box-shadow:inset 0 0 0 2px var(--cab-edge) }
-.brand { grid-column:1 / -1; color:#fff; font-weight:800; letter-spacing:.14em; font-size:11px; text-align:center; padding:5px 0;
-  background:var(--cab-brand); border-radius:6px }
-.glass { position:relative; background:linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.02) 35%, rgba(255,255,255,.05));
-  border-radius:8px; padding:5px 5px 0; box-shadow:inset 0 0 0 1px rgba(255,255,255,.1); min-width:0 }
-.shelf { display:grid; grid-template-columns:repeat(8, minmax(0, 1fr)); gap:3px; border-bottom:3px solid #505968;
-  padding-bottom:2px; margin-bottom:3px }
-.slot { position:relative; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; min-width:0;
-  height:92px; padding:12px 1px 2px; border-radius:4px 4px 0 0; color:#cfd6df; text-decoration:none }
-.slot .num { position:absolute; top:1px; left:0; right:0; text-align:center; font:600 9px ui-monospace, Consolas, monospace; color:#9aa5b2 }
-.theirs { background:repeating-linear-gradient(45deg, rgba(255,255,255,.05) 0 5px, transparent 5px 10px) }
-.theirs .num { color:rgba(255,255,255,.3); top:40% }
-.ours { background:rgba(255,255,255,.04) }
-a.ours:hover, a.ours:focus-visible { background:rgba(255,255,255,.1); outline:none }
-.vm[data-view="next"] .ours.changed { box-shadow:inset 0 0 0 2px var(--accent) }
-.bottle { position:relative; flex:1 1 auto; width:60%; max-width:22px; min-height:20px; max-height:52px; margin-top:5px;
-  border-radius:7px 7px 3px 3px; background:rgba(255,255,255,.08); overflow:hidden; box-shadow:inset 0 0 0 1px rgba(255,255,255,.18) }
-.bottle i { position:absolute; left:0; right:0; bottom:0; display:block }
-.bottle b { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-  font:700 10px ui-monospace, Consolas, monospace; color:#fff; text-shadow:0 1px 2px #000 }
-.bottle.unknown { background:none; box-shadow:none; outline:1px dashed rgba(255,255,255,.4); outline-offset:-1px }
-.empty-now .bottle.v-now, .empty-next .bottle.v-next { box-shadow:inset 0 0 0 1.5px var(--bad) }
-.lbl { width:100%; margin-top:2px; font-size:8px; line-height:10px; text-align:center; white-space:nowrap; overflow:hidden;
-  text-overflow:ellipsis; color:#cfd6df }
-.tag { margin-top:2px; width:100%; background:#f3f1e7; color:#1d232b; border-radius:2px; font:700 9px/11px ui-monospace, Consolas, monospace;
-  text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-.tag s { display:block; font-weight:400; opacity:.55 }
-.chg { position:absolute; top:-2px; right:-1px; width:9px; height:9px; border-radius:50%; box-shadow:0 0 0 2px var(--cab-2); z-index:1 }
-.chg.info, .dotk.info { background:var(--info) } .chg.warn, .dotk.warn { background:var(--warn) }
-.chg.bad, .dotk.bad { background:var(--bad) }
-.noplan { position:absolute; inset:0; display:grid; place-items:center; color:#fff; font-weight:700; font-size:16px;
-  background:rgba(14,17,22,.72); border-radius:8px }
-.ctl { display:flex; flex-direction:column; gap:7px; align-items:center }
-.lcd { width:100%; background:#0d1a12; color:#58e08a; font:700 10px ui-monospace, Consolas, monospace; text-align:center;
-  padding:6px 2px; border-radius:4px; box-shadow:inset 0 0 0 1px #24402e }
-.keys { display:grid; grid-template-columns:repeat(3, 1fr); gap:3px; width:100% }
-.keys span { background:var(--cab-edge); color:#cfd6df; font:700 9px ui-monospace, Consolas, monospace; text-align:center;
-  padding:3px 0; border-radius:3px }
-.coin { width:10px; height:28px; border-radius:5px; background:#0e1014; box-shadow:inset 0 0 0 2px #4b5462 }
-.bill { width:100%; height:12px; border-radius:3px; background:#0e1014; box-shadow:inset 0 0 0 2px #4b5462 }
-.bin, .coinret { height:32px; border-radius:6px; background:#0f1216; box-shadow:inset 0 3px 6px rgba(0,0,0,.7) }
-.bin { color:#5f6b7a; font-size:10px; letter-spacing:.2em; text-align:center; line-height:32px }
-.vm-side { display:grid; gap:10px; min-width:0 }
+.vm-wrap { display:grid; grid-template-columns:minmax(0, 1fr); gap:14px; align-items:start }
+.dotk.info { background:var(--info) } .dotk.warn { background:var(--warn) } .dotk.bad { background:var(--bad) }
+.vm-side { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap:10px;
+  min-width:0 }
 details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; margin:6px 0 }
 .card { background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:10px 12px; min-width:0 }
 .card p { margin:4px 0 0 }
@@ -1507,8 +1376,7 @@ footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8p
   main { padding:12px } .big { font-size:19px } header.top .meta { margin-left:0; width:100% }
   .tiles { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px } .tile { padding:10px 12px }
   .tile:last-child:nth-child(odd) { grid-column:1 / -1 }
-  .vm-wrap { grid-template-columns:minmax(0, 1fr) } .cab { grid-template-columns:minmax(0, 1fr) 40px; padding:8px }
-  .shelf { gap:2px } .slot { height:84px } .plan-head { display:none }
+  .plan-head { display:none }
   .pc summary { grid-template-columns:30px minmax(0, 1fr) } .pc summary .now::before { content:"now: " }
   .pc summary .what, .pc summary .tags { grid-column:2 } .pc summary .what::before { content:"Friday: " }
   .pc summary .tags { justify-content:flex-start }
@@ -1520,11 +1388,15 @@ footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8p
 # and says so. Without JavaScript the <noscript> meta refresh reloads the page instead.
 SCRIPT = """(function () {
   var REFRESH = %d * 1000, show = 'all', view = 'now', only = false, lastOk = Date.now(), failed = false;
+  var shelf = '';
   try {
     show = localStorage.getItem('dash-show') || 'all';
     view = localStorage.getItem('dash-view') === 'next' ? 'next' : 'now';
     only = localStorage.getItem('dash-changed') === '1';
+    shelf = localStorage.getItem('dash-shelf') || '';
   } catch (e) {}
+  var picked = /^#shelf-([1-5])$/.exec(location.hash);
+  if (picked) shelf = picked[1];
   function span(ms) {
     var m = Math.floor(Math.abs(ms) / 60000);
     if (m < 1) return 'under a minute';
@@ -1561,7 +1433,12 @@ SCRIPT = """(function () {
     document.querySelectorAll('.filter button').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b.getAttribute('data-show') === show));
     });
-    document.querySelectorAll('.vm').forEach(function (v) { v.setAttribute('data-view', view); });
+    // The shelf the close-up shows: the viewer's pick, kept across refreshes, else the page's default.
+    document.querySelectorAll('.vm').forEach(function (v) {
+      v.setAttribute('data-view', view);
+      v.setAttribute('data-js', '');
+      if (shelf && v.querySelector('.ma-shelf[data-n="' + shelf + '"]')) v.setAttribute('data-shelf', shelf);
+    });
     document.querySelectorAll('.vm .seg').forEach(function (s) { s.hidden = false; });
     document.querySelectorAll('.vm .seg button').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b.getAttribute('data-view') === view));
@@ -1582,6 +1459,16 @@ SCRIPT = """(function () {
     if (b) { show = b.getAttribute('data-show'); save('dash-show', show); filter(); }
     if (v) { view = v.getAttribute('data-view'); save('dash-view', view); filter(); }
     if (a) openSlot(a.getAttribute('href').slice(1));
+    var pick = t.closest('a[data-shelf]'), lane = t.closest('a[data-lane]');
+    if (pick) { e.preventDefault(); shelf = pick.getAttribute('data-shelf'); save('dash-shelf', shelf); filter(); }
+    if (lane) {
+      var to = document.getElementById('lane-' + lane.getAttribute('data-lane'));
+      if (to) {
+        e.preventDefault();
+        var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+        to.scrollIntoView({block: 'nearest', inline: 'start', behavior: still ? 'auto' : 'smooth'});
+      }
+    }
   });
   document.addEventListener('change', function (e) {
     if (e.target.id !== 'changed-only') return;
@@ -1659,7 +1546,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<noscript><meta http-equiv="refresh" content="{int(refresh)}"></noscript>'
             f'<title>{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
-            f'<style>{STYLE}</style></head><body><main>{body}</main>'
+            f'<style>{STYLE}{machine_art.STYLE}</style></head><body><main>{body}</main>'
             f'<script>{SCRIPT % int(refresh)}</script></body></html>')
 
 
