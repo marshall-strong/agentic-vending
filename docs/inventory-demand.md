@@ -120,7 +120,7 @@ To number in `docs/assumptions.md` (open PRs use A16-A19: #69 A16, #99 A17-A18, 
 - **Does #68's forecast feed the agent?** Recommended: no. Team to decide (#93).
 - **Add the in-stock rate and a "sold out since" time to `get_machine_state`?** The in-stock rate is built (`units_per_class_day`, with the segment prior until 5 class days); a "sold out since" time is not.
 - **Should a door count post a correction to the books?** Not decided.
-- **Cost method:** first in, first out by load, chosen 19 Nov (Kevin; #128, which the team can still reopen before it merges). Sales take the oldest units; unsold stock is valued at its remaining layers' costs (`vending/stock.py`, #172). Was weighted average. Which method David uses for the leaderboard is unknown (A23).
+- **Cost method:** first in, first out by load, decided 19 Nov (Kevin; #128). Sales take the oldest units, as a spiral sells the front can first; unsold stock is valued at what those cans cost (`vending/stock.py`, #172). Was weighted average.
 - **Restocks on Fri 25 Dec and Fri 1 Jan** (closures). Not yet asked in #102.
 - **New-slot prior** (Proposed, #91 R3): fall segment rate for the price band; category shares for ranking only.
 - **When a slot's own rate counts** (Proposed, #91): after 5 in-stock class days.
