@@ -312,7 +312,7 @@ def test_a_cents_counter_that_did_not_rise_with_the_units_cannot_split_them():
     # At an old price of $0 a missing rise read as 0 cents would book both units old.
     stock = book(swap(), counters=[("15", hours(1), 100, 20000, 0), ("15", hours(5), 102, 100, 400)])
     [sale] = stock.sales
-    assert (sale.product, sale.units, sale.cost_cents) == ("REDBULL", 2, None)
+    assert (sale.product, sale.units, sale.cost_cents) == (None, 2, None)
     assert any("can't split" in w for w in stock.warnings)
 
 
@@ -424,6 +424,10 @@ _UNSPLIT = ("slot 15: 2 units sold between the polls at {} and 2026-11-07T20:00:
             "be the wrong product's; the 1 units of ARIZONA written off as shrinkage at the change may be some of "
             "these sales, not losses")
 _MAIN_SLOT_AFTER_2_SOLD = [("15", "REDBULL", 8, 150, 10, 2, 0, 3.0, 3.0)]
+# Where main can't split the window, #172 changes one thing: its 2 units are unattributed, in neither
+# product's sales and not in REDBULL's sold. Every other figure is main's.
+_MAIN_UNSPLIT_SALE = [(5.0, None, None, 2, 2, None, 300)]
+_MAIN_UNSPLIT_SLOT = [("15", "REDBULL", 8, 150, 10, 0, 0, 3.0, 3.0)]
 _MAIN_SHRINKAGE = [(3.0, "slot 15", "ARIZONA", 1, 50)]
 
 
@@ -436,11 +440,11 @@ _MAIN_SHRINKAGE = [(3.0, "slot 15", "ARIZONA", 1, 50)]
      {"sales": [(5.0, None, "REDBULL", 2, 2, 300, None)], "slots": _MAIN_SLOT_AFTER_2_SOLD,
       "closet": [("ARIZONA", 9, 50)], "shrinkage": _MAIN_SHRINKAGE, "warnings": [_WRITTEN_OFF]}),
     ([("15", hours(1), 100, 20000, 350), ("15", hours(2.75), 100, 20000, 350), ("15", hours(5), 102, 20700, 350)],
-     {"sales": [(5.0, None, "REDBULL", 2, 2, None, 300)], "slots": _MAIN_SLOT_AFTER_2_SOLD,
+     {"sales": _MAIN_UNSPLIT_SALE, "slots": _MAIN_UNSPLIT_SLOT,
       "closet": [("ARIZONA", 9, 50)], "shrinkage": _MAIN_SHRINKAGE,
       "warnings": [_WRITTEN_OFF, _UNSPLIT.format("2026-11-07T17:45:00+00:00")]}),
     ([("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20500, 400)],
-     {"sales": [(5.0, None, "REDBULL", 2, 2, None, 300)], "slots": _MAIN_SLOT_AFTER_2_SOLD,
+     {"sales": _MAIN_UNSPLIT_SALE, "slots": _MAIN_UNSPLIT_SLOT,
       "closet": [("ARIZONA", 9, 50)], "shrinkage": _MAIN_SHRINKAGE,
       "warnings": [_WRITTEN_OFF, _UNSPLIT.format("2026-11-07T16:00:00+00:00")]}),
 ])
@@ -674,3 +678,52 @@ def test_a_window_from_inside_one_visit_to_inside_the_next_is_the_first_visits_p
     stock = book(lines, counters=counters)
     [sale] = [s for s in stock.sales if s.units]
     assert sale.cost_cents is None and any("can't split" in w and "2 product changes" in w for w in stock.warnings)
+
+
+# Every slot at our visit (#172 item 1). A window between two polls that the counters and the door
+# times can't split is carried as unknown: not booked as the new product's sales, nor the old one's.
+
+@pytest.mark.parametrize("door", [False, True])
+def test_a_same_price_swap_carries_the_windows_sales_as_unknown_not_as_the_new_products(door):
+    # Arizona at $2.00 swapped for Coke at $2.00, 2 sold between the polls either side of the visit.
+    lines = swap(sku="COKE20", total_paid="8.00")
+    stock = book(with_door(lines) if door else lines,
+                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20400, 200)])
+    [sale] = stock.sales
+    assert (sale.product, sale.units, sale.cost_cents) == (None, 2, None)
+    assert "can't split" in sale.unattributed
+    # Callers that need a number keep today's: the cost the units took stays in cost of sales,
+    # and `units` is what we know is there, with up to `unattributed` more if they were Arizonas.
+    assert (sale.costed_units, sale.unattributed_cost_cents) == (2, 160)
+    [slot] = stock.slots
+    assert (slot.product, slot.loaded, slot.sold, slot.unattributed, slot.units) == ("COKE20", 10, 0, 2, 8)
+
+
+@pytest.mark.parametrize("door", [False, True])
+def test_a_price_change_the_counters_settle_is_split_with_nothing_left_unknown(door):
+    # Arizona at $2.00 swapped for Red Bull at $4.00: 2 units and 600 cents is one of each.
+    stock = book(with_door(swap()) if door else swap(),
+                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    assert [(s.product, s.units, s.unattributed) for s in stock.sales] == [("ARIZONA", 1, ""), ("REDBULL", 1, "")]
+    [slot] = stock.slots
+    assert (slot.product, slot.sold, slot.unattributed, slot.units) == ("REDBULL", 1, 0, 9)
+
+
+def test_a_poll_in_the_open_minute_after_an_earlier_price_change_is_not_read_as_all_new():
+    # r0 tops up the Arizona at 16:35-16:40 and drops its price from $2.50 to $2.00. r2 opens the
+    # door in the 17:30 minute to swap in Coke at the same $2.00. The poll at 17:30:10 shows $2.00:
+    # r0's price, not a sign that r2 had started, so the door may have opened at 17:30:50, and an
+    # Arizona can sell in between. Same price on both sides: the counters can't say which sold.
+    lines = with_door([line(sku="ARIZONA", units_loaded=2, total_paid="1.00", at=1.6, request_id="r0")],
+                      opened=1 + 35 / 60, closed=1 + 40 / 60, request_id="r0")
+    lines = lines + with_door(swap(sku="COKE20", total_paid="8.00"))
+    counters = [("15", hours(1), 100, 25000, 250), ("15", seconds(2.5, 10), 100, 25000, 200),
+                ("15", hours(4), 102, 25400, 200)]
+    stock = book(lines, counters=counters)
+    [sale] = [s for s in stock.sales if s.units]
+    assert (sale.product, sale.units, sale.cost_cents) == (None, 2, None)
+    [slot] = stock.slots
+    assert (slot.product, slot.sold, slot.unattributed) == ("COKE20", 0, 2)
+    # Without r0 the price change at 17:30:10 can only be r2's, so the door was open: all Coke, as before.
+    alone = book(with_door(swap(sku="COKE20", total_paid="8.00")), counters=counters)
+    assert [(s.product, s.units, s.unattributed) for s in alone.sales if s.units] == [("COKE20", 2, "")]
