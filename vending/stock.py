@@ -119,6 +119,7 @@ class Movement:
     notes: tuple[StockWarning, ...] = ()  # warnings to pass on when this movement is replayed, each with its slot
     door_conflict: str = ""              # sale: the receipt it contradicts, by selling with the door open
     split: bool = False                  # sale: already split at its changes; another pass leaves it alone
+    read_as_new: bool = False            # sale: unsplit, but main booked it all to the new product (`_old_units`)
 
 
 @dataclass(frozen=True)
@@ -168,7 +169,9 @@ class SaleCost:
     they took out of the new product's count. Their product is unknown, so
     `product` is None, `unattributed` says why, and `cost_cents` stays None,
     but the cost still lands in cost of sales and the books add up (#112,
-    #172). `at` is the poll that
+    #172). A window main read as all the new product's, and #172 leaves
+    unattributed, keeps that cost in `cost_cents` instead, as main had it, so
+    the money series still counts it as the ledger does. `at` is the poll that
     measured the units, the same moment the takings book them to. The old
     product's share of a window split at a product change left its count
     earlier, at the change: that is `taken_at`.
@@ -420,12 +423,23 @@ def _old_units(m: Movement, change: Movement, visits: list[tuple[str, datetime, 
     the first poll may have come before this visit's door opened (#172).
     Otherwise the counters decide (`_solve`).
     """
-    a, b = m.price_before, m.price_after
-    if (a is not None and a == b and m.price_prior is not None and m.price_prior != a
-            and m.since is not None and change.at - m.since <= _VISIT_MAX
-            and not _price_set_by_another_visit(m, change, visits)):
+    if _read_as_new(m, change) and not _price_set_by_another_visit(m, change, visits):
         return 0
     return _solve(m)
+
+
+def _read_as_new(m: Movement, change: Movement) -> bool:
+    """Whether main read the window as all the new product's: new price at both ends, another at the poll before."""
+    a, b = m.price_before, m.price_after
+    return (a is not None and a == b and m.price_prior is not None and m.price_prior != a
+            and m.since is not None and change.at - m.since <= _VISIT_MAX)
+
+
+def _split_one(m: Movement, change: Movement, visits: list[tuple[str, datetime, datetime]]) -> list[Movement]:
+    """`_shares` at one change by `_old_units`. A window left unsplit that main read as all new is marked."""
+    old = _old_units(m, change, visits)
+    shares = _shares(m, change, old)
+    return [replace(shares[0], read_as_new=True)] if old is None and _read_as_new(m, change) else shares
 
 
 def _request(m: Movement) -> str:
@@ -505,7 +519,7 @@ def _split_at_changes(movements: list[Movement]) -> list[Movement]:
         elif all(c.opened_at is not None for c in inside):
             out.extend(_split_by_door(m, inside, visits))
         elif len(inside) == 1:
-            out.extend(_shares(m, inside[0], _old_units(m, inside[0], visits)))
+            out.extend(_split_one(m, inside[0], visits))
         else:
             out.append(replace(m, changes=len(inside), split=True))
     return out
@@ -569,7 +583,7 @@ def _split_by_door(m: Movement, inside: list[Movement],
         # `_old_units` reads a window with the new price at both ends, and the old price at the poll
         # before, as starting during the visit. The door times rule that out for a window that starts
         # before the open minute, so there only the counters decide.
-        return _shares(m, change, _old_units(m, change, visits) if m.since >= change.opened_at else _solve(m))
+        return _split_one(m, change, visits) if m.since >= change.opened_at else _shares(m, change, _solve(m))
     return [replace(m, changes=k, split=True)]
 
 
@@ -806,7 +820,9 @@ def weighted_average(movements: list[Movement]) -> Stock:
                                 f"and {m.at.isoformat()}, {across}; the counters can't split them, so they are "
                                 f"costed at {slot.product}'s average, which may be the wrong product's{written_off}")
                 slot.unattributed += m.units
-                sales.append(SaleCost(m.at, m.slot, None, m.units, taken, None, unattributed_cost_cents=cost,
+                # Main costed a window it read as all new in cost_cents; it stays there (see `SaleCost`).
+                sales.append(SaleCost(m.at, m.slot, None, m.units, taken, cost if m.read_as_new else None,
+                                      unattributed_cost_cents=None if m.read_as_new else cost,
                                       unattributed=f"sold {across}; the counters can't split them"))
             else:
                 slot.sold += m.units
