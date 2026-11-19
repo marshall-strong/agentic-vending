@@ -69,7 +69,8 @@ def test_reads_stored_polls(conn):
     store_poll(conn, "base", "2026-10-22T12:00:00+00:00", {"15": (250, 100), "16": (300, 7)})
     store_poll(conn, "mid", "2026-10-26T12:00:00+00:00", {"15": (250, 104)})
     store_poll(conn, "latest", "2026-10-29T12:00:00+00:00", {"15": (275, 114), "16": (300, 7), "11": (100, 999)})
-    store_poll(conn, "other-device", "2026-10-30T12:00:00+00:00", {"15": (1, 1)}, device_id="vmc2")
+    # Before `now` below and after "latest", so only the device filter keeps it out.
+    store_poll(conn, "other-device", "2026-10-29T12:30:00+00:00", {"15": (1, 1)}, device_id="vmc2")
     reply = get_machine_state(conn, now=NOW + timedelta(hours=1))
     assert reply.success and reply.count == 20 and not reply.stale
     assert [s.slot for s in reply.data] == list(TEST_SLOTS)  # slot 11 isn't ours

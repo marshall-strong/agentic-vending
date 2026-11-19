@@ -238,11 +238,43 @@ def last_notes(conn: psycopg.Connection, *, live: bool) -> str:
     return f"(From {kind} on {started.astimezone(EASTERN):%A %d %B %H:%M} Eastern.)\n{notes}"
 
 
-def brief(now: datetime, notes: str, *, live: bool) -> str:
+def brief(now: datetime, notes: str, *, live: bool, startup: str = "") -> str:
     mode = ("This is the live run: submit_desired_state sends a real purchase request." if live else
             "This is a dry run: the write tools are hidden. Preview the plan you would submit, then answer.")
-    return (f"Now: {now.astimezone(EASTERN):%A %d %B %Y %H:%M} Eastern.\n{mode}\n\n"
+    block = f"{startup}\n\n" if startup else ""
+    return (f"Now: {now.astimezone(EASTERN):%A %d %B %Y %H:%M} Eastern.\n{mode}\n\n{block}"
             f"Your notes from the last run:\n{notes}")
+
+
+async def startup_read(call_tool: Callable, record_step: Callable) -> str:
+    """One real MCP read before the model loop, never a fabricated model tool-use turn."""
+    metadata: dict[str, Any] = {"source": "startup", "tool": "get_briefing"}
+    failed = False
+    try:
+        result = await call_tool("get_briefing", {})
+        text, reply = _result_text(result)
+        # Some MCP clients expose only text content. Read that envelope too.
+        if reply is None:
+            try:
+                reply = json.loads(text)
+            except (ValueError, TypeError):
+                reply = None
+        if (getattr(result, "isError", False) or not isinstance(reply, dict)
+                or reply.get("success") is not True or not all(
+                    isinstance(reply.get(k), str) and reply[k] for k in ("computed_at", "snapshot_id", "text"))):
+            raise ValueError("get_briefing did not return a usable snapshot")
+        metadata.update(computed_at=reply["computed_at"], snapshot_id=reply["snapshot_id"], success=True)
+        opening = (f"Trusted startup read from get_briefing (computed_at={reply['computed_at']}, "
+                   f"snapshot_id={reply['snapshot_id']}):\n{reply['text']}")
+    except Exception as error:
+        failed = True
+        # Errors may contain arbitrary transport/source text. Keep them in the run record only.
+        metadata.update(success=False, error=f"{type(error).__name__}: {error}"[:500])
+        opening = ("Startup read get_briefing failed. Use the existing pull tools for machine state, sales, "
+                   "P&L, catalog and pending requests. Call get_account_balance every run before planning.")
+    await anyio.to_thread.run_sync(lambda: record_step(
+        1, "tool_result", json.dumps(metadata, sort_keys=True), tool="get_briefing", is_error=failed))
+    return opening
 
 
 async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tools: list[dict], out: Outcome, *,
@@ -448,8 +480,9 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
             if live and SUBMIT not in {t.name for t in listed}:
                 out.detail = "submit_desired_state isn't built on this server, so a live run can't submit. Use a dry run."
             else:
+                startup = await startup_read(call_tool, record_step)
                 await converse(harness, call_tool, tool_definitions(listed, live=live), out, model=model,
-                               effort=effort, system=system, opening=brief(now(), notes, live=live), live=live,
+                               effort=effort, system=system, opening=brief(now(), notes, live=live, startup=startup), live=live,
                                halted=halted,
                                on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
                                label=f"agent run {run_id}", on_step=record_step)

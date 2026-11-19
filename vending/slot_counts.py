@@ -162,7 +162,8 @@ def record(conn: psycopg.Connection, count: Count, by: str) -> int:
     return len(count.selections)
 
 
-def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID) -> dict[str, dict]:
+def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID,
+           until: datetime | None = None) -> dict[str, dict]:
     """Each selection's most recent count, with units sold since it from the polls.
 
     Sales since a count start at the first good poll at or after it (the count already
@@ -176,10 +177,11 @@ def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID) -> dict[str, di
     rows = conn.execute(
         "select distinct on (selection) selection, count_id, counted_at, source, product, units, exact,"
         " price_on_tag, note from slot_counts where device_id = %s and selection = any(%s)"
-        " order by selection, counted_at desc, recorded_at desc", (device_id, assigned)).fetchall()
+        " and (%s::timestamptz is null or counted_at <= %s)"
+        " order by selection, counted_at desc, recorded_at desc", (device_id, assigned, until, until)).fetchall()
     if not rows:
         return {}
-    counters = _counters_since(conn, device_id, min(r[2] for r in rows), assigned)
+    counters = _counters_since(conn, device_id, min(r[2] for r in rows), assigned, until)
     out: dict[str, dict] = {}
     for selection, count_id, counted_at, source, product, units, exact, price, note in rows:
         sold = None if counters is None else _sold_since(counters.get(selection, []), counted_at)
@@ -191,7 +193,7 @@ def latest(conn: psycopg.Connection, device_id: str = DEVICE_ID) -> dict[str, di
 
 
 def _counters_since(conn: psycopg.Connection, device_id: str, since: datetime,
-                    selections: list[str]) -> dict[str, list] | None:
+                    selections: list[str], until: datetime | None = None) -> dict[str, list] | None:
     """Every good poll's lifetime units per selection from `since` on, oldest first, or None
     when the poll tables aren't there (a savepoint keeps the caller's transaction usable)."""
     try:
@@ -199,8 +201,8 @@ def _counters_since(conn: psycopg.Connection, device_id: str, since: datetime,
             found = conn.execute(
                 "select ps.selection, p.started_at, ps.lifetime_units from polls p join poll_selections ps"
                 " using (session_id) where p.device_id = %s and p.crc_ok and p.started_at >= %s"
-                " and ps.selection = any(%s) order by ps.selection, p.started_at",
-                (device_id, since, selections)).fetchall()
+                " and ps.selection = any(%s) and (%s::timestamptz is null or p.started_at <= %s)"
+                " order by ps.selection, p.started_at", (device_id, since, selections, until, until)).fetchall()
     except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         return None
     out: dict[str, list] = {}

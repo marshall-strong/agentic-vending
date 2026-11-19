@@ -1,4 +1,4 @@
-"""The MCP server: the agent's 12 tools, over stdio.
+"""The MCP server: the agent's 13 tools, over stdio.
 
     python -m vending.server
 
@@ -38,7 +38,7 @@ from pydantic_core import to_jsonable_python
 
 from vending import db
 from vending.bridge import Bridge
-from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, catalog, catalog_request,
+from vending.tools import (NotBuilt, Reply, RefusalOut, WriteReply, account_balance, briefing, catalog, catalog_request,
                            machine_state, pnl, preview, project_rules, purchase_requests, sales_history,
                            stubs, submit, wildcard_slot)
 from vending.tools.desired_state import DesiredState
@@ -149,6 +149,12 @@ def _write_sync(tool: str, arguments: dict[str, Any], action: Callable[[psycopg.
         )
     except NotBuilt as error:
         raise ToolError(str(error)) from None
+
+
+@_tool(built=True)
+async def get_briefing() -> briefing.BriefingReply:
+    """Startup snapshot of our assigned slots: data quality, ledger weeks and live API spend, stock with evidence ages, closet, pending requests and exact lookup hints. Does not replace the fresh balance check or preview."""
+    return await _read("get_briefing", briefing.get_briefing)
 
 
 @_tool(built=True)
