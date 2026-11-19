@@ -390,7 +390,8 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
                 f"no poll after the last one that read slot {slot} above the ceiling has read its price, so "
                 "whether its price test has ended is unknown"), price)
         start = back
-    measured = _measure(w, start, now, loads.get(slot, []), sales, readings, None if price_test else ceiling_cents)
+    measured = _measure(w, start, now, loads.get(slot, []), sales, readings, None if price_test else ceiling_cents,
+                        coil_losses(conn).get(slot, []))
     record = measured.record(tax_percent)
     others = {s: c for s, c in counts.items() if s != slot and c.product == w.product}
     before = sorted(s for s, c in others.items() if c.since < w.since)
@@ -439,13 +440,33 @@ def judged_by(now: datetime) -> datetime:
 
 
 def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list[tuple[datetime, int]],
-             sales: tuple[stock.SaleCost, ...], readings: list[Reading], ceiling_cents: int | None) -> Measured:
-    """One slot's intervals from `start`, with when its current product held stock."""
+             sales: tuple[stock.SaleCost, ...], readings: list[Reading], ceiling_cents: int | None,
+             losses: list[tuple[datetime, str, int]] = ()) -> Measured:
+    """One slot's intervals from `start`, with when its current product held stock.
+
+    `losses` are the slot's recorded coil losses (`coil_losses`): units of its product lost since it went in
+    leave the slot like sales, so a slot emptied by a loss isn't counted in stock until a load refills it."""
     mine = [s for s in sales if s.slot == count.slot and s.at > count.since]
+    gone = [(at, units) for at, sku, units in losses if at > count.since and sku == count.product]
     spans = demand.in_stock_spans([(at, u) for at, u in loads if at >= count.since],
-                                  [(s.at, s.units) for s in mine], now, count.units)
+                                  [(s.at, s.units) for s in mine] + gone, now, count.units)
     return Measured(count.slot, count.product, start,
                     intervals(readings, start, count.product, mine, spans, ceiling_cents))
+
+
+def coil_losses(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, str, int]]]:
+    """Units recorded lost from each slot after loading, as `(recorded_at, sku, units)`, from fulfilled receipts.
+
+    Lines resolved before the ledger's opening are left out, as in `stock._receipts`."""
+    out: dict[str, list[tuple[datetime, str, int]]] = {}
+    since = stock.receipts_count_from(conn)
+    for slot, at, sku, units in conn.execute(
+            "select l.slot, o.recorded_at, o.sku, o.units from purchase_line_losses o"
+            " join purchase_lines l using (request_id, line_no) join purchase_requests r using (request_id)"
+            " where r.status = 'fulfilled' and o.location = 'coil' and o.units > 0"
+            " and (%s::timestamptz is null or l.resolved_at >= %s)", (since, since)):
+        out.setdefault(slot, []).append((at, sku, units))
+    return out
 
 
 def _readings(conn: psycopg.Connection, since: datetime, until: datetime, slots: list[str]) -> dict[str, list[Reading]]:
@@ -543,6 +564,7 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
     readings = _readings(conn, start, now, regular)
     seen = _counted(conn)
     at_visit = stock.request_loads(conn, list(visit))
+    lost = coil_losses(conn)
     tax_percent = _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
     silent: list[Silent] = []
     unconfirmed: list[Unconfirmed] = []
@@ -582,7 +604,8 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
         if doubt is not None:
             not_silent.append(NotSilent(slot, f"unknown: {doubt}"))
             continue
-        days = len(_watched_days(_measure(c, start, now, loads.get(slot, []), sales, mine, None).intervals))
+        days = len(_watched_days(_measure(c, start, now, loads.get(slot, []), sales, mine, None,
+                                          lost.get(slot, [])).intervals))
         if days < SILENT_DAYS:
             not_silent.append(NotSilent(slot, f"{days} of {SILENT_DAYS} in-stock class days seen since the window "
                                               "began; not silent yet"))

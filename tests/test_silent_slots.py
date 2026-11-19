@@ -186,6 +186,19 @@ def test_a_test_purchase_before_the_ledger_opened_is_no_friday_visit(conn):
     assert stock.request_loads(conn, ["t0"]) == {}
     assert all(at >= opened for slot_loads in stock.loads(conn).values() for at, _ in slot_loads)
 
+
+def test_a_slot_emptied_by_a_recorded_loss_isnt_in_stock_until_it_is_refilled(conn):
+    """16 holds 12 BBB after the 23 Oct visit, loses all 12 the next day (a recorded coil loss), and gets 6 more
+    on Thursday evening. The polls see no sale, but it held nothing for most of the week: not silent."""
+    machine(conn, sales={"18": [(datetime(2026, 10, 27, 15, tzinfo=UTC), 1)]})
+    conn.execute("insert into purchase_line_losses (request_id, line_no, position, location, sku, units, recorded_at)"
+                 " values ('r1', 0, 0, 'coil', 'BBB', 12, %s)", (datetime(2026, 10, 24, 15, tzinfo=UTC),))
+    fulfilled(conn, "r2", THURSDAY_EVENING - timedelta(hours=1), ("16", "BBB", "primary", "6.00", 6, 0, 0))
+    conn.execute("update purchase_requests set off_cycle = true where request_id = 'r2'")
+    r = report(conn)
+    assert r.window_start == WINDOW and "16" not in [s.slot for s in r.silent]
+    assert why(r, "16").endswith("in-stock class days seen since the window began; not silent yet")
+
 # --- What the agent and the planner see ----------------------------------------------------------------
 
 def trial_sales(extra=None):
