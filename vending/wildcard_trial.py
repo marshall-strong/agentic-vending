@@ -390,6 +390,15 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
                 f"no poll after the last one that read slot {slot} above the ceiling has read its price, so "
                 "whether its price test has ended is unknown"), price)
         start = back
+    across = [s for s in sales if s.slot == slot and s.at > w.since and s.unattributed_cost_cents is not None]
+    if across:
+        # A window over the swap the counters can't split: its units may be the old product's or the trial's, so
+        # how long the trial's own stock lasted is unknown. Fail closed rather than guess either way.
+        return Trial(None, slot, False, UNKNOWN, (
+            f"{sum(s.units for s in across)} units sold in the poll window over slot {slot}'s switch to {w.product} "
+            f"(booked at {across[0].at:%Y-%m-%d %H:%M} UTC), and the counters can't split them between the old "
+            "product and the new, so how long its stock lasted, and so this trial, is unknown; it can't be "
+            "judged, so test the next product at a Friday visit"), price)
     measured = _measure(w, start, now, loads.get(slot, []), sales, readings, None if price_test else ceiling_cents,
                         coil_losses(conn).get(slot, []))
     record = measured.record(tax_percent)
@@ -450,8 +459,11 @@ def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list
     # At or after the load that put it in: a loss recorded at the load's own time comes after it, as in the stock
     # replay (`demand.in_stock_spans` applies a load before a decrease at the same moment).
     gone = [(at, units) for at, sku, units in losses if at >= count.since and sku == count.product]
+    # Only its own product's sales leave its stock: the outgoing product's share of a window split at the swap
+    # (`stock._split_at_changes`) is booked by the first poll after it, but came out of the old count.
     spans = demand.in_stock_spans([(at, u) for at, u in loads if at >= count.since],
-                                  [(s.at, s.units) for s in mine] + gone, now, count.units)
+                                  [(s.at, s.units) for s in mine if s.product == count.product] + gone,
+                                  now, count.units)
     return Measured(count.slot, count.product, start,
                     intervals(readings, start, count.product, mine, spans, ceiling_cents))
 

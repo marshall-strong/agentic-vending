@@ -453,3 +453,31 @@ def test_a_load_lost_at_its_own_time_leaves_the_wildcard_empty_until_a_refill(co
     set_wildcard(conn, "15")
     t = get_machine_state(conn, now=FRESH).wildcard_trial
     assert (t.product, t.class_days_in_stock) == ("AAA", 2), t   # Fri 23 and Mon 26, not the six from 19 Oct
+
+
+def _swap_with_a_sale_in_its_window(conn, new_price):
+    """Slot 15 held ZZZ at $2.50 from 9 Oct; at SINCE it switches to 1 unit of AAA. One unit sells in the poll
+    window around the swap, booked by the first poll after it, then nothing sells to Friday 23 Oct."""
+    from tests.conftest import TEST_SLOTS
+
+    fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 10, 0, 0),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (250, 100, 25000)})
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "3.00", 1, 0, 0))
+    first = ("p1", "2026-10-16T21:00:00+00:00", {"15": (new_price, 101, 25250)})
+    polls(conn, [first, ("p2", "2026-10-23T22:00:00+00:00", first[2])])
+    set_wildcard(conn, "15")
+
+
+def test_a_sale_of_the_old_product_after_a_swap_takes_nothing_from_the_new_one(conn):
+    """The counters split it (the price changed): the unit was ZZZ, so AAA's one unit stays in stock all week."""
+    _swap_with_a_sale_in_its_window(conn, new_price=300)
+    t = get_machine_state(conn, now=datetime(2026, 10, 24, 2, tzinfo=timezone.utc)).wildcard_trial
+    assert (t.product, t.units_sold, t.class_days_in_stock) == ("AAA", 0, 5), t
+
+
+def test_a_sale_the_counters_cant_split_across_a_swap_leaves_the_trial_unknown(conn):
+    """Same price on both sides: the unit may be either product, so the trial's stock is unknown."""
+    _swap_with_a_sale_in_its_window(conn, new_price=250)
+    t = get_machine_state(conn, now=datetime(2026, 10, 24, 2, tzinfo=timezone.utc)).wildcard_trial
+    assert t.verdict == UNKNOWN and "can't split" in t.reason, t
