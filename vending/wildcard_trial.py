@@ -42,7 +42,8 @@ The rule (`docs/agent/wildcard.md`, "A testing ground"):
    priced moment, the price is unknown and so is the verdict.
 
 The interval holding the load mixes the old product's sales with the new one's,
-so it is left out of both units and days. Units sold past what the receipts
+so it is left out of both units and days, and any sale in it leaves the verdict
+unknown: nothing shows how long the new stock lasted. Units sold past what the receipts
 loaded have no cost, so they make the profit unknown rather than free.
 
 A promotion goes only into a **silent slot** (`silent_slots`): a regular slot
@@ -396,13 +397,13 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
                 f"no poll after the last one that read slot {slot} above the ceiling has read its price, so "
                 "whether its price test has ended is unknown"), price)
         start = back
-    across = [s for s in sales if s.slot == slot and s.at > w.since and s.unattributed_cost_cents is not None]
+    across = _sales_over(slot, w.since, readings, sales)
     if across:
-        # A window over the swap the counters can't split: its units may be the old product's or the trial's, so
-        # how long the trial's own stock lasted is unknown. Fail closed rather than guess either way.
+        # Units sold in the poll window that holds the swap may be the old product's or the trial's, whatever the
+        # counters or the costs seem to say, so how long the trial's own stock lasted is unknown. Fail closed.
         return Trial(None, slot, False, UNKNOWN, (
             f"{sum(s.units for s in across)} units sold in the poll window over slot {slot}'s switch to {w.product} "
-            f"(booked at {across[0].at:%Y-%m-%d %H:%M} UTC), and the counters can't split them between the old "
+            f"(booked at {across[0].at:%Y-%m-%d %H:%M} UTC), and nothing can split them for sure between the old "
             "product and the new, so how long its stock lasted, and so this trial, is unknown; it can't be "
             "judged, so test the next product at a Friday visit"), price)
     measured = _measure(w, start, now, loads.get(slot, []), sales, readings, None if price_test else ceiling_cents,
@@ -442,6 +443,20 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
             f"it would pass, but {seen}, so its price now, and whether it is still under the ceiling, is unknown; "
             "judge it once a poll reads it"), price)
     return Trial(record, slot, price_test, verdict, reason, price)
+
+
+def _sales_over(slot: str, swap: datetime, readings: list[Reading],
+                sales: tuple[stock.SaleCost, ...]) -> list[stock.SaleCost]:
+    """The slot's sales booked in the poll window that holds `swap`, ends included. Pure.
+
+    The window runs from the last poll before the swap to the first one after it. A poll at the swap's own moment
+    is inside it, not an end: a visit's time is when it finished, so that poll may have read either product.
+    """
+    before = [at for at, _, _, _ in readings if at < swap]
+    after = [at for at, _, _, _ in readings if at > swap]
+    lo, hi = (max(before) if before else swap), (min(after) if after else None)
+    return sorted((s for s in sales if s.slot == slot and s.units > 0 and lo <= s.at
+                   and (hi is None or s.at <= hi)), key=lambda s: s.at)
 
 
 def judged_by(now: datetime) -> datetime:

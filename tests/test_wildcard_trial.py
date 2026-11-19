@@ -204,8 +204,9 @@ def test_a_wildcard_no_longer_in_our_assignment_has_no_verdict_and_blocks_planni
         planning.gather(conn, [], NOW)
 
 
-def test_the_poll_window_holding_the_load_is_left_out(conn):
-    # The poll after the load also saw 2 sales: before or after the load, nobody knows, so they don't count.
+def test_a_sale_in_the_poll_window_holding_the_load_leaves_the_trial_unknown(conn):
+    # The poll after the load also saw 2 sales: before or after the load, nobody knows, so neither is how long the
+    # new stock lasted. Fail closed: no verdict.
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
     stock_the_rest(conn)
@@ -215,8 +216,7 @@ def test_the_poll_window_holding_the_load_is_left_out(conn):
     polls(conn, rows)
     set_wildcard(conn, "15")
     t = get_machine_state(conn, now=NOW).wildcard_trial
-    assert t.units_sold == 18 and t.class_days_in_stock == 6
-    assert t.profit_per_class_day == f"{(5000 - 900) / 100 / t.class_days_in_stock:.2f}"
+    assert t.verdict == UNKNOWN and "2 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
 
 
 def test_a_price_test_ends_when_the_price_is_back_under_the_ceiling(conn):
@@ -455,29 +455,48 @@ def test_a_load_lost_at_its_own_time_leaves_the_wildcard_empty_until_a_refill(co
     assert (t.product, t.class_days_in_stock) == ("AAA", 2), t   # Fri 23 and Mon 26, not the six from 19 Oct
 
 
-def _swap_with_a_sale_in_its_window(conn, new_price):
-    """Slot 15 held ZZZ at $2.50 from 9 Oct; at SINCE it switches to 1 unit of AAA. One unit sells in the poll
-    window around the swap, booked by the first poll after it, then nothing sells to Friday 23 Oct."""
+def _swap_with_a_sale_in_its_window(conn, new_price, first_at="2026-10-16T21:00:00+00:00", paid="3.00"):
+    """Slot 15 held ZZZ at $2.50 from 9 Oct; at SINCE it switches to 1 unit of AAA (`paid` for it, None: unknown).
+    One unit sells in the poll window around the swap, booked by the first poll after the one before it (at
+    `first_at`), then nothing sells to Friday 23 Oct."""
     from tests.conftest import TEST_SLOTS
 
     fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 10, 0, 0),
               *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (250, 100, 25000)})
-    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "3.00", 1, 0, 0))
-    first = ("p1", "2026-10-16T21:00:00+00:00", {"15": (new_price, 101, 25250)})
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", paid, 1, 0, 0))
+    first = ("p1", first_at, {"15": (new_price, 101, 25000 + new_price)})
     polls(conn, [first, ("p2", "2026-10-23T22:00:00+00:00", first[2])])
     set_wildcard(conn, "15")
 
 
-def test_a_sale_of_the_old_product_after_a_swap_takes_nothing_from_the_new_one(conn):
-    """The counters split it (the price changed): the unit was ZZZ, so AAA's one unit stays in stock all week."""
+def _swap_trial(conn):
+    return get_machine_state(conn, now=datetime(2026, 10, 24, 2, tzinfo=timezone.utc)).wildcard_trial
+
+
+def test_any_sale_in_the_poll_window_over_a_swap_leaves_the_trial_unknown(conn):
+    """Even when the counters seem to split it (the price changed), nothing proves which product the unit was."""
     _swap_with_a_sale_in_its_window(conn, new_price=300)
-    t = get_machine_state(conn, now=datetime(2026, 10, 24, 2, tzinfo=timezone.utc)).wildcard_trial
-    assert (t.product, t.units_sold, t.class_days_in_stock) == ("AAA", 0, 5), t
+    t = _swap_trial(conn)
+    assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
 
 
 def test_a_sale_the_counters_cant_split_across_a_swap_leaves_the_trial_unknown(conn):
     """Same price on both sides: the unit may be either product, so the trial's stock is unknown."""
     _swap_with_a_sale_in_its_window(conn, new_price=250)
-    t = get_machine_state(conn, now=datetime(2026, 10, 24, 2, tzinfo=timezone.utc)).wildcard_trial
-    assert t.verdict == UNKNOWN and "can't split" in t.reason, t
+    t = _swap_trial(conn)
+    assert t.verdict == UNKNOWN and "nothing can split them" in t.reason, t
+
+
+def test_an_unsplit_sale_at_a_swap_whose_new_stock_has_no_known_cost_leaves_the_trial_unknown(conn):
+    """Same price, and nothing says what AAA cost: the window carries no unattributed cost, and still counts."""
+    _swap_with_a_sale_in_its_window(conn, new_price=250, paid=None)
+    t = _swap_trial(conn)
+    assert t.verdict == UNKNOWN and "switch to AAA" in t.reason, t
+
+
+def test_a_sale_booked_by_a_poll_at_the_swaps_own_moment_leaves_the_trial_unknown(conn):
+    """The poll lands exactly on the swap: the unit it booked may be either product."""
+    _swap_with_a_sale_in_its_window(conn, new_price=250, first_at=SINCE.isoformat())
+    t = _swap_trial(conn)
+    assert t.verdict == UNKNOWN and "switch to AAA" in t.reason, t
