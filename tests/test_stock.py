@@ -843,3 +843,28 @@ def test_mixed_cost_shrinkage_and_inventory_keep_the_known_amount_and_say_they_a
     assert sum(x.cost_cents for x in lost.shrinkage if x.cost_cents is not None) == 200
     assert any(x.cost_cents is None for x in lost.shrinkage)
 
+
+def test_a_back_stock_load_past_the_closet_count_keeps_the_known_units_cost():
+    stock = book([
+        line(units_loaded=0, units_to_back_stock=4, total_paid="4.00"),               # 4 at 100 in the closet
+        line(slot="16", outcome="loaded", total_paid=None, units_loaded=5,
+             units_from_back_stock=5, at=2, request_id="r2"),                         # 5 loaded from 4 counted
+    ])
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.units, slot16.unit_cost) == (5, None)
+    assert slot16.layers == ((4, 100), (1, None))
+    assert any("counted only 4 there" in w for w in stock.warnings)
+
+
+def test_a_back_stock_load_with_a_loss_keeps_the_dearer_layer_apart():
+    """2 at $1 then 2 at $3 drawn, 1 lost: the loss comes out of the oldest units, and its $1 is spread
+    over the 3 left, so the $3 units stay the last and dearest, and the $8 is all still there."""
+    stock = book([
+        line(units_loaded=0, units_to_back_stock=2, total_paid="2.00"),               # 2 at 100
+        line(units_loaded=0, units_to_back_stock=2, total_paid="6.00", at=1, request_id="r2"),   # 2 at 300
+        line(slot="16", outcome="loaded", total_paid=None, units_loaded=3,
+             units_from_back_stock=4, at=2, request_id="r3"),                         # 1 dropped
+    ])
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert slot16.layers == ((1, Fraction(400, 3)), (2, Fraction(1000, 3)))
+    assert sum(units * cost for units, cost in slot16.layers) == 800

@@ -733,6 +733,25 @@ def _known(layers: list[_Layer]) -> tuple[int, Fraction | None]:
     return sum(layer.units for layer in known), sum((layer.unit_cost * layer.units for layer in known), Fraction(0))
 
 
+def _less_lost(layers: list[_Layer], lost: int) -> list[_Layer]:
+    """Layers drawn from the closet for a load, less `lost` units dropped on the way.
+
+    The lost units come out of the oldest layers, and their known cost is
+    spread evenly over the known units that made it, so the load still costs
+    what was drawn and the layers keep their order and differences: a dearer
+    layer stays dearer for later sales and floors.
+    """
+    pool = _Pool()
+    pool.add_layers(layers)
+    _, cost = _known(pool.take_layers(lost))
+    known = sum(layer.units for layer in pool.layers if layer.unit_cost is not None)
+    if cost and known:
+        for layer in pool.layers:
+            if layer.unit_cost is not None:
+                layer.unit_cost += cost / known
+    return pool.layers
+
+
 @dataclass
 class _Slot:
     product: str
@@ -834,12 +853,8 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 if taken < wanted:
                     warn(m.slot, f"{m.ref}: loaded {wanted} units of {m.sku} from the closet "
                                     f"but we counted only {taken} there")
-                    slot.pool.add(m.to_slot, None)
-                elif m.lost:
-                    # Which layer the lost units came from is unknown, so the survivors share their cost.
-                    slot.pool.add(m.to_slot, _cost(layers))
-                else:
-                    slot.pool.add_layers(layers)
+                    layers.append(_Layer(wanted - taken, None))   # the ones we didn't count: cost unknown
+                slot.pool.add_layers(_less_lost(layers, m.lost))
             slot.loaded += m.to_slot
             slot.at_most += m.to_slot
             slot.last_moved = m.at
