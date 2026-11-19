@@ -642,21 +642,25 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
 
 
 def _inventory(counted: stock.Stock) -> tuple[Fraction | None, Fraction | None, bool]:
-    """(machine, closet) at cost, and whether every unit on hand had a known cost."""
+    """(machine, closet) at cost, and whether every unit on hand had a known cost.
+
+    Each count is valued by its layers, so units of unknown cost leave out
+    only themselves, not the known units sharing a slot or shelf with them.
+    """
     complete = True
     machine = closet = None
     for s in counted.slots:
-        if not s.units:
-            continue
-        if s.unit_cost is None:
-            complete = False
-            continue
-        machine = (machine or 0) + s.unit_cost * s.units
+        for units, each in (s.layers or ((s.units, s.unit_cost),)) if s.units else ():
+            if each is None:
+                complete = False
+                continue
+            machine = (machine or 0) + each * units
     for c in counted.closet:
-        if c.unit_cost is None:
-            complete = False
-            continue
-        closet = (closet or 0) + c.unit_cost * c.units
+        for units, each in c.layers or ((c.units, c.unit_cost),):
+            if each is None:
+                complete = False
+                continue
+            closet = (closet or 0) + each * units
     if counted.slots and machine is None and complete:
         machine = Fraction(0)
     if counted.closet and closet is None and complete:

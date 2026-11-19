@@ -807,3 +807,39 @@ def test_visits_whose_door_times_the_replay_drops_still_count_as_setting_the_pri
     assert any("share a minute" in w for w in stock.warnings)
     [sale] = [s for s in stock.sales if s.units]
     assert (sale.product, sale.units) == (None, 2) and "can't split" in sale.unattributed
+
+
+def _unknown_then_two_dollars(**loaded):
+    """Slot 17 holds 2 OLDCOLA: 1 of unknown cost (pulled from a slot we never loaded with it), then 1 at $2."""
+    return [
+        line(sku="PEPSI20", units_loaded=10, total_paid="8.00", units_pulled=1, pulled_sku="OLDCOLA",
+             slot_reassigned=True),
+        line(slot="16", sku="OLDCOLA", units_loaded=0, units_to_back_stock=1, total_paid="2.00", at=1,
+             request_id="r2"),
+        line(slot="17", sku="OLDCOLA", outcome="loaded", total_paid=None, units_loaded=2,
+             units_from_back_stock=2, at=2, request_id="r3"),
+    ]
+
+
+@pytest.mark.parametrize("counters", [
+    [("17", hours(3), 0), ("17", hours(5), 2)],                          # both in one poll
+    [("17", hours(3), 0), ("17", hours(4), 1), ("17", hours(5), 2)],     # one per poll
+])
+def test_a_sale_across_an_unknown_and_a_known_unit_books_the_known_cost_however_it_is_polled(counters):
+    stock = book(_unknown_then_two_dollars(), counters=counters)
+    sales = [s for s in stock.sales if s.slot == "17"]
+    assert sum(s.cost_cents or 0 for s in sales) == 200
+    assert sum(s.costed_units for s in sales if s.cost_cents is not None) == 1   # the other unit's cost is unknown
+
+
+def test_mixed_cost_shrinkage_and_inventory_keep_the_known_amount_and_say_they_are_incomplete():
+    from vending.ledger import _inventory
+    held = book(_unknown_then_two_dollars())
+    slot17 = next(s for s in held.slots if s.slot == "17")
+    assert slot17.unit_cost is None                                    # no mean over a partly unknown pool
+    assert _inventory(held) == (Fraction(800 + 200), None, False)   # slot 15's PEPSI20, and the known unit
+    lost = book(_unknown_then_two_dollars(), [loss("coil", 2, sku="OLDCOLA", slot="17", at=3, request_id="r3")])
+    assert sum(x.units for x in lost.shrinkage) == 2
+    assert sum(x.cost_cents for x in lost.shrinkage if x.cost_cents is not None) == 200
+    assert any(x.cost_cents is None for x in lost.shrinkage)
+
