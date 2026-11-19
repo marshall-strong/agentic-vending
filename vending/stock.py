@@ -53,9 +53,11 @@ is recorded every receipt counts, so the planner and the tools can be tested
 on test purchases. Sales counters are read as before; a sale from a slot with
 no counted receipt is sold but not costed.
 
-The cost method is first in, first out (#172): sales, pulls, losses and loads
-take the oldest units first, so a sale is costed at the stock that was there.
-A count's `unit_cost` is the exact mean of what is left. The method lives in
+The cost method is first in, first out by load, the team's choice since
+19 Nov (#128; it came in with #172, replacing weighted average): sales,
+pulls, losses and loads take the oldest units first, so a sale is costed at
+the stock that was there. What is left is valued at its remaining layers'
+costs, and a count's `unit_cost` is the exact mean of them. The method lives in
 `first_in_first_out` and `_Pool`, nowhere else. Money is exact cents
 (`Fraction`), never a float.
 """

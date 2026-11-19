@@ -236,7 +236,7 @@ Shelf prices include the 8% tax, so a unit sold at price P keeps P ÷ 1.08. That
 | A 6-pack, max $4.49 | $0.748 | $0.808 | $0.85 |
 
 - **Worst case wins.** The floor uses the higher per-unit max of the primary and the alternate. If units already in the slot cost more, it uses their actual cost instead.
-- **Price-only changes** use the actual cost of the stock on hand, from receipts after spoilage. Average cost or first in, first out is still a team decision.
+- **Price-only changes** use the actual cost of the stock on hand, from receipts after spoilage. Since 19 Nov that is first in, first out (#128): the floor clears the dearest cost among the units staying.
 - **Unchanged prices are checked too** whenever a slot gets newly bought units. A restock at a higher max can lift the floor above the current price; that is refused as `below_floor`.
 - **Exact arithmetic:** integer cents, rounded up once at the end, never down.
 - **Ceiling:** `config.price_ceiling_cents`, $6.50 (team decision, 12 Nov). The API refuses anything over $10.00.
@@ -378,7 +378,7 @@ Already answered on 8 Oct: the closet exists and holds pulled stock at cost, and
 These are ours to answer; nobody else will decide them for us.
 
 - [x] Price bounds: what are the actual floor and ceiling? Proposal: floor = average unit cost + tax, rounded up to the next 5 cents; ceiling = a flat cap such as $6.00. 19 Oct: the floor now uses the max buy price per unit (see the pricing gate). **Decided 12 Nov: the ceiling is $6.50** (`price_ceiling_cents` 650); the machine and the API refuse anything over $10.00.
-- [ ] Cost method for cost of goods and closet value: average cost per SKU (the build plan's proposal) or first in, first out? 12 Nov: still being worked out; the code uses weighted average until then.
+- [x] Cost method for cost of goods and closet value: average cost per SKU (the build plan's proposal) or first in, first out? **FIFO, chosen 19 Nov (Kevin; see #128).** Sales, pulls and losses take the oldest units by load, and unsold stock is valued at its remaining layers' costs. The team can still ask to switch back on #128 before it merges.
 - [x] Where do the sync job and the agent run? Decided 19 Oct: Azure, on a VM that joins the tailnet. Graham issues access once we tell him what we need.
 - [ ] How often does each scheduled job run? See the proposed frequencies in "Scheduled code, not tools": history hourly, pending requests hourly while one is open, catalog daily.
 - [ ] Build the MCP server in n8n or plain Python? We ruled out n8n on 20 Sep; the build plan suggests reconsidering.

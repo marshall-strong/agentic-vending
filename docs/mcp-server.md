@@ -239,7 +239,7 @@ Friday. `units_sold` counts every rise in our slots' unit counters; cost of sale
 units the receipts can cost (first in, first out, `vending.stock`), and `units_costed`,
 `cost_of_sales_complete: false` and a note say how many could not be (sold before we first loaded
 the slot, or past what we loaded). Units sold across a product change that the counters can't split
-(#112) count as costed, at the new product's average cost; a note says the product may be wrong. Cost of sales is never "unknown": a quiet week with a $25 visit
+(#112) count as costed, at the cost of the new product's oldest units; a note says the product may be wrong. Cost of sales is never "unknown": a quiet week with a $25 visit
 and 40 cents of tokens nets -25.40. **Shrinkage** is the cost of units lost without a sale: later
 losses, units still counted in a slot when its product changed, and a purchase line that lost
 every unit. It is its own line, taken out of net, so a lost unit's cost never silently disappears.

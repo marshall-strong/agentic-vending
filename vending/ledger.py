@@ -503,7 +503,7 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     counted = stock.stock(conn, until=end)
     # A rise is booked to the later poll, so the window's sales are the rises at polls after `start`.
     sales = [s for s in counted.sales if start < s.at <= end]
-    # Sold across a product change the counters can't split: costed at the new product's average (#112).
+    # Sold across a product change the counters can't split: costed at the new product's oldest units (#112).
     # They count as costed, since their cost is in cost of sales; the note says the product may be wrong.
     guessed = sum(s.costed_units for s in sales if s.unattributed_cost_cents is not None)
     units_costed = sum(s.costed_units for s in sales if _has_cost(s))
