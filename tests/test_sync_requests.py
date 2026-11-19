@@ -41,11 +41,12 @@ def receipt(**overrides):
     return {**fields, **overrides}
 
 
-def fulfilled(request_id, *receipts, fulfilled_at="2026-11-07T16:30:00Z"):
+def fulfilled(request_id, *receipts, fulfilled_at="2026-11-07T16:30:00Z", **fields):
+    """A fulfilled answer. `fields` are more request-level fields, such as the door times."""
     return {
         "id": request_id, "status": "fulfilled", "device_id": "vmc1", "created_at": "2026-11-07T14:00:00Z",
         "updated_at": fulfilled_at, "fulfilled_at": fulfilled_at, "off_cycle": False, "note": None,
-        "decision_note": None, "total_paid": "12.37",
+        "decision_note": None, "total_paid": "12.37", **fields,
         "lines": [{"line": i, "slot": "15", "source": "purchase", "primary": BODY["lines"][0]["primary"],
                    "alternate": None, "load": None, "receipt": r} for i, r in enumerate(receipts)],
     }
@@ -268,3 +269,168 @@ def test_stock_preserves_receipts_but_does_not_count_removed_selections_sales(co
                      " lifetime_sales_cents) values (%s, '15', 250, %s, 0)", (session_id, lifetime))
     [slot] = stock(conn).slots
     assert (slot.units, slot.sold) == (8, 0)
+
+
+# --- Door times (17 Nov): request-level, to the minute, null on older requests -------------
+
+OPENED, CLOSED = "2026-11-07T15:34:00+00:00", "2026-11-07T16:34:00+00:00"
+
+
+def door_row(conn, request_id="r1"):
+    return conn.execute("select door_opened_at, door_closed_at from purchase_requests where request_id = %s",
+                        (request_id,)).fetchone()
+
+
+def test_door_times_are_stored_with_the_receipt(conn):
+    submit(conn, "r1")
+    store(conn, "r1", fulfilled("r1", receipt(), door_opened_at=OPENED, door_closed_at=CLOSED), NOW)
+    assert door_row(conn) == (datetime(2026, 11, 7, 15, 34, tzinfo=timezone.utc),
+                              datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc))
+
+
+@pytest.mark.parametrize("fields", [
+    {},                                                           # an older request: no such fields
+    {"door_opened_at": None, "door_closed_at": None},             # the worker left them out
+    {"door_opened_at": OPENED, "door_closed_at": None},           # half a visit is no visit
+    {"door_opened_at": None, "door_closed_at": CLOSED},
+])
+def test_missing_or_null_door_times_are_stored_as_null(conn, fields):
+    submit(conn, "r1")
+    stored = store(conn, "r1", fulfilled("r1", receipt(), **fields), NOW)
+    assert door_row(conn) == (None, None)
+    # Only half a pair is worth telling a person about: the receipt has one, so the other went missing.
+    half = len([v for v in fields.values() if v is not None]) == 1
+    assert len(stored.warnings) == half and all(w.startswith("r1: the receipt has door_") for w in stored.warnings)
+    # The answer itself is still kept whole.
+    assert conn.execute("select last_response from purchase_requests").fetchone()[0].items() >= fields.items()
+
+
+def test_half_a_pair_of_door_times_is_logged_naming_the_request(conn):
+    submit(conn, "r1")
+    said = []
+    sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED)}), NOW, log=said.append)
+    assert said == ["r1: the receipt has door_opened_at but no door_closed_at; neither is kept, "
+                    "so its visit is dated by resolved_at"]
+    assert door_row(conn) == (None, None)
+
+
+@pytest.mark.parametrize("bad", [1763000000, 17.5, "soon", ["2026-11-07T15:34:00Z"], {"at": OPENED}, True])
+def test_a_door_time_that_is_not_a_time_is_logged_and_the_rest_of_the_batch_still_syncs(conn, bad):
+    # A number (or anything not a time string) used to raise TypeError past the per-request
+    # handler and stop the whole sync. It is treated as missing: logged, neither kept.
+    submit(conn, "r1")
+    submit(conn, "r2")
+    said = []
+    report = sync(conn, FakeBridge({
+        "r1": fulfilled("r1", receipt(), door_opened_at=bad, door_closed_at=CLOSED),
+        "r2": fulfilled("r2", receipt(), door_opened_at=OPENED, door_closed_at=CLOSED),
+    }), NOW, log=said.append)
+    assert (report.checked, report.failed) == (2, 0)
+    assert said == [f"r1: door_opened_at is {bad!r}, not a time; neither door time is kept, "
+                    "so its visit is dated by resolved_at"]
+    assert door_row(conn, "r1") == (None, None)
+    assert door_row(conn, "r2")[1] == datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc)
+    assert conn.execute("select count(*) from purchase_lines where request_id = 'r1'").fetchone()[0] == 1
+
+
+def test_a_door_time_with_a_date_and_no_time_is_logged_and_the_receipt_kept(conn):
+    # Read as midnight, "2026-11-07" would close the door before its 15:34 open, and the whole
+    # receipt would be refused. It isn't a time: neither door time is kept, the receipt is.
+    submit(conn, "r1")
+    said = []
+    report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED,
+                                                    door_closed_at="2026-11-07")}), NOW, log=said.append)
+    assert (report.checked, report.failed) == (1, 0)
+    assert said == ["r1: door_closed_at is '2026-11-07', not a time; neither door time is kept, "
+                    "so its visit is dated by resolved_at"]
+    assert door_row(conn) == (None, None)
+    assert conn.execute("select count(*) from purchase_lines").fetchone()[0] == 1
+
+
+def test_a_door_closed_before_it_opened_is_logged_and_not_stored(conn):
+    submit(conn, "r1")
+    said = []
+    bad = fulfilled("r1", receipt(), door_opened_at=CLOSED, door_closed_at=OPENED)
+    report = sync(conn, FakeBridge({"r1": bad}), NOW, log=said.append)
+    assert report.failed == 1 and any("before it opened" in s for s in said)
+    assert conn.execute("select status, last_response from purchase_requests").fetchone() == ("pending", None)
+    assert conn.execute("select count(*) from purchase_lines").fetchone()[0] == 0
+    # A good receipt we already had is kept when a later read is bad.
+    store(conn, "r1", fulfilled("r1", receipt(), door_opened_at=OPENED, door_closed_at=CLOSED), NOW)
+    sync(conn, FakeBridge({"r1": bad}), NOW, log=quiet)
+    assert door_row(conn)[1] == datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc)
+    # The database refuses one too, should anything write past `store`.
+    import psycopg
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("update purchase_requests set door_opened_at = door_closed_at + interval '1 minute'")
+
+
+def test_stock_reads_door_times_for_a_line_resolved_before_the_door_opened(conn):
+    # As on pr_v8hB_h3gQatc: a line filled in before the door opened. A poll at 15:33,
+    # after resolved_at but before door open, sees 3 sales. They are not the new load's.
+    submit(conn, "r1")
+    sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(total_paid="12.00", resolved_at="2026-11-07T15:31:52Z"),
+                                           door_opened_at=OPENED, door_closed_at=CLOSED)}), NOW, log=quiet)
+    for session_id, started_at, lifetime in (("p1", "2026-11-07T14:33:00Z", 40), ("p2", "2026-11-07T15:33:00Z", 43),
+                                             ("p3", "2026-11-07T17:33:00Z", 44)):
+        conn.execute("insert into polls (session_id, device_id, started_at, raw, byte_count, crc_ok)"
+                     " values (%s, 'vmc1', %s, '', 0, true)", (session_id, started_at))
+        conn.execute("insert into poll_selections (session_id, selection, price_cents, lifetime_units,"
+                     " lifetime_sales_cents) values (%s, '15', 250, %s, 0)", (session_id, lifetime))
+    [slot] = stock(conn).slots
+    assert (slot.since, slot.units, slot.sold) == (datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc), 7, 1)
+
+
+def test_migration_019_backfills_door_times_from_stored_answers(database_url):
+    import uuid
+
+    from psycopg.types.json import Jsonb
+
+    from tests.conftest import open_in
+    from vending import db
+
+    schema = f"test_{uuid.uuid4().hex[:8]}"
+    with open_in(database_url, "public") as admin:
+        admin.execute(f"create schema {schema}")
+        try:
+            with open_in(database_url, schema) as conn:
+                # Every migration before 019, recorded as applied, as on a database that is behind.
+                conn.execute("create table schema_migrations (version text primary key,"
+                             " applied_at timestamptz not null default now())")
+                for path in sorted(db.MIGRATIONS.glob("*.sql")):
+                    if path.name >= "019":
+                        break
+                    conn.execute(path.read_text(encoding="utf-8"))
+                    conn.execute("insert into schema_migrations (version) values (%s)", (path.name,))
+                answers = {
+                    "both": {"door_opened_at": OPENED, "door_closed_at": CLOSED},
+                    "no_zone": {"door_opened_at": "2026-11-07T15:34:00", "door_closed_at": "2026-11-07T16:34:00"},
+                    "none": {},
+                    "nulls": {"door_opened_at": None, "door_closed_at": None},
+                    "half": {"door_opened_at": OPENED},
+                    "backwards": {"door_opened_at": CLOSED, "door_closed_at": OPENED},
+                    "garbage": {"door_opened_at": "soon", "door_closed_at": "later"},
+                    # Passes a prefix regex, but there is no 31 November: casting it would abort 019.
+                    "bad_date": {"door_opened_at": "2026-11-31T15:34:00Z", "door_closed_at": CLOSED},
+                    "unread": None,
+                }
+                for request_id, fields in answers.items():
+                    conn.execute(
+                        "insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, last_response)"
+                        " values (%s, %s, false, '{}', %s)",
+                        (request_id, NOW, None if fields is None else Jsonb(fulfilled(request_id, receipt(), **fields))))
+                conn.execute("set time zone 'America/New_York'")   # the backfill must not depend on the session
+                notices = []
+                conn.add_notice_handler(lambda d: notices.append(d.message_primary))
+                assert db.migrate(conn)[0] == "019_door_times.sql"
+                got = dict((r, (o, c)) for r, o, c in conn.execute(
+                    "select request_id, door_opened_at, door_closed_at from purchase_requests"))
+                visit = (datetime(2026, 11, 7, 15, 34, tzinfo=timezone.utc), datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc))
+                assert got == {"both": visit, "no_zone": visit, **{r: (None, None) for r in answers if r not in ("both", "no_zone")}}
+                # The skipped pairs are named; a request with no door times at all is not.
+                assert "019: door times filled in on 2 request(s)" in notices
+                [skipped] = [n for n in notices if "skipped" in n]
+                assert skipped.startswith("019: 4 request(s) skipped") and skipped.endswith(
+                    "left null: backwards, bad_date, garbage, half")
+        finally:
+            admin.execute(f"drop schema {schema} cascade")

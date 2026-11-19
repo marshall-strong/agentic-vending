@@ -595,20 +595,19 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
 
 
 def _receipts(conn: psycopg.Connection, start: datetime, end: datetime) -> tuple[Fraction, int, int]:
-    """(total paid in cents, lines counted, lines with no total) for receipt lines resolved in the window.
+    """(total paid in cents, lines counted, lines with no total) for receipt lines in the window.
 
-    Lines go by their own `resolved_at`, the same clock the stock replay uses,
-    so a purchase and the sales it costs can't fall in different windows. Lines
-    before the opening are test purchases and left out, at the boundary the
-    stock replay uses (`stock.receipts_count_from`).
+    Lines go by the receipt clock the stock replay uses (`stock.receipt_lines`:
+    door close when the replay uses the receipt's door times, else the line's
+    own `resolved_at`), so a purchase and the sales it costs can't fall in
+    different windows. Lines before the opening are test purchases and left
+    out, at the boundary the stock replay uses (`stock.receipts_count_from`).
     """
-    total, lines, missing = conn.execute(
-        "select coalesce(sum(l.total_paid), 0), count(l.total_paid), count(*) - count(l.total_paid)"
-        " from purchase_lines l join purchase_requests r using (request_id)"
-        " where r.status = 'fulfilled' and l.resolved_at >= %s and l.resolved_at <= %s",
-        (stock.receipts_count_from(conn, start), end),
-    ).fetchone()
-    return Fraction(Decimal(total)) * 100, lines, missing
+    lo = stock.receipts_count_from(conn, start)
+    paid = [stock.cents(line["total_paid"]) for line in stock.receipt_lines(conn)
+            if line["at"] is not None and lo <= line["at"] <= end]
+    known = [p for p in paid if p is not None]
+    return sum(known, Fraction(0)), len(known), len(paid) - len(known)
 
 
 def _visits(conn: psycopg.Connection, start: datetime, end: datetime) -> tuple[int, int]:
@@ -622,22 +621,24 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
 
     Each request is charged the fee stored on it at submission; requests from
     before that column existed fall back to `config.midweek_fee_cents`. A visit
-    is timed at its first receipt line, like the stock it delivered, so a visit
-    timed before the opening brought test purchases and its fee is left out
-    (`stock.receipts_count_from`).
+    is timed like the stock it delivered, at its first line on the receipt
+    clock (`stock.request_times`), or at `fulfilled_at` with no lines. So a
+    visit timed before the opening brought test purchases and its fee is left
+    out (`stock.receipts_count_from`).
     """
     fee = config.get_value(conn, "midweek_fee_cents", DEFAULT_MIDWEEK_FEE_CENTS)
     if not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
         fee = DEFAULT_MIDWEEK_FEE_CENTS
-    rows = conn.execute(
-        "select v.at, v.fee from ("
-        " select coalesce((select min(l.resolved_at) from purchase_lines l where l.request_id = r.request_id),"
-        "                 r.fulfilled_at) as at, coalesce(r.visit_fee_cents, %s) as fee"
-        " from purchase_requests r where r.off_cycle and r.status = 'fulfilled') v"
-        " where v.at between %s and %s order by v.at",
-        (fee, stock.receipts_count_from(conn, start), end),
-    ).fetchall()
-    return [(at, int(cents)) for at, cents in rows]
+    times = stock.request_times(stock.receipt_lines(conn))
+    lo = stock.receipts_count_from(conn, start)
+    rows = []
+    for request_id, fulfilled_at, cents in conn.execute(
+            "select request_id, fulfilled_at, coalesce(visit_fee_cents, %s) from purchase_requests"
+            " where off_cycle and status = 'fulfilled'", (fee,)):
+        at = times.get(request_id, fulfilled_at)
+        if at is not None and lo <= at <= end:
+            rows.append((at, int(cents)))
+    return sorted(rows, key=lambda row: row[0])
 
 
 def _inventory(counted: stock.Stock) -> tuple[Fraction | None, Fraction | None, bool]:
