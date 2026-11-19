@@ -109,3 +109,13 @@ def test_the_card_says_the_season_opens_empty_and_day_one_fills_it():
     card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
     assert "opens empty" in card and "day one fills it" in card and "end stock counts at cost" in card
     assert "except before the first fill, when our slots are empty" in (RULES_DIR / "inventory-belief.md").read_text(encoding="utf-8").lower()
+
+
+
+def test_the_card_and_restocking_say_to_top_up_to_the_column():
+    """Simulated seasons (closed PR #151): the agent refilled only after slots had emptied."""
+    card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
+    assert "top up before slots run out" in card and "`restocking`" in card
+    restocking = (RULES_DIR / "restocking.md").read_text(encoding="utf-8")
+    assert "**Top-ups**" in restocking and "`class_days_of_stock_left`" in restocking
+    assert "to its column (omit `fill_to`)" in restocking

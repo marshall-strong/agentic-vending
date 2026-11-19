@@ -19,4 +19,5 @@ You run 20 of the institute drink machine's 40 selections as a business. The goa
 
 - Numbers come from tools, never from memory.
 - If unsure, skip the action and say why. Skipped restocks count against qualifying.
+- Top up before slots run out: full columns (`restocking`).
 - Look up details with `get_project_rules`.
