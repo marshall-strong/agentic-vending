@@ -57,3 +57,18 @@ def priced_average(parts) -> tuple[float | None, int]:
     units = sum(uo + uc for _, _, uo, uc, _ in parts)
     total = sum((p_open * uo if uo else 0) + (p_close * uc if uc else 0) for p_open, p_close, uo, uc, _ in parts)
     return (total / units if units else None), sum(p[4] for p in parts)
+
+
+SALES_RULE = "units-weighted price in effect at each regular-era class-day sale"
+NOON_RULE = "mean noon listed price on regular-era class days (no sales with a known price)"
+
+
+def slot_average_price(parts, noon_mean) -> tuple[float, str, int]:
+    """`(average price in cents, the rule that gave it, units unknown)` as analysis/sales_analysis.py reports a slot's.
+
+    The average of the units whose price is known (`priced_average`); a slot with none takes `noon_mean()`, the mean
+    of its noon listed price over the same days (called only then). Unknown units are counted either way."""
+    avg, unknown = priced_average(parts)
+    if avg is not None:
+        return float(avg), SALES_RULE, unknown
+    return float(noon_mean()), NOON_RULE, unknown

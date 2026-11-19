@@ -87,7 +87,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from slots_config import SOURCE_CLI, SOURCE_FALL, SOURCE_SERVER, check_before_start, resolve_run  # noqa: E402
 from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
-from boundary_units import price_sales, priced_average  # noqa: E402
+from boundary_units import price_sales, slot_average_price  # noqa: E402
 from door_events import our_windows, read_receipts  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID  # noqa: E402  (configure() sets the device and slots this run uses)
@@ -1322,8 +1322,8 @@ def main():
         # average price = units-weighted price in effect at each sale on regular-era class days; a slot with no such sale
         # takes the mean of its noon listed price over those days
         sc = su[su.date.isin(set(reg_class))]
-        avg_known, unknown = priced_average(zip(sc.price_at_sale, sc.price_close, sc.units_open, sc.units_close, sc.units_unknown))
-        avg_p = float(avg_known) if avg_known is not None else float(price_day.loc[reg_class, s].mean())
+        avg_p, avg_rule, unknown = slot_average_price(zip(sc.price_at_sale, sc.price_close, sc.units_open, sc.units_close, sc.units_unknown),
+                                                      lambda: price_day.loc[reg_class, s].mean())
         last_sale = su.t.max() if len(su) else None
         slot_rows.append(dict(
             slot=s, row=int(rowcol.loc[s, "row"]), col=int(rowcol.loc[s, "col"]),
@@ -1332,9 +1332,7 @@ def main():
             units_per_week=su.units.sum() / ((T1 - T0).total_seconds() / 86400 / 7),
             instock_class_days=rate_rows[s]["instock_days_all"], class_days=len(reg_class),
             rate=rate_rows[s]["rate_all"], rate_recent=rate_rows[s]["rate_recent"],
-            avg_price=avg_p / 100, avg_price_rule="units-weighted price in effect at each regular-era class-day sale" if avg_known is not None
-            else "mean noon listed price on regular-era class days (no sales with a known price)",
-            price_unknown_units=int(unknown),
+            avg_price=avg_p / 100, avg_price_rule=avg_rule, price_unknown_units=int(unknown),
             current_price=int(rd[rd.slot == s].price_cents.iloc[-1]),
             fri_share=float(fri_units / wd_tot) if wd_tot else 0.0,
             zero_week_share=float((wk_units == 0).mean()) if len(wk_units) else None,

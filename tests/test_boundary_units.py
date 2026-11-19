@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "analysis"))
 
-from boundary_units import price_sales, priced_average, split_boundary  # noqa: E402
+from boundary_units import NOON_RULE, SALES_RULE, price_sales, priced_average, slot_average_price, split_boundary  # noqa: E402
 
 T0 = datetime.fromisoformat("2026-12-04T09:00:00-05:00")
 T = [T0 + timedelta(hours=h) for h in range(3)]
@@ -61,6 +61,16 @@ def test_when_every_unit_is_unknown_there_is_no_average():
     assert average(readings, [(T[0], T[1], 2, 333)]) == (None, 2)
 
 
+def test_the_reported_average_price_falls_back_to_the_noon_price_when_every_unit_is_unknown():
+    # what sales_analysis reports for a slot: avg_price (cents here), avg_price_rule and price_unknown_units together
+    readings = [(T[0], 0, 0, 150), (T[1], 2, 333, 250)]
+    parts = price_sales(readings, [(T[0], T[1], 2, 333)])
+    assert slot_average_price(parts, lambda: 200.0) == (200.0, NOON_RULE, 2)         # the mean noon price, not None or 250
+    # with a unit of known price the average is the units' own, and the noon price is not asked for
+    known = price_sales([(T[0], 0, 0, 150), (T[1], 10, 1500, 150), *readings[1:]], [(T[0], T[1], 10, 1500)])
+    assert slot_average_price(known, lambda: 1 / 0) == (150, SALES_RULE, 0)
+
+
 def test_unit_and_cents_rises_from_different_polls_are_not_split():
     # units 10, 11, 13 but cents 1000, 5, 1400 (the middle cents reading is a misread): the units rose from T[1] and
     # the cents from T[0], so the 400 cents span all three units, not the last two. Prices 100, 100, 200.
@@ -74,6 +84,7 @@ def test_a_misread_both_counters_share_does_not_stop_the_split():
     # both counters misread at T[1] and agree on the window from T[0]; the sale at T[2] still splits (price 150 -> 250)
     readings = [(T[0], 10, 1000, 150), (T[1], 4, 500, 150), (T[2], 13, 1650, 250)]
     assert price_sales(readings, [(T[1], T[2], 3, 650)])[0][2:] == (1, 2, 0)
+
 
 
 def test_a_sale_before_the_slots_first_reading_takes_that_reading():
