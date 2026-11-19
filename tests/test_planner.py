@@ -767,6 +767,28 @@ class TestWildcard(unittest.TestCase):
         self.assertEqual(where(wild(restock_15(), slot="18", slots=unread)), [("price_unknown", "18")])
         self.assertTrue(wild(restock_15(), slots={"18": SlotState("18", SPRITE, None, 0, 50)}).ok)
 
+    def test_a_kept_slot_of_unknown_price_and_unknown_stock_is_refused(self):
+        # No receipt describes 18, so planning counts it as empty, but it may hold a regular product selling at $7.50.
+        # Only stock known to be empty skips the check.
+        for unknown in (SlotState("18", None, None, 0, None, contents_known=False),
+                        SlotState("18", None, None, 3, None)):
+            p = wild(restock_15(), slots={"18": unknown})
+            self.assertEqual(where(p), [("price_unknown", "18")])
+            self.assertIn("no receipt says what it holds", p.refusals[0].message)
+        # Its price read: the ceiling check runs as for any kept slot.
+        read = {"18": SlotState("18", None, 750, 0, None, contents_known=False)}
+        self.assertEqual(where(wild(restock_15(), slots=read)), [("above_ceiling", "18")])
+        # A line for it that is itself refused says what to fix; it isn't refused again as kept.
+        too_full = DesiredSlot("18", product=SPRITE, sale_price="2.50", fill_to=99)
+        p = wild(restock_15(), too_full, slots={"18": SlotState("18", None, None, 0, None, contents_known=False)},
+                 sourcing=(SPRITE_SOURCING,))
+        self.assertEqual(where(p), [("over_capacity", "18")])
+        # Switching it in the plan settles both.
+        sprite_18 = DesiredSlot("18", product=SPRITE, sale_price="2.50", fill_to=10)
+        p = wild(restock_15(), sprite_18, slots={"18": SlotState("18", None, None, 0, None, contents_known=False)},
+                 sourcing=(SPRITE_SOURCING,))
+        self.assertTrue(p.ok, [r.message for r in p.refusals])
+
     def test_a_kept_wildcard_stays_under_the_wildcard_ceiling(self):
         # A lowered setting, or a price set before it: keeping it there is refused too.
         over = {"18": SlotState("18", SPRITE, 900, 10, 50)}
@@ -901,11 +923,11 @@ class TestWildcard(unittest.TestCase):
         self.assertIn(PICKLE, warning)
 
     def test_the_day_one_fill_is_refused_if_it_keeps_a_slot_no_receipt_describes(self):
-        # 46 keeps whatever is in it, which may be PICKLE.
+        # 46 keeps whatever is in it, which may be PICKLE, at a price no poll has read.
         p = self.day_one("46")
-        self.assertEqual(where(p), [("wildcard", "37")])
-        self.assertIn("keeps slot 46", p.refusals[0].message)
-        self.assertIn("switch it in this plan", p.refusals[0].message)
+        self.assertEqual(where(p), [("price_unknown", "46"), ("wildcard", "37")])
+        self.assertIn("keeps slot 46", p.refusals[1].message)
+        self.assertIn("switch it in this plan", p.refusals[1].message)
 
     def test_no_other_slot_switches_to_the_wildcards_next_product(self):
         state = {"17": SlotState("17", PICKLE, 750, 2, 250)}

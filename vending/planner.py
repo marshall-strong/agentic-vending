@@ -656,16 +656,21 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             f"buy less or cheaper")))
 
     floors: list[SlotFloor] = []
+    # A slot whose own line was refused is held as it is; that refusal already says what to fix.
+    refused = {r.slot for r in refusals if r.slot is not None}
     for s in slots:
         if s.action == NO_CHANGE:
             if s.price_cents is None:
                 # No poll ever read its price (`vending.planning` falls back to the last one that did), so nothing
-                # shows the units the receipts say it holds sell at or under its ceiling. A slot with none sells nothing.
-                if s.state.units > 0:
+                # shows what it holds sells at or under its ceiling. Only a slot the receipts show empty sells nothing;
+                # one no receipt describes may hold anything at any price.
+                if (s.state.units > 0 or s.state.unsure) and s.slot not in refused:
+                    held = (f"with {s.state.units} units" if not s.state.unsure
+                            else "and no receipt says what it holds")
                     refusals.append(Refusal("price_unknown", (
-                        f"slot {s.slot} is kept with {s.state.units} units, but no poll has read its price, so it "
-                        "can't be shown to be at or under the ceiling; give it a sale_price and load it at this "
-                        "visit, or ask a person to check the polls"), s.slot))
+                        f"slot {s.slot} is kept {held}, but no poll has read its price, so it can't be shown to be "
+                        "at or under the ceiling; give it a product, a sale_price and a load at this visit, or ask a "
+                        "person to check the polls"), s.slot))
                 continue
             # A kept regular slot is held to the regular ceiling too: only the one wildcard may sell above it.
             if s.slot != config.wildcard_slot and s.price_cents > config.price_ceiling_cents:

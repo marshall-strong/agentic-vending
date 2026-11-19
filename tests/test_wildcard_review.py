@@ -294,8 +294,9 @@ def test_4_no_regular_load_while_the_wildcards_contents_are_unknown():
 
     unknown = {"17": SlotState("17", None, None, 0, None, contents_known=False)}
     p = wild(restock_15(), slot="17", slots=unknown)
-    assert where(p) == [("wildcard", "17")]
-    assert "may put the same product in two slots" in p.refusals[0].message
+    # Kept at a price no poll has read, it is refused for that too.
+    assert where(p) == [("price_unknown", "17"), ("wildcard", "17")]
+    assert "may put the same product in two slots" in p.refusals[1].message
 
 
 def test_4_a_plan_that_sets_the_wildcards_product_may_load_others():
