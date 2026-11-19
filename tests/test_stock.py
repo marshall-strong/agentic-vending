@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 
-from vending.stock import closet_from_receipts, movements_from_receipts, replay, sales_from_counters, weighted_average
+from vending.stock import closet_from_receipts, movements_from_receipts, replay, sales_from_counters, first_in_first_out
 
 T0 = datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
 
@@ -32,7 +32,7 @@ def loss(location, units, sku="COKE20", slot="15", at=1, request_id="r1", line_n
 
 
 def book(lines, losses=(), counters=()):
-    return weighted_average(movements_from_receipts(list(lines), list(losses)) + sales_from_counters(list(counters)))
+    return first_in_first_out(movements_from_receipts(list(lines), list(losses)) + sales_from_counters(list(counters)))
 
 
 def test_one_broken_unit_spreads_the_pack_over_the_rest():
@@ -87,7 +87,7 @@ def test_the_closet_from_receipts_alone_has_every_unit_but_no_guessed_pull_cost(
     assert [(c.product, c.units, c.unit_cost) for c in alone] == [("COKE20", 6, None), ("WATER", 4, 50)]
 
 
-def test_a_top_up_blends_old_and_new_cost():
+def test_a_top_up_keeps_old_and_new_cost_apart_and_averages_them_for_unit_cost():
     stock = book(
         [line(units_loaded=10, total_paid="5.00"),                                  # 10 at 50
          line(units_loaded=10, total_paid="8.00", at=48, request_id="r2")],         # 10 at 80
@@ -96,6 +96,72 @@ def test_a_top_up_blends_old_and_new_cost():
     [slot] = stock.slots
     # 4 left at 50 (200) + 10 at 80 (800) = 1000 over 14.
     assert (slot.units, slot.unit_cost, slot.loaded, slot.sold) == (14, Fraction(1000, 14), 20, 6)
+    assert slot.layers == ((4, 50), (10, 80))
+
+
+def test_a_sale_in_the_window_of_a_top_up_is_costed_at_the_stock_that_was_there():
+    """#172 item 2. 4 on hand at $1, 4 more loaded at $2, and the next poll shows 4 sold: the 4 that
+    sold are the $1 ones (first in, first out), not 4 at the $1.50 average."""
+    stock = book(
+        [line(units_loaded=4, total_paid="4.00"),                                   # 4 at 100
+         line(units_loaded=4, total_paid="8.00", at=24, request_id="r2")],          # 4 at 200
+        counters=[("15", hours(1), 100), ("15", hours(30), 104)],                   # the window holds the top-up
+    )
+    [sale] = stock.sales
+    assert (sale.units, sale.costed_units, sale.cost_cents) == (4, 4, 400)
+    [slot] = stock.slots
+    assert (slot.units, slot.unit_cost, slot.loaded, slot.sold) == (4, 200, 8, 4)
+
+
+def test_sales_drain_the_oldest_units_first():
+    stock = book(
+        [line(units_loaded=4, total_paid="4.00"),                                   # 4 at 100
+         line(units_loaded=4, total_paid="8.00", at=24, request_id="r2")],          # 4 at 200
+        counters=[("15", hours(1), 100), ("15", hours(30), 102), ("15", hours(40), 105)],
+    )
+    # 2 of the $1 units, then the last 2 of them and 1 at $2.
+    assert [(s.units, s.cost_cents) for s in stock.sales] == [(2, 200), (3, 400)]
+    [slot] = stock.slots
+    assert (slot.units, slot.unit_cost) == (3, 200)
+
+
+def test_a_loss_takes_the_oldest_units():
+    stock = book(
+        [line(units_loaded=4, total_paid="4.00"),                                   # 4 at 100
+         line(units_loaded=4, total_paid="8.00", at=24, request_id="r2")],          # 4 at 200
+        [loss("coil", 2, at=30)],
+    )
+    [x] = stock.shrinkage
+    assert (x.units, x.cost_cents) == (2, 200)
+    [slot] = stock.slots
+    assert (slot.units, slot.unit_cost) == (6, Fraction(1000, 6))
+
+
+def test_pulled_units_keep_their_layers_and_a_later_load_takes_the_oldest():
+    stock = book([
+        line(units_loaded=4, total_paid="4.00"),                                    # 4 at 100
+        line(units_loaded=4, total_paid="8.00", at=24, request_id="r2"),            # 4 at 200
+        line(sku="PEPSI20", units_loaded=10, total_paid="8.00", units_pulled=8, pulled_sku="COKE20",
+             slot_reassigned=True, at=48, request_id="r3"),
+        line(slot="16", outcome="loaded", total_paid=None, units_loaded=4,
+             units_from_back_stock=4, at=50, request_id="r4"),
+    ])
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.units, slot16.unit_cost) == (4, 100)
+    assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("COKE20", 4, 200)]
+
+
+def test_a_back_stock_load_takes_the_oldest_closet_units():
+    stock = book([
+        line(units_loaded=0, units_to_back_stock=4, total_paid="2.00"),             # 4 at 50 in the closet
+        line(units_loaded=0, units_to_back_stock=4, total_paid="4.00", at=2, request_id="r2"),   # 4 at 100
+        line(slot="16", outcome="loaded", total_paid=None, units_loaded=3,
+             units_from_back_stock=3, at=4, request_id="r3"),
+    ])
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.units, slot16.unit_cost) == (3, 50)
+    [closet] = stock.closet
+    assert (closet.units, closet.unit_cost) == (5, Fraction(450, 5))   # 1 at 50 and 4 at 100
 
 
 def test_later_losses_come_out_where_they_were_found_as_shrinkage():
@@ -521,7 +587,7 @@ def test_visits_sharing_a_minute_are_found_by_scanning_in_door_open_order():
 def test_door_times_split_once_however_often_the_replay_splits():
     moves = movements_from_receipts(with_door(swap()), []) + sales_from_counters(
         [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
-    assert replay(moves) == weighted_average(moves)
+    assert replay(moves) == first_in_first_out(moves)
     cut = replay(moves, until=hours(4))
     assert cut.shrinkage == () and cut.warnings == () and cut.sales == ()
 

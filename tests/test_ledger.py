@@ -312,7 +312,7 @@ def test_a_pnl_range_spanning_the_opening_leaves_out_test_purchases_and_their_fe
         "0.00", "0.00", 0, "0.00", "0.00")
 
 
-def test_pnl_costs_sales_at_weighted_average_and_values_what_is_left(conn):
+def test_pnl_costs_sales_from_receipts_and_values_what_is_left(conn):
     open_ledger(conn)
     deliver(conn, "r1")                                  # 8 in the slot, 3 in the closet
     sell(conn, units=5, price=250)

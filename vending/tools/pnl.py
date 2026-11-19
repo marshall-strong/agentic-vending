@@ -1,7 +1,7 @@
 """`get_pnl` (tool #10): profit and loss over a window, and inventory at cost at its end.
 
 Revenue is the takings from the polls with the sales tax taken out. Cost of
-sales is what the units sold actually cost, at weighted-average cost from the
+sales is what the units sold actually cost, first in, first out, from the
 receipts (`vending.stock`), so it is known only for units sold from slots we
 have loaded; `units_sold` counts every sale from our 20 slots and the reply
 says how many of them could not be costed. Shrinkage is the cost of units

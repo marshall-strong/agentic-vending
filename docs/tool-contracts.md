@@ -138,7 +138,7 @@ should do next.
 - **Inputs**: optional `start` and `end`, calendar days in Eastern time, both inclusive. Default:
   from the ledger's opening to today.
 - **Outputs**: `revenue` (tax included), `tax_set_aside`, `revenue_ex_tax`, `units_sold`,
-  `units_costed`, `cost_of_sales` (weighted-average cost from receipts) and
+  `units_costed`, `cost_of_sales` (first-in, first-out cost from receipts) and
   `cost_of_sales_complete`, `gross_margin`, `shrinkage` and `shrinkage_units` (units lost without
   a sale), `visit_fees`, `visits`, `token_spend`, `adjustments`, `net`; also `purchases`,
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
