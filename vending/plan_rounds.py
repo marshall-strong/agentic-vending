@@ -107,6 +107,7 @@ class Slot:
     expected_cents: Fraction | None
     refusals: tuple[str, ...]            # check_price and capacity problems, in words
     projected: dict[str, Projected] = field(default_factory=dict)
+    fill_check: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,7 +148,7 @@ class Round:
     window: str | None
     assumptions: dict
     notes: dict[str, Any]                 # fallbacks, asks, checks, expect, note, problems, needs_* as given
-    warnings: list[str]                   # disagreements between the plan, the projection and this module
+    warnings: list[str]                   # underfills and disagreements with the projection
     ours: tuple[str, ...]                 # our slots it was checked against, shelf then column
 
     @property
@@ -408,8 +409,10 @@ def _parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, .
         assumed = chart is None and cap is not None and (pack is None or pack.capacity_assumed)
         if cap is not None and units > cap:
             problems.append(f"{units} units but a column holds {cap}" + (" (assumed, not counted)" if assumed else ""))
-        if cap is None:
-            problems.append(f"no column capacity for {size or 'this size'}: someone has to count one column")
+        check = capacity.fill_check(units, None if assumed else cap)
+        why = entry.get("why") or entry.get("reason")
+        if check and check != capacity.NOT_COUNTED:
+            warnings.append(f"slot {slot}: {check}" + (f". {why}" if why else ""))
         projected = {scen: _projected(rows[slot]) for scen, rows in scen_rows.items() if slot in rows}
         for scen, rows in scen_rows.items():
             pc = _opt_int(rows.get(slot, {}).get("price_cents"))
@@ -421,11 +424,12 @@ def _parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, .
         slots[slot] = Slot(
             slot=slot, product=product, size=size, sku=sku,
             category=(pack.category if pack else None) or ps.get("cat"),
-            units=units, price_cents=price, why=entry.get("why"),
+            units=units, price_cents=price, why=why,
             needs_request=entry.get("needs_request") if isinstance(entry.get("needs_request"), bool) else None,
             interloper=ps.get("interloper") if isinstance(ps.get("interloper"), bool) else None,
             floor_cents=floor, legal_price=legal_price, capacity=cap, capacity_assumed=assumed,
-            most_cents=most, expected_cents=expected, refusals=tuple(problems), projected=projected)
+            most_cents=most, expected_cents=expected, refusals=tuple(problems), projected=projected,
+            fill_check=check)
     missing = [s for s in ours if s not in slots]
     if missing:
         warnings.append(f"no product for slot{'s' if len(missing) > 1 else ''} {', '.join(missing)}")

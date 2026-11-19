@@ -63,7 +63,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import db, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
+from vending import capacity, db, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
 from vending import pricing_panel
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
@@ -305,7 +305,7 @@ def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
     return {**current, "fill_expected_cents": checked.fill_expected_cents,
             "fill_most_cents": checked.fill_most_cents, "fill_cap_cents": plan_rounds.FILL_CAP_CENTS,
             "slots": [{"slot": s.slot, "sku": s.sku, "product": _plan_text(s.product), "price_cents": s.price_cents,
-                       "units": s.units, "reason": _plan_text(s.why),
+                       "units": s.units, "reason": _plan_text(s.why), "fill_check": s.fill_check,
                        "checks": {"floor_cents": s.floor_cents, "legal_price": s.legal_price,
                                   "capacity": s.capacity, "capacity_assumed": s.capacity_assumed,
                                   "expected_fill_share": _dollars(s.expected_cents),
@@ -615,6 +615,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         snap["weekly_plan"] = snap["plan"]
         snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots)))
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
+    _check_plan_fills(snap)
     snap["pricing"] = _pricing(conn, now, snap)
     return snap
 
@@ -724,6 +725,16 @@ def attention(snap: dict) -> list[dict]:
     if money and money["ok"]:
         for level, text in money_panel.attention(money["data"]):
             add(level, text)
+
+    plan = snap.get("plan") or {}
+    if plan.get("ok") and plan["data"]:
+        first_fill = "weekly_plan" in snap
+        for row in plan["data"]["slots"]:
+            entry = row if first_fill else row.get("now")
+            check = row.get("fill_check")
+            if entry and check and check != capacity.NOT_COUNTED:
+                reason = entry.get("reason")
+                add("warn", f"Slot {row['slot']} {check}." + (f" {reason}" if reason else ""))
 
     stock = snap["stock"]
     if stock["ok"] and stock["data"]["warnings"]:
@@ -952,6 +963,24 @@ def _fill(entry: dict | None) -> int | None:
     return fill if isinstance(fill, int) and not isinstance(fill, bool) else None
 
 
+def _check_plan_fills(snap: dict) -> None:
+    """Check explicit weekly fills against the same catalog and counts as the close-up."""
+    plan = snap.get("weekly_plan", snap["plan"])
+    if not plan["ok"] or not plan["data"]:
+        return
+    products = snap["products"].get("data") or {}
+    catalog, overrides = products.get("catalog", {}), products.get("overrides", {})
+    view = machine_view(snap)
+    for row in plan["data"]["slots"]:
+        entry = row["now"]
+        fill = _fill(entry)
+        if fill is None or fill <= 0 or entry.get("keep"):
+            continue
+        product = view[row["slot"]]["next"]["product"]
+        limit = capacity.for_product(product, catalog.get(product, {}).get("size"), overrides) if isinstance(product, str) else None
+        row["fill_check"] = capacity.fill_check(fill, limit)
+
+
 def machine_view(snap: dict) -> dict:
     """What "In the machine" draws for each of our slots, Now and Next Friday. Reads nothing.
 
@@ -1075,6 +1104,12 @@ def _cabinet_html(snap: dict) -> str:
             f'<div class="vm-side"><div class="card">{changes}</div>{legend}</div></div></section>')
 
 
+def _fill_check_html(check: str, reason: str | None) -> str:
+    tone = "muted" if check == capacity.NOT_COUNTED else "warn"
+    return (f'<span class="fill-check">{_pill(check, tone)}'
+            + (f' &middot; {_e(reason)}' if reason else "") + "</span>")
+
+
 def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
                window: str = "the window") -> str:
     """One slot of the plan as a <details>: what it asks for in the summary; the reason, what it was
@@ -1099,7 +1134,11 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
     tags = "".join(_pill(t, _change_tone(t)) for t in labels)
     body = []
     reason = (entry or {}).get("reason")
-    body.append(f'<div class="why">{_e(reason)}</div>' if reason else '<div class="dim">No reason given.</div>')
+    check = s.get("fill_check")
+    if check:
+        what += _fill_check_html(check, reason)
+    if not check or not reason:
+        body.append(f'<div class="why">{_e(reason)}</div>' if reason else '<div class="dim">No reason given.</div>')
     if changed and s["before"] is not None:
         body.append(f'<div class="was">was: {_entry_text(s["before"])}</div>')
     on_hand = (held or {}).get("on_hand")
@@ -1167,6 +1206,9 @@ def _plan_html(snap: dict) -> str:
 
 def _first_fill_cell(row: dict) -> str:
     slot, checks = row["slot"], row["checks"]
+    check, reason = row.get("fill_check"), row["reason"]
+    fill_note = _fill_check_html(check, reason) if check else ""
+    reason_detail = f'<div class="why">{_e(reason or "No reason given.")}</div>' if not check or not reason else ""
     floor = checks["floor_cents"]
     legal = checks["legal_price"]
     price = "legal price" if legal else "price refused" if legal is False else "price check unavailable"
@@ -1182,8 +1224,7 @@ def _first_fill_cell(row: dict) -> str:
     return (f'<details class="pc" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
             f'<summary><b class="num">{_e(slot)}</b><span class="what">{_e(row["product"])}'
             f' &middot; {plan_rounds.format_cents(row["price_cents"])}'
-            f' &middot; {_plural(row["units"], "unit")}</span></summary>'
-            f'<div class="why">{_e(row["reason"] or "No reason given.")}</div>'
+            f' &middot; {_plural(row["units"], "unit")}{fill_note}</span></summary>{reason_detail}'
             f'<div class="was"><span class="label">Code checks</span>'
             f'<div>{" &middot; ".join(_e(finding) for finding in findings)}</div>{problems}</div></details>')
 
@@ -1640,6 +1681,7 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
 .pc:target { outline:2px solid var(--accent) }
 .pc summary { color:var(--ink); font-size:13px }
 .pc summary .what { min-width:0; overflow-wrap:anywhere } .pc summary s { color:var(--muted) }
+.pc .fill-check { display:block; margin-top:4px }
 .pc .tags { display:inline-flex; flex-wrap:wrap; gap:3px; justify-content:flex-end }
 .pc .why { font-size:13px; margin-top:4px; overflow-wrap:anywhere }
 .pc .was { font-size:12px; color:var(--muted); margin-top:3px; border-top:1px dashed var(--line); padding-top:3px; overflow-wrap:anywhere }

@@ -14,9 +14,9 @@ from http.server import ThreadingHTTPServer
 import psycopg
 import pytest
 
-from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, store_poll
+from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, TEST_SLOTS, store_poll
 from vending import agent_runs, dashboard
-from vending.config import set_halted
+from vending.config import set_halted, set_value
 from vending.write_gate import log
 
 
@@ -824,6 +824,39 @@ def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn):
     html = dashboard.machine_art.closeup_html(view, products, True)
     assert "<b>?</b> of 7" in html and "+? back Friday" in html and "filled to 7" in html
     assert "ma-unk" in html and "units unknown" in html
+
+
+def test_the_current_plan_checks_underfills_and_shows_the_reason(conn, page_conn):
+    under, full, unknown, same, pull, keep = TEST_SLOTS[:6]
+    catalog(conn, ("CAN-12", "Plain can", "Plain", None, "12 oz can"),
+            ("BOTTLE-20", "Test bottle", "Plain", None, "20 oz bottle"),
+            ("CARTON-11", "Test shake", "Plain", None, "11 oz carton"))
+    set_value(conn, "capacity_overrides", {"BOTTLE-20": 8}, "test")
+    fulfilled(conn, "held", same, "CAN-12", units_loaded=2, paid="6", at=MONDAY - timedelta(days=3))
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "submitted", plan=plan(
+        {"slot": under, "product": "BOTTLE-20", "fill_to": 6, "reason": "Budget < limit"},
+        {"slot": full, "product": "CAN-12", "fill_to": 8},
+        {"slot": unknown, "product": "CARTON-11", "fill_to": 6},
+        {"slot": same, "fill_to": 7},
+        {"slot": pull, "product": "CAN-12", "fill_to": 0},
+        {"slot": keep, "keep": True, "product": "CAN-12", "fill_to": 6}))
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    checks = {s["slot"]: s.get("fill_check") for s in snap["plan"]["data"]["slots"]}
+    assert checks[under] == "fills 6 of 8: 2 spaces empty"
+    assert checks[same] == "fills 7 of 8: 1 space empty"
+    assert checks[unknown] == "capacity not counted"
+    assert checks[full] is checks[pull] is checks[keep] is None
+    assert dashboard.verdict(snap["attention"]) == "check"
+    warnings = [item["text"] for item in snap["attention"] if item["level"] == "warn"]
+    assert f"Slot {under} fills 6 of 8: 2 spaces empty. Budget < limit" in warnings
+    assert f"Slot {same} fills 7 of 8: 1 space empty." in warnings
+    assert not any("capacity not counted" in w for w in warnings)
+    page = dashboard.render(snap)
+    row = page.split(f'id="slot-{under}"', 1)[1].split("</summary>", 1)[0]
+    assert "fills 6 of 8: 2 spaces empty" in row and "Budget &lt; limit" in row
+    row = page.split(f'id="slot-{unknown}"', 1)[1].split("</summary>", 1)[0]
+    assert "capacity not counted" in row
 
 
 def test_a_swap_and_a_price_change_on_friday(conn, page_conn):

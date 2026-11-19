@@ -66,10 +66,11 @@ How to read a lane:
 - **+N back Friday** is the plan's `fill_to` less the units on hand, when both are known. With
   units unknown it is **+?**. With no plan there is no number, only "no plan yet". It is never
   capacity less units.
-- **Dashed slots** are empty room in the column. How many fit comes from
-  `capacity.for_product`: a person's count in `config.capacity_overrides`, else the machine's
-  loading chart for the catalog size. With neither (a carton, a 16.9 oz bottle), the lane draws no
-  empty slots beyond what the plan fills and says "capacity not counted yet".
+- **Dashed slots** are empty room in the column, based on [package capacity](capacity.md).
+  When capacity is unknown, the lane draws only the planned fill and says "capacity not counted yet".
+- **Fill check.** The current plan shows how many spaces a proposed fill leaves and the reason,
+  if given. The same warning appears under Needs attention as a Check. A plan line with unknown
+  capacity says "capacity not counted".
 - **Swap, pull, price.** On Next Friday a swap draws the new product, a pull shows the lane empty,
   and a price change strikes the old tag through. The agent's reason is cut to one line; the full
   text is in the plan row.

@@ -6,6 +6,7 @@ import pytest
 from psycopg.errors import CheckViolation
 
 from tests.conftest import TEST_SLOTS, open_in
+from tests.test_dashboard import catalog
 from tests.test_plan_rounds import day_one, projection, write
 from vending import agent_runs, dashboard, plan_store, slots
 
@@ -55,26 +56,41 @@ def test_load_refuses_a_plan_with_an_unassigned_slot(conn, tmp_path):
 def test_first_fill_switches_to_weekly_plan_at_the_lock(conn, tmp_path, monkeypatch):
     lock = slots.lock_at()
     before = lock - timedelta(microseconds=1)
-    write(tmp_path, "round3", "3", {"day_one": day_one(**{"15": {"why": "Early fill reason."}})}, projection())
+    slot = TEST_SLOTS[-1]
+    write(tmp_path, "round3", "3", {"day_one": day_one(**{slot: {"units": 6, "why": "Early fill reason."}})}, projection())
     old = plan_store.load(conn, tmp_path, "3", "Test Loader")
     write(tmp_path, "round3", "3", {"day_one": day_one(**{"15": {"why": "New fill reason."}})}, projection())
     new = plan_store.load(conn, tmp_path, "3", "Test Loader")
+    catalog(conn, ("WEEKLY", "Weekly drink", "Weekly", None, "20 oz bottle"))
     run = agent_runs.start(conn, mode="dry-run")
-    agent_runs.finish(conn, run, "skipped", plan={"slots": [{"slot": "15", "reason": "Weekly reason."}]})
+    agent_runs.finish(conn, run, "skipped", plan={"slots": [
+        {"slot": slot, "product": "WEEKLY", "fill_to": 5, "reason": "Weekly reason."}]})
     early = dashboard.snapshot(conn, before)
     assert early["plan"]["data"]["id"] == new
     assert "latest, not picked" in dashboard.render(early)
     plan_store.pick(conn, old, "Test Picker")
     early = dashboard.snapshot(conn, before)
     assert early["plan"]["data"]["id"] == old
-    plan_html = dashboard.render(early).split('<section id="plan">')[1].split("</section>")[0]
+    first_row = next(row for row in early["plan"]["data"]["slots"] if row["slot"] == slot)
+    assert first_row["checks"]["legal_price"] is True and first_row["checks"]["capacity"] == 8
+    assert first_row["fill_check"] == "fills 6 of 8: 2 spaces empty"
+    page = dashboard.render(early)
+    plan_html = page.split('<section id="plan">')[1].split("</section>")[0]
     assert "Early fill reason." in plan_html and "Weekly reason." not in plan_html
+    summary = plan_html.split(f'id="slot-{slot}"', 1)[1].split("</summary>", 1)[0]
+    assert "fills 6 of 8: 2 spaces empty" in summary and "Early fill reason." in summary
+    assert "Code checks" in plan_html and "legal price" in plan_html
+    assert [item["text"] for item in early["attention"] if " spaces empty" in item["text"]] == [
+        f"Slot {slot} fills 6 of 8: 2 spaces empty. Early fill reason."]
     conn.execute("update slot_assignment set last_checked_at = %s", (lock,))
     monkeypatch.setattr(slots, "clock", lambda conn: lock)
     at_lock = dashboard.snapshot(conn, lock)
     assert at_lock["plan"]["data"]["run"]["id"] == run
     plan_html = dashboard.render(at_lock).split('<section id="plan">')[1].split("</section>")[0]
     assert "Weekly reason." in plan_html and "Plan for the first fill" not in plan_html
+    assert "fills 5 of 7: 2 spaces empty" in plan_html
+    assert [item["text"] for item in at_lock["attention"] if " spaces empty" in item["text"]] == [
+        f"Slot {slot} fills 5 of 7: 2 spaces empty. Weekly reason."]
 
 
 def test_redraw_hides_the_picked_plan_even_if_a_newer_one_matches(conn, tmp_path):

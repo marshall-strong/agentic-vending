@@ -262,7 +262,8 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   a plan with no refusals); `lines`, one per slot that changes, with the exact request body in
   `api`; `directive`, the instructions the worker will read; `cost` (`expected`, `max`,
   `visit_fee`, `spendable`, `spendable_left_at_max`, and per line); `floors`, each changed slot's
-  lowest legal price and how it was worked out; `warnings`; `refusals` (each a `code`, `message`
+  lowest legal price and how it was worked out; `warnings`, including [fills that leave space](capacity.md);
+  `refusals` (each a `code`, `message`
   and `slot`); `notes`; `as_of` and `prices_as_of`.
 - **Preconditions**: the ledger is open; the bridge's catalog can be read; `capacity_overrides` in
   `config` is valid. Missing polls or receipts don't stop it: they add a note and count as empty.

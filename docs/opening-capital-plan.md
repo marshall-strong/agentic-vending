@@ -39,7 +39,7 @@ This plan owns the Summative 2 money numbers; the restock policy (`docs/restock-
 
 ## 1. The day-one fill
 
-**Capacity** per column (`vending/capacity.py`, `vending/dashboard.py`): 20 oz and 16 oz bottles 7; 14 oz bottle 8; 12 oz can 8; 8.4 oz can 11. A 16 oz can must be counted by hand first.
+Use the [column capacity table](capacity.md) for each package. Count the 16 oz can at the stocking visit.
 
 **Full slot** = pack price ÷ pack units × column. Prices: the team's 11 Nov Amazon list (`docs/agent/price-list.md` on branch `add_price_list`, which has no PR yet; it must merge with this plan).
 
@@ -145,7 +145,7 @@ To be numbered in `docs/assumptions.md` (open PRs take A16 to A19: #69 A16, #99 
 1. **The fill comes out of the $600.** The instructor said so but is checking (#106, row 3).
 2. **It is bought on Amazon at the list's packs and prices.** Not confirmed (#102, #106).
 3. **Prices stay near 11 Nov's.** The ~15% maximum covers drift.
-4. **The loading chart is right.** It says it is approximate (`vending/capacity.py`).
+4. **The loading chart is close enough for this estimate.** The chart gives [approximate capacities](capacity.md).
 5. **New products sell near our fall rate**, 14 to 23.3 a class day. Price effects are unknown (#99, `docs/agent/price-history.md`). Our 20 oz Coke and Diet Coke floors ($2.90, $2.70) exceed their $2.00 fall price, so the example's 9 regular soda slots and the wildcard's Coca-Cola can may sell slower.
 6. **The agent runs live once a week** (#107).
 7. **The run is 9 weeks** from 3 Dec (`docs/agent/goal-and-scoring.md`; #106). It ends Wed 3 Feb if break weeks count, about 10 to 17 Feb if not; not yet asked. The model line counts 9 run weeks either way.

@@ -260,31 +260,10 @@ the latest good poll (price); the closet from the receipts; pending requests fro
 `get_catalog` reads, so a bridge outage doesn't stop planning; the spendable balance from the
 ledger; and the planner's settings from `config`.
 
-**How many units fit in a column depends on the package**, not the slot: each column is a row of
-packages in front of a pusher. `vending/capacity.py` matches each product's catalog `size` against
-the machine's Package Loading chart ([photographed 9 Nov](images/package-loading-chart-2026-11-09.jpg)): 20 oz bottle 7, 16 oz bottle 7 (the chart
-says glass 7, PET 8, and the catalog doesn't say which), 14 oz bottle 8, 12 oz can 8, 240/250 ml can
-11. The chart doesn't list the 16 oz can; it gets 8, estimated from its width (the 12 oz can's, only
-taller; assumption A20). Any other package the chart doesn't list (a 16.9 oz bottle, a carton) is refused as
-`unknown_capacity` until a person counts how many fit and records it; a count also wins over the
-chart, which calls its own figures approximate:
-
-```
-python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 6}' --by marshall
-python -m vending.config show
-```
-
-In Windows PowerShell 5.1 the inner quotes are lost unless escaped:
-
-```
-python -m vending.config set capacity_overrides '{\"MONSTER-WHITE-16CAN\": 6}' --by marshall
-```
-
-`set` replaces the whole object, so copy the current one from `show` and add to it; `set` names
-any count the new value dropped. A count must be 1 to 15 units (the chart's largest figure is 11),
-and a SKU with a space in it is refused, since SKUs have none and it would never match. Preview
-warns about a count for a SKU that isn't in the catalog, and about one more than 1.5 times the
-chart's figure for that package.
+`vending/capacity.py` uses the package size and any SKU override to find [column capacity](capacity.md).
+Preview warns when a proposed load leaves space, for example `fills 6 of 8: 2 spaces empty`.
+If the planner cannot establish capacity for a load, it returns `unknown_capacity` with instructions
+to record a count.
 
 The other keys the planner reads are `price_ceiling_cents` (650), `tax_percent` (8) and
 `midweek_fee_cents` (2500). **Only the keys in `KNOWN` can be set**, and each value is checked for
