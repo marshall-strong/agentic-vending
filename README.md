@@ -291,7 +291,8 @@ decisions are.
 - **Never poll the machine in a loop.** A read is about 8.5 seconds of live conversation
   over a slow serial line, results are shared across the whole class for 30 seconds, and
   **the machine is in service selling drinks to real people.** Read the stored history
-  instead wherever you can; it is free and does not touch the machine.
+  instead wherever you can; it is free and does not touch the machine. The one exception is
+  the worker's Friday-afternoon reads around our visit (`docs/deploy.md`).
 
 ## Words you will see
 

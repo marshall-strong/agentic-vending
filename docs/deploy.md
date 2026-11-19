@@ -25,6 +25,45 @@ names the host and user); the errors are in the log. The page is built from the 
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
 
+**Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
+worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a
+minute from 2:45 PM to 7 PM Eastern. Why: the machine's counters are cumulative and are read only when
+polled, so a sale between the last read before our visit and the first one after it can't be told apart
+(old product or new) when the price didn't change. A read taken **while the door is open** settles it:
+no unit sells then, so everything before that read is the old product and everything after it is the
+new one, and the receipt's door times prove the read fell inside the visit. A visit can take only a few
+minutes, so the reads have to be close together for one to land inside it.
+
+| Setting | Default | |
+|---|---|---|
+| `VISIT_POLL_EVERY_MINUTES` | `1` | Minutes between reads. `0` turns them off |
+| `VISIT_POLL_FROM` | `14:45` | First read, Eastern time (the window follows the wall clock through daylight saving) |
+| `VISIT_POLL_TO` | `19:00` | No read from this time on |
+
+A wrong value turns the reads off, with a line in the log; it never stops the worker. The bridge stores
+every read in its history, so after each read the worker copies the two latest UTC days of history into
+our database (`vending.sync_history`, idempotent) and the read reaches the stock replay like the hourly
+ones. That a live read lands in the history is what `docs/dex-bridge.md` says ("the bridge stores every
+poll anyone makes") and what the poll's `X-Poll-Session-Id` header suggests. No one has checked it
+against the live bridge yet, so on the first Friday check that the log shows a new poll after a read.
+
+A read holds the bridge's one serial line, and anyone else's poll gets a `409` while it runs, so:
+
+- one read at a time: a read is never started while the last one is still running;
+- one try each: a `409`, a timeout or a bridge that is down is logged ("visit reads: skipped ...")
+  and skipped, with no retry, and the next try is a whole interval later;
+- after **3 failures in a row**, 5 minutes pass before the next try (and again after each further
+  failure, until one works);
+- **a failed read never fails the round or `/health`.** Reads are not jobs of the round and appear in
+  neither. Only the log shows them.
+
+Each step first re-reads our pending purchase requests (plain GETs, not machine reads), so a receipt
+is seen within a minute. The reads stop for the day once a request of ours was fulfilled that day and a
+read taken after its door closed (the close minute is over) is stored. A receipt with no door times is
+dated by `fulfilled_at`. David allowed a read about every 10 minutes around a visit (12 Nov); a read
+every minute is Kevin's choice, tighter than that. Only Fridays: a midweek visit has no day the data
+can tell us, since a pending request can be filled on any day, so those get the hourly reads only.
+
 **Never point an HTTP liveness probe at `/health`.** Its `503` means a sync failed, for example
 while the bridge is unreachable, not that the worker is stuck, so Azure would restart a healthy
 container every round and the restarts would fix nothing. The deploy script sets no probes, so
