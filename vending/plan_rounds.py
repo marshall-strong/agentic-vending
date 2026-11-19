@@ -232,10 +232,17 @@ def discover(root: Path) -> list[tuple[str, Path, Path | None]]:
             if match is None:
                 continue
             rid = match["legacy"] or match["new"]
+            # planN.json is the checked plan; rN.plan.json is the model's raw answer, which only stands in
+            # for a round that has no planN.json (round 4). Rounds 2 and 3 have both: the plan wins.
+            legacy = match["legacy"] is not None
             if rid in found:
                 old = found[rid][0]
-                raise RoundError(f"round {rid} has two plan files: {old.parent.name}/{old.name} and "
-                                 f"{folder.name}/{plan.name}")
+                old_legacy = _PLAN.fullmatch(old.name)["legacy"] is not None
+                if old_legacy and not legacy:
+                    continue
+                if legacy == old_legacy:
+                    raise RoundError(f"round {rid} has two plan files: {old.parent.name}/{old.name} and "
+                                     f"{folder.name}/{plan.name}")
             found[rid] = (plan, projections.get(rid))
     return [(rid, *found[rid]) for rid in sorted(found, key=_round_key)]
 
