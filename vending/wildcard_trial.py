@@ -447,7 +447,9 @@ def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list
     `losses` are the slot's recorded coil losses (`coil_losses`): units of its product lost since it went in
     leave the slot like sales, so a slot emptied by a loss isn't counted in stock until a load refills it."""
     mine = [s for s in sales if s.slot == count.slot and s.at > count.since]
-    gone = [(at, units) for at, sku, units in losses if at > count.since and sku == count.product]
+    # At or after the load that put it in: a loss recorded at the load's own time comes after it, as in the stock
+    # replay (`demand.in_stock_spans` applies a load before a decrease at the same moment).
+    gone = [(at, units) for at, sku, units in losses if at >= count.since and sku == count.product]
     spans = demand.in_stock_spans([(at, u) for at, u in loads if at >= count.since],
                                   [(s.at, s.units) for s in mine] + gone, now, count.units)
     return Measured(count.slot, count.product, start,

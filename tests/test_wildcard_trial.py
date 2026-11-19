@@ -440,3 +440,16 @@ def test_polls_at_the_same_moment_that_disagree_on_a_price_settle_nothing(conn):
     polls(conn, [("x3", later.isoformat(), {"15": (300, 118, 88500), "16": (200, 62)})], after=last)
     t = get_machine_state(conn, now=NOW).wildcard_trial
     assert (t.price_test, t.since, t.verdict) == (False, later, TOO_EARLY)
+
+
+def test_a_load_lost_at_its_own_time_leaves_the_wildcard_empty_until_a_refill(conn):
+    """The wildcard's whole load is recorded lost at the load's own time, as a receipt with the loss on it does;
+    the stock replay applies the load, then the loss. The trial must too: in stock only from Thursday's refill."""
+    week_of_sales(conn, per_day15=0)
+    conn.execute("insert into purchase_line_losses (request_id, line_no, position, location, sku, units, recorded_at)"
+                 " values ('r1', 0, 0, 'coil', 'AAA', 20, %s)", (SINCE,))
+    fulfilled(conn, "r2", datetime(2026, 10, 22, 23, tzinfo=timezone.utc), ("15", "AAA", "primary", "6.00", 6, 0, 0))
+    conn.execute("update purchase_requests set off_cycle = true where request_id = 'r2'")
+    set_wildcard(conn, "15")
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert (t.product, t.class_days_in_stock) == ("AAA", 2), t   # Fri 23 and Mon 26, not the six from 19 Oct
