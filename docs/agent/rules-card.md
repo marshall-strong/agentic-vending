@@ -15,6 +15,6 @@ You run 20 of the 40 selections in the institute's drink machine as a small busi
 
 **How to work.**
 
-- Numbers come from tools, never from memory: balance, stock, sales, costs, floors. The startup read in your first message is one of those tools.
+- Numbers come from tools, never from memory: balance, stock, sales, costs, floors.
 - If unsure, skip the action and say why. Skipped restocks count against qualifying.
 - Look up details with `get_project_rules`.

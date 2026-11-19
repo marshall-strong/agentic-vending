@@ -6,10 +6,9 @@ from decimal import Decimal
 import pytest
 from psycopg.types.json import Jsonb
 
-from tests.conftest import store_poll
+from tests.conftest import TEST_SLOTS as SLOTS, store_poll
 from tests.test_sync_requests import BODY, fulfilled, receipt
 from vending import briefing, ledger, purchase_requests
-from vending.slots import SLOTS
 
 NOW = datetime(2026, 11, 12, 20, tzinfo=timezone.utc)
 OPEN = datetime(2026, 11, 5, 15, tzinfo=timezone.utc)
@@ -126,25 +125,29 @@ def test_unusable_assignment_refuses_every_section(conn, device, stored_slots):
 
 def test_other_device_unassigned_polls_receipts_counts_excluded(conn):
     sample(conn)
-    conn.execute("update slot_assignment set slots = %s", (["15"],))
+    # A full assignment of 20 that shares only 15 with the fixture's receipts and polls, and leaves out 11.
+    ours = sorted(["15"] + [f"{shelf}{col}" for shelf in "12345" for col in "1234" if f"{shelf}{col}" != "11"])
+    conn.execute("update slot_assignment set slots = %s", (ours,))
     observe(conn, slot="11", product="RIVAL")
     observe(conn, slot="15", device="other", product="OTHER_DEVICE")
     store_poll(conn, "other", NOW.isoformat(), {"15": (1, 90000)}, device_id="other")
     store_poll(conn, "unassigned", NOW.isoformat(), {"11": (1, 90000)})
     b = briefing.build(conn, NOW)
-    assert b.our_slots == ["15"] and [s.slot for s in b.slots] == ["15"]
+    assert b.our_slots == ours and sorted(s.slot for s in b.slots) == ours
+    # Only slot 15's counters are read: 6 units at $1. The closet holds every receipt's back stock (ours, whatever
+    # the assignment; see vending.stock): 20 receipts x 4 units at $1.
     assert b.money["competition"].known_cost_of_sales == "6.00"
-    assert b.closet_value_at_cost == "4.00" and b.closet[0].units == 4
+    assert b.closet_value_at_cost == "80.00" and sum(c.units for c in b.closet) == 80
     assert "RIVAL" not in b.model_dump_json() and "OTHER_DEVICE" not in b.model_dump_json()
     # The latest device poll lacks our slot. Money ends at the last poll that has it, never at that poll's zeros.
-    assert b.slots[0].price is None
+    assert next(s for s in b.slots if s.slot == "15").price is None
     assert b.money["competition"].end_poll == NOW - timedelta(hours=1)
 
 
 def test_assignment_changes_snapshot_identity(conn):
     sample(conn)
     a = briefing.build(conn, NOW)
-    conn.execute("update slot_assignment set slots=%s", (["15"],))
+    conn.execute("update slot_assignment set slots=%s", (sorted(set(SLOTS) - {"58"} | {"11"}),))
     b = briefing.build(conn, NOW)
     assert a.snapshot_id != b.snapshot_id and a.slot_assignment_version != b.slot_assignment_version
 

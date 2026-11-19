@@ -235,7 +235,7 @@ def _inventory(conn, b: Briefing, ours: tuple[str, ...]) -> None:
         _alert(b, "polls_stale", "latest poll exceeds 3h", "get_machine_state")
     if m.success and m.window_start is None:
         _alert(b, "rates_unavailable", "only one poll; recent sales and rates unknown", "get_sales_history")
-    replay = stock.stock(conn, until=b.computed_at, slots=ours)
+    replay = stock.stock(conn, until=b.computed_at)
     receipts = {s.slot: s for s in replay.slots}
     b.stock_warning_count = len(replay.warnings)
     if replay.warnings:
