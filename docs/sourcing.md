@@ -54,8 +54,14 @@ python -m vending.sourcing import db/sourcing/2026-11-15-catalog.csv --by NAME
 Together they cover 23 of the 34 catalog products. **Still without a price:** the six bubly 12 oz cans
 (no single-flavour link checked), Mountain Dew Baja Blast 20 oz (no Amazon offer on 15 Nov) and the four Pure
 Leaf 16.9 oz bottles (no price at an allowed store). Walmart pages blocked the 15 Nov checks, so Walmart
-prices aren't in either file. Coke and Pepsi 12 oz cans are cheapest at BJ's, which needs a membership; each
-has an Amazon alternate. A few rows note that their price came from search results, or that stock was low.
+prices aren't in either file. Coke 12 oz cans are cheapest at BJ's ($0.56 a can against $0.64 on Amazon), which
+needs a membership and sends about 27 cans to the closet per pack, so Amazon is its alternate. Pepsi 12 oz cans
+cost about the same either way ($0.58), so Amazon is the primary and BJ's the alternate.
+
+**Re-checking prices.** Re-check one product with `python -m vending.sourcing set`. To re-check many, add a
+new dated file. A product may appear in a later file only with a later `checked` date, and importing files in
+date order keeps the newest price. Every row from 15 Nov will be `STALE` by the day-one order (~27 Nov), so
+re-check prices around 25 Nov. A few rows note that their price came from search results, or that stock was low.
 
 ## What reads it
 

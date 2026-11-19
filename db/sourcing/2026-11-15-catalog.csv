@@ -10,8 +10,8 @@ HINT-GRAPE-16BOT,primary,Amazon,12,13.46,,https://www.amazon.com/dp/B0C6FKV2PR,1
 ARIZONA-ICED_LEMON-16BOT,primary,Amazon,12,8.19,,https://www.amazon.com/dp/B004UKHAF4,12 x 16 oz bottles Iced Tea with Lemon,2026-11-15,Sold by Amazon.com
 COCA-ORIGINAL-12CAN,primary,BJs,35,19.49,,https://www.bjs.com/product/coca-cola-soda-soft-drink-cans-35-pk12-fl-oz/3000000000000322043/,35 x 12 oz cans,2026-11-15,BJ's Rochester; membership needed; $1.00 instant savings included
 COCA-ORIGINAL-12CAN,alternate,Amazon,12,7.68,,https://www.amazon.com/dp/B000T9WLTK,12 x 12 oz cans,2026-11-11,From the team's 11 Nov Amazon price list (add_price_list)
-PEPSI-ORIGINAL-12CAN,primary,BJs,36,20.99,,https://www.bjs.com/product/pepsi-cola-cans-36-ct12-oz/3000000000000146349/,36 x 12 oz cans,2026-11-15,BJ's Rochester; membership needed
-PEPSI-ORIGINAL-12CAN,alternate,Amazon,12,6.97,,https://www.amazon.com/dp/B000R9AK5O,12 x 12 oz cans,2026-11-15,Price from amazon.com search results
+PEPSI-ORIGINAL-12CAN,primary,Amazon,12,6.97,,https://www.amazon.com/dp/B000R9AK5O,12 x 12 oz cans,2026-11-15,Price from amazon.com search results; about the same per can as BJ's and needs no membership
+PEPSI-ORIGINAL-12CAN,alternate,BJs,36,20.99,,https://www.bjs.com/product/pepsi-cola-cans-36-ct12-oz/3000000000000146349/,36 x 12 oz cans,2026-11-15,BJ's Rochester; membership needed; a 36-pack sends about 28 cans to the closet
 PEPSI-ORIGINAL-20BOT,primary,Amazon,12,29.99,,https://www.amazon.com/dp/B0BMT2LF9P,12 x 20 oz bottles,2026-11-11,From the 11 Nov list; on 15 Nov no in-stock 20 oz Pepsi was found at an allowed store
 PEPSI-DIET-20BOT,primary,Amazon,24,57.45,,https://www.amazon.com/dp/B0H37DLF2S,24 x 20 oz bottles,2026-11-11,From the team's 11 Nov Amazon price list (add_price_list)
 MOUNTAIN-CODE_RED-20BOT,primary,Amazon,24,57.45,,https://www.amazon.com/dp/B0CG9ZQ4GX,24 x 20 oz bottles,2026-11-11,From the team's 11 Nov Amazon price list (add_price_list)
