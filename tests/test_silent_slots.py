@@ -16,14 +16,15 @@ NOW = THURSDAY_EVENING + timedelta(hours=1)
 STEP = timedelta(hours=4)
 
 
-def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit=None, full=False):
+def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit=None, full=False, takings=None):
     """Our slots on a Friday-to-Thursday cycle, polled every 4 hours from Fri 16 Oct to `last`.
 
     At the 16 Oct visit: 15 (the wildcard), 16, 17, 18, 25, 26 and 28 are loaded with 10 each. At the 23 Oct
     visit 16 is topped up with 2 and 25 switches product. `sales` maps slot -> [(when, units)]. No poll is
     stored inside a gap `(begin, end)`. `drop_at` is when slot 16's units counter reads low once. `edit(t,
     units)` may change a poll's units per slot before it is stored, or drop a slot from it. `full` loads our
-    other 13 slots at the 16 Oct visit too (no poll reads them), so a receipt names what every slot holds."""
+    other 13 slots at the 16 Oct visit too (no poll reads them), so a receipt names what every slot holds.
+    `takings` maps slot -> [(when, cents)] added to its takings counter with no unit counted."""
     from tests.conftest import TEST_SLOTS as SLOTS
 
     sales = sales or {}
@@ -43,7 +44,8 @@ def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit
                 units["16"] = 3
             if edit is not None:
                 edit(t, units)
-            store_poll(conn, f"p{n}", t.isoformat(), {slot: (300, u) for slot, u in units.items()})
+            extra = {slot: sum(c for at, c in (takings or {}).get(slot, []) if at <= t) for slot in units}
+            store_poll(conn, f"p{n}", t.isoformat(), {slot: (300, u, 300 * u + extra[slot]) for slot, u in units.items()})
         t, n = t + STEP, n + 1
 
 
@@ -153,6 +155,53 @@ def test_the_window_is_the_last_friday_visit_not_a_midweek_one(conn):
                  " fulfilled_at) values ('mid', %s, true, '{}', 'fulfilled', %s)",
                  (datetime(2026, 10, 26, tzinfo=UTC), datetime(2026, 10, 27, 15, tzinfo=UTC)))
     assert report(conn).window_start == WINDOW
+
+
+def test_takings_that_rise_with_no_unit_counted_are_not_silence(conn):
+    """16 took $2.50 on Tuesday, but its units counter stayed flat: the counters disagree, so it isn't silent."""
+    machine(conn, takings={"16": [(datetime(2026, 10, 27, 15, tzinfo=UTC), 250)]})
+    r = report(conn)
+    assert "16" not in [s.slot for s in r.silent]
+    assert why(r, "16").startswith("unknown: its takings rose $2.50 since the window began")
+
+
+def test_a_pull_since_the_window_began_is_not_silence(conn):
+    """An unavailable switch pulls all 12 BBB from 16 on Sunday; BBB goes back in on Thursday evening. The
+    receipts say it holds stock again, but it stood empty through class days, so it isn't silent."""
+    machine(conn)
+    sunday, thursday = datetime(2026, 10, 25, 16, tzinfo=UTC), datetime(2026, 10, 29, 21, tzinfo=UTC)
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status,"
+                 " fulfilled_at) values ('sun', %s, true, '{}', 'fulfilled', %s),"
+                 " ('thu', %s, true, '{}', 'fulfilled', %s)",
+                 (sunday - timedelta(days=1), sunday, thursday - timedelta(days=1), thursday))
+    conn.execute(
+        "insert into purchase_lines (request_id, line_no, slot, source, asked, outcome, sku, packs_bought,"
+        " units_bought, total_paid, units_loaded, units_lost, units_to_back_stock, units_from_back_stock,"
+        " units_pulled, pulled_sku, slot_reassigned, resolved_at) values"
+        " ('sun', 0, '16', 'purchase', '{}', 'unavailable', 'ZZZ', 0, 0, null, 0, 0, 0, 0, 12, 'BBB', false, %s),"
+        " ('thu', 0, '16', 'back_stock', '{}', 'loaded', 'BBB', 0, 0, null, 10, 0, 0, 10, 0, null, false, %s)",
+        (sunday, thursday))
+    r = report(conn)
+    assert "16" not in [s.slot for s in r.silent]
+    assert why(r, "16") == ("unknown: a receipt pulled 12 units from it on 2026-10-25, since the window began, so "
+                            "it may have stood empty")
+
+
+def test_a_dated_request_with_no_lines_since_the_window_began_blocks_every_silent_slot(conn):
+    """After the opening, fulfilled, dated, and no lines: nothing says what that visit did, so no slot is silent."""
+    from tests.test_ledger import open_ledger
+
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=UTC))
+    machine(conn)
+    assert [s.slot for s in report(conn).silent] == ["16"]
+    for request_id, off_cycle in (("r9", False), ("m9", True)):
+        conn.execute("delete from purchase_requests where request_id in ('r9', 'm9')")
+        conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status,"
+                     " fulfilled_at) values (%s, %s, %s, '{}', 'fulfilled', %s)",
+                     (request_id, VISIT, off_cycle, datetime(2026, 10, 27, 15, tzinfo=UTC)))
+        r = report(conn)
+        assert r.silent == () and request_id in r.reason and "no lines" in r.reason, r
+        assert all(n.why == r.reason for n in r.not_silent)
 
 
 def test_with_no_friday_visit_no_slot_is_silent(conn):

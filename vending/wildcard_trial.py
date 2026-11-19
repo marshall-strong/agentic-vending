@@ -303,6 +303,15 @@ def _last_friday(conn: psycopg.Connection, now: datetime) -> tuple[datetime | No
     return start, tuple(sorted(r for r, at in rows if start <= at <= now)), None
 
 
+def _requests_without_lines(conn: psycopg.Connection, start: datetime, now: datetime) -> list[str]:
+    """Fulfilled requests, off-cycle ones too, with no lines and a `fulfilled_at` from `start` to `now`."""
+    return [r for (r,) in conn.execute(
+        "select r.request_id from purchase_requests r where r.status = 'fulfilled'"
+        " and r.fulfilled_at >= %s and r.fulfilled_at <= %s"
+        " and not exists (select 1 from purchase_lines l where l.request_id = r.request_id)"
+        " order by r.request_id", (start, now))]
+
+
 def _friday_midnight(day: date) -> datetime:
     """00:00 Eastern on the Friday on or before `day`."""
     return datetime.combine(day - timedelta(days=(day.weekday() - 4) % 7), time(0), tzinfo=EASTERN)
@@ -504,6 +513,20 @@ def coil_losses(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, str,
     return out
 
 
+def pulls(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
+    """Units pulled from each slot by fulfilled receipts, as `(resolved_at, units)`, in time order.
+
+    Lines resolved before the ledger's opening are left out, as in `stock._receipts`."""
+    out: dict[str, list[tuple[datetime, int]]] = {}
+    since = stock.receipts_count_from(conn)
+    for slot, at, units in conn.execute(
+            "select l.slot, l.resolved_at, l.units_pulled from purchase_lines l join purchase_requests r"
+            " using (request_id) where r.status = 'fulfilled' and l.units_pulled > 0 and l.resolved_at is not null"
+            " and (%s::timestamptz is null or l.resolved_at >= %s) order by l.resolved_at", (since, since)):
+        out.setdefault(slot, []).append((at, units))
+    return out
+
+
 def _readings(conn: psycopg.Connection, since: datetime, until: datetime, slots: list[str]) -> dict[str, list[Reading]]:
     """`(polled_at, lifetime_units, lifetime_sales_cents, price_cents)` per slot, from the last good poll at or
     before `since`."""
@@ -562,7 +585,7 @@ class SilentReport:
     silent: tuple[Silent, ...]        # ranked: silent longest, then lowest unit margin, then slot
     unconfirmed: tuple[Unconfirmed, ...]
     not_silent: tuple[NotSilent, ...]
-    reason: str | None = None         # why `window_start` is None
+    reason: str | None = None         # why `window_start` is None, or why no slot can be silent
 
 
 def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotCount],
@@ -578,9 +601,11 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
        it end to end (`_unproven`): a reading at or before the window's start,
        a fresh one at its end, no restart and no stretch longer than
        `MAX_POLL_GAP` between them. Anything less, or a lone drop the next poll
-       hasn't settled, makes it unknown, not silent.
+       hasn't settled, makes it unknown, not silent. Its takings counter
+       rose in none either: money in with no unit counted is unknown too.
     2. It held one product the whole window (its last product change is at
-       or before the window's start).
+       or before the window's start), and no receipt pulled units from it
+       in the window: a pull may have left it empty for days.
     3. Its stock is confirmed: the receipts say it holds units now, and a
        receipt shows units loaded into it at or since the visit, or a person's
        count since the visit saw units in it. Otherwise it is unconfirmed,
@@ -590,16 +615,24 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
        (intervals no longer than `MAX_POLL_GAP`, each day watched from its
        midnight to `SEEN_UNTIL`). With fewer it isn't silent yet.
 
-    The wildcard is never a silent slot, nor is a slot no receipt describes.
+    The wildcard is never a silent slot, nor is a slot no receipt describes. A fulfilled request with no lines
+    in the window, off-cycle or not, leaves every slot not silent: nothing says what that visit did.
     """
     regular = [s for s in slots if s != wildcard]
     start, visit, why = _last_friday(conn, now)
     if start is None:
         return SilentReport(None, (), (), tuple(NotSilent(s, why) for s in regular), why)
+    empty = _requests_without_lines(conn, start, now)
+    if empty:
+        # Nothing says what such a visit loaded or pulled, so no slot's stock can be confirmed through it.
+        why = (f"request {', '.join(empty)} was fulfilled since the window began but has no lines, so what that "
+               "visit loaded or pulled is unknown and no slot can be shown silent; a person checks the request")
+        return SilentReport(start, (), (), tuple(NotSilent(s, why) for s in regular), why)
     readings = _readings(conn, start, now, regular)
     seen = _counted(conn)
     at_visit = stock.request_loads(conn, list(visit))
     lost = coil_losses(conn)
+    pulled = pulls(conn)
     tax_percent = _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT)
     silent: list[Silent] = []
     unconfirmed: list[Unconfirmed] = []
@@ -622,12 +655,32 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
         if sold:
             not_silent.append(NotSilent(slot, f"sold {sold} since the window began"))
             continue
+        # The takings counter must agree: money in with no unit counted is a sale the units counter missed, or a
+        # misread, and either way the slot isn't shown to have sold nothing.
+        takings = [(at, cents) for at, _, cents, _ in mine]
+        if counters.unsettled(takings):
+            not_silent.append(NotSilent(slot, "unknown: its takings counter's latest reading is a drop the next "
+                                              "poll hasn't settled"))
+            continue
+        took = sum(rise for _, at, rise in counters.windows(takings) if at > start)
+        if took:
+            not_silent.append(NotSilent(slot, (
+                f"unknown: its takings rose ${took // 100}.{took % 100:02d} since the window began but its units "
+                "counter didn't, so the counters disagree on whether it sold")))
+            continue
         gap = _unproven(units, start, now)
         if gap:
             not_silent.append(NotSilent(slot, f"unknown: {gap}"))
             continue
         if c.since > start:
             not_silent.append(NotSilent(slot, f"its product changed on {c.since:%Y-%m-%d}"))
+            continue
+        out = [(at, n) for at, n in pulled.get(slot, []) if start <= at <= now]
+        if out:
+            # This check's stock replay doesn't take pulls out, so a slot a pull emptied may look stocked.
+            not_silent.append(NotSilent(slot, (
+                f"unknown: a receipt pulled {out[0][1]} units from it on {out[0][0]:%Y-%m-%d}, since the window "
+                "began, so it may have stood empty")))
             continue
         look = seen.get(slot)
         evidence, doubt = _stock_evidence(c, start, at_visit.get(slot, []),
