@@ -1016,7 +1016,7 @@ def test_a_missing_catalog_column_blanks_its_counts_too(conn, page_conn):
 
 
 def test_a_missing_catalog_table_blanks_only_its_panel(conn, page_conn):
-    conn.execute("drop table product_requests")
+    conn.execute("drop table product_requests cascade")   # the request backlog (#140) references it
     snap = dashboard.snapshot(page_conn, MONDAY)
     assert snap["catalog_requests"]["ok"] is False and snap["catalog_counts"]["ok"] is False
     assert snap["purchase_requests"]["ok"] is True

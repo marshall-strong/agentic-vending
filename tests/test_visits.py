@@ -194,7 +194,7 @@ def site(monkeypatch, events):
     monkeypatch.setattr(gate, "WRONG_DELAY_SECONDS", 0)
     monkeypatch.setattr(gate, "_next_try", {})
     monkeypatch.setenv(gate.KEY_SETTING, "postgresql://reader:secret@example/db")
-    monkeypatch.setattr(pages, "respond", lambda target: pages.Reply(200, pages.HTML, "<main>page</main>"))
+    monkeypatch.setattr(pages, "respond", lambda target, syncs=None: pages.Reply(200, pages.HTML, "<main>page</main>"))
     server = worker.serve_health(worker.State(), 0)
     try:
         yield server.server_address[1]
@@ -279,7 +279,7 @@ def test_signed_out_nothing_is_counted(site, events):
 
 
 def test_a_page_that_failed_is_not_a_visit(site, events, monkeypatch):
-    monkeypatch.setattr(pages, "respond", lambda target: pages.Reply(503, pages.HTML, "busy"))
+    monkeypatch.setattr(pages, "respond", lambda target, syncs=None: pages.Reply(503, pages.HTML, "busy"))
     signed = f"{gate.COOKIE}={gate.token()}; vend_browser={BROWSER}"
     status, _, _ = set_cookies(site, "GET", "/dashboard", headers={"Cookie": signed})
     assert status == 503 and events.empty()
