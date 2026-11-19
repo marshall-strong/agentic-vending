@@ -275,9 +275,15 @@ def _last_friday(conn: psycopg.Connection, now: datetime) -> tuple[datetime | No
     longer, never shorter. Its requests are the Friday requests fulfilled from
     then to `now`; an off-cycle one never is. A fulfilled Friday request with
     no `fulfilled_at` can't be placed, so the visit is unknown.
+
+    Once the ledger has opened, a request counts only if one of its lines was resolved from the opening on
+    (`stock.receipts_count_from`): test purchases before it are no visit, placed or not.
     """
-    rows = conn.execute("select request_id, fulfilled_at from purchase_requests"
-                        " where status = 'fulfilled' and not off_cycle").fetchall()
+    since = stock.receipts_count_from(conn)
+    rows = conn.execute("select r.request_id, r.fulfilled_at from purchase_requests r"
+                        " where r.status = 'fulfilled' and not r.off_cycle"
+                        " and (%s::timestamptz is null or exists (select 1 from purchase_lines l"
+                        " where l.request_id = r.request_id and l.resolved_at >= %s))", (since, since)).fetchall()
     unplaced = sorted(request_id for request_id, at in rows if at is None)
     if unplaced:
         return None, (), (f"Friday request {', '.join(unplaced)} is fulfilled but its fulfilled_at is null, so when "

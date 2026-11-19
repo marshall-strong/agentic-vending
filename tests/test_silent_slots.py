@@ -170,6 +170,22 @@ def test_a_friday_visit_with_no_time_leaves_every_slot_unknown(conn):
     assert all(n.why == r.reason for n in r.not_silent)
 
 
+
+def test_a_test_purchase_before_the_ledger_opened_is_no_friday_visit(conn):
+    """Main's rule (stock._receipts): receipts from before the ledger's opening don't count, so an old test
+    request with no fulfilled_at neither hides the last Friday visit nor counts as a load at one."""
+    from tests.test_ledger import open_ledger
+
+    opened = datetime(2026, 10, 1, tzinfo=UTC)
+    open_ledger(conn, at=opened)
+    machine(conn, sales={"18": [(datetime(2026, 10, 27, 15, tzinfo=UTC), 1)]})
+    fulfilled(conn, "t0", datetime(2026, 9, 21, 15, tzinfo=UTC), ("16", "ZZZ", "primary", "5.00", 5, 0, 0))
+    conn.execute("update purchase_requests set fulfilled_at = null where request_id = 't0'")
+    r = report(conn)
+    assert r.reason is None and r.window_start == WINDOW and [s.slot for s in r.silent] == ["16"]
+    assert stock.request_loads(conn, ["t0"]) == {}
+    assert all(at >= opened for slot_loads in stock.loads(conn).values() for at, _ in slot_loads)
+
 # --- What the agent and the planner see ----------------------------------------------------------------
 
 def trial_sales(extra=None):

@@ -594,23 +594,31 @@ def load_movements(conn: psycopg.Connection) -> list[Movement]:
 
 
 def loads(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
-    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`."""
+    """Every time each slot had units put in it, from fulfilled receipts, as `(at, units)`.
+
+    Lines resolved before the ledger's opening (test purchases) are left out, as in `_receipts`."""
     out: dict[str, list[tuple[datetime, int]]] = {}
+    since = receipts_count_from(conn)
     for slot, at, units in conn.execute(
             "select l.slot, l.resolved_at, l.units_loaded from purchase_lines l join purchase_requests r"
             " using (request_id) where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded')"
-            " and l.units_loaded > 0 and l.resolved_at is not null"):
+            " and l.units_loaded > 0 and l.resolved_at is not null"
+            " and (%s::timestamptz is null or l.resolved_at >= %s)", (since, since)):
         out.setdefault(slot, []).append((at, units))
     return out
 
 
 def request_loads(conn: psycopg.Connection, request_ids: list[str]) -> dict[str, list[tuple[str, int]]]:
-    """What the receipts of these requests loaded into each slot, as `(sku, units)`: one visit's own loads."""
+    """What the receipts of these requests loaded into each slot, as `(sku, units)`: one visit's own loads.
+
+    Lines resolved before the ledger's opening (test purchases) are left out, as in `_receipts`."""
     out: dict[str, list[tuple[str, int]]] = {}
+    since = receipts_count_from(conn)
     for slot, sku, units in conn.execute(
             "select l.slot, l.sku, l.units_loaded from purchase_lines l join purchase_requests r using (request_id)"
             " where r.status = 'fulfilled' and r.request_id = any(%s)"
-            " and l.outcome in ('primary', 'alternate', 'loaded') and l.units_loaded > 0", (list(request_ids),)):
+            " and l.outcome in ('primary', 'alternate', 'loaded') and l.units_loaded > 0"
+            " and (%s::timestamptz is null or l.resolved_at >= %s)", (list(request_ids), since, since)):
         out.setdefault(slot, []).append((sku, units))
     return out
 
