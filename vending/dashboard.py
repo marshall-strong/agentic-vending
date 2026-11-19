@@ -1404,6 +1404,9 @@ header.top .meta { color:var(--muted); font-size:12px; margin-left:auto }
 .verdict.ok { color:var(--ok); background:var(--ok-soft) } .verdict.check { color:var(--warn); background:var(--warn-soft) }
 .verdict.problem { color:var(--bad); background:var(--bad-soft) }
 #live.failed { color:var(--bad); font-weight:600 }
+.demo-banner { position:sticky; top:0; z-index:20; padding:10px 16px; text-align:center; font-size:15px; font-weight:700;
+  background:#ffd23f; color:#1a1400; border-bottom:3px solid #b8860b }
+.demo-banner a { color:inherit; text-decoration:underline }
 .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px }
 .tile { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px 14px; box-shadow:var(--shadow); min-width:0 }
 .label { font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
@@ -1538,13 +1541,15 @@ STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 # and says so. Without JavaScript the <noscript> meta refresh reloads the page instead.
 
 SCRIPT = """(function () {
-  var REFRESH = %d * 1000, show = 'all', view = 'now', only = false, lastOk = Date.now(), failed = false;
+  var REFRESH = %d * 1000, FROZEN = %d, show = 'all', view = 'now', only = false, lastOk = Date.now(), failed = false;
   var shelf = '';
+  // The demo copy keeps its toggles under its own keys, so flipping one there never moves the live page's.
+  var PFX = '%s';
   try {
-    show = localStorage.getItem('dash-show') || 'all';
-    view = localStorage.getItem('dash-view') === 'next' ? 'next' : 'now';
-    only = localStorage.getItem('dash-changed') === '1';
-    shelf = localStorage.getItem('dash-shelf') || '';
+    show = localStorage.getItem(PFX + 'show') || 'all';
+    view = localStorage.getItem(PFX + 'view') === 'next' ? 'next' : 'now';
+    only = localStorage.getItem(PFX + 'changed') === '1';
+    shelf = localStorage.getItem(PFX + 'shelf') || '';
   } catch (e) {}
   var picked = /^#shelf-([1-5])$/.exec(location.hash);
   if (picked) shelf = picked[1];
@@ -1558,6 +1563,8 @@ SCRIPT = """(function () {
     return h ? d + ' d ' + h + ' h' : d + ' d';
   }
   function times() {
+    // A fixed (demo) page keeps the times the server wrote, as of its own moment, not the viewer's.
+    if (FROZEN) return;
     var now = Date.now();
     document.querySelectorAll('time[datetime]').forEach(function (t) {
       var d = new Date(t.getAttribute('datetime')), f = t.getAttribute('data-f');
@@ -1602,17 +1609,17 @@ SCRIPT = """(function () {
   function openSlot(id) {
     var d = document.getElementById(id);
     if (!d || d.tagName !== 'DETAILS') return;
-    if (only && !d.classList.contains('changed')) { only = false; save('dash-changed', '0'); filter(); }
+    if (only && !d.classList.contains('changed')) { only = false; save(PFX + 'changed', '0'); filter(); }
     d.open = true;
   }
   document.addEventListener('click', function (e) {
     var t = e.target.closest ? e.target : e.target.parentElement;
     var b = t.closest('.filter button'), v = t.closest('.vm .seg button'), a = t.closest('a[href^="#slot-"]');
-    if (b) { show = b.getAttribute('data-show'); save('dash-show', show); filter(); }
-    if (v) { view = v.getAttribute('data-view'); save('dash-view', view); filter(); }
+    if (b) { show = b.getAttribute('data-show'); save(PFX + 'show', show); filter(); }
+    if (v) { view = v.getAttribute('data-view'); save(PFX + 'view', view); filter(); }
     if (a) openSlot(a.getAttribute('href').slice(1));
     var pick = t.closest('a[data-shelf]'), lane = t.closest('a[data-lane]');
-    if (pick) { e.preventDefault(); shelf = pick.getAttribute('data-shelf'); save('dash-shelf', shelf); filter(); }
+    if (pick) { e.preventDefault(); shelf = pick.getAttribute('data-shelf'); save(PFX + 'shelf', shelf); filter(); }
     if (lane) {
       var to = document.getElementById('lane-' + lane.getAttribute('data-lane'));
       if (to) {
@@ -1624,7 +1631,7 @@ SCRIPT = """(function () {
   });
   document.addEventListener('change', function (e) {
     if (e.target.id !== 'changed-only') return;
-    only = e.target.checked; save('dash-changed', only ? '1' : '0'); filter();
+    only = e.target.checked; save(PFX + 'changed', only ? '1' : '0'); filter();
   });
   window.addEventListener('hashchange', function () { openSlot(location.hash.slice(1)); });
   function refresh() {
@@ -1652,19 +1659,33 @@ SCRIPT = """(function () {
   }
   filter(); times();
   if (location.hash) openSlot(location.hash.slice(1));
-  setInterval(refresh, REFRESH);
-  setInterval(times, 15000);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
+  if (!FROZEN) {
+    setInterval(refresh, REFRESH);
+    setInterval(times, 15000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
+  }
 })();"""
 
 
 _VERDICT_TEXT = {"ok": "OK", "check": "Check", "problem": "Problem"}
 
 
+# The demo copy's banner (`vending.demo`). The words are fixed: people look for them.
+DEMO_BANNER = "DEMO: made-up data, not our machine. The live page is "
+DEMO_LIVE_HREF = "/dashboard"
+DEMO_TITLE = "DEMO &middot; "
+# The page remembers its toggles in localStorage. Same origin, so the demo needs its own keys.
+LIVE_STORAGE, DEMO_STORAGE = "dash-", "demo-dash-"
+
+
 def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.json",
-           nav: tuple[tuple[str, str], ...] = ()) -> str:
+           nav: tuple[tuple[str, str], ...] = (), demo: bool = False) -> str:
     """The page. `json_href` is where its JSON twin lives, and `nav` is (label, href) links to
-    sibling pages, for a server that mounts this page under a path beside others."""
+    sibling pages, for a server that mounts this page under a path beside others.
+
+    `demo` is for the made-up copy (`vending.demo`): a banner on top, "DEMO" in the tab title, and a
+    fixed page. It never refreshes and keeps the times the server wrote, because the page's script would
+    otherwise measure "3 days ago" and "in 1 day" from the viewer's own clock, not the snapshot's."""
     now = snap["as_of"]
     links = "".join(f' &middot; <a href="{_e(href)}">{_e(label)}</a>' for label, href in nav)
     items = snap.get("attention")
@@ -1677,7 +1698,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     head =(f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
             f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
             f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
-            f'refreshes every {int(refresh)} s</span> &middot; <a href="{_e(json_href)}">JSON</a>{links}</span></header>')
+            + ("fixed snapshot, never refreshes" if demo else f"refreshes every {int(refresh)} s")
+            + f'</span> &middot; <a href="{_e(json_href)}">JSON</a>{links}</span></header>')
     money = (f'<section id="money"><h2>Money <span class="hint">from the ledger &middot; exact to the cent'
              " &middot; the competition counts from the ledger's opening; spend before it is development"
              f'</span></h2>{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
@@ -1696,14 +1718,24 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + f'<section id="closet"><h2>Back stock <span class="hint">the closet, from receipts</span></h2>'
               f'{_closet_html(snap["stock"])}</section>'
             + "</div>"
-            + '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code></footer>')
+            + ('<footer>Made-up data from a fixed snapshot, shown with the live page\'s own code. Nothing here is '
+               f'read from our database. The live page is <a href="{DEMO_LIVE_HREF}">{DEMO_LIVE_HREF}</a>.</footer>'
+               if demo else
+               '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code></footer>'))
+    # The query marks the reload as one, so the visit counter doesn't count it (`vending.visits`).
+    # The demo never reloads.
+    reload = ("" if demo else
+              f'<noscript><meta http-equiv="refresh" content="{int(refresh)}; url=?{visits.REFRESH_QUERY}"></noscript>')
+    banner = (f'<div class="demo-banner" role="note">{_e(DEMO_BANNER)}<a href="{DEMO_LIVE_HREF}">{DEMO_LIVE_HREF}</a>'
+              '</div>' if demo else "")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            # The query marks the reload as one, so the visit counter doesn't count it (`vending.visits`).
-            f'<noscript><meta http-equiv="refresh" content="{int(refresh)}; url=?{visits.REFRESH_QUERY}"></noscript>'
-            f'<title>{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
-            f'<style>{STYLE}{machine_art.STYLE}</style></head><body><main>{body}</main>'
-            f'<script>{SCRIPT % (int(refresh), visits.REFRESH_HEADER)}</script></body></html>')
+            + ('<meta name="robots" content="noindex">' if demo else "")
+            + reload
+            + f'<title>{DEMO_TITLE if demo else ""}{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
+            f'<style>{STYLE}{machine_art.STYLE}</style></head><body>{banner}<main>{body}</main>'
+            f'<script>{SCRIPT % (int(refresh), int(demo), DEMO_STORAGE if demo else LIVE_STORAGE, visits.REFRESH_HEADER)}'
+            '</script></body></html>')
 
 
 def _error_page(message: str) -> str:

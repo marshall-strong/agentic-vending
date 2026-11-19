@@ -332,7 +332,7 @@ class _Health(BaseHTTPRequestHandler):
         if path == gate.LOGOUT:
             return self._redirect(gate.LOGIN, gate.cleared_cookie())
         if gate.needs_password(path) and not gate.signed_in(self.headers.get("Cookie")):
-            if path == "/dashboard/state.json":
+            if path in ("/dashboard/state.json", "/dashboard/demo/state.json"):
                 # The dashboard's own refresh asks for this; a redirect would only fail there.
                 return self._send(401, "application/json", b'{"error": "signed out: reload the page to sign in"}')
             return self._redirect(gate.login_location(self.path))
@@ -388,7 +388,11 @@ class _Health(BaseHTTPRequestHandler):
 
     def _count_view(self, path: str, target: str) -> tuple[str, ...]:
         """Count a signed-in browser opening `path` (`target` is it with its query; `vending.visits`);
-        the cookies to set, if it has no id yet. Only queues the count, so the page never waits on it."""
+        the cookies to set, if it has no id yet. Only queues the count, so the page never waits on it.
+
+        The demo copy (`/dashboard/demo`, `vending.demo`) isn't one of `visits.PAGES`, so a view of it is
+        never counted: not as a visit, and it sets no browser cookie either. Visits are what people
+        read from the real page."""
         if path not in visits.PAGES:
             return ()
         browser, cookies = visits.identify(self.headers.get("Cookie"))

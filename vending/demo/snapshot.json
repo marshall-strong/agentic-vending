@@ -1,0 +1,2124 @@
+{
+ "as_of": {
+  "$datetime": "2026-12-09T15:00:00+00:00"
+ },
+ "ours": {
+  "ok": true,
+  "data": [
+   "11",
+   "13",
+   "16",
+   "17",
+   "22",
+   "24",
+   "25",
+   "28",
+   "31",
+   "33",
+   "36",
+   "37",
+   "41",
+   "44",
+   "46",
+   "47",
+   "52",
+   "54",
+   "55",
+   "58"
+  ]
+ },
+ "status": {
+  "halted": false,
+  "halt_changed_at": {
+   "$datetime": "2026-12-02T14:00:00+00:00"
+  },
+  "halt_changed_by": "kevin",
+  "latest_run": {
+   "id": 6,
+   "started_at": {
+    "$datetime": "2026-12-09T14:50:00+00:00"
+   },
+   "finished_at": null,
+   "mode": "live",
+   "model": "claude-sonnet-5-5",
+   "status": "running",
+   "detail": null,
+   "cost_usd": null
+  },
+  "last_action": {
+   "at": {
+    "$datetime": "2026-12-09T14:53:00+00:00"
+   },
+   "kind": "write",
+   "tool": "submit_desired_state",
+   "outcome": "refused"
+  },
+  "next_cutoff": {
+   "$datetime": "2026-12-10T23:59:00-05:00"
+  }
+ },
+ "plan": {
+  "ok": true,
+  "data": {
+   "run": {
+    "id": 5,
+    "started_at": {
+     "$datetime": "2026-12-07T14:00:00+00:00"
+    },
+    "finished_at": {
+     "$datetime": "2026-12-07T14:12:00+00:00"
+    },
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "submitted"
+   },
+   "previous_run": 3,
+   "visit": "scheduled",
+   "reason": "Raise three prices on sell-outs, swap the slowest lane, pull one.",
+   "update": "Next Friday's order: three prices up, one swap, one lane pulled. Selections 55 and 58 get another try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
+   "notes": "Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater.",
+   "slots": [
+    {
+     "slot": "11",
+     "now": {
+      "slot": "11",
+      "reason": "Coca-Cola ran out on Saturday morning. One more quarter should still sell it through.",
+      "fill_to": 7,
+      "product": "DEMO-COKE-20",
+      "sale_price": "2.75"
+     },
+     "before": {
+      "slot": "11",
+      "reason": "Coca-Cola is the safest seller in the fall figures. Fill the lane.",
+      "fill_to": 7,
+      "product": "DEMO-COKE-20",
+      "sale_price": "2.50"
+     },
+     "changed": true
+    },
+    {
+     "slot": "13",
+     "now": {
+      "slot": "13",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 7,
+      "product": "DEMO-DIETCOKE-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "13",
+      "reason": "Diet Coke followed Coca-Cola in the fall figures.",
+      "fill_to": 7,
+      "product": "DEMO-DIETCOKE-20",
+      "sale_price": "2.50"
+     },
+     "changed": false
+    },
+    {
+     "slot": "16",
+     "now": {
+      "slot": "16",
+      "reason": "Coke Zero sold 5 of 6 by Monday. One more unit on the rail.",
+      "fill_to": 7,
+      "product": "DEMO-ZERO-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "16",
+      "reason": "Coke Zero sold steadily in the fall. A little under full to start.",
+      "fill_to": 6,
+      "product": "DEMO-ZERO-20",
+      "sale_price": "2.50"
+     },
+     "changed": true
+    },
+    {
+     "slot": "17",
+     "now": {
+      "slot": "17",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 6,
+      "product": "DEMO-SPRITE-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "17",
+      "reason": "A lemon-lime to sit beside the colas.",
+      "fill_to": 6,
+      "product": "DEMO-SPRITE-20",
+      "sale_price": "2.50"
+     },
+     "changed": false
+    },
+    {
+     "slot": "22",
+     "now": {
+      "slot": "22",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 8,
+      "product": "DEMO-BUBLY-STRAW-12",
+      "sale_price": "1.75"
+     },
+     "before": {
+      "slot": "22",
+      "reason": "Cans are cheap to buy, so a lower price should keep them moving.",
+      "fill_to": 8,
+      "product": "DEMO-BUBLY-STRAW-12",
+      "sale_price": "1.75"
+     },
+     "changed": false
+    },
+    {
+     "slot": "24",
+     "now": {
+      "slot": "24",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 8,
+      "product": "DEMO-BUBLY-PALOMA-12",
+      "sale_price": "1.75"
+     },
+     "before": {
+      "slot": "24",
+      "reason": "A second bubly flavour, to see which one wins.",
+      "fill_to": 8,
+      "product": "DEMO-BUBLY-PALOMA-12",
+      "sale_price": "1.75"
+     },
+     "changed": false
+    },
+    {
+     "slot": "25",
+     "now": {
+      "slot": "25",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 7,
+      "product": "DEMO-TOPO-16G",
+      "sale_price": "2.75"
+     },
+     "before": {
+      "slot": "25",
+      "reason": "Glass sparkling water, priced up for the bottle.",
+      "fill_to": 7,
+      "product": "DEMO-TOPO-16G",
+      "sale_price": "2.75"
+     },
+     "changed": false
+    },
+    {
+     "slot": "28",
+     "now": {
+      "slot": "28",
+      "reason": "vitaminwater sold 2 in 6 days, the slowest lane. GORGIE's request was approved, so swap it in.",
+      "fill_to": 6,
+      "product": "DEMO-GORGIE-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "28",
+      "reason": "A non-fizzy choice.",
+      "fill_to": 6,
+      "product": "DEMO-VW-20",
+      "sale_price": "2.50"
+     },
+     "changed": true
+    },
+    {
+     "slot": "31",
+     "now": {
+      "slot": "31",
+      "reason": "Pepsi sold out on Tuesday with a day to go. Raising the price a quarter.",
+      "fill_to": 7,
+      "product": "DEMO-PEPSI-20",
+      "sale_price": "2.75"
+     },
+     "before": {
+      "slot": "31",
+      "reason": "Pepsi sold well in the fall figures.",
+      "fill_to": 7,
+      "product": "DEMO-PEPSI-20",
+      "sale_price": "2.50"
+     },
+     "changed": true
+    },
+    {
+     "slot": "33",
+     "now": {
+      "slot": "33",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 7,
+      "product": "DEMO-DEW-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "33",
+      "reason": "Mountain Dew is the strongest of the greens.",
+      "fill_to": 7,
+      "product": "DEMO-DEW-20",
+      "sale_price": "2.50"
+     },
+     "changed": false
+    },
+    {
+     "slot": "36",
+     "now": {
+      "slot": "36",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 6,
+      "product": "DEMO-DRPEPPER-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "36",
+      "reason": "Dr Pepper, for people who want neither cola.",
+      "fill_to": 6,
+      "product": "DEMO-DRPEPPER-20",
+      "sale_price": "2.50"
+     },
+     "changed": false
+    },
+    {
+     "slot": "37",
+     "now": {
+      "slot": "37",
+      "reason": "Red Bull sold out twice in a week at $3.00. $3.25 is still under the ceiling.",
+      "fill_to": 10,
+      "product": "DEMO-RB-250",
+      "sale_price": "3.25"
+     },
+     "before": {
+      "slot": "37",
+      "reason": "The energy drink with the best margin; the small can fits 11.",
+      "fill_to": 10,
+      "product": "DEMO-RB-250",
+      "sale_price": "3.00"
+     },
+     "changed": true
+    },
+    {
+     "slot": "41",
+     "now": {
+      "slot": "41",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 8,
+      "product": "DEMO-MONSTER-16",
+      "sale_price": "3.25"
+     },
+     "before": {
+      "slot": "41",
+      "reason": "A second energy drink, in the bigger can.",
+      "fill_to": 8,
+      "product": "DEMO-MONSTER-16",
+      "sale_price": "3.25"
+     },
+     "changed": false
+    },
+    {
+     "slot": "44",
+     "now": {
+      "slot": "44",
+      "reason": "Snapple sold 1 in 6 days and 5 are still here. Pull it and keep the units in the closet.",
+      "fill_to": 0,
+      "product": "DEMO-SNAPPLE-16",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "44",
+      "reason": "Tea, to cover a different taste.",
+      "fill_to": 6,
+      "product": "DEMO-SNAPPLE-16",
+      "sale_price": "2.50"
+     },
+     "changed": true
+    },
+    {
+     "slot": "46",
+     "now": {
+      "slot": "46",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 6,
+      "product": "DEMO-PROTEIN-11",
+      "sale_price": "4.00"
+     },
+     "before": {
+      "slot": "46",
+      "reason": "A protein shake for the gym crowd, at a price that pays for the carton.",
+      "fill_to": 6,
+      "product": "DEMO-PROTEIN-11",
+      "sale_price": "4.00"
+     },
+     "changed": false
+    },
+    {
+     "slot": "47",
+     "now": {
+      "slot": "47",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 8,
+      "product": "DEMO-RECESS-12",
+      "sale_price": "2.25"
+     },
+     "before": {
+      "slot": "47",
+      "reason": "A new-wave drink that has a following.",
+      "fill_to": 8,
+      "product": "DEMO-RECESS-12",
+      "sale_price": "2.25"
+     },
+     "changed": false
+    },
+    {
+     "slot": "52",
+     "now": {
+      "slot": "52",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 7,
+      "product": "DEMO-BAJA-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "52",
+      "reason": "A colourful flavour for variety.",
+      "fill_to": 7,
+      "product": "DEMO-BAJA-20",
+      "sale_price": "2.50"
+     },
+     "changed": false
+    },
+    {
+     "slot": "54",
+     "now": {
+      "slot": "54",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 6,
+      "product": "DEMO-COKE-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "54",
+      "reason": "A second Coca-Cola lane, since it sells best.",
+      "fill_to": 6,
+      "product": "DEMO-COKE-20",
+      "sale_price": "2.50"
+     },
+     "changed": false
+    },
+    {
+     "slot": "55",
+     "now": {
+      "slot": "55",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 7,
+      "product": "DEMO-TOPO-16G",
+      "sale_price": "2.75"
+     },
+     "before": {
+      "slot": "55",
+      "reason": "More sparkling water, if it can be bought.",
+      "fill_to": 7,
+      "product": "DEMO-TOPO-16G",
+      "sale_price": "2.75"
+     },
+     "changed": false
+    },
+    {
+     "slot": "58",
+     "now": {
+      "slot": "58",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "fill_to": 7,
+      "product": "DEMO-BAJA-20",
+      "sale_price": "2.50"
+     },
+     "before": {
+      "slot": "58",
+      "reason": "A second Baja Blast lane, if it can be bought.",
+      "fill_to": 7,
+      "product": "DEMO-BAJA-20",
+      "sale_price": "2.50"
+     },
+     "changed": false
+    }
+   ]
+  }
+ },
+ "runs": {
+  "ok": true,
+  "data": [
+   {
+    "id": 6,
+    "started_at": {
+     "$datetime": "2026-12-09T14:50:00+00:00"
+    },
+    "finished_at": null,
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "running",
+    "detail": null,
+    "cost_usd": null,
+    "request_id": null,
+    "team_update": null,
+    "notes": null,
+    "steps": [
+     {
+      "turn": 1,
+      "kind": "thinking",
+      "tool": null,
+      "content": "Wednesday check: is anything wrong before Thursday's cutoff?",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_call",
+      "tool": "get_machine_state",
+      "content": "{}",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_result",
+      "tool": "get_machine_state",
+      "content": "20 lanes; last poll 1 h 30 min ago",
+      "is_error": false
+     },
+     {
+      "turn": 2,
+      "kind": "tool_call",
+      "tool": "submit_desired_state",
+      "content": "{\"slots\": 20}",
+      "is_error": false
+     },
+     {
+      "turn": 2,
+      "kind": "tool_result",
+      "tool": "submit_desired_state",
+      "content": "refused: a request for Friday is already pending (pr-002)",
+      "is_error": true
+     }
+    ],
+    "has_plan": false,
+    "compared": false,
+    "changes": [],
+    "stale": false
+   },
+   {
+    "id": 5,
+    "started_at": {
+     "$datetime": "2026-12-07T14:00:00+00:00"
+    },
+    "finished_at": {
+     "$datetime": "2026-12-07T14:12:00+00:00"
+    },
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "submitted",
+    "detail": null,
+    "cost_usd": {
+     "$decimal": "0.58"
+    },
+    "request_id": "pr-002",
+    "team_update": "Next Friday's order: three prices up, one swap, one lane pulled. Selections 55 and 58 get another try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
+    "notes": "Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater.",
+    "steps": [
+     {
+      "turn": 1,
+      "kind": "thinking",
+      "tool": null,
+      "content": "Monday. Last week's plan is the baseline. I want sales per lane, what sold out, and what the ledger says I can spend.",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_call",
+      "tool": "get_machine_state",
+      "content": "{}",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_result",
+      "tool": "get_machine_state",
+      "content": "20 lanes; 31 sold out; 11, 33, 37 topped up on Saturday",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_call",
+      "tool": "get_account_balance",
+      "content": "{}",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_result",
+      "tool": "get_account_balance",
+      "content": "balance and spendable both well above the $53 floor",
+      "is_error": false
+     },
+     {
+      "turn": 2,
+      "kind": "thinking",
+      "tool": null,
+      "content": "Pepsi, Coca-Cola and Red Bull empty before Friday. Their price is too low for the demand, and a quarter more should still clear them.",
+      "is_error": false
+     },
+     {
+      "turn": 2,
+      "kind": "tool_call",
+      "tool": "get_sales_history",
+      "content": "{\"slot\": \"31\"}",
+      "is_error": false
+     },
+     {
+      "turn": 2,
+      "kind": "tool_result",
+      "tool": "get_sales_history",
+      "content": "9 sold in 6 days, empty from Tuesday",
+      "is_error": false
+     },
+     {
+      "turn": 3,
+      "kind": "thinking",
+      "tool": null,
+      "content": "vitaminwater sold 2 in 6 days. GORGIE was approved last week; try it there. Snapple sold 1, so pull it.",
+      "is_error": false
+     },
+     {
+      "turn": 3,
+      "kind": "tool_call",
+      "tool": "preview_desired_state",
+      "content": "{\"slots\": 20}",
+      "is_error": false
+     },
+     {
+      "turn": 3,
+      "kind": "tool_result",
+      "tool": "preview_desired_state",
+      "content": "most we pay $90.90, 0 refusals",
+      "is_error": false
+     },
+     {
+      "turn": 4,
+      "kind": "tool_call",
+      "tool": "submit_desired_state",
+      "content": "{\"slots\": 20}",
+      "is_error": false
+     },
+     {
+      "turn": 4,
+      "kind": "text",
+      "tool": null,
+      "content": "Submitted request pr-002.",
+      "is_error": false
+     }
+    ],
+    "has_plan": true,
+    "compared": true,
+    "changes": [
+     {
+      "slot": "11",
+      "labels": [
+       "$2.50 to $2.75"
+      ]
+     },
+     {
+      "slot": "16",
+      "labels": [
+       "fill 6 to 7"
+      ]
+     },
+     {
+      "slot": "28",
+      "labels": [
+       "swap"
+      ]
+     },
+     {
+      "slot": "31",
+      "labels": [
+       "$2.50 to $2.75"
+      ]
+     },
+     {
+      "slot": "37",
+      "labels": [
+       "$3.00 to $3.25"
+      ]
+     },
+     {
+      "slot": "44",
+      "labels": [
+       "pull"
+      ]
+     }
+    ],
+    "stale": false
+   },
+   {
+    "id": 4,
+    "started_at": {
+     "$datetime": "2026-12-06T12:00:00+00:00"
+    },
+    "finished_at": {
+     "$datetime": "2026-12-06T12:02:00+00:00"
+    },
+    "mode": "replay",
+    "model": "claude-sonnet-5-5",
+    "status": "skipped",
+    "detail": "Replay of the week of 23 Nov with the same rules; nothing to submit",
+    "cost_usd": {
+     "$decimal": "0.00"
+    },
+    "request_id": null,
+    "team_update": null,
+    "notes": null,
+    "steps": [],
+    "has_plan": false,
+    "compared": false,
+    "changes": [],
+    "stale": false
+   },
+   {
+    "id": 3,
+    "started_at": {
+     "$datetime": "2026-12-05T14:00:00+00:00"
+    },
+    "finished_at": {
+     "$datetime": "2026-12-05T14:09:00+00:00"
+    },
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "submitted",
+    "detail": null,
+    "cost_usd": {
+     "$decimal": "0.37"
+    },
+    "request_id": "pr-003",
+    "team_update": "Midweek visit: Coca-Cola, Mountain Dew and Red Bull topped up to full.",
+    "notes": "The visit paid for itself within two days. Watch for it in the profit.",
+    "steps": [],
+    "has_plan": true,
+    "compared": true,
+    "changes": [],
+    "stale": false
+   },
+   {
+    "id": 2,
+    "started_at": {
+     "$datetime": "2026-12-04T14:00:00+00:00"
+    },
+    "finished_at": {
+     "$datetime": "2026-12-04T14:03:00+00:00"
+    },
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "failed",
+    "detail": "(error text isn't shown on this public page; it is in the database and the container's log)",
+    "cost_usd": {
+     "$decimal": "0.12"
+    },
+    "request_id": null,
+    "team_update": null,
+    "notes": null,
+    "steps": [
+     {
+      "turn": 1,
+      "kind": "thinking",
+      "tool": null,
+      "content": "Checking Friday's stock before deciding whether a visit is worth it.",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_call",
+      "tool": "get_machine_state",
+      "content": "{}",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_result",
+      "tool": "get_machine_state",
+      "content": "the call timed out",
+      "is_error": true
+     }
+    ],
+    "has_plan": false,
+    "compared": false,
+    "changes": [],
+    "stale": false
+   },
+   {
+    "id": 1,
+    "started_at": {
+     "$datetime": "2026-12-02T19:00:00+00:00"
+    },
+    "finished_at": {
+     "$datetime": "2026-12-02T19:06:00+00:00"
+    },
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "submitted",
+    "detail": null,
+    "cost_usd": {
+     "$decimal": "0.46"
+    },
+    "request_id": "pr-001",
+    "team_update": "First fill is ordered: 18 of the 20 selections have a seller. Two selections found none.",
+    "notes": "Selections 55 and 58 had no seller on day one. Try them again next Friday.",
+    "steps": [
+     {
+      "turn": 1,
+      "kind": "thinking",
+      "tool": null,
+      "content": "It is the first fill. I need what the machine holds, what the catalog sells and what the fall figures say.",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_call",
+      "tool": "get_catalog",
+      "content": "{}",
+      "is_error": false
+     },
+     {
+      "turn": 1,
+      "kind": "tool_result",
+      "tool": "get_catalog",
+      "content": "18 products, 17 with a price per pack",
+      "is_error": false
+     },
+     {
+      "turn": 2,
+      "kind": "thinking",
+      "tool": null,
+      "content": "Twenty lanes and a $600 budget. Cans are cheap and sell at $1.75; the big bottles carry the margin.",
+      "is_error": false
+     },
+     {
+      "turn": 2,
+      "kind": "tool_call",
+      "tool": "preview_desired_state",
+      "content": "{\"slots\": 20}",
+      "is_error": false
+     },
+     {
+      "turn": 2,
+      "kind": "tool_result",
+      "tool": "preview_desired_state",
+      "content": "20 lines, 0 refusals",
+      "is_error": false
+     },
+     {
+      "turn": 3,
+      "kind": "tool_call",
+      "tool": "submit_desired_state",
+      "content": "{\"slots\": 20}",
+      "is_error": false
+     },
+     {
+      "turn": 3,
+      "kind": "text",
+      "tool": null,
+      "content": "Submitted request pr-001 for 20 selections.",
+      "is_error": false
+     }
+    ],
+    "has_plan": true,
+    "compared": false,
+    "changes": [],
+    "stale": false
+   }
+  ]
+ },
+ "activity": {
+  "ok": true,
+  "data": [
+   {
+    "id": 39,
+    "at": {
+     "$datetime": "2026-12-09T14:53:00+00:00"
+    },
+    "kind": "write",
+    "tool": "submit_desired_state",
+    "outcome": "refused",
+    "detail": "A request for this Friday is already pending (pr-002). Wait for it to be filled or rejected.",
+    "arguments": {
+     "slots": 20
+    }
+   },
+   {
+    "id": 38,
+    "at": {
+     "$datetime": "2026-12-09T14:52:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_pnl",
+    "outcome": "failed",
+    "detail": "(error text isn't shown on this public page; it is in the database and the container's log)",
+    "arguments": {}
+   },
+   {
+    "id": 37,
+    "at": {
+     "$datetime": "2026-12-09T14:51:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_machine_state",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 36,
+    "at": {
+     "$datetime": "2026-12-08T16:00:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_machine_state",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 35,
+    "at": {
+     "$datetime": "2026-12-07T14:11:00+00:00"
+    },
+    "kind": "write",
+    "tool": "submit_desired_state",
+    "outcome": "done",
+    "detail": "request pr-002 submitted",
+    "arguments": {
+     "slots": 20
+    }
+   },
+   {
+    "id": 34,
+    "at": {
+     "$datetime": "2026-12-07T14:09:00+00:00"
+    },
+    "kind": "write",
+    "tool": "submit_desired_state",
+    "outcome": "refused",
+    "detail": "Selection 37: $3.50 is above the price ceiling of $3.25. Price it at or under the ceiling.",
+    "arguments": {
+     "slots": 20
+    }
+   },
+   {
+    "id": 33,
+    "at": {
+     "$datetime": "2026-12-07T14:08:00+00:00"
+    },
+    "kind": "read",
+    "tool": "preview_desired_state",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "slots": 20
+    }
+   },
+   {
+    "id": 32,
+    "at": {
+     "$datetime": "2026-12-07T14:07:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_purchase_requests",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 31,
+    "at": {
+     "$datetime": "2026-12-07T14:06:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_sales_history",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "slot": "28"
+    }
+   },
+   {
+    "id": 30,
+    "at": {
+     "$datetime": "2026-12-07T14:05:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_sales_history",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "slot": "31"
+    }
+   },
+   {
+    "id": 29,
+    "at": {
+     "$datetime": "2026-12-07T14:03:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_pnl",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 28,
+    "at": {
+     "$datetime": "2026-12-07T14:02:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_account_balance",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 27,
+    "at": {
+     "$datetime": "2026-12-07T14:01:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_machine_state",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 26,
+    "at": {
+     "$datetime": "2026-12-05T14:09:00+00:00"
+    },
+    "kind": "write",
+    "tool": "submit_desired_state",
+    "outcome": "done",
+    "detail": "request pr-003 submitted",
+    "arguments": {
+     "slots": 20,
+     "off_cycle": true
+    }
+   },
+   {
+    "id": 25,
+    "at": {
+     "$datetime": "2026-12-05T14:07:00+00:00"
+    },
+    "kind": "read",
+    "tool": "preview_desired_state",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "slots": 20,
+     "off_cycle": true
+    }
+   },
+   {
+    "id": 24,
+    "at": {
+     "$datetime": "2026-12-05T14:05:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_sales_history",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "slot": "37"
+    }
+   },
+   {
+    "id": 23,
+    "at": {
+     "$datetime": "2026-12-05T14:04:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_sales_history",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "slot": "33"
+    }
+   },
+   {
+    "id": 22,
+    "at": {
+     "$datetime": "2026-12-05T14:03:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_sales_history",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "slot": "11"
+    }
+   },
+   {
+    "id": 21,
+    "at": {
+     "$datetime": "2026-12-05T14:01:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_machine_state",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 20,
+    "at": {
+     "$datetime": "2026-12-04T14:01:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_machine_state",
+    "outcome": "failed",
+    "detail": "(error text isn't shown on this public page; it is in the database and the container's log)",
+    "arguments": {}
+   },
+   {
+    "id": 19,
+    "at": {
+     "$datetime": "2026-12-02T19:05:00+00:00"
+    },
+    "kind": "write",
+    "tool": "submit_desired_state",
+    "outcome": "done",
+    "detail": "request pr-001 submitted",
+    "arguments": {
+     "slots": 20
+    }
+   },
+   {
+    "id": 18,
+    "at": {
+     "$datetime": "2026-12-02T19:04:00+00:00"
+    },
+    "kind": "read",
+    "tool": "preview_desired_state",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "slots": 20
+    }
+   },
+   {
+    "id": 17,
+    "at": {
+     "$datetime": "2026-12-02T19:02:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_account_balance",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 16,
+    "at": {
+     "$datetime": "2026-12-02T19:01:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_catalog",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {}
+   },
+   {
+    "id": 15,
+    "at": {
+     "$datetime": "2026-12-02T19:00:00+00:00"
+    },
+    "kind": "read",
+    "tool": "get_project_rules",
+    "outcome": "done",
+    "detail": null,
+    "arguments": {
+     "topic": "pricing"
+    }
+   },
+   {
+    "id": 14,
+    "at": {
+     "$datetime": "2026-12-02T15:00:00+00:00"
+    },
+    "kind": "write",
+    "tool": "ledger.opening",
+    "outcome": "done",
+    "detail": "opening 600.00 recorded by kevin: opening capital",
+    "arguments": {
+     "amount": "600.00"
+    }
+   },
+   {
+    "id": 13,
+    "at": {
+     "$datetime": "2026-12-02T14:00:00+00:00"
+    },
+    "kind": "write",
+    "tool": "halt",
+    "outcome": "done",
+    "detail": "halt switch turned off by kevin",
+    "arguments": {
+     "by": "kevin",
+     "state": "off"
+    }
+   },
+   {
+    "id": 12,
+    "at": {
+     "$datetime": "2026-12-02T13:40:00+00:00"
+    },
+    "kind": "write",
+    "tool": "submit_desired_state",
+    "outcome": "refused",
+    "detail": "The agent is halted, so no write tool can run.",
+    "arguments": {
+     "slots": 20
+    }
+   }
+  ]
+ },
+ "recent_calls": {
+  "ok": true,
+  "data": {
+   "calls": 4,
+   "writes": 1,
+   "refused": 1,
+   "failed": 1
+  }
+ },
+ "sales": {
+  "ok": true,
+  "data": {
+   "as_of": {
+    "$datetime": "2026-12-09T13:30:00+00:00"
+   },
+   "stale": false,
+   "window_start": {
+    "$datetime": "2026-12-01T12:00:00+00:00"
+   },
+   "slots": {
+    "11": {
+     "price": "2.50",
+     "sold": 8,
+     "per_day": "0.99"
+    },
+    "13": {
+     "price": "2.50",
+     "sold": 6,
+     "per_day": "0.74"
+    },
+    "16": {
+     "price": "2.50",
+     "sold": 4,
+     "per_day": "0.50"
+    },
+    "17": {
+     "price": "2.50",
+     "sold": 4,
+     "per_day": "0.50"
+    },
+    "22": {
+     "price": "1.75",
+     "sold": 5,
+     "per_day": "0.62"
+    },
+    "24": {
+     "price": "1.75",
+     "sold": 2,
+     "per_day": "0.25"
+    },
+    "25": {
+     "price": "2.75",
+     "sold": 3,
+     "per_day": "0.37"
+    },
+    "28": {
+     "price": "2.50",
+     "sold": 2,
+     "per_day": "0.25"
+    },
+    "31": {
+     "price": "2.50",
+     "sold": 7,
+     "per_day": "0.87"
+    },
+    "33": {
+     "price": "2.50",
+     "sold": 7,
+     "per_day": "0.87"
+    },
+    "36": {
+     "price": "2.50",
+     "sold": 4,
+     "per_day": "0.50"
+    },
+    "37": {
+     "price": "3.00",
+     "sold": 8,
+     "per_day": "0.99"
+    },
+    "41": {
+     "price": "3.25",
+     "sold": 7,
+     "per_day": "0.87"
+    },
+    "44": {
+     "price": "2.50",
+     "sold": 1,
+     "per_day": "0.12"
+    },
+    "46": {
+     "price": "4.00",
+     "sold": 2,
+     "per_day": "0.25"
+    },
+    "47": {
+     "price": "2.25",
+     "sold": 3,
+     "per_day": "0.37"
+    },
+    "52": {
+     "price": "2.50",
+     "sold": 5,
+     "per_day": "0.62"
+    },
+    "54": {
+     "price": "2.50",
+     "sold": 4,
+     "per_day": "0.50"
+    },
+    "55": {
+     "price": "2.75",
+     "sold": 0,
+     "per_day": "0.00"
+    },
+    "58": {
+     "price": "2.50",
+     "sold": 0,
+     "per_day": "0.00"
+    }
+   }
+  }
+ },
+ "stock": {
+  "ok": true,
+  "data": {
+   "slots": {
+    "11": {
+     "product": "DEMO-COKE-20",
+     "on_hand": 1,
+     "loaded": 9,
+     "sold": 8,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-05T17:00:00+00:00"
+     },
+     "unit_cost": "1.45"
+    },
+    "13": {
+     "product": "DEMO-DIETCOKE-20",
+     "on_hand": 1,
+     "loaded": 7,
+     "sold": 6,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.45"
+    },
+    "16": {
+     "product": "DEMO-ZERO-20",
+     "on_hand": 2,
+     "loaded": 6,
+     "sold": 4,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.45"
+    },
+    "17": {
+     "product": "DEMO-SPRITE-20",
+     "on_hand": 2,
+     "loaded": 6,
+     "sold": 4,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.40"
+    },
+    "22": {
+     "product": "DEMO-BUBLY-STRAW-12",
+     "on_hand": 3,
+     "loaded": 8,
+     "sold": 5,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "0.68"
+    },
+    "24": {
+     "product": "DEMO-BUBLY-PALOMA-12",
+     "on_hand": 6,
+     "loaded": 8,
+     "sold": 2,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "0.63"
+    },
+    "25": {
+     "product": "DEMO-TOPO-16G",
+     "on_hand": 4,
+     "loaded": 7,
+     "sold": 3,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.20"
+    },
+    "28": {
+     "product": "DEMO-VW-20",
+     "on_hand": 4,
+     "loaded": 6,
+     "sold": 2,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.30"
+    },
+    "31": {
+     "product": "DEMO-PEPSI-20",
+     "on_hand": 0,
+     "loaded": 7,
+     "sold": 7,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": null
+    },
+    "33": {
+     "product": "DEMO-DEW-20",
+     "on_hand": 2,
+     "loaded": 9,
+     "sold": 7,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-05T17:00:00+00:00"
+     },
+     "unit_cost": "1.35"
+    },
+    "36": {
+     "product": "DEMO-DRPEPPER-20",
+     "on_hand": 2,
+     "loaded": 6,
+     "sold": 4,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.40"
+    },
+    "37": {
+     "product": "DEMO-RB-250",
+     "on_hand": 5,
+     "loaded": 13,
+     "sold": 8,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-05T17:00:00+00:00"
+     },
+     "unit_cost": "1.70"
+    },
+    "41": {
+     "product": "DEMO-MONSTER-16",
+     "on_hand": 1,
+     "loaded": 8,
+     "sold": 7,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.75"
+    },
+    "44": {
+     "product": "DEMO-SNAPPLE-16",
+     "on_hand": 5,
+     "loaded": 6,
+     "sold": 1,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.15"
+    },
+    "46": {
+     "product": "DEMO-PROTEIN-11",
+     "on_hand": 4,
+     "loaded": 6,
+     "sold": 2,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "2.60"
+    },
+    "47": {
+     "product": "DEMO-RECESS-12",
+     "on_hand": 5,
+     "loaded": 8,
+     "sold": 3,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "0.95"
+    },
+    "52": {
+     "product": "DEMO-BAJA-20",
+     "on_hand": 2,
+     "loaded": 7,
+     "sold": 5,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.40"
+    },
+    "54": {
+     "product": "DEMO-COKE-20",
+     "on_hand": 2,
+     "loaded": 6,
+     "sold": 4,
+     "lost": 0,
+     "since": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "last_moved": {
+      "$datetime": "2026-12-03T15:00:00+00:00"
+     },
+     "unit_cost": "1.45"
+    }
+   },
+   "closet": [
+    {
+     "product": "DEMO-BAJA-20",
+     "units": 5,
+     "unit_cost": "1.40"
+    },
+    {
+     "product": "DEMO-BUBLY-PALOMA-12",
+     "units": 4,
+     "unit_cost": "0.63"
+    },
+    {
+     "product": "DEMO-BUBLY-STRAW-12",
+     "units": 3,
+     "unit_cost": "0.68"
+    },
+    {
+     "product": "DEMO-COKE-20",
+     "units": 21,
+     "unit_cost": "1.45"
+    },
+    {
+     "product": "DEMO-DEW-20",
+     "units": 15,
+     "unit_cost": "1.35"
+    },
+    {
+     "product": "DEMO-DIETCOKE-20",
+     "units": 5,
+     "unit_cost": "1.45"
+    },
+    {
+     "product": "DEMO-DRPEPPER-20",
+     "units": 6,
+     "unit_cost": "1.40"
+    },
+    {
+     "product": "DEMO-MONSTER-16",
+     "units": 4,
+     "unit_cost": "1.75"
+    },
+    {
+     "product": "DEMO-PEPSI-20",
+     "units": 5,
+     "unit_cost": "1.35"
+    },
+    {
+     "product": "DEMO-PROTEIN-11",
+     "units": 6,
+     "unit_cost": "2.60"
+    },
+    {
+     "product": "DEMO-RB-250",
+     "units": 11,
+     "unit_cost": "1.70"
+    },
+    {
+     "product": "DEMO-RECESS-12",
+     "units": 4,
+     "unit_cost": "0.95"
+    },
+    {
+     "product": "DEMO-SNAPPLE-16",
+     "units": 6,
+     "unit_cost": "1.15"
+    },
+    {
+     "product": "DEMO-SPRITE-20",
+     "units": 6,
+     "unit_cost": "1.40"
+    },
+    {
+     "product": "DEMO-TOPO-16G",
+     "units": 5,
+     "unit_cost": "1.20"
+    },
+    {
+     "product": "DEMO-VW-20",
+     "units": 6,
+     "unit_cost": "1.30"
+    },
+    {
+     "product": "DEMO-ZERO-20",
+     "units": 6,
+     "unit_cost": "1.45"
+    }
+   ],
+   "warnings": []
+  }
+ },
+ "counts": {
+  "ok": true,
+  "data": {
+   "44": {
+    "count_id": "demo-photo-1",
+    "counted_at": {
+     "$datetime": "2026-12-08T15:00:00+00:00"
+    },
+    "source": "photo",
+    "product": "Snapple 16 oz",
+    "units_counted": 5,
+    "exact": false,
+    "price_on_tag": {
+     "$decimal": "2.50"
+    },
+    "note": null,
+    "sold_since": 0,
+    "on_hand": 5
+   },
+   "55": {
+    "count_id": "demo-photo-1",
+    "counted_at": {
+     "$datetime": "2026-12-08T15:00:00+00:00"
+    },
+    "source": "photo",
+    "product": "Sparkling water 16 oz (brand not readable)",
+    "units_counted": 4,
+    "exact": false,
+    "price_on_tag": {
+     "$decimal": "2.00"
+    },
+    "note": null,
+    "sold_since": 0,
+    "on_hand": 4
+   }
+  }
+ },
+ "spend": {
+  "ok": true,
+  "data": {
+   "model": {
+    "runs": 5,
+    "total": {
+     "$decimal": "1.53"
+    },
+    "last_7_days": {
+     "$decimal": "1.53"
+    },
+    "unpriced": 0
+   },
+   "drinks": {
+    "paid": {
+     "$decimal": "349.20"
+    },
+    "fulfilled": 2,
+    "pending": 1,
+    "midweek": 1
+   }
+  }
+ },
+ "visits": {
+  "ok": true,
+  "data": {
+   "browsers": 5,
+   "browsers_7_days": 4,
+   "sign_ins": 9,
+   "visits": 31,
+   "visits_7_days": 12,
+   "since": {
+    "$datetime": "2026-12-02T16:00:00+00:00"
+   }
+  }
+ },
+ "money": {
+  "ok": true,
+  "data": {
+   "opened": true,
+   "opening_at": {
+    "$datetime": "2026-12-02T15:00:00+00:00"
+   },
+   "opening": "600.00",
+   "capital": "0.00",
+   "takings": "212.00",
+   "tax_set_aside": "15.70",
+   "receipts": "349.20",
+   "receipt_lines": 23,
+   "visit_fees": "25.00",
+   "visits": 1,
+   "tokens": "1.62",
+   "tax_remitted": "0.00",
+   "spent": "375.82",
+   "adjustments": "0.00",
+   "balance": "436.18",
+   "tax_owed": "15.70",
+   "spendable": "420.48",
+   "spendable_after_pending": "329.58",
+   "notes": [
+    "3 model-call entries totalling 1.04 are from before the opening on 2026-12-02: development spend, not in the balance"
+   ],
+   "committed": {
+    "requests": 1,
+    "unsettled": 0,
+    "max": "90.90",
+    "unpriced_lines": 0
+   },
+   "pnl": {
+    "units_sold": 82,
+    "units_costed": 82,
+    "revenue_ex_tax": "196.30",
+    "cost_of_sales": "114.91",
+    "gross_margin": "81.39",
+    "shrinkage": "0.00",
+    "shrinkage_complete": true,
+    "visit_fees": "25.00",
+    "tokens": "1.62",
+    "net": "54.77",
+    "inventory": "234.29",
+    "inventory_complete": true
+   }
+  }
+ },
+ "purchase_requests": {
+  "ok": true,
+  "data": [
+   {
+    "request_id": "pr-002",
+    "submitted_at": {
+     "$datetime": "2026-12-07T14:40:00+00:00"
+    },
+    "off_cycle": false,
+    "status": "pending",
+    "total_paid": null,
+    "decision_note": null,
+    "lines": 0,
+    "units_loaded": 0,
+    "unavailable": 0,
+    "alternates": 0
+   },
+   {
+    "request_id": "pr-003",
+    "submitted_at": {
+     "$datetime": "2026-12-04T21:00:00+00:00"
+    },
+    "off_cycle": true,
+    "status": "fulfilled",
+    "total_paid": {
+     "$decimal": "54.00"
+    },
+    "decision_note": "Midweek visit done",
+    "lines": 3,
+    "units_loaded": 7,
+    "unavailable": 0,
+    "alternates": 0
+   },
+   {
+    "request_id": "pr-001",
+    "submitted_at": {
+     "$datetime": "2026-12-02T19:30:00+00:00"
+    },
+    "off_cycle": false,
+    "status": "fulfilled",
+    "total_paid": {
+     "$decimal": "295.20"
+    },
+    "decision_note": "Filled; 2 of 20 selections had no seller",
+    "lines": 20,
+    "units_loaded": 126,
+    "unavailable": 2,
+    "alternates": 1
+   }
+  ]
+ },
+ "catalog_requests": {
+  "ok": true,
+  "data": [
+   {
+    "id": 10,
+    "requested_at": {
+     "$datetime": "2026-12-08T14:00:00+00:00"
+    },
+    "name": "Snapple Peach Tea",
+    "size": "16 oz bottle",
+    "status": "pending",
+    "sku": null,
+    "decision_note": null
+   },
+   {
+    "id": 9,
+    "requested_at": {
+     "$datetime": "2026-12-03T16:00:00+00:00"
+    },
+    "name": "Monster Ultra White",
+    "size": "16 oz can",
+    "status": "pending",
+    "sku": null,
+    "decision_note": null
+   },
+   {
+    "id": 8,
+    "requested_at": {
+     "$datetime": "2026-12-01T15:00:00+00:00"
+    },
+    "name": "Iced Energy Peach",
+    "size": "12 oz can",
+    "status": "pending",
+    "sku": null,
+    "decision_note": null
+   },
+   {
+    "id": 7,
+    "requested_at": {
+     "$datetime": "2026-11-23T12:00:00+00:00"
+    },
+    "name": "Vita Coco Coconut Water",
+    "size": "11.1 oz carton",
+    "status": "rejected",
+    "sku": null,
+    "decision_note": "Not available from the distributor."
+   },
+   {
+    "id": 6,
+    "requested_at": {
+     "$datetime": "2026-11-22T17:00:00+00:00"
+    },
+    "name": "Recess Lime",
+    "size": "12 oz can",
+    "status": "approved",
+    "sku": "DEMO-RECESS-12",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 5,
+    "requested_at": {
+     "$datetime": "2026-11-21T16:00:00+00:00"
+    },
+    "name": "Mountain Dew Baja Blast",
+    "size": "20 oz bottle",
+    "status": "approved",
+    "sku": "DEMO-BAJA-20",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 4,
+    "requested_at": {
+     "$datetime": "2026-11-20T13:00:00+00:00"
+    },
+    "name": "Red Bull",
+    "size": "250 ml can",
+    "status": "approved",
+    "sku": "DEMO-RB-250",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 3,
+    "requested_at": {
+     "$datetime": "2026-11-19T15:00:00+00:00"
+    },
+    "name": "Premier Protein Chocolate",
+    "size": "11 oz carton",
+    "status": "approved",
+    "sku": "DEMO-PROTEIN-11",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 2,
+    "requested_at": {
+     "$datetime": "2026-11-19T15:00:00+00:00"
+    },
+    "name": "Topo Chico Sparkling Water",
+    "size": "16 oz glass bottle",
+    "status": "approved",
+    "sku": "DEMO-TOPO-16G",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 1,
+    "requested_at": {
+     "$datetime": "2026-11-18T14:00:00+00:00"
+    },
+    "name": "GORGIE Electrolyte Water",
+    "size": "20 oz bottle",
+    "status": "approved",
+    "sku": "DEMO-GORGIE-20",
+    "decision_note": "Approved."
+   }
+  ]
+ },
+ "catalog_counts": {
+  "ok": true,
+  "data": {
+   "total": 10,
+   "by_status": {
+    "pending": 3,
+    "approved": 6,
+    "rejected": 1,
+    "sending": 0,
+    "unknown": 0
+   },
+   "open": 3,
+   "cap": 25,
+   "left": 22,
+   "unsettled": 0
+  }
+ },
+ "products": {
+  "ok": true,
+  "data": {
+   "catalog": {
+    "DEMO-COKE-20": {
+     "name": "Coca-Cola 20 oz",
+     "line": "Coca-Cola",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    "DEMO-DIETCOKE-20": {
+     "name": "Diet Coke 20 oz",
+     "line": "Diet Coke",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    "DEMO-ZERO-20": {
+     "name": "Coke Zero 20 oz",
+     "line": "Coke Zero",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    "DEMO-SPRITE-20": {
+     "name": "Sprite 20 oz",
+     "line": "Sprite",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    "DEMO-PEPSI-20": {
+     "name": "Pepsi 20 oz",
+     "line": "Pepsi",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    "DEMO-DEW-20": {
+     "name": "Mountain Dew 20 oz",
+     "line": "Mountain Dew",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    "DEMO-DRPEPPER-20": {
+     "name": "Dr Pepper 20 oz",
+     "line": "Dr Pepper",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    "DEMO-BAJA-20": {
+     "name": "Mountain Dew Baja Blast 20 oz",
+     "line": "Mountain Dew",
+     "flavor": "Baja Blast",
+     "size": "20 oz bottle"
+    },
+    "DEMO-BUBLY-STRAW-12": {
+     "name": "bubly Strawberry 12 oz",
+     "line": "bubly",
+     "flavor": "Strawberry",
+     "size": "12 oz can"
+    },
+    "DEMO-BUBLY-PALOMA-12": {
+     "name": "bubly Paradise Paloma 12 oz",
+     "line": "bubly",
+     "flavor": "Paradise Paloma",
+     "size": "12 oz can"
+    },
+    "DEMO-RECESS-12": {
+     "name": "Recess Lime 12 oz",
+     "line": "Recess",
+     "flavor": "Lime",
+     "size": "12 oz can"
+    },
+    "DEMO-TOPO-16G": {
+     "name": "Topo Chico 16 oz glass",
+     "line": "Topo Chico",
+     "flavor": null,
+     "size": "16 oz glass bottle"
+    },
+    "DEMO-VW-20": {
+     "name": "vitaminwater dark 20 oz",
+     "line": "vitaminwater",
+     "flavor": "dark",
+     "size": "20 oz bottle"
+    },
+    "DEMO-RB-250": {
+     "name": "Red Bull 250 ml",
+     "line": "Red Bull",
+     "flavor": null,
+     "size": "250 ml can"
+    },
+    "DEMO-MONSTER-16": {
+     "name": "Monster 16 oz",
+     "line": "Monster",
+     "flavor": null,
+     "size": "16 oz can"
+    },
+    "DEMO-SNAPPLE-16": {
+     "name": "Snapple 16 oz",
+     "line": "Snapple",
+     "flavor": null,
+     "size": "16 oz bottle"
+    },
+    "DEMO-PROTEIN-11": {
+     "name": "Premier Protein Chocolate 11 oz",
+     "line": "Premier Protein",
+     "flavor": "Chocolate",
+     "size": "11 oz carton"
+    },
+    "DEMO-GORGIE-20": {
+     "name": "GORGIE Electrolyte Water 20 oz",
+     "line": "GORGIE",
+     "flavor": null,
+     "size": "20 oz bottle"
+    }
+   },
+   "overrides": {}
+  }
+ },
+ "syncs": {
+  "status": "ok",
+  "started_at": "2026-12-02T15:30:00+00:00",
+  "rounds": 162,
+  "last_round_at": "2026-12-09T14:00:00+00:00",
+  "next_round_at": "2026-12-09T15:00:00+00:00",
+  "results": [
+   {
+    "job": "slots_check",
+    "started_at": "2026-12-09T14:00:00+00:00",
+    "seconds": 0.4,
+    "exit_code": 0,
+    "outcome": "ok"
+   },
+   {
+    "job": "sync_history",
+    "started_at": "2026-12-09T14:00:00+00:00",
+    "seconds": 3.1,
+    "exit_code": 0,
+    "outcome": "ok"
+   },
+   {
+    "job": "sync_requests",
+    "started_at": "2026-12-09T14:00:00+00:00",
+    "seconds": 2.2,
+    "exit_code": 0,
+    "outcome": "ok"
+   },
+   {
+    "job": "sync_catalog",
+    "started_at": "2026-12-09T14:00:00+00:00",
+    "seconds": 1.6,
+    "exit_code": 0,
+    "outcome": "ok"
+   },
+   {
+    "job": "sync_product_requests",
+    "started_at": "2026-12-09T14:00:00+00:00",
+    "seconds": 1.1,
+    "exit_code": 0,
+    "outcome": "ok"
+   }
+  ]
+ },
+ "attention": [
+  {
+   "level": "warn",
+   "text": "Tool calls in the last 24 hours: 1 refused and 1 failed. See Tool calls below."
+  }
+ ],
+ "demo": true
+}
