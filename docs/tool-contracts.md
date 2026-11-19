@@ -145,6 +145,8 @@ should do next.
 - **Cost**: database queries only.
 - **Failure behavior**:
   - No `start` and the ledger not opened: `success: false`, naming the command.
+  - Model calls before the opening are development spend: left out of token spend and net, with a
+    note giving the amount. With no opening, every model call is. Other lines cover the whole window.
   - `end` before `start`: `success: false`.
   - Units sold that no receipt can cost: `cost_of_sales_complete: false` and a note saying how
     many. Cost of sales is never "unknown" as a whole. Units sold across a product change the
