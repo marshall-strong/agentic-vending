@@ -1,3 +1,4 @@
 # Development: the runtime packages plus the test runner
 -r requirements.txt
 pytest==8.*
+pytest-xdist==3.*

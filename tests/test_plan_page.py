@@ -124,7 +124,7 @@ def test_server_answers_local_hosts_only_and_sends_a_strict_csp(tmp_path, schema
     monkeypatch.setattr(plan_page, "connect", lambda: open_in(*schema_url))
     root = rounds(tmp_path)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), plan_page._handler(root, use_db=False))
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
     try:
         with urllib.request.urlopen(base + "/") as reply:

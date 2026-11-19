@@ -195,7 +195,7 @@ def server(schema_url, monkeypatch):
     url, _ = schema_url
     monkeypatch.setattr(dx, "connect", lambda: psycopg.connect(url, autocommit=True, options=dx.OPTIONS))
     httpd = dx.ThreadingHTTPServer(("127.0.0.1", 0), dx.Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
     yield httpd.server_address[1]
     httpd.shutdown()
     httpd.server_close()

@@ -396,7 +396,7 @@ def get(port: int, path: str, host: str = "127.0.0.1") -> tuple[int, str]:
 def test_the_server_answers_only_a_local_host(conn, read_only):
     seed(conn)
     httpd = pr.ThreadingHTTPServer(("127.0.0.1", 0), pr.Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
     port = httpd.server_address[1]
     try:
         assert get(port, "/", host="evil.example")[0] == 403
