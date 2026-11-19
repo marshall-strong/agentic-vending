@@ -8,7 +8,7 @@ import pytest
 from tests.conftest import store_poll
 from tests.test_machine_state import fulfilled
 from vending.tools.machine_state import get_machine_state
-from vending import config
+from vending import config, stock
 from vending.wildcard_trial import (DROP, EXTEND, MAX_POLL_GAP, PASS, PRICE_TEST, PROMOTED, TOO_EARLY, UNKNOWN,
                                     SlotRecord, judge, slot_record)
 
@@ -486,6 +486,11 @@ def test_a_sale_the_counters_cant_split_across_a_swap_leaves_the_trial_unknown(c
     _swap_with_a_sale_in_its_window(conn, new_price=250)
     t = _swap_trial(conn)
     assert t.verdict == UNKNOWN and "nothing can split them" in t.reason, t
+    # The replay carries that unit as unattributed (#173), not as AAA's: AAA's 1 unit may still be there.
+    counted = stock.stock(conn, until=datetime(2026, 10, 24, 2, tzinfo=timezone.utc))
+    assert [(x.product, x.units) for x in counted.sales if x.slot == "15" and x.unattributed] == [(None, 1)]
+    c15 = next(c for c in counted.slots if c.slot == "15")
+    assert (c15.product, c15.units, c15.at_most) == ("AAA", 0, 1)
 
 
 def test_an_unsplit_sale_at_a_swap_whose_new_stock_has_no_known_cost_leaves_the_trial_unknown(conn):

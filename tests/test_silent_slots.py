@@ -1,11 +1,13 @@
 """Silent slots (`vending.wildcard_trial.silent_slots`): where a passing trial may be promoted to."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from tests.conftest import store_poll
 from tests.test_machine_state import fulfilled
 from vending import counters, stock
-from vending.wildcard_trial import SILENT_DAYS, pulls, silent_slots
+from vending.wildcard_trial import (CONFLICT, PASS, Silent, SilentReport, SlotRecord, Trial, SILENT_DAYS,
+                                    _stock_evidence, propose, pulls, silent_slots)
 
 UTC = timezone.utc
 R0 = datetime(2026, 10, 16, 20, tzinfo=UTC)       # a Friday visit, 4 PM Eastern
@@ -335,3 +337,39 @@ def test_the_planner_gets_the_verdict_and_the_silent_slots(conn):
     config.set_value(conn, "wildcard_slot", "15", "test")
     gathered = planning.gather(conn, [], NOW)
     assert (gathered.current.wildcard_verdict, gathered.current.silent) == ("pass", frozenset({"16"}))
+
+
+# 18 was 3 units of OLD; at a swap it took 6 of FFF, and 3 units sold in a window the replay can't split
+# (#173): on hand is 3 to 6 of FFF.
+SPLIT = stock.SlotCount(slot="18", product="FFF", units=3, unit_cost=None, loaded=6, sold=0, lost=0,
+                        since=R0, unattributed=3, at_most=6)
+
+
+def _look(units, product="FFF"):
+    return {"count_id": "c1", "counted_at": VISIT + timedelta(days=1), "source": "door", "product": product,
+            "units_counted": units}
+
+
+def test_a_count_anywhere_in_the_range_unattributed_sales_leave_agrees_with_the_receipts():
+    for units in (3, 5, 6):
+        evidence, doubt = _stock_evidence(SPLIT, WINDOW, [], [(R0, 6)], _look(units))
+        assert doubt is None and evidence.endswith(f"{units} units of FFF"), (units, evidence)
+    evidence, doubt = _stock_evidence(SPLIT, WINDOW, [], [(R0, 6)], _look(7))
+    assert evidence == CONFLICT and "holds 3 to 6 of FFF" in doubt
+
+
+def test_a_slot_unattributed_sales_may_have_emptied_is_unconfirmed_not_empty():
+    maybe = replace(SPLIT, units=0)
+    evidence, doubt = _stock_evidence(maybe, WINDOW, [], [(R0, 6)], None)
+    assert evidence is None and "holds 0 to 6 of FFF" in doubt and "may be empty" in doubt
+    gone = replace(SPLIT, units=0, at_most=0)
+    assert _stock_evidence(gone, WINDOW, [], [(R0, 6)], None) == (None, "the receipts say it is empty")
+    assert _stock_evidence(maybe, WINDOW, [], [(R0, 6)], _look(2))[1] is None   # a count settles it
+
+
+def test_a_promotion_pulls_the_range_the_receipts_allow():
+    trial = Trial(SlotRecord("15", "AAA", R0, 5, 5, None), "15", False, PASS, "passes", 300)
+    report = SilentReport(WINDOW, (Silent("18", "FFF", 4, R0, None, "loaded"),), (), ())
+    assert propose(trial, report, {"18": SPLIT}, 650).pulls == "FFF (3 to 6 units to the closet)"
+    exact = replace(SPLIT, unattributed=0, at_most=None)
+    assert propose(trial, report, {"18": exact}, 650).pulls == "FFF (3 units to the closet)"

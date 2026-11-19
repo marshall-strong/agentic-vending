@@ -726,21 +726,30 @@ def _stock_evidence(c: stock.SlotCount, start: datetime, at_visit: list[tuple[st
     units the receipts say are there. A count that disagrees on either is a
     conflict, not a confirmation: nobody could say what a promotion would pull.
     A load at any other visit, an off-cycle one included, confirms nothing.
+
+    Sales at a product change the replay can't split (`stock.SlotCount.unattributed`) leave the receipts
+    saying it holds `c.units` to `c.at_most`: a count anywhere in that range agrees with them.
     """
-    if c.units <= 0:
+    most = c.units if c.at_most is None else c.at_most
+    if most <= 0:
         return None, "the receipts say it is empty"
+    held = str(c.units) if most == c.units else f"{c.units} to {most}"
     last_load = max((at for at, _ in loads), default=None)
     if look is not None and look["counted_at"] >= start and (last_load is None or look["counted_at"] >= last_load):
         when = f"{look['source']} count {look['count_id']} on {look['counted_at']:%Y-%m-%d}"
         if look["units_counted"] == 0:
             return None, f"a person counted it empty on {look['counted_at']:%Y-%m-%d}"
         named = (look["product"] or "").strip()
-        if named.casefold() != c.product.casefold() or look["units_counted"] != c.units:
+        if (named.casefold() != c.product.casefold() or look["units_counted"] is None
+                or not c.units <= look["units_counted"] <= most):
             saw = "an uncounted number" if look["units_counted"] is None else look["units_counted"]
             return CONFLICT, (f"the {when} saw {saw} of {named or 'no product named'}, but the receipts say it "
-                              f"holds {c.units} of {c.product}; a door count naming the SKU, or a corrected "
+                              f"holds {held} of {c.product}; a door count naming the SKU, or a corrected "
                               "receipt, settles it")
         return f"{when}: {look['units_counted']} units of {c.product}", None
+    if c.units <= 0:
+        return None, (f"the receipts say it holds {held} of {c.product}: {c.unattributed} sold at its last product "
+                      "change may have been either product's, so it may be empty; a door count of it confirms it")
     others = sorted({sku for sku, _ in at_visit if sku != c.product})
     if others:
         return CONFLICT, (f"the last Friday visit's receipt loaded {', '.join(others)} into it, but the receipts "
@@ -837,9 +846,11 @@ def propose(t: Trial | None, report: SilentReport, counts: dict[str, stock.SlotC
     if held is None or held.product != target.product or held.units <= 0:
         return None   # it would promise to pull a SKU or quantity nothing confirms
     price = "" if t.price_cents is None else f" at ${t.price_cents // 100}.{t.price_cents % 100:02d}"
+    # Sales at its last product change the replay can't split leave its stock a range (`stock.SlotCount.at_most`).
+    units = held.units if held.at_most in (None, held.units) else f"{held.units} to {held.at_most}"
     return Proposal(
         target.slot, r.product, t.price_cents,
-        f"{held.product} ({held.units} units to the closet)",
+        f"{held.product} ({units} units to the closet)",
         f"switch slot {t.slot} to the next product to test in the same plan",
         (f"{r.units_sold} sold over {r.class_days_in_stock} in-stock class days{price}; slot {target.slot} sold "
          f"nothing since {report.window_start:%a %d %b} (stock confirmed: {target.evidence}). Load {r.product} "
