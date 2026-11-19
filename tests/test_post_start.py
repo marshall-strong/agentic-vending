@@ -90,8 +90,9 @@ def leaked(text: str, *extra: int) -> list[str]:
     figure (a machine-wide total), as a number or as dollars."""
     figures = (SENTINEL_PRICE, SENTINEL_UNITS, SENTINEL_CENTS, *extra)
     patterns = [rf"(?<![\w.]){n}(?![\w])" for n in figures]
-    patterns += [re.escape(f"{c / 100:,.2f}") for c in (SENTINEL_PRICE, SENTINEL_CENTS, *extra)]
-    patterns += [re.escape(f"{c / 100:.2f}") for c in (SENTINEL_PRICE, SENTINEL_CENTS, *extra)]
+    # Dollars stand alone too: "59.878255" in a clock time is not $9.87.
+    patterns += [rf"(?<![\w.,]){re.escape(f'{c / 100:,.2f}')}(?![\w])" for c in (SENTINEL_PRICE, SENTINEL_CENTS, *extra)]
+    patterns += [rf"(?<![\w.,]){re.escape(f'{c / 100:.2f}')}(?![\w])" for c in (SENTINEL_PRICE, SENTINEL_CENTS, *extra)]
     return [p for p in patterns if re.search(p, text)]
 
 
