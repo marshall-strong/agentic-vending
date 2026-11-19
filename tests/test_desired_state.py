@@ -15,11 +15,12 @@ psycopg = pytest.importorskip("psycopg")
 from tests.conftest import store_poll  # noqa: E402
 from tests.test_ledger import UNIT_COST, deliver, open_ledger  # noqa: E402
 from tests.test_server import call, db  # noqa: E402,F401  (db is a fixture)
+from tests.test_sync_requests import BODY, fulfilled, receipt  # noqa: E402
 from vending import ledger, planning, server  # noqa: E402
 from vending.bridge import Bridge  # noqa: E402
 from vending.config import set_halted, set_value  # noqa: E402
 from tests.conftest import TEST_SLOTS  # noqa: E402
-from vending.purchase_requests import record as record_request  # noqa: E402
+from vending.purchase_requests import record as record_request, store  # noqa: E402
 from vending.sync_catalog import sync as catalog_sync  # noqa: E402
 from vending.tools import desired_state as schema  # noqa: E402
 from vending.tools.preview import preview_desired_state  # noqa: E402
@@ -293,6 +294,22 @@ def test_a_price_below_the_floor_is_refused_with_the_plan_still_shown(db, fake):
     assert codes(reply) == ["below_floor"] and "1.25" in reply.refusals[0].message
     assert len(reply.lines) == 1 and reply.cost is not None
     assert "Plan refused: 1 problem (below_floor)" in reply.message
+
+
+def test_the_floor_clears_the_dearest_units_staying_not_their_average(db, fake):  # noqa: F811
+    """A price must clear every cost a slot carries (`slot_floor_cents`), so units staying at two
+    costs set two floors, not one at their average (#172 item 2)."""
+    ready(db, capacity=15)
+    stocked(db)                                     # 8 on hand at 1237/11 cents -> $1.25 floor
+    record_request(db, "r2", NOW - timedelta(days=1), False, BODY)
+    store(db, "r2", fulfilled("r2", receipt(units_bought=2, units_per_pack=2, total_paid="6.00", unit_cost_paid="3.00",
+                                            units_loaded=2, units_lost=0, loss_note=None, units_to_back_stock=0,
+                                            resolved_at="2026-11-08T18:00:00Z"), total_paid="6.00"), NOW)
+    # 2 more at $3.00 -> $3.25 floor. Their average, 1499.6/10 cents, would floor at $1.65.
+    reply = preview_desired_state(db, desired(restock_15(fill_to=11)), fake.client(), NOW)
+    assert codes(reply) == ["below_floor"] and "3.25" in reply.refusals[0].message
+    [floor] = reply.floors
+    assert sorted(p.floor for p in floor.parts) == ["1.25", "1.25", "3.25"]   # on hand twice, back stock once
 
 
 def test_every_problem_is_reported_at_once(db, fake):  # noqa: F811
