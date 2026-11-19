@@ -25,6 +25,65 @@ names the host and user); the errors are in the log. The page is built from the 
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
 
+**Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
+worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a
+minute from 2:45 PM to 7 PM Eastern. Why: the machine's counters are cumulative and are read only when
+polled, so a sale between the last read before our visit and the first one after it can't be told apart
+(old product or new) when the price didn't change. A read taken **while the door is open** settles it:
+no unit sells then, so everything before that read is the old product and everything after it is the
+new one, and the receipt's door times prove the read fell inside the visit. A visit can take only a few
+minutes, so the reads have to be close together for one to land inside it.
+
+| Setting | Default | |
+|---|---|---|
+| `VISIT_POLL_EVERY_MINUTES` | `1` | Minutes between reads: `0` turns them off, otherwise a number from `1` to `1440` (a day). Under a minute, over a day, `inf` or text is a wrong value (`1e12` would overflow a date) |
+| `VISIT_POLL_FROM` | `14:45` | First read, Eastern time (the window follows the wall clock through daylight saving) |
+| `VISIT_POLL_TO` | `19:00` | No read from this time on |
+| `VISIT_POLL_DATES` | empty | Comma-separated ISO dates (Eastern), such as `2026-11-30`. These days get the reads too, with the same window and the same stop rule as a Friday. For a visit of ours that isn't on a Friday, the day-one fill. Remove the date afterwards (a past date does nothing) |
+
+A wrong value turns the reads off, with a line in the log; it never stops the worker. The bridge stores
+every read in its history, so after each read the worker copies the two latest UTC days of history into
+our database (`vending.sync_history`, idempotent) and the read reaches the stock replay like the hourly
+ones. The worker keeps the session id the bridge names in the `X-Poll-Session-Id` header of the read and
+checks that the copy stored a usable row for it (checksum passed, our device). This check only logs. If
+no such row is found (the history couldn't be listed or fetched, the checksum failed, the poll isn't in
+the listing, or the header's id is not the history's id), the log says "visit reads: storage not
+confirmed ..." and the read is still a read: it does not count toward the back-off. When it is stored,
+the log says "visit reads: stored read <session id>". Nothing in the repo shows that the header's id is
+the id the history lists (`docs/snapshot-archive.md` says only that it "identifies the serial
+conversation", for correlating with the bridge's logs), and no one has checked it against the live
+bridge yet. If every read says "storage not confirmed" while polls do appear in the history, that is
+the first suspect, and nothing is lost: the stop rule and the stock replay use the stored rows'
+`started_at`, not the header. Without a header, the check falls back to a usable poll of ours taken at or
+after the moment the read was sent; an earlier row is an observation at its own time, and not this read.
+Each read also logs `cached=` and `age_seconds=` from `X-Poll-Cached` and `X-Poll-Age-Seconds`. A response
+with `cached=true` is another caller's recent document: it counts for the stop rule and for attributing a
+read to our visit only by the `started_at` of the row it is stored as, like any other row.
+
+The window and the spacing are checked again when the read is sent, after the receipts have been read
+back: no read goes out after `VISIT_POLL_TO`, and none within an interval of the last one actually sent.
+
+A read holds the bridge's one serial line, and anyone else's poll gets a `409` while it runs, so:
+
+- one read at a time: a read is never started while the last one is still running;
+- one try each: a `409`, a timeout or a bridge that is down is logged ("visit reads: skipped ...")
+  and skipped, with no retry, and the next try is a whole interval later;
+- after **3 failures in a row**, 5 minutes pass before the next try, counted from the POST that failed
+  (from the failure, when no POST was sent), and again after each further failure, until one works. A
+  failure is an error status, a timeout, a bridge that is down, or a step that broke; a read that went
+  out but whose row is "not confirmed" is not one;
+- **a failed read never fails the round or `/health`.** Reads are not jobs of the round and appear in
+  neither. Only the log shows them.
+
+Each step first re-reads our pending purchase requests (plain GETs, not machine reads), so a receipt
+is seen within a minute. The reads stop for the day once a request of ours was fulfilled that day and a
+read taken after its door closed (the close minute is over) is stored. A receipt with no door times is
+dated by `fulfilled_at`. David set no limit on how often: on 12 Nov he said a read about every 10 minutes "won't break
+anything", and named a poll every 15 seconds as what would get our container switched off. A read
+every minute is Kevin's choice (19 Nov). Only Fridays and the dates in `VISIT_POLL_DATES`: a midweek
+visit has no day the data can tell us, since a pending request can be filled on any day, so those get
+the hourly reads only unless a person lists the day.
+
 **Never point an HTTP liveness probe at `/health`.** Its `503` means a sync failed, for example
 while the bridge is unreachable, not that the worker is stuck, so Azure would restart a healthy
 container every round and the restarts would fix nothing. The deploy script sets no probes, so

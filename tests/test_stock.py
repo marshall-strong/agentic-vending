@@ -933,3 +933,55 @@ def test_unattributed_sales_say_they_are_costed_at_the_oldest_units_taken():
     stock = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 250)])
     unsplit = [w for w in stock.warnings if "can't split" in w]
     assert unsplit and all("oldest units taken from" in w and "average" not in w for w in unsplit)
+
+
+# A read taken while the door is open (#172). The counters are cumulative and read only when polled, so
+# when a product swap keeps the price, a unit sold between the last read before the visit and the first
+# one after it can't be told apart. No unit sells with the door open, so a read inside the visit puts
+# everything before it with the old product and everything after it with the new one. The receipt's
+# door times prove the read fell inside the visit. 15:00 is T0, door open 15:12, close 15:31.
+
+def minutes(m):
+    return T0 + timedelta(minutes=m)
+
+
+def same_price_swap():
+    """ARIZONA (10 at 50c) loaded at 14:00. The worker opens the door at 15:12, pulls the 8 left, loads 10 REDBULL
+    (150c each) and closes the door at 15:31. Both sell at $2.00."""
+    return with_door([line(sku="ARIZONA", units_loaded=10, total_paid="5.00", at=-1),
+                      line(sku="REDBULL", units_loaded=10, total_paid="15.00", units_pulled=8, pulled_sku="ARIZONA",
+                           slot_reassigned=True, at=0.4, request_id="r2")], opened=12 / 60, closed=31 / 60)
+
+
+# The lifetime units at each minute from T0. One unit sells at 15:05 and one at 15:11, before the door
+# opens; one at 15:35 and one at 15:45, after it closes. None sells with the door open.
+UNITS = {-60: 100, -10: 100, 0: 100, 10: 101, 20: 102, 30: 102, 40: 103, 50: 104, 60: 104}
+
+
+def polled_at(*at_minutes):
+    return [("15", minutes(m), UNITS[m], UNITS[m] * 200, 200) for m in at_minutes]
+
+
+def attributed(stock):
+    return sorted((s.product, s.units, s.cost_cents, s.unattributed_cost_cents) for s in stock.sales)
+
+
+def test_a_read_inside_the_visit_attributes_every_unit_where_hourly_polls_cannot():
+    every_10_minutes = book(same_price_swap(), counters=polled_at(-10, 0, 10, 20, 30, 40, 50, 60))
+    # The 15:20 and 15:30 reads fall while the door is open: the two sales before it are the Arizona the worker
+    # pulled, the two after it the Red Bull that was loaded. Nothing is unknown, and the books balance.
+    assert attributed(every_10_minutes) == [("ARIZONA", 1, 50, None), ("ARIZONA", 1, 50, None),
+                                            ("REDBULL", 1, 150, None), ("REDBULL", 1, 150, None)]
+    assert every_10_minutes.warnings == () and every_10_minutes.shrinkage == ()
+    [slot] = every_10_minutes.slots
+    assert (slot.product, slot.units, slot.sold) == ("REDBULL", 8, 2)
+    assert [(c.product, c.units) for c in every_10_minutes.closet] == [("ARIZONA", 8)]
+
+    # The same sales, polled every 10 minutes but with no read while the door was open: the window from 15:10 to
+    # 15:40 holds the whole visit, and at one price on both sides its 2 units can't be told apart.
+    no_read_inside = book(same_price_swap(), counters=polled_at(-10, 0, 10, 40, 50, 60))
+    # The hourly polls: all 4 units are one window across the visit.
+    hourly = book(same_price_swap(), counters=polled_at(-60, 0, 60))
+    for stock, unknown in ((no_read_inside, 2), (hourly, 4)):
+        assert sum(s.units for s in stock.sales if s.cost_cents is None) == unknown
+        assert any("the counters can't split them" in w for w in stock.warnings)

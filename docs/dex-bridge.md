@@ -53,7 +53,9 @@ python scripts/bridge.py latest --out data/latest.dex
   28 August, and David's poller reads the machine every hour on the hour. Reading
   history costs nothing and never touches the machine. A live poll is about 8.5 seconds
   of serial conversation with a machine that is selling drinks to real people, so
-  `poll` only runs with `--live`, and you should rarely need it.
+  `poll` only runs with `--live`, and you should rarely need it. The one automatic exception is our
+  worker, which reads the machine every minute on Friday afternoons around our visit
+  (`vending/visit_polls.py`, `docs/deploy.md`); a person's `--live` poll then gets a `409` while one runs.
 - **History dates are UTC days.** `--start 2026-10-15` starts at 8 pm on 14 October in
   Rochester (EDT). Both ends are inclusive.
 - **The script cannot submit a purchase request, on purpose.** Submitting spends real

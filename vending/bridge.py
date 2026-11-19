@@ -1,7 +1,8 @@
 """Client for the DEX Bridge, for code that runs unattended.
 
 `scripts/bridge.py` is the command-line tool for people; this is the library the
-sync jobs and the write tools use. It never polls the machine live. The sync
+sync jobs and the write tools use. Only `poll`, which `vending.visit_polls` calls
+around a visit, reads the machine live. The sync
 jobs read stored history and our purchase requests through it, with retries;
 `submit_desired_state` and `request_catalog_product` send their one POST through
 `post`, never retried, and `/health` tells a bad poll from an outage.
@@ -23,12 +24,28 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, NamedTuple
 
 from vending import settings
 
 TIMEOUT_SECONDS = 20
+# A live read takes about 8.5 s, and may wait its turn for the serial line first.
+POLL_TIMEOUT_SECONDS = 30
+# The header a live read names its session in (docs/snapshot-archive.md).
+SESSION_HEADER = "X-Poll-Session-Id"
+# `true` means another caller's recent document, `X-Poll-Age-Seconds` how old it was (docs/snapshot-archive.md).
+CACHED_HEADER, AGE_HEADER = "X-Poll-Cached", "X-Poll-Age-Seconds"
 RETRIES = 4
+
+
+class LiveRead(NamedTuple):
+    """What `Bridge.poll` got: the document, the session id the bridge named (None if it named none), and
+    whether it was another caller's cached document (None if the header was missing or not true/false) and
+    how old it was (None if not given or not a number)."""
+    document: bytes
+    session_id: str | None
+    cached: bool | None = None
+    age_seconds: float | None = None
 
 
 class BridgeError(RuntimeError):
@@ -92,15 +109,43 @@ class Bridge:
         """
         return json.loads(self._once("POST", path, body))
 
-    def _once(self, method: str, path: str, body: dict | None = None) -> bytes:
+    def poll(self) -> LiveRead:
+        """Read the machine now (`POST /api/v1/poll`, about 8.5 s): the document, and the session id
+        the bridge named in its `X-Poll-Session-Id` header (None if it sent none).
+
+        One try, never retried: the read holds the bridge's serial line, so another caller
+        gets a `409` while it runs, and a retry would only keep it busy. The bridge stores
+        the read in its history, which is where `vending.sync_history` copies it from.
+        Raises `BridgeAnswered` for an error status (`409` when the line is busy),
+        `BridgeNoAnswer` for a timeout, and `BridgeUnreachable` when the bridge is down.
+        Only `vending.visit_polls` calls it.
+        """
+        headers: dict[str, str] = {}
+        document = self._once("POST", "/api/v1/poll", expect_json=False, timeout=POLL_TIMEOUT_SECONDS,
+                              headers_out=headers)
+        cached = {"true": True, "false": False}.get(headers.get(CACHED_HEADER.lower(), "").strip().lower())
+        try:
+            age = float(headers[AGE_HEADER.lower()])
+        except (KeyError, ValueError):
+            age = None
+        if age is not None and age != age:      # nan
+            age = None
+        return LiveRead(document, headers.get(SESSION_HEADER.lower()) or None, cached, age)
+
+    def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
+              timeout: float | None = None, headers_out: dict[str, str] | None = None) -> bytes:
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
+        if not expect_json:
+            headers["Accept"] = "text/plain"
         request = urllib.request.Request(self.base_url + path, method=method, headers=headers,
                                          data=None if body is None else json.dumps(body).encode())
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            with urllib.request.urlopen(request, timeout=timeout or TIMEOUT_SECONDS) as response:
                 data = response.read()
+                if headers_out is not None:    # names lower-cased: HTTP header names have no case
+                    headers_out.update({k.lower(): v for k, v in response.headers.items()})
         except urllib.error.HTTPError as error:
             # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
             raise BridgeAnswered(error.code, _start_of_body(error, 300).decode(errors="replace")) from None
@@ -111,10 +156,11 @@ class Bridge:
             # A timeout waiting for the answer, or an answer cut off part way
             # (`IncompleteRead`): either way it was sent and may have run.
             raise BridgeNoAnswer(f"{type(error).__name__}: {error}") from None
-        try:
-            json.loads(data)
-        except ValueError as error:
-            raise BridgeNoAnswer(f"the answer wasn't JSON ({error})") from None
+        if expect_json:
+            try:
+                json.loads(data)
+            except ValueError as error:
+                raise BridgeNoAnswer(f"the answer wasn't JSON ({error})") from None
         return data
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> bytes:

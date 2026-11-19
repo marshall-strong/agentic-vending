@@ -215,6 +215,28 @@ def test_record_twice_keeps_what_the_sync_learned(conn):
     assert conn.execute("select status from purchase_requests").fetchone() == ("fulfilled",)
 
 
+@pytest.mark.parametrize("final", ["fulfilled", "rejected"])
+def test_a_late_pending_answer_does_not_overwrite_a_final_one(conn, final):
+    """A visit step that outlived its timeout can read a request as pending, and write it after the hourly
+    sync stored the receipt. Pending is where a request starts; it never comes back."""
+    submit(conn, "r1")
+    door = {"door_opened_at": "2026-11-09T11:00:00+00:00", "door_closed_at": "2026-11-09T11:20:00+00:00"}
+    answer = (fulfilled("r1", receipt(), fulfilled_at="2026-11-09T11:30:00Z", **door) if final == "fulfilled"
+              else {"id": "r1", "status": "rejected", "decision_note": "no", "created_at": "2026-11-07T14:00:00Z"})
+    assert store(conn, "r1", answer, NOW).status == final
+    before = conn.execute("select status, decision_note, fulfilled_at, door_opened_at, door_closed_at, last_checked,"
+                          " last_response from purchase_requests").fetchone()
+    lines = conn.execute("select count(*) from purchase_lines").fetchone()[0]
+
+    assert store(conn, "r1", pending("r1"), NOW + timedelta(minutes=5)).status == final     # told what is stored
+    assert conn.execute("select status, decision_note, fulfilled_at, door_opened_at, door_closed_at, last_checked,"
+                        " last_response from purchase_requests").fetchone() == before
+    assert conn.execute("select count(*) from purchase_lines").fetchone()[0] == lines
+    # The other way round still works, and a request that was never recorded is still refused.
+    with pytest.raises(ValueError, match="not in purchase_requests"):
+        store(conn, "nope", pending("nope"), NOW)
+
+
 def test_a_float_amount_is_refused(conn):
     submit(conn, "r1")
     with pytest.raises(ValueError):

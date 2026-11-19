@@ -63,7 +63,8 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     therefore never counts a loss twice, and a receipt the bridge corrects
     simply overwrites the old one. An answer we can't make sense of raises
     `ValueError` before anything is written, so a bad read never wipes a good one.
-    That includes door times with close before open (`door_times`).
+    That includes door times with close before open (`door_times`). Once a request is
+    `fulfilled` or `rejected`, a `pending` answer is ignored and the stored status returned.
     """
     if response.get("id") not in (None, request_id):
         raise ValueError(f"asked for {request_id}, the bridge answered about {response.get('id')}")
@@ -86,14 +87,19 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
                set status = %s, decision_note = %s, total_paid = %s, fulfilled_at = %s,
                    updated_at = %s, last_checked = %s, last_response = %s,
                    door_opened_at = %s, door_closed_at = %s
-             where request_id = %s
+             where request_id = %s and not (%s = 'pending' and status <> 'pending')
             """,
             (status, response.get("decision_note"), _money(response.get("total_paid")),
              _when(response.get("fulfilled_at")), _when(response.get("updated_at")),
-             checked_at, Jsonb(response), opened, closed, request_id),
+             checked_at, Jsonb(response), opened, closed, request_id, status),
         ).rowcount
         if not updated:
-            raise ValueError(f"{request_id} is not in purchase_requests; record it when it is submitted")
+            stored = conn.execute("select status from purchase_requests where request_id = %s", (request_id,)).fetchone()
+            if stored is None:
+                raise ValueError(f"{request_id} is not in purchase_requests; record it when it is submitted")
+            # A request only ever leaves `pending`. A `pending` answer that arrives after a final one
+            # (a slow read that outlived its timeout) is stale, so it must not clear the receipt or door times.
+            return Stored(stored[0])
         if status != "fulfilled":
             return Stored(status, warnings=warnings)
         before = conn.execute(
