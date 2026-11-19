@@ -27,7 +27,7 @@ A door opening isn't always a refill. Before the competition, course staff stock
 
 We don't depend on a set restock time. A student worker won't always be on time, and the history shows visits on every weekday.
 
-1. **Find the visit in the data.** A door-count rise between two polls marks it. A fulfilled request's `fulfilled_at` marks the end of the visit, and the worker's door times on the receipt (David confirmed them live on 17 Nov) narrow it further. A change in a slot's price field at a poll shows the new setup is in place.
+1. **Find the visit in the data.** A door-count rise between two polls marks it. A fulfilled request's `fulfilled_at` marks the end of the visit, and the receipt's door times pin it to the minute (below). A change in a slot's price field at a poll shows the new setup is in place.
 2. **Mark the uncertain window**: from the last poll before the first opening to the first poll after the last one. Before it is the old setup; after it is the new one.
 3. **Only our changed slots need care.** A slot whose product and price didn't change counts as usual.
 4. **When the price changed, solve with the counters.** With `u` units and `c` cents inside the window, an old price `a` and a new price `b`, the number sold at the new price is `(c - u*a) / (b - a)`. A whole number from 0 to `u` settles it. Anything else means a misread or a third price: flag it for a person.
@@ -38,19 +38,56 @@ We don't depend on a set restock time. A student worker won't always be on time,
 
 - **Restocks will be standard on Friday afternoons**, with 3 PM as the target. The student worker gets out of class at 1 and may have to drive to the stores first, so the load may well come at 3 to 5 PM or later. Our sales are lowest then (about 0.2 an hour after 3 PM), so a later visit puts even fewer sales in doubt. Poll about every 10 minutes from about 2 to 6 PM on Fridays. That isn't happening yet: our container only copies the bridge's hourly polls today. Our own Friday polling is #107.
 - **`fulfilled_at` is the end of the visit**, set when the worker submits the receipt after loading. There's no push notification; we poll the request.
-- **Door-open and door-closed times on the receipt** are live (David, 17 Nov). Our code doesn't read them yet.
+- **Door-open and door-closed times on the receipt** are live (David, 17 Nov), and the code reads them (below).
 - **Polling about every 10 minutes is allowed.** That shrinks the one gap door times don't close: a sale between the last poll and the door opening. David named that case himself.
 
 So the plan above gets a usual time to expect, and still handles a visit at any other time. Full notes: `docs/planning/2026-11-12-david-answers.md` (#106).
+
+## Door times on the receipt (17 Nov)
+
+David confirmed on 17 Nov that receipts now carry the door times. Each fulfilled request has `door_opened_at` and `door_closed_at`, beside `fulfilled_at`. They are to the minute. They can be null on older requests, or if the worker leaves them out.
+
+Each line's `resolved_at` is when the worker filled that line in, not when it went in the machine. On our first filled request (`pr_v8hB_h3gQatc`, 12 Nov) the lines ran from 16:31:52 to 17:34:08, and the door was open from 16:34 to 17:34. So one line was filled in before the door opened.
+
+How we use them:
+
+- **Stored** on `purchase_requests` (migration 019) by `vending/purchase_requests.py` `store`. They are kept as a pair or not at all. An answer with only one of them, or with one that isn't a time (a number, say), keeps neither, and the sync logs a warning naming the request; the receipt itself is stored. An answer with close before open is refused and logged, and the receipt we had is kept. The migration fills them in from each request's stored answer. It skips a value that isn't a valid time (such as 31 November), half a pair, or close before open, and names those requests in a notice.
+- **Stock** (`vending/stock.py`). The old product leaves at door open: pulls are timed then, and so are its sales from a window that holds the visit. The new product goes in at door close. No unit sells while the door is open. How a window between two polls is split, given the door times are only to the minute, is below.
+- **Machine state.** `days_since_loaded` and `units_sold_since_load` count from door close. A sale between door close and `resolved_at` is sold since the load.
+- **Ledger.** Purchases and visit fees are dated by door close too, the same clock as the stock they bring.
+
+Without door times, everything works as before: `resolved_at` stands in for the visit.
+
+The one gap they don't close is still a sale between the last poll and the door opening. Polling about every 10 minutes on Fridays (#107) shrinks it.
+
+### The door times are minutes, not instants
+
+We don't know whether the bridge truncates the door times or rounds them. We read each one as the minute it happened in: a door "opened at 16:34" opened between 16:34:00 and 16:35:00, and one "closed at 17:34" closed by the end of 17:34. So the door had certainly opened by the end of its open minute, and it can't have closed before the start of its close minute. (If the bridge rounds, a time could also be up to 30 seconds late. We haven't allowed for that.)
+
+For a window between two polls, in a slot whose product changed at the visit (`vending/stock.py` `_split_by_door`):
+
+- **Wholly inside the visit** (starts after the open minute, ends by the start of the close minute): no unit can sell with the door open. If the counters rose, the receipt is contradicted. The units are flagged and left unattributed.
+- **All old product**: any other window that ends by the start of the close minute. The new product wasn't in yet.
+- **All new product**: any other window that starts after the end of the open minute. The old product was out. A window that starts *during* the open minute is not all new: the door may not have opened yet.
+- **Everything else** touches an uncertain minute or holds the whole visit. The price solve in step 4 decides it, as without door times. With the same price on both sides, its units are left unattributed (step 5).
+- **From inside one visit to inside the next** (same slot, two changes): the product loaded at the first, since nothing else could have sold between them. A window that could hold two or more products across two or more visits is left unattributed.
+- **Two visits to one slot that share a minute** (one closes at 15:34 and the next opens at 15:34, or a visit opens and closes within 15:34 next to another): they go in the order the requests were submitted. If that doesn't settle it (submitted at the same moment, door times that overlap, or door times that disagree with the submission order), neither visit's door times are used. Their lines are timed by `resolved_at`, as before, with a warning.
+
+A poll inside the open minute may have come a few seconds before the door really opened, after an old-product sale. When it already shows the new price, and the poll before it showed another, the price change says the visit had started, so the window after it is the new product's. That reading needs this visit to have set the price. If another visit of ours falls between those two polls, it may have set it instead, and the counters decide as usual (#172).
+
+When the timing can't settle which product sold, we fall back to what we did before door times: the price solve, or units left unattributed and flagged. We never guess.
+
+**Unattributed units belong to neither product** (#172). The stock replay books them as sold, with the reason, but not as the old product's sales or the new one's (`SaleCost.unattributed`, `SlotCount.unattributed`). They are out of the slot's known count, so on hand is that count up to `SlotCount.at_most`: what would be left if none of them were the new product's. Later sales, pulls and losses lower that bound too. What still treats them as the new product's, for now: cost of sales (their cost is taken at the new product's average), machine state's demand and units sold since the load, the dashboard's sold column, and the planner's on-hand count. Items 2 to 5 of #172 fix those.
 
 ## What we checked, and what David answered
 
 Asked in #102, with the evidence. David's answers (12 Nov) are in the section above.
 
-- `fulfilled_at` is already in the purchase-request response and we store it (`vending/purchase_requests.py`). We haven't seen a filled request yet. David says it marks the end of the visit: it's set when the worker submits the receipt, after loading.
+- `fulfilled_at` is already in the purchase-request response and we store it (`vending/purchase_requests.py`). David says it marks the end of the visit: it's set when the worker submits the receipt, after loading.
 - In all 1,325 CRC-checked polls stored for `vmc1` (read from the raw DEX text in our database), `EA2*DO` carries only its two counts (since reset and lifetime), never a "door open now" flag. We may simply never have polled during a visit. Not discussed on 12 Nov, so still open.
 - `EA7` (power outages) changed only 3 times since 27 Aug, so a restock doesn't power-cycle the machine. It isn't a visit signal.
 - `POST /api/v1/poll` reads the machine live (about 8.5 s). `docs/dex-bridge.md` asks us to use it rarely, so we asked before polling every 10 minutes around a visit. David allowed it; our own polling isn't built yet (#107).
+- Door rises from 3 Dec: the offline analysis (`analysis/visit_windows.py`, `analysis/sales_analysis.py`) counts a rise as our visit only when a fulfilled receipt of ours falls with it (`analysis/data/receipts.csv`, from `export_sales.py`). A receipt's candidate rises are the counter windows (the polls a rise is measured between, so a misread poll doesn't shorten it) that overlap [`fulfilled_at` − 1 hour, first line resolved]: the door opened by the first line and a visit runs at most an hour (`door_events.our_visits`). One candidate: the receipt claims it. Several: the receipt is still one visit of ours, with an ambiguous door window, and none of those rises is in a window or a sales calculation. None: one visit of ours with an unknown window. Our visit is never dropped (`visit_windows.py` marks them `window: ambiguous | unknown`; `sales_analysis.py` lists them as `visits_without_window`). A rise with no receipt is left out of our windows, not merged into them. Door times on the receipt aren't stored yet, so they don't narrow the match. Before 3 Dec every rise counts, so the pre-competition history reads as before.
 - Visits after 1 PM: our sales are lowest then, so a visit puts the fewest units in doubt. David's target is 3 PM on Fridays.
 
 The interactive version, with the dark-period charts and a calculator for step 4, is the [Cutover Clock](https://claude.ai/artifact/BSgBkggAC5PYBpdPqRHp1H) (Golisano sign-in).

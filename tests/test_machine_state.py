@@ -366,3 +366,104 @@ def test_an_emptied_slot_rates_only_the_days_it_held_stock(conn):
     assert (s.units_per_class_day, s.rate_basis) == ("2.17", "own: 13 sold over 6 in-stock class days")
     assert (s.stock_on_hand, s.class_days_of_stock_left) == (3, "1.4")
     assert states["16"].units_per_class_day == "0.722" and states["16"].class_days_in_stock is None
+
+
+def test_a_load_is_dated_by_door_close_when_the_receipt_has_door_times(conn):
+    # The door closed at 12:30 but the worker filled in the line at 15:00. The 13:00 poll's
+    # 3 sales came after the load, so they are sold since it. Without door times they aren't.
+    # At 13:00 five days on, it is 5 days since the door closed but 4 since resolved_at.
+    now = datetime(2026, 10, 29, 13, tzinfo=timezone.utc)
+
+    def state(door):
+        conn.execute("delete from purchase_requests")
+        conn.execute("delete from polls")
+        store_poll(conn, "p0", "2026-10-24T10:00:00+00:00", {"15": (250, 100)})
+        fulfilled(conn, "r1", datetime(2026, 10, 24, 15, tzinfo=timezone.utc),
+                  ("15", "COKE20", "primary", "12.00", 20, 0, 0))
+        if door:
+            conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s",
+                         (datetime(2026, 10, 24, 12, tzinfo=timezone.utc), datetime(2026, 10, 24, 12, 30, tzinfo=timezone.utc)))
+        store_poll(conn, "p1", "2026-10-24T13:00:00+00:00", {"15": (250, 103)})
+        store_poll(conn, "p2", "2026-10-29T10:00:00+00:00", {"15": (250, 105)})
+        return by_slot(get_machine_state(conn, now=now).data)["15"]
+
+    s = state(door=True)
+    assert (s.units_sold_since_load, s.stock_on_hand, s.days_since_loaded) == (5, 15, 5)
+    s = state(door=False)
+    assert (s.units_sold_since_load, s.stock_on_hand, s.days_since_loaded) == (2, 18, 4)
+
+
+def test_a_load_dated_after_now_is_not_the_latest_load_yet(conn):
+    # At 10:00 a receipt filled in at 09:55 says the door closed at 10:05. The stock as of 10:00
+    # doesn't have it yet, so it can't be the latest load either: days_since_loaded stays with r1's.
+    now = datetime(2026, 10, 29, 10, tzinfo=timezone.utc)
+    store_poll(conn, "p0", "2026-10-24T10:00:00+00:00", {"15": (250, 100)})
+    fulfilled(conn, "r1", datetime(2026, 10, 24, 15, tzinfo=timezone.utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
+    fulfilled(conn, "r2", datetime(2026, 10, 29, 9, 55, tzinfo=timezone.utc), ("15", "COKE20", "primary", "6.00", 10, 0, 0))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r2'",
+                 (datetime(2026, 10, 29, 9, 58, tzinfo=timezone.utc), datetime(2026, 10, 29, 10, 5, tzinfo=timezone.utc)))
+    store_poll(conn, "p1", "2026-10-29T09:00:00+00:00", {"15": (250, 104)})
+    s = by_slot(get_machine_state(conn, now=now).data)["15"]
+    assert (s.stock_on_hand, s.units_sold_since_load, s.days_since_loaded) == (16, 4, 4)
+    later = by_slot(get_machine_state(conn, now=now + timedelta(hours=1)).data)["15"]
+    assert (later.stock_on_hand, later.days_since_loaded) == (26, 0)
+
+
+def test_warnings_about_a_slot_we_no_longer_hold_are_left_out(conn):
+    # Two visits to slot 15 share a minute and were submitted together, so the stock warns about
+    # both. After a reassignment that takes 15 away, the agent's machine state leaves them out,
+    # as the dashboard does.
+    store_poll(conn, "p0", "2026-10-24T10:00:00+00:00", {"15": (250, 100), "16": (300, 50)})
+    at = datetime(2026, 10, 24, 15, tzinfo=timezone.utc)
+    fulfilled(conn, "r1", at, ("15", "COKE20", "primary", "12.00", 20, 0, 0))
+    fulfilled(conn, "r2", at, ("15", "COKE20", "primary", "6.00", 10, 0, 0))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s",
+                 (datetime(2026, 10, 24, 14, tzinfo=timezone.utc), datetime(2026, 10, 24, 14, 30, tzinfo=timezone.utc)))
+    store_poll(conn, "p1", "2026-10-29T09:00:00+00:00", {"15": (250, 104), "16": (300, 50)})
+    clashes = [w for w in get_machine_state(conn, now=NOW).warnings if "can't be told" in w]
+    assert len(clashes) == 2
+    conn.execute("update slot_assignment set slots = %s", ([s for s in TEST_SLOTS if s != "15"] + ["11"],))
+    reply = get_machine_state(conn, now=NOW)
+    assert not any("slot 15" in w for w in reply.warnings)
+
+
+def test_door_openings_with_no_receipt_of_ours_change_nothing(conn):
+    # #172: the door counter (EA2*DO) is machine-wide. It rises midweek (Wed 28 Oct, 10:00 to 11:00)
+    # and twice more during our Friday visit on 30 Oct, from openings that aren't ours: no receipt
+    # of ours goes with them. Stock and machine state must read exactly as with a counter that rises
+    # only at our own visits. Slot 15 swaps Coke ($2.50) for Pepsi ($2.75) at that Friday visit.
+    from vending.stock import stock
+
+    now = datetime(2026, 11, 2, 12, tzinfo=timezone.utc)
+    polls = [  # (session, time, slot 15 (price, units, cents), door counter ours only, with others' openings)
+        ("p0", "2026-10-22T12:00:00+00:00", (250, 100, 25000), 5, 5),
+        ("p1", "2026-10-23T20:00:00+00:00", (250, 100, 25000), 6, 6),     # our first load, Fri 23 Oct
+        ("p2", "2026-10-28T10:00:00+00:00", (250, 104, 26000), 6, 6),
+        ("p3", "2026-10-28T11:00:00+00:00", (250, 105, 26250), 6, 7),     # a midweek opening, not ours
+        ("p4", "2026-10-30T18:00:00+00:00", (250, 107, 26750), 6, 7),
+        ("p5", "2026-10-30T20:00:00+00:00", (275, 108, 27025), 7, 10),    # our visit, and two that overlap it
+        ("p6", "2026-11-02T10:00:00+00:00", (275, 111, 27850), 7, 10),
+    ]
+
+    def read(others):
+        conn.execute("delete from purchase_requests")
+        conn.execute("delete from polls")
+        for session_id, at, slot15, ours, theirs in polls:
+            store_poll(conn, session_id, at, {"15": slot15, "16": (300, 50)}, door=theirs if others else ours)
+        fulfilled(conn, "r1", datetime(2026, 10, 23, 19, 30, tzinfo=timezone.utc),
+                  ("15", "COKE20", "primary", "12.00", 20, 0, 0))
+        fulfilled(conn, "r2", datetime(2026, 10, 30, 19, 30, tzinfo=timezone.utc),
+                  ("15", "PEPSI20", "primary", "10.00", 20, 0, 0))
+        conn.execute("update purchase_lines set units_pulled = 13, pulled_sku = 'COKE20', slot_reassigned = true"
+                     " where request_id = 'r2'")
+        conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r2'",
+                     (datetime(2026, 10, 30, 19, 0, tzinfo=timezone.utc),
+                      datetime(2026, 10, 30, 19, 20, tzinfo=timezone.utc)))
+        return stock(conn, until=now), get_machine_state(conn, now=now)
+
+    ours_only, with_others = read(others=False), read(others=True)
+    assert with_others == ours_only
+    counted, reply = with_others
+    [slot] = counted.slots
+    assert (slot.product, slot.loaded, slot.units) == ("PEPSI20", 20, 16)
+    assert by_slot(reply.data)["15"].stock_on_hand == 16

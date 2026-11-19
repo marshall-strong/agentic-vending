@@ -228,8 +228,9 @@ def test_sales_across_a_product_change_are_split_by_the_cents_counter():
     # Both are booked to the hour-5 poll that measured them; the Arizona left its count at the swap.
     assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales] == [
         (hours(5), hours(3), "ARIZONA", 1, 50), (hours(5), None, "REDBULL", 1, 150)]
+    assert [s.unattributed for s in stock.sales] == ["", ""]
     [slot] = stock.slots
-    assert (slot.product, slot.units, slot.sold) == ("REDBULL", 9, 1)
+    assert (slot.product, slot.units, slot.sold, slot.unattributed) == ("REDBULL", 9, 1, 0)
     # The 9 pulled are all that was left, so nothing is written off.
     assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("ARIZONA", 9, 50)]
     assert stock.shrinkage == () and stock.warnings == ()
@@ -246,6 +247,10 @@ def test_sales_across_a_change_the_counters_cannot_split_keep_their_cost_unattri
         [sale] = stock.sales
         assert (sale.at, sale.units, sale.cost_cents, sale.unattributed_cost_cents) == (hours(5), 2, None, taken)
         assert any("can't split" in w and "may be the wrong product's" in w for w in stock.warnings)
+        # #172: carried as unknown, the new product's neither, with the reason.
+        assert (sale.product, sale.costed_units) == (None, 2) and "can't split" in sale.unattributed
+    [slot] = same.slots
+    assert (slot.product, slot.loaded, slot.sold, slot.unattributed, slot.units) == ("COKE20", 10, 0, 2, 8)
 
 
 def test_an_unsplit_window_keeps_the_books_whole():
@@ -312,7 +317,7 @@ def test_a_cents_counter_that_did_not_rise_with_the_units_cannot_split_them():
     # At an old price of $0 a missing rise read as 0 cents would book both units old.
     stock = book(swap(), counters=[("15", hours(1), 100, 20000, 0), ("15", hours(5), 102, 100, 400)])
     [sale] = stock.sales
-    assert (sale.product, sale.units, sale.cost_cents) == ("REDBULL", 2, None)
+    assert (sale.product, sale.units, sale.cost_cents) == (None, 2, None)
     assert any("can't split" in w for w in stock.warnings)
 
 
@@ -337,3 +342,402 @@ def test_a_window_across_two_changes_says_so():
                            slot_reassigned=True, at=4, request_id="r3")]
     stock = book(lines, counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 250)])
     assert any("can't split" in w and "2 product changes" in w for w in stock.warnings)
+
+
+# Door times (17 Nov): the receipt says when the worker opened and closed the door. The old
+# product ends at door open and the new one starts at door close. Without them, the line's
+# resolved_at stands in, as above.
+
+def with_door(lines, opened=2.5, closed=3.5, request_id="r2"):
+    """The same lines, with door times on `request_id`'s lines (the swap), as `stock()` reads them."""
+    return [{**l, "door_opened_at": hours(opened), "door_closed_at": hours(closed)} if l["request_id"] == request_id
+            else l for l in lines]
+
+
+def test_with_door_times_a_window_across_the_visit_is_split_at_open_and_close():
+    stock = book(with_door(swap()), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    # The Arizona left its count at door open, the Red Bull went in at door close.
+    assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales] == [
+        (hours(5), hours(2.5), "ARIZONA", 1, 50), (hours(5), None, "REDBULL", 1, 150)]
+    assert [s.unattributed for s in stock.sales] == ["", ""]
+    [slot] = stock.slots
+    assert (slot.product, slot.units, slot.since, slot.sold, slot.unattributed) == ("REDBULL", 9, hours(3.5), 1, 0)
+    assert stock.shrinkage == () and stock.warnings == ()
+
+
+def test_with_door_times_a_window_that_starts_during_the_visit_is_all_new_with_no_guess():
+    # The same-price counters that can't be split without door times (above): a poll at 2h45m,
+    # inside the visit, with $3.50 at both ends of the next window and no price change before it.
+    counters = [("15", hours(1), 100, 20000, 350), ("15", hours(2.75), 100, 20000, 350),
+                ("15", hours(5), 102, 20700, 350)]
+    stock = book(with_door(swap()), counters=counters)
+    assert [(s.product, s.units, s.cost_cents) for s in stock.sales if s.units] == [("REDBULL", 2, 300)]
+    assert not any("can't split" in w for w in stock.warnings)
+
+
+def test_with_door_times_a_window_that_ends_during_the_visit_is_all_old():
+    # A poll at 3h, between door open and close, after 1 sale at $2.00 and before any new price.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", hours(3), 101, 20200, 200),
+                ("15", hours(5), 101, 20200, 400)]
+    stock = book(with_door(swap()), counters=counters)
+    assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales if s.units] == [
+        (hours(3), hours(2.5), "ARIZONA", 1, 50)]
+    # 10 loaded, 1 sold, 9 pulled: nothing written off.
+    assert stock.shrinkage == () and stock.warnings == ()
+
+
+def test_with_door_times_a_same_price_window_across_the_whole_visit_still_cannot_be_split():
+    stock = book(with_door(swap(sku="COKE20", total_paid="8.00")),
+                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20400, 200)])
+    [sale] = stock.sales
+    assert (sale.units, sale.cost_cents, sale.unattributed_cost_cents) == (2, None, 160)
+    assert any("can't split" in w for w in stock.warnings)
+    assert (sale.product, sale.costed_units) == (None, 2) and "can't split" in sale.unattributed
+    [slot] = stock.slots
+    assert (slot.product, slot.loaded, slot.sold, slot.unattributed, slot.units) == ("COKE20", 10, 0, 2, 8)
+
+
+def test_a_line_resolved_before_the_door_opened_is_timed_by_the_door():
+    # On pr_v8hB_h3gQatc one line was filled in 2 minutes before the door opened. Here the
+    # worker fills in the swap at 2h, opens the door at 2.5h and closes it at 3.5h. A poll at
+    # 2h15m shows 1 more sale at $2.00: an Arizona, sold before the door opened.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", hours(2.25), 101, 20200, 200),
+                ("15", hours(5), 102, 20600, 400)]
+    stock = book(with_door(swap(at=2)), counters=counters)
+    assert [(s.product, s.units, s.cost_cents) for s in stock.sales] == [("ARIZONA", 1, 50), ("REDBULL", 1, 150)]
+    assert stock.warnings == ()
+    # Without door times the swap is at 2h, so that Arizona sale lands after it.
+    guessed = book(swap(at=2), counters=counters)
+    assert any("can't split" in w for w in guessed.warnings)
+
+
+def summary(stock):
+    """A Stock as plain values, times as hours after T0, so main's numbers can be written down."""
+    h = lambda t: None if t is None else (t - T0) / timedelta(hours=1)
+    return {
+        "sales": [(h(s.at), h(s.taken_at), s.product, s.units, s.costed_units, s.cost_cents, s.unattributed_cost_cents)
+                  for s in stock.sales],
+        "slots": [(s.slot, s.product, s.units, s.unit_cost, s.loaded, s.sold, s.lost, h(s.since), h(s.last_moved))
+                  for s in stock.slots],
+        "closet": [(c.product, c.units, c.unit_cost) for c in stock.closet],
+        "shrinkage": [(h(x.at), x.where, x.product, x.units, x.cost_cents) for x in stock.shrinkage],
+        "warnings": list(stock.warnings),
+    }
+
+
+# What main (9523764, before door times) gives for `swap()` with these counters, worked out
+# by running main's vending/stock.py on them. Null door times must give exactly this.
+_WRITTEN_OFF = "r2 line 0: 1 units of ARIZONA still counted in slot 15 when it changed to REDBULL; written off as shrinkage"
+_UNSPLIT = ("slot 15: 2 units sold between the polls at {} and 2026-11-07T20:00:00+00:00, across the change from "
+            "ARIZONA to REDBULL; the counters can't split them, so they are costed at REDBULL's average, which may "
+            "be the wrong product's; the 1 units of ARIZONA written off as shrinkage at the change may be some of "
+            "these sales, not losses")
+_MAIN_SLOT_AFTER_2_SOLD = [("15", "REDBULL", 8, 150, 10, 2, 0, 3.0, 3.0)]
+# Where main can't split the window, #172 changes one thing: its 2 units are unattributed, in neither
+# product's sales and not in REDBULL's sold. Every other figure is main's.
+_MAIN_UNSPLIT_SALE = [(5.0, None, None, 2, 2, None, 300)]
+_MAIN_UNSPLIT_SLOT = [("15", "REDBULL", 8, 150, 10, 0, 0, 3.0, 3.0)]
+_MAIN_SHRINKAGE = [(3.0, "slot 15", "ARIZONA", 1, 50)]
+
+
+@pytest.mark.parametrize("counters, main", [
+    ([("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)],
+     {"sales": [(5.0, 3.0, "ARIZONA", 1, 1, 50, None), (5.0, None, "REDBULL", 1, 1, 150, None)],
+      "slots": [("15", "REDBULL", 9, 150, 10, 1, 0, 3.0, 3.0)], "closet": [("ARIZONA", 9, 50)],
+      "shrinkage": [], "warnings": []}),
+    ([("15", hours(1), 100, 20000, 250), ("15", hours(2.75), 100, 20000, 350), ("15", hours(5), 102, 20700, 350)],
+     {"sales": [(5.0, None, "REDBULL", 2, 2, 300, None)], "slots": _MAIN_SLOT_AFTER_2_SOLD,
+      "closet": [("ARIZONA", 9, 50)], "shrinkage": _MAIN_SHRINKAGE, "warnings": [_WRITTEN_OFF]}),
+    ([("15", hours(1), 100, 20000, 350), ("15", hours(2.75), 100, 20000, 350), ("15", hours(5), 102, 20700, 350)],
+     {"sales": _MAIN_UNSPLIT_SALE, "slots": _MAIN_UNSPLIT_SLOT,
+      "closet": [("ARIZONA", 9, 50)], "shrinkage": _MAIN_SHRINKAGE,
+      "warnings": [_WRITTEN_OFF, _UNSPLIT.format("2026-11-07T17:45:00+00:00")]}),
+    ([("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20500, 400)],
+     {"sales": _MAIN_UNSPLIT_SALE, "slots": _MAIN_UNSPLIT_SLOT,
+      "closet": [("ARIZONA", 9, 50)], "shrinkage": _MAIN_SHRINKAGE,
+      "warnings": [_WRITTEN_OFF, _UNSPLIT.format("2026-11-07T16:00:00+00:00")]}),
+])
+def test_null_door_times_give_mains_answer(counters, main):
+    # Older requests, or a worker who left them out: exactly what main gave before door times.
+    # Submitted in the opposite order to the visits: without door times that must change nothing.
+    sent = {"r1": hours(1), "r2": hours(-1)}
+    nulls = [{**l, "door_opened_at": None, "door_closed_at": None, "submitted_at": sent[l["request_id"]]}
+             for l in swap()]
+    assert summary(book(nulls, counters=counters)) == main
+
+
+def test_without_door_times_every_pull_at_one_moment_goes_before_any_load_as_on_main():
+    # r3, submitted before r2, loads 5 Arizona from the closet at the same resolved_at as r2's
+    # pull of 9 Arizona. As on main, the pull goes first: the load takes the pulled units at 50c.
+    sent = {"r1": hours(-2), "r3": hours(-1), "r2": hours(0)}
+    lines = swap() + [line(slot="16", sku="ARIZONA", outcome="loaded", total_paid=None, units_loaded=5,
+                           units_from_back_stock=5, at=3, request_id="r3")]
+    stock = book([{**l, "door_opened_at": None, "door_closed_at": None, "submitted_at": sent[l["request_id"]]}
+                  for l in lines])
+    assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("ARIZONA", 4, 50)]
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.product, slot16.units, slot16.unit_cost) == ("ARIZONA", 5, 50)
+
+
+def test_a_door_timed_pull_goes_before_a_closet_load_without_door_times_at_the_same_moment():
+    # r2 pulls 9 Arizona at its door open, 17:30; r3, with no door times, loads 5 Arizona from
+    # the closet into slot 16 at the same instant. As on main, the pull goes first.
+    sent = {"r1": hours(-2), "r2": hours(-1), "r3": hours(0)}
+    lines = with_door(swap()) + [line(slot="16", sku="ARIZONA", outcome="loaded", total_paid=None, units_loaded=5,
+                                      units_from_back_stock=5, at=2.5, request_id="r3")]
+    stock = book([{**l, "submitted_at": sent[l["request_id"]]} for l in lines])
+    assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("ARIZONA", 4, 50)]
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.product, slot16.units, slot16.unit_cost) == ("ARIZONA", 5, 50)
+
+
+def test_a_pull_goes_before_a_load_at_one_minute_even_from_a_later_submitted_visit():
+    # r3, submitted first, loads 5 Arizona from the closet into slot 16, its door closing at
+    # 17:30. r2, submitted later, opens slot 15 at 17:30 and pulls 9 Arizona. Different slots, so
+    # submission order doesn't decide: the pull goes first and the load takes the pulled units.
+    sent = {"r1": hours(-2), "r3": hours(-1), "r2": hours(0)}
+    load = with_door([line(slot="16", sku="ARIZONA", outcome="loaded", total_paid=None, units_loaded=5,
+                           units_from_back_stock=5, at=2.6, request_id="r3")], opened=2, closed=2.5, request_id="r3")
+    stock = book([{**l, "submitted_at": sent[l["request_id"]]} for l in with_door(swap()) + load])
+    assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("ARIZONA", 4, 50)]
+    slot16 = next(s for s in stock.slots if s.slot == "16")
+    assert (slot16.product, slot16.units, slot16.unit_cost) == ("ARIZONA", 5, 50)
+
+
+def test_visits_sharing_a_minute_are_found_by_scanning_in_door_open_order():
+    from itertools import combinations
+
+    from vending.stock import _MINUTE, _sharing_a_minute
+
+    # Nested, chained and separate visits: the scan finds exactly the pairs every-pair-against-every-pair finds.
+    visits = {"a": (hours(1), hours(4), None), "b": (hours(1.5), hours(2), None), "c": (hours(3), hours(3.5), None),
+              "d": (hours(4), hours(4.5), None), "e": (hours(6), hours(7), None), "f": (hours(7), hours(7), None)}
+    every = [((p, pv), (q, qv)) for (p, pv), (q, qv) in combinations(sorted(visits.items()), 2)
+             if pv[0] < qv[1] + _MINUTE and qv[0] < pv[1] + _MINUTE]
+    assert _sharing_a_minute(visits) == every
+    assert [(p, q) for (p, _), (q, _) in every] == [("a", "b"), ("a", "c"), ("a", "d"), ("e", "f")]
+
+
+def test_door_times_split_once_however_often_the_replay_splits():
+    moves = movements_from_receipts(with_door(swap()), []) + sales_from_counters(
+        [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    assert replay(moves) == weighted_average(moves)
+    cut = replay(moves, until=hours(4))
+    assert cut.shrinkage == () and cut.warnings == () and cut.sales == ()
+
+
+# The door times are to the minute, and we don't know whether they are truncated or rounded.
+# Each is read as a minute: the door opened in [17:30, 17:31) and closed in [18:30, 18:31) for
+# `with_door(swap())`. A poll inside either minute can't say which side of the door it was.
+
+def seconds(h, s):
+    return hours(h) + timedelta(seconds=s)
+
+
+def test_a_window_starting_in_the_open_minute_is_solved_by_the_counters_not_read_as_all_new():
+    # A poll at 17:30:20 may have come before the door opened at, say, 17:30:50, and an
+    # Arizona can sell in between. The counters say it did: 1 unit at $2.00, 1 at $4.00.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", seconds(2.5, 20), 100, 20000, 200),
+                ("15", hours(5), 102, 20600, 400)]
+    stock = book(with_door(swap()), counters=counters)
+    assert [(s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales] == [
+        (hours(2.5), "ARIZONA", 1, 50), (None, "REDBULL", 1, 150)]
+    assert stock.warnings == ()
+    # With the same price on both sides the counters can't say, so it is left unattributed, as on main.
+    same = book(with_door(swap(sku="COKE20", total_paid="8.00")),
+                counters=[(s, t, u, c, 200) for s, t, u, c, _ in counters[:2]] + [("15", hours(5), 102, 20400, 200)])
+    [sale] = same.sales
+    assert (sale.units, sale.cost_cents, sale.unattributed_cost_cents) == (2, None, 160)
+    assert any("can't split" in w for w in same.warnings)
+
+
+def test_a_window_starting_after_the_open_minute_is_all_new():
+    # At 17:31 the door had opened, so nothing after it is the Arizona, whatever the counters say.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", seconds(2.5, 60), 100, 20000, 200),
+                ("15", hours(5), 102, 20400, 200)]
+    stock = book(with_door(swap()), counters=counters)
+    assert [(s.product, s.units, s.cost_cents) for s in stock.sales] == [("REDBULL", 2, 300)]
+    assert not any("can't split" in w for w in stock.warnings)
+
+
+def test_a_window_ending_in_the_close_minute_is_solved_by_the_counters():
+    # A poll at 18:30:30 may have come before or after the door closed in that minute, so a
+    # window from before the visit to it may hold either product. The counters decide.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", seconds(3.5, 30), 102, 20600, 400),
+                ("15", hours(5), 102, 20600, 400)]
+    stock = book(with_door(swap()), counters=counters)
+    assert [(s.taken_at, s.product, s.units) for s in stock.sales] == [(hours(2.5), "ARIZONA", 1), (None, "REDBULL", 1)]
+    same = book(with_door(swap(sku="COKE20", total_paid="8.00")),
+                counters=[("15", hours(1), 100, 20000, 200), ("15", seconds(3.5, 30), 102, 20400, 200)])
+    [sale] = same.sales
+    assert sale.cost_cents is None and any("can't split" in w for w in same.warnings)
+
+
+def test_a_window_ending_by_the_start_of_the_close_minute_is_all_old():
+    # By 18:30:00 the door had not closed, so no Red Bull could have sold yet.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", hours(3.5), 101, 20200, 200),
+                ("15", hours(5), 101, 20200, 400)]
+    stock = book(with_door(swap()), counters=counters)
+    assert [(s.at, s.taken_at, s.product, s.units) for s in stock.sales] == [(hours(3.5), hours(2.5), "ARIZONA", 1)]
+    assert stock.warnings == ()
+
+
+# Ties (17 Nov review): a visit inside one recorded minute, and two visits sharing a minute.
+
+def test_a_visit_inside_one_minute_pulls_before_it_loads_and_the_counters_settle_a_poll_in_it():
+    # The door opened and closed at 17:30. A poll at 17:30:30 already shows the new $4.00 price
+    # and one more sale for $2.00: an Arizona, before the visit. The next window starts with the
+    # new price at both ends, after the price was set, so it is all Red Bull.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", seconds(2.5, 30), 101, 20200, 400),
+                ("15", hours(5), 102, 20600, 400)]
+    stock = book(with_door(swap(), opened=2.5, closed=2.5), counters=counters)
+    assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales] == [
+        (seconds(2.5, 30), hours(2.5), "ARIZONA", 1, 50), (hours(5), None, "REDBULL", 1, 150)]
+    # The 9 pulled are what the Arizona sale left: the pull came after it and before the load.
+    assert [(c.product, c.units) for c in stock.closet] == [("ARIZONA", 9)]
+    assert stock.shrinkage == () and stock.warnings == ()
+
+
+def two_visits(first=(2.5, 3), second=(3, 3.5), sent=(1, 2)):
+    """Arizona at hour 0; r2 swaps it for Red Bull, then r3 swaps that for Pepsi, each with door times.
+
+    `sent` is when each of r2 and r3 was submitted, in hours (None: unknown). Their
+    resolved_at, 2.9h and 3.4h, are in the same order as the visits.
+    """
+    lines = [line(sku="ARIZONA", units_loaded=10, total_paid="5.00"),
+             line(sku="REDBULL", units_loaded=10, total_paid="15.00", units_pulled=10, pulled_sku="ARIZONA",
+                  slot_reassigned=True, at=2.9, request_id="r2"),
+             line(sku="PEPSI20", units_loaded=10, total_paid="10.00", units_pulled=10, pulled_sku="REDBULL",
+                  slot_reassigned=True, at=3.4, request_id="r3")]
+    for request_id, (opened, closed), at in (("r2", first, sent[0]), ("r3", second, sent[1])):
+        lines = [{**l, "submitted_at": None if at is None else hours(at)} if l["request_id"] == request_id else l
+                 for l in with_door(lines, opened, closed, request_id)]
+    return lines
+
+
+def test_two_visits_sharing_a_minute_go_in_the_order_they_were_submitted():
+    # r2's door closed at 18:00 and r3's opened at 18:00. r2 was submitted first, so its Red Bull
+    # goes in before r3 pulls it out, though r3's pull is timed at the same minute as r2's load.
+    stock = book(two_visits())
+    assert [(c.product, c.units, c.unit_cost) for c in stock.closet] == [("ARIZONA", 10, 50), ("REDBULL", 10, 150)]
+    [slot] = stock.slots
+    assert (slot.product, slot.units, slot.since) == ("PEPSI20", 10, hours(3.5))
+    assert stock.shrinkage == () and stock.warnings == ()
+
+
+@pytest.mark.parametrize("sent", [(None, None), (1, 1), (2, 1)])
+def test_two_visits_sharing_a_minute_whose_order_cant_be_told_fall_back_to_resolved_at(sent):
+    # Submitted together, unknown, or in the opposite order to the door times: the door times
+    # don't place these visits, so both are timed by resolved_at as before, with a warning.
+    stock = book(two_visits(sent=sent))
+    assert [(c.product, c.units) for c in stock.closet] == [("ARIZONA", 10), ("REDBULL", 10)]
+    [slot] = stock.slots
+    assert slot.since == hours(3.4)   # r3's resolved_at, not its door close
+    assert sorted(w.split(":")[0] for w in stock.warnings if "can't be told" in w) == ["r2", "r3"]
+    assert not any("never loaded" in w for w in stock.warnings)
+
+
+def test_a_clash_warning_names_its_own_slot_when_the_request_first_moved_another_slot():
+    # r3's first line loads slot 14 (say, a former slot); its clash with r2 is in slot 15. The
+    # dashboard keeps a warning only for our slots, by its `slot`, so it must say 15.
+    lines = two_visits(sent=(1, 1))
+    r3 = next(l for l in lines if l["request_id"] == "r3")
+    lines.insert(lines.index(r3), {**r3, "slot": "14", "line_no": 1, "sku": "COKE20", "total_paid": "2.00",
+                                   "units_loaded": 2, "units_pulled": 0, "pulled_sku": None,
+                                   "slot_reassigned": False})
+    stock = book(lines)
+    clashes = [w for w in stock.warnings if "can't be told" in w]
+    assert sorted((w.split(":")[0], w.slot) for w in clashes) == [("r2", "15"), ("r3", "15")]
+
+
+def test_two_visits_that_overlap_fall_back_to_resolved_at_even_in_submission_order():
+    stock = book(two_visits(first=(2.5, 3.25), second=(3, 3.5)))
+    assert sum("can't be told" in w for w in stock.warnings) == 2
+    assert stock.slots[0].since == hours(3.4)
+
+
+# Eligibility (17 Nov review): which products a window could hold, given the door was open.
+
+def test_a_sale_while_the_door_was_open_is_flagged_and_left_unattributed():
+    # Polls at 17:45 and 18:15 both fall while the receipt says the door was open (opened by
+    # 17:31, closed no earlier than 18:30), yet the counter rose. That contradicts the receipt.
+    counters = [("15", hours(1), 100, 20000, 200), ("15", hours(2.75), 100, 20000, 200),
+                ("15", hours(3.25), 101, 20200, 200), ("15", hours(5), 101, 20200, 400)]
+    stock = book(with_door(swap()), counters=counters)
+    [sale] = [s for s in stock.sales if s.units]
+    assert (sale.at, sale.units, sale.cost_cents) == (hours(3.25), 1, None)
+    assert any("r2's door times say the door was open" in w and "contradicts the receipt" in w
+               for w in stock.warnings)
+
+
+def test_a_window_from_inside_one_visit_to_inside_the_next_is_the_first_visits_product():
+    # r2 open 17:30-17:50 (Red Bull in), r3 open 18:10-18:30 (Pepsi in). A window from 17:40 to
+    # 18:20 starts and ends with the door open, so only the Red Bull, in between, can have sold.
+    lines = two_visits(first=(2.5, 2 + 50 / 60), second=(3 + 10 / 60, 3.5))
+    lines = [{**l, "units_pulled": 9} if l["request_id"] == "r3" else l for l in lines]
+    counters = [("15", hours(1), 100, 20000, 200), ("15", hours(2 + 40 / 60), 100, 20000, 200),
+                ("15", hours(3 + 20 / 60), 101, 20300, 300), ("15", hours(5), 101, 20300, 300)]
+    stock = book(lines, counters=counters)
+    assert [(s.at, s.taken_at, s.product, s.units, s.cost_cents) for s in stock.sales] == [
+        (hours(3 + 20 / 60), hours(3 + 10 / 60), "REDBULL", 1, 150)]
+    assert stock.shrinkage == () and stock.warnings == ()
+    # From inside r2's open minute instead, the Arizona may have sold too: two products, two
+    # changes, so the window is left unattributed.
+    counters[1] = ("15", seconds(2.5, 30), 100, 20000, 200)
+    stock = book(lines, counters=counters)
+    [sale] = [s for s in stock.sales if s.units]
+    assert sale.cost_cents is None and any("can't split" in w and "2 product changes" in w for w in stock.warnings)
+
+
+# Every slot at our visit (#172 item 1). A window between two polls that the counters and the door
+# times can't split is carried as unknown: not booked as the new product's sales, nor the old one's.
+
+def test_a_poll_in_the_open_minute_after_an_earlier_price_change_is_not_read_as_all_new():
+    # r0 tops up the Arizona at 16:35-16:40 and drops its price from $2.50 to $2.00. r2 opens the
+    # door in the 17:30 minute to swap in Coke at the same $2.00. The poll at 17:30:10 shows $2.00:
+    # r0's price, not a sign that r2 had started, so the door may have opened at 17:30:50, and an
+    # Arizona can sell in between. Same price on both sides: the counters can't say which sold.
+    lines = with_door([line(sku="ARIZONA", units_loaded=2, total_paid="1.00", at=1.6, request_id="r0")],
+                      opened=1 + 35 / 60, closed=1 + 40 / 60, request_id="r0")
+    lines = lines + with_door(swap(sku="COKE20", total_paid="8.00"))
+    counters = [("15", hours(1), 100, 25000, 250), ("15", seconds(2.5, 10), 100, 25000, 200),
+                ("15", hours(4), 102, 25400, 200)]
+    stock = book(lines, counters=counters)
+    [sale] = [s for s in stock.sales if s.units]
+    assert (sale.product, sale.units) == (None, 2)
+    # Main read it as all Coke and costed it at 80 cents in cost_cents; that cost stays, so the money
+    # series still counts it as the ledger does (#172 fix 5 reports such estimates apart).
+    assert (sale.cost_cents, sale.unattributed_cost_cents) == (160, None)
+    [slot] = stock.slots
+    assert (slot.product, slot.sold, slot.unattributed) == ("COKE20", 0, 2)
+    # Without r0 the price change at 17:30:10 can only be r2's, so the door was open: all Coke, as before.
+    alone = book(with_door(swap(sku="COKE20", total_paid="8.00")), counters=counters)
+    assert [(s.product, s.units, s.unattributed) for s in alone.sales if s.units] == [("COKE20", 2, "")]
+
+
+def test_confirmed_sales_after_unattributed_ones_lower_the_most_that_can_be_on_hand():
+    # 10 Coke loaded at a same-price swap; 8 sold in the window across it (unattributed), then 6 more,
+    # all Coke. If the 8 were Arizonas, 10 - 6 = 4 Coke are left; if they were Coke, none are.
+    stock = book(swap(sku="COKE20", total_paid="8.00"),
+                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 108, 21600, 200),
+                           ("15", hours(8), 114, 22800, 200)])
+    [slot] = stock.slots
+    assert (slot.loaded, slot.sold, slot.unattributed, slot.units, slot.at_most) == (10, 6, 8, 0, 4)
+
+
+def test_visits_whose_door_times_the_replay_drops_still_count_as_setting_the_price():
+    # As the test above, but r0's top-up is two requests, r0 and r1, whose door times share the 16:40
+    # minute and were submitted together. The replay times their lines by resolved_at (15:30, before
+    # the 16:00 poll), but the doors were open between the 16:00 and 17:30:10 polls, so either may have
+    # set the $2.00 price: the 17:30:10 poll doesn't show r2 had started.
+    lines = [line(sku="ARIZONA", units_loaded=10, total_paid="5.00")]
+    for request_id, opened, closed in (("r0", 1 + 35 / 60, 1 + 40 / 60), ("r1", 1 + 40 / 60, 1 + 42 / 60)):
+        lines = with_door(lines + [line(sku="ARIZONA", units_loaded=1, total_paid="0.50", at=0.5,
+                                        request_id=request_id)], opened=opened, closed=closed, request_id=request_id)
+    lines = lines + with_door([swap(sku="COKE20", total_paid="8.00")[1]])
+    counters = [("15", hours(1), 100, 25000, 250), ("15", seconds(2.5, 10), 100, 25000, 200),
+                ("15", hours(4), 102, 25400, 200)]
+    stock = book(lines, counters=counters)
+    assert any("share a minute" in w for w in stock.warnings)
+    [sale] = [s for s in stock.sales if s.units]
+    assert (sale.product, sale.units) == (None, 2) and "can't split" in sale.unattributed

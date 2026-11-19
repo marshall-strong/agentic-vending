@@ -451,6 +451,53 @@ def test_pnl_by_week_leaves_development_spend_out_like_pnl(conn):
     assert sum(w.net_cents for w in weeks) == p.net_cents
 
 
+def test_with_door_times_purchases_and_stock_go_by_door_close(conn):
+    open_ledger(conn)
+    # Filled in at 16:00 on the 7th, but the door closed just after midnight on the 8th.
+    record_request(conn, "r1", OPENED + timedelta(days=5), False, BODY)
+    store(conn, "r1", fulfilled("r1", receipt(resolved_at="2026-11-07T16:00:00Z"), fulfilled_at="2026-11-08T00:10:00Z",
+                                door_opened_at="2026-11-07T23:30:00Z", door_closed_at="2026-11-08T00:05:00Z"), NOW)
+    before = ledger.pnl(conn, OPENED, datetime(2026, 11, 8, 0, 0, tzinfo=timezone.utc))
+    after = ledger.pnl(conn, OPENED, datetime(2026, 11, 8, 1, 0, tzinfo=timezone.utc))
+    assert (before.receipts_cents, before.inventory_machine_cents) == (0, None)
+    assert (after.receipts_cents, after.inventory_machine_cents) == (1237, 8 * UNIT_COST)
+
+
+@pytest.mark.parametrize("clash", [False, True])
+def test_a_line_resolved_before_the_opening_with_its_door_closed_after_counts_the_same_everywhere(conn, clash):
+    # Opening at 15:00. r2 was filled in at 14:55, its door open 14:58-15:05. Alone, it is timed at
+    # door close and counts. With r1's visit to slot 15 sharing a minute and the same submission
+    # time, the replay can't order them and times both by resolved_at: 14:55, a test purchase.
+    # Either way the ledger, the stock and the machine state's load date must agree.
+    from vending.tools import machine_state
+
+    opened = datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
+    ledger.record(conn, "opening", 60000, "opening capital", "marshall", opened)
+    sent = opened - timedelta(days=1)
+    r1_door = ("2026-11-07T14:40:00Z", "2026-11-07T14:59:00Z") if clash else ("2026-11-07T13:00:00Z",
+                                                                              "2026-11-07T13:10:00Z")
+    record_request(conn, "r1", sent, False, BODY)
+    store(conn, "r1", fulfilled("r1", receipt(resolved_at="2026-11-07T14:50:00Z"), fulfilled_at="2026-11-07T14:59:00Z",
+                                door_opened_at=r1_door[0], door_closed_at=r1_door[1]), NOW)
+    record_request(conn, "r2", sent, False, BODY)
+    store(conn, "r2", fulfilled("r2", receipt(resolved_at="2026-11-07T14:55:00Z"), fulfilled_at="2026-11-07T15:10:00Z",
+                                door_opened_at="2026-11-07T14:58:00Z", door_closed_at="2026-11-07T15:05:00Z"), NOW)
+    counts = not clash
+    p = ledger.pnl(conn, opened, NOW)
+    assert p.receipts_cents == (1237 if counts else 0)
+    assert ledger.balance(conn, NOW).balance_cents == 60000 - (1237 if counts else 0)
+    [slot] = stock.stock(conn).slots if counts else [None]
+    if counts:
+        assert (slot.units, slot.since) == (8, datetime(2026, 11, 7, 15, 5, tzinfo=timezone.utc))
+    else:
+        assert stock.stock(conn).slots == ()
+        # Opening stock holds nothing of r2's: it was left out, not replayed at 14:55.
+        assert stock.stock(conn, until=opened).slots == ()
+    loads = machine_state._loads(stock.receipt_lines(conn), NOW).get("15", [])
+    assert max(at for at, _ in loads) == (datetime(2026, 11, 7, 15, 5, tzinfo=timezone.utc) if counts
+                                          else datetime(2026, 11, 7, 14, 55, tzinfo=timezone.utc))
+
+
 # --- Through the MCP client -------------------------------------------------------------
 
 def test_pnl_by_week_books_each_line_to_its_week_and_adds_up_to_pnl(conn):

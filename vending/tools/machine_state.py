@@ -11,7 +11,9 @@ Built from our database only; it never reads the machine.
   counts from when the slot's current product went in (loaded − sold − lost),
   so a top-up of the same product adds to it.
 - `days_since_loaded` and `units_sold_since_load` count from the slot's most
-  recent load: the latest fulfilled receipt line that put units in it.
+  recent load: the latest fulfilled receipt line that put units in it, dated
+  on the receipt clock (`stock.receipt_lines`): its request's door close when
+  the stock replay uses the receipt's door times, else the line's `resolved_at`.
 - The closet (back stock) is listed per product, with its value at cost.
 - What a person saw, from the latest count in `slot_counts` (`vending.slot_counts`),
   fills `counted_*` for a slot the receipts don't cover, or whose count is newer
@@ -56,6 +58,8 @@ RECEIPT_FIELDS = "product, stock_on_hand, units_sold_since_load, days_since_load
 
 
 COUNT_STALE_DAYS = 7   # a person's count older than this is called weak evidence in the message
+# Receipt lines that put units into a slot, dated on the receipt clock (`stock.receipt_lines`).
+LOADING = ("primary", "alternate", "loaded")
 
 
 class SlotState(BaseModel):
@@ -218,13 +222,16 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     start = baseline[1] if baseline else None
     window_sold = sold_in_window(_readings(conn, start, as_of, slots), start) if start else {}
 
-    counted = stock.stock(conn, until=now)
+    receipts = stock.receipt_lines(conn)       # read once: the stock, the loads and their dates share it
+    counted = stock.stock(conn, until=now, lines=receipts)
+    warnings = [w for w in counted.warnings if stock.warning_is_ours(w, set(slots))]
     counts = {c.slot: c for c in counted.slots if c.slot in slots}
-    last_loaded = _last_loaded(conn, now)
+    loads = _loads(receipts, now)
+    last_loaded = _last_loaded(loads)
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
     seen = _seen(conn, now)
     latest_counters = _counters(conn, latest[0], slots)
-    demands = _demands(counts, _loads(conn, now), counted.sales, latest_counters, now)
+    demands = _demands(counts, loads, counted.sales, latest_counters, now)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     closet, closet_value = closet_items(counted.closet)
@@ -238,14 +245,14 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
         success=True,
         stale=stale,
         message=(f"{warning}{len(states)} slots as of the poll at {as_of:%Y-%m-%d %H:%M} UTC; "
-                 f"sales window {window}. {_receipts_note(slots, counts, closet, counted.warnings)}{_count_note(states)}"),
+                 f"sales window {window}. {_receipts_note(slots, counts, closet, warnings)}{_count_note(states)}"),
         count=len(states),
         as_of=as_of,
         window_start=baseline[1] if baseline else None,
         data=states,
         closet=closet,
         closet_value_at_cost=closet_value,
-        warnings=list(counted.warnings),
+        warnings=warnings,
     )
 
 
@@ -300,25 +307,25 @@ def _seen(conn: psycopg.Connection, until: datetime | None = None) -> dict[str, 
         return {}
 
 
-def _last_loaded(conn: psycopg.Connection, until: datetime | None = None) -> dict[str, datetime]:
-    """When each slot last had units put in it, from fulfilled receipts."""
-    rows = conn.execute(
-        "select l.slot, max(l.resolved_at) from purchase_lines l join purchase_requests r using (request_id)"
-        " where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded') and l.units_loaded > 0"
-        " and (%s::timestamptz is null or l.resolved_at <= %s)"
-        " group by l.slot", (until, until))
-    return dict(rows)
+def _last_loaded(loads: dict[str, list[tuple[datetime, int]]]) -> dict[str, datetime]:
+    """When each slot last had units put in it, from fulfilled receipts.
+
+    A load is dated on the receipt clock (`stock.receipt_lines`), the same
+    moment `vending.stock` puts the units in: door close when the replay uses
+    the receipt's door times, else the line's `resolved_at`.
+    """
+    return {slot: max(at for at, _ in slot_loads) for slot, slot_loads in loads.items()}
 
 
-def _loads(conn: psycopg.Connection, until: datetime | None = None) -> dict[str, list[tuple[datetime, int]]]:
-    """Every time each slot had units put in it up to `until`, from fulfilled receipts, as `(at, units)`."""
+def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime, int]]]:
+    """Every time each slot had units put in it, from fulfilled receipts (`stock.receipt_lines`), as
+    `(at, units)`, dated like `_last_loaded`. A load dated after `now` hasn't happened yet, as in
+    the stock as of `now`, so it is left out: it can't make `days_since_loaded` negative."""
     loads: dict[str, list[tuple[datetime, int]]] = {}
-    for slot, at, units in conn.execute(
-            "select l.slot, l.resolved_at, l.units_loaded from purchase_lines l join purchase_requests r"
-            " using (request_id) where r.status = 'fulfilled' and l.outcome in ('primary', 'alternate', 'loaded')"
-            " and l.units_loaded > 0 and l.resolved_at is not null"
-            " and (%s::timestamptz is null or l.resolved_at <= %s)", (until, until)):
-        loads.setdefault(slot, []).append((at, units))
+    for line in receipts:
+        if (line["outcome"] in LOADING and line["units_loaded"] and line["at"] is not None
+                and line["at"] <= now):
+            loads.setdefault(line["slot"], []).append((line["at"], line["units_loaded"]))
     return loads
 
 
