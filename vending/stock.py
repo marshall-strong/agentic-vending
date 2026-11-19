@@ -525,6 +525,18 @@ def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetC
 
 def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll."""
+    return replay(load_movements(conn), until)
+
+
+def load_movements(conn: psycopg.Connection) -> list[Movement]:
+    """Every stock movement on record, unsorted: what `stock()` replays.
+
+    Separate so a caller that needs the stock at many moments (the daily money
+    series) can read the history once and pass it to `replay(movements, moment)`
+    for each, which is exactly `stock(conn, until=moment)` without a query per
+    moment. Don't cut a prefix yourself: `replay` must split product changes
+    (#97) before it cuts.
+    """
     assigned = set(our_slots(conn))
     lines, losses = _receipts(conn)
     # Receipts preserve our purchases, but cannot authorize counter reads after reassignment.
@@ -538,7 +550,7 @@ def stock(conn: psycopg.Connection, until: datetime | None = None) -> Stock:
         " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)",
         (DEVICE_ID, slots),
     ).fetchall()
-    return replay(movements_from_receipts(lines, losses) + sales_from_counters(counters), until)
+    return movements_from_receipts(lines, losses) + sales_from_counters(counters)
 
 
 def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
