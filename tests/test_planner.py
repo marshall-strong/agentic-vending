@@ -750,6 +750,14 @@ class TestWildcard(unittest.TestCase):
         with self.assertRaises(ValueError):
             Config(slots=TEST_SLOTS, price_ceiling_cents=650, wildcard_ceiling_cents=600)
 
+    def test_a_kept_regular_slot_stays_under_the_ceiling(self):
+        # Kept, not changed: still refused above $6.50, with or without a wildcard, so only the wildcard is above it.
+        over = {"18": SlotState("18", SPRITE, 750, 10, 50)}
+        self.assertEqual(where(wild(pickle_17(price="7.50"), slots=over)), [("above_ceiling", "18")])
+        self.assertEqual(where(wild(restock_15(), slot=None, slots=over)), [("above_ceiling", "18")])
+        at_ceiling = {"18": SlotState("18", SPRITE, 650, 10, 50)}
+        self.assertTrue(wild(pickle_17(price="7.50"), slots=at_ceiling).ok)
+
     def test_a_kept_wildcard_stays_under_the_wildcard_ceiling(self):
         # A lowered setting, or a price set before it: keeping it there is refused too.
         over = {"18": SlotState("18", SPRITE, 900, 10, 50)}
@@ -916,6 +924,9 @@ class TestWildcard(unittest.TestCase):
                  "18": SlotState("18", None, 750, 0, None, contents_known=False)}
         dear = Sourcing(MTDEW, PurchaseOption("BJs", 24, "85.00"))
         mtdew_16 = DesiredSlot("16", product=MTDEW, sale_price="6.00", fill_to=10)
+        # 18 kept above $6.50 is refused for its price, not treated as a wildcard.
+        self.assertEqual(where(wild(mtdew_16, slots=state, sourcing=(dear,))), [("above_ceiling", "18")])
+        state["18"] = SlotState("18", None, 650, 0, None, contents_known=False)
         self.assertTrue(wild(mtdew_16, slots=state, sourcing=(dear,)).ok)
 
 

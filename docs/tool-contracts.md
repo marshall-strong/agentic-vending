@@ -209,7 +209,7 @@ Both `preview_desired_state` and `submit_desired_state` return these.
 | `product_unknown` | The SKU is not active in the catalog. |
 | `price_off_step` | No sale price, a malformed one, or not a multiple of 5 cents. |
 | `below_floor` | Price under the slot's floor, or $0.00. |
-| `above_ceiling` | Price over the ceiling (`price_ceiling_cents`, $6.50 by default), or for the wildcard slot over the wildcard ceiling (`wildcard_ceiling_cents`, $8.00). |
+| `above_ceiling` | Price over the ceiling (`price_ceiling_cents`, $6.50 by default), or for the wildcard slot over the wildcard ceiling (`wildcard_ceiling_cents`, $8.00). A regular slot the plan keeps is refused too while its price is over the ceiling. |
 | `wildcard` | The wildcard slot is kept above the wildcard ceiling; its own purchase is over the $82.00 cap; it would switch to a product another slot holds, or while the plan keeps a slot no receipt describes; it would load more of a product another slot holds; another slot would switch to its product without a promotion the data backs, or to the product it switches to; or, while no receipt says what it holds, another slot loads and the plan doesn't set its product (`docs/agent/wildcard.md`). |
 | `unknown_capacity` | Nobody knows how many of this package fit in a column. |
 | `over_capacity` | `fill_to` is more than fit in a column. |

@@ -658,6 +658,13 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     floors: list[SlotFloor] = []
     for s in slots:
         if s.action == NO_CHANGE:
+            # A kept regular slot is held to the regular ceiling too: only the one wildcard may sell above it.
+            if (s.slot != config.wildcard_slot and s.price_cents is not None
+                    and s.price_cents > config.price_ceiling_cents):
+                refusals.append(Refusal("above_ceiling", (
+                    f"slot {s.slot} stays at {_dollars(s.price_cents)}, above the ceiling of "
+                    f"{_dollars(config.price_ceiling_cents)}; only the wildcard slot may sell above it, so price "
+                    "it at or under the ceiling at this visit"), s.slot))
             continue
         if s.action == PRICE_ONLY:
             refusals.append(Refusal("price_only_unsupported", (
