@@ -14,8 +14,10 @@ other team's prices** (Kevin, 11 Nov). It keeps us inside David's rule, and we s
 need that information to win. The team can revisit this. If we do, change this page and
 assumption A15 first. Explain the choice in Summative 2.
 
-**The Interloper's prices are not an input either.** David said no on 17 Nov to using the
-third-party machine beside ours (#116) as a pricing input.
+**The Interloper's prices are out too.** The snack machine placed next to ours sells
+drinks. It isn't the other team, but David answered on 17 Nov that we may not use its
+prices as an input to ours, and that it is outside the project's scope. This one is the
+course staff's rule, not a team choice. See `docs/agent/interloper.md`.
 
 Which selections are ours is the inventory server's assignment (brief, section 1). The
 machine is split evenly between the two teams. The instructors change the assignment exactly once,

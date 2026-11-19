@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from datetime import date
+
 import pytest
 
 from vending.tools.project_rules import RULES_DIR, get_project_rules, topics
@@ -59,3 +62,31 @@ def test_the_rules_card_is_short_and_covers_the_guardrails():
                    "get_project_rules", "never from memory", "skip"):
         assert phrase in card, phrase
 
+
+
+def test_interloper_topic_matches_the_latest_observation():
+    """The agent can't read analysis/ (it isn't in the image), so the topic carries the newest file's drinks."""
+    latest = sorted((RULES_DIR.parent.parent / "analysis" / "interloper").glob("*.json"))[-1]
+    data = json.loads(latest.read_text(encoding="utf-8"))
+    topic = (RULES_DIR / "interloper.md").read_text(encoding="utf-8")
+    day = date.fromisoformat(data["observed"])
+    assert f"{day:%a} {day.day} {day:%b}" in topic, "the topic names an older observation"
+    for d in data["drinks"]:
+        assert f"| {d['position']} | {d['name']} | {d['size']} |" in topic, d["name"]
+
+
+def test_no_agent_topic_gives_the_interloper_prices():
+    """The course staff said its prices may not be an input to ours (David, 17 Nov), so the agent never sees them."""
+    topic = (RULES_DIR / "interloper.md").read_text(encoding="utf-8").lower()
+    for word in ("$", "¢", "cents", "price range", "cheaper", "dearer", "its price |"):
+        assert word not in topic, word
+    for path in RULES_DIR.glob("*.md"):
+        for line in path.read_text(encoding="utf-8").lower().splitlines():
+            if "interloper" in line:
+                assert "$" not in line and "may be used" not in line, (path.name, line)
+
+
+@pytest.mark.parametrize("topic", ["pricing", "rules-card", "competition-and-integrity", "interloper"])
+def test_the_interloper_price_rule_is_where_the_agent_reads_pricing_rules(topic):
+    text = (RULES_DIR / f"{topic}.md").read_text(encoding="utf-8").lower()
+    assert "never use the interloper's prices" in text or "ignore the interloper's prices" in text, topic
