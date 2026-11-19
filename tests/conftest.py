@@ -309,15 +309,18 @@ def conn(schema_url):
 
 
 def store_poll(conn, session_id: str, started_at: str, selections: dict[str, tuple],
-               device_id: str = "vmc1") -> None:
+               device_id: str = "vmc1", door: int | None = None) -> None:
     """Store a synthetic poll through the history sync's own `store`.
     `selections` maps slot -> (price_cents or None, lifetime_units), or to
     (price_cents, lifetime_units, lifetime_sales_cents) when the cents counter
-    is not units at today's price (the price changed between polls)."""
+    is not units at today's price (the price changed between polls). `door`, if
+    given, is the machine's door-open counter (EA2*DO, since reset and lifetime)."""
     from tests.test_evadts import build
     from vending.sync_history import store
 
     records = ["ID1*TEST-MACHINE*0000**EVS3.0*", "ID4*2*1840*5", "VA1*0*0*0*0"]
+    if door is not None:
+        records.append(f"EA2*DO*{door}*{door}")
     for slot, (price, units, *sales_cents) in selections.items():
         sales_cents = sales_cents[0] if sales_cents else units * (price or 0)
         records += [f"PA1*{slot}*{'' if price is None else price}*", f"PA2*{units}*{sales_cents}*0*0*0*0"]

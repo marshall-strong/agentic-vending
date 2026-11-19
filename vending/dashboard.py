@@ -371,9 +371,14 @@ def _sales(conn: psycopg.Connection, now: datetime) -> dict:
 
 
 def _stock(conn: psycopg.Connection) -> dict:
-    """What each slot and the closet hold, from fulfilled receipts and polls (`vending.stock`)."""
+    """What each slot and the closet hold, from fulfilled receipts and polls (`vending.stock`).
+
+    "sold" still counts units sold across a product change that can't be split
+    (`SlotCount.unattributed`) as the slot's, as before #172; labelling them is
+    #172 item 4."""
     found = _guarded(conn, lambda: stock_mod.stock(conn))
-    return {"slots": {s.slot: {"product": s.product, "on_hand": s.units, "loaded": s.loaded, "sold": s.sold,
+    return {"slots": {s.slot: {"product": s.product, "on_hand": s.units, "loaded": s.loaded,
+                               "sold": s.sold + s.unattributed,
                                "lost": s.lost, "since": s.since, "last_moved": s.last_moved,
                                "unit_cost": _dollars(s.unit_cost)}
                       for s in found.slots},
