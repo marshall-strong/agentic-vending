@@ -891,6 +891,31 @@ def test_a_load_loss_no_known_unit_survives_to_carry_is_shrinkage(loaded, drawn)
     assert _known_cents(stock) == 200
 
 
+def test_a_load_loss_of_a_zero_cost_unit_no_known_unit_survives_to_carry_is_still_shrinkage():
+    """The closet holds 1 unit at $0 (free stock); the load drops it and nothing makes it into the slot.
+    It is still a unit gone without a sale, so it is booked as shrinkage at $0, not lost from the books."""
+    stock = book([
+        line(units_loaded=0, units_to_back_stock=1, total_paid="0.00"),              # 1 at 0 in the closet
+        line(slot="16", outcome="loaded", total_paid=None, units_loaded=0,
+             units_from_back_stock=1, at=2, request_id="r2"),
+    ])
+    assert [(x.units, x.cost_cents) for x in stock.shrinkage] == [(1, 0)]
+
+
+def test_a_load_loss_of_an_unknown_cost_unit_is_shrinkage_even_when_a_known_unit_survives():
+    """The closet holds 1 unit of unknown cost, then 1 at $2; the load draws both and drops the oldest, the
+    unknown one. The $2 unit makes it, but has no known loss to carry: the dropped unit is shrinkage of unknown
+    cost, so the P&L says shrinkage is incomplete instead of leaving the unit out."""
+    stock = book([
+        line(units_loaded=0, units_to_back_stock=1, total_paid=None),                # 1 unknown in the closet
+        line(units_loaded=0, units_to_back_stock=1, total_paid="2.00", at=1, request_id="r1b"),  # then 1 at 200
+        line(slot="16", outcome="loaded", total_paid=None, units_loaded=1,
+             units_from_back_stock=2, at=2, request_id="r2"),
+    ])
+    assert [(x.units, x.cost_cents) for x in stock.shrinkage] == [(1, None)]
+    assert _known_cents(stock) == 200
+
+
 def test_a_pull_past_the_count_brings_the_extra_units_in_at_unknown_cost():
     """Slot 17 counts 1 unknown OLDCOLA, then 1 at $2; 3 are pulled. The two counted move at their own cost;
     the third has no layer, so its cost is unknown rather than another $2."""

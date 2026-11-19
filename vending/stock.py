@@ -737,26 +737,28 @@ def _known(layers: list[_Layer]) -> tuple[int, Fraction | None]:
 
 def _less_lost(layers: list[_Layer], lost: int) -> tuple[list[_Layer], list[_Layer]]:
     """Layers drawn from the closet for a load, less `lost` units dropped on the way, and the lost
-    layers when no unit that made it can carry their cost (else empty).
+    layers that go to be written off as shrinkage.
 
     The lost units come out of the oldest layers, and their known cost is
     spread evenly over the known units that made it, so the load still costs
     what was drawn and the layers keep their order and differences: a dearer
     layer stays dearer for later sales and floors. If none of the units that
-    made it has a known cost, the lost layers go back to be written off.
+    made it has a known cost, every lost layer is written off, a $0 one too.
+    Lost units of unknown cost are always written off, so shrinkage shows
+    they are missing a cost instead of leaving them out.
     """
     pool = _Pool()
     pool.add_layers(layers)
-    dropped = pool.take_layers(lost)
-    _, cost = _known(dropped)
+    dropped = [layer for layer in pool.take_layers(lost) if layer.units]
     known = sum(layer.units for layer in pool.layers if layer.unit_cost is not None)
-    if cost and not known:
+    if not known:
         return pool.layers, dropped
+    _, cost = _known(dropped)
     if cost:
         for layer in pool.layers:
             if layer.unit_cost is not None:
                 layer.unit_cost += cost / known
-    return pool.layers, []
+    return pool.layers, [layer for layer in dropped if layer.unit_cost is None]
 
 
 @dataclass
@@ -861,9 +863,10 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                     layers.append(_Layer(wanted - taken, None))   # the ones we didn't count: cost unknown
                 kept, stranded = _less_lost(layers, m.lost)
                 slot.pool.add_layers(kept)
-                if stranded:
+                if any(layer.unit_cost is not None for layer in stranded):
                     warn(m.slot, f"{m.ref}: no unit of {m.sku} loaded into slot {m.slot} has a known cost to carry "
                                     "the units lost on the way; they are written off as shrinkage")
+                if stranded:
                     write_off(m.at, f"slot {m.slot}", m.sku, stranded)
             slot.loaded += m.to_slot
             slot.at_most += m.to_slot
