@@ -88,7 +88,7 @@ from slots_config import SOURCE_CLI, SOURCE_FALL, SOURCE_SERVER, check_before_st
 from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
 from boundary_units import price_sales, slot_average_price  # noqa: E402
-from door_events import our_windows, read_receipts  # noqa: E402
+from door_events import our_visits, read_receipts  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID  # noqa: E402  (configure() sets the device and slots this run uses)
 
@@ -542,11 +542,14 @@ def main():
     # ---------------------------------------------------------- visits from the door-open counter
     # A rise in the lifetime door-open counter between two polls = the door was opened in (previous poll, poll].
     # Rises within VISIT_MERGE_H hours are one visit.  From the start (3 Dec) a rise is ours only when a fulfilled receipt
-    # of ours falls with it (door_events.our_windows); any other rise is skipped, not merged into ours.  Before the
-    # start every rise counts.  Without door data: one assumed visit every Friday 08:00.
-    vis = []
+    # of ours claims it (door_events.our_visits: one candidate counter window); any other rise is skipped, not merged into
+    # ours.  A receipt with several candidate rises, or none, is still our visit but has no door window: it is listed in
+    # visits_without_window and takes no part in the window-based evidence below.  Before the start every rise counts.
+    # Without door data: one assumed visit every Friday 08:00.
+    vis, unplaced = [], []
     if doors is not None:
-        for prev, at, rise in our_windows(list(zip(doors.t, doors.door_open_lifetime.astype(int))), read_receipts(args.receipts)):
+        found, unplaced = our_visits(list(zip(doors.t, doors.door_open_lifetime.astype(int))), read_receipts(args.receipts))
+        for prev, at, rise in found:
             if vis and (at - vis[-1]["end"]).total_seconds() / 3600 <= VISIT_MERGE_H:
                 v = vis[-1]
                 v["end"] = at
@@ -2021,6 +2024,8 @@ def main():
                 f"the first opening. Likely refill = >= {LIKELY_MIN} resumed slots"
                 f"{'; possible top-up = 1' if LIKELY_MIN > 1 else ' (with this few slots, one resumed slot is already likely)'}."),
         capacity_max=CAPACITY_MAX, silent_days=SILENT_DAYS, resume_days=RESUME_DAYS, likely_min=LIKELY_MIN,
+        visits_without_window=[dict(fulfilled_at=iso(done), window=kind, candidate_rises=[iso(c) for c in cands])
+                               for done, kind, cands in unplaced],
         per_visit={str(v["id"]): dict(evidence=v["evidence"], proven_slots=v["proven_slots"], pair_proof_slots=v["pair_proof_slots"],
                                       resumed_slots=v["resumed_slots"], outcome_refill_slots=v["outcome_refill_slots"]) for v in vis},
         per_slot=per_slot_ev,

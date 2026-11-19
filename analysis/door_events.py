@@ -56,26 +56,45 @@ def read_receipts(path) -> list[tuple[datetime, datetime]]:
                 for r in csv.DictReader(f)]
 
 
-def our_windows(readings, receipts, start: datetime = START) -> list[tuple[datetime, datetime, int]]:
-    """`(from, at, rise)` for each door-counter rise (`readings`: `(poll time, lifetime count)`) that is a visit of ours.
+def our_visits(readings, receipts, start: datetime = START):
+    """`(windows, unplaced)`: our visits from the door counter (`readings`: `(poll time, lifetime count)`) and receipts.
 
-    Before `start` every rise is ours: nobody's receipts exist yet and the history is read as before, from the poll
-    before it. From `start`, a rise is ours only when a fulfilled receipt of ours falls with it, and `from` is the
-    counter window's real start (vending.counters.windows: after a misread, the good poll before it). Each receipt claims:
-    - the rises whose window contains the receipt (opened before its first line was resolved, seen no earlier than
-      its fulfilment); else
-    - the one rise whose window ends after the visit began, a visit running at most VISIT_MAX before `fulfilled_at`.
-      With two such rises nothing says which is ours, so the receipt claims neither.
-    A rise no receipt claims is left out of our visit windows. It isn't merged into ours and nothing is read from it."""
+    `windows` is `(from, at, rise)` for each rise that is a visit of ours. Before `start` every rise is ours: nobody's
+    receipts exist yet and the history is read as before, from the poll before it. From `start`, a rise is ours only when
+    a fulfilled receipt of ours claims it, and `from` is the counter window's real start (vending.counters.windows:
+    after a misread, the good poll before it).
+
+    A receipt's candidate rises are the counter windows (start, at] that overlap [fulfilled_at - VISIT_MAX, first line
+    resolved]: the door opened by the time the first line was resolved, and no more than VISIT_MAX before the
+    fulfilment. A window that began after the first line was resolved can't hold the opening, however soon after it ends.
+    - One candidate: the receipt claims it.
+    - Several: nothing says which is ours. The receipt is one visit of ours with an ambiguous door window, and it
+      claims none of them (it never picks the latest, or the one containing the receipt).
+    - None: the receipt is one visit of ours with an unknown door window.
+    A receipt is real evidence of a visit, so it is never dropped. A rise no receipt claims is left out of our windows:
+    it isn't merged into ours and nothing is read from it.
+
+    `unplaced` is `(fulfilled_at, "ambiguous" | "unknown", candidate rise polls)` for those visits, oldest first. Receipts
+    with the same candidates are one visit (the earliest fulfilment); unknown ones are told apart by fulfilment time."""
     readings = sorted(readings, key=lambda r: r[0])
     found = windows(readings)
     before = {t: p for (p, _), (t, _) in zip(readings, readings[1:])}
     ours = {at for _, at, _ in found if at < start}
-    for first, done in receipts:
-        later = [(s, at) for s, at, _ in found if at >= start]
-        claimed = [at for s, at in later if s < first and done <= at]
-        if not claimed:
-            claimed = [at for s, at in later if s < done and at > done - VISIT_MAX]
-            claimed = claimed if len(claimed) == 1 else []
-        ours.update(claimed)
-    return [(s if at >= start else before[at], at, rise) for s, at, rise in found if at in ours]
+    unplaced: dict[tuple, tuple] = {}
+    for first, done in sorted(receipts, key=lambda r: r[1]):
+        if done < start:
+            continue
+        candidates = tuple(at for s, at, _ in found if at >= start and s < first and at >= done - VISIT_MAX)
+        if len(candidates) == 1:
+            ours.update(candidates)
+        elif candidates:
+            unplaced.setdefault(candidates, (done, "ambiguous", candidates))
+        else:
+            unplaced.setdefault(done, (done, "unknown", ()))
+    return ([(s if at >= start else before[at], at, rise) for s, at, rise in found if at in ours],
+            sorted(unplaced.values()))
+
+
+def our_windows(readings, receipts, start: datetime = START) -> list[tuple[datetime, datetime, int]]:
+    """`(from, at, rise)` of the visits of ours that have a door window (`our_visits`; the others have none)."""
+    return our_visits(readings, receipts, start)[0]

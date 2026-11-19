@@ -150,23 +150,39 @@ def door_counts(counts, t0=FRIDAY):
     return [{"at_eastern": at(h, t0), "door_open_lifetime": str(c), "rise": "0"} for h, c in enumerate(counts)]
 
 
-def test_one_receipt_does_not_claim_two_adjacent_rises():
-    # rises seen at 12:00 and 13:00, a receipt resolved 12:15 and fulfilled 12:30: the 13:00 poll's window holds it
-    (v,) = vw.analyse(door({5: 1, 6: 1}, FRIDAY), polls(range(13), FRIDAY), [], receipts=[receipt(5.25, 5.5)])["visits"]
-    assert v["openings"] == 1 and v["window_min"] == 60
-    assert v["from"].startswith("2026-12-04T12:00") and v["to"].startswith("2026-12-04T13:00")
+def test_a_receipt_with_two_candidate_rises_is_one_visit_with_an_ambiguous_window():
+    # rises seen at 12:00 and 13:00, a receipt resolved 12:15 and fulfilled 12:30: either window could hold the opening
+    # (the 13:00 window containing the receipt is not preferred). One visit of ours; neither rise is in a window or a sale
+    sales = [{"slot": "15", "at_eastern": at(h, FRIDAY), "units": str(u)} for h, u in ((5, 2), (6, 3))]
+    r = vw.analyse(door({5: 1, 6: 1}, FRIDAY), polls(range(13), FRIDAY), sales, receipts=[receipt(5.25, 5.5)])
+    (v,) = r["visits"]
+    assert v["window"] == "ambiguous" and v["from"] is None and v["to"] is None and v["window_min"] is None
+    assert v["openings"] is None and v["our_units_inside"] is None and v["weekday"] == "Fri"
+    assert r["summary"]["visits"] == 1 and r["summary"]["our_units_inside"] == 0 and r["summary"]["window_median_min"] is None
+    # two receipts of one visit are still one visit
+    two = [receipt(5.25, 5.5), receipt(5.3, 5.6)]
+    assert len(vw.analyse(door({5: 1, 6: 1}, FRIDAY), polls(range(13), FRIDAY), [], receipts=two)["visits"]) == 1
 
 
 def test_a_receipt_reaches_back_an_hour_from_its_fulfilment_not_from_its_first_line():
-    # first line 10:06, fulfilled 11:30: a visit runs at most an hour, so a door seen at 10:00 opened before it began
-    r = vw.analyse(door({3: 1}, FRIDAY), polls(range(13), FRIDAY), [], receipts=[receipt(3.1, 4.5)])
-    assert r["visits"] == []
+    # first line 10:06, fulfilled 11:30: a visit runs at most an hour, so a door seen at 10:00 opened before it began.
+    # The receipt still proves our visit, with no door window; the 10:00 rise is not in it
+    (v,) = vw.analyse(door({3: 1}, FRIDAY), polls(range(13), FRIDAY), [], receipts=[receipt(3.1, 4.5)])["visits"]
+    assert v["window"] == "unknown" and v["from"] is None and v["window_min"] is None and v["openings"] is None
+    assert v["our_units_inside"] is None
 
 
-def test_a_receipt_that_two_rises_could_both_belong_to_claims_neither():
-    # first line 12:50, fulfilled 13:10, rises seen at 13:00 and 14:00: nothing says which, so neither is ours
-    r = vw.analyse(door({6: 1, 7: 1}, FRIDAY), polls(range(13), FRIDAY), [], receipts=[receipt(5.83, 6.17)])
-    assert r["visits"] == []
+def test_a_rise_after_the_first_line_was_resolved_is_ruled_out():
+    # first line 12:50, fulfilled 13:10: the door opened by 12:50, so the only rise, seen at 14:00 (13:00 to 14:00), is not ours
+    (v,) = vw.analyse(door({7: 1}, FRIDAY), polls(range(13), FRIDAY), [], receipts=[receipt(5.83, 6.17)])["visits"]
+    assert v["window"] == "unknown" and v["from"] is None      # old code claimed that 14:00 rise: a 60 minute window
+
+
+def test_a_receipt_with_one_candidate_rise_claims_it_and_not_the_later_rise():
+    # same receipt, rises seen at 13:00 and 14:00: only the 13:00 window can hold an opening by 12:50
+    (v,) = vw.analyse(door({6: 1, 7: 1}, FRIDAY), polls(range(13), FRIDAY), [], receipts=[receipt(5.83, 6.17)])["visits"]
+    assert v["window"] == "known" and v["openings"] == 1
+    assert v["from"].startswith("2026-12-04T12:00") and v["to"].startswith("2026-12-04T13:00")
 
 
 def test_two_openings_seen_at_one_poll_are_one_visit_and_the_count_stays_machine_wide():
