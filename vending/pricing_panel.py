@@ -113,6 +113,12 @@ def build(snap: dict, slots: tuple[str, ...], raw: dict, now: datetime) -> dict:
             basis = None
         floor, parts = _floor(receipt, options.get(product), tax)
         legal, problems = _check(price, floor, ceiling)
+        if legal is False and receipt is not None and _check(price, floor_cents(receipt, tax), ceiling)[0]:
+            # The floor is the planner's restock rule, so the next pack counts. Say when it is only
+            # the next pack that makes the price fail: the units already on the rail are covered.
+            problems = problems + [f"It covers the units already in the slot (their floor is $"
+                                   f"{_dollars(floor_cents(receipt, tax))}); the next pack at its most-we-pay "
+                                   "price is what raises the floor."]
         rows.append({
             "slot": slot, "product": product, "product_from": product_from,
             "price": sale.get("price"),

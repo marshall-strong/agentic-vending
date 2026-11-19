@@ -105,6 +105,23 @@ def test_an_illegal_price_is_flagged_now_and_in_the_plan(conn, page_conn):
     panel = section(dashboard.render(snap))
     assert panel.count("pr-row pr-illegal") == 2 and "2 shelf prices not legal; 1 plan price not legal." in panel
     assert "Plan: $7.00 is above the ceiling of $6.50" in panel and "&minus;$0.01" in panel
+    # Needs attention says so too, once per price that fails, as a Check.
+    texts = [a["text"] for a in dashboard.attention(snap) if a["level"] == "warn"]
+    assert any(t.startswith("Selection 15: the shelf price $0.85 isn't legal. $0.85 is below") for t in texts)
+    assert "Selection 15: the plan's price $7.00 isn't legal. $7.00 is above the ceiling of $6.50" in texts
+    assert any(t.startswith("Selection 16: the shelf price $2.52 isn't legal.") for t in texts)
+
+
+def test_a_price_that_fails_only_on_the_next_pack_says_so(conn, page_conn):
+    catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"))
+    # The rail's units cost 80 cents (floor $0.90); the next pack could cost $1.50 a unit (floor $1.65).
+    fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
+    source(conn, "FAKE-COLA-20", pack=6, expected=800, most=900)
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (125, 1)})
+    r = rows(dashboard.snapshot(page_conn, MONDAY))["15"]
+    assert (r["floor"], r["legal"]) == ("1.65", False)
+    assert r["problems"][-1] == ("It covers the units already in the slot (their floor is $0.90); the next pack at "
+                                 "its most-we-pay price is what raises the floor.")
 
 
 def test_a_price_change_shows_in_the_sparkline(conn, page_conn):

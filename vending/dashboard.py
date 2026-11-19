@@ -719,6 +719,17 @@ def attention(snap: dict) -> list[dict]:
         add("info", f"{n} stock warning{'s' if n != 1 else ''} from the receipts: {stock['data']['warnings'][0]}"
                     + (" (and more in /state.json)" if n > 1 else ""))
 
+    pricing = snap.get("pricing")
+    if pricing and pricing["ok"]:
+        for r in pricing["data"]["rows"]:
+            if r["legal"] is False:
+                add("warn", f"Selection {r['slot']}: the shelf price ${r['price']} isn't legal. "
+                            + (r["problems"][0] if r["problems"] else "See Pricing."))
+            n = r["next"]
+            if n and n["legal"] is False:
+                add("warn", f"Selection {r['slot']}: the plan's price ${n['price']} isn't legal. "
+                            + (n["problems"][0] if n["problems"] else "See Pricing."))
+
     for key, name in (("plan", "Plan"), ("runs", "Runs"), ("activity", "Tool calls"), ("sales", "Sales"),
                       ("stock", "Stock"), ("purchase_requests", "Purchase requests"),
                       ("catalog_requests", "Catalog requests"), ("money", "Money")):
