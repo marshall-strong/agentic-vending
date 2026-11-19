@@ -119,16 +119,36 @@ def build(detail: Path, season_id: str, name: str | None = None, strategy: str |
 
 # --- writing: one line per small object, so a summary stays short ------------------------------
 
+WIDTH = 150
+
+
 def dumps(value: Any, indent: str = "") -> str:
-    """JSON with every object or list that fits in 150 characters on one line."""
+    """JSON with every object or list that fits in `WIDTH` characters on one line, and an object's
+    plain values (numbers, text, none) packed several to a line."""
     flat = json.dumps(value, ensure_ascii=False)
-    if len(flat) + len(indent) <= 150 or not isinstance(value, (dict, list)) or not value:
+    if len(flat) + len(indent) <= WIDTH or not isinstance(value, (dict, list)) or not value:
         return flat
     inner = indent + " "
-    if isinstance(value, dict):
-        items = [f"{inner}{json.dumps(k)}: {dumps(v, inner)}" for k, v in value.items()]
-        return "{\n" + ",\n".join(items) + "\n" + indent + "}"
-    return "[\n" + ",\n".join(inner + dumps(v, inner) for v in value) + "\n" + indent + "]"
+    if isinstance(value, list):
+        return "[\n" + ",\n".join(inner + dumps(v, inner) for v in value) + "\n" + indent + "]"
+    lines: list[str] = []
+    packed = ""
+    for k, v in value.items():
+        item = f"{json.dumps(k)}: {dumps(v, inner)}"
+        plain = not isinstance(v, (dict, list)) and "\n" not in item
+        if plain and packed and len(inner) + len(packed) + 2 + len(item) <= WIDTH:
+            packed += ", " + item
+            continue
+        if packed:
+            lines.append(inner + packed)
+            packed = ""
+        if plain:
+            packed = item
+        else:
+            lines.append(inner + item)
+    if packed:
+        lines.append(inner + packed)
+    return "{\n" + ",\n".join(lines) + "\n" + indent + "}"
 
 
 def write(summary: dict, path: Path) -> None:

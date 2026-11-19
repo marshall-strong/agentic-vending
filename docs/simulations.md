@@ -7,8 +7,10 @@ They don't forecast real sales.
 
 ## Where to see them
 
-`/dashboard/demo/simulations` on the container, behind the shared password. It lists every
-committed season, and each season has a page with its weeks, report cards and the agent's
+`/dashboard/demo/simulations` on the container, behind the shared password. It opens with the
+chart from slide 13 of the final deck: cumulative profit by week for each season, after its AI cost
+(model spend), with the AI cost of each beside it. The simple rule is dashed. Below the chart is a
+table of every committed season. Each season has a page with its weeks, report cards and the agent's
 decisions. Every page opens with the banner "SIMULATED season: not real sales or money". The pages
 read only the summary files in `vending/simulate/seasons/`. They never open a database connection.
 The live dashboard (`/dashboard`) never shows or links a simulation.
@@ -20,12 +22,14 @@ cash and stock-outs, the report card, and each run's decision with its reason. T
 (every run's tool calls, every request and receipt, every slot on every day) stays on the machine
 that ran the season.
 
-Three seasons are kept:
+Five seasons are kept, about 800 lines in all:
 
-| Season | Why it is kept | Profit after model spend |
+| Season | Why it is kept | Profit after AI cost |
 |---|---|---:|
 | `2026-11-16-opus-medium-round3` | The best: Opus 5.5 after round 3's changes, 15 drinks, a top-up rule | $963.69 |
-| `2026-11-16-opus-medium` | The worst: the agent as first built | $317.12 |
+| `2026-11-16-baseline-wednesday` | Slide 13: the simple rule, Wednesday runs, the bar for the fixed agent | $443.09 |
+| `2026-11-16-opus-medium-fixed` | Slide 13: the agent after the first fixes | $385.97 |
+| `2026-11-16-opus-medium` | The worst, and slide 13's first run: the agent as first built | $317.12 |
 | `2026-11-16-interloper-0-25` | The Interloper next door takes 0.25 of a shared drink's demand (totals only) | $412.11 |
 
 All seven seasons from PR #151, for reference (seed 20261203):

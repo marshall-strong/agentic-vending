@@ -98,6 +98,30 @@ def test_every_page_carries_the_banner_and_reads_no_database(site, no_database):
         assert f'href="{ROOT}/{s.id}"' in body and s.name in body.replace("&#x27;", "'")
 
 
+def test_the_index_opens_with_profit_by_week_after_ai_cost(site, no_database):
+    """Slide 13 of the final deck: the first thing under the banner is cumulative profit by week for
+    every season with weeks, each with its AI cost; the agent's line and the rule's are told apart."""
+    _, _, body = _ask(site, "GET", ROOT)
+    main = body[body.index("<main>"):]
+    assert main.index('class="card headline"') < main.index("<h1>") < main.index("<table>")
+    chart = main[main.index('class="card headline"'):main.index("</section>")]
+    assert "Profit so far, week by week, after AI cost" in chart and "<svg" in chart
+    charted = [s for s in summary.load_all() if s.weeks]
+    assert len(charted) >= 3
+    for s in charted:
+        line = f'{s.id}">{s.name}</a>: <b>${s.totals["profit_after_model"]:,.2f}</b> after '
+        assert line in chart.replace("&#x27;", "'"), s.id
+        assert f'<b>${round(s.totals["model_spend"], 2):,.2f}</b> of AI cost' in chart, s.id
+        assert f'${s.totals["profit_after_model"]:,.0f}</text>' in chart, s.id        # the line's end label
+    assert chart.count("<polyline") == len(charted)
+    rules = sum(s.data["decider"] != "model" for s in charted)
+    assert chart.count('stroke-dasharray="7 5"') == rules >= 1          # the rule is dashed, the agent isn't
+    # Slide 13's three: the agent as first built and after the fixes, against the rule on the same days.
+    for sid in ("2026-11-16-opus-medium", "2026-11-16-opus-medium-fixed", "2026-11-16-baseline-wednesday"):
+        assert f'href="{ROOT}/{sid}"' in chart
+    assert "Not charted, totals only" in chart and "2026-11-16-interloper-0-25" in chart
+
+
 def test_a_season_page_shows_weeks_report_cards_and_decisions(site, no_database):
     status, _, body = _ask(site, "GET", f"{ROOT}/2026-11-16-opus-medium-round3")
     assert status == 200
@@ -138,9 +162,9 @@ def test_the_live_pages_do_not_link_or_show_simulations(site):
 def test_the_committed_summaries_load_and_stay_small():
     seasons = summary.load_all()
     assert {s.id for s in seasons} >= {"2026-11-16-opus-medium-round3", "2026-11-16-opus-medium"}
-    assert len(seasons) <= 3
+    assert len(seasons) <= 6
     lines = sum(len(p.read_text(encoding="utf-8").splitlines()) for p in summary.SEASONS.glob("*.json"))
-    assert lines < 1500
+    assert lines < 1200
     for s in seasons:
         assert s.data["simulated"] is True
         assert all(len(d["reason"] or "") <= summary.REASON_CHARS for d in s.data["decisions"])

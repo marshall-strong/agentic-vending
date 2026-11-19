@@ -103,12 +103,12 @@ STYLE = """
 :root { color-scheme: light dark;
   --bg:#f3f5f8; --surface:#fff; --ink:#18202a; --muted:#5d6977; --line:#dfe4ea; --accent:#1f5fd1;
   --ok:#16794a; --ok-soft:#e3f5ea; --warn:#9a5b00; --warn-soft:#fff2d9; --bad:#c0262d; --bad-soft:#fde7e7;
-  --s1:#1f5fd1; --s2:#c25e00; --s3:#0f8a7a; --grid:#e7ebf0; --zero:#8a94a3;
+  --s1:#1f5fd1; --s2:#c25e00; --s3:#0f8a7a; --s4:#7c3aed; --rule:#5d6977; --grid:#e7ebf0; --zero:#8a94a3;
   --banner:#ffd23f; --banner-ink:#141414; }
 @media (prefers-color-scheme: dark) { :root {
   --bg:#0e1116; --surface:#161b22; --ink:#e6eaf0; --muted:#94a0ae; --line:#2a313b; --accent:#6ea8ff;
   --ok:#4cc38a; --ok-soft:#12301f; --warn:#f0b450; --warn-soft:#3a2a10; --bad:#ff6b6b; --bad-soft:#3d1a1c;
-  --s1:#6ea8ff; --s2:#f59e4c; --s3:#3fc7b3; --grid:#262d36; --zero:#6b7480; } }
+  --s1:#6ea8ff; --s2:#f59e4c; --s3:#3fc7b3; --s4:#b392f0; --rule:#a3adba; --grid:#262d36; --zero:#6b7480; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
 a { color:var(--accent); }
@@ -136,8 +136,12 @@ tr:last-child td { border-bottom:0; }
 .bad { background:var(--bad-soft); color:var(--bad); }
 .chart { width:100%; height:auto; display:block; }
 .chart text { fill:var(--muted); font-size:12px; }
-@media (max-width:600px) { .chart text { font-size:22px; } }
-.legend { display:flex; gap:16px; flex-wrap:wrap; font-size:13px; margin:6px 0 0; }
+@media (max-width:600px) { .chart text, .chart text.end { font-size:22px; } }
+.legend { display:flex; gap:6px 18px; flex-wrap:wrap; font-size:14px; margin:8px 0 0; padding:0; list-style:none; }
+.headline { margin:4px 0 8px; } .headline h2 { margin:0 0 2px; font-size:20px; }
+.small { font-size:13px; margin:2px 0 6px; }
+.chart text.end { font-size:13px; font-weight:700; }
+.key.dashed { background:repeating-linear-gradient(90deg, var(--rule) 0 5px, transparent 5px 8px) !important; }
 .key { display:inline-block; width:12px; height:12px; border-radius:2px; vertical-align:-1px; margin-right:6px; }
 details { margin:8px 0; } summary { cursor:pointer; color:var(--accent); }
 ul.decisions { list-style:none; padding:0; margin:0; }
@@ -178,14 +182,15 @@ def _scale(values: list[float]) -> tuple[float, float, float]:
     return low, high, step
 
 
-def _chart(series: list[tuple[str, str, list[dict]]], bars: bool) -> str:
+def _chart(series: list[tuple[str, str, list[dict], bool]], bars: bool, ends: bool = False) -> str:
     """Cumulative profit as lines (and, with `bars`, each week's profit as bars) for each (name, colour,
-    weeks). Weeks run W1 to the longest season's last."""
-    width, height, left, right, top, bottom = 860, 300, 88, 16, 14, 34
-    n = max(len(w) for _, _, w in series)
-    values = [x["cumulative_profit"] for _, _, w in series for x in w]
+    weeks, dashed). With `ends`, each line's last value is written at its end. Weeks run W1 to the
+    longest season's last."""
+    width, height, left, right, top, bottom = 860, 300, 88, 70 if ends else 16, 14, 34
+    n = max(len(w) for _, _, w, _ in series)
+    values = [x["cumulative_profit"] for _, _, w, _ in series for x in w]
     if bars:
-        values += [x["profit"] for _, _, w in series for x in w]
+        values += [x["profit"] for _, _, w, _ in series for x in w]
     low, high, step = _scale(values)
     y = lambda v: top + (high - min(max(v, low), high)) * (height - top - bottom) / (high - low)
     band = (width - left - right) / n
@@ -198,7 +203,8 @@ def _chart(series: list[tuple[str, str, list[dict]]], bars: bool) -> str:
     out.append(f'<line x1="{left}" x2="{width - right}" y1="{y(0):.1f}" y2="{y(0):.1f}" style="stroke:var(--zero)"/>')
     for i in range(n):
         out.append(f'<text x="{left + band * (i + .5):.1f}" y="{height - 10}" text-anchor="middle">W{i + 1}</text>')
-    for name, colour, weeks in series:
+    labels: list[list] = []
+    for name, colour, weeks, dashed in series:
         if bars:
             for i, w in enumerate(weeks):
                 y0, y1 = sorted((y(0), y(w["profit"])))
@@ -206,55 +212,89 @@ def _chart(series: list[tuple[str, str, list[dict]]], bars: bool) -> str:
                            f'height="{max(y1 - y0, 1):.1f}" rx="2" style="fill:{colour};opacity:.35">'
                            f'<title>W{i + 1}: {_money(w["profit"])} profit</title></rect>')
         points = " ".join(f"{left + band * (i + .5):.1f},{y(w['cumulative_profit']):.1f}" for i, w in enumerate(weeks))
-        out.append(f'<polyline points="{points}" fill="none" style="stroke:{colour}" stroke-width="2.5"/>')
+        dash = ' stroke-dasharray="7 5"' if dashed else ""
+        out.append(f'<polyline points="{points}" fill="none" style="stroke:{colour}" stroke-width="2.5"{dash}/>')
         for i, w in enumerate(weeks):
             out.append(f'<circle cx="{left + band * (i + .5):.1f}" cy="{y(w["cumulative_profit"]):.1f}" r="3.5" '
                        f'style="fill:{colour}"><title>{escape(name)}, W{i + 1}: {_money(w["cumulative_profit"])} '
                        "so far</title></circle>")
+        if ends and weeks:
+            last = weeks[-1]["cumulative_profit"]
+            labels.append([y(last) + 4, colour, _money(last, cents=False), left + band * (len(weeks) - .5) + 8])
+    # End labels in value order, pushed apart so none overlaps the next.
+    labels.sort(key=lambda label: label[0])
+    for k in range(1, len(labels)):
+        labels[k][0] = max(labels[k][0], labels[k - 1][0] + 22)
+    for at, colour, text, x in labels:
+        out.append(f'<text x="{x:.1f}" y="{at:.1f}" class="end" style="fill:{colour}">{text}</text>')
     return "".join(out) + "</svg>"
 
 
 # --- pages --------------------------------------------------------------------------------------
 
-COLOURS = ("var(--s1)", "var(--s2)", "var(--s3)")
+COLOURS = ("var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)")
+RULE_COLOUR = "var(--rule)"      # a season with no model, drawn dashed: the bar the agent should clear
+
+
+def _ai(t: dict) -> str:
+    """A season's AI cost (its model spend), to the cent."""
+    return _money(round(t.get("model_spend") or 0, 2))
+
+
+def headline_chart(seasons: list[summary.Season]) -> str:
+    """Slide 13 of the final deck: profit so far, week by week, after the AI cost, for every season with
+    weeks, best first. A season with no model is dashed, as the bar the agent should clear."""
+    charted = sorted((s for s in seasons if s.weeks), key=lambda s: -s.totals["profit_after_model"])
+    if not charted:
+        return ""
+    series, k = [], 0
+    for s in charted:
+        rule = s.data.get("decider") != "model"
+        series.append((s, RULE_COLOUR if rule else COLOURS[k % len(COLOURS)], rule))
+        k += 0 if rule else 1
+    legend = "".join(
+        f'<li><i class="key{" dashed" if rule else ""}" style="background:{c}"></i>'
+        f'<a href="{ROOT}/{s.id}">{escape(s.name)}</a>: <b>{_money(s.totals["profit_after_model"])}</b> after '
+        f'<b>{_ai(s.totals)}</b> of AI cost</li>' for s, c, rule in series)
+    untracked = [s for s in seasons if not s.weeks]
+    missing = ('<p class="muted small">Not charted, totals only: '
+               + ", ".join(f'<a href="{ROOT}/{s.id}">{escape(s.name)}</a>' for s in untracked) + ".</p>"
+               if untracked else "")
+    lines = [(s.name, c, s.weeks, rule) for s, c, rule in series]
+    return ('<section class="card headline"><h2>Profit so far, week by week, after AI cost</h2>'
+            '<p class="muted small">Cumulative profit of each simulated season, after what its model calls cost. '
+            "Dashed: the simple refill rule, no model.</p>"
+            f'{_chart(lines, bars=False, ends=True)}<ul class="legend">{legend}</ul>{missing}</section>')
 
 
 def index(seasons: list[summary.Season]) -> str:
-    charted = [s for s in seasons if s.weeks]
-    order = sorted(seasons, key=lambda s: -s.totals["profit_after_model"])
+    if not seasons:
+        return _page("Simulated seasons", "<h1>Simulated seasons</h1><p>No season summaries are committed yet.</p>")
     rows = []
-    for s in order:
+    for s in sorted(seasons, key=lambda s: -s.totals["profit_after_model"]):
         t = s.totals
         rows.append(
             f'<tr><td class="wrap"><a href="{ROOT}/{s.id}"><b>{escape(s.name)}</b></a>'
             f'<br><small class="muted">{escape(s.data["strategy"])}</small></td>'
-            f'<td><b>{_money(t["profit_after_model"])}</b></td><td>{_num(t.get("units_sold"))}</td>'
-            f'<td>{_num(t.get("units_lost"))}</td><td>{_money(t.get("model_spend"))}</td>'
-            f'<td>{len(s.weeks) or "totals only"}</td></tr>')
-    chart = ""
-    if charted:
-        series = [(s.name, COLOURS[i % len(COLOURS)], s.weeks) for i, s in enumerate(charted)]
-        legend = "".join(f'<span><i class="key" style="background:{c}"></i>{escape(n)}</span>' for n, c, _ in series)
-        chart = (f'<h2>Profit so far, week by week</h2><div class="card">{_chart(series, bars=False)}'
-                 f'<div class="legend">{legend}</div></div>')
+            f'<td><b>{_money(t["profit_after_model"])}</b></td><td>{_ai(t)}</td><td>{_num(t.get("units_sold"))}</td>'
+            f'<td>{_num(t.get("units_lost"))}</td><td>{len(s.weeks) or "totals only"}</td></tr>')
     body = (
+        f"{headline_chart(seasons)}"
         "<h1>Simulated seasons</h1>"
         '<p class="muted">Each season runs our real agent, tools, planner, stock count and ledger from the day-one '
         "fill (Mon 30 Nov) to Wed 3 Feb, on a made-up machine with made-up customers. They compare strategies "
         "with each other. They don't forecast real sales.</p>"
-        f"{chart}<h2>Seasons</h2>"
         '<div class="scroll"><table><thead><tr><th class="l">Season and what it tries</th>'
-        "<th>Profit after model spend</th><th>Units sold</th><th>Units lost to empty slots</th>"
-        f"<th>Model spend</th><th>Weeks</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
-        if seasons else "<h1>Simulated seasons</h1><p>No season summaries are committed yet.</p>")
+        "<th>Profit after AI cost</th><th>AI cost</th><th>Units sold</th><th>Units lost to empty slots</th>"
+        f"<th>Weeks</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
     return _page("Simulated seasons", body)
 
 
 def _tiles(t: dict) -> str:
-    tiles = (("Profit after model spend", _money(t.get("profit_after_model"))),
+    tiles = (("Profit after AI cost", _money(t.get("profit_after_model"))),
              ("Units sold", _num(t.get("units_sold"))),
              ("Units lost to empty slots", _num(t.get("units_lost"))),
-             ("Model spend", _money(t.get("model_spend"))),
+             ("AI cost (model calls)", _ai(t)),
              ("Cash at the end", _money(t.get("balance_end"))),
              ("Stock at cost at the end", _money(t.get("inventory_at_cost_end"))))
     return '<div class="tiles">' + "".join(
@@ -273,7 +313,7 @@ def _weeks_table(weeks: list[dict]) -> str:
             f'<td{neg(w["cumulative_profit"])}>{_money(w["cumulative_profit"])}</td><td>{_money(w["balance"])}</td>'
             f'<td>{_money(w["spendable"])}</td></tr>')
     return ('<div class="scroll"><table><thead><tr><th class="l">Week</th><th>Class days</th><th>Units sold</th>'
-            "<th>Units lost</th><th>Slots that ran out</th><th>Revenue ex tax</th><th>Gross profit</th><th>Model</th>"
+            "<th>Units lost</th><th>Slots that ran out</th><th>Revenue ex tax</th><th>Gross profit</th><th>AI cost</th>"
             "<th>Profit</th><th>So far</th><th>Cash</th><th>Spendable</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>")
 
@@ -303,7 +343,7 @@ def _decisions(decisions: list[dict]) -> str:
     for d in decisions:
         what = d.get("decision") or d.get("status") or ""
         items.append(f'<li><b>{_when(d["at"])}</b> <span class="muted">{escape(str(d.get("kind") or ""))} run, '
-                     f'{escape(str(what))}, {_money(d.get("cost_usd"))} of model spend</span>'
+                     f'{escape(str(what))}, {_money(d.get("cost_usd"))} of AI cost</span>'
                      f'<br>{escape(d.get("reason") or "No reason recorded.")}</li>')
     return f'<div class="card"><ul class="decisions">{"".join(items)}</ul></div>'
 
@@ -315,7 +355,7 @@ def _sweep(sweep: dict) -> str:
                    for r in sweep["rows"])
     return ("<h2>The same rule, four shares</h2>"
             '<div class="scroll"><table><thead><tr><th class="l">Share the Interloper takes</th>'
-            "<th>Profit after model spend</th><th>Units sold</th><th>Red Bull</th><th>Celsius</th>"
+            "<th>Profit after AI cost</th><th>Units sold</th><th>Red Bull</th><th>Celsius</th>"
             f"<th>Mountain Dew 20 oz</th></tr></thead><tbody>{rows}</tbody></table></div>")
 
 
@@ -329,7 +369,7 @@ def season_page(s: summary.Season) -> str:
              f'seed {escape(str(d.get("seed")))}.</p>', _tiles(s.totals)]
     if s.weeks:
         parts += ['<h2>Profit by week (bars) and so far (line)</h2>',
-                  f'<div class="card">{_chart([(s.name, "var(--s1)", s.weeks)], bars=True)}</div>',
+                  f'<div class="card">{_chart([(s.name, "var(--s1)", s.weeks, False)], bars=True)}</div>',
                   "<h2>Week by week</h2>", _weeks_table(s.weeks),
                   "<h2>Report cards</h2>", _cards(s.weeks)]
     if d.get("sweep"):
