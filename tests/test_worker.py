@@ -356,7 +356,9 @@ def _ask(server, method: str, path: str, headers: dict | None = None):
     import http.client
     conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=20)
     try:
-        conn.request(method, path, body=b"x=1" if method == "POST" else None, headers=headers or {})
+        # A POST with no body: the server refuses it without reading one, and on Windows a body it never
+        # read can make the client's send fail with WinError 10053 before the 405 arrives.
+        conn.request(method, path, body=b"" if method == "POST" else None, headers=headers or {})
         reply = conn.getresponse()
         return reply.status, dict(reply.getheaders()), reply.read().decode()
     finally:
