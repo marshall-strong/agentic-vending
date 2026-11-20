@@ -731,6 +731,23 @@ def lane_html(page: str, slot: str) -> str:
     return page[start:end if end != -1 else len(page)]
 
 
+def shows(text: str, figure: str) -> bool:
+    """Whether `text` shows `figure` (a sentinel price or count) on its own: not inside a longer number,
+    such as the seconds of a timestamp ("02:54:58.766051" holds "8.76"). A colon counts as a
+    boundary only after a digit (a clock), so compact JSON ("sold":4321) is still caught."""
+    return re.search(rf"(?<![\d.])(?<!\d:){re.escape(figure)}(?![\d])", text) is not None
+
+
+def test_a_timestamp_s_seconds_dont_read_as_a_sentinel_figure():
+    # A page's own clock ("02:54:58.766051") holds "8.76"; that isn't the other team's price.
+    assert not shows('<time datetime="2026-11-20T02:54:58.766051+00:00">', "8.76")
+    assert not shows("run 14321 steps", "4321") and not shows("19.875", "9.87")
+    # The figure on its own, in a cell, a price, JSON or a sentence, still shows.
+    for text, figure in (("<td>8.76</td>", "8.76"), ("$8.76", "8.76"), ('"price": "8.76"', "8.76"), ('"sold":4321', "4321"),
+                         ("8.76", "8.76"), ("tag 4321 units", "4321"), ("(9.87)", "9.87")):
+        assert shows(text, figure), text
+
+
 def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json(conn, page_conn):
     # 12 isn't ours (ours are columns 5 to 8): a receipt, a catalog row, a count, a poll and a plan entry name it.
     catalog(conn, ("ZZ-RIVAL-SKU", "Zebra Fizz Rival", "Zebra Fizz", "Mango", "16 oz glass bottle"),
@@ -750,8 +767,10 @@ def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json
     page, state = dashboard.render(snap), dashboard.to_json(snap)
     assert snap["products"]["ok"] and list(snap["products"]["data"]["catalog"]) == ["COKE-20OZ"]
     # (The request's own total, $5.55, stays in Requests: that is our money, not a lane.)
-    for leak in ("ZZ-RIVAL", "Zebra", "Mango", "Quokka", "9.87", "8.76", "4321"):
+    for leak in ("ZZ-RIVAL", "Zebra", "Mango", "Quokka"):
         assert leak not in page and leak not in state, leak
+    for figure in ("9.87", "8.76", "4321"):
+        assert not shows(page, figure) and not shows(state, figure), figure
     card = lane_html(page, "12")
     assert 'class="ma-lane ma-notours"' in page and "Not ours" in card and "<svg" not in card
     assert "+2 back Friday" in lane_html(page, "15")        # ours is drawn: fill 7 less 5 on hand
