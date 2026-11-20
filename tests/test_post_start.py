@@ -124,8 +124,8 @@ def http_date(moment: str) -> str:
 @pytest.fixture
 def script(monkeypatch, assignment):
     """scripts/bridge.py, answering from a fake bridge with one stored poll, `script.poll`, taken
-    at `script.taken` by every account the bridge gives: the listing's `started_at`, a `polls` table
-    lookup, and a live read's `Date` header. The script must print the same whatever they say.
+    at `script.taken` by every account the bridge gives: the listing's `started_at` and a live
+    read's `Date` header. The script must print the same whatever they say.
     `script.listing` replaces the whole listing. `script.ours` is our assignment. "Now", the
     client's clock, is `script.now`, the day after the start unless a test moves it. The fake
     answers only the history and poll routes, so a command that asks `/api/v1/slots` which
@@ -135,7 +135,7 @@ def script(monkeypatch, assignment):
     module.poll, module.taken = machine_poll(assignment, 13, SENTINEL_PRICE, SENTINEL_UNITS, 7), AFTER
     module.calls = []
     module.now = datetime(2026, 12, 4, 15, 0, tzinfo=timezone.utc)
-    module.listing = module.stored = module.live_headers = None
+    module.listing = module.live_headers = None
 
     def call(method, path, **kwargs):
         module.calls.append(path)
@@ -152,12 +152,6 @@ def script(monkeypatch, assignment):
             return module.listing
         return {"polls": [{"session_id": "s1", "started_at": module.taken}]}
 
-    def stored_poll_time(session_id):
-        module.calls.append(f"polls table: {session_id}")
-        if module.stored is not None:
-            return module.stored
-        return datetime.fromisoformat(module.taken), None
-
     class Now(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -167,8 +161,6 @@ def script(monkeypatch, assignment):
     monkeypatch.setattr(module, "get_json", get_json)
     monkeypatch.setattr(module, "datetime", Now)
     module.stored_selections = module.our_selections   # the real one, for tests that store an assignment
-    module.real_stored_poll_time = getattr(module, "stored_poll_time", None)   # the real one, likewise
-    monkeypatch.setattr(module, "stored_poll_time", stored_poll_time, raising=False)
     monkeypatch.setattr(module, "our_selections", lambda: (assignment, None))
     return module
 
@@ -176,7 +168,7 @@ def script(monkeypatch, assignment):
 def rebuilt(ours: tuple[str, ...], door: str = "EA2*DO*7*107") -> str:
     """Exactly what the script prints of `machine_poll(ours, 13, ...)` from the start: ID4's decimal
     places, the door counter, then each of ours in the poll's order, rebuilt from its fields."""
-    lines = ["ID4*2", door] + [r for s in sorted(ours) for r in (f"PA1*{s}*250", "PA2*13*3250*0*0*0*0")]
+    lines = ["ID4*2", door] + [r for s in sorted(ours) for r in (f"PA1*{s}*250", "PA2*13*3250")]
     return "".join(line + "\r\n" for line in lines)
 
 
@@ -208,7 +200,7 @@ def at(script, taken: str) -> None:
 
 
 def http_calls(script) -> list[str]:
-    """The requests the script sent to the bridge (not the `polls` table lookups)."""
+    """The requests the script sent to the bridge."""
     return [c for c in script.calls if c.startswith("/")]
 
 
@@ -441,8 +433,8 @@ def test_rebuild_writes_only_checked_fields_of_ours_and_the_door():
             "PA1*16*x\nPA2*y\nG85*ABCD\nSE*20*0001\nDXE*1*1\n")
     shown, printed, left_out = load_script().rebuild(text, ("15", "16"))
     # A field that isn't a number ends its record there; a PA2 outside our block, PA3 and the
-    # rest are gone. `\n` in, `\n` out.
-    assert shown == "ID4*2\nPA1*15*250\nPA2*3*750*1*2\nEA2*DO*7*107\nPA1*16\n"
+    # rest are gone; PA2 keeps its units and value, EA2*DO its two counters. `\n` in, `\n` out.
+    assert shown == "ID4*2\nPA1*15*250\nPA2*3*750\nEA2*DO*7*107\nPA1*16\n"
     assert (printed, left_out) == (2, 15)
 
 
@@ -529,9 +521,10 @@ def test_health_prints_only_its_status(bridge, capsys):
     bridge.replies["/health"] = {"status": "ok", "raw": HIDDEN, "detail": {"last": HIDDEN}}
     assert bridge.main(["health"]) == 0
     assert shown(capsys)[0] == {"status": "ok"}
-    bridge.replies["/health"] = {"status": HIDDEN}
-    assert bridge.main(["health"]) == 0
-    assert shown(capsys)[0] == {"status": None}
+    for status in (HIDDEN, "degraded", "OK ", None, 1):
+        bridge.replies["/health"] = {"status": status}
+        assert bridge.main(["health"]) == 0
+        assert shown(capsys)[0] == {"status": "unexpected status"}
 
 
 def test_slots_prints_only_our_teams_checked_assignment(bridge, capsys):
@@ -585,7 +578,9 @@ def test_a_fulfilled_request_prints_its_receipts_checked(bridge, capsys):
                "units_bought": 24, "total_paid": "18.50", "unit_cost_paid": "0.7708", "units_loaded": 20,
                "units_lost": 0, "loss_note": HIDDEN, "units_to_back_stock": 4, "units_from_back_stock": 0,
                "units_pulled": 0, "pulled_sku": None, "slot_reassigned": False,
-               "resolved_at": "2026-11-20T16:00:00+00:00", "later_losses": [{"note": HIDDEN}], "raw": HIDDEN}
+               "resolved_at": "2026-11-20T16:00:00+00:00", "raw": HIDDEN,
+               "later_losses": [{"location": "closet", "sku": "SKU-1", "units": 2, "note": HIDDEN,
+                                 "recorded_at": "2026-11-21T15:00:00+00:00", "raw": HIDDEN}, HIDDEN]}
     bridge.replies["/api/v1/purchase-requests/r2"] = {
         "id": "r2", "status": "fulfilled", "device_id": "vmc1", "created_at": "2026-11-20T15:00:00+00:00",
         "updated_at": "2026-11-20T16:00:00+00:00", "fulfilled_at": "2026-11-20T16:00:00+00:00",
@@ -600,7 +595,10 @@ def test_a_fulfilled_request_prints_its_receipts_checked(bridge, capsys):
     assert line["slot"] == "15" and "primary" not in line and len(printed["lines"]) == 1
     assert line["receipt"]["units_loaded"] == 20 and line["receipt"]["unit_cost_paid"] == "0.7708"
     assert line["receipt"]["loss_note"] == f"(note omitted, {len(HIDDEN)} characters)"
-    assert line["receipt"]["later_losses"] == 1 and "raw" not in line["receipt"]
+    assert line["receipt"]["later_losses"] == [
+        {"location": "closet", "sku": "SKU-1", "units": 2, "recorded_at": "2026-11-21T15:00:00+00:00",
+         "note": f"(note omitted, {len(HIDDEN)} characters)"}]
+    assert "raw" not in line["receipt"]
     assert "1 line left out" in err
 
 
@@ -626,6 +624,166 @@ def test_a_reply_that_isnt_http_prints_a_fixed_message(monkeypatch, capsys, argv
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     monkeypatch.setattr(module, "our_selections", lambda: (COLUMNS_5_TO_8, None))
-    assert module.main(argv) in (module.EXIT_BRIDGE, module.EXIT_UNREACHABLE)
+    no_answer = kind == "RemoteDisconnected"   # the peer closed before any status: no answer at all
+    assert module.main(argv) == (module.EXIT_UNREACHABLE if no_answer else module.EXIT_BRIDGE)
     out, err = capsys.readouterr()
     assert out == "" and "PA1*" not in err and "VA1" not in err and not leaked(err, 987654, 98765), err
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85", "\r", "\n", "\x9b"])
+def test_short_text_is_one_line_by_any_line_break(bridge, capsys, separator):
+    bridge.replies["/api/v1/products"] = [{"sku": "SKU-1", "name": f"Cola{separator}VA1 987654"}]
+    assert bridge.main(["products"]) == 0
+    assert shown(capsys)[0] == [{"sku": "SKU-1", "name": None, "line": None, "flavor": None, "size": None}]
+
+
+def test_raw_help_doesnt_promise_raw_text(capsys):
+    with pytest.raises(SystemExit):
+        load_script().main(["raw", "--help"])
+    with pytest.raises(SystemExit):
+        load_script().main(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "raw EVA-DTS text" not in text and "rebuilt from our selections" in text
+
+
+# --- Requests that fail in ways HTTP doesn't name -------------------------------------------------
+
+@pytest.mark.parametrize("error", [ValueError, KeyError, UnicodeError, AttributeError, RuntimeError])
+@pytest.mark.parametrize("argv", [["health"], ["slots"], ["raw", "s1"], ["poll", "--live"]])
+def test_any_fault_in_a_request_prints_its_kind_only(monkeypatch, capsys, argv, error):
+    import urllib.request
+
+    module = load_script()
+    monkeypatch.setenv("DEX_BASE_URL", "http://bridge.test")
+    monkeypatch.setenv("DEX_API_KEY", "key")
+
+    def urlopen(request, timeout):
+        raise error(f"redirect to {HIDDEN}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(module, "our_selections", lambda: (COLUMNS_5_TO_8, None))
+    assert module.main(argv) == module.EXIT_BRIDGE
+    out, err = capsys.readouterr()
+    assert out == "" and error.__name__ in err and "Traceback" not in err
+    assert "PA1*" not in err and "VA1" not in err and not leaked(err, 987654, 98765), err
+
+
+def test_a_redirect_to_a_malformed_location_prints_no_part_of_it(monkeypatch, capsys):
+    """A real server: a 302 whose Location urllib can't parse, holding a VA1 record."""
+    import http.server
+    import threading
+
+    class Redirect(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", "http://[VA1*987654*98765/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Redirect)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        module = load_script()
+        monkeypatch.setenv("DEX_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
+        monkeypatch.setenv("DEX_API_KEY", "key")
+        assert module.main(["slots"]) == module.EXIT_BRIDGE
+    finally:
+        server.shutdown()
+        server.server_close()
+    out, err = capsys.readouterr()
+    assert out == "" and "Traceback" not in err
+    assert "VA1" not in err and not leaked(err, 987654, 98765), err
+
+
+# --- Malformed polls: the same selection blocks as vending.evadts ---------------------------------
+
+POLL_VIEWS = [["latest"], ["raw", "s1"], ["poll", "--live"], ["latest", "--summary"]]
+
+
+def poll_of(*records: str) -> bytes:
+    """A whole, checksummed poll of `records` (vending.evadts reads it as a good one)."""
+    return build(["ID1*TEST-MACHINE*0000**EVS3.0*", "ID4*2*1840*5", "VA1*987654*98765*0*0", *records])
+
+
+def printed_counters(script, argv, out: str) -> dict:
+    """Each of our selections' (units, value) the view printed, or None where it printed none."""
+    import json
+
+    if argv[-1] == "--summary":
+        rows = json.loads(out)
+        return {r["slot"]: (r["lifetime_units"], r["lifetime_sales"]) for r in rows
+                if r["lifetime_units"] is not None}
+    found, current = {}, None
+    for line in out.splitlines():
+        fields = line.split("*")
+        if fields[0] == "PA1":
+            current = fields[1]
+        elif fields[0] == "PA2" and current:
+            found[current] = (int(fields[1]), f"${int(fields[2]) / 100:,.2f}")
+            current = None
+    return found
+
+
+def evadts_counters(poll: bytes, ours) -> dict:
+    """Each of our selections' (units, value) by vending.evadts, the parser the sync stores."""
+    from vending import evadts
+
+    return {s.selection: (s.lifetime_units, f"${s.lifetime_sales_cents / 100:,.2f}")
+            for s in evadts.parse(poll).selections if s.selection in ours}
+
+
+@pytest.mark.parametrize("argv", POLL_VIEWS)
+@pytest.mark.parametrize("between", ["PA9*1", "XX1*2", "", "EA2*DO*1*2"])
+def test_a_pa2_across_another_record_isnt_attached(script, capsys, argv, between):
+    """vending.evadts ends a selection block at any record but PA3-PA5, PA7 and PA8: so does every view."""
+    first = script.ours[0]
+    script.poll = poll_of("EA2*DO*7*107", f"PA1*{first}*250", between, "PA2*13*3250*0*0",
+                          f"PA1*{script.ours[1]}*250", "PA3*1*2", "PA5*20261204", "PA2*13*3250")
+    assert script.main(argv) == 0
+    out, _ = capsys.readouterr()
+    assert printed_counters(script, argv, out) == evadts_counters(script.poll, script.ours)
+    assert first not in printed_counters(script, argv, out) and script.ours[1] in printed_counters(script, argv, out)
+
+
+@pytest.mark.parametrize("argv", POLL_VIEWS)
+def test_a_selection_listed_twice_prints_none_of_its_figures(script, capsys, argv):
+    first = script.ours[0]
+    script.poll = poll_of("EA2*DO*7*107", f"PA1*{first}*250", "PA2*13*3250",
+                          f"PA1*{script.ours[1]}*250", "PA2*13*3250",
+                          f"PA1*{first}*{SENTINEL_PRICE}", f"PA2*{SENTINEL_UNITS}*{SENTINEL_CENTS}")
+    assert script.main(argv) == 0
+    out, err = capsys.readouterr()
+    assert not leaked(out) and not leaked(err)
+    assert first not in printed_counters(script, argv, out) and script.ours[1] in printed_counters(script, argv, out)
+    assert f"PA1*{first}" not in out and "more than once" in err
+    if argv[-1] == "--summary":
+        import json
+
+        row = next(r for r in json.loads(out) if r["slot"] == first)
+        assert row == {"slot": first, "price": None, "lifetime_units": None, "lifetime_sales": None}
+
+
+def test_the_rebuilt_view_keeps_only_defined_fields(script, capsys):
+    ours = script.ours[0]
+    script.poll = poll_of("EA2*DO*7*107*55*9", f"PA1*{ours}*250*1*2", "PA2*13*3250*4*5*6")
+    assert script.main(["latest"]) == 0
+    out, _ = capsys.readouterr()
+    assert out == f"ID4*2\r\nEA2*DO*7*107\r\nPA1*{ours}*250\r\nPA2*13*3250\r\n"
+
+
+@pytest.mark.parametrize("scale", ["3", "9", "x", "-1"])
+def test_an_id4_scale_evadts_wouldnt_accept_prints_no_scale_and_no_money(script, capsys, scale):
+    import json
+
+    ours = script.ours[0]
+    script.poll = build(["ID1*TEST-MACHINE*0000**EVS3.0*", f"ID4*{scale}*1840*5", "EA2*DO*7*107",
+                         f"PA1*{ours}*250", "PA2*13*3250"])
+    assert script.main(["latest"]) == 0
+    out, _ = capsys.readouterr()
+    assert not out.startswith("ID4") and "ID4" not in out
+    assert script.main(["latest", "--summary"]) == 0
+    row = next(r for r in json.loads(capsys.readouterr().out) if r["slot"] == ours)
+    assert row["price"] is None and row["lifetime_sales"] is None and row["lifetime_units"] == 13
