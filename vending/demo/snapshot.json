@@ -94,7 +94,8 @@
       "product": "COCA-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
-     "changed": true
+     "changed": true,
+     "fill_check": null
     },
     {
      "slot": "13",
@@ -112,7 +113,8 @@
       "product": "COCA-DIET-20BOT",
       "sale_price": "2.50"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "16",
@@ -130,7 +132,8 @@
       "product": "COCA-ZERO_SUG-20BOT",
       "sale_price": "2.50"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "17",
@@ -148,7 +151,8 @@
       "product": "SPRITE-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "22",
@@ -166,7 +170,8 @@
       "product": "BUBLY-STRAWBER-12CAN",
       "sale_price": "1.75"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "24",
@@ -184,7 +189,8 @@
       "product": "BUBLY-PARADISE-12CAN",
       "sale_price": "1.75"
      },
-     "changed": true
+     "changed": true,
+     "fill_check": null
     },
     {
      "slot": "25",
@@ -202,7 +208,8 @@
       "product": "TOPOCHICO-ORIGINAL-16BOT",
       "sale_price": "2.75"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "28",
@@ -220,7 +227,8 @@
       "product": "VITAMINWATER-DARK-20BOT",
       "sale_price": "2.50"
      },
-     "changed": true
+     "changed": true,
+     "fill_check": null
     },
     {
      "slot": "31",
@@ -238,7 +246,8 @@
       "product": "PEPSI-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
-     "changed": true
+     "changed": true,
+     "fill_check": null
     },
     {
      "slot": "33",
@@ -256,7 +265,8 @@
       "product": "MOUNTAIN-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "36",
@@ -274,7 +284,8 @@
       "product": "DRPEPPER-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "37",
@@ -292,7 +303,8 @@
       "product": "REDBULL-ORIGINAL-8_4CAN",
       "sale_price": "3.00"
      },
-     "changed": true
+     "changed": true,
+     "fill_check": null
     },
     {
      "slot": "41",
@@ -310,7 +322,8 @@
       "product": "MONSTER-ORIGINAL-16CAN",
       "sale_price": "3.25"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "44",
@@ -346,7 +359,8 @@
       "product": "PREMIER-CHOCOLAT-11CAR",
       "sale_price": "4.00"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "47",
@@ -364,7 +378,8 @@
       "product": "RECESS-LIME-12CAN",
       "sale_price": "2.25"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "52",
@@ -382,7 +397,8 @@
       "product": "MOUNTAIN-BAJA_BLA-20BOT",
       "sale_price": "2.50"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "54",
@@ -400,7 +416,8 @@
       "product": "COCA-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "55",
@@ -418,7 +435,8 @@
       "product": "TOPOCHICO-ORIGINAL-16BOT",
       "sale_price": "2.75"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     },
     {
      "slot": "58",
@@ -436,7 +454,8 @@
       "product": "MOUNTAIN-BAJA_BLA-20BOT",
       "sale_price": "2.50"
      },
-     "changed": false
+     "changed": false,
+     "fill_check": null
     }
    ]
   }
