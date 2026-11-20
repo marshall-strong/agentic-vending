@@ -117,7 +117,7 @@ import psycopg
 
 from vending import db, ledger, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
-from vending.slots import SlotsNotRecorded
+from vending.slots import SlotsNotRecorded, our_slots
 from vending.tools.machine_state import price_history
 from vending.tools.sales_history import tax_cents
 
