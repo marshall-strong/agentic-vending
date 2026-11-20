@@ -538,18 +538,21 @@ def test_a_multi_day_unattributed_window_drops_its_class_days_from_the_in_stock_
 def test_demand_counts_only_the_current_products_loads():
     # One receipt tops up Coke (5) and swaps to Pepsi (2) at the same moment. Pepsi sells out on Mon 2 Nov
     # and is refilled Thu 5 Nov. The Coke units never were Pepsi's stock, so they don't keep Pepsi in
-    # stock over Tue 3 and Wed 4 Nov: its in-stock class days are Mon 2 and Fri 6 Nov.
-    from vending.tools.machine_state import _demands, _loads
+    # stock over Tue 3 and Wed 4 Nov: its in-stock class days are Mon 2 and Fri 6 Nov. The count comes from
+    # the replay, since demand reads the run's history from it (round 3).
+    from vending.stock import Movement, replay
+    from vending.tools.machine_state import _demands
     utc = timezone.utc
     at, now = datetime(2026, 10, 30, 19, 30, tzinfo=utc), datetime(2026, 11, 6, 22, tzinfo=utc)
-    refill = datetime(2026, 11, 5, 19, tzinfo=utc)
-    receipts = [dict(slot="15", sku="COKE20", outcome="loaded", units_loaded=5, at=at),
-                dict(slot="15", sku="PEPSI20", outcome="primary", units_loaded=2, at=at),
-                dict(slot="15", sku="PEPSI20", outcome="primary", units_loaded=2, at=refill)]
-    pepsi = SlotCount("15", "PEPSI20", 2, None, 4, 2, 0, at)
-    sold = machine_state.stock.SaleCost(datetime(2026, 11, 2, 22, tzinfo=utc), "15", "PEPSI20", 2, 2, None)
-    d = _demands({"15": pepsi}, _loads(receipts, now), (sold,), {"15": (250, 0)}, now)
-    assert (d["15"].units_sold, d["15"].class_days_in_stock) == (2, 2)
+    [pepsi] = replay([
+        Movement(at, "purchase", "15", "COKE20", to_slot=5, paid_cents=Fraction(500)),
+        Movement(at, "purchase", "15", "PEPSI20", to_slot=2, paid_cents=Fraction(200), reassigned=True),
+        Movement(datetime(2026, 11, 2, 22, tzinfo=utc), "sale", "15", None, units=2,
+                 since=datetime(2026, 11, 2, 12, tzinfo=utc)),
+        Movement(datetime(2026, 11, 5, 19, tzinfo=utc), "purchase", "15", "PEPSI20", to_slot=2,
+                 paid_cents=Fraction(200))], now).slots
+    d = _demands({"15": pepsi}, {"15": (250, 0)}, now)
+    assert (pepsi.product, pepsi.loaded, d["15"].units_sold, d["15"].class_days_in_stock) == ("PEPSI20", 4, 2, 2)
 
 
 def test_unattributed_sales_can_empty_the_slot_so_its_days_arent_counted_in_stock(conn):

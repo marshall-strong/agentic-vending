@@ -10,11 +10,12 @@ The rule (`docs/inventory-demand.md`, "The simpler rule, per slot"):
    fall rate of the segment whose average price is nearest the slot's price
    (`SEGMENTS`, `docs/restock-policy.md` R3).
 
-Stock comes from the receipts' loads and the counters' sales, cycle by cycle:
-the slot holds stock from a load that takes it above zero until the sale that
-takes it back to zero. A class day counts when the slot held stock as it began
-(`class_days.class_days_after`), so a Friday-afternoon load starts counting on
-Monday, and the day a slot sold out counts.
+Stock comes from the stock replay's own history of the product's run
+(`stock.SlotCount.history`, with a person's counts from `stock.run_history`),
+cycle by cycle: the slot holds stock from the movement that takes it above zero
+until the one that takes it back to zero. A class day counts when the slot held
+stock as it began (`class_days.class_days_after`), so a Friday-afternoon load
+starts counting on Monday, and the day a slot sold out counts.
 
 Everything here is pure: no database, no clock.
 """
@@ -24,8 +25,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import TYPE_CHECKING
 
 from vending.class_days import class_days_after
+
+if TYPE_CHECKING:
+    from vending.stock import Applied
 
 OWN_RATE_AFTER = 5   # in-stock class days before a slot's own rate replaces the prior (Proposed, #110 item 6)
 
@@ -63,41 +68,44 @@ def segment_for(price_cents: int) -> Segment:
     return min(SEGMENTS, key=lambda s: abs(s.average_price_cents - price_cents))
 
 
-def in_stock_spans(loads: list[tuple[datetime, int]], sales: list[tuple[datetime, int]],
-                   now: datetime, units_now: int | None = None) -> list[tuple[datetime, datetime]]:
-    """When the slot held stock: from each load that took it above zero to the sale that emptied it.
-
-    `loads` and `sales` are `(at, units)` for the slot's current product only. A load
-    and a sale at the same moment apply the load first. A sale past zero (more sold
-    than the receipts loaded) changes nothing here. A span still open runs to `now`,
-    unless `units_now` (the stock replay's count, which also takes off losses) says
-    the slot is empty: then it ends at the last sale.
-    """
-    events = sorted([(at, 0, units) for at, units in loads] + [(at, 1, -units) for at, units in sales])
-    spans, on_hand, start, last_sale = [], 0, None, None
-    for at, kind, change in events:
-        if kind == 1:
-            last_sale = at
-        before, on_hand = on_hand, max(on_hand + change, 0)
+def _stretches(history: tuple[Applied, ...] | list[Applied]) -> list[tuple[datetime, datetime | None]]:
+    """`(start, end)` for each stretch the run surely held stock; `end` is None for one still running."""
+    spans: list[tuple[datetime, datetime | None]] = []
+    on_hand, start = 0, None
+    for applied in history:
+        before = on_hand
+        if applied.kind == "load":
+            on_hand += applied.units
+        elif applied.kind == "count":
+            on_hand = min(on_hand, applied.units)
+        else:
+            on_hand = max(on_hand - applied.units, 0)
         if before == 0 and on_hand > 0:
-            start = at
+            start = applied.at
         elif before > 0 and on_hand == 0:
-            spans.append((start, at))
+            spans.append((start, applied.at))
             start = None
     if start is not None:
-        empty = units_now == 0 and last_sale is not None and last_sale >= start
-        spans.append((start, last_sale if empty else now))
+        spans.append((start, None))
     return spans
 
 
-def run_events(since: datetime, total: int, events: list[tuple[datetime, int]]) -> list[tuple[datetime, int]]:
-    """One product run's loads, or its decreases, as `(at, units)`: those after `since`, when the run began, and
-    at `since` itself what is left of `total`, the stock replay's own count of them for the run
-    (`stock.SlotCount`), kept in its movement order. A timestamp can't say whether something at `since` itself
-    was this run's or the one before (A, B, then A again at one visit; a poll at the swap's own moment)."""
-    later = [(at, units) for at, units in events if at > since]
-    first = total - sum(units for _, units in later)
-    return ([(since, first)] if first > 0 else []) + later
+def in_stock_spans(history: tuple[Applied, ...] | list[Applied], now: datetime) -> list[tuple[datetime, datetime]]:
+    """When the slot surely held its product: from each movement that took it above zero to the one that emptied it.
+
+    `history` is the run as the stock replay applied it, in its order (`stock.SlotCount.history`), with any
+    person's counts (`stock.run_history`). The count is a lower bound: a load adds its units; a sale, attributed
+    or not, a pull or a loss takes its units off, never below zero; a count lowers it to what the person saw, so
+    one that found the slot empty ends a span. Without counts it is the replay's own `SlotCount.units` at every
+    step, so a loss or pull is counted once, when and as the replay applied it. A span still open runs to `now`.
+    """
+    return [(start, now if end is None else end) for start, end in _stretches(history)]
+
+
+def in_stock_since(history: tuple[Applied, ...] | list[Applied]) -> datetime | None:
+    """When the stretch of stock still running at the end of `history` began; None when the slot may be empty."""
+    spans = _stretches(history)
+    return spans[-1][0] if spans and spans[-1][1] is None else None
 
 
 def class_days_in_stock(spans: list[tuple[datetime, datetime]]) -> list[date]:

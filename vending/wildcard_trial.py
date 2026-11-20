@@ -517,19 +517,14 @@ def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list
              losses: list[tuple[datetime, str, int]] = ()) -> Measured:
     """One slot's intervals from `start`, with when its current product held stock.
 
-    `losses` are the slot's recorded coil losses (`coil_losses`): units of its product lost since it went in
-    leave the slot like sales, so a slot emptied by a loss isn't counted in stock until a load refills it."""
-    mine = [s for s in sales if s.slot == count.slot and s.at > count.since]
-    # At or after the load that put it in: a loss recorded at the load's own time comes after it, as in the stock
-    # replay (`demand.in_stock_spans` applies a load before a decrease at the same moment).
-    gone = [(at, units) for at, sku, units in losses if at >= count.since and sku == count.product]
-    # Only its own product's sales leave its stock: the outgoing product's share of a window split at the swap
-    # (`stock._split_at_changes`) is booked by the first poll after it, but came out of the old count.
-    # The run's own loads: at the moment it began, what the replay put in for it, not every load then (A, B,
-    # then A again at one visit), as in the machine state's demand (`demand.run_events`).
-    spans = demand.in_stock_spans(demand.run_events(count.since, count.loaded, loads),
-                                  [(s.at, s.units) for s in mine if s.product == count.product] + gone,
-                                  now, count.units)
+    When it held stock comes from the stock replay's own history of the run (`stock.SlotCount.history`,
+    `demand.in_stock_spans`), as in the machine state's demand: every load, sale (attributed or not), pull and
+    coil loss the replay applied to it, in its order, and nothing it ignored. So a sale booked at the run's
+    first load empties the slot as it did in the replay, and a loss counts once. `loads` and `losses` are no
+    longer read; the callers still pass them. The intervals still reconcile the sales the replay booked at
+    their polls (`SaleCost.at`), from the run's first moment on."""
+    mine = [s for s in sales if s.slot == count.slot and s.at >= count.since]
+    spans = demand.in_stock_spans(count.history, now)
     return Measured(count.slot, count.product, start,
                     intervals(readings, start, count.product, mine, spans, ceiling_cents))
 

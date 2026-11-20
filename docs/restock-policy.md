@@ -126,7 +126,7 @@ The margin is a ceiling (A5). In practice, a cash-short week waits for Friday.
 
 The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
-- **Flag** a slot with no sales for **5 school days in a row while records (a receipt or a count) say it held stock**. Break days don't count. A slot that may be empty is not slow. `get_machine_state` gives this count per slot as `class_days_since_sale`: 0 when the slot may be empty now, and null for a slot known only from a count (no receipts), which isn't flagged.
+- **Flag** a slot with no sales for **5 school days in a row while records (a receipt or a count) say it held stock**. Break days don't count. A slot that may be empty is not slow. `get_machine_state` gives this count per slot as `class_days_since_sale`: 0 when the slot may be empty now, and null for a slot known only from a count (no receipts), which isn't flagged. It counts a day only when the slot surely held stock all of it (receipts, sales, losses and pulls as the stock replay applied them, and any count that found it empty) and readings of its sales counter that show no rise cover it to its end. A possible sale, or a stretch no such reading covers, starts it again.
 - **Act at the next Friday visit:** lower the price or swap the product. Pulled units go to the closet at cost.
 
 **Proposed here (not in PR #100):** a flagged slot gets no new purchase; a swapped-in product is priced by PR #99's method (open) under the $6.50 ceiling.

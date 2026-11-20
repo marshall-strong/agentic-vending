@@ -1,10 +1,12 @@
 """Tests for turning receipts and polls into stock. Synthetic receipts only; no database."""
 
 import pytest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 
-from vending.stock import closet_from_receipts, movements_from_receipts, replay, sales_from_counters, first_in_first_out
+from vending.stock import (closet_from_receipts, movements_from_receipts, replay, run_history, sales_from_counters,
+                           first_in_first_out)
 
 T0 = datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
 
@@ -326,6 +328,48 @@ def test_every_sale_carries_the_poll_before_it():
                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20400, 200)])
     assert [(s.since, s.at, s.product) for s in split.sales + same.sales] == [
         (hours(1), hours(5), "ARIZONA"), (hours(1), hours(5), "REDBULL"), (hours(1), hours(5), None)]
+
+
+def test_a_slots_history_is_its_current_run_as_the_replay_applied_it():
+    # `SlotCount.history` (#172, round 3). The Arizona run ends at the swap; Red Bull's is its load, then its own
+    # share of the window split there, with the counters' window start. An unsplit window is unattributed.
+    split = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    same = book(swap(sku="COKE20", total_paid="8.00"),
+                counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20400, 200)])
+    [red_bull], [coke] = split.slots, same.slots
+    assert [(a.at, a.kind, a.units, a.since) for a in red_bull.history] == [
+        (hours(3), "load", 10, None), (hours(5), "sale", 1, hours(1))]
+    assert [(a.kind, a.units, a.since) for a in coke.history] == [("load", 10, None), ("unattributed", 2, hours(1))]
+    # The history isn't part of a count's equality: a count built by hand still equals the replay's.
+    assert red_bull == replace(red_bull, history=())
+
+
+def test_a_runs_history_holds_what_the_replay_applied_and_nothing_it_ignored():
+    # 10 Coke in, 3 lost in the coil, 4 pulled. A pull of 2 PEPSI20 and a loss of 5 PEPSI20 from slot 15, which
+    # never held Pepsi, the replay warns about and leaves out of slot 15's count, so they aren't in its history.
+    # A later loss of 9, more than the 3 left, takes the count to 0, and only the 3 there count as lost.
+    counted = book([line(units_loaded=10, total_paid="5.00"),
+                    line(outcome="unavailable", sku=None, total_paid=None, units_pulled=4, pulled_sku="COKE20", at=2,
+                         request_id="r2"),
+                    line(outcome="unavailable", sku=None, total_paid=None, units_pulled=2, pulled_sku="PEPSI20", at=3,
+                         request_id="r3")],
+                   losses=[loss("coil", 3, at=1), loss("coil", 5, sku="PEPSI20", at=4), loss("coil", 9, at=5)])
+    [slot] = counted.slots
+    assert [(a.at, a.kind, a.units) for a in slot.history] == [
+        (hours(0), "load", 10), (hours(1), "loss", 3), (hours(2), "pull", 4), (hours(5), "loss", 9)]
+    assert (slot.units, slot.lost) == (0, 6)
+    assert sum("PEPSI20" in w for w in counted.warnings) == 2
+
+
+def test_run_history_puts_a_persons_counts_after_the_movements_at_their_moment():
+    # A count at the run's first moment can't be told from the load that began it, so it is left out.
+    counted = book([line(units_loaded=10, total_paid="5.00"), line(units_loaded=5, total_paid="2.50", at=4,
+                                                                    request_id="r2")],
+                   counters=[("15", hours(1), 100), ("15", hours(2), 103)])
+    [slot] = counted.slots
+    assert [(a.at, a.kind, a.units) for a in run_history(slot, [(hours(3), 0), (hours(0), 9), (hours(2), 6)])] == [
+        (hours(0), "load", 10), (hours(2), "sale", 3), (hours(2), "count", 6), (hours(3), "count", 0),
+        (hours(4), "load", 5)]
 
 
 def test_an_unsplit_window_keeps_the_books_whole():

@@ -41,7 +41,10 @@ A slot's count starts again whenever its product changes, so `loaded` and
 `sold` are since the last change, and on hand is loaded - sold - unattributed
 - lost: what we know is there. More may be, if unattributed sales were the old
 product's, but never more than `at_most`: what is left if none of them were
-this product's.
+this product's. `SlotCount.history` is that run as the replay applied it, in
+its order (`Applied`), so a caller that needs when the slot held stock reads it
+from there and never rebuilds it from the receipts (#172): `run_history` adds
+a person's counts to it.
 
 **Receipts before the ledger's opening don't count once it exists.** Purchases
 made before the opening are tests: they never came out of the $600 (#104), so
@@ -65,6 +68,7 @@ costs, and a count's `unit_cost` is the exact mean of them. The method lives in
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -149,6 +153,24 @@ class ClosetCount:
 
 
 @dataclass(frozen=True)
+class Applied:
+    """One movement the replay applied to a slot's current product run, in the replay's order (`SlotCount.history`).
+
+    `kind` is `load` (a purchase or a load from the closet), `sale` (booked to the run's product), `unattributed`
+    (sold across a change the counters can't split, still taken from this count), `pull` or `loss`. `run_history`
+    adds a person's counts as `count`. `units` is what it put in or took out, as recorded; units leave the count
+    only down to 0, so replaying them from the run's start gives `SlotCount.units` at every step. A count's
+    `units` is what the person saw, 0 when they found the slot empty. A sale's `since` is its counters' window
+    start: its units sold somewhere in (since, at]. The replay ignores a pull or loss of another product for the
+    slot, so neither is here.
+    """
+    at: datetime
+    kind: str
+    units: int
+    since: datetime | None = None
+
+
+@dataclass(frozen=True)
 class SlotCount:
     """One slot since its last product change. `units` and `unit_cost` feed `SlotState`.
 
@@ -171,6 +193,9 @@ class SlotCount:
     unattributed: int = 0                # sold, but which product is unknown; see above
     at_most: int | None = None           # the most that can be on hand; see above (None: `units`)
     layers: tuple[tuple[int, Fraction | None], ...] = ()   # `units` by arrival as (units, cents per unit), oldest first
+    # What the replay applied to this run, in its order (`Applied`). Not compared: two counts that agree on
+    # every figure are equal, however they were built.
+    history: tuple[Applied, ...] = field(default=(), compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -799,6 +824,7 @@ class _Slot:
     before_pull: dict[str, Fraction | None] = field(default_factory=dict)
     unattributed: int = 0         # sold in windows that can't be split; not in `sold`
     at_most: int = 0              # on hand if none of those were this product: loaded less everything else out
+    history: list[Applied] = field(default_factory=list)   # what the replay applied to this run (`SlotCount.history`)
 
 
 def first_in_first_out(movements: list[Movement]) -> Stock:
@@ -858,6 +884,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 # Every recorded layer has moved; any cost on the rest would be counted twice or made up.
                 shelf(m.sku).add(m.units - taken, None)
             slot.last_moved = m.at
+            slot.history.append(Applied(m.at, "pull", m.units))
         elif m.kind in ("purchase", "load"):
             changed = slot is not None and slot.product != m.sku
             if changed != m.reassigned and slot is not None:
@@ -905,6 +932,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
             slot.loaded += m.to_slot
             slot.at_most += m.to_slot
             slot.last_moved = m.at
+            slot.history.append(Applied(m.at, "load", m.to_slot))
         elif m.kind == "loss":
             if m.location == "back_stock":
                 layers = shelf(m.sku).take_layers(m.units)
@@ -914,6 +942,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 slot.lost += sum(layer.units for layer in layers)
                 slot.at_most = max(0, slot.at_most - m.units)
                 slot.last_moved = m.at
+                slot.history.append(Applied(m.at, "loss", m.units))
                 where = f"slot {m.slot}"
             else:
                 warn(m.slot, f"{m.ref}: {m.units} units of {m.sku} lost in slot {m.slot}, "
@@ -932,6 +961,9 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 warn(m.slot, f"slot {m.slot}: the counters split {m.units} units of {slot.product} to before "
                                 f"the change at {m.at.isoformat()}, but we counted only {taken}")
             across_change = slot.replaced and m.since is not None and m.since < slot.since
+            # The same test as the branches below: a door conflict or an unsplit change leaves it unattributed.
+            unplaced = m.kind == "sale" and bool(m.door_conflict or across_change or m.changes)
+            slot.history.append(Applied(m.at, "unattributed" if unplaced else "sale", m.units, m.window_since))
             if m.kind == "sale" and m.door_conflict:
                 # The receipt says the door was open for the whole window. Taken from
                 # the count the slot has then, but which product sold is unknown.
@@ -1001,12 +1033,29 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
         closet=tuple(ClosetCount(sku, pool.units, pool.unit_cost(), pool.counted())
                      for sku, pool in sorted(closet.items()) if pool.units),
         slots=tuple(SlotCount(name, s.product, s.pool.units, s.pool.unit_cost(), s.loaded, s.sold, s.lost, s.since,
-                              s.last_moved, s.unattributed, s.at_most, s.pool.counted())
+                              s.last_moved, s.unattributed, s.at_most, s.pool.counted(), tuple(s.history))
                     for name, s in sorted(slots.items())),
         warnings=tuple(warnings),
         sales=tuple(sales),
         shrinkage=tuple(shrinkage),
     )
+
+
+def run_history(count: SlotCount, seen: Iterable[tuple[datetime, int]] = ()) -> tuple[Applied, ...]:
+    """A slot's current product run as the replay applied it (`SlotCount.history`), with a person's counts of the
+    slot after the run began. Pure.
+
+    `seen` is `(counted_at, units)` per count, 0 when it found the slot empty. A count goes after every movement
+    at its moment, since it saw what they left. One at the run's first moment is left out: it can't be told from
+    the load that began the run.
+    """
+    counts = [Applied(at, "count", units) for at, units in sorted(seen) if at > count.since]
+    out: list[Applied] = []
+    for applied in count.history:
+        while counts and counts[0].at < applied.at:
+            out.append(counts.pop(0))
+        out.append(applied)
+    return tuple(out + counts)
 
 
 def opening_at(conn: psycopg.Connection) -> datetime | None:
