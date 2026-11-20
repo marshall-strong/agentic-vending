@@ -169,3 +169,12 @@ def test_the_prompt_gives_the_cash_short_recipe_and_cannot_skip_a_fill_on_cost()
                    "keep where no load fits", "preview again", "The order of entries sets no priority",
                    "Name every slot left short in the update"):
         assert phrase in SYSTEM, phrase
+
+
+def test_a_visit_can_change_any_of_our_slots_within_the_api_and_wildcard_rules():
+    """Review finding 5: "can change anything" overstated it. Kevin's "no limit on units or lines" stays."""
+    restocking = (RULES_DIR / "restocking.md").read_text(encoding="utf-8")
+    policy = (RULES_DIR.parent / "restock-policy.md").read_text(encoding="utf-8")
+    for text in (restocking, policy):
+        assert "can change anything" not in text
+        assert "within the request API and the wildcard rules" in text and "no limit on units or lines" in text

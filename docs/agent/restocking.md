@@ -11,9 +11,9 @@ One free restock every Friday; an extra dispatch costs $25 per request (not per 
 
 **The trade** (section 3.4). A midweek dispatch trades $25 and an uncertain arrival against the cost of a slot sitting empty. Compare it with what $25 would buy if we waited for Friday (section 3.3). Decide from those numbers, the uncertainty and our cash, and show the working.
 
-**Ordering** (sections 3.4 and 4). The order is placed end to end through the approved retailer and channel, inside the balance, within the price floor and ceiling, and subject to the halt switch.
+**Ordering** (sections 3.4 and 4). The order goes end to end through the approved retailer and channel, inside every guardrail on the rules card.
 
-**How this works for us.** A restock is one desired state for all 20 slots. Check it with `preview_desired_state` first: it returns the request lines, the worker's directive, the cost, the balance left and every refusal. A midweek visit is the same request with the off-cycle flag. Check open requests with `get_purchase_requests` before asking for another, and do not send a second request while one is pending. Any visit, free Friday or paid midweek, can change anything in our slots (any drink, price or stock), with no limit on units or lines (Kevin, 19 Nov).
+**How this works for us.** A restock is one desired state for all 20 slots. Check it with `preview_desired_state` first: it returns the request lines, the worker's directive, the cost, the balance left and every refusal. A midweek visit is the same request with the off-cycle flag. Check `get_purchase_requests` too: never send a second request while one is pending. At any visit, any of our slots can be changed, within the request API and the wildcard rules, with no limit on units or lines (Kevin, 19 Nov).
 
 **Every restock, fill every slot** (Kevin, 19 Nov). Each visit's plan lists each of our slots, not as `keep`, without `fill_to`, so each fills to its column. Almost every visit is Friday's: $25 is a lot. The planner loads from the closet when it covers the gap, else buys. Exceptions, each named in the slot's reason:
 

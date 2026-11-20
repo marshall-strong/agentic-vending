@@ -20,7 +20,7 @@ The project brief asks for a "documented restock and dispatch policy, with the d
 | Our sales on Friday afternoons | 0.2 to 0.4 units an hour from 2 to 4 PM; under 0.7 an hour after 1 PM | `docs/cutover.md` (PR #105, open) |
 | Machine units sold 8 to 11 AM | 66% | `analysis/REPORT.md`, finding 7 |
 | Midweek visit | $25 a request, any number of slots; may take longer than 24 hours | `docs/agent/restocking.md`; config `midweek_fee_cents` |
-| What a visit can change | Anything in our slots, at any restock visit, the free Friday one or a paid $25 midweek one: any drink, price or stock, a full fresh board, with no limit on units or lines. A confirmed fact | Kevin, 19 Nov |
+| What a visit can change | At any restock visit, the free Friday one or a paid $25 midweek one, any of our slots can be changed (any drink, price or stock, a full fresh board), within the request API and the wildcard rules, with no limit on units or lines. A confirmed fact | Kevin, 19 Nov |
 | Open requests | One at a time today; David may lift this | `docs/process-map.md`; #106 row 12 |
 | Column capacity | 7 (20 oz bottle), 8 (12 oz can), 11 (8.4 oz can) | `vending/capacity.py` |
 | Sales tax inside the shelf price | 8% | `vending/pricing.py`, config `tax_percent` |
