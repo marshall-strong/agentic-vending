@@ -95,7 +95,10 @@ repo root points here.
   `scripts/check_archive.py` log the status, sizes, a session id that passes
   `vending.bridge.valid_session_id` (32 hex digits), and a reason the code wrote itself ("502 Bad Gateway",
   "short read: 1234 of 2000 bytes", "device mismatch"). A database error is logged as its class and SQLSTATE,
-  not its text, which can quote the row. An error built from a reply is raised `from None`, so a traceback
+  not its text, which can quote the row: the sync does it for a poll it can't store, and `worker.run_round`
+  for any job that crashes on one. A sync that loses its connection raises a message of its own, `from None`.
+  `scripts/check_archive.py` reads a log line's reason from its structured start only, because an older line
+  can hold a reply's records in `detail` or `problems`. An error built from a reply is raised `from None`, so a traceback
   doesn't print the reply either. The archive and the database still keep whole polls. The scope is poll
   content (bodies, documents, tracebacks), not every field of a JSON answer: the one write we make
   (`post`) still shows the server's reason for our own request. A day's listing is checked row by row

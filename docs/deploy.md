@@ -20,7 +20,7 @@ outcome per job (a `503` means the last round failed). Its root, `GET /`, is the
 page for people: whether the last round passed, each job's outcome, when the last and next rounds
 run (Eastern time), and links to the docs. It reloads itself every minute and works on a phone.
 Both are public, so they show exit codes and outcomes only, never error text (a database error
-names the host and user); the errors are in the log. The page is built from the same data as
+names the host and user); the errors are in the log, a database error as its class and SQLSTATE. The page is built from the same data as
 `/health`, so it can't show more. `docker/entrypoint.sh` joins the tailnet first and
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.

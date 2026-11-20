@@ -35,7 +35,7 @@ browser, and a 503 there means the last round failed. `GET /` shows the same
 facts as a page for people: whether the last round passed, each job's outcome,
 when the next round runs, and links to the docs. It reloads itself every
 minute. Neither ever shows error text, because both are public and a database
-error names the host and user; the errors are in the log. The page is built
+error names the host and user; the errors are in the log (a database error as its class and SQLSTATE). The page is built
 only from `State.public()`, the same dict as `/health`, so it can't show more.
 
 `GET /dashboard` (with `/dashboard/state.json`) and `GET /db` are the agent
@@ -129,6 +129,18 @@ class State:
                              "exit_code": r.exit_code, "outcome": r.outcome} for r in self.results]}
 
 
+def _describe(problem: BaseException) -> str:
+    """What the log says of a job that crashed: the class and the message. A database error is its class and
+    SQLSTATE only: its text can quote the row it refused, which holds a poll (docs/integrity.md)."""
+    try:
+        import psycopg      # not imported at the top: the worker's other code doesn't need the driver
+    except ImportError:
+        psycopg = None
+    if psycopg is not None and isinstance(problem, psycopg.Error):
+        return f"{type(problem).__name__}: SQLSTATE {problem.sqlstate or 'none'}"
+    return f"{type(problem).__name__}: {problem}"
+
+
 def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: float | None = None,
               running: dict[str, threading.Thread] | None = None) -> list[JobResult]:
     """Run every job once, in order, even if one fails. Never raises.
@@ -154,7 +166,7 @@ def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: floa
             try:
                 done["code"] = int(run())
             except BaseException as problem:  # noqa: BLE001 - one job's crash must not stop the others
-                done["error"] = f"{type(problem).__name__}: {problem}"
+                done["error"] = _describe(problem)
 
         thread = threading.Thread(target=target, name=name, daemon=True)
         thread.start()

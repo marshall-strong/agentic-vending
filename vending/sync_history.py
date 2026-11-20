@@ -24,6 +24,10 @@ skipped, and never logged. Storing a poll is just as separate: one the database
 refuses (a NUL byte in its serial, say) is counted and logged as the error's class
 and SQLSTATE, and the polls after it are still stored.
 
+A run that couldn't store a poll ends its summary with the earliest day and the `--since <day>` that
+fetches it again: the default window follows the newest poll stored, so it may not go back that far. A
+connection that is gone raises `StorageLost`, with a message of our own.
+
 The log says what happened in words of our own (a status, a size, a session id
 that passes `valid_session_id`) and never quotes what the bridge sent or the
 database's error text: the log is read by people, and a poll can hold selections
@@ -59,7 +63,14 @@ class Report:
     crc_failed: int = 0
     unparseable: int = 0
     failed_days: int = 0
-    failed_polls: int = 0
+    failed_polls: int = 0           # skipped: not listed usably, not fetched, or not stored
+    storage_failed: int = 0         # of those, the ones the database refused
+    first_storage_failure: date | None = None   # the earliest day (UTC, as listed) one was refused on
+
+
+class StorageLost(RuntimeError):
+    """The database connection is gone, so no poll after this one can be stored either. The message is ours:
+    the database's own text can quote the row it refused, which holds a poll."""
 
 
 def _device(meta: dict) -> str:
@@ -164,13 +175,16 @@ def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log
             try:
                 outcome = store(conn, {**row, "started_at": listed.started_at}, raw)
             except psycopg.Error as error:
+                # The database's text can quote the row it refused, which holds the document: the class and
+                # the SQLSTATE say enough, here and in the error raised below.
+                why = f"{type(error).__name__}, SQLSTATE {error.sqlstate or 'none'}"
                 if conn.closed or conn.broken:      # nothing after this can be stored either
-                    raise
-                # One poll the database refuses mustn't stop the rest. Its text can quote the row it
-                # refused, which holds the document: the class and the SQLSTATE say enough.
+                    raise StorageLost(f"the database connection was lost while storing {session}: {why}") from None
+                # One poll the database refuses mustn't stop the rest.
                 report.failed_polls += 1
-                log(f"  could not store {session} ({when}): {type(error).__name__}, "
-                    f"SQLSTATE {error.sqlstate or 'none'}; skipped")
+                report.storage_failed += 1
+                report.first_storage_failure = report.first_storage_failure or day
+                log(f"  could not store {session} ({when}): {why}; skipped")
                 continue
             known.add(session)
             again = session in retrying
@@ -195,6 +209,10 @@ def default_since(conn: psycopg.Connection) -> date:
         return HISTORY_START
     # One day back: a poll from late on day D can be stored after we've already
     # synced an early poll from D+1.
+    #
+    # This window moves with the newest stored poll, so a poll the database refused on an earlier day is not
+    # fetched again once later polls are stored. Nothing records it (there is no row to count from), so the
+    # run says so and names `--since <day>` (`main`), and it exits 1 until someone reruns that.
     return max(last.astimezone(timezone.utc).date() - timedelta(days=1), HISTORY_START)
 
 
@@ -224,7 +242,12 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     print(f"done: {report.days} days, {report.listed} polls listed, {report.new} new, "
           f"{report.crc_failed} failed the checksum, {report.unparseable} unparseable, "
-          f"{report.failed_days} days and {report.failed_polls} polls the bridge couldn't return")
+          f"{report.failed_days} days couldn't be listed, {report.failed_polls} polls skipped")
+    if report.storage_failed:
+        day = report.first_storage_failure
+        print(f"storage failed for {report.storage_failed} of the polls skipped, the first on {day}. Fetch them again "
+              f"with: python -m vending.sync_history --since {day}\n"
+              "(a default run starts a day before the newest poll stored, so it may not go back that far)")
     problems = report.crc_failed + report.unparseable + report.failed_days + report.failed_polls
     return 1 if problems else 0
 
