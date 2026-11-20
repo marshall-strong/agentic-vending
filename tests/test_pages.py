@@ -1,6 +1,7 @@
 """The public pages (#53): served by the worker, on a login that can only read, with no error text."""
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -13,7 +14,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
-from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, open_in
+from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, open_in, store_poll
 from tests.test_plan_rounds import day_one, projection, write
 from tests.test_plan_store import unassigned_slot
 from vending import agent_runs, dashboard, db, db_explorer, ledger, pages, plan_store, settings, slots, worker
@@ -213,6 +214,67 @@ def test_public_dashboard_panel_errors_go_to_stderr(site, conn, capsys):
     local = dashboard.snapshot(conn)
     assert 'relation "product_requests" does not exist' in local["catalog_requests"]["why"]
     assert "python -m vending.db migrate" in dashboard.render(local)
+
+
+@pytest.mark.parametrize("source", ["old_write", "scoped_step"])
+def test_public_dashboard_omits_retired_selection_text(site, conn, source):
+    now = conn.execute("select now()").fetchone()[0]
+    before, reassigned = now - timedelta(minutes=10), now - timedelta(minutes=5)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=before)
+    conn.execute("update slot_assignment set slots = array_remove(slots, '15') || array['11'], "
+                 "first_read_at = %s, last_checked_at = %s", (reassigned, reassigned))
+    store_poll(conn, "assignment-control", now.isoformat(), {"15": (8193, 1), "16": (256, 1)})
+    if source == "old_write":
+        log(conn, "write", "config.set", {"key": "wildcard_slot", "value": "15"}, "done", "RETIRED-CONFIG slot 15")
+        conn.execute("update action_log set at = %s where tool = 'config.set'", (before,))
+        owned = {"key": "wildcard_slot", "value": "16"}
+        log(conn, "write", "config.set", owned, "done", "OWNED-CONTROL slot 16")
+        markers = ("RETIRED-CONFIG", '"value": "15"', "81.93")
+    else:
+        run = agent_runs.start(conn, mode="live")
+        payload = {"slots": [{"slot": "15", "product": "RETIRED-ROW"}, {"slot": "16", "product": "OWNED-CONTROL"}],
+                   **{key: f"RETIRED-{key} slot 15" for key in ("directive", "decision_note", "notes")}}
+        agent_runs.step(conn, run, 1, "tool_result", json.dumps(payload), tool="get_purchase_requests")
+        markers = ("RETIRED-ROW", "RETIRED-directive", "RETIRED-decision_note", "RETIRED-notes", "81.93")
+    status, _, page = _get(site, "/dashboard")
+    assert status == 200 and "OWNED-CONTROL" in page
+    _, _, body = _get(site, "/dashboard/state.json")
+    assert "OWNED-CONTROL" in body
+    attrs = re.findall(r'(?:aria-label|title)="([^"]*)"', page)
+    assert any("2.56" in attr for attr in attrs)
+    for marker in markers:
+        assert marker not in page and marker not in body
+        assert all(marker not in attr for attr in attrs)
+    if source == "old_write":
+        audit = [row for row in json.loads(body)["activity"]["data"] if row["tool"] == "config.set"]
+        assert [row["arguments"] for row in audit] == [owned, {}]
+
+
+def test_public_dashboard_has_no_spend_error_before_opening(site, capsys):
+    for path in ("/dashboard", "/dashboard/state.json"):
+        status, _, body = _get(site, path)
+        assert status == 200
+        assert dashboard.PUBLIC_PANEL_ERROR not in body.replace("&#x27;", "'")
+        assert "Spent so far" not in body and "Spent before the opening" not in body
+    assert json.loads(body)["spend"] == {"ok": True, "data": None}
+    assert capsys.readouterr().err == ""
+
+
+def test_public_dashboard_keeps_submit_confirmation_without_later_error(site, conn):
+    now = conn.execute("select now()").fetchone()[0]
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=now - timedelta(minutes=1))
+    run = agent_runs.start(conn, mode="live")
+    confirmation = "Submitted purchase request test-123"
+    detail = f"{confirmation}; afterwards: OperationalError: connection to db-private.example.test failed"
+    agent_runs.finish(conn, run, "submitted", detail=detail, request_id="test-123")
+
+    for path in ("/dashboard", "/dashboard/state.json"):
+        status, _, body = _get(site, path)
+        assert status == 200 and confirmation in body
+        assert "db-private.example.test" not in body and "OperationalError" not in body
+    state = json.loads(body)
+    assert state["status"]["latest_run"]["detail"] == state["runs"]["data"][0]["detail"] == confirmation
+    assert dashboard.snapshot(conn)["runs"]["data"][0]["detail"] == detail
 
 
 def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):

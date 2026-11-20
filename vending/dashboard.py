@@ -585,19 +585,22 @@ def hide_errors(snap: dict, *, public: bool = False) -> None:
     page, a panel's read error goes to stderr. Clean the snapshot before building Needs
     attention so both the page and `/state.json` get the same text.
     """
-    run = snap["status"].get("latest_run")
-    if run and run.get("status") == "failed" and run.get("detail"):
-        run["detail"] = HIDDEN
-    for panel, column, failed in (("runs", "status", "failed"), ("activity", "outcome", "failed")):
-        if snap[panel]["ok"]:
-            for row in snap[panel]["data"]:
-                if row.get(column) == failed and row.get("detail"):
-                    row["detail"] = HIDDEN
-    if snap["runs"]["ok"]:
-        for run in snap["runs"]["data"]:
-            for step in run["steps"]:
-                if step["kind"] == "tool_result" and step["is_error"]:
-                    step["content"] = HIDDEN
+    runs = snap["runs"]["data"] if snap["runs"]["ok"] else []
+    for run in (snap["status"].get("latest_run"), *runs):
+        if not run or not (detail := run.get("detail")):
+            continue
+        if run["status"] == "failed":
+            run["detail"] = HIDDEN
+        elif public and run["status"] == "submitted" and detail.startswith("Submitted purchase request "):
+            run["detail"] = detail.partition("; afterwards:")[0]
+    if snap["activity"]["ok"]:
+        for row in snap["activity"]["data"]:
+            if row["outcome"] == "failed" and row["detail"]:
+                row["detail"] = HIDDEN
+    for run in runs:
+        for step in run["steps"]:
+            if step["kind"] == "tool_result" and step["is_error"]:
+                step["content"] = HIDDEN
     if public:
         for name, panel in snap.items():
             if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
@@ -638,7 +641,7 @@ def _scope_payload(value: Any, ours: set[str], key: str = "") -> Any:
             scoped[k] = kept
     if scoped != value:
         # A summary can describe a selection dropped from the structured part.
-        for field in ("message", "detail", "reason", "note", "text", "warnings"):
+        for field in ("message", "detail", "reason", "note", "text", "warnings", "directive", "decision_note", "notes"):
             scoped.pop(field, None)
     return scoped
 
@@ -680,15 +683,18 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
                     step["content"] = to_json(scoped)
     if (activity := snap.get("activity")) and activity["ok"]:
         for row in activity["data"]:
-            args = _scope_payload(row["arguments"], ours)
-            if args != row["arguments"]:
-                row["arguments"] = {} if args is _DROP else args
-                row["detail"] = OUTSIDE_ASSIGNMENT
+            if _older_assignment(row["at"], assignment_at):
+                if row["arguments"] or row["detail"]:
+                    row["arguments"] = {}
+                    row["detail"] = OLD_ASSIGNMENT
+            else:
+                args = _scope_payload(row["arguments"], ours)
+                if args != row["arguments"]:
+                    row["arguments"] = {} if args is _DROP else args
+                    row["detail"] = OUTSIDE_ASSIGNMENT
             # The assignment audit writer includes both the old and the new slot lists.
             if row["tool"] == "slots.record":
                 row["detail"] = "Slot assignment recorded. See the current assignment on this page."
-            elif row["kind"] == "read" and row["detail"] and _older_assignment(row["at"], assignment_at):
-                row["detail"] = OLD_ASSIGNMENT
     run = snap.get("status", {}).get("latest_run")
     if run and run["detail"] and _older_assignment(run["started_at"], assignment_at):
         run["detail"] = OLD_ASSIGNMENT
@@ -728,6 +734,12 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
     catalog = _panel(lambda: _rows(
         conn, "select id, requested_at, name, size, status, sku, decision_note"
               " from product_requests order by requested_at desc, id desc"))
+    if live_since is None:
+        spend = {"ok": True, "data": None}
+    elif purchases["ok"]:
+        spend = _panel(lambda: _spend(conn, now, live_since, purchases["data"][0]))
+    else:
+        spend = {"ok": False, "why": "No live spend available."}
     snap = {
         "as_of": now,
         "ours": ours,
@@ -743,8 +755,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
                   else {"ok": True, "data": {"slots": {}, "closet": [], "warnings": []}}),
         "counts": (_panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))) if ours["ok"] else
                    {"ok": True, "data": {}}),
-        "spend": (_panel(lambda: _spend(conn, now, live_since, purchases["data"][0]))
-                  if live_since and purchases["ok"] else {"ok": False, "why": "No live spend available."}),
+        "spend": spend,
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
         "money": _panel(lambda: _money_panel(conn, now)),
         "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
@@ -1489,7 +1500,7 @@ def _tiles(snap: dict, charts: dict[str, str] | None = None) -> str:
         tiles.append(("Spent since the opening", f'<span class="big">{_money(Decimal(ledgered["spent"]))}</span>',
                       f'drinks {_money(Decimal(ledgered["receipts"]))}, visits {_money(Decimal(ledgered["visit_fees"]))}, '
                       f'model {_money(Decimal(ledgered["tokens"]))} &middot; from the ledger{spend_link}'))
-    elif spend["ok"]:
+    elif spend["ok"] and spend["data"] is not None:
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
         unpriced = f' &middot; {m["unpriced"]} without a cost' if m["unpriced"] else ""
         visits = f' &middot; {_plural(dr["midweek"], "midweek visit")}' if dr["midweek"] else ""
