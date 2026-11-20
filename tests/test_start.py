@@ -35,10 +35,6 @@ def test_the_fall_cut_defaults_to_18_november_and_is_never_after_the_start(monke
     from vending import start
 
     assert start.fall_cut() == datetime(2026, 11, 18, 5, 0, tzinfo=timezone.utc)   # conftest unsets FALL_CUTOFF
-    assert start.on_or_after_fall_cut(datetime(2026, 11, 18, 5, 0, tzinfo=timezone.utc))
-    assert not start.on_or_after_fall_cut(datetime(2026, 11, 18, 4, 59, 59, tzinfo=timezone.utc))
-    with pytest.raises(ValueError):
-        start.on_or_after_fall_cut(datetime(2026, 11, 20, 12, 0))
     monkeypatch.setenv("FALL_CUTOFF", "2026-11-30T08:00:00-05:00")
     assert start.fall_cut() == datetime(2026, 11, 30, 13, 0, tzinfo=timezone.utc)
     monkeypatch.setenv("FALL_CUTOFF", "2026-12-20T00:00:00-05:00")

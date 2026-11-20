@@ -62,10 +62,3 @@ def fall_cut() -> datetime:
     if cut is None or cut.utcoffset() is None:
         raise ValueError(f"{FALL_CUTOFF_SETTING} is {value!r}; give a time with its offset, like {DEFAULT_FALL_CUTOFF}")
     return min(cut, START)
-
-
-def on_or_after_fall_cut(moment: datetime) -> bool:
-    """True for an aware moment at or after `fall_cut()`. A naive one is refused: its zone is a guess."""
-    if moment.utcoffset() is None:
-        raise ValueError(f"{moment!r} has no time zone, so it can't be placed before or after the fall cut")
-    return moment >= fall_cut()

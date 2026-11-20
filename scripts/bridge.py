@@ -14,9 +14,11 @@ One command per question you might have about the machine or our account:
     python scripts/bridge.py request REQUEST_ID     where a purchase request has got to
     python scripts/bridge.py poll --live            read the machine right now (see below)
 
-For a poll taken from the fall cut on (`FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern
-when unset), `raw`, `latest` and `poll` print a view rebuilt from our selections
-and the door counter only (see "From the fall cut" below).
+**This script never prints a whole poll.** `raw`, `latest` and `poll --live`
+print every poll as a view rebuilt from our selections and the door counter
+only, whatever the poll's time (see below). Pre-cut fall data for all 40
+selections comes from `analysis/export_sales.py --fall-all`, which stops at the
+fall cut (`docs/integrity.md`, "Fall data").
 
 Settings come from `.env` at the repository root (copy `.env.example`), or from
 the environment: `DEX_BASE_URL` and `DEX_API_KEY`. You must be on Tailscale --
@@ -34,44 +36,38 @@ Two things this script deliberately does not do:
   because that is where the balance, price and halt checks live. Reading a
   request's status is fine, so `request` is here.
 
-**From the fall cut (`vending.start.fall_cut`).** All 40 selections' data, and
-the machine-wide totals, may be used only from polls taken before the fall cut:
-the setting `FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern when unset, and never later
-than the 3 Dec 2026 start (`docs/integrity.md`, "Fall data"). From the cut on,
-nothing may show per-selection data outside our assignment or a machine-wide
-total. From the start the raw poll carries all 40 selections, the other team's
-20 too. Our selections are the stored assignment (`vending.slots.our_slots`,
-which needs `DATABASE_URL`), never a fresh `/api/v1/slots` answer. For a poll
-from the fall cut on:
+**Why never whole.** All 40 selections' data, and the machine-wide totals, may
+be used only from polls taken before the fall cut (`FALL_CUTOFF`, 18 Nov 2026
+00:00 Eastern when unset, never later than the 3 Dec 2026 start). The only
+times this script could judge that by are the bridge's (a listing's
+`started_at`, a reply's `Date`), and those can be wrong: a slow or proxied
+clock, or a time with no offset. So it doesn't judge. Our selections are the
+stored assignment (`vending.slots.our_slots`, which needs `DATABASE_URL`),
+never a fresh `/api/v1/slots` answer.
 
 - `raw`, `latest` and `poll --live` print a view rebuilt from checked fields,
   not lines copied from the poll: `ID4` with its decimal places, `PA1` (the
   selection and its price) and `PA2` (its counters) for each of our selections,
   and the door counter `EA2*DO` with its counts. Nothing else: no envelope, no
-  `ID1`, no `G85` checksum, no other team's selection and no machine-wide total
+  `ID1`, no `G85` checksum, no other selection and no machine-wide total
   (`VA1`, the cash and card records, the rest). A note on stderr says how many
   lines were left out. When the assignment can't be read, no selection is
-  printed, and stderr says so. Nothing prints the whole poll.
-- `--out FILE` saves the raw bytes, because storing the poll is fine. It
-  writes only a regular file: it refuses `-`, a device (`/dev/stdout`, `CON`,
-  `NUL`), a pipe, a directory, or anything else that isn't a regular file.
+  printed, and stderr says so.
+- `--out FILE` is archival storage: it saves the raw bytes, because storing
+  the poll is fine, to a regular file only. It refuses `-`, a device
+  (`/dev/stdout`, `CON`, `NUL`), a pipe, a directory, or anything else that
+  isn't a regular file.
 - `latest --summary` reads the stored assignment first, and skips every
   selection that isn't ours before reading any of its fields.
 
-When a poll was taken comes from the bridge, never from this computer's clock:
-`latest` reads the listing's `started_at`, `raw` the time our `polls` table
-holds for the session (copied from the bridge's listing by the history sync),
-and `poll --live` the bridge's `Date` header, less `X-Poll-Age-Seconds` when
-the read was another caller's. A poll prints whole only when that time is
-before the cut; an unknown time counts as one from the cut. The cut is settled
-before the bridge is asked anything, so a `FALL_CUTOFF` that isn't a time with
-its offset stops the command with no request sent.
-
-Nothing the bridge sends is printed unchecked. `history` prints each entry's
-`session_id`, `started_at` and `bytes`, checked, and `truncated`; nothing else.
-`latest` prints the session and time it checked. An error from any route shows
-the status and its standard phrase, never the bridge's reply: a reply could
-carry a poll's records.
+**Nothing the bridge sends is printed unchecked.** `history` prints each
+entry's `session_id`, `started_at` and `bytes`, checked, and `truncated`.
+`latest` prints the session and time it checked. `health`, `slots`,
+`products` and `request` print only their documented fields, each checked;
+free text (a request's notes) prints as its length. `slots` refuses a reply
+that isn't our team's assignment on our machine. An error from any route, or a
+reply that isn't HTTP, shows a fixed message, never the bridge's reply: a reply
+could carry a poll's records.
 
 Standard library only, except reading the stored assignment, so it runs
 anywhere Python 3.11 does with nothing to install.
@@ -80,6 +76,7 @@ anywhere Python 3.11 does with nothing to install.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -89,7 +86,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from http import HTTPStatus
 from pathlib import Path
 
@@ -106,7 +102,7 @@ TIMEOUT_SECONDS = 15
 POLL_TIMEOUT_SECONDS = 30
 
 
-# Routes whose replies are polls or list them. Their error replies are never printed (see `call`).
+# Routes whose replies are polls or list them.
 POLL_ROUTES = ("/api/v1/history", "/api/v1/poll")
 
 
@@ -137,7 +133,6 @@ def repo_root() -> Path:
 # on how a value is quoted or commented. Standard library too.
 sys.path.insert(0, str(repo_root()))
 from vending import settings as env  # noqa: E402
-from vending.start import fall_cut  # noqa: E402
 
 
 def settings() -> tuple[str, str]:
@@ -200,13 +195,26 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
         if error.code == 429:
             raise BridgeError(f"429: too many requests ({detail}). Slow down.", EXIT_BRIDGE) from None
         raise BridgeError(f"{error.code}: {detail}", EXIT_BRIDGE) from None
+    except http.client.HTTPException as error:
+        # A malformed status line, an over-long header, a body cut short: the exception holds what
+        # the bridge sent, so only its kind is printed.
+        raise BridgeError(f"the bridge's reply wasn't valid HTTP ({type(error).__name__}); none of it is "
+                          "printed", EXIT_BRIDGE) from None
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        reason = getattr(error, "reason", error)
         raise BridgeError(
-            f"Could not reach {base_url} ({reason}). Is Tailscale connected? "
+            f"Could not reach {base_url} ({plain_reason(error)}). Is Tailscale connected? "
             "Run `tailscale status` and look for aihub-pi.",
             EXIT_UNREACHABLE,
         ) from None
+
+
+def plain_reason(error: BaseException) -> str:
+    """Why a connection failed, from the operating system's own words or the error's kind: never
+    text that could have come from the other end."""
+    reason = getattr(error, "reason", error)
+    if isinstance(reason, OSError) and reason.strerror:
+        return reason.strerror
+    return type(reason if isinstance(reason, BaseException) else error).__name__
 
 
 def get_json(path: str, **kwargs) -> object:
@@ -295,7 +303,7 @@ def counts(fields: list[str]) -> list[str]:
 
 
 def rebuild(dex_text: str, ours: tuple[str, ...] | list[str]) -> tuple[str, int, int]:
-    """What a poll from the fall cut on may show: (text, how many of `ours` it prints, lines left out).
+    """What a poll may show, whenever it was taken: (text, how many of `ours` it prints, lines left out).
 
     Nothing is copied from the poll. Each line is written anew from a known tag and fields
     checked to be plain numbers, so a record nobody thought of, or a field that isn't a number,
@@ -358,91 +366,27 @@ def our_selections() -> tuple[tuple[str, ...], str | None]:
         with db.connect() as conn:
             return tuple(our_slots(conn)), None
     except Exception as error:  # noqa: BLE001 -- whatever went wrong, no selection is printed
-        return (), f"{type(error).__name__}: {str(error)[:200]}"
+        # Its kind only: a database error can quote what it was given.
+        return (), f"{type(error).__name__}; check DATABASE_URL and `python -m vending.slots record`"
 
 
-def settled_cut() -> datetime:
-    """The fall cut (`vending.start.fall_cut`), settled before the bridge is asked for anything. A
-    malformed FALL_CUTOFF stops the command here, with no request sent."""
-    try:
-        return fall_cut()
-    except ValueError as error:
-        raise BridgeError(str(error), EXIT_CONFIG) from None
-
-
-def show_poll(body: bytes, out: str | None, taken: datetime | None, cut: datetime,
-              unknown: str | None = None) -> None:
-    """Print a poll, or save it byte for byte. Only one `taken`, by the bridge's account, before
-    `cut` is as it always was. One from the cut on, or taken at an unknown time (`unknown` says
-    why), prints only as `rebuild` writes it, and saves only to a regular file (`save`)."""
-    whole = taken is not None and taken < cut
+def show_poll(body: bytes, out: str | None) -> None:
+    """Print a poll as `rebuild` writes it, or archive it byte for byte to a regular file (`save`).
+    Never whole, whenever it was taken: see the module docstring."""
     if out:
-        if whole:
-            write_text(body, out)
-        else:
-            save(body, out)
+        save(body, out)
         return
-    if whole:
-        write_text(body, None)
-        return
-    if taken is None:
-        print(f"note: when the poll was taken is unknown ({unknown}), so it counts as one from the "
-              "fall cut", file=sys.stderr)
     ours, why = our_selections()
     if why:
         print(f"note: our slot assignment can't be read ({why}), so no selection is printed",
               file=sys.stderr)
     text, printed, left_out = rebuild(body.decode("utf-8", errors="replace"), ours)
-    print(f"note: a poll from the fall cut on ({cut.isoformat(timespec='minutes')}, FALL_CUTOFF): "
-          f"{printed} of our selections, rebuilt from checked fields; {left_out} lines left out (the "
-          "selections that aren't ours, the machine-wide totals, the envelope and G85). --out FILE "
-          "saves the whole poll", file=sys.stderr)
+    print(f"note: {printed} of our selections and the door counter, rebuilt from checked fields; "
+          f"{left_out} lines left out (the selections that aren't ours, the machine-wide totals, the "
+          "envelope and G85). This script never prints a whole poll: pre-cut fall data for all 40 "
+          "comes from analysis/export_sales.py --fall-all. --out FILE archives the raw poll",
+          file=sys.stderr)
     sys.stdout.write(text)
-
-
-def stored_poll_time(session_id: str) -> tuple[datetime | None, str | None]:
-    """(when the poll was taken, None) from our `polls` table, or (None, why it isn't known).
-
-    The table's `started_at` is the bridge's listing, copied by the history sync. Imported here,
-    like `our_selections`, because only this and that need psycopg and `DATABASE_URL`.
-    """
-    try:
-        from vending import db
-
-        with db.connect() as conn:
-            row = conn.execute("select started_at from polls where session_id = %s", (session_id,)).fetchone()
-    except Exception as error:  # noqa: BLE001 -- whatever went wrong, the time is unknown
-        return None, f"{type(error).__name__}: {str(error)[:200]}"
-    if row is None:
-        return None, "not in the polls table; `python -m vending.sync_history` copies the bridge's listing"
-    taken = row[0]
-    if not callable(getattr(taken, "utcoffset", None)) or taken.utcoffset() is None:
-        return None, "the polls table's time has no time zone"
-    return taken, None
-
-
-def live_poll_time(headers: dict[str, str]) -> tuple[datetime | None, str | None]:
-    """(the latest the live read can have been taken, None) by the bridge's clock, or (None, why not).
-
-    The bridge's `Date` header is written after the read, so the read can't be later. When the
-    read was another caller's (`X-Poll-Cached: true`), it is `X-Poll-Age-Seconds` older still; an
-    age that isn't a number of seconds is ignored, which leaves the later time.
-    """
-    found = {k.lower(): v for k, v in headers.items()}
-    try:
-        date = parsedate_to_datetime(found.get("date") or "")
-    except (TypeError, ValueError, IndexError):
-        date = None
-    if date is None or date.utcoffset() is None:
-        return None, "the bridge's reply has no readable Date header"
-    if (found.get("x-poll-cached") or "").strip().lower() == "true":
-        try:
-            age = float(found.get("x-poll-age-seconds") or "")
-        except ValueError:
-            age = None
-        if age is not None and 0 <= age < 3600:   # also refuses nan and inf
-            date -= timedelta(seconds=age)
-    return date, None
 
 
 # A session ID as the bridge gives them: letters, digits, `-` and `_`. Anything else is never printed.
@@ -464,6 +408,74 @@ def checked_time(value: object) -> datetime | None:
     return moment if moment.utcoffset() is not None else None
 
 
+# Text a metadata reply may print: one short line with no `*`, the EVA-DTS field separator, so no
+# poll record can ride along in it. Anything else prints as null.
+PLAIN = re.compile(r"[^\x00-\x1f\x7f*]{1,80}")
+MONEY = re.compile(r"-?[0-9]{1,9}(\.[0-9]{1,4})?")
+
+
+def plain(value: object) -> str | None:
+    return value if isinstance(value, str) and PLAIN.fullmatch(value) else None
+
+
+def whole_number(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def money(value: object) -> str | int | None:
+    if type(value) is int:
+        return value
+    return value if isinstance(value, str) and MONEY.fullmatch(value) else None
+
+
+def when(value: object) -> str | None:
+    moment = checked_time(value)
+    return moment.isoformat() if moment else None
+
+
+def flag(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def omitted(value: object) -> str | None:
+    """Free text, such as a request's notes, as its length only: it could carry anything."""
+    if value is None:
+        return None
+    return f"(note omitted, {len(value)} characters)" if isinstance(value, str) else "(note omitted)"
+
+
+def projected(reply: dict, fields: dict) -> dict:
+    """The `fields` that `reply` has, each through its check. Nothing else of the reply."""
+    return {key: check(reply[key]) for key, check in fields.items() if key in reply}
+
+
+def note_left_out(count: int, one: str, many: str, why: str) -> None:
+    if count:
+        print(f"note: {count} {one if count == 1 else many} left out: {why}", file=sys.stderr)
+
+
+PRODUCT_FIELDS = ("sku", "name", "line", "flavor", "size")
+REQUEST_FIELDS = {"id": plain, "status": plain, "device_id": plain, "created_at": when, "updated_at": when,
+                  "fulfilled_at": when, "off_cycle": flag, "total_paid": money, "door_opened_at": when,
+                  "door_closed_at": when, "note": omitted, "decision_note": omitted}
+LINE_FIELDS = {"line": whole_number, "slot": plain, "source": plain}
+RECEIPT_FIELDS = {
+    "outcome": plain, "sku": plain, "store": plain, "packs_bought": whole_number, "units_per_pack": whole_number,
+    "units_bought": whole_number, "total_paid": money, "unit_cost_paid": money, "units_loaded": whole_number,
+    "units_lost": whole_number, "loss_note": omitted, "units_to_back_stock": whole_number,
+    "units_from_back_stock": whole_number, "units_pulled": whole_number, "pulled_sku": plain,
+    "slot_reassigned": lambda v: flag(v) if isinstance(v, bool) else plain(v), "resolved_at": when,
+    "later_losses": lambda v: len(v) if isinstance(v, list) else None,
+}
+
+
+def a_dict(reply: object, route: str) -> dict:
+    if not isinstance(reply, dict):
+        raise BridgeError(f"the reply from {route} isn't the object this script knows, so none of it is "
+                          "printed", EXIT_BRIDGE)
+    return reply
+
+
 def listed_polls(listing: object) -> list[dict]:
     """The listing's `polls`, each a dict, or a BridgeError: a reply of any other shape isn't printed."""
     polls = listing.get("polls") if isinstance(listing, dict) else None
@@ -481,15 +493,31 @@ def utc_today() -> str:
 
 
 def cmd_health(args: argparse.Namespace) -> None:
-    print_json(get_json("/health", needs_key=False))
+    reply = a_dict(get_json("/health", needs_key=False), "/health")
+    print_json({"status": plain(reply.get("status"))})
 
 
 def cmd_slots(args: argparse.Namespace) -> None:
-    print_json(get_json("/api/v1/slots"))
+    from vending.slots import DEVICE_ID, BadAssignment, parse
+
+    reply = get_json("/api/v1/slots")
+    try:   # the same checks `python -m vending.slots record` makes, our team's included
+        found = parse(reply)
+    except BadAssignment:
+        # Its message can quote the reply, so it isn't printed.
+        raise BridgeError("the slots reply isn't an assignment for our team (SLOTS_TEAM) of 20 selections "
+                          f"on {DEVICE_ID}, so none of it is printed", EXIT_BRIDGE) from None
+    print_json({"team": found.team, "device_id": found.device_id, "slots": list(found.slots)})
 
 
 def cmd_products(args: argparse.Namespace) -> None:
-    print_json(get_json("/api/v1/products"))
+    reply = get_json("/api/v1/products")
+    items = reply.get("products") if isinstance(reply, dict) else reply
+    if not isinstance(items, list):
+        raise BridgeError("the products reply isn't a list of products, so none of it is printed", EXIT_BRIDGE)
+    rows = [{key: plain(item.get(key)) for key in PRODUCT_FIELDS} for item in items if isinstance(item, dict)]
+    note_left_out(len(items) - len(rows), "entry", "entries", "not a product")
+    print_json(rows)
 
 
 def cmd_history(args: argparse.Namespace) -> None:
@@ -507,22 +535,16 @@ def cmd_history(args: argparse.Namespace) -> None:
         taken, size = checked_time(entry.get("started_at")), entry.get("bytes")
         rows.append({"session_id": session, "started_at": taken.isoformat() if taken else None,
                      "bytes": size if type(size) is int and size >= 0 else None})
-    if left_out:
-        print(f"note: {left_out} {'entry' if left_out == 1 else 'entries'} left out: a session ID that "
-              "isn't one", file=sys.stderr)
+    note_left_out(left_out, "entry", "entries", "a session ID that isn't one")
     print_json({"polls": rows, "truncated": listing.get("truncated") is True})
 
 
 def cmd_raw(args: argparse.Namespace) -> None:
-    cut = settled_cut()
     body, _ = call("GET", f"/api/v1/history/{urllib.parse.quote(args.session_id)}/raw")
-    # The route doesn't say when the poll was taken; our polls table does, from the bridge's listing.
-    taken, unknown = stored_poll_time(args.session_id)
-    show_poll(body, args.out, taken, cut, unknown)
+    show_poll(body, args.out)
 
 
 def cmd_latest(args: argparse.Namespace) -> None:
-    cut = settled_cut()   # first, even for --summary: a malformed setting sends no request
     ours: tuple[str, ...] = ()
     if args.summary:
         # Ours from the stored assignment, read before any poll; never from a fresh /api/v1/slots.
@@ -555,11 +577,26 @@ def cmd_latest(args: argparse.Namespace) -> None:
     if args.summary:
         print_json(summarize(body.decode("utf-8", errors="replace"), ours))
     else:
-        show_poll(body, args.out, taken, cut, "the listing's started_at isn't a time with its offset")
+        show_poll(body, args.out)
 
 
 def cmd_request(args: argparse.Namespace) -> None:
-    print_json(get_json(f"/api/v1/purchase-requests/{urllib.parse.quote(args.request_id)}"))
+    route = f"/api/v1/purchase-requests/{urllib.parse.quote(args.request_id)}"
+    reply = a_dict(get_json(route), "/api/v1/purchase-requests")
+    shown = projected(reply, REQUEST_FIELDS)
+    if "lines" in reply:
+        lines = reply["lines"] if isinstance(reply["lines"], list) else []
+        shown["lines"] = []
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            row = projected(line, LINE_FIELDS)
+            if "receipt" in line:
+                receipt = line["receipt"]
+                row["receipt"] = projected(receipt, RECEIPT_FIELDS) if isinstance(receipt, dict) else None
+            shown["lines"].append(row)
+        note_left_out(len(lines) - len(shown["lines"]), "line", "lines", "not a request line")
+    print_json(shown)
 
 
 def cmd_poll(args: argparse.Namespace) -> None:
@@ -570,22 +607,11 @@ def cmd_poll(args: argparse.Namespace) -> None:
             "the newest stored poll (at most an hour old) without touching it.",
             EXIT_REFUSED,
         )
-    cut = settled_cut()
     body, headers = call("POST", "/api/v1/poll", timeout=POLL_TIMEOUT_SECONDS)
     cached = {k.lower(): v for k, v in headers.items()}.get("x-poll-cached")
     if cached == "true":
         print("note: someone polled in the last 30 seconds; this is their read", file=sys.stderr)
-    taken, unknown = live_poll_time(headers)
-    show_poll(body, args.out, taken, cut, unknown)
-
-
-def write_text(body: bytes, out: str | None) -> None:
-    """Print a raw document, or save it byte for byte so its checksum survives. Before the fall cut only."""
-    if out:
-        Path(out).write_bytes(body)
-        print(f"wrote {len(body)} bytes to {out}", file=sys.stderr)
-    else:
-        sys.stdout.write(body.decode("utf-8", errors="replace"))
+    show_poll(body, args.out)
 
 
 # Windows device names. `CON`, `nul.txt` or `C:\x\COM1` open a device, not a file, in any folder.
@@ -603,7 +629,7 @@ def device_name(out: str) -> bool:
 
 
 def save(body: bytes, out: str) -> None:
-    """Save a poll from the fall cut on byte for byte, to a regular file and nowhere else.
+    """Archive a poll byte for byte, to a regular file and nowhere else.
 
     `--out` is for archiving, so it can't be a way round the rebuilt view: `-`, a device
     (`/dev/stdout`, `/dev/tty`, `CON`), a pipe, a socket or a directory is refused, and nothing
@@ -611,7 +637,7 @@ def save(body: bytes, out: str) -> None:
     one swapped in between is refused too.
     """
     def refuse(why: str) -> BridgeError:
-        return BridgeError(f"--out {out!r} {why}. A poll from the fall cut on is saved only to a regular "
+        return BridgeError(f"--out {out!r} {why}. A poll is saved only to a regular "
                            "file, never to the terminal, a device or a pipe.", EXIT_REFUSED)
 
     if out == "-" or device_name(out):
@@ -646,7 +672,11 @@ def save(body: bytes, out: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Talk to the DEX Bridge (the vending machine's Raspberry Pi).",
+        description="Talk to the DEX Bridge (the vending machine's Raspberry Pi). This script never "
+                    "prints a whole poll: raw, latest and poll --live show only our selections and the "
+                    "door counter, whatever the poll's time, and --out archives the raw poll to a regular "
+                    "file. Pre-cut fall data for all 40 selections comes from "
+                    "analysis/export_sales.py --fall-all, which stops at the fall cut.",
         epilog="See docs/dex-bridge.md for what each route returns.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -663,13 +693,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     raw = commands.add_parser("raw", help="one stored poll as raw EVA-DTS text")
     raw.add_argument("session_id")
-    raw.add_argument("--out", help="save to this file instead of printing")
+    raw.add_argument("--out", help="archive the raw poll to this regular file instead of printing")
     raw.set_defaults(run=cmd_raw)
 
     latest = commands.add_parser("latest", help="the newest stored poll")
     latest.add_argument("--summary", action="store_true",
                         help="print price and lifetime sales for our slots instead of raw text")
-    latest.add_argument("--out", help="save the raw text to this file")
+    latest.add_argument("--out", help="archive the raw poll to this regular file")
     latest.set_defaults(run=cmd_latest)
 
     request = commands.add_parser("request", help="status of one of our purchase requests")
@@ -678,7 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     poll = commands.add_parser("poll", help="read the machine live (needs --live)")
     poll.add_argument("--live", action="store_true", help="yes, really read the machine now")
-    poll.add_argument("--out", help="save to this file instead of printing")
+    poll.add_argument("--out", help="archive the raw poll to this regular file instead of printing")
     poll.set_defaults(run=cmd_poll)
 
     return parser
