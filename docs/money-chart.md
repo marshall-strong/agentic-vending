@@ -60,7 +60,7 @@ those sales took is `unattributed_stock`, a reconciliation line in no cost or pr
 day's note also states, so each day's cash and stock at cost still add up. One timing exception:
 a unit the counters split to the old product at a swap leaves stock at the swap but is booked to
 the poll that measured it. When that poll falls on a later day, the earlier day's cash and stock
-are off by that unit's cost and the later day makes it up; weekly and whole-run figures balance
+are off by that unit's cost and the period containing the poll makes it up; weekly and whole-run figures balance
 unless a week ends between the two.
 
 **Exact money.** The page sums exact cents before it rounds values for display, and every value

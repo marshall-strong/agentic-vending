@@ -49,8 +49,9 @@ opening cash and stock + net at known costs + capital + tax set aside - tax
 remitted - unattributed stock = closing cash + stock at cost. One timing
 exception, older than this line: a unit the counters split to the old product
 at a swap leaves stock at the swap but is booked to the poll that measured it,
-so a period that ends between the two is off by that unit's cost until the
-next period; one that holds both balances (`stock.replay`). Where a write-off
+so a period that ends between the two is off by that unit's cost, which the
+period containing the poll makes up; one that holds both balances
+(`stock.replay`). Where a write-off
 at the same swap may be one of those sales, the line is provisional
 (`unattributed_stock_provisional`). The money series counts all of this the
 same way.
@@ -530,6 +531,7 @@ class SalesCost:
     estimated_cost_of_sales_cents: Fraction
     unattributed_stock_cents: Fraction = Fraction(0)
     unattributed_stock_provisional: bool = False
+    unattributed_stock_known: bool = False     # some debit's cost is known, $0.00 included
 
 
 def summarize_sales(sales: Iterable[stock.SaleCost]) -> SalesCost:
@@ -551,7 +553,8 @@ def summarize_sales(sales: Iterable[stock.SaleCost]) -> SalesCost:
                      sum(s.units for s in guessed), sum((s.estimated_cost_cents for s in guessed), Fraction(0)),
                      sum((s.unattributed_cost_cents for s in taken), Fraction(0)),
                      # Whether or not the debit's cost is known (#172 review round 2).
-                     any(s.may_be_written_off for s in sales if s.cost_cents is None))
+                     any(s.may_be_written_off for s in sales if s.cost_cents is None),
+                     bool(taken))
 
 
 def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
@@ -567,14 +570,14 @@ def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
         notes.append(f"{unknown} of {units_sold} units sold have no known cost (sold from a slot before we first "
                      "loaded it, past what we loaded, or across a product change with no estimate), "
                      f"so {what} leave their cost out")
-    if cost.unattributed_stock_cents:
+    if cost.unattributed_stock_known:
         notes.append(f"{money(cost.unattributed_stock_cents)} of stock at cost left the count with sales of unknown "
                      "product: a reconciliation line, in no cost, estimate or profit, by which net worth falls"
                      + ("; provisional, since units written off at the same swap may be some of those sales"
                         if cost.unattributed_stock_provisional else ""))
     elif cost.unattributed_stock_provisional:
-        notes.append("sales of unknown product took stock of unknown cost; units written off at the same swap may "
-                     "be some of those sales, so that shrinkage is provisional")
+        notes.append("units written off at a swap that sales of unknown product span may be some of those sales, "
+                     "so that shrinkage is provisional")
     return notes
 
 

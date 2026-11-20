@@ -818,9 +818,9 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
         warnings.append(StockWarning(text, slot))
     sales: list[SaleCost] = []
     shrinkage: list[Shrinkage] = []
-    # Units written off at each product change, (slot, door open or change, change, units), and each
-    # unattributed sale's place in `sales` with its movement: a write-off its window overlaps may be it.
-    changed_away: list[tuple[str, datetime, datetime, int]] = []
+    # Units written off at each product change, (the change, units), and each unattributed sale's
+    # place in `sales` with its movement: a write-off at a change its window touches may be it.
+    changed_away: list[tuple[Movement, int]] = []
     unknown_sales: list[tuple[int, Movement]] = []
 
     def shelf(sku: str) -> _Pool:
@@ -867,7 +867,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 warn(m.slot, f"{m.ref}: {slot.pool.units} units of {slot.product} still counted in slot "
                                 f"{m.slot} when it changed to {m.sku}; written off as shrinkage")
                 write_off(m.at, f"slot {m.slot}", slot.product, slot.pool.layers)
-                changed_away.append((m.slot, m.opened_at or m.at, m.at, slot.pool.units))
+                changed_away.append((m, slot.pool.units))
             if slot is None or changed:
                 # A sale of the old product just before this visit would have taken the unit that was
                 # oldest before the visit's own pull, which may have moved or emptied the pool since.
@@ -982,11 +982,15 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, costed, cost,
                                       taken_at=m.at if m.booked_at else None, since=m.window_since))
 
-    # Every change the window overlaps is a candidate, not only the slot's last one, and a write-off
-    # there may be one of the sales whatever the debit's cost (#172 review).
+    # Every change the window touches is a candidate, not only the slot's last one, by the replay's
+    # own rule (`_touches`: a poll exactly at a change without door times touches it), and a
+    # write-off there may be one of the sales whatever the debit's cost (#172 review). This doesn't
+    # apply `_split_by_door`'s door rules, which can rule out the written-off product (a window that
+    # starts inside its visit): that would mean splitting its inline logic out. So such a sale may be
+    # flagged when it can't be that product: over-flagging, the conservative side of "may be".
     for i, m in unknown_sales:
-        if any(at_slot == m.slot and units and (m.since is None or m.since < at) and start < m.at
-               for at_slot, start, at, units in changed_away):
+        if any(change.slot == m.slot and units and (m.since is None or _touches(m, change))
+               for change, units in changed_away):
             sales[i] = replace(sales[i], may_be_written_off=True)
 
     for name, slot in sorted(slots.items()):

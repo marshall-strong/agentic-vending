@@ -51,7 +51,7 @@ equal the day before's plus net at known costs, capital and the tax set
 aside, less tax remitted and that line. Except for timing: a unit the counters
 split to the old product at a swap leaves stock at the swap but is booked to
 the poll that measured it, so a day (or a week) that ends between the two is
-off by that unit's cost, and the next one makes it up; the whole run
+off by that unit's cost, and the period containing the poll makes it up; the whole run
 balances. `unattributed_stock_provisional` says a write-off at the same swap
 may be one of those sales.
 
