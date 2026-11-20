@@ -334,7 +334,7 @@ def fulfilled(conn, request_id, slot, sku, *, units_loaded, paid, at, to_back_st
 
 @pytest.mark.parametrize("offset", [None, timedelta(hours=1), timedelta(hours=-1)],
                          ids=["no-opening", "future-opening", "after-opening"])
-def test_live_dashboard_uses_opening_for_runs_calls_purchases_and_stock(conn, page_conn, offset):
+def test_live_dashboard_uses_opening_for_calls_purchases_and_stock(conn, page_conn, offset):
     now = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
     if offset is not None:
         ledger.record(conn, "opening", 60000, "opening capital", "operator", at=now + offset)
@@ -352,15 +352,15 @@ def test_live_dashboard_uses_opening_for_runs_calls_purchases_and_stock(conn, pa
                      (test_at, status))
     catalog_request(conn, "REAL-CATALOG-APPROVAL", "approved", test_at, "APPROVED-SKU")
     store_poll(conn, "owned", test_at.isoformat(), {"15": (265, 10)})
-    for tool in ("slots.record", "ledger.adjustment", "plan_store.save", "config.set", "request_catalog_product"):
+    for tool in ("slots.record", "ledger.adjustment", "plan_store.pick", "config.set", "request_catalog_product"):
         conn.execute("insert into action_log (at, kind, tool, arguments, outcome) values (%s, 'write', %s, '{}', 'done')",
                      (test_at, tool))
     conn.execute("insert into action_log (at, kind, tool, arguments, outcome, detail) "
                  "values (%s, 'read', 'get_catalog', '{}', 'failed', 'TEST-CALL')", (test_at,))
     conn.execute("insert into action_log (at, kind, tool, arguments, outcome, detail) "
                  "values (%s, 'read', 'get_catalog', '{}', 'done', 'LIVE-CALL')", (live_at,))
-    conn.execute("insert into agent_runs (mode, started_at, finished_at, status, detail) "
-                 "values ('live', %s, %s, 'failed', 'TEST-LIVE-RUN')", (test_at, test_at))
+    early_live = conn.execute("insert into agent_runs (mode, started_at, finished_at, status) "
+                              "values ('live', %s, %s, 'skipped') returning id", (test_at, test_at)).fetchone()[0]
     for mode in ("dry-run", "replay"):
         conn.execute("insert into agent_runs (mode, started_at, finished_at, status) "
                      "select %s, %s, %s, 'skipped' from generate_series(1, %s)",
@@ -374,21 +374,21 @@ def test_live_dashboard_uses_opening_for_runs_calls_purchases_and_stock(conn, pa
     agent_runs.step(conn, dry, 1, "thinking", "TEST-STEP")
     snap = dashboard.snapshot(page_conn, now)
     page, body = dashboard.render(snap), dashboard.to_json(snap)
-    for marker in ("TEST-DRINK", "81.19", "test-receipt", "test-rejection", "TEST-CALL", "TEST-LIVE-RUN", "TEST-STEP"):
+    for marker in ("TEST-DRINK", "81.19", "test-receipt", "test-rejection", "TEST-CALL", "TEST-STEP"):
         assert marker not in page and marker not in body
     assert snap["sales"]["data"]["slots"]["15"]["price"] == "2.65"
     assert snap["catalog_counts"]["data"]["by_status"]["approved"] == 1
     assert {r["tool"] for r in snap["activity"]["data"]} >= {
-        "slots.record", "ledger.adjustment", "plan_store.save", "config.set", "request_catalog_product",
+        "slots.record", "ledger.adjustment", "plan_store.pick", "config.set", "request_catalog_product",
     }
     assert snap["recent_calls"]["data"]["failed"] == 0
     assert not any("was rejected" in item["text"] for item in snap["attention"])
     assert "day-one-pending" in page and "REAL-CATALOG-APPROVAL" in page
-    assert [r["id"] for r in snap["runs"]["data"]] == ([live] if opened else [])
-    assert ("LIVE-CALL" in body) is opened and ("LIVE-STEP" in body) is opened
+    assert [r["id"] for r in snap["runs"]["data"]] == [live, early_live]
+    assert ("LIVE-CALL" in body) is opened and "LIVE-STEP" in body
     assert ("LIVE-DRINK" in page) is opened and ("day-one-receipt" in body) is opened
     assert snap["money"]["data"]["committed"]["unsettled"] == (0 if opened else 2)
-    assert f"{2 * (dashboard.RUN_ROWS + 1) + (1 if opened else 4)} test runs and 2 test purchases" in page
+    assert f"{2 * (dashboard.RUN_ROWS + (1 if opened else 2))} test runs and 2 test purchases" in page
 
 
 def test_standalone_routes_scope_reassigned_slots_and_redact_failed_steps(served, conn):
@@ -428,6 +428,71 @@ def test_rejected_test_request_does_not_change_verdict(conn, page_conn):
     snap = dashboard.snapshot(page_conn, MONDAY)
     assert snap["purchase_requests"]["data"] == []
     assert dashboard.verdict(snap["attention"]) == "ok"
+
+
+def test_day_one_request_rejected_after_opening_is_visible_and_needs_a_check(conn, page_conn):
+    opening = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=opening)
+    conn.execute("insert into purchase_requests (request_id, submitted_at, updated_at, off_cycle,"
+                 " request_body, status, decision_note) values ('day-one', %s, %s, false, '{}',"
+                 " 'rejected', 'One product needs approval.')",
+                 (opening - timedelta(hours=1), opening + timedelta(minutes=1)))
+    early = dashboard.snapshot(page_conn, opening - timedelta(minutes=1))
+    assert early["purchase_requests"]["data"] == []
+    snap = dashboard.snapshot(page_conn, opening + timedelta(minutes=2))
+    assert [row["request_id"] for row in snap["purchase_requests"]["data"]] == ["day-one"]
+    assert dashboard.verdict(snap["attention"]) == "check"
+    assert "Purchase request day-one was rejected" in dashboard.render(snap)
+    assert "hidden_tests" not in snap["runs"]
+
+
+def test_live_run_and_agent_writes_show_before_opening(conn, page_conn):
+    now = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
+    at = now - timedelta(minutes=10)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=now + timedelta(hours=1))
+    live = conn.execute("insert into agent_runs (mode, started_at) values ('live', %s) returning id", (at,)).fetchone()[0]
+    agent_runs.finish(conn, live, "skipped", plan=plan({"slot": "15", "keep": True}))
+    agent_runs.step(conn, live, 1, "text", "LIVE-PRE-OPENING-STEP")
+    for mode in ("dry-run", "replay"):
+        test = conn.execute("insert into agent_runs (mode, started_at) values (%s, %s) returning id",
+                            (mode, at)).fetchone()[0]
+        agent_runs.step(conn, test, 1, "text", "TEST-PRE-OPENING-STEP")
+    for kind, tool, outcome in (("read", "get_catalog", "failed"), ("write", "submit_desired_state", "refused"),
+                                ("write", "set_wildcard_slot", "failed")):
+        log(conn, kind, tool, {}, outcome, "test detail")
+    conn.execute("update action_log set at = %s where tool <> 'ledger.opening'", (at,))
+
+    snap = dashboard.snapshot(page_conn, now)
+    assert snap["status"]["latest_run"]["id"] == live
+    assert snap["plan"]["data"]["run"]["id"] == live
+    assert [row["id"] for row in snap["runs"]["data"]] == [live]
+    assert snap["runs"]["hidden_tests"] == {"runs": 2, "purchases": 0}
+    assert {row["tool"]: row["outcome"] for row in snap["activity"]["data"] if row["tool"] != "ledger.opening"} == {
+        "submit_desired_state": "refused", "set_wildcard_slot": "failed",
+    }
+    assert snap["recent_calls"]["data"] == {"calls": 2, "writes": 2, "refused": 1, "failed": 1}
+    page = dashboard.render(snap)
+    assert "LIVE-PRE-OPENING-STEP" in page and "TEST-PRE-OPENING-STEP" not in page
+
+
+def test_before_opening_only_exact_write_tools_are_kept(conn, page_conn):
+    now = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
+    for tool, arguments in (("ledger.new_tool", {}), ("config.debug", {}),
+                            ("ledger.tokens", {"reference": "msg_dev"}), ("plan_store.save", {}),
+                            ("ledger.adjustment", {}), ("config.set", {}),
+                            ("plan_store.load", {}), ("plan_store.pick", {})):
+        log(conn, "write", tool, arguments, "done", tool)
+    log(conn, "read", "config.set", {}, "done", "non-write control")
+    conn.execute("update action_log set at = %s", (now - timedelta(minutes=10),))
+
+    snap = dashboard.snapshot(page_conn, now)
+    assert {row["tool"] for row in snap["activity"]["data"]} == {
+        "ledger.adjustment", "config.set", "plan_store.load", "plan_store.pick",
+    }
+    assert snap["recent_calls"]["data"] == {"calls": 4, "writes": 4, "refused": 0, "failed": 0}
+    assert snap["status"]["last_action"]["kind"] == "write"
+    for marker in ("ledger.new_tool", "config.debug", "ledger.tokens", "msg_dev", "plan_store.save"):
+        assert marker not in dashboard.to_json(snap)
 
 
 def test_runs_list_what_each_plan_changed(conn, page_conn, open_ledger):

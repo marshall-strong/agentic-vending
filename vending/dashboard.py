@@ -211,18 +211,17 @@ def _eastern(value: datetime) -> datetime:
         return value
 
 
-# action_log has no run ID. Before opening, keep the operator and catalog writes.
-# The harness also writes ledger.tokens, with an entry or a "live ... pending" reference.
-ACTIVITY_VISIBLE = """(
-    at between %s and %s
-    or (kind = 'write' and (
-        tool in ('halt', 'slots.record', 'slot_counts', 'request_catalog_product')
-        or split_part(tool, '.', 1) in ('config', 'plan_store', 'product_requests',
-                                       'request_backlog', 'submissions', 'sourcing', 'pages')
-        or (split_part(tool, '.', 1) = 'ledger' and (
-            tool <> 'ledger.tokens' or (not (arguments ? 'entry')
-                and coalesce(arguments->>'reference', '') !~ '^live( .*)? pending$')))
-    )))"""
+# action_log has no run ID. Before opening, keep only real operator and agent writes by name.
+PRE_OPENING_WRITES = (
+    "config.set", "halt",
+    "ledger.adjustment", "ledger.capital", "ledger.opening", "ledger.tax_remitted",
+    "pages.grant",
+    "plan_store.load", "plan_store.pick",  # Written by the companion first-fill plan branch.
+    "product_requests.resolve", "request_backlog.add", "request_backlog.drop", "request_backlog.move",
+    "request_catalog_product", "set_wildcard_slot", "slot_counts", "slots.record",
+    "sourcing.remove", "sourcing.set", "submissions.resolve", "submit_desired_state",
+)
+ACTIVITY_VISIBLE = "(at <= %s and (at >= %s or (kind = 'write' and tool = any(%s))))"
 
 
 def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None) -> dict:
@@ -230,16 +229,16 @@ def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None) -
     # Fails closed like `vending.config.is_halted`: anything but JSON false is halted.
     halted = flag is None or flag["value"] is not False
     run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail, cost_usd"
-                          " from agent_runs where mode = 'live' and started_at between %s and %s"
-                          " order by started_at desc, id desc limit 1", (opening, now))
+                          " from agent_runs where mode = 'live' and started_at <= %s"
+                          " order by started_at desc, id desc limit 1", (now,))
     if run is None:   # no runs, or an agent_runs older than cost_usd: try without it
         run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail"
-                              " from agent_runs where mode = 'live' and started_at between %s and %s"
-                              " order by started_at desc, id desc limit 1", (opening, now))
+                              " from agent_runs where mode = 'live' and started_at <= %s"
+                              " order by started_at desc, id desc limit 1", (now,))
     if run and run["status"] == "running" and now - run["started_at"] > STALE_RUN:
         run["stale"] = True
     last = _optional(conn, f"select at, kind, tool, outcome from action_log where {ACTIVITY_VISIBLE}"
-                           " order by at desc, id desc limit 1", (opening, now))
+                           " order by at desc, id desc limit 1", (now, opening, list(PRE_OPENING_WRITES)))
     return {"halted": halted, "halt_changed_at": flag and flag["updated_at"],
             "halt_changed_by": flag and flag["updated_by"], "latest_run": run,
             "last_action": last, "next_cutoff": next_cutoff(now)}
@@ -265,19 +264,18 @@ def our_selections(snap: dict) -> tuple[str, ...]:
     return tuple(ours["data"]) if ours.get("ok") else ()
 
 
-def _plan(conn: psycopg.Connection, ours: tuple[str, ...], opening: datetime | None, now: datetime,
+def _plan(conn: psycopg.Connection, ours: tuple[str, ...], now: datetime,
           assignment_at: datetime | None) -> dict | None:
     columns = "id, started_at, finished_at, mode, model, status, plan, team_update, notes"
     found = _rows(conn, f"select {columns} from agent_runs where plan is not null and mode = 'live'"
-                        " and started_at between %s and %s order by started_at desc, id desc limit 1",
-                  (opening, now))
+                        " and started_at <= %s order by started_at desc, id desc limit 1", (now,))
     if not found:
         return None
     latest = found[0]
     previous = _optional(conn, f"select {columns} from agent_runs where plan is not null and mode = 'live'"
-                               " and started_at >= %s and (started_at, id) < (%s, %s)"
+                               " and (started_at, id) < (%s, %s)"
                                " order by started_at desc, id desc limit 1",
-                         (opening, latest["started_at"], latest["id"]))
+                         (latest["started_at"], latest["id"]))
     now_slots = _by_slot(latest["plan"])
     before = _by_slot(previous["plan"]) if previous else {}
     # One row per selection assigned to us now, in the assignment's order. A stored plan can name
@@ -345,7 +343,7 @@ def _tags(conn: psycopg.Connection, now: datetime) -> dict:
         return {}
 
 
-def _runs(conn: psycopg.Connection, now: datetime, opening: datetime | None, tags: dict | None = None,
+def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
           ours: tuple[str, ...] = ()) -> list[dict]:
     """The last runs, newest first, each with the slots its plan changed from the plan before it.
 
@@ -356,11 +354,11 @@ def _runs(conn: psycopg.Connection, now: datetime, opening: datetime | None, tag
         select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, r.detail, r.cost_usd,
                r.request_id, r.team_update, r.notes, r.plan,
                (select p.plan from agent_runs p
-                 where p.mode = r.mode and p.plan is not null and p.started_at >= %s
+                 where p.mode = r.mode and p.plan is not null
                    and (p.started_at, p.id) < (r.started_at, r.id)
                  order by p.started_at desc, p.id desc limit 1) as previous_plan
-          from agent_runs r where r.mode = 'live' and r.started_at between %s and %s
-         order by r.started_at desc, r.id desc limit %s""", (opening, opening, now, RUN_ROWS))
+          from agent_runs r where r.mode = 'live' and r.started_at <= %s
+         order by r.started_at desc, r.id desc limit %s""", (now, RUN_ROWS))
     steps = _steps(conn, [r["id"] for r in rows])
     newest = True
     for r in rows:
@@ -477,7 +475,8 @@ def _dollars(cents: Fraction | None) -> str | None:
 
 
 def _purchase_rows(conn: psycopg.Connection, opening: datetime | None, now: datetime) -> tuple[list[dict], int]:
-    rows = _rows(conn, """select request_id, submitted_at, off_cycle, status, total_paid, decision_note, fulfilled_at
+    rows = _rows(conn, """select request_id, submitted_at, off_cycle, status, total_paid, decision_note,
+                                 fulfilled_at, updated_at
                           from purchase_requests order by submitted_at desc, request_id desc""")
     receipts: dict[str, list[dict]] = {}
     if opening is not None and any(r["status"] == "fulfilled" for r in rows):
@@ -487,13 +486,17 @@ def _purchase_rows(conn: psycopg.Connection, opening: datetime | None, now: date
     for row in rows:
         status = row["status"]
         fulfilled_at = row.pop("fulfilled_at")
+        updated_at = row.pop("updated_at")
         lines = receipts.get(row["request_id"], [])
         live_lines = [line for line in lines if line["at"] is not None and opening <= line["at"] <= now]
         if status == "fulfilled":
+            decision_at = min((line["at"] for line in lines if line["at"] is not None),
+                              default=fulfilled_at or row["submitted_at"])
             show = bool(live_lines) if lines else (
                 opening is not None and fulfilled_at is not None and opening <= fulfilled_at <= now)
         else:
-            show = status == "pending" or (opening is not None and opening <= row["submitted_at"] <= now)
+            decision_at = updated_at or row["submitted_at"]
+            show = status == "pending" or (opening is not None and opening <= decision_at <= now)
         if show:
             if live_lines and len(live_lines) < len(lines):
                 row["total_paid"] = sum((line["total_paid"] or 0 for line in live_lines), Decimal(0))
@@ -501,11 +504,8 @@ def _purchase_rows(conn: psycopg.Connection, opening: datetime | None, now: date
                             "units_loaded": sum(line["units_loaded"] or 0 for line in live_lines),
                             "unavailable": sum(line["outcome"] == "unavailable" for line in live_lines),
                             "alternates": sum(line["outcome"] == "alternate" for line in live_lines)})
-        else:
-            receipt_at = min((line["at"] for line in lines if line["at"] is not None),
-                             default=fulfilled_at or row["submitted_at"])
-            if opening is None or receipt_at < opening:
-                hidden += 1
+        elif decision_at <= now and (opening is None or decision_at < opening):
+            hidden += 1
     return visible, hidden
 
 
@@ -540,7 +540,7 @@ def _money_panel(conn: psycopg.Connection, now: datetime) -> dict:
 
 def _recent_calls(conn: psycopg.Connection, now: datetime, opening: datetime | None) -> dict:
     rows = _rows(conn, f"select kind, outcome, count(*) as n from action_log where at > %s and {ACTIVITY_VISIBLE}"
-                       " group by kind, outcome", (now - RECENT, opening, now))
+                       " group by kind, outcome", (now - RECENT, now, opening, list(PRE_OPENING_WRITES)))
     counts = {"calls": 0, "writes": 0, "refused": 0, "failed": 0}
     for r in rows:
         counts["calls"] += r["n"]
@@ -729,7 +729,8 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
     live_since = opening if opening is not None and opening <= now else None
     purchases = _panel(lambda: _purchase_rows(conn, live_since, now))
     comparison = "<" if live_since else "<="
-    model_test_count = _optional(conn, f"select count(*) as n from agent_runs where started_at {comparison} %s",
+    model_test_count = _optional(conn, f"select count(*) as n from agent_runs where mode in ('dry-run', 'replay')"
+                                       f" and started_at {comparison} %s",
                                  (live_since or now,))
     catalog = _panel(lambda: _rows(
         conn, "select id, requested_at, name, size, status, sku, decision_note"
@@ -744,11 +745,11 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         "as_of": now,
         "ours": ours,
         "status": _status(conn, now, live_since),
-        "plan": _panel(lambda: _plan(conn, slots, live_since, now, assignment_at)),
-        "runs": _panel(lambda: _runs(conn, now, live_since, _tags(conn, now), slots)),
+        "plan": _panel(lambda: _plan(conn, slots, now, assignment_at)),
+        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots)),
         "activity": _panel(lambda: _rows(
             conn, f"select id, at, kind, tool, outcome, detail, arguments from action_log where {ACTIVITY_VISIBLE}"
-                  " order by at desc, id desc limit %s", (live_since, now, ACTIVITY_ROWS))),
+                  " order by at desc, id desc limit %s", (now, live_since, list(PRE_OPENING_WRITES), ACTIVITY_ROWS))),
         "recent_calls": _panel(lambda: _recent_calls(conn, now, live_since)),
         "sales": _panel(lambda: _sales(conn, now)),
         "stock": (_panel(lambda: _stock(conn, now) if ours["ok"] else _closet_only(conn)) if live_since

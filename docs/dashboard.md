@@ -38,7 +38,7 @@ what changed and why.
 | The plan | Before the slot lock, the plan for the first fill. Each line shows the product, price and units. Open it for the agent's reason and the code's checks. The header compares the fill cost with the proposed $366 cap. The page shows the picked plan or labels the latest one "latest, not picked". A plan for an earlier assignment shows a message with no slots. From the lock, the agent's Friday plan shows its slot changes, reasons, weekly update and notes; each line also says what the slot sold in the 7 days to the last poll. That count is the slot's, not the product's: a swap at a visit inside the window adds the old product's sales (#172), and the page says so. | `first_fill_plans` before the lock, then `agent_runs`, `vending.stock` and `get_machine_state` |
 | Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it. Under each, **How it decided** opens the run's steps in order: the model's reasoning (a summary the API returns, never the raw chain of thought), anything it wrote, each tool call and what came back, with failed replies in red. A run in progress shows the steps so far | `agent_runs`, `agent_steps` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
-| Money | **Balance**, **spendable** (balance less the sales tax set aside) and **profit since the opening**. One bar shows where the money in (opening, capital, takings) has gone: drinks bought, midweek visits, model spend, tax handed over, tax set aside, and what is still spendable. Then model spend against the proposed \$9 and visit fees against the proposed \$50, the profit and loss since the opening (units sold across a swap the counters can't split have no exact cost, so cost of sales and profit show as unknown, and their estimate gets its own line, labelled as an estimate and not in profit, #172), the proposed split of the \$600 (#113), and the ledger's notes about the live period. **Committed:** what the pending purchase requests could still cost at most (the dearer of each line's primary and alternate at `packs x max_price_per_pack`, plus an off-cycle request's visit fee), since the ledger counts a purchase only once it is fulfilled. If any pending line has no price we can read, the most is unknown, never counted as \$0, and so is what stays spendable after it. The competition counts from the ledger's opening entry; anything before it is development and test spend, not from the \$600, and no figure here counts it. Before the opening entry, it says how to record it; an opening entry dated in the future (recorded ahead with `--at`) keeps that view and says when the ledger opens. Receipts and visit fees from before the opening are test purchases: once the opening is recorded, stock on hand and cost of sales leave them out too (`stock.receipts_count_from`, #150). A submission sent with no usable answer (`sending` or `unknown` in `purchase_submissions`) counts as committed too, since it may exist at the bridge. Needs attention adds: **Problem** if spendable is below zero, or if pending requests could cost more than is spendable; **Check** if spendable would fall under the proposed \$53 floor, if requests are pending with no opening entry or before an opening dated ahead (the date in Eastern), if a submission is unsettled, if a pending line has no price we can read, or if the ledger can't give a balance (for example, our slot assignment isn't recorded); **Info** if model spend passes \$9. If reading the ledger passes the statement timeout, only this panel says it isn't available; the rest of the page still shows | `vending.ledger` (`balance`, `pnl`), `purchase_requests`, `purchase_submissions` |
+| Money | **Balance**, **spendable** (balance less the sales tax set aside) and **profit since the opening**. One bar shows where the money in (opening, capital, takings) has gone: drinks bought, midweek visits, model spend, tax handed over, tax set aside, and what is still spendable. Then model spend against the proposed \$9 and visit fees against the proposed \$50, the profit and loss since the opening (units sold across a swap the counters can't split have no exact cost, so cost of sales and profit show as unknown, and their estimate gets its own line, labelled as an estimate and not in profit, #172), the proposed split of the \$600 (#113), and the ledger's notes about the live period. **Committed:** what the pending purchase requests could still cost at most (the dearer of each line's primary and alternate at `packs x max_price_per_pack`, plus an off-cycle request's visit fee), since the ledger counts a purchase only once it is fulfilled. If any pending line has no price we can read, the most is unknown, never counted as \$0, and so is what stays spendable after it. The ledger figures count spending from the opening entry. Before the opening entry, it says how to record it; an opening entry dated in the future (recorded ahead with `--at`) keeps that view and says when the ledger opens. Receipts and visit fees from before the opening are test purchases: once the opening is recorded, stock on hand and cost of sales leave them out too (`stock.receipts_count_from`, #150). A submission sent with no usable answer (`sending` or `unknown` in `purchase_submissions`) counts as committed too, since it may exist at the bridge. Needs attention adds: **Problem** if spendable is below zero, or if pending requests could cost more than is spendable; **Check** if spendable would fall under the proposed \$53 floor, if requests are pending with no opening entry or before an opening dated ahead (the date in Eastern), if a submission is unsettled, if a pending line has no price we can read, or if the ledger can't give a balance (for example, our slot assignment isn't recorded); **Info** if model spend passes \$9. If reading the ledger passes the statement timeout, only this panel says it isn't available; the rest of the page still shows | `vending.ledger` (`balance`, `pnl`), `purchase_requests`, `purchase_submissions` |
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates). Then every catalog request, newest first: counts by status, the open (`pending`) ones against the bridge's cap and the places left, and each request's status, its SKU once it has one (an approved product may be added under a SKU we wouldn't guess), and the decision note | `purchase_requests`, `purchase_lines`, `product_requests` |
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
 | Product leaderboards | The ten best sellers by SKU, flavor, and brand for our current assignment. Each row shows units sold, revenue excluding tax, and sell-through. Sell-through divides units sold by units loaded since the opening. For this week (Saturday to Friday, Eastern), it divides units sold by starting stock plus units loaded. The rate is unavailable if sales exceed recorded stock. Sales with an unknown product stay out of the rankings. The panel counts those sales and labels the units with an estimated cost. | `vending.stock`, `vending.ledger`, `catalog_products` |
@@ -111,8 +111,8 @@ shows at once. Every lane has an aria label that reads it out (product, count, F
 reason); with reduced motion set, the Friday fill doesn't animate.
 
 A slot counts as changed when what the plan asks for changes (product, fill, price, keep). A
-reworded reason alone is not a change. The status and machine panels follow live runs from the
-opening. The plan compares with the previous live plan from that period.
+reworded reason alone is not a change. The status and machine panels follow live runs.
+The plan compares with the previous live plan.
 
 The page refreshes itself in place every 30 seconds, keeping your scroll position, any open
 slot or arguments, the tool-call filter, the Now / Next Friday choice, the shelf you picked and the
@@ -217,22 +217,32 @@ warning still covers a history sync that has stopped.
 
 ## What the live page leaves out
 
-The dashboard and its JSON use the ledger opening time. An opening dated ahead takes effect at
-that time. Runs show only `live` runs from the opening. Purchase requests omit rejections
-submitted before the opening. Fulfilled purchases and back stock use the same receipt clock as
-the ledger. The Runs panel counts the test runs and purchases it leaves out from before opening.
+Runs show `live` work, including runs before the opening. The panel counts `dry-run` and `replay`
+runs it leaves out from before opening. A rejected request appears if its last update falls
+within the ledger period. If it has no update time, the dashboard uses the submission time.
+Fulfilled purchases and back stock use the same receipt clock as the ledger. The Runs panel
+also counts the test purchases it leaves out from before opening.
+
 Pending purchase requests, catalog requests and approvals, the assignment, and polls still show
 before opening. Unsettled submissions (`sending` and `unknown`) still count as committed spend.
+An opening dated ahead takes effect at that time. The spend tile appears after the opening.
 
-`action_log` has no run ID. Calls appear by time from the opening. These `write` rows also
-appear before it: `halt`, `slots.record`, `slot_counts`, `request_catalog_product`,
-`ledger.*`, `plan_store.*`, `config.*`, `product_requests.*`, `request_backlog.*`,
-`submissions.*`, `sourcing.*`, and `pages.*`. The model harness also writes `ledger.tokens`.
-Its reservation and settlement rows follow the time filter.
+`action_log` has no run ID. From the opening, calls appear by time. Before the opening, these
+exact `write` tools appear:
+
+- `config.set`, `halt`, `pages.grant`, `slot_counts`, and `slots.record`
+- `ledger.adjustment`, `ledger.capital`, `ledger.opening`, and `ledger.tax_remitted`
+- `plan_store.load` and `plan_store.pick` from the first-fill plan branch
+- `product_requests.resolve`, `request_catalog_product`, `request_backlog.add`,
+  `request_backlog.drop`, and `request_backlog.move`
+- `set_wildcard_slot`, `submit_desired_state`, `submissions.resolve`, `sourcing.remove`, and `sourcing.set`
+
+All `ledger.tokens` rows follow the opening time, including entries recorded by an operator.
 
 Both routes use the current slot assignment. They omit plan entries and structured tool data
-for other selections. A note replaces run text from before the current assignment. The stored
-error text of failed calls, tool results and runs stays out of both responses.
+for other selections. A note replaces run and activity text from before the current assignment.
+The stored error text of failed calls, tool results and runs stays out of both responses.
+The public page keeps the confirmation when a submit succeeds and the run later fails.
 The public page gives a fixed message when a panel cannot read its data. The detail goes to
 stderr. The standalone page shows the detail in the panel.
 
