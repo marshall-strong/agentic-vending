@@ -165,12 +165,18 @@ def test_empty_states(conn, page_conn):
     assert "No slot assignment is stored, so nothing is priced" in section(dashboard.render(snap))
 
 
-def test_a_missing_sourcing_table_blanks_only_this_panel(conn, page_conn):
+def test_a_missing_sourcing_table_blanks_only_this_panel_with_a_fixed_message(conn, page_conn, capsys):
+    # The database's own text names tables (and can name the host): it goes to the log, never the page or JSON.
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (250, 3)})
     conn.execute("drop table sourcing_options")
-    snap = dashboard.snapshot(page_conn, MONDAY)
-    assert not snap["pricing"]["ok"] and "sourcing_options" in snap["pricing"]["why"]
-    assert snap["sales"]["ok"] and "Not available" in section(dashboard.render(snap))
+    for public in (False, True):
+        snap = dashboard.snapshot(page_conn, MONDAY, public=public)
+        assert snap["pricing"] == {"ok": False, "why": dashboard.PRICING_FAILED}
+        page, state = dashboard.render(snap), dashboard.to_json(snap)
+        for leak in ("sourcing_options", "does not exist", "UndefinedTable"):
+            assert leak not in page and leak not in state, leak
+        assert snap["sales"]["ok"] and f"Not available: {dashboard.PRICING_FAILED}" in section(page).replace("&#x27;", "'")
+    assert 'relation "sourcing_options" does not exist' in capsys.readouterr().err
 
 
 def test_price_history_reads_our_slots_itself(conn):

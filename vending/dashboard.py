@@ -623,7 +623,20 @@ def _pricing(conn: psycopg.Connection, now: datetime, snap: dict) -> dict:
     """The pricing panel (`vending.pricing_panel`): its own reads (our selections, their sourcing, the
     ceilings, the price history) isolated like an optional panel, then built from the sales, stock and plan
     panels above. The reader finds our selections itself, in this same snapshot."""
-    return _panel(lambda: pricing_panel.build(snap, _isolated(conn, lambda: pricing_panel.read(conn, now)), now))
+    try:
+        return {"ok": True, "data": pricing_panel.build(snap, _isolated(conn, lambda: pricing_panel.read(conn, now)), now)}
+    except (Missing, Unavailable) as error:
+        # The database's text names tables (and can name the host), so it goes to the log, not the page or JSON.
+        cause = error.__cause__ or error
+        first = (str(cause).strip().splitlines() or [""])[0]
+        print(f"dashboard: the pricing panel couldn't be read: {type(cause).__name__}: {first}",
+              file=sys.stderr, flush=True)
+        return {"ok": False, "why": PRICING_FAILED}
+
+
+# Shown when the pricing panel's reads fail, in place of the error's text (on every page, public or not).
+PRICING_FAILED = ("the pricing figures couldn't be read just now; the server's log has the detail. If it says a "
+                  "table is missing, run `python -m vending.db migrate` on this database")
 
 
 # Shown when the products read fails, in place of the error's text.
