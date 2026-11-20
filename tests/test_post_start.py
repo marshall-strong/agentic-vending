@@ -175,10 +175,11 @@ def test_a_poll_from_before_the_start_is_printed_whole(script, capsys):
 
 
 @pytest.mark.parametrize("argv", [["latest"], ["raw", "s1"], ["poll", "--live"]])
-def test_out_saves_the_raw_poll_byte_for_byte(script, capsys, tmp_path, argv):
+def test_out_saves_the_raw_poll_byte_for_byte(script, capsys, tmp_path, monkeypatch, argv):
     saved = tmp_path / "poll.dex"
     saved.write_bytes(b"x" * (len(script.poll) + 100))   # a longer file there already is replaced whole
-    assert script.main([*argv, "--out", str(saved)]) == 0
+    monkeypatch.chdir(tmp_path)   # named relative to it: "wrote ... to" prints the name, never the temp folder
+    assert script.main([*argv, "--out", "poll.dex"]) == 0
     out, err = capsys.readouterr()
     assert saved.read_bytes() == script.poll and out == "" and not leaked(err)
 
@@ -188,26 +189,38 @@ TARGETS = ("-", "CON", "con.txt", "nul", "COM1", "lpt3.dex", "CONOUT$", "a devic
 
 
 def _target(name: str, tmp_path: Path) -> str:
-    """The `--out` target `name` stands for, made in `tmp_path` where it has to be made."""
+    """The `--out` target `name` stands for, made in `tmp_path` where it has to be made, and named
+    relative to it (the test runs from there): an absolute path would print the temp folder, and
+    any folder above could hold a number `leaked` reads as a sentinel."""
     import os
 
     if name == "a device path":
         return "\\\\.\\CON"
     if name == "NUL in a folder":
-        return str(tmp_path / "NUL.dex")
+        return "NUL.dex"
     if name == "a directory":
-        return str(tmp_path)
+        return "."
     if name == "a pipe":
         if not hasattr(os, "mkfifo"):
             pytest.skip("this system can't make a named pipe")
         os.mkfifo(tmp_path / "pipe")
-        return str(tmp_path / "pipe")
+        return "pipe"
     if name == "a link to a device":
         if os.name != "posix" or not Path("/dev/null").exists():
             pytest.skip("this system has no /dev/null to link to")
         (tmp_path / "link").symlink_to("/dev/null")
-        return str(tmp_path / "link")
+        return "link"
     return name
+
+
+def test_an_out_target_names_no_temp_folder(tmp_path):
+    """pytest numbers its temp folders by run, and a run named pytest-987 printed the folder in an
+    --out error, so `leaked` matched the sentinel price and failed these tests at random (20 in one
+    run). Any folder above could hold such a number, so a target names no folder at all."""
+    folder = tmp_path / f"run-{SENTINEL_PRICE}"
+    folder.mkdir()
+    for name in ("NUL in a folder", "a directory"):
+        assert not leaked(_target(name, folder)), _target(name, folder)
 
 
 @pytest.mark.parametrize("name", TARGETS)
