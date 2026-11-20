@@ -67,14 +67,42 @@ def restamp_all(conn: psycopg.Connection, at: datetime) -> None:
         conn.execute(f"update {table} set {column} = %s where {column} is not null", (at,))
 
 
+SCRATCH_ONLY = "The simulation runs only against a scratch database on 127.0.0.1 or localhost."
+# Settings libpq reads besides the URL that can send a connection elsewhere: a host address it dials instead
+# of the host name, and a service file whose entry names its own host.
+SIDE_DOORS = ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE")
+
+
 def check_scratch(url: str) -> None:
-    """Refuse any database that isn't on this machine: the simulation writes freely."""
+    """Refuse any database that isn't on this machine: the simulation writes freely.
+
+    Every host and host address in the URL must be local, the URL may not name a service, and none of
+    `SIDE_DOORS` may be set. A URL that can't be parsed is refused too (its text isn't repeated: it may
+    hold a password)."""
+    import os
+
+    from psycopg import ProgrammingError
     from psycopg.conninfo import conninfo_to_dict
-    params = conninfo_to_dict(url)
+    try:
+        params = conninfo_to_dict(url)
+    except ProgrammingError:
+        raise SystemExit(SCRATCH_ONLY + " That database URL can't be parsed.") from None
+    if params.get("service"):
+        raise SystemExit(SCRATCH_ONLY + " The URL names a service, which can name its own host.")
+    found = [name for name in SIDE_DOORS if os.environ.get(name)]
+    if found:
+        raise SystemExit(SCRATCH_ONLY + f" Unset {', '.join(found)}: libpq would use it besides the URL.")
     hosts = [h for h in (params.get("host") or "").split(",")] + (params.get("hostaddr") or "").split(",")
     hosts = [h for h in hosts if h]
     if not hosts or any(h not in LOCAL_HOSTS for h in hosts):
-        raise SystemExit("The simulation runs only against a scratch database on 127.0.0.1 or localhost.")
+        raise SystemExit(SCRATCH_ONLY)
+
+
+def check_connected(conn: psycopg.Connection) -> None:
+    """Refuse a connection that didn't land on this machine, whatever the URL said."""
+    host, address = conn.info.host or "", getattr(conn.info, "hostaddr", "") or ""
+    if host not in LOCAL_HOSTS or (address and address not in LOCAL_HOSTS):
+        raise SystemExit(SCRATCH_ONLY + " This connection went somewhere else.")
 
 
 @dataclass
@@ -154,6 +182,7 @@ def new_state(seed: int, decider: str, model: str, effort: str, check_ins: bool,
 
 def setup(conn: psycopg.Connection, st: State, budget_usd: Decimal, run_cap_usd: Decimal) -> None:
     """What a person does before the first run (docs/agent.md, "Before the first run"), on the scratch DB."""
+    check_connected(conn)
     now = st.clock.now()
     behind = db.pending(conn)
     if behind:

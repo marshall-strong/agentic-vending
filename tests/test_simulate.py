@@ -287,3 +287,33 @@ def test_restamp_moves_only_the_rows_a_step_wrote_even_after_the_season_starts(s
         got = dict(conn.execute("select tool, at from action_log where tool in ('old', 'new')").fetchall())
     assert got["new"] == simulated                  # the step's row is at the simulated moment
     assert got["old"] == earlier                    # a row from an earlier step keeps its simulated time
+
+
+@pytest.mark.parametrize("url, env", [
+    ("postgresql://u:p@127.0.0.1/sim?service=team", {}),                    # a service file names the host
+    ("postgresql://u:p@127.0.0.1/sim", {"PGSERVICE": "team"}),
+    ("postgresql://u:p@127.0.0.1/sim", {"PGHOSTADDR": "10.1.2.3"}),        # libpq dials this, not the name
+    ("postgresql://u:p@127.0.0.1/sim?hostaddr=10.1.2.3", {}),
+    ("postgresql://u:p@[oops/sim", {}),                                      # malformed: refused, not a crash
+    ("host=127.0.0.1 dbname=sim service=team", {}),
+])
+def test_scratch_only_closes_the_side_doors(monkeypatch, url, env):
+    from vending.simulate import season
+    for name in ("PGSERVICE", "PGHOSTADDR", "PGSERVICEFILE"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(SystemExit):
+        season.check_scratch(url)
+
+
+def test_setup_checks_where_the_connection_really_went():
+    from types import SimpleNamespace
+
+    from vending.simulate import season
+    st = season.new_state(1, "scripted", "m", "medium", False, 3, EXAMPLE)
+    for info in (SimpleNamespace(host="db.example.com", hostaddr=""),
+                 SimpleNamespace(host="localhost", hostaddr="10.1.2.3")):
+        conn = SimpleNamespace(info=info, execute=lambda *_a, **_k: pytest.fail("setup touched the database"))
+        with pytest.raises(SystemExit):
+            season.setup(conn, st, Decimal(1), Decimal(1))
