@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
+from html import unescape
 
 import psycopg
 import pytest
@@ -15,7 +16,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
 from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, open_in, store_poll
-from tests.test_dashboard import fulfilled, get, served  # noqa: F401 (the standalone server fixture)
+from tests.test_dashboard import fulfilled, get, served, shows  # noqa: F401 (the standalone server fixture)
 from tests.test_plan_rounds import day_one, projection, write
 from tests.test_plan_store import unassigned_slot
 from vending import agent_runs, dashboard, db, db_explorer, ledger, pages, plan_store, settings, slots, worker
@@ -635,6 +636,131 @@ def redraw_with_receipts(conn, monkeypatch):
 def _dashboard_bodies(site, served):
     yield tuple(get(served + path)[2] for path in ("/", "/state.json"))
     yield tuple(_get(site, path)[2] for path in ("/dashboard", "/dashboard/state.json"))
+
+
+def _stale_wildcard_refusal(conn, retired, owned):
+    detail = f"The wildcard is slot {retired}. Refused the change to slot {owned}."
+    log(conn, "write", "set_wildcard_slot", {"slot": owned}, "refused", detail)
+    return detail
+
+
+def _stale_preview_reply(conn, retired, owned):
+    run = agent_runs.start(conn, mode="live")
+    warning = f"Counted stock on slot {retired} needs a check."
+    control = f"Counted stock on slot {owned} is current."
+    content = json.dumps({
+        "slots": [{"slot": owned, "fill_to": 4}],
+        "message": f"The earlier proposal used selection {retired}.",
+        "notes": [warning, control],
+        "counted": {"warnings": [warning, control]},
+    })
+    agent_runs.step(conn, run, 1, "tool_result", content, tool="preview_desired_state")
+    return run, content, control
+
+
+def _stale_purchase_decision(conn, retired):
+    note = f"The worker declined the old selection {retired}."
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status, decision_note)"
+                 " values ('new-rejection', now(), false, '{}', 'rejected', %s)", (note,))
+    return note
+
+
+def _stale_slot_config(conn, retired, owned):
+    for key in ("slot", "selection", "into_slot", "wildcard_slot"):
+        log(conn, "write", "config.set", {"key": key, "value": int(retired)}, "done", "Configuration changed.")
+    control = {"key": "wildcard_slot", "value": owned}
+    log(conn, "write", "config.set", control, "done", f"Configured owned slot {owned}.")
+    return control
+
+
+def test_current_wildcard_refusal_redacts_retired_slot_text(site, served, conn, redraw_with_receipts):
+    _, retired, owned, _ = redraw_with_receipts
+    detail = _stale_wildcard_refusal(conn, retired, owned)
+    for page, body in _dashboard_bodies(site, served):
+        audit = next(r for r in json.loads(body)["activity"]["data"] if r["tool"] == "set_wildcard_slot")
+        assert audit["detail"] == dashboard.OUTSIDE_ASSIGNMENT
+        assert audit["outcome"] == "refused" and audit["arguments"] == {"slot": owned}
+        assert detail not in page and dashboard.OUTSIDE_ASSIGNMENT in page
+    assert conn.execute("select detail from action_log where tool = 'set_wildcard_slot'").fetchone() == (detail,)
+
+
+def test_current_preview_redacts_text_and_keeps_owned_notes(site, served, conn, redraw_with_receipts):
+    _, retired, owned, _ = redraw_with_receipts
+    run, content, control = _stale_preview_reply(conn, retired, owned)
+    for page, body in _dashboard_bodies(site, served):
+        reply = json.loads(json.loads(body)["runs"]["data"][0]["steps"][0]["content"])
+        assert reply["message"] == dashboard.OUTSIDE_ASSIGNMENT
+        assert reply["notes"] == reply["counted"]["warnings"] == [control]
+        assert reply["slots"] == [{"slot": owned, "fill_to": 4}]
+        assert control in page and f"Counted stock on slot {retired}" not in page
+    assert conn.execute("select content from agent_steps where run_id = %s", (run,)).fetchone() == (content,)
+
+
+def test_current_decision_note_is_scoped_before_attention(site, served, conn, redraw_with_receipts):
+    _, retired, _, _ = redraw_with_receipts
+    note = _stale_purchase_decision(conn, retired)
+    for page, body in _dashboard_bodies(site, served):
+        snap = json.loads(body)
+        request = next(r for r in snap["purchase_requests"]["data"] if r["request_id"] == "new-rejection")
+        assert request["decision_note"] == dashboard.OUTSIDE_ASSIGNMENT
+        warn = next(a for a in snap["attention"] if "Purchase request new-rejection was rejected" in a["text"])
+        assert warn["level"] == "warn" and dashboard.OUTSIDE_ASSIGNMENT in warn["text"]
+        assert note not in page and note not in body
+    assert conn.execute("select decision_note from purchase_requests where request_id = 'new-rejection'").fetchone() == (note,)
+
+
+def test_current_audit_slot_key_value_pairs_drop_retired_slots(site, served, conn, redraw_with_receipts):
+    _, retired, owned, _ = redraw_with_receipts
+    control = _stale_slot_config(conn, retired, owned)
+    for page, body in _dashboard_bodies(site, served):
+        args = [r["arguments"] for r in json.loads(body)["activity"]["data"] if r["tool"] == "config.set"]
+        assert len(args) == 5 and args.count({}) == 4 and control in args
+        assert "Configuration changed." not in page and f"Configured owned slot {owned}." in page
+
+
+def test_redraw_sweep_scopes_recorded_text_on_both_routes(site, served, conn, redraw_with_receipts, monkeypatch):
+    _, retired, owned, _ = redraw_with_receipts
+    _stale_wildcard_refusal(conn, retired, owned)
+    run, _, control = _stale_preview_reply(conn, retired, owned)
+    _stale_purchase_decision(conn, retired)
+    _stale_slot_config(conn, retired, owned)
+    monkeypatch.setattr(dashboard, "lock_at", lambda: TEST_NOW - timedelta(days=30))
+    agent_runs.finish(conn, run, "skipped", plan={"slots": [{
+        "slot": owned, "fill_to": 5, "sale_price": "2.75",
+        "reason": f"Carry over the price of selection {retired}.",
+    }]})
+    for page, body in _dashboard_bodies(site, served):
+        # A grey cabinet position only labels the machine geometry. Check every recorded mention,
+        # plus the dynamic title and aria text, independently of that static label.
+        geometry = f"Selection {retired}: not ours"
+        attrs = re.findall(r'(?:aria-label|title)="([^"]*)"', page)
+        texts = (page.replace(geometry, ""), body, *(text for text in attrs if text != geometry))
+        for text in texts:
+            decoded = unescape(text).lower()
+            assert not shows(decoded, f"slot {retired}") and not shows(decoded, f"selection {retired}")
+        for row in json.loads(body)["activity"]["data"]:
+            if row["tool"] == "config.set":
+                assert not shows(json.dumps(row["arguments"]), retired)
+        assert control in page and control in body
+        assert any(shows(unescape(text).lower(), f"selection {owned}") for text in attrs)
+        assert f'class="pr-reason" title="{dashboard.OUTSIDE_ASSIGNMENT}"' in page
+
+
+def test_fill_check_scopes_the_check_and_plan_reason_before_display(site, served, conn, redraw_with_receipts, monkeypatch):
+    _, retired, owned, _ = redraw_with_receipts
+    check = f"Fills 4 of 8. See slot {retired}."
+    reason = f"Based on a count for selection {retired}."
+    monkeypatch.setattr(dashboard, "lock_at", lambda: TEST_NOW - timedelta(days=30))
+    monkeypatch.setattr(dashboard.capacity, "fill_check", lambda fill, limit: check)
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "skipped", plan={"slots": [{"slot": owned, "fill_to": 4, "reason": reason}]})
+    for page, body in _dashboard_bodies(site, served):
+        snap = json.loads(body)
+        row = next(row for row in snap["plan"]["data"]["slots"] if row["slot"] == owned)
+        assert row["fill_check"] == row["now"]["reason"] == dashboard.OUTSIDE_ASSIGNMENT
+        assert any(item["level"] == "warn" and item["text"].startswith(f"Slot {owned} {dashboard.OUTSIDE_ASSIGNMENT}")
+                   for item in snap["attention"])
+        assert all(text not in unescape(page) and text not in body for text in (check, reason))
 
 
 def test_redraw_hides_retired_receipt_stock_in_both_dashboards(site, served, redraw_with_receipts):

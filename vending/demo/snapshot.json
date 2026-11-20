@@ -2419,7 +2419,7 @@
     "total_paid": {
      "$decimal": "295.20"
     },
-    "decision_note": "Filled; 2 of 20 selections had no seller",
+    "decision_note": "Tool payload omitted for a selection outside the current slot assignment.",
     "lines": 20,
     "units_loaded": 136,
     "unavailable": 2,

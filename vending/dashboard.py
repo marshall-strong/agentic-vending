@@ -67,7 +67,7 @@ from vending import capacity, db, leaderboards, machine_art, money_panel, plan_r
 from vending import pricing_panel
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
-from vending.slots import DEVICE_ID, SlotsNotRecorded, lock_at, our_slots
+from vending.slots import DEVICE_ID, RECORD_HINT, SlotsNotRecorded, lock_at, our_slots
 from vending.tools import machine_state
 from vending.mascot import svg as mascot_svg  # after the rest: other PRs edit the lines above
 
@@ -319,9 +319,9 @@ def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...], assignment_at: 
         return None
     current = {"id": row["id"], "picked": row["picked"], "slots": []}
     if not ours:
-        return {**current, "message": "Our slot assignment is not available."}
+        return {**current, "message": NO_ASSIGNMENT}
     if set(row["slots"]) != set(ours):
-        return {**current, "message": "planned for an earlier slot assignment: load a new plan"}
+        return {**current, "message": PLAN_ASSIGNMENT_CHANGED}
     checked = plan_rounds.parse_round(row["label"], row["plan"], row["projection"], ours, saved_at=row["loaded_at"])
     older = _older_assignment(row["loaded_at"], assignment_at)
     return {**current, "fill_expected_cents": checked.fill_expected_cents,
@@ -568,9 +568,10 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
         conn.execute("set transaction isolation level repeatable read, read only")
         # Event timestamps come from Postgres. Use its clock for the same transaction's cutoff.
         now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
-        snap = _snapshot(conn, now)
+        snap, assignment_at = _snapshot(conn, now)
     snap["syncs"] = syncs
     hide_errors(snap, public=public)
+    only_ours(snap, assignment_at)
     snap["attention"] = attention(snap)
     return snap
 
@@ -616,6 +617,11 @@ def hide_errors(snap: dict, *, public: bool = False) -> None:
 OLD_ASSIGNMENT = "Text omitted from before the current slot assignment."
 OUTSIDE_ASSIGNMENT = "Tool payload omitted for a selection outside the current slot assignment."
 POLL_REPLY_OMITTED = "Saved poll reply omitted because its selections could not be scoped."
+NO_ASSIGNMENT = "Our slot assignment is not available."
+PLAN_ASSIGNMENT_CHANGED = "planned for an earlier slot assignment: load a new plan"
+ASSIGNMENT_RECORDED = "Slot assignment recorded. See the current assignment on this page."
+_ASSIGNMENT_NOTICES = frozenset({OLD_ASSIGNMENT, OUTSIDE_ASSIGNMENT, POLL_REPLY_OMITTED, NO_ASSIGNMENT,
+                                PLAN_ASSIGNMENT_CHANGED, ASSIGNMENT_RECORDED, RECORD_HINT})
 _DROP = object()
 _SLOT_KEYS = {"slot", "selection", "into_slot", "wildcard_slot"}
 _SLOT_LISTS = {"slots", "selections", "assigned_slots", "our_slots"}
@@ -637,6 +643,9 @@ def _scope_payload(value: Any, ours: set[str], key: str = "") -> Any:
         return [item for item in (_scope_payload(item, ours) for item in items) if item is not _DROP]
     if not isinstance(value, dict):
         return value
+    setting = value.get("key")
+    if isinstance(setting, str) and setting in _SLOT_KEYS and "value" in value and str(value["value"]) not in ours:
+        return _DROP
     if any(str(value[k]) not in ours for k in _SLOT_KEYS & value.keys() if value[k] is not None):
         return _DROP
     scoped = {}
@@ -672,6 +681,34 @@ def _scope_poll_reply(value: Any, ours: set[str]) -> Any:
                      for row in rows if isinstance(row, dict) and str(row.get("slot")) in ours]}
 
 
+def _outside_assignment(text: str, ours: set[str]) -> bool:
+    return text not in _ASSIGNMENT_NOTICES and bool(stock_mod._slots_named(text) - ours)
+
+
+def _scope_text(value: Any, ours: set[str]) -> Any:
+    """Redact free text in the display copy, leaving values such as prices and slot codes typed."""
+    if isinstance(value, str):
+        return OUTSIDE_ASSIGNMENT if _outside_assignment(value, ours) else value
+    if isinstance(value, (list, tuple)):
+        items = (_scope_text(item, ours) for item in value
+                 if not isinstance(item, str) or not _outside_assignment(item, ours))
+        return tuple(items) if isinstance(value, tuple) else list(items)
+    if isinstance(value, dict):
+        scoped = {}
+        for key, item in value.items():
+            # A payload can use prose as a map label. Its value belongs to that label.
+            if isinstance(key, str) and " " in key and _outside_assignment(key, ours):
+                continue
+            # These values name the audit tool and the configuration field, respectively.
+            if (key == "tool" and item == "slots.record") or (
+                    key == "key" and isinstance(item, str) and item in _SLOT_KEYS):
+                scoped[key] = item
+            else:
+                scoped[key] = _scope_text(item, ours)
+        return scoped
+    return value
+
+
 def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
     """Scope the live dashboard to the current assignment before either response is built."""
     ours = set(our_selections(snap))
@@ -689,12 +726,13 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
         for run in runs["data"]:
             if _older_assignment(run["started_at"], assignment_at):
                 if any(run[k] for k in ("detail", "team_update", "notes", "steps")):
-                    run["detail"] = OLD_ASSIGNMENT
+                    run["detail"] = HIDDEN if run["status"] == "failed" else OLD_ASSIGNMENT
                 run["team_update"] = run["notes"] = None
                 run["steps"] = []
-                continue
+            run.update(_scope_text({key: value for key, value in run.items() if key != "steps"}, ours))
             for step in run["steps"]:
                 if step["kind"] not in ("tool_call", "tool_result") or step["is_error"]:
+                    step["content"] = _scope_text(step["content"], ours)
                     continue
                 poll_reply = step["kind"] == "tool_result" and step["tool"] in _POLL_REPLY_TOOLS
                 try:
@@ -704,31 +742,46 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
                         step["content"] = POLL_REPLY_OMITTED
                     elif step["content"].lstrip().startswith(("{", "[")):
                         step["content"] = "Incomplete tool payload omitted."
+                    else:
+                        step["content"] = _scope_text(step["content"], ours)
                     continue
                 scoped = _scope_poll_reply(value, ours) if poll_reply else _scope_payload(value, ours)
                 if scoped is _DROP:
                     step["content"] = POLL_REPLY_OMITTED if poll_reply else OUTSIDE_ASSIGNMENT
-                elif scoped != value:
-                    step["content"] = to_json(scoped)
+                else:
+                    scoped = _scope_text(scoped, ours)
+                    if scoped != value:
+                        step["content"] = to_json(scoped)
     if (activity := snap.get("activity")) and activity["ok"]:
         for row in activity["data"]:
             if _older_assignment(row["at"], assignment_at):
                 if row["arguments"] or row["detail"]:
                     row["arguments"] = {}
-                    row["detail"] = OLD_ASSIGNMENT
+                    row["detail"] = HIDDEN if row["outcome"] == "failed" else OLD_ASSIGNMENT
             else:
                 args = _scope_payload(row["arguments"], ours)
                 if args != row["arguments"]:
                     row["arguments"] = {} if args is _DROP else args
-                    row["detail"] = OUTSIDE_ASSIGNMENT
-                elif row["kind"] == "read" and row["tool"] in _POLL_REPLY_TOOLS and row["detail"]:
+                    row["detail"] = HIDDEN if row["outcome"] == "failed" else OUTSIDE_ASSIGNMENT
+                elif (row["kind"] == "read" and row["tool"] in _POLL_REPLY_TOOLS
+                      and row["detail"] and row["detail"] != HIDDEN):
                     row["detail"] = POLL_REPLY_OMITTED
             # The assignment audit writer includes both the old and the new slot lists.
             if row["tool"] == "slots.record":
-                row["detail"] = "Slot assignment recorded. See the current assignment on this page."
+                row["detail"] = HIDDEN if row["outcome"] == "failed" else ASSIGNMENT_RECORDED
     run = snap.get("status", {}).get("latest_run")
-    if run and run["detail"] and _older_assignment(run["started_at"], assignment_at):
+    if run and run["detail"] and run["detail"] != HIDDEN and _older_assignment(run["started_at"], assignment_at):
         run["detail"] = OLD_ASSIGNMENT
+    for name, panel in snap.items():
+        if name not in ("runs", "pricing") or not panel["ok"]:
+            snap[name] = _scope_text(panel, ours)
+    if (pricing := snap.get("pricing")) and pricing["ok"]:
+        for row in pricing["data"]["rows"]:
+            for price in (row, row["next"]):
+                if price:
+                    # Price checks are generated from our own figures and fixed messages.
+                    fields = {key: value for key, value in price.items() if key not in ("next", "problems")}
+                    price.update(_scope_text(fields, ours))
 
 
 def _catalog_counts(catalog: dict) -> dict:
@@ -748,7 +801,7 @@ def _catalog_counts(catalog: dict) -> dict:
                                  "unsettled": by_status["sending"] + by_status["unknown"]}}
 
 
-def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
+def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime | None]:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
     assigned = _optional(conn, "select first_read_at from slot_assignment where id = 1") if slots else None
@@ -808,11 +861,10 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
     hidden_purchases = purchases["data"][1] if purchases["ok"] else 0
     if hidden_runs or hidden_purchases:
         snap["runs"]["hidden_tests"] = {"runs": hidden_runs, "purchases": hidden_purchases}
-    only_ours(snap, assignment_at)
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
     _check_plan_fills(snap)
     snap["pricing"] = _pricing(conn, now, snap)
-    return snap
+    return snap, assignment_at
 
 
 def _pricing(conn: psycopg.Connection, now: datetime, snap: dict) -> dict:
