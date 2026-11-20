@@ -150,8 +150,8 @@ to it as "Demo copy"; the demo links back as "Live dashboard".
   count would need a new `page` value in `page_visits`, whose check allows `/login`, `/dashboard`
   and `/db` only (migration 016), so it is a migration; this change adds none. The counter never
   tries to write a demo view.
-- **Its toggles are its own.** The page keeps the Now / Next Friday choice, the shelf and the
-  filters in `localStorage`, which both pages share by address. The demo uses keys that start
+- **Its toggles are its own.** The page keeps the Now / Next restock choice, the changed-only
+  switch and the tool-call filter in `localStorage`, which both pages share by address. The demo uses keys that start
   `demo-dash-`, the live page `dash-`, so a switch flipped on the demo doesn't move the live page's.
 - **Signed out**, the demo's JSON answers 401 like the live JSON, and its page redirects to the
   password page. A POST to either is refused with 405. The demo can't set off anything that reads
