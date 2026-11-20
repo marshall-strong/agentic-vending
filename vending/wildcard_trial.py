@@ -525,7 +525,9 @@ def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list
     gone = [(at, units) for at, sku, units in losses if at >= count.since and sku == count.product]
     # Only its own product's sales leave its stock: the outgoing product's share of a window split at the swap
     # (`stock._split_at_changes`) is booked by the first poll after it, but came out of the old count.
-    spans = demand.in_stock_spans([(at, u) for at, u in loads if at >= count.since],
+    # The run's own loads: at the moment it began, what the replay put in for it, not every load then (A, B,
+    # then A again at one visit), as in the machine state's demand (`demand.run_events`).
+    spans = demand.in_stock_spans(demand.run_events(count.since, count.loaded, loads),
                                   [(s.at, s.units) for s in mine if s.product == count.product] + gone,
                                   now, count.units)
     return Measured(count.slot, count.product, start,
