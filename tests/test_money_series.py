@@ -211,6 +211,59 @@ def test_the_books_balance_with_an_unsplit_swap_in_every_view(conn):
     assert as_json(sale_day)["unattributed_stock"] == "3.00"
 
 
+def test_an_unsplit_window_across_two_swaps_is_provisional_for_the_earlier_write_off(conn):
+    # Review round 2: Coke -> Red Bull at 12:00 (1 Coke written off) -> Dasani at 14:00 (every Red
+    # Bull pulled, nothing written off). The 2 units may be a Coke and a Dasani, so the $2.00 the
+    # replay took from the Dasani is provisional, though the last swap wrote nothing off.
+    swap_receipts(conn)
+    record_request(conn, "r3", OPENED + timedelta(days=6), False, BODY)
+    store(conn, "r3", fulfilled("r3", receipt(
+        sku="DASANI", units_per_pack=10, units_bought=10, total_paid="10.00", unit_cost_paid="1.00",
+        units_loaded=10, units_lost=0, loss_note=None, units_to_back_stock=0, units_pulled=10, pulled_sku="REDBULL",
+        slot_reassigned=True, resolved_at="2026-11-08T14:00:00Z"), fulfilled_at="2026-11-08T14:30:00Z"), NOW)
+    store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (200, 102, 25450)})
+    day = date(2026, 11, 8)
+    p = ledger.pnl(conn, *window(day, day))
+    [pnl_week] = ledger.pnl_by_week(conn, *window(day, day))
+    [d] = daily(conn, day, day, now=AFTER)
+    [w] = by_week([d], date(2026, 10, 31))
+    for row in (p, pnl_week, d, w):
+        assert (row.unattributed_stock_cents, row.unattributed_stock_provisional) == (200, True), row
+
+
+def test_the_provisional_flag_does_not_need_the_debits_cost(conn):
+    # Review round 2: the same single swap with the Red Bull's cost unknown. The debit has no cost,
+    # but the 1 Coke written off at the swap may still be one of the sales.
+    swap_receipts(conn, paid=None)
+    store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25700)})
+    day = date(2026, 11, 8)
+    p = ledger.pnl(conn, *window(day, day))
+    [d] = daily(conn, day, day, now=AFTER)
+    for row in (p, d):
+        assert (row.unattributed_stock_cents, row.unattributed_stock_provisional) == (0, True), row
+        assert any("provisional" in n for n in row.notes), row.notes
+
+
+def test_a_misread_just_before_the_opening_is_not_the_baseline_in_the_balance_or_the_chart(conn):
+    # Review round 2: cents 25000 -> 24000 | opening | 25250. The whole history shows 24000 was a
+    # misread, so the opening baseline is 25000: 250 cents taken, not 1250. One named rule
+    # (`ledger.opening_rises`) gives the balance and the chart's cash, and they agree.
+    store_poll(conn, "p1", "2026-10-31T22:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "p2", "2026-10-31T23:00:00+00:00", {"15": (250, 96, 24000)})    # just before the opening
+    open_ledger(conn)                                                                 # 00:00 UTC on 1 Nov
+    store_poll(conn, "p3", "2026-11-02T17:00:00+00:00", {"15": (250, 101, 25250)})
+    end = window(date(2026, 11, 2), date(2026, 11, 2))[1]
+    rows = ledger._counter_rows(conn, "lifetime_sales_cents", end)
+    assert [r.amount for r in ledger.opening_rises(rows, OPENED, end)[2]] == [250]
+    b = ledger.balance(conn, end)
+    assert (b.balance_cents, b.tax_owed_cents) == (60250, 19)
+    days = daily(conn, date(2026, 10, 31), date(2026, 11, 2), now=AFTER)
+    assert (days[-1].cash_balance_cents, days[-1].tax_owed_cents) == (60250, 19)
+    assert_cash_is_the_balance(conn, days)
+
+
 def test_a_counter_drop_before_the_window_is_read_from_the_same_history_as_the_stock(conn):
     # #172 review: 110 -> 100 -> 98 -> 100. From the whole history 100 and 98 are a restart and 2
     # sold across the swap, as the stock replay reads them. A window starting after the first 100

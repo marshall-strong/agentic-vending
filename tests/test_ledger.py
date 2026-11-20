@@ -408,14 +408,16 @@ def test_a_period_that_ends_between_a_swap_and_the_next_poll_books_the_split_wit
         assert getattr(first, name) + getattr(second, name) == getattr(whole, name), name
 
 
-def swap_receipts(conn):
+def swap_receipts(conn, paid="15.00"):
     """The ledger opened, 8 Coke loaded at UNIT_COST on Sat 7 Nov, and a swap to 10 Red Bull at 150c
-    each at 12:00 on Sun 8 Nov that pulls 7 Coke, so 1 Coke is left to write off at the swap."""
+    each (`paid` for the 10; None: unknown) at 12:00 on Sun 8 Nov that pulls 7 Coke, so 1 Coke is
+    left to write off at the swap."""
     open_ledger(conn)
     deliver(conn, "r1")
     record_request(conn, "r2", OPENED + timedelta(days=6), False, BODY)
     store(conn, "r2", fulfilled("r2", receipt(
-        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid="15.00", unit_cost_paid="1.50",
+        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid=paid,
+        unit_cost_paid=None if paid is None else "1.50",
         units_loaded=10, units_lost=0, loss_note=None, units_to_back_stock=0, units_pulled=7, pulled_sku="COKE20",
         slot_reassigned=True, resolved_at="2026-11-08T12:00:00Z"), fulfilled_at="2026-11-08T12:30:00Z"), NOW)
 
