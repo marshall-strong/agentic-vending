@@ -2214,6 +2214,7 @@ a.chg .why { display:block; color:var(--muted); font-size:11.5px; overflow-wrap:
   .vm-panel .ma-nm { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-size:11px }
   .vm-panel .ma-nm span, .vm-panel .ma-chips, .vm-panel .ma-nt, .vm-panel .ma-why, .vm-panel .ma-plan { display:none }
   .vm-panel .ma-ct b { font-size:16px } }
+@media (min-width:820px) and (max-width:979px) { .vm-panel { order:-1; scroll-margin-top:8px } }
 @media (max-width:819px) {
   .vm-panel { display:block; position:fixed; left:0; right:0; bottom:0; z-index:30; max-height:88vh; overflow-y:auto;
     overscroll-behavior:contain; border:0; border-radius:16px 16px 0 0; background:var(--surface); box-shadow:0 -10px 30px rgba(0,0,0,.35);
@@ -2356,6 +2357,8 @@ SCRIPT = """(function () {
     only = localStorage.getItem(PFX + 'changed') === '1';
   } catch (e) {}
   function narrow() { return !!(window.matchMedia && matchMedia('(max-width: 819px)').matches); }
+  // Between the phone's sheet and the desktop's side-by-side view the close-up sits under the front.
+  function stacked() { return !!(window.matchMedia && matchMedia('(min-width: 820px) and (max-width: 979px)').matches); }
   function still() { return !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); }
   function span(ms) {
     var m = Math.floor(Math.abs(ms) / 60000);
@@ -2454,6 +2457,9 @@ SCRIPT = """(function () {
     if (sheet) {
       if (panel) panel.scrollTop = 0;
       if (card) card.focus({preventScroll: true});
+    } else if (stacked()) {
+      // One column: bring the close-up, under the front, into view.
+      if (panel) panel.scrollIntoView({block: 'start', behavior: still() ? 'auto' : 'smooth'});
     } else if (from && !from.closest('.vm')) {
       // Picked from the plan below: bring the machine back into view.
       var vm = document.getElementById('vm');

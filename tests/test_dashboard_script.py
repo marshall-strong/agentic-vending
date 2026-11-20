@@ -112,7 +112,10 @@ document.activeElement = document.body;
 document.hidden = false; document.title = "";
 document.addEventListener = on("document");
 document.getElementById = id => document.querySelector("#" + id);
-const window = {addEventListener: on("window"), matchMedia: q => ({matches: q.includes("max-width") ? NARROW : false})};
+// A media query against the viewport's WIDTH: every (min-width) and (max-width) in it must hold.
+const media = q => [...q.matchAll(/\((min|max)-width:\s*(\d+)px\)/g)].every(([, k, n]) =>
+  k === "min" ? WIDTH >= +n : WIDTH <= +n) && !/prefers-reduced-motion/.test(q);
+const window = {addEventListener: on("window"), matchMedia: q => ({matches: media(q)})};
 const matchMedia = window.matchMedia;
 const localStorage = {getItem: () => null, setItem() {}};
 const location = {hash: "", pathname: "/", reload() {}};
@@ -139,12 +142,12 @@ def _main_html() -> str:
     return f"<main>{dashboard._cabinet_html(snap, [])}</main>"
 
 
-def run_script(tmp_path, checks: str, narrow: bool = False) -> None:
+def run_script(tmp_path, checks: str, width: int = 1280) -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed")
     script = dashboard.SCRIPT % (30, 0, dashboard.LIVE_STORAGE, visits.REFRESH_HEADER)    # the live page, not the demo
-    prelude = f"const PAGE = {json.dumps(_main_html())};\nconst NARROW = {'true' if narrow else 'false'};\n"
+    prelude = f"const PAGE = {json.dumps(_main_html())};\nconst WIDTH = {int(width)};\n"
     path = tmp_path / "page.js"
     path.write_text(prelude + _DOM + script + "\n(async () => {\n" + checks + "\n})().catch(e => "
                     "{ console.error(e.stack || e); process.exit(1); });\n", encoding="utf-8")
@@ -152,8 +155,8 @@ def run_script(tmp_path, checks: str, narrow: bool = False) -> None:
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("narrow", [False, True], ids=["wide", "phone"])
-def test_a_keyboard_pick_keeps_focus_through_the_refresh_and_escape_returns_it(tmp_path, narrow):
+@pytest.mark.parametrize("width", [1280, 900, 390], ids=["wide", "tablet", "phone"])
+def test_a_keyboard_pick_keeps_focus_through_the_refresh_and_escape_returns_it(tmp_path, width):
     run_script(tmp_path, r'''
       const vm = () => document.querySelector(".vm");
       const cell = document.querySelector('.fc[data-sel="15"]');
@@ -170,4 +173,16 @@ def test_a_keyboard_pick_keeps_focus_through_the_refresh_and_escape_returns_it(t
       assert(!vm().hasAttribute("data-sel"), "Escape closes the close-up");
       assert(document.activeElement === document.querySelector('.fc[data-sel="15"]'),
              "focus is back on the opener: " + (document.activeElement.id || document.activeElement.tagName));
-    ''', narrow=narrow)
+    ''', width=width)
+
+
+@pytest.mark.parametrize("width, shown", [(1280, False), (979, True), (900, True), (820, True), (390, False)])
+def test_between_the_phone_and_desktop_layouts_a_pick_scrolls_the_close_up_into_view(tmp_path, width, shown):
+    # Wide, the close-up sits beside the front; on a phone it is a sheet. In between it sits below the
+    # front in one column, so a pick must bring it into view.
+    run_script(tmp_path, f'''
+      fire("click", document.querySelector('.fc[data-sel="46"]'));
+      assert(document.querySelector(".vm").getAttribute("data-sel") === "46", "the pick took");
+      const panel = scrolled.includes("vm-panel");
+      assert(panel === {'true' if shown else 'false'}, "close-up scrolled into view: " + JSON.stringify(scrolled));
+    ''', width=width)
