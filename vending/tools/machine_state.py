@@ -34,8 +34,10 @@ Built from our database only; it never reads the machine.
   out, with the class days their poll window covers, and out of
   `units_sold_since_load` too. `class_days_since_sale` is the slow-seller
   clock: those in-stock class days since the product last sold (an
-  unattributed sale restarts it), or since it went in; unlike
-  `class_days_in_stock`, it starts again at every sale. `units_per_day` stays
+  unattributed sale restarts it), or since the current stretch of stock
+  began, each counted once a reading of the slot after its end shows no
+  sale; 0 when the slot may be empty now. Unlike `class_days_in_stock`, it
+  starts again at every sale. `units_per_day` stays
   as before: the last 7 calendar days, empty days and weekends included, so it
   reads low for a slot that sold out.
 

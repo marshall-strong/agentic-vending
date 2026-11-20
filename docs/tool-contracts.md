@@ -120,7 +120,11 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   its price until it has 5 such days), `rate_basis` (which of the two, in words),
   `class_days_in_stock` (null without receipts) and `class_days_of_stock_left` (on hand, the
   count's when it is newer, ÷ the rate). `class_days_since_sale` is the slow-seller clock: in-stock
-  class days since the product's last sale, or since it went in (null without receipts). Units sold across a product change that the counters
+  class days since the product's last sale, or since the slot's current stretch of stock began, each
+  counted only once a reading of the slot at or after its end shows no sale. It is 0 when the slot
+  may be empty now (a sale, loss or pull emptied it, or a newer count found it empty), and null
+  without receipts (a slot known only from a count). A possible sale, one the counters can't place
+  at a swap (unattributed), restarts it too, so repeated ambiguity can keep a slot below the threshold. Units sold across a product change that the counters
   can't place (unattributed, #172) are in neither `units_sold_since_load` nor the rate, and the
   class days their poll window covers are not in-stock days. Also the closet (back stock) per product in `closet`, with `units`,
   `unit_cost` and `value_at_cost`, and its total in `closet_value_at_cost`. Plus `as_of` (the
