@@ -125,6 +125,13 @@ def test_history_returns_the_polls_with_the_device_id(bridge):
     assert client.history(DAY) == [dict(POLL, device_id="vmc1")]
 
 
+def test_history_returns_a_bad_row_as_it_is_for_the_sync_to_skip(bridge):
+    rows = [POLL, {"started_at": POLL["started_at"]}, "s1", None]
+    assert bridge({HISTORY: listing(*rows)}).history(DAY) == [dict(POLL, device_id="vmc1"),
+                                                             {"started_at": POLL["started_at"], "device_id": "vmc1"},
+                                                             "s1", None]
+
+
 def test_a_day_with_no_polls_is_an_empty_list(bridge):
     assert bridge({HISTORY: listing()}).history(DAY) == []
 
@@ -196,7 +203,7 @@ def test_a_reply_that_is_not_http_is_an_error_for_that_request_alone(bridge):
 
 def test_a_truncated_day_is_refused(bridge):
     client = bridge({HISTORY: listing(POLL, truncated=True, limit=500)})
-    refuses_with_plain_error(lambda: client.history(DAY), match="truncated at 500")
+    refuses_with_plain_error(lambda: client.history(DAY), match="listing truncated")
 
 
 def test_a_dropped_connection_is_retried(bridge, sleeps):
@@ -275,13 +282,10 @@ def test_a_listing_that_is_not_json_is_an_error_for_that_day_alone(bridge, body)
         {"polls": None},
         {"polls": "s1"},
         {"polls": {"session_id": "s1"}},
-        {"polls": ["s1"]},
-        {"polls": [{"started_at": POLL["started_at"]}]},
-        {"polls": [{"session_id": "s1"}]},
-        {"polls": [{"session_id": 1, "started_at": POLL["started_at"]}]},
-        {"polls": [POLL, {"session_id": None, "started_at": None}]},
     ],
 )
+# A row that is bad (no id, a non-string start) is not an error for the day: `history` hands every row to the
+# sync, which counts and skips the bad ones (tests/test_logs_no_poll_bytes.py, tests/test_sync_history.py).
 def test_json_that_is_not_a_listing_is_an_error_for_that_day_alone(bridge, body):
     client = bridge({HISTORY: Answer(body=json.dumps(body).encode())})
     refuses_with_plain_error(lambda: client.history(DAY), match="not a listing")

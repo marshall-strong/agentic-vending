@@ -91,11 +91,17 @@ repo root points here.
 - **Logs carry no poll bytes.** The worker's logs, its job output and `/health` are read by people, and a
   poll can hold selections that aren't ours. So nothing turns what the bridge sent back (an error body, a
   malformed document, a status line, a header) into a log line, an exception message or output.
-  `vending/bridge.py`, `vending/sync_history.py`, `vending/visit_polls.py` and `scripts/poll_snapshot.py`
-  log the status, sizes, a session id that passes `vending.bridge.valid_session_id`, and a reason the code
-  wrote itself ("502 Bad Gateway", "short read: 1234 of 2000 bytes"). The archive and the database still
-  keep whole polls. `tests/test_logs_no_poll_bytes.py` answers each of these places with `PA1*`, `PA2*` and
-  `VA1*` records and checks every line logged, raised or printed.
+  `vending/bridge.py`, `vending/sync_history.py`, `vending/visit_polls.py`, `scripts/poll_snapshot.py` and
+  `scripts/check_archive.py` log the status, sizes, a session id that passes
+  `vending.bridge.valid_session_id` (32 hex digits), and a reason the code wrote itself ("502 Bad Gateway",
+  "short read: 1234 of 2000 bytes", "device mismatch"). A database error is logged as its class and SQLSTATE,
+  not its text, which can quote the row. An error built from a reply is raised `from None`, so a traceback
+  doesn't print the reply either. The archive and the database still keep whole polls. The scope is poll
+  content (bodies, documents, tracebacks), not every field of a JSON answer: the one write we make
+  (`post`) still shows the server's reason for our own request. A day's listing is checked row by row
+  (`vending.bridge.listed_poll`): a row with no usable session id or start is counted and skipped, and the
+  good polls of that day are still stored. `tests/test_logs_no_poll_bytes.py` answers each of these places
+  with `PA1*`, `PA2*` and `VA1*` records and checks every line logged, raised, printed or formatted.
 
 The fall rule applies to the poll timestamps, not the date an analysis runs. Historical fall
 data remains usable after the start. Our own historical purchase receipts and action logs also

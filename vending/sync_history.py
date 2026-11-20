@@ -13,13 +13,21 @@ re-checked, because polls can land on them after the previous run.
 A day the bridge can't list, or a poll it can't return, is logged and counted
 and the run carries on, so one bad poll can't block everything after it. That
 includes a poll whose connection keeps dropping, as long as `/health` still
-answers. A listed poll whose session id or start time isn't usable is counted
-the same way. The log says what happened in words of our own (a status, a
-size, a session id that passes `vending.bridge.valid_session_id`) and never
-quotes what the bridge sent: the log is read by people, and a poll can hold
-selections that aren't ours (`docs/integrity.md`). Re-run with `--since` to retry them; that pass also fetches again any
+answers. Re-run with `--since` to retry them; that pass also fetches again any
 poll stored as unparseable, in case the bridge sent a cut-off document. Only an
 unreachable bridge or a rejected key stops the run.
+
+Each row of a day's listing is checked on its own, before anything is fetched
+(`vending.bridge.listed_poll`): it needs a session id of 32 hex digits and a start
+that is a real time with an offset. A row that fails is counted as a failed poll,
+skipped, and never logged. Storing a poll is just as separate: one the database
+refuses (a NUL byte in its serial, say) is counted and logged as the error's class
+and SQLSTATE, and the polls after it are still stored.
+
+The log says what happened in words of our own (a status, a size, a session id
+that passes `valid_session_id`) and never quotes what the bridge sent or the
+database's error text: the log is read by people, and a poll can hold selections
+that aren't ours (`docs/integrity.md`).
 
 It never migrates. On a database that is behind it refuses to run (exit 2) and
 names `python -m vending.db migrate`, like the server and the halt switch, so a
@@ -36,7 +44,7 @@ from datetime import date, datetime, timedelta, timezone
 import psycopg
 
 from vending import db
-from vending.bridge import Bridge, BridgeError, BridgeUnreachable, usable
+from vending.bridge import Bridge, BridgeError, BridgeUnreachable, listed_poll
 from vending.evadts import ParseError, parse
 
 # The bridge's history starts here.
@@ -52,6 +60,11 @@ class Report:
     unparseable: int = 0
     failed_days: int = 0
     failed_polls: int = 0
+
+
+def _device(meta: dict) -> str:
+    device = meta.get("device_id")
+    return device if isinstance(device, str) and device else "unknown"
 
 
 def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
@@ -80,8 +93,9 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
             where polls.crc_ok is null and excluded.crc_ok is not null
             """,
             (
-                # `crc_ok` stays null when the document couldn't be read at all.
-                meta["session_id"], meta.get("device_id") or "unknown", meta["started_at"], raw, len(raw),
+                # `crc_ok` stays null when the document couldn't be read at all. The listing's device
+                # is the bridge's word: only text is a device.
+                meta["session_id"], _device(meta), meta["started_at"], raw, len(raw),
                 None if poll is None else poll.crc_ok,
                 poll.machine_serial if ok else None, poll.decimal_places if ok else None,
                 poll.total_paid_cents if ok else None, poll.total_paid_units if ok else None,
@@ -128,36 +142,48 @@ def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log
             day += timedelta(days=1)
             continue
         report.listed += len(listing)
-        for meta in listing:
-            if not usable(meta):
-                # The listing is the bridge's words, and the log is read by people: a session id or start time
-                # that isn't one is neither logged, fetched nor stored.
+        for row in listing:
+            listed = listed_poll(row)
+            if listed is None:
+                # The listing is the bridge's words, and the log is read by people: a row that has no usable
+                # session id or start is neither logged, fetched nor stored, and the rows after it carry on.
                 report.failed_polls += 1
                 log("  skipped a listed poll whose session id or start time isn't usable")
                 continue
-            if meta["session_id"] in known:
+            session, when = listed.session_id, listed.started_at.isoformat()
+            if session in known:
                 continue
             try:
-                raw = bridge.raw(meta["session_id"])
+                raw = bridge.raw(session)
             except BridgeUnreachable:
                 raise
             except BridgeError as error:
                 report.failed_polls += 1
-                log(f"  could not fetch {meta['session_id']} ({meta['started_at']}): {error}; skipped")
+                log(f"  could not fetch {session} ({when}): {error}; skipped")
                 continue
-            outcome = store(conn, meta, raw)
-            known.add(meta["session_id"])
-            again = meta["session_id"] in retrying
+            try:
+                outcome = store(conn, {**row, "started_at": listed.started_at}, raw)
+            except psycopg.Error as error:
+                if conn.closed or conn.broken:      # nothing after this can be stored either
+                    raise
+                # One poll the database refuses mustn't stop the rest. Its text can quote the row it
+                # refused, which holds the document: the class and the SQLSTATE say enough.
+                report.failed_polls += 1
+                log(f"  could not store {session} ({when}): {type(error).__name__}, "
+                    f"SQLSTATE {error.sqlstate or 'none'}; skipped")
+                continue
+            known.add(session)
+            again = session in retrying
             if outcome == "bad":
                 report.unparseable += 1
-                log(f"  {'still ' if again else ''}not EVA-DTS: {meta['session_id']} ({meta['started_at']}); kept raw")
+                log(f"  {'still ' if again else ''}not EVA-DTS: {session} ({when}); kept raw")
                 continue
             report.new += 1
             if again:
-                log(f"  re-fetched {meta['session_id']} ({meta['started_at']}): now readable")
+                log(f"  re-fetched {session} ({when}): now readable")
             if outcome == "crc":
                 report.crc_failed += 1
-                log(f"  checksum failed: {meta['session_id']} ({meta['started_at']}); kept raw, counters skipped")
+                log(f"  checksum failed: {session} ({when}); kept raw, counters skipped")
         log(f"{day}: {len(listing)} listed")
         day += timedelta(days=1)
     return report

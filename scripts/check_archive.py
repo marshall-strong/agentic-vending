@@ -194,8 +194,9 @@ def main(argv: list[str] | None = None) -> int:
         failures = [line for line in tail if "level=ERROR" in line]
         if failures:
             last = failures[-1]
+            # The reason code only. The `detail` of a line written before the reply was kept out of
+            # the log can hold a snippet of it, and this report is read by people (docs/integrity.md).
             print(f"  Most recent error : {last.split(' ', 1)[0]}  reason={field(last, 'reason')}")
-            print(f"                      {field(last, 'detail')[:100]}")
         cached = sum(1 for line in tail if "cached=true" in line)
         if cached:
             print(f"  Served from cache : {cached} of the last {len(tail)} runs")

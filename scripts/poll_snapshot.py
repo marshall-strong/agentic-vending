@@ -81,8 +81,10 @@ MAX_LOG_BYTES = 5 * 1024 * 1024
 
 # What a session id may look like before the log names it (the same shape as `vending.bridge`'s; this
 # script imports nothing from the repo).
-SESSION_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+SESSION_ID = re.compile(r"[0-9a-fA-F]{32}")      # 32 hex digits (docs/snapshot-archive.md)
 AGE_SECONDS = re.compile(r"\d{1,6}(\.\d{1,6})?")
+# A value of /health that is plain text: letters, digits and a few separators, never a record.
+PLAIN = re.compile(r"[A-Za-z0-9 ._:+/-]{1,40}")
 
 # The log carries no poll bytes: it is read by people, and a poll can hold selections that aren't ours
 # (docs/integrity.md). So no line quotes a response body, a record of the document, a status line's
@@ -273,20 +275,22 @@ def http_request(
         # An HTTPError is still a response: it has a status and headers. Its body can hold a poll and
         # nothing here uses it, so it isn't read.
         return error.code, status_phrase(error.code), list(error.headers.items()), b""
+    # Every `raise` below is `from None`: a chained cause is printed with the traceback, and the cause
+    # of a reply that isn't HTTP is the line the bridge sent (`BadStatusLine`).
     except urllib.error.URLError as error:
-        raise PollError("unreachable", f"{url} could not be reached: {error.reason}", EXIT_UNREACHABLE)
+        raise PollError("unreachable", f"{url} could not be reached: {error.reason}", EXIT_UNREACHABLE) from None
     except TimeoutError:
-        raise PollError("timeout", f"{url} did not respond within {timeout:.0f}s", EXIT_UNREACHABLE)
+        raise PollError("timeout", f"{url} did not respond within {timeout:.0f}s", EXIT_UNREACHABLE) from None
     except OSError as error:
-        raise PollError("unreachable", f"{url} could not be reached: {error}", EXIT_UNREACHABLE)
+        raise PollError("unreachable", f"{url} could not be reached: {error}", EXIT_UNREACHABLE) from None
     except http.client.IncompleteRead as error:
         got = len(error.partial)
         size = f"{got} of {got + error.expected} bytes" if isinstance(error.expected, int) else f"{got} bytes"
-        raise PollError("bridge_error", f"{url} sent a short read: {size}", EXIT_BRIDGE)
+        raise PollError("bridge_error", f"{url} sent a short read: {size}", EXIT_BRIDGE) from None
     except http.client.HTTPException as error:
         # `BadStatusLine` names the line it got, so only the kind of failure is kept.
         raise PollError("bridge_error", f"{url} sent a reply that wasn't whole HTTP ({type(error).__name__})",
-                        EXIT_BRIDGE)
+                        EXIT_BRIDGE) from None
 
 
 def status_phrase(status: int) -> str:
@@ -311,9 +315,19 @@ def get_health(base_url: str, timeout: float) -> dict:
             EXIT_UNREACHABLE,
         )
     try:
-        return json.loads(body)
-    except json.JSONDecodeError:
-        raise PollError("health_not_ok", "GET /health did not return JSON", EXIT_UNREACHABLE)
+        health = json.loads(body)
+    except ValueError:      # `JSONDecodeError`, and `UnicodeDecodeError` for a body that isn't text
+        raise PollError("health_not_ok", "GET /health did not return JSON", EXIT_UNREACHABLE) from None
+    if not isinstance(health, dict):
+        raise PollError("health_not_ok", "GET /health did not return a JSON object", EXIT_UNREACHABLE)
+    return health
+
+
+def plain(value: object) -> str:
+    """A value from /health that is fit for the log: a boolean, a number or short plain text, else "?".
+    /health is the bridge's word, and the log is read by people."""
+    text = str(value)
+    return text if isinstance(value, (bool, int, float, str)) and PLAIN.fullmatch(text) else "?"
 
 
 def poll_machine(
@@ -536,10 +550,10 @@ def run(args: argparse.Namespace) -> int:
         log_line(
             log_path,
             f"{now()} level=INFO event=dry_run tailscale={quote(tailscale_note)} "
-            f"health={quote(health.get('status', '?'))} "
-            f"version={quote(health.get('version', '?'))} "
-            f"uptime={quote(health.get('uptime', '?'))} "
-            f"transmit_enabled={health.get('transmit_enabled')} "
+            f"health={quote(plain(health.get('status', '?')))} "
+            f"version={quote(plain(health.get('version', '?')))} "
+            f"uptime={quote(plain(health.get('uptime', '?')))} "
+            f"transmit_enabled={quote(plain(health.get('transmit_enabled')))} "
             f"note={quote('no poll was made')}",
         )
         return EXIT_OK

@@ -31,16 +31,16 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Any, NamedTuple
 
 from vending import settings
 
 TIMEOUT_SECONDS = 20
-# What a session id and a poll's start time may look like before a log line or a URL names them. The bridge's
-# ids are 32 hex digits; the wider shape lets a test's "s1" through but not a record (`PA1*11*987*`) or a line break.
-_SESSION_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
-_START_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}(:?\d{2})?)?")
+# What a session id looks like before a log line or a URL names it: the bridge's ids are 32 hex digits
+# (docs/snapshot-archive.md). A record (`PA1*11*987*`), a bare counter or a line break is not one.
+_SESSION_ID = re.compile(r"[0-9a-fA-F]{32}")
 # A live read takes about 8.5 s, and may wait its turn for the serial line first.
 POLL_TIMEOUT_SECONDS = 30
 # The header a live read names its session in (docs/snapshot-archive.md).
@@ -60,20 +60,36 @@ class LiveRead(NamedTuple):
     age_seconds: float | None = None
 
 
+class ListedPoll(NamedTuple):
+    """One row of a day's listing that can be fetched and stored: its session id, and its start as a UTC time."""
+    session_id: str
+    started_at: datetime
+
+
 def valid_session_id(value: object) -> bool:
-    """Whether `value` is a session id that is safe to log and to put in a URL."""
+    """Whether `value` is a session id: 32 hex digits, so safe to log and to put in a URL."""
     return isinstance(value, str) and _SESSION_ID.fullmatch(value) is not None
 
 
-def valid_start_time(value: object) -> bool:
-    """Whether `value` is a time of the shape the bridge lists polls at, safe to log."""
-    return isinstance(value, str) and len(value) <= 40 and _START_TIME.fullmatch(value) is not None
+def parse_start_time(value: object) -> datetime | None:
+    """A listed poll's start as a UTC `datetime`, or None unless it is a real time with an offset.
+    "2026-02-30T12:00:00+00:00" is not one, and neither is a time with no offset."""
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+        return None if moment.utcoffset() is None else moment.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
 
 
-def usable(meta: object) -> bool:
-    """Whether a listed poll has a session id and start time that can be logged, fetched and stored."""
-    return (isinstance(meta, dict) and valid_session_id(meta.get("session_id"))
-            and valid_start_time(meta.get("started_at")))
+def listed_poll(row: object) -> ListedPoll | None:
+    """A row of a day's listing as a `ListedPoll`, or None when it has no usable session id or start.
+    The row is the bridge's word: nothing from a row that fails is logged, fetched or stored."""
+    if not isinstance(row, dict) or not valid_session_id(row.get("session_id")):
+        return None
+    started = parse_start_time(row.get("started_at"))
+    return None if started is None else ListedPoll(row["session_id"], started)
 
 
 def status_phrase(status: int) -> str:
@@ -280,11 +296,15 @@ class Bridge:
         except ValueError:  # Not `JSONDecodeError`: bytes that aren't text raise `UnicodeDecodeError`.
             raise BridgeError(f"/api/v1/slots was not JSON ({len(payload)} bytes)") from None
 
-    def history(self, day: str) -> list[dict]:
+    def history(self, day: str) -> list[Any]:
         """Stored polls for one UTC day (YYYY-MM-DD), oldest first.
 
         The bridge returns at most 500 polls per request and marks the answer
         `truncated`, so the sync asks one day at a time and refuses a truncated day.
+
+        Only the listing as a whole is checked here. A row that is not an object, or has no usable
+        session id or start (`listed_poll`), comes back as it is, so one bad row can't turn the whole
+        day into an error: the sync counts and skips it.
         """
         payload = self._get("/api/v1/history", {"start": day, "end": day})
         try:
@@ -294,8 +314,8 @@ class Bridge:
         if not _is_listing(body):
             raise BridgeError(f"history for {day} was not a listing of polls ({len(payload)} bytes)")
         if body.get("truncated"):
-            raise BridgeError(f"history for {day} was truncated at {body.get('limit')} polls")
-        return [dict(p, device_id=body.get("device_id")) for p in body["polls"]]
+            raise BridgeError(f"history for {day}: listing truncated")   # not its `limit`: a figure of the bridge's
+        return [dict(p, device_id=body.get("device_id")) if isinstance(p, dict) else p for p in body["polls"]]
 
     def raw(self, session_id: str) -> bytes:
         """One stored poll, byte-for-byte.
@@ -341,11 +361,9 @@ class Bridge:
 
 
 def _is_listing(body: object) -> bool:
-    """Whether `body` is a day's listing, with what the sync needs from every poll."""
-    return isinstance(body, dict) and isinstance(body.get("polls"), list) and all(
-        isinstance(p, dict) and isinstance(p.get("session_id"), str) and isinstance(p.get("started_at"), str)
-        for p in body["polls"]
-    )
+    """Whether `body` is a day's listing: an object with a list of `polls`. Its rows are checked one by one
+    by the sync (`listed_poll`), never all together."""
+    return isinstance(body, dict) and isinstance(body.get("polls"), list)
 
 
 def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
