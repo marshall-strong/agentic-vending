@@ -182,6 +182,9 @@ def test_the_books_balance_with_an_unsplit_swap_in_every_view(conn):
     # #172 review: the 300c of Red Bull stock the replay took for the 2 unsplit sales is in no
     # exact cost, estimate or profit, so it is its own reconciliation line, and opening + flows
     # = closing cash + stock at cost holds exactly in all four views. Opening $600, no stock.
+    # Timing exception (older than this branch): a unit the counters split to the old product leaves
+    # stock at the swap but is booked to the poll that measured it, so a day that ends between the
+    # two is off by its cost. This fixture's swap and poll fall on the same day, so every day balances.
     unsplit_swap(conn)
     end = window(date(2026, 11, 14), date(2026, 11, 14))[1]
     p = ledger.pnl(conn, OPENED, end)

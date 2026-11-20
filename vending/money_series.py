@@ -48,8 +48,12 @@ in no profit figure, known or not (#172 item 5). The stock those sales took
 out of the count is `unattributed_stock_cents`, the ledger's reconciliation
 line: in no cost, estimate or profit, so each day's cash and stock at cost
 equal the day before's plus net at known costs, capital and the tax set
-aside, less tax remitted and that line. `unattributed_stock_provisional` says
-a write-off at the same swap may be one of those sales.
+aside, less tax remitted and that line. Except for timing: a unit the counters
+split to the old product at a swap leaves stock at the swap but is booked to
+the poll that measured it, so a day (or a week) that ends between the two is
+off by that unit's cost, and the next one makes it up; the whole run
+balances. `unattributed_stock_provisional` says a write-off at the same swap
+may be one of those sales.
 
 When some units sold, or some units lost, have no known cost, a profit that
 leaves them out looks complete and isn't. So `gross_profit_cents` and
@@ -357,9 +361,9 @@ class _Book:
         _, _, rises, self.poll_note = ledger.rises_between(sales_rows, since, until)
         for r in rises:
             self.takings[_day(r.at)] += r.amount
-        if since != opened.at:
-            # The balance counts every rise since the opening, including those before a later window start.
-            rises = ledger.rises_between(sales_rows, opened.at, until)[2]
+        # Cash and tax owed count every rise since the opening, by the balance's own rule
+        # (`ledger.opening_rises`), including those before a later window start.
+        rises = ledger.opening_rises(sales_rows, opened.at, until)[2]
         self.cash += [(r.at, Fraction(r.amount)) for r in rises]
         # The tax still owed at a moment counts from the opening too, rounded per week as the balance does.
         self.open_rises = sorted((r.at, r.amount) for r in rises)

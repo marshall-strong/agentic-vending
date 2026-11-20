@@ -239,7 +239,8 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   - Stock taken by sales of unknown product: `unattributed_stock`, a reconciliation line in no
     cost, estimate or profit, so opening cash and stock + net + capital + tax set aside - tax
     remitted - `unattributed_stock` = closing cash + stock at cost. `unattributed_stock_provisional`
-    is true when units written off at the same swap may be some of those sales.
+    is true when units written off at a swap the sales' window spans may be some of those sales.
+    Timing exception: A unit the counters split to the old product at a swap leaves stock at the swap but is booked to the poll that measured it, so a period that ends between the two (usually a day) is off by that unit's cost until the next one; a period that holds both balances.
   - Stock whose cost is unknown: `inventory_complete: false` and a note.
 - **Owner**: Marshall Strong (issue #23, PR #35).
 

@@ -243,7 +243,8 @@ the slot, or past what we loaded). Units sold across a product change that the c
 cost of sales, `cost_of_sales_complete` is false, and `units_estimated` and
 `estimated_cost_of_sales` report an estimate apart (the midpoint of the two products' unit costs,
 when both are known). The estimate is in no profit figure (#172 item 5). The stock they took is
-`unattributed_stock`, a reconciliation line, also in no profit figure, so the books still balance.
+`unattributed_stock`, a reconciliation line, also in no profit figure, so the books still balance,
+except for timing: A unit the counters split to the old product at a swap leaves stock at the swap but is booked to the poll that measured it, so a period that ends between the two (usually a day) is off by that unit's cost until the next one; a period that holds both balances.
 While a cost is missing, `gross_margin` and `net` are over known costs only, and the summary says
 "net at known costs (incomplete...)". Cost of sales is never "unknown" as a whole: a quiet week with
 a $25 visit and 40 cents of tokens nets -25.40. **Shrinkage** is the cost of units lost without a sale: later

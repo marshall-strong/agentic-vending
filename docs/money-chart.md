@@ -44,7 +44,9 @@ Every figure is the money series', so each day adds up to `ledger.pnl` and each 
   money from cash into stock, so net worth holds; only profit and capital move it.
 
 Competition money only: counting starts at the ledger's opening, so model calls before it
-(development spend, #104) are in no figure.
+(development spend, #104) are in no figure. A counter reading just before the opening that later
+polls show was a misread isn't used as the baseline; the balance uses the same rule
+(`ledger.opening_rises`).
 
 **Unknown stays unknown.** A missing cost makes the affected profit and cost totals unknown.
 Lines leave a gap on any day a value is unknown (cash and net worth too), and a known day between
@@ -55,7 +57,11 @@ exact cost, so their day's gross profit and net are unknown too. The series carr
 for them apart (`units_estimated`, `estimated_cost_of_sales`), and the day's note in the tooltip
 states it as an estimate. It is never drawn into a cost or profit line (#172 item 5). The stock
 those sales took is `unattributed_stock`, a reconciliation line in no cost or profit, which the
-day's note also states, so each day's cash and stock at cost still add up.
+day's note also states, so each day's cash and stock at cost still add up. One timing exception:
+a unit the counters split to the old product at a swap leaves stock at the swap but is booked to
+the poll that measured it. When that poll falls on a later day, the earlier day's cash and stock
+are off by that unit's cost and the later day makes it up; weekly and whole-run figures balance
+unless a week ends between the two.
 
 **Exact money.** The page sums exact cents before it rounds values for display, and every value
 label keeps its cents; only axis ticks are rounded.

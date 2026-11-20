@@ -191,8 +191,9 @@ class SaleCost:
     candidate unit costs (the old product's unit a sale before the visit's
     pull would have taken, first in, first out, and the new product's oldest
     unit) times the units, when both are known; otherwise None (#172 item 5).
-    `may_be_written_off` is true when units of the old product were written
-    off at that change: a sale may explain one, so the debit and that
+    `may_be_written_off` is true when units were written off at any product
+    change the window overlaps, however many it spans and whether or not the
+    debit's cost is known: a sale may explain one, so the debit and that
     shrinkage are provisional. `at` is the poll that
     measured the units, the same moment the takings book them to. The old
     product's share of a window split at a product change left its count
@@ -817,6 +818,10 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
         warnings.append(StockWarning(text, slot))
     sales: list[SaleCost] = []
     shrinkage: list[Shrinkage] = []
+    # Units written off at each product change, (slot, door open or change, change, units), and each
+    # unattributed sale's place in `sales` with its movement: a write-off its window overlaps may be it.
+    changed_away: list[tuple[str, datetime, datetime, int]] = []
+    unknown_sales: list[tuple[int, Movement]] = []
 
     def shelf(sku: str) -> _Pool:
         return closet.setdefault(sku, _Pool())
@@ -862,6 +867,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 warn(m.slot, f"{m.ref}: {slot.pool.units} units of {slot.product} still counted in slot "
                                 f"{m.slot} when it changed to {m.sku}; written off as shrinkage")
                 write_off(m.at, f"slot {m.slot}", slot.product, slot.pool.layers)
+                changed_away.append((m.slot, m.opened_at or m.at, m.at, slot.pool.units))
             if slot is None or changed:
                 # A sale of the old product just before this visit would have taken the unit that was
                 # oldest before the visit's own pull, which may have moved or emptied the pool since.
@@ -935,6 +941,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                              "unattributed, costed at the oldest units taken from "
                              f"{slot.product}'s count, which may be the wrong product's")
                 slot.unattributed += m.units
+                unknown_sales.append((len(sales), m))
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
                                       unattributed=f"sold while {m.door_conflict}'s door times say the door was open",
                                       since=m.window_since))
@@ -964,16 +971,23 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 if (across_change and m.changes <= 1
                         and slot.replaced_unit_cost is not None and oldest is not None):
                     estimate = (slot.replaced_unit_cost + oldest) / 2 * m.units
+                unknown_sales.append((len(sales), m))
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
                                       unattributed=f"sold {across}; the counters can't split them",
                                       since=m.window_since,
-                                      estimated_cost_cents=estimate,
-                                      may_be_written_off=bool(across_change and slot.written_off)))
+                                      estimated_cost_cents=estimate))
             else:
                 slot.sold += m.units
                 slot.at_most = max(0, slot.at_most - m.units)
                 sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, costed, cost,
                                       taken_at=m.at if m.booked_at else None, since=m.window_since))
+
+    # Every change the window overlaps is a candidate, not only the slot's last one, and a write-off
+    # there may be one of the sales whatever the debit's cost (#172 review).
+    for i, m in unknown_sales:
+        if any(at_slot == m.slot and units and (m.since is None or m.since < at) and start < m.at
+               for at_slot, start, at, units in changed_away):
+            sales[i] = replace(sales[i], may_be_written_off=True)
 
     for name, slot in sorted(slots.items()):
         if slot.oversold:

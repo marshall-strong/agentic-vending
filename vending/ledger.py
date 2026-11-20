@@ -46,8 +46,12 @@ includes (#172 item 5). The stock those sales took out of the count, at the
 cost it was taken (`unattributed_stock_cents`), is in no cost, estimate or
 profit either. It is its own reconciliation line, so the books still balance:
 opening cash and stock + net at known costs + capital + tax set aside - tax
-remitted - unattributed stock = closing cash + stock at cost. Where a
-write-off at the same swap may be one of those sales, the line is provisional
+remitted - unattributed stock = closing cash + stock at cost. One timing
+exception, older than this line: a unit the counters split to the old product
+at a swap leaves stock at the swap but is booked to the poll that measured it,
+so a period that ends between the two is off by that unit's cost until the
+next period; one that holds both balances (`stock.replay`). Where a write-off
+at the same swap may be one of those sales, the line is provisional
 (`unattributed_stock_provisional`). The money series counts all of this the
 same way.
 
@@ -408,6 +412,17 @@ def rises_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, un
     return baseline, times[-1], out, note
 
 
+def opening_rises(rows: Iterable[tuple[datetime, str, int]], opened_at: datetime, until: datetime
+                  ) -> tuple[datetime | None, datetime | None, list[Rise], str | None]:
+    """The opening baseline: every rise in a counter from the ledger's opening to `until`, as
+    `rises_between` reads it. One rule for the balance (`balance`) and the money chart's cash and tax
+    owed (`vending.money_series`), so they agree. The counter is read over its whole history first,
+    so a misread just before the opening is not the baseline: cents 25000 -> 24000 | opening | 25250
+    took 250 cents since the opening, not 1250 (#172 review round 2).
+    """
+    return rises_between(rows, opened_at, until)
+
+
 def week_of(moment_local: datetime, week_starts: int = WEEK_STARTS) -> date:
     """The day the week holding `moment_local` began: the latest `week_starts` weekday on or before it."""
     return moment_local.date() - timedelta(days=(moment_local.weekday() - week_starts) % 7)
@@ -421,7 +436,13 @@ def takings_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, 
     Each rise in a slot's counter is booked to the week of the poll that showed
     it. Tax is rounded per week, then summed.
     """
-    baseline, last, rises, note = rises_between(rows, since, until)
+    return _takings(rises_between(rows, since, until), tz, week_starts, tax_percent)
+
+
+def _takings(read: tuple[datetime | None, datetime | None, list[Rise], str | None], tz: tzinfo,
+             week_starts: int = WEEK_STARTS, tax_percent: int = DEFAULT_TAX_PERCENT) -> Takings:
+    """`takings_between` from rises already read: (baseline poll, last poll, rises, note)."""
+    baseline, last, rises, note = read
     weeks: dict[date, int] = defaultdict(int)
     for r in rises:
         weeks[week_of(r.at.astimezone(tz), week_starts)] += r.amount
@@ -475,7 +496,9 @@ def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance 
     if as_of is None:
         as_of = db_now(conn)
     notes: list[str] = []
-    sold = takings(conn, start.at, as_of)
+    # The opening baseline, the same rule as the money chart's cash (`opening_rises`).
+    sold = _takings(opening_rises(_counter_rows(conn, "lifetime_sales_cents", as_of), start.at, as_of),
+                    ZoneInfo(TIMEZONE))
     if sold.note:
         notes.append(sold.note)
     receipts, lines, missing = _receipts(conn, start.at, as_of)
@@ -527,7 +550,8 @@ def summarize_sales(sales: Iterable[stock.SaleCost]) -> SalesCost:
     return SalesCost(sum(s.costed_units for s in exact), sum((s.cost_cents for s in exact), Fraction(0)),
                      sum(s.units for s in guessed), sum((s.estimated_cost_cents for s in guessed), Fraction(0)),
                      sum((s.unattributed_cost_cents for s in taken), Fraction(0)),
-                     any(s.may_be_written_off for s in taken))
+                     # Whether or not the debit's cost is known (#172 review round 2).
+                     any(s.may_be_written_off for s in sales if s.cost_cents is None))
 
 
 def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
@@ -548,6 +572,9 @@ def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
                      "product: a reconciliation line, in no cost, estimate or profit, by which net worth falls"
                      + ("; provisional, since units written off at the same swap may be some of those sales"
                         if cost.unattributed_stock_provisional else ""))
+    elif cost.unattributed_stock_provisional:
+        notes.append("sales of unknown product took stock of unknown cost; units written off at the same swap may "
+                     "be some of those sales, so that shrinkage is provisional")
     return notes
 
 
