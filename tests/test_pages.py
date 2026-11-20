@@ -198,6 +198,23 @@ def test_a_passed_check_is_trusted_for_a_while_then_made_again(schema_url, reade
 
 # --- No error text ------------------------------------------------------------------------------
 
+def test_public_dashboard_panel_errors_go_to_stderr(site, conn, capsys):
+    conn.execute("drop table product_requests cascade")
+    fixed = "This part of the page can't be read right now."
+    for path in ("/dashboard", "/dashboard/state.json"):
+        status, _, body = _get(site, path)
+        assert status == 200
+        assert fixed in body.replace("&#x27;", "'")
+        for marker in ("product_requests", "does not exist", "LINE 1:", "select id, requested_at"):
+            assert marker not in body
+    state = json.loads(body)
+    assert state["catalog_requests"] == state["catalog_counts"] == {"ok": False, "why": fixed}
+    assert 'relation "product_requests" does not exist' in capsys.readouterr().err
+    local = dashboard.snapshot(conn)
+    assert 'relation "product_requests" does not exist' in local["catalog_requests"]["why"]
+    assert "python -m vending.db migrate" in dashboard.render(local)
+
+
 def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
     _, schema = schema_url
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=datetime.now(timezone.utc) - timedelta(minutes=1))
@@ -473,18 +490,19 @@ def test_the_public_pages_follow_a_changed_stored_assignment(site, schema_url, c
 
 def test_the_public_pages_degrade_when_no_assignment_is_stored(site, schema_url, conn):
     """Nothing stored: no selection is ours, so the pages light nothing, show no selection rows,
-    and say why, rather than fall back to any list."""
+    and say the assignment is unavailable."""
     _, schema = schema_url
     _not_ours(conn)
     conn.execute("delete from slot_assignment")
     status, _, page = _get(site, "/dashboard")
     assert status == 200 and '<article class="ma-lane' not in page
-    assert "Not available: Our slot assignment hasn" in page and "python -m vending.slots record" in page
+    assert f"Not available: {dashboard.PUBLIC_PANEL_ERROR}" in page.replace("&#x27;", "'")
     assert "Which selections are ours isn" in page and "Our Chips" not in page and NOT_OURS not in page
     assert "our slots aren't recorded" in page and "run the history sync" not in page   # not "no polls"
     status, _, body = _get(site, "/dashboard/state.json")
     snap = json.loads(body)
     assert status == 200 and snap["ours"]["ok"] is False and snap["counts"]["data"] == {}
+    assert snap["ours"]["why"] == dashboard.PUBLIC_PANEL_ERROR
     assert "Our Chips" not in body and NOT_OURS not in body
     for table in ("slot_counts", "poll_selections"):
         status, _, page = _get(site, f"/db?schema={schema}&table={table}")

@@ -555,8 +555,8 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
     """Everything the page shows, from one consistent moment. Reads only.
 
     JSON numbers come back as Decimal, so a price stored as a number stays exact.
-    The live view has the same filters on every route. `public` is retained for callers that pass
-    it. `syncs` is the worker's latest sync round, as its `/health` shows
+    The live view has the same filters on every route. On the public page, panel read errors
+    go to stderr. `syncs` is the worker's latest sync round, as its `/health` shows
     it (`vending.worker.State.public`: outcomes and exit codes, never error text). The worker
     keeps that in memory, not in the database, so only a page the worker serves has it; run
     on its own, the dashboard has None and says nothing about the syncs.
@@ -568,21 +568,22 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
         now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
         snap = _snapshot(conn, now)
     snap["syncs"] = syncs
-    hide_errors(snap)
+    hide_errors(snap, public=public)
     snap["attention"] = attention(snap)
     return snap
 
 
 # Shown in place of a failure's text on a public page.
 HIDDEN = "(error text isn't shown on this public page; it is in the database and the container's log)"
+PUBLIC_PANEL_ERROR = "This part of the page can't be read right now."
 
 
-def hide_errors(snap: dict) -> None:
+def hide_errors(snap: dict, *, public: bool = False) -> None:
     """Replace the free text of every failure with `HIDDEN`, in place.
 
-    A failed tool call or run stores the raw error, and a database error names the host and the
-    user. A refusal keeps its text: we wrote it, and it says what to do next. Done on the
-    snapshot, before Needs attention is built, so the page and `/state.json` both get it.
+    A failed tool call or run stores the raw error. A refusal keeps its text. On the public
+    page, a panel's read error goes to stderr. Clean the snapshot before building Needs
+    attention so both the page and `/state.json` get the same text.
     """
     run = snap["status"].get("latest_run")
     if run and run.get("status") == "failed" and run.get("detail"):
@@ -597,6 +598,14 @@ def hide_errors(snap: dict) -> None:
             for step in run["steps"]:
                 if step["kind"] == "tool_result" and step["is_error"]:
                     step["content"] = HIDDEN
+    if public:
+        for name, panel in snap.items():
+            if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
+                continue
+            why = panel["why"]
+            if why != PUBLIC_PANEL_ERROR:
+                print(f"dashboard: {name}: {why}", file=sys.stderr, flush=True)
+                panel["why"] = PUBLIC_PANEL_ERROR
 
 
 OLD_ASSIGNMENT = "Text omitted from before the current slot assignment."

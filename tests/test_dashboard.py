@@ -1018,7 +1018,7 @@ def test_the_close_up_survives_a_failed_products_read(conn, page_conn, open_ledg
         connection.execute("select 1 / 0")     # any database error inside the read
     monkeypatch.setattr(dashboard.machine_art, "read_products", broken)
     snap = dashboard.snapshot(page_conn, MONDAY, public=True)
-    assert snap["products"] == {"ok": False, "why": dashboard.PRODUCTS_FAILED}
+    assert snap["products"] == {"ok": False, "why": dashboard.PUBLIC_PANEL_ERROR}
     row = next(row for row in snap["plan"]["data"]["slots"] if row["slot"] == slot)
     assert "fill_check" not in row
     assert not any(item["level"] == "warn" for item in snap["attention"])

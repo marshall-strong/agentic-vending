@@ -233,6 +233,8 @@ Its reservation and settlement rows follow the time filter.
 Both routes use the current slot assignment. They omit plan entries and structured tool data
 for other selections. A note replaces run text from before the current assignment. The stored
 error text of failed calls, tool results and runs stays out of both responses.
+The public page gives a fixed message when a panel cannot read its data. The detail goes to
+stderr. The standalone page shows the detail in the panel.
 
 ## Honesty rules
 
