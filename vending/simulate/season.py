@@ -135,6 +135,9 @@ class State:
     runs: list[dict] = field(default_factory=list)
     done: bool = False
     run_day: int = 3                                  # the weekly run's weekday, Monday 0 (Thursday by default)
+    # Where a checkpoint taken mid-hour (after an agent run) stopped inside the hour starting at `poll_at`:
+    # a resume sells, handles the rest of the hour's events and polls from here. None between hours.
+    resume_at: datetime | None = None
 
     @property
     def assignment(self) -> tuple[str, ...]:
@@ -427,6 +430,7 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
                                          opts.get("interloper", 0.0))
     with patched(st.clock):
         t = st.poll_at
+        cursor = getattr(st, "resume_at", None)       # a checkpoint from before this field has none
         while t < world.COMPETITION_END:
             if stop_at is not None and t >= stop_at:
                 say(f"stopped at {t.astimezone(EASTERN):%a %d %b %H:%M} ET; resume with --resume")
@@ -434,7 +438,10 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
                 return st
             nxt = t + timedelta(hours=1)
             due = sorted((e for e in st.events if t <= e.at < nxt), key=lambda e: (e.at, e.kind))
-            a = t
+            # Resuming mid-hour: what came before the cursor already happened (its events were handled and
+            # removed before the checkpoint), so the hour goes on from there.
+            a = cursor if cursor is not None and t <= cursor < nxt else t
+            cursor = None
             for ev in due:
                 runs_before = len(st.runs)
                 sell(st, cal, demand, a, ev.at)
@@ -448,9 +455,8 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
                     r = st.runs[-1]
                     say(f"{ev.at.astimezone(EASTERN):%a %d %b %H:%M} {r.get('kind')}: {r.get('status')}, "
                         f"${r.get('cost_usd', '0')} ({r.get('detail', '')[:140]})")
-                    st.poll_at = nxt     # resume after this hour's events would re-sell the start of it
+                    st.resume_at = ev.at     # the rest of this hour is still to come
                     save(st, checkpoint)
-                    st.poll_at = t
             sell(st, cal, demand, a, nxt)
             st.clock.set(nxt)
             since = wall_clock(conn)
@@ -460,7 +466,8 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
             # the start confirms it for the competition, as live, so the tools go on reading our slots.
             slot_assignment.check(conn, st.bridge.slots(), now=nxt, by=BY)
             restamp(conn, nxt, since)
-            st.poll_at = t = nxt
+            st.poll_at, st.resume_at = nxt, None
+            t = nxt
         st.done = True
         save(st, checkpoint)
     return st

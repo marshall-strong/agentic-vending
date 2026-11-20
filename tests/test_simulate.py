@@ -378,3 +378,58 @@ def test_an_unknown_decider_is_refused_never_sent_to_the_model(monkeypatch):
     with pytest.raises(ValueError):
         season.run_agent(_FakeConn(), st, "weekly", Decimal(1), Decimal(1), Decimal(0))
     assert season.DECIDERS == ("scripted", "scripted-wide", "model")
+
+
+class _Crash(Exception):
+    pass
+
+
+def _short_season(monkeypatch, tmp_path, crash: bool):
+    """30 Nov to 13:00 with the database steps faked: which events ran, which hours were polled, what sold.
+    With `crash`, the process dies just after the checkpoint the day-one run writes, and is resumed."""
+    from vending.simulate import season
+
+    polls: list = []
+
+    def handle(conn, st, ev, opts):
+        st.log.append({"kind": ev.kind, "at": ev.at.isoformat()})
+        if ev.kind == "agent_run":
+            st.runs.append({"kind": ev.data["kind"], "status": "submitted", "run_id": len(st.runs) + 1})
+            # The day-one fill, so customers have something to buy in the rest of the hour.
+            for slot in list(st.machine.slots)[:4]:
+                st.machine.slots[slot].sku, st.machine.slots[slot].units = "REDBULL-ORIGINAL-8_4CAN", 10
+
+    real_save, crashed = season.save, []
+
+    def save(st, path):
+        real_save(st, path)
+        if crash and st.runs and not crashed:
+            crashed.append(True)
+            raise _Crash
+
+    monkeypatch.setattr(world, "OFF_DAY", 40.0)       # 30 Nov has no classes; make customers come anyway
+    monkeypatch.setattr(season, "handle", handle)
+    monkeypatch.setattr(season, "poll", lambda conn, st, at: polls.append(at))
+    monkeypatch.setattr(season, "save", save)
+    monkeypatch.setattr(season.sync_requests, "sync", lambda *_a, **_k: None)
+    monkeypatch.setattr(season.slot_assignment, "check", lambda *_a, **_k: None)
+    st = season.new_state(5, "scripted", "m", "medium", False, 3, EXAMPLE)
+    # Later in the same hour as the day-one run (hours start at :05), so a resume that skips it loses it.
+    st.events.append(season.Event(datetime(2026, 11, 30, 10, 2, tzinfo=EASTERN), "probe"))
+    stop, path = datetime(2026, 11, 30, 13, 0, tzinfo=EASTERN), tmp_path / f"crash-{crash}.pickle"
+    try:
+        st = season.run_season(_FakeConn(), st, {}, path, stop, say=lambda *_: None)
+    except _Crash:
+        st = season.run_season(_FakeConn(), season.load(path), {}, path, stop, say=lambda *_: None)
+    sold = {k: v["sold"] for k, v in st.days.items()}
+    return [e["kind"] for e in st.log], polls, sold
+
+
+def test_resume_picks_up_mid_hour_where_the_checkpoint_was_taken(monkeypatch, tmp_path):
+    """Review fix: the checkpoint after a run said the hour was done, so a resumed season skipped the
+    rest of it: later events in the hour, its customers and its poll."""
+    events, polls, sold = _short_season(monkeypatch, tmp_path, crash=False)
+    again = _short_season(monkeypatch, tmp_path, crash=True)
+    assert "probe" in events and again[0] == events
+    assert sorted(set(again[1])) == sorted(set(polls)) and len(again[1]) == len(polls)
+    assert again[2] == sold and sum(sold.values()) > 0
