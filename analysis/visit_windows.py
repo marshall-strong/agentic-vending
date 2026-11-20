@@ -18,7 +18,9 @@ What it measures (hourly-polling era only, from 21 Sep 2026, when polls came eve
                   claimed. With several, or none, the receipt is still a visit of ours, with `window` "ambiguous" or
                   "unknown" and no window, openings or sales inside, and no candidate rise is in any window.
                   Other rises are left out of our windows, not merged into them. Before 3 Dec every rise counts.
-    grades        the analysis's refill grade for each visit (proven, likely, possible top-up, no sign).
+    grades        the analysis's refill grade for each visit (proven, likely, possible top-up, no sign). A visit with an
+                  ambiguous or unknown window has none: the analysis lists it, and it is graded "no door window" when
+                  lab_data.json lists it. The "rerun the analysis" warning fires only for a visit the lab data lacks.
     poll gaps     how often a gap between polls is longer than an hour: a longer gap widens any window.
     exposure      our units sold inside a visit window (the units a product or price change would make
                   ambiguous), and our class-day sales by hour, which gives the expected exposure for a
@@ -41,7 +43,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from door_events import our_visits, read_receipts  # noqa: E402  (standard library only)
+from door_events import is_listed, our_visits, read_receipts  # noqa: E402  (standard library only)
 from slots_config import START  # noqa: E402
 
 MERGE_H = 3                                        # rises within 3 h are one visit (sales_analysis.VISIT_MERGE_H)
@@ -49,6 +51,7 @@ HOURLY_FROM = datetime.fromisoformat("2026-09-21T01:00:00-04:00")
 DAY_H0, DAY_H1 = 7, 18                             # hours shown in the by-hour profile
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 RESTOCK_GRADES = ("proven refill", "likely refill", "possible top-up")
+NO_WINDOW_GRADE = "no door window"                 # a visit of ours the door counter can't place: not graded, not stale
 
 
 def _median(values):
@@ -125,9 +128,17 @@ def class_days(lab: dict | None) -> set[str] | None:
 
 
 def grade_of(visit: dict, lab: dict | None) -> str | None:
-    """The analysis's refill grade for the visit with the same window start, if lab data is there."""
+    """The analysis's refill grade for the visit with the same window start, if lab data is there.
+
+    A visit with no door window (ambiguous or unknown) can't be graded from the door counter, so the analysis lists it
+    in refill_evidence.visits_without_window instead of grading it. When the lab data lists this receipt (the same
+    fulfilment instant, to the second) with this kind of window, its grade is NO_WINDOW_GRADE; when it doesn't, the lab
+    data wasn't made from these receipts: None, like any visit the lab data has never seen."""
     if not lab:
         return None
+    if visit["window"] != "known":
+        listed = (lab.get("refill_evidence") or {}).get("visits_without_window") or []
+        return NO_WINDOW_GRADE if is_listed(listed, visit["first"], visit["window"]) else None
     key = visit["from"].isoformat(timespec="minutes")[:16]
     for v in lab.get("visits", []):
         if str(v.get("start", ""))[:16] == key:
@@ -149,7 +160,7 @@ def analyse(door_rows, poll_rows, sales_rows, lab=None, since=HOURLY_FROM, recei
         if v["window"] != "known":      # a receipt of ours with no door window: nothing is placed in or around it
             visits.append({"weekday": DAYS[v["first"].weekday()], "window": v["window"], "from": None, "to": None,
                            "mid_hour": None, "window_min": None, "openings": None, "our_units_inside": None,
-                           "minutes_to_next_sale": None, "grade": None})
+                           "minutes_to_next_sale": None, "grade": grade_of(v, lab)})
             continue
         inside = sum(u for t, u, _ in sales if v["from"] < t <= v["last"])   # can't be placed before or after
         nxt = next((t for t, u, _ in sales if t > v["last"] and u > 0), None)

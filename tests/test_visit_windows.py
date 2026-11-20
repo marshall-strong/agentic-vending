@@ -196,3 +196,95 @@ def test_a_misread_does_not_hide_our_visit_after_the_start():
     (v,) = vw.analyse(rows, polls(range(13), FRIDAY), [], receipts=[receipt(4.33, 4.58)])["visits"]
     assert v["openings"] == 1 and v["window_min"] == 120
     assert v["from"].startswith("2026-12-04T11:00") and v["to"].startswith("2026-12-04T13:00")
+
+
+# --- the CLI's "rerun the analysis" warning fires only on data that is really stale (S10 of #174) ---
+
+def write_data(tmp_path, door_rows, receipts, lab):
+    """The CSVs export_sales.py writes, and the analysis's lab_data.json, in tmp_path; the paths main() takes."""
+    import csv
+    import json
+
+    def write(name, header, rows):
+        with open(tmp_path / name, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(header)
+            w.writerows(rows)
+    write("door_events.csv", ["at_eastern", "door_open_lifetime", "door_open_since_reset", "rise"],
+          [(r["at_eastern"], r["door_open_lifetime"], r["door_open_lifetime"], r["rise"]) for r in door_rows])
+    write("polls.csv", ["at_eastern"], [(r["at_eastern"],) for r in polls(range(13), FRIDAY)])
+    write("sales_events.csv", ["slot", "row", "col", "at_eastern", "units", "cents"], [])
+    write("receipts.csv", ["request_id", "first_at_eastern", "fulfilled_at_eastern"],
+          [("r%d" % i, first.isoformat(), done.isoformat()) for i, (first, done) in enumerate(receipts)])
+    (tmp_path / "lab_data.json").write_text(json.dumps(lab), encoding="utf-8")
+    return ["--data", str(tmp_path), "--lab-data", str(tmp_path / "lab_data.json"), "--out", str(tmp_path / "out.json")]
+
+
+def lab_listing(*unplaced):
+    """lab_data.json as sales_analysis.py writes it: no visit with a door window, and `unplaced` receipts without one."""
+    return {"visits": [], "calendar": {"days": []},
+            "refill_evidence": {"visits_without_window": [
+                {"fulfilled_at": done.isoformat(), "window": kind, "candidate_rises": []}
+                for done, kind in unplaced]}}
+
+
+def test_a_fresh_lab_listing_an_ambiguous_visit_does_not_warn(tmp_path, capsys):
+    # rises seen at 12:00 and 13:00 and a receipt fulfilled 12:30: an ambiguous visit, which the analysis lists but cannot grade
+    done = receipt(5.25, 5.5)[1]
+    argv = write_data(tmp_path, door({5: 1, 6: 1}, FRIDAY), [receipt(5.25, 5.5)], lab_listing((done, "ambiguous")))
+    vw.main(argv)
+    assert "WARNING" not in capsys.readouterr().out                      # old code: warned, as for every visit with no grade
+
+
+def test_a_fresh_lab_listing_an_unknown_visit_does_not_warn(tmp_path, capsys):
+    done = receipt(3.1, 4.5)[1]
+    argv = write_data(tmp_path, door({3: 1}, FRIDAY), [receipt(3.1, 4.5)], lab_listing((done, "unknown")))
+    vw.main(argv)
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_a_lab_that_does_not_list_the_visit_is_stale_and_warns(tmp_path, capsys):
+    # a lab_data.json from before this receipt (or from the old analysis): nothing lists the visit
+    argv = write_data(tmp_path, door({5: 1, 6: 1}, FRIDAY), [receipt(5.25, 5.5)], lab_listing())
+    vw.main(argv)
+    assert "WARNING" in capsys.readouterr().out
+    # and one that lists it with another window kind was not made from these receipts
+    argv = write_data(tmp_path, door({5: 1, 6: 1}, FRIDAY), [receipt(5.25, 5.5)], lab_listing((receipt(5.25, 5.5)[1], "unknown")))
+    vw.main(argv)
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_a_lab_listing_one_receipt_does_not_silence_the_warning_for_another_in_the_same_minute(tmp_path, capsys):
+    # two unknown visits, fulfilled at 11:30:00 and 11:30:15; the lab data lists only the first
+    first = (FRIDAY + timedelta(hours=3.1), FRIDAY + timedelta(hours=4.5))
+    second = (FRIDAY + timedelta(hours=3.1), FRIDAY + timedelta(hours=4.5, seconds=15))
+    argv = write_data(tmp_path, door({3: 1}, FRIDAY), [first, second], lab_listing((first[1], "unknown")))
+    vw.main(argv)
+    assert "WARNING" in capsys.readouterr().out                         # old code matched on the minute: no warning
+    lab = lab_listing((first[1], "unknown"))
+    visits = vw.analyse(door({3: 1}, FRIDAY), polls(range(13), FRIDAY), [], lab, receipts=[first, second])["visits"]
+    assert [v["grade"] for v in visits] == [vw.NO_WINDOW_GRADE, None]
+    # listed with both, nothing is stale
+    argv = write_data(tmp_path, door({3: 1}, FRIDAY), [first, second], lab_listing((first[1], "unknown"), (second[1], "unknown")))
+    vw.main(argv)
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_a_minute_only_lab_entry_from_an_older_analysis_does_not_silence_the_warning_at_exactly_that_minute(tmp_path, capsys):
+    # a visit fulfilled at exactly 11:30:00; an older lab_data.json wrote "11:30" (no seconds), which reads as 11:30:00
+    first = (FRIDAY + timedelta(hours=3.1), FRIDAY + timedelta(hours=4.5))
+    lab = lab_listing((first[1], "unknown"))
+    lab["refill_evidence"]["visits_without_window"][0]["fulfilled_at"] = first[1].isoformat(timespec="minutes")
+    argv = write_data(tmp_path, door({3: 1}, FRIDAY), [first], lab)
+    vw.main(argv)
+    assert "WARNING" in capsys.readouterr().out
+    visits = vw.analyse(door({3: 1}, FRIDAY), polls(range(13), FRIDAY), [], lab, receipts=[first])["visits"]
+    assert visits[0]["grade"] is None
+
+
+def test_a_visit_without_a_door_window_is_graded_as_having_none(tmp_path):
+    done = receipt(5.25, 5.5)[1]
+    lab = lab_listing((done, "ambiguous"))
+    (v,) = vw.analyse(door({5: 1, 6: 1}, FRIDAY), polls(range(13), FRIDAY), [], lab, receipts=[receipt(5.25, 5.5)])["visits"]
+    assert v["window"] == "ambiguous" and v["grade"] == vw.NO_WINDOW_GRADE
+    assert vw.analyse(door({5: 1, 6: 1}, FRIDAY), polls(range(13), FRIDAY), [], None, receipts=[receipt(5.25, 5.5)])["visits"][0]["grade"] is None

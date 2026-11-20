@@ -579,6 +579,164 @@ def test_the_exports_stop_at_the_fall_cut(conn, schema_url, tmp_path, monkeypatc
     assert units == [0, 1, 1, 2]           # slot 15's rises only
 
 
+def _need_analysis():
+    """Skip, as the file's other analysis tests do, unless the analysis's own dependencies are installed. Call it before
+    importing pandas or sales_analysis: with statsmodels missing, the import of sales_analysis errors instead of skipping."""
+    for name in ("pandas", "statsmodels", "sklearn"):
+        pytest.importorskip(name)
+
+
+def _load_csvs(tmp_path, sales, readings):
+    """sales_analysis.load on CSVs written from `sales` rows (slot, at, units, cents) and `readings` rows (slot, at, lifetime
+    units, lifetime cents, price or "" for a blank). A normal run, the stored assignment REDRAWN."""
+    import argparse
+    import csv
+
+    _need_analysis()
+    import sales_analysis
+
+    def write(name, header, rows):
+        with open(tmp_path / name, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows([header, *rows])
+    write("s.csv", ["slot", "row", "col", "at_eastern", "units", "cents"], [(s, s[0], s[1], at, u, c) for s, at, u, c in sales])
+    write("r.csv", ["slot", "row", "col", "at_eastern", "lifetime_units", "lifetime_sales_cents", "price_cents"],
+          [(s, s[0], s[1], at, u, c, p) for s, at, u, c, p in readings])
+    write("p.csv", ["at_eastern"], [(at,) for at in sorted({r[1] for r in readings})])
+    write("m.csv", ["at_eastern", "units", "cents"], [(r[1], 0, 0) for r in readings[:1]])
+    (tmp_path / "cal.json").write_text("{}", encoding="utf-8")
+    sales_analysis.configure(slots_config.DEVICE_ID, REDRAWN, slots_config.SOURCE_SERVER, assigned=REDRAWN)
+    return sales_analysis.load(argparse.Namespace(
+        sales=tmp_path / "s.csv", readings=tmp_path / "r.csv", polls=tmp_path / "p.csv", machine=tmp_path / "m.csv",
+        calendar=tmp_path / "cal.json", doors=None, photos=tmp_path / "none.json", planogram=tmp_path / "none.json"))
+
+
+POLLS = [f"2026-12-10T{h:02d}:00:00-05:00" for h in (9, 10, 11)]
+BLANK_PRICE_READINGS = [("11", POLLS[0], 10, 1000, 150), ("11", POLLS[1], 4, 500, 150), ("11", POLLS[2], 12, 1400, 250),
+                        ("24", POLLS[0], 3, 750, 250), ("24", POLLS[1], 3, 750, ""), ("24", POLLS[2], 3, 750, 250)]
+
+
+def test_a_blank_price_in_one_slot_does_not_stop_another_slots_price_split(tmp_path):
+    # slot 11 listed 150 then 250 and sold 2 units for 400 cents over a window a misread widened (both counters read low at
+    # 10:00); slot 24's price is blank at 10:00. One blank makes pandas read the whole price column as floats.
+    _need_analysis()
+    from boundary_units import price_sales, priced_average
+    sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 2, 400)], BLANK_PRICE_READINGS)
+    assert reads.price_cents.dtype.kind == "f"                         # the premise: floats, with a NaN in them
+    r_ = reads[reads.slot == "11"].sort_values("t")
+    parts = price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
+                        [(r_.t.iloc[1], r_.t.iloc[2], 2, 400)])
+    assert [p[:5] for p in parts] == [(150, 250, 1, 1, 0)]             # one unit at each price: 150 + 250 = 400 cents
+    assert priced_average(parts) == (200, 0)
+    # the slot with the blank price: its own units are priced by what is known, and nothing raises
+    r_ = reads[reads.slot == "24"].sort_values("t")
+    out = price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
+                      [(r_.t.iloc[1], r_.t.iloc[2], 1, 250)])
+    assert out[0][:2] == (None, 250)
+
+
+FOUR_PRICE_READINGS = [("11", POLLS[0], 10, 1000, 1), ("11", POLLS[1], 4, 500, 10000),       # both counters misread at 10:00
+                       ("11", POLLS[2], 10010, 100001000, 20000), ("11", POLLS[2], 10010, 100001000, 30000)]   # two sessions, 11:00
+
+
+def test_price_slot_sales_prices_through_a_blank_and_flags_the_sales_whose_search_was_capped(tmp_path):
+    _need_analysis()
+    import pandas as pd
+
+    import sales_analysis
+    readings = FOUR_PRICE_READINGS + [r for r in BLANK_PRICE_READINGS if r[0] == "24"]         # slot 24: a blank price at 10:00
+    sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 10_000, 100_000_000), ("24", POLLS[2], 1, 250)], readings)
+    sales["prev"] = sales.t - pd.Timedelta(hours=1)
+    rd = reads.sort_values(["slot", "t"], kind="stable")
+    out = sales_analysis.price_slot_sales(sales.copy(), rd).set_index("slot")
+    assert tuple(out.loc["11", ["units_open", "units_close", "units_unknown"]]) == (0, 0, 10_000)   # four prices: capped, unknown
+    assert tuple(out.loc["24", ["units_open", "units_close", "units_unknown"]]) == (0, 1, 0)         # no price at the opening poll
+    assert dict(out.price_capped) == {"11": True, "24": False}
+
+
+def test_the_cap_report_counts_every_capped_window_and_says_how_many_are_in_the_average():
+    _need_analysis()
+    import pandas as pd
+
+    import sales_analysis
+    su = pd.DataFrame({"price_capped": [True, True, False]})       # a Saturday sale, a class-day sale, a sale that split
+    sc = su.iloc[[1, 2]]                                           # the class-day sales: the ones the average price uses
+    assert sales_analysis.capped_counts(su, sc) == {"price_capped_windows": 2, "price_capped_in_average": 1}
+    assert sales_analysis.capped_counts(su.iloc[[0]], su.iloc[[]]) == {"price_capped_windows": 1, "price_capped_in_average": 0}
+    assert sales_analysis.capped_note([{"price_capped_windows": 0, "price_capped_in_average": 0}, {}]) is None
+    note = sales_analysis.capped_note([{"price_capped_windows": 1, "price_capped_in_average": 1}, {"price_capped_windows": 1}])
+    assert "2 sale windows had too many" in note and "1 of them is in the regular-era class-day sales" in note
+    only_saturday = sales_analysis.capped_note([{"price_capped_windows": 1, "price_capped_in_average": 0}])     # old code: no note
+    assert "1 sale window had too many" in only_saturday and "none of them is in the regular-era class-day sales" in only_saturday
+
+
+def _fulfilled(conn, request_id, at):
+    """A fulfilled purchase request of ours, fulfilled at `at` (UTC text), with no lines: the receipt export needs nothing else."""
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status, fulfilled_at)"
+                 " values (%s, %s, false, '{}', 'fulfilled', %s)", (request_id, at, at))
+
+
+def test_the_fall_export_writes_only_receipts_before_the_fall_cut(conn, schema_url, tmp_path, monkeypatch):
+    import csv
+
+    monkeypatch.delenv(slots_config.FALL_CUTOFF_SETTING)                 # the default cut: 18 Nov, 00:00 Eastern
+    _store(conn, "p1", "2026-11-15T15:00:00Z", {"11": 5, "15": 7})
+    _fulfilled(conn, "before", "2026-11-17T15:00:00Z")
+    _fulfilled(conn, "just-before", "2026-11-18T04:59:59Z")             # 23:59:59 Eastern on 17 Nov
+    _fulfilled(conn, "at-the-cut", "2026-11-18T05:00:00Z")              # midnight Eastern: the cut
+    _fulfilled(conn, "day-one-fill", "2026-12-01T15:00:00Z")            # between the cut and the start
+    _fulfilled(conn, "after-start", "2026-12-10T15:00:00Z")
+
+    def receipts(out):
+        with open(out / "receipts.csv", newline="") as f:
+            return [r["fulfilled_at_eastern"] for r in csv.DictReader(f)]
+    _export(schema_url, tmp_path / "fall", "--fall-all")
+    assert receipts(tmp_path / "fall") == ["2026-11-17T10:00:00-05:00", "2026-11-17T23:59:59-05:00"]
+    # a normal export keeps every receipt of ours
+    _export(schema_url, tmp_path / "ours")
+    assert len(receipts(tmp_path / "ours")) == 5
+
+
+# --- sales_analysis.find_visits: with door data, and without it ---
+
+def _visit_run():
+    """The days of a run from 20 Nov to 11 Dec, polled from 21 Nov to 10 Dec: Fridays 20 Nov, 27 Nov, 4 Dec and 11 Dec."""
+    pytest.importorskip("pandas")
+    pytest.importorskip("statsmodels")
+    pytest.importorskip("sklearn")
+    import pandas as pd
+
+    import sales_analysis
+    dates = [dt.date(2026, 11, 20) + dt.timedelta(days=i) for i in range(22)]
+    return pd, sales_analysis, dates, pd.Timestamp("2026-11-21T00:00:00-05:00"), pd.Timestamp("2026-12-10T23:00:00-05:00")
+
+
+def test_without_door_data_visits_are_assumed_fridays_before_the_start_and_never_after_it():
+    pd, sales_analysis, dates, t0, t1 = _visit_run()
+    friday = dt.datetime(2026, 12, 4, 9, 40, tzinfo=EASTERN)
+    receipts = [(friday - dt.timedelta(minutes=30), friday)]
+    vis, unplaced = sales_analysis.find_visits(None, receipts, dates, t0, t1)
+    # 27 Nov only: 20 Nov is before the first poll, and 4 and 11 Dec are from the start on, where a receipt is the visit
+    assert [v["start"] for v in vis] == [pd.Timestamp("2026-11-27T08:00:00-05:00")]
+    (v,) = vis
+    assert v["openings"] is None and v["rise_polls"] == [v["start"]] and "no door data" in v["source"]
+    assert unplaced == [(friday, "unknown", ())]             # our receipt: a visit with no door window, not an assumed Friday
+    # with no receipts either, nothing is ours from the start on
+    assert sales_analysis.find_visits(None, [], dates, t0, t1) == (vis, [])
+
+
+def test_with_door_data_a_receipt_claims_its_window_and_a_door_only_rise_is_not_ours():
+    pd, sales_analysis, dates, t0, t1 = _visit_run()
+    friday = dt.datetime(2026, 12, 4, 7, tzinfo=EASTERN)
+    hours = [friday + dt.timedelta(hours=h) for h in range(13)]
+    life = [1000 + (h >= 3) + (h >= 6) for h in range(13)]                   # openings seen at 10:00 and 13:00
+    doors = pd.DataFrame({"t": [pd.Timestamp(h) for h in hours], "door_open_lifetime": life})
+    receipts = [(friday + dt.timedelta(hours=5, minutes=15), friday + dt.timedelta(hours=5, minutes=30))]
+    vis, unplaced = sales_analysis.find_visits(doors, receipts, dates, t0, t1)
+    (v,) = vis
+    assert unplaced == [] and v["source"] == "door counter" and v["openings"] == 1
+    assert (v["start"], v["end"]) == (pd.Timestamp(hours[5]), pd.Timestamp(hours[6]))
+
+
 def test_the_fall_section_shows_groups_never_one_selection_outside_ours():
     """The committed report is public: the fall section gives bands, shelves and halves, not one selection's rates."""
     pytest.importorskip("pandas")

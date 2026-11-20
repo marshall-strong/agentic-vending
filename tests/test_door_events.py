@@ -1,7 +1,7 @@
 """analysis/door_events.py: the door-open counter in a raw poll, and the rises export_sales.py writes to door_events.csv."""
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "analysis"))
@@ -112,3 +112,27 @@ def test_one_candidate_is_claimed_and_two_are_an_ambiguous_visit_that_claims_nei
                                                  (t0 + timedelta(hours=1), t0 + timedelta(hours=2)))])
     # the same receipt twice, or another receipt of the same two candidates, is still one visit
     assert len(our_visits(readings, [two, two, (two[0], t0 + timedelta(hours=1, minutes=40))])[1]) == 1
+
+
+def test_the_lab_listing_keeps_the_full_fulfilment_time_and_tells_receipts_of_one_minute_apart():
+    import json
+
+    from door_events import is_listed, unplaced_listing
+    done = datetime.fromisoformat("2026-12-04T11:30:00-05:00")
+    later = done + timedelta(seconds=15)
+    rises = (done - timedelta(hours=1), done)
+    listing = json.loads(json.dumps(unplaced_listing([(done, "unknown", ()), (later, "ambiguous", rises)])))     # as lab_data.json
+    assert listing[0] == {"fulfilled_at": "2026-12-04T11:30:00-05:00", "window": "unknown", "candidate_rises": []}
+    assert listing[1]["fulfilled_at"] == "2026-12-04T11:30:15-05:00"
+    assert listing[1]["candidate_rises"] == ["2026-12-04T10:30-05:00", "2026-12-04T11:30-05:00"]
+    assert is_listed(listing, done, "unknown") and is_listed(listing, later, "ambiguous")
+    assert not is_listed(listing, later, "unknown") and not is_listed(listing, done, "ambiguous")      # kind must match
+    assert not is_listed(listing, done + timedelta(seconds=1), "unknown")                               # to the second
+    assert is_listed(listing, done.astimezone(timezone.utc), "unknown")                                 # the same instant
+    # an entry from an older analysis (minutes only, which reads as :00 and would match a visit at exactly that minute), a
+    # naive time, or no time lists nothing
+    for odd in ({"fulfilled_at": "2026-12-04T11:30-05:00", "window": "unknown"},
+                {"fulfilled_at": "2026-12-04T11:30:00", "window": "unknown"},
+                {"fulfilled_at": None, "window": "unknown"}, {"window": "unknown"}):
+        assert not is_listed([odd], done, "unknown")
+    assert not is_listed([], done, "unknown")

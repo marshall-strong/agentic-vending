@@ -98,6 +98,33 @@ def our_visits(readings, receipts, start: datetime = START):
             sorted(unplaced.values()))
 
 
+def unplaced_listing(unplaced) -> list[dict]:
+    """The `unplaced` of `our_visits` as lab_data.json lists them (refill_evidence.visits_without_window).
+
+    `fulfilled_at` is the receipt's full timestamp, seconds included, because `is_listed` tells receipts apart by it:
+    two receipts of one minute are two visits. Candidate rises are shown to the minute, for people."""
+    return [{"fulfilled_at": done.isoformat(), "window": kind,
+             "candidate_rises": [c.isoformat(timespec="minutes") for c in cands]} for done, kind, cands in unplaced]
+
+
+def is_listed(listing, fulfilled_at: datetime, window: str) -> bool:
+    """Does `listing` (`unplaced_listing`, as read back from lab_data.json) list a visit fulfilled at exactly this instant
+    with this kind of window? An entry with no readable time, a naive one, or one with no seconds lists nothing: an
+    older analysis wrote minutes only, which `fromisoformat` reads as :00, so it would match a visit at exactly that
+    minute and hide that the file is old."""
+    for entry in listing:
+        text = str(entry.get("fulfilled_at", ""))
+        if not re.match(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}", text):
+            continue
+        try:
+            at = datetime.fromisoformat(text)
+        except ValueError:
+            continue
+        if at == fulfilled_at and entry.get("window") == window:       # a naive time never equals an aware one
+            return True
+    return False
+
+
 def our_windows(readings, receipts, start: datetime = START) -> list[tuple[datetime, datetime, int]]:
     """`(from, at, rise)` of the visits of ours that have a door window (`our_visits`; the others have none)."""
     return our_visits(readings, receipts, start)[0]
