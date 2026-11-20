@@ -195,7 +195,7 @@ def test_a_search_over_four_or_more_prices_stops_at_its_bound_and_leaves_the_uni
     assert split_among(20, 8000, prices) == [(100, 0), (200, 0), (300, 0), (400, 20)]       # all at the top: the one split
     assert split_among(2, 600, [100, 200, 300, 400, 500]) is None                             # 100+500, 200+400, 300+300
     assert split_among(2, 900, [100, 200, 300, 400, 500]) == [(100, 0), (200, 0), (300, 0), (400, 1), (500, 1)]
-    monkeypatch.setattr(boundary_units, "MAX_NODES", 3)
+    monkeypatch.setattr(boundary_units, "MAX_NODES", 0)
     assert split_among(20, 8000, prices) is None                                              # past the bound: unknown
     monkeypatch.undo()
     # a huge count over many prices ends at the bound, not after the counts
@@ -213,6 +213,51 @@ def test_a_proven_split_among_four_prices_is_found_whatever_the_number_of_units(
     # one unit one step down from all at the top price: still the only split, a billion units over
     assert split_among(10 ** 9, 4 * 10 ** 11 - 100, [100, 200, 300, 400]) == [
         (100, 0), (200, 0), (300, 1), (400, 10 ** 9 - 1)]
+
+
+def test_a_search_that_hits_its_cap_says_so_and_one_that_ends_on_its_own_does_not(monkeypatch):
+    import boundary_units
+
+    wide = [100, 200, 300, 400]                      # 20 units and 5,000 cents: many splits
+    for cap, said in ((0, True), (5_000, False)):    # a cap of 0 lets no step through
+        monkeypatch.setattr(boundary_units, "MAX_NODES", cap)
+        capped: list = []
+        assert split_among(20, 5_000, wide, capped) is None
+        assert bool(capped) is said                  # unknown by the cap when it can't search, several splits when it can
+    monkeypatch.setattr(boundary_units, "MAX_NODES", 1)
+    capped = []
+    assert split_among(20, 8_000, wide, capped) == [(100, 0), (200, 0), (300, 0), (400, 20)]   # one count to try: one step
+    assert capped == []
+    monkeypatch.setattr(boundary_units, "MAX_NODES", 0)
+    # turned away before any search, or solved without one: never the cap's doing, even with a cap of 0
+    for units, cents, prices in ((20, 8_001, wide), (-1, -100, wide), (20, None, wide), (20, 9_000, wide), (20, 5_000, [300, 100, 200])):
+        assert split_among(units, cents, prices, capped) is None
+    assert capped == []
+
+
+def test_price_sales_reports_which_sales_had_their_split_search_capped(monkeypatch):
+    import boundary_units
+
+    def gives_up(units, cents, prices, capped=None):       # a window with four prices is out of reach of real polls: stand in
+        if cents is not None:
+            capped.append(units)
+        return None
+    monkeypatch.setattr(boundary_units, "split_among", gives_up)
+    readings = [(T[0], 10, 1000, 150), (T[1], 4, 500, 250), (T[2], 13, 1650, 150)]
+    capped: list = []
+    parts = price_sales(readings, [(T[0], T[1], 1, 150), (T[1], T[2], 3, 650)], capped)
+    assert capped == [1] and parts[1][4] == 3              # the second sale, by its place in the list; its units unknown
+    assert price_sales(readings, [(T[1], T[2], 3, 650)])[0][4] == 3      # no list given: nothing to report to, nothing breaks
+
+
+def test_a_float_or_blank_price_is_read_as_whole_cents_or_not_at_all():
+    from boundary_units import price_value
+    nan = float("nan")
+    assert [price_value(p) for p in (150, 150.0, None, nan, float("inf"), 150.5, "x")] == [150, 150, None, None, None, None, None]
+    assert split_among(2, 400, [150.0, 250.0]) == [(150, 1), (250, 1)]              # floats, as pandas reads a column with a blank
+    assert split_among(2, 400, [150.0, nan, 250.0, None]) == [(150, 1), (250, 1)]   # the blank is left out, not a price
+    assert split_among(2, 300, [150.0, nan]) == [(150, 2)]
+    assert split_among(2, 300, [nan, None]) is None
 
 
 def test_split_among_refuses_a_negative_number_of_units():

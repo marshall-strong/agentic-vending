@@ -227,6 +227,32 @@ def local_at(d, hour=0):
     return pd.Timestamp(dt.datetime.combine(d, dt.time(hour))).tz_localize(TZ)
 
 
+def price_slot_sales(sales, rd):
+    """`sales` with the price columns `boundary_units.price_sales` gives each sale (the opening and closing price, the units
+    at each, the units unknown, the units at another price) and `price_capped`: True when the sale's units are unknown
+    because the split search hit its cap (not because no split fits). `rd` is the slot readings, `sales` has `prev`.
+    A blank price in the readings is no price (boundary_units.price_value), and pandas' floats are whole cents."""
+    priced, capped = {}, set()
+    for s, g in sales.groupby("slot"):
+        r_ = rd[rd.slot == s]
+        hit: list[int] = []
+        priced.update(zip(g.index, price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
+                                               list(zip(g.prev, g.t, g.units, g.cents)), hit)))
+        capped.update(g.index[k] for k in hit)
+    for k, col in enumerate(["price_at_sale", "price_close", "units_open", "units_close", "units_unknown", "units_other"]):
+        sales[col] = [priced[i][k] for i in sales.index]
+    sales["price_capped"] = [i in capped for i in sales.index]
+    return sales
+
+
+def capped_note(slot_rows) -> str | None:
+    """The report's sentence on sales whose split search hit its cap (`price_capped_windows` of the slot rows), or None."""
+    n = sum(r.get("price_capped_windows", 0) for r in slot_rows)
+    return (f"Price split cap: {n} sale window{'s' if n != 1 else ''} had too many price combinations to search "
+            f"(boundary_units.MAX_NODES), so {'their' if n != 1 else 'its'} units are counted as unknown and left out of the "
+            "average price, though a split may exist.") if n else None
+
+
 def find_visits(doors, receipts, dates, t0, t1):
     """`(visits, unplaced)`: our restock visits and our receipts with no door window (door_events.our_visits).
 
@@ -1310,17 +1336,11 @@ def main():
     #    in one of them moves its window's start); a price listed only between the two (150, 250, 150 across a window
     #    widened by a misread) is a price the units may have sold at too, so every price seen in the window takes part, and
     #    the split must be the one whole split that fits; units the counters can't split are left out of the average price and
-    #    counted in price_unknown_units, never credited to the opening price. Takings (cents) are never changed.
+    #    counted in price_unknown_units, never credited to the opening price (a search over four or more prices that hits its
+    #    cap leaves them unknown too, and says so in price_capped_windows and the report). Takings (cents) are never changed.
     #  * price on a day (slot_daily.p) = the listed price at 12:00 noon ET: the last reading before noon, or, on a day with
     #    no reading before noon, the day's first reading; days with no reading carry the last price forward.
-    priced = {}
-    for s, g in sales.groupby("slot"):
-        r_ = rd[rd.slot == s]
-        priced.update(zip(g.index, price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
-                                               list(zip(g.prev, g.t, g.units, g.cents)))))
-    for k, col in enumerate(["price_at_sale", "price_close", "units_open", "units_close", "units_unknown", "units_other"]):
-        sales[col] = [priced[i][k] for i in sales.index]
-    sales = sales.sort_values(["t", "slot"]).reset_index(drop=True)
+    sales = price_slot_sales(sales, rd).sort_values(["t", "slot"]).reset_index(drop=True)
     sale_list = {s: list(sales[sales.slot == s].sort_values("t")[["prev", "t", "units"]].itertuples(index=False)) for s in slots}
     rd["date"] = rd.t.dt.date
     noon_last = rd[rd.t.dt.hour < 12].groupby(["date", "slot"]).price_cents.last()
@@ -1351,6 +1371,7 @@ def main():
             instock_class_days=rate_rows[s]["instock_days_all"], class_days=len(reg_class),
             rate=rate_rows[s]["rate_all"], rate_recent=rate_rows[s]["rate_recent"],
             avg_price=avg_p / 100, avg_price_rule=avg_rule, price_unknown_units=int(unknown),
+            price_capped_windows=int(sc.price_capped.sum()),
             current_price=int(rd[rd.slot == s].price_cents.iloc[-1]),
             fri_share=float(fri_units / wd_tot) if wd_tot else 0.0,
             zero_week_share=float((wk_units == 0).mean()) if len(wk_units) else None,
@@ -2570,6 +2591,9 @@ def write_report(path, L):
           "prices if one whole split fits; units they can't split are left out of the average price. The price on a day is the listed price "
           "at 12:00 noon ET (last reading before noon, else the day's first reading); a slot with no sale at a known price takes that "
           "noon price as its average.")
+        w("")
+    if capped_note(L["slot_rows"]):
+        w(capped_note(L["slot_rows"]))
         w("")
     w("## Slow-seller rule: what to change in the agent's guideline")
     w("")

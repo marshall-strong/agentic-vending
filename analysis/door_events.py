@@ -109,10 +109,15 @@ def unplaced_listing(unplaced) -> list[dict]:
 
 def is_listed(listing, fulfilled_at: datetime, window: str) -> bool:
     """Does `listing` (`unplaced_listing`, as read back from lab_data.json) list a visit fulfilled at exactly this instant
-    with this kind of window? An entry with no readable time, or a naive one, lists nothing."""
+    with this kind of window? An entry with no readable time, a naive one, or one with no seconds lists nothing: an
+    older analysis wrote minutes only, which `fromisoformat` reads as :00, so it would match a visit at exactly that
+    minute and hide that the file is old."""
     for entry in listing:
+        text = str(entry.get("fulfilled_at", ""))
+        if not re.match(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}", text):
+            continue
         try:
-            at = datetime.fromisoformat(str(entry.get("fulfilled_at", "")))
+            at = datetime.fromisoformat(text)
         except ValueError:
             continue
         if at == fulfilled_at and entry.get("window") == window:       # a naive time never equals an aware one

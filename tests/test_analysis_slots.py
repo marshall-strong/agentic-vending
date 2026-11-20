@@ -606,15 +606,15 @@ def _load_csvs(tmp_path, sales, readings):
 
 
 POLLS = [f"2026-12-10T{h:02d}:00:00-05:00" for h in (9, 10, 11)]
+BLANK_PRICE_READINGS = [("11", POLLS[0], 10, 1000, 150), ("11", POLLS[1], 4, 500, 150), ("11", POLLS[2], 12, 1400, 250),
+                        ("24", POLLS[0], 3, 750, 250), ("24", POLLS[1], 3, 750, ""), ("24", POLLS[2], 3, 750, 250)]
 
 
 def test_a_blank_price_in_one_slot_does_not_stop_another_slots_price_split(tmp_path):
     # slot 11 listed 150 then 250 and sold 2 units for 400 cents over a window a misread widened (both counters read low at
     # 10:00); slot 24's price is blank at 10:00. One blank makes pandas read the whole price column as floats.
     from boundary_units import price_sales, priced_average
-    readings = [("11", POLLS[0], 10, 1000, 150), ("11", POLLS[1], 4, 500, 150), ("11", POLLS[2], 12, 1400, 250),
-                ("24", POLLS[0], 3, 750, 250), ("24", POLLS[1], 3, 750, ""), ("24", POLLS[2], 3, 750, 250)]
-    sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 2, 400)], readings)
+    sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 2, 400)], BLANK_PRICE_READINGS)
     assert reads.price_cents.dtype.kind == "f"                         # the premise: floats, with a NaN in them
     r_ = reads[reads.slot == "11"].sort_values("t")
     parts = price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
@@ -626,6 +626,38 @@ def test_a_blank_price_in_one_slot_does_not_stop_another_slots_price_split(tmp_p
     out = price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
                       [(r_.t.iloc[1], r_.t.iloc[2], 1, 250)])
     assert out[0][:2] == (None, 250)
+
+
+def test_price_slot_sales_prices_through_a_blank_and_flags_the_sales_whose_search_was_capped(tmp_path, monkeypatch):
+    import pandas as pd
+
+    import sales_analysis
+    sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 2, 400), ("24", POLLS[2], 1, 250)], BLANK_PRICE_READINGS)
+    sales["prev"] = sales.t - pd.Timedelta(hours=1)
+    rd = reads.sort_values(["slot", "t"])
+    out = sales_analysis.price_slot_sales(sales.copy(), rd).set_index("slot")
+    assert tuple(out.loc["11", ["units_open", "units_close", "units_unknown"]]) == (1, 1, 0)
+    assert tuple(out.loc["24", ["units_open", "units_close", "units_unknown"]]) == (0, 1, 0)      # no price at the opening poll
+    assert not out.price_capped.any()
+    real = sales_analysis.price_sales
+
+    def capping(readings, sales_, capped=None):        # a window with four prices is out of reach of real polls: stand in
+        if capped is not None and sales_[0][2] == 1:
+            capped.append(0)
+        return real(readings, sales_)
+    monkeypatch.setattr(sales_analysis, "price_sales", capping)
+    out = sales_analysis.price_slot_sales(sales.copy(), rd).set_index("slot")
+    assert dict(out.price_capped) == {"11": False, "24": True}
+
+
+def test_the_report_says_how_many_sale_windows_the_price_split_search_gave_up_on():
+    pytest.importorskip("pandas")
+    pytest.importorskip("statsmodels")
+    pytest.importorskip("sklearn")
+    import sales_analysis
+    assert sales_analysis.capped_note([{"price_capped_windows": 0}, {}]) is None
+    assert "1 sale window had too many" in sales_analysis.capped_note([{"price_capped_windows": 1}])
+    assert "3 sale windows had too many" in sales_analysis.capped_note([{"price_capped_windows": 2}, {"price_capped_windows": 1}])
 
 
 def _fulfilled(conn, request_id, at):

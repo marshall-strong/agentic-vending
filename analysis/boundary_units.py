@@ -30,6 +30,20 @@ def split_boundary(units: int, cents: int | None, p_open: int | None, p_close: i
 MAX_NODES = 5_000        # the most steps a search over four or more prices may take; past it the units stay unknown
 
 
+def price_value(price) -> int | None:
+    """A listed price as a whole number of cents, or None when there is none to read.
+
+    pandas reads a price column with one blank as floats (150.0, and NaN for the blank), so a price may come in as a float,
+    a numpy number or NaN. A blank, NaN, infinite or fractional price is no price: None, never a guess."""
+    try:
+        if price is None or price != price or price in (float("inf"), float("-inf")):
+            return None
+        whole = int(price)
+    except (TypeError, ValueError, OverflowError):                   # also pandas' NA, which has no truth value
+        return None
+    return whole if whole == price else None
+
+
 def _three(units: int, cents: int, prices: list[int]) -> tuple[int, list[tuple[int, int]] | None]:
     """`(how many whole splits fit, one of them)` of `units` and `cents` among three prices, counted up to a limit, not searched.
 
@@ -52,18 +66,19 @@ def _three(units: int, cents: int, prices: list[int]) -> tuple[int, list[tuple[i
     return steps + 1, [(a, units - y0 - z0), (b, y0), (c, z0)]
 
 
-def split_among(units: int, cents: int | None, prices: list[int]) -> list[tuple[int, int]] | None:
+def split_among(units: int, cents: int | None, prices: list[int], capped: list | None = None) -> list[tuple[int, int]] | None:
     """`(price, units)` for each of `prices` when exactly one way of selling `units` at them takes in `cents`, else None.
 
     None means no whole split fits (a misread, or a price not seen) or several do, so nothing says which: the units are
-    unknown, not credited to any price. Needs `cents` and a number of units that isn't negative; the prices are listed
-    once each.
+    unknown, not credited to any price. Needs `cents` and a number of units that isn't negative. The prices are read
+    with `price_value`: one that isn't a whole number of cents (a blank, NaN) is left out, and each is used once.
 
     The work is bounded however large the counters' jump is. Every sale is `units * lowest price` plus a whole
     number of the prices' differences, so a total that isn't is turned away at once (the gcd of the differences). One,
-    two and three prices are solved algebraically. Four or more are searched over all but the last three, and the search
-    stops after MAX_NODES steps: the units are then unknown, not guessed."""
-    prices = sorted(set(prices))
+    two and three prices are solved algebraically. Four or more are searched over all but the last three, each of the
+    others only over the counts the takings leave room for, and the search stops after MAX_NODES steps: the units are then
+    unknown, not guessed, and `capped` (a list, when given) gets an item, so the caller can say the cap was the cause."""
+    prices = sorted({p for p in map(price_value, prices) if p is not None})
     if units < 0 or cents is None or not prices:
         return None
     extra = cents - units * prices[0]
@@ -90,24 +105,27 @@ def split_among(units: int, cents: int | None, prices: list[int]) -> list[tuple[
             count, split = _three(left, owed, prices[i:])
             found.extend([[*taken, *split]] * min(count, 2) if split else [])
             return True
-        for n in range(left + 1):
+        # n units at this price leave `left - n` for the dearer ones, which take in at least `nxt` and at most `top` each:
+        # nxt*(left - n) <= owed - n*p <= top*(left - n). Solving for n gives the only counts worth trying.
+        p, nxt, top = prices[i], prices[i + 1], prices[-1]
+        for n in range(max(0, -((owed - nxt * left) // (nxt - p))), min(left, (top * left - owed) // (top - p)) + 1):
             budget -= 1
             if budget < 0:
                 return False
-            after, left_over = owed - n * prices[i], left - n
-            if prices[i + 1] * left_over <= after <= prices[-1] * left_over:      # what's left can still be reached
-                if not walk(i + 1, left_over, after, [*taken, (prices[i], n)]):
-                    return False
-                if len(found) > 1:
-                    return True
+            if not walk(i + 1, left - n, owed - n * p, [*taken, (p, n)]):
+                return False
+            if len(found) > 1:
+                return True
         return True
 
     if not walk(0, units, cents, []):
+        if capped is not None:
+            capped.append(units)
         return None
     return found[0] if len(found) == 1 else None
 
 
-def price_sales(readings, sales) -> list[tuple[int | None, int | None, int, int, int, tuple[tuple[int, int], ...]]]:
+def price_sales(readings, sales, capped: list | None = None) -> list[tuple[int | None, int | None, int, int, int, tuple[tuple[int, int], ...]]]:
     """What each sale of one slot sold at: `(opening price, closing price, units at opening, at closing, unknown, other)`.
 
     `readings`: `(at, lifetime units, lifetime cents, price)` for each poll of the slot. `sales`: `(prev, at, units,
@@ -125,14 +143,18 @@ def price_sales(readings, sales) -> list[tuple[int | None, int | None, int, int,
 
     The units and cents of a poll can be measured from different polls (vending.counters.windows: a misread in one
     counter and not the other). Then the cents do not cover the same units, so a sale whose prices differ is not
-    split: its units are unknown, and the cents stay in the slot's takings."""
-    readings = sorted(readings, key=lambda r: r[0])
+    split: its units are unknown, and the cents stay in the slot's takings.
+
+    Prices are read with `price_value`, so floats from a CSV column with a blank, and the blank itself (NaN), are fine: a
+    reading with no price is None. When `capped` is a list, it gets the position (in `sales`) of each sale whose split
+    search hit MAX_NODES: its units are unknown because of the cap, not because no split fits."""
+    readings = sorted(((at, u, c, price_value(p)) for at, u, c, p in readings), key=lambda r: r[0])
     times = [r[0] for r in readings]
     close = {at: price for at, _, _, price in readings}
     unit_from = {at: s for s, at, _ in windows((at, u) for at, u, _, _ in readings)}
     cents_from = {at: s for s, at, _ in windows((at, c) for at, _, c, _ in readings)}
     out = []
-    for prev, at, units, cents in sales:
+    for k, (prev, at, units, cents) in enumerate(sales):
         i = bisect_right(times, unit_from.get(at, prev))
         first = max(i - 1, 0)
         opening = readings[first][3] if readings else None
@@ -143,7 +165,10 @@ def price_sales(readings, sales) -> list[tuple[int | None, int | None, int, int,
         if len(seen) < 2:                       # one price all through the window (or none seen): nothing to split
             out.append((opening, closing, *split_boundary(int(units), cents, opening, closing), ()))
             continue
-        split = split_among(int(units), cents, seen)          # a missing end price doesn't hide the prices that were seen
+        hit: list = []
+        split = split_among(int(units), cents, seen, hit)     # a missing end price doesn't hide the prices that were seen
+        if hit and capped is not None:
+            capped.append(k)
         if split is None:
             out.append((opening, closing, 0, 0, int(units), ()))
             continue
