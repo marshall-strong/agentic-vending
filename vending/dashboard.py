@@ -49,6 +49,7 @@ The page, top to bottom:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
@@ -69,6 +70,7 @@ from psycopg.types.json import set_json_loads
 from vending import capacity, db, leaderboards, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
 from vending import pricing_panel
 from vending import stock as stock_mod
+from vending import planner
 from vending.planner import IN_STORE_CUTOFF
 from vending.slots import DEVICE_ID, RECORD_HINT, SlotsNotRecorded, lock_at, our_slots
 from vending.tools import machine_state
@@ -1629,20 +1631,31 @@ def _switched(verb: str, at: datetime | None, by: str | None, now: datetime) -> 
             + (f" by {_e(by)}" if by else ""))
 
 
+# The planner's week and zone, as its `Config` defaults them, so the page reads the cutoff as it does.
+_PLANNER_DEFAULTS = {f.name: f.default for f in dataclasses.fields(planner.Config)
+                     if f.name in ("week_starts", "timezone")}
+
+
 def _restock(plan: dict | None) -> str | None:
     """The restock an agent's plan is for, in words. Almost every restock is the free Friday visit:
-    "Fri 4 Dec", the Friday after the order cutoff that follows the plan's run. A paid midweek visit
-    is a restock too: "midweek visit", since the plan records no date for it. None without a plan,
-    or without the time-zone data to place the cutoff."""
+    "Fri 4 Dec", the Friday the planner would still buy for when the plan's run started. That is the
+    planner's own rule (`planner._past_cutoff`, `planner._week_of`): its week turns over on
+    Saturday, and the cutoff passes only after the cutoff minute, so a run at 23:59:59 Thursday is
+    still for this Friday. A paid midweek visit is a restock too: "midweek visit", since the plan
+    records no date for it. None without a plan, or without the time-zone data to place the cutoff."""
     if not plan:
         return None
     if plan.get("visit") == "midweek":
         return "midweek visit"
-    cutoff = next_cutoff(plan["run"]["started_at"])
-    if cutoff is None:
+    try:
+        local = plan["run"]["started_at"].astimezone(planner._tz(_PLANNER_DEFAULTS["timezone"]))
+    except Exception:   # Windows without the tzdata package
         return None
-    day = cutoff + timedelta(days=1)          # the cutoff is Thursday 23:59 Eastern; the visit is Friday
-    return f"{day:%a} {day.day} {day:%b}"
+    week_starts = _PLANNER_DEFAULTS["week_starts"]
+    friday = planner._week_of(local, week_starts) + timedelta(days=(4 - week_starts) % 7)
+    if planner._past_cutoff(local, IN_STORE_CUTOFF, week_starts):
+        friday += timedelta(days=7)
+    return f"{friday:%a} {friday.day} {friday:%b}"
 
 
 def next_sync(now: datetime, syncs: dict | None = None) -> datetime | None:

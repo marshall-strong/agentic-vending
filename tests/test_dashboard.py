@@ -1663,3 +1663,26 @@ def test_a_wildcard_that_is_not_ours_is_never_marked(conn, page_conn, even_colum
     assert snap["wildcard"] is None and ' fc-wild"' not in page and 'class="ma-wl"' not in page
     assert "<dt>Wildcard</dt>" not in page and ">wildcard</span>" not in page
     assert 'data-sel="37"' not in page
+
+
+# Thursdays either side of both 2026 clock changes (8 Mar, 1 Nov), in Eastern.
+_DST_THURSDAYS = ((2026, 3, 5), (2026, 3, 12), (2026, 10, 29), (2026, 11, 5))
+
+
+@pytest.mark.parametrize("thursday", _DST_THURSDAYS)
+@pytest.mark.parametrize("clock, same_week", [((23, 58, 59), True), ((23, 59, 0), True), ((23, 59, 59), True),
+                                              (None, False)])        # None: Friday 00:00:00
+def test_the_restock_date_follows_the_planners_cutoff_minute(thursday, clock, same_week):
+    """The planner still accepts this Friday's purchases through 23:59:59 Thursday (`planner._past_cutoff`
+    is past only after the cutoff minute), so the page names this Friday until midnight."""
+    zoneinfo = pytest.importorskip("zoneinfo")
+    try:
+        eastern = zoneinfo.ZoneInfo("America/New_York")
+    except zoneinfo.ZoneInfoNotFoundError:
+        pytest.skip("no IANA time-zone data")
+    thu = datetime(*thursday, tzinfo=eastern)
+    local = (thu.replace(hour=clock[0], minute=clock[1], second=clock[2]) if clock
+             else thu + timedelta(days=1))
+    friday = thu + timedelta(days=1 if same_week else 8)
+    shown = dashboard._restock({"visit": "scheduled", "run": {"started_at": local.astimezone(timezone.utc)}})
+    assert shown == f"{friday:%a} {friday.day} {friday:%b}", (local, shown)
