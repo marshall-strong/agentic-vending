@@ -235,19 +235,40 @@ def test_a_search_that_hits_its_cap_says_so_and_one_that_ends_on_its_own_does_no
     assert capped == []
 
 
-def test_price_sales_reports_which_sales_had_their_split_search_capped(monkeypatch):
-    import boundary_units
+FOUR_PRICES = [(T[0], 10, 1000, 1), (T[1], 4, 500, 10000), (T[2], 10010, 100001000, 20000), (T[2], 10010, 100001000, 30000)]
 
-    def gives_up(units, cents, prices, capped=None):       # a window with four prices is out of reach of real polls: stand in
-        if cents is not None:
-            capped.append(units)
-        return None
-    monkeypatch.setattr(boundary_units, "split_among", gives_up)
-    readings = [(T[0], 10, 1000, 150), (T[1], 4, 500, 250), (T[2], 13, 1650, 150)]
+
+def test_price_sales_reports_which_sales_had_their_split_search_capped():
+    # Four prices reach one window: both counters misread at 10:00, and two poll sessions share the 11:00 timestamp (prices
+    # 20000 and 30000). 10,000 units and 100,000,000 cents have too many splits to search; they stay unknown, and say so
     capped: list = []
-    parts = price_sales(readings, [(T[0], T[1], 1, 150), (T[1], T[2], 3, 650)], capped)
-    assert capped == [1] and parts[1][4] == 3              # the second sale, by its place in the list; its units unknown
-    assert price_sales(readings, [(T[1], T[2], 3, 650)])[0][4] == 3      # no list given: nothing to report to, nothing breaks
+    sales = [(T[0], T[1], 1, 1), (T[1], T[2], 10_000, 100_000_000)]
+    parts = price_sales(FOUR_PRICES, sales, capped)
+    assert capped == [1] and parts[1][4] == 10_000          # the second sale, by its place in the list
+    assert parts[1][:4] == (1, 30000, 0, 0)
+    assert price_sales(FOUR_PRICES, sales[1:])[0][4] == 10_000      # no list given: nothing to report to, nothing breaks
+    # a sale that can be split is not reported
+    capped = []
+    easy = [(T[0], 10, 1000, 150), (T[1], 4, 500, 250), (T[2], 13, 1650, 150)]
+    assert price_sales(easy, [(T[1], T[2], 3, 650)], capped)[0][4] == 0
+    assert capped == []
+
+
+def test_a_sale_with_no_price_anywhere_in_its_window_is_unknown_not_credited_to_a_missing_price():
+    readings = [(T[0], 0, 0, None), (T[1], 1, 150, None)]
+    assert price_sales(readings, [(T[0], T[1], 1, 150)]) == [(None, None, 0, 0, 1, ())]
+    assert average(readings, [(T[0], T[1], 1, 150)]) == (None, 1)              # old code: a TypeError averaging None
+
+
+def test_the_one_known_price_in_a_window_is_an_inside_reading_and_its_units_are_other():
+    # no price at either end of the window, 150 at the misread poll between: the unit sold at 150 or at an unlisted price;
+    # the one price known is the only one to credit it to
+    readings = [(T[0], 10, 1000, None), (T[1], 4, 500, 150), (T[2], 11, 1150, None)]
+    assert price_sales(readings, [(T[1], T[2], 1, 150)]) == [(None, None, 0, 0, 0, ((150, 1),))]
+    assert average(readings, [(T[1], T[2], 1, 150)]) == (150, 0)
+    # the known price at an end is still that end's: the opening, the closing, or both
+    assert price_sales([(T[0], 0, 0, 150), (T[1], 1, 150, None)], [(T[0], T[1], 1, 150)])[0][2:] == (1, 0, 0, ())
+    assert price_sales([(T[0], 0, 0, None), (T[1], 1, 150, 150)], [(T[0], T[1], 1, 150)])[0][2:] == (0, 1, 0, ())
 
 
 def test_a_float_or_blank_price_is_read_as_whole_cents_or_not_at_all():

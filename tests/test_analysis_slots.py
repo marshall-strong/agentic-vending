@@ -628,36 +628,45 @@ def test_a_blank_price_in_one_slot_does_not_stop_another_slots_price_split(tmp_p
     assert out[0][:2] == (None, 250)
 
 
-def test_price_slot_sales_prices_through_a_blank_and_flags_the_sales_whose_search_was_capped(tmp_path, monkeypatch):
+FOUR_PRICE_READINGS = [("11", POLLS[0], 10, 1000, 1), ("11", POLLS[1], 4, 500, 10000),       # both counters misread at 10:00
+                       ("11", POLLS[2], 10010, 100001000, 20000), ("11", POLLS[2], 10010, 100001000, 30000)]   # two sessions, 11:00
+
+
+def test_price_slot_sales_prices_through_a_blank_and_flags_the_sales_whose_search_was_capped(tmp_path):
+    _need_analysis()
     import pandas as pd
 
     import sales_analysis
-    sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 2, 400), ("24", POLLS[2], 1, 250)], BLANK_PRICE_READINGS)
+    readings = FOUR_PRICE_READINGS + [r for r in BLANK_PRICE_READINGS if r[0] == "24"]         # slot 24: a blank price at 10:00
+    sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 10_000, 100_000_000), ("24", POLLS[2], 1, 250)], readings)
     sales["prev"] = sales.t - pd.Timedelta(hours=1)
-    rd = reads.sort_values(["slot", "t"])
+    rd = reads.sort_values(["slot", "t"], kind="stable")
     out = sales_analysis.price_slot_sales(sales.copy(), rd).set_index("slot")
-    assert tuple(out.loc["11", ["units_open", "units_close", "units_unknown"]]) == (1, 1, 0)
-    assert tuple(out.loc["24", ["units_open", "units_close", "units_unknown"]]) == (0, 1, 0)      # no price at the opening poll
-    assert not out.price_capped.any()
-    real = sales_analysis.price_sales
-
-    def capping(readings, sales_, capped=None):        # a window with four prices is out of reach of real polls: stand in
-        if capped is not None and sales_[0][2] == 1:
-            capped.append(0)
-        return real(readings, sales_)
-    monkeypatch.setattr(sales_analysis, "price_sales", capping)
-    out = sales_analysis.price_slot_sales(sales.copy(), rd).set_index("slot")
-    assert dict(out.price_capped) == {"11": False, "24": True}
+    assert tuple(out.loc["11", ["units_open", "units_close", "units_unknown"]]) == (0, 0, 10_000)   # four prices: capped, unknown
+    assert tuple(out.loc["24", ["units_open", "units_close", "units_unknown"]]) == (0, 1, 0)         # no price at the opening poll
+    assert dict(out.price_capped) == {"11": True, "24": False}
 
 
-def test_the_report_says_how_many_sale_windows_the_price_split_search_gave_up_on():
-    pytest.importorskip("pandas")
-    pytest.importorskip("statsmodels")
-    pytest.importorskip("sklearn")
+def test_the_cap_report_counts_every_capped_window_and_says_how_many_are_in_the_average():
+    _need_analysis()
+    import pandas as pd
+
     import sales_analysis
-    assert sales_analysis.capped_note([{"price_capped_windows": 0}, {}]) is None
-    assert "1 sale window had too many" in sales_analysis.capped_note([{"price_capped_windows": 1}])
-    assert "3 sale windows had too many" in sales_analysis.capped_note([{"price_capped_windows": 2}, {"price_capped_windows": 1}])
+    su = pd.DataFrame({"price_capped": [True, True, False]})       # a Saturday sale, a class-day sale, a sale that split
+    sc = su.iloc[[1, 2]]                                           # the class-day sales: the ones the average price uses
+    assert sales_analysis.capped_counts(su, sc) == {"price_capped_windows": 2, "price_capped_in_average": 1}
+    assert sales_analysis.capped_counts(su.iloc[[0]], su.iloc[[]]) == {"price_capped_windows": 1, "price_capped_in_average": 0}
+    assert sales_analysis.capped_note([{"price_capped_windows": 0, "price_capped_in_average": 0}, {}]) is None
+    note = sales_analysis.capped_note([{"price_capped_windows": 1, "price_capped_in_average": 1}, {"price_capped_windows": 1}])
+    assert "2 sale windows had too many" in note and "1 of them is in the regular-era class-day sales" in note
+    only_saturday = sales_analysis.capped_note([{"price_capped_windows": 1, "price_capped_in_average": 0}])     # old code: no note
+    assert "1 sale window had too many" in only_saturday and "none of them is in the regular-era class-day sales" in only_saturday
+
+
+def _need_analysis():
+    """Skip, as the file's other analysis tests do, unless the analysis's own dependencies are installed."""
+    for name in ("pandas", "statsmodels", "sklearn"):
+        pytest.importorskip(name)
 
 
 def _fulfilled(conn, request_id, at):
