@@ -348,6 +348,23 @@ def test_an_unsplit_window_is_estimated_at_the_midpoint_only_when_both_candidate
     assert [(s.cost_cents, s.estimated_cost_cents) for s in split.sales] == [(50, None), (150, None)]
 
 
+def test_the_old_candidate_cost_is_the_unit_a_sale_before_the_pull_would_have_taken():
+    # #172 review: 1 Arizona at 50c, a top-up of 1 at 300c, then the swap pulls 1. If the unsplit
+    # sale was the Arizona it took the 50c unit first in, first out, and the pull took the 300c one,
+    # so the midpoint with a 150c Red Bull is 100c, not 225c.
+    one_unit = [("15", hours(2), 100, 20000, 200), ("15", hours(5), 101, 20300, 400)]   # 300c: no split
+    swap_line = line(sku="REDBULL", units_loaded=10, total_paid="15.00", units_pulled=1, pulled_sku="ARIZONA",
+                     slot_reassigned=True, at=3, request_id="r2")
+    topped_up = [line(sku="ARIZONA", units_loaded=1, total_paid="0.50"),
+                 line(sku="ARIZONA", units_loaded=1, total_paid="3.00", at=1, request_id="r1b"), swap_line]
+    [sale] = book(topped_up, counters=one_unit).sales
+    assert (sale.product, sale.estimated_cost_cents) == (None, 100)
+    # A pull that empties the slot leaves the candidate it would have sold: still 100c.
+    emptied = [line(sku="ARIZONA", units_loaded=1, total_paid="0.50"), swap_line]
+    [sale] = book(emptied, counters=one_unit).sales
+    assert (sale.product, sale.estimated_cost_cents) == (None, 100)
+
+
 def test_a_poll_during_the_visit_starts_a_window_of_only_the_new_product():
     # Marshall's case: Arizona at $2.50 swapped for Red Bull at $3.50. The price is set during
     # the visit, a poll lands at 2h45m with the new price, and the receipt resolves at 3h.

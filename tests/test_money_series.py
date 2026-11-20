@@ -15,7 +15,7 @@ psycopg = pytest.importorskip("psycopg")
 
 from tests.conftest import store_poll  # noqa: E402
 from tests.test_ledger import (  # noqa: E402
-    EASTERN, NOW, OPENED, SWAP_ESTIMATE, UNIT_COST, deliver, open_ledger, sell, unsplit_swap,
+    EASTERN, NOW, OPENED, SWAP_ESTIMATE, UNIT_COST, deliver, open_ledger, sell, swap_receipts, unsplit_swap,
 )
 from tests.test_sync_requests import BODY, fulfilled, later, receipt  # noqa: E402
 from vending import ledger, money_series  # noqa: E402
@@ -36,6 +36,7 @@ PNL = {
     "purchases_cents": lambda p: p.receipts_cents, "capital_cents": lambda p: p.capital_cents,
     "tax_remitted_cents": lambda p: p.tax_remitted_cents, "units_estimated": lambda p: p.units_estimated,
     "estimated_cost_of_sales_cents": lambda p: p.estimated_cost_of_sales_cents,
+    "unattributed_stock_cents": lambda p: p.unattributed_stock_cents,
 }
 
 
@@ -133,12 +134,12 @@ def test_a_counter_misread_or_restart_is_read_as_the_ledger_reads_it(conn):
     assert [d.takings_cents for d in days] == [300, 200, 0, 200]
     assert_adds_up_to_pnl(conn, days, date(2026, 11, 3), date(2026, 11, 6))
     assert_cash_is_the_balance(conn, days)
-    # Why the days are cut from one window rather than each being its own: a window that starts
-    # just after the misread takes it as its baseline and books the gap as sales.
-    assert ledger.pnl(conn, *window(date(2026, 11, 4), date(2026, 11, 4))).units_sold == 104
-    # A series that starts there matches that P&L, as promised, but its cash is still the balance.
+    # A window that starts just after the misread reads the counters from the same history as the
+    # stock replay, so the misread is still a misread there: 2 sold, not the gap of 104 (#172 review).
+    assert ledger.pnl(conn, *window(date(2026, 11, 4), date(2026, 11, 4))).units_sold == 2
+    # A series that starts there matches that P&L, and its cash is still the balance.
     later_start = daily(conn, date(2026, 11, 4), date(2026, 11, 6), now=AFTER)
-    assert later_start[0].units_sold == 104
+    assert [d.units_sold for d in later_start] == [2, 0, 2]
     assert_adds_up_to_pnl(conn, later_start, date(2026, 11, 4), date(2026, 11, 6))
     assert_cash_is_the_balance(conn, later_start)
 
@@ -169,6 +170,71 @@ def test_an_unsplit_swap_is_estimated_apart_the_same_in_the_pnl_and_the_series(c
     assert (row["units_estimated"], row["estimated_cost_of_sales"]) == (2, ledger.money(SWAP_ESTIMATE))
     assert row["exact_cents"]["estimated_cost_of_sales"] == str(SWAP_ESTIMATE)
     assert (row["cost_of_sales"], row["gross_profit"], row["net"]) == ("0.00", None, None)
+
+
+def books(net, capital, tax_set_aside, tax_remitted, unattributed_stock):
+    """What a period moves net worth (cash + stock at cost) by: net at known costs, the cash moves that
+    aren't profit (the tax set aside is still cash), less the stock that unattributed sales took."""
+    return net + capital + tax_set_aside - tax_remitted - unattributed_stock
+
+
+def test_the_books_balance_with_an_unsplit_swap_in_every_view(conn):
+    # #172 review: the 300c of Red Bull stock the replay took for the 2 unsplit sales is in no
+    # exact cost, estimate or profit, so it is its own reconciliation line, and opening + flows
+    # = closing cash + stock at cost holds exactly in all four views. Opening $600, no stock.
+    unsplit_swap(conn)
+    end = window(date(2026, 11, 14), date(2026, 11, 14))[1]
+    p = ledger.pnl(conn, OPENED, end)
+    closing = ledger.balance(conn, end).balance_cents + p.inventory_cents
+    # The reviewer's figures: $27.37 bought, $1.12 written off, nothing costed exactly.
+    assert (ledger.money(p.receipts_cents), p.cost_of_sales_cents) == ("27.37", 0)
+    assert ledger.money(p.shrinkage_cents) == "1.12" and p.unattributed_stock_cents == 300
+    # The 1 Coke written off at the swap may be one of the sales: the line is provisional.
+    assert p.unattributed_stock_provisional and any("provisional" in n for n in p.notes)
+    assert 60000 + books(p.net_cents, p.capital_cents, p.takings.tax_cents, p.tax_remitted_cents,
+                         p.unattributed_stock_cents) == closing
+    # By week: this fixture has no capital or remittance, which `WeekPnl` doesn't carry.
+    weeks = ledger.pnl_by_week(conn, OPENED, end)
+    assert sum(w.unattributed_stock_cents for w in weeks) == 300
+    assert 60000 + sum(books(w.net_cents, 0, w.tax_cents, 0, w.unattributed_stock_cents) for w in weeks) == closing
+    # Day by day and week by week, each against its own end of day cash and stock.
+    days = daily(conn, date(2026, 10, 31), date(2026, 11, 14), now=AFTER)
+    for rows in (days, by_week(days, date(2026, 10, 31))):
+        worth = Fraction(60000)
+        for row in rows:
+            worth += books(row.net_known_cents, row.capital_cents, row.sales_tax_cents, row.tax_remitted_cents,
+                           row.unattributed_stock_cents)
+            assert worth == row.cash_balance_cents + (row.inventory_cents or 0), row
+        assert worth == closing
+    [sale_day] = [d for d in days if d.units_sold]
+    assert sale_day.unattributed_stock_provisional and any("provisional" in n for n in sale_day.notes)
+    assert as_json(sale_day)["unattributed_stock"] == "3.00"
+
+
+def test_a_counter_drop_before_the_window_is_read_from_the_same_history_as_the_stock(conn):
+    # #172 review: 110 -> 100 -> 98 -> 100. From the whole history 100 and 98 are a restart and 2
+    # sold across the swap, as the stock replay reads them. A window starting after the first 100
+    # took it as its baseline, read 98 as a misread and counted 0 sold, beside 2 estimated units:
+    # "complete" cost of sales and a numeric net over sales it never counted.
+    swap_receipts(conn)
+    for session, at, price, units, cents in (
+            ("t1", "2026-11-07T17:00:00+00:00", 250, 110, 30000),
+            ("t2", "2026-11-07T18:00:00+00:00", 250, 100, 25000),
+            ("t3", "2026-11-08T06:00:00+00:00", 250, 98, 24000),
+            ("t4", "2026-11-08T17:00:00+00:00", 400, 100, 24700)):    # 700 cents fits no split
+        store_poll(conn, session, at, {"15": (price, units, cents)})
+    day = date(2026, 11, 8)
+    p = ledger.pnl(conn, *window(day, day))
+    [pnl_week] = ledger.pnl_by_week(conn, *window(day, day))
+    [d] = daily(conn, day, day, now=AFTER)
+    [w] = by_week([d], date(2026, 10, 31))
+    for row in (p, pnl_week, d, w):
+        assert (row.units_sold, row.units_costed, row.units_estimated, row.cost_of_sales_complete) == (2, 0, 2, False), row
+    assert (d.net_cents, w.net_cents) == (None, None)
+    assert not any("of 0 units" in n for n in p.notes + d.notes + w.notes)
+    # Backstop: an estimated unit never leaves cost of sales complete, whatever the counts say.
+    for row in (p, pnl_week, d, w):
+        assert not replace(row, units_sold=0, units_costed=0).cost_of_sales_complete, row
 
 
 def test_days_are_eastern_and_1_nov_2026_has_25_hours(conn):
@@ -273,20 +339,22 @@ def test_a_receipt_filled_in_before_the_opening_but_closed_after_it_is_charged_o
     assert_adds_up_to_pnl(conn, days, date(2026, 11, 7), date(2026, 11, 8), opened)
 
 
-def test_sales_the_open_minute_no_longer_reads_as_new_keep_their_cost_on_the_chart(conn):
-    # #172: r0 tops up the Arizona at 16:35-16:40 and drops its price to $2.00; r2 swaps in Coke at
-    # $2.00, door open in the 17:30 minute. The poll at 17:30:10 no longer reads as r2's, so its 2 sales
-    # have no product. Before, they were Coke at 80 cents; the chart and the ledger both still count it.
+def open_minute_swap(conn, top_up: bool) -> None:
+    """r2 swaps 9 Arizona (50c each) out for Coke (80c each) at $2.00, door open in the 17:30 minute,
+    and the poll at 17:30:10 has $2.00 at both ends of the next window, 2 sold. With `top_up`, r0 tops
+    up the Arizona at 16:35-16:40 first and may have set that price, so the window can't be read as r2's."""
     from tests.test_machine_state import fulfilled as fulfilled_lines
-    from vending import stock
 
     open_ledger(conn)
     fulfilled_lines(conn, "r1", datetime(2026, 11, 7, 15, tzinfo=timezone.utc), ("15", "ARIZONA", "primary", "5.00", 10, 0, 0))
-    fulfilled_lines(conn, "r0", datetime(2026, 11, 7, 16, 36, tzinfo=timezone.utc), ("15", "ARIZONA", "primary", "1.00", 2, 0, 0))
+    doors = [("r2", (17, 30), (18, 30))]
+    if top_up:
+        fulfilled_lines(conn, "r0", datetime(2026, 11, 7, 16, 36, tzinfo=timezone.utc), ("15", "ARIZONA", "primary", "1.00", 2, 0, 0))
+        doors.append(("r0", (16, 35), (16, 40)))
     fulfilled_lines(conn, "r2", datetime(2026, 11, 7, 18, tzinfo=timezone.utc), ("15", "COKE20", "primary", "8.00", 10, 0, 0))
     conn.execute("update purchase_lines set units_pulled = 9, pulled_sku = 'ARIZONA', slot_reassigned = true"
                  " where request_id = 'r2'")
-    for request_id, opened, closed in (("r0", (16, 35), (16, 40)), ("r2", (17, 30), (18, 30))):
+    for request_id, opened, closed in doors:
         conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = %s",
                      (datetime(2026, 11, 7, *opened, tzinfo=timezone.utc),
                       datetime(2026, 11, 7, *closed, tzinfo=timezone.utc), request_id))
@@ -294,10 +362,35 @@ def test_sales_the_open_minute_no_longer_reads_as_new_keep_their_cost_on_the_cha
     store_poll(conn, "b", "2026-11-07T17:30:10+00:00", {"15": (200, 100, 25000)})
     store_poll(conn, "c", "2026-11-07T19:00:00+00:00", {"15": (200, 102, 25400)})
 
+
+def test_sales_the_open_minute_no_longer_reads_as_new_are_estimated_not_costed(conn):
+    # #172 review: r0's top-up may have set the $2.00, so the 2 sales may be Arizona or Coke. Main
+    # read them as Coke at 80c; that 160c is now an unattributed stock debit, not exact cost of sales,
+    # and the estimate is the midpoint of an Arizona (50c) and a Coke (80c): 130c for the 2.
+    from vending import stock
+
+    open_minute_swap(conn, top_up=True)
     [sale] = [s for s in stock.stock(conn).sales if s.units]
-    assert (sale.product, sale.units) == (None, 2) and sale.unattributed
+    assert (sale.product, sale.units, sale.cost_cents) == (None, 2, None) and sale.unattributed
+    assert (sale.unattributed_cost_cents, sale.estimated_cost_cents) == (160, 130)
+    day = daily(conn, date(2026, 11, 7), date(2026, 11, 7), now=AFTER)[0]
+    assert (day.units_sold, day.units_costed, day.cost_of_sales_cents, day.cost_of_sales_complete) == (2, 0, 0, False)
+    assert (day.units_estimated, day.estimated_cost_of_sales_cents, day.unattributed_stock_cents) == (2, 130, 160)
+    assert day.net_cents is None
+    assert_adds_up_to_pnl(conn, [day], date(2026, 11, 7), date(2026, 11, 7))
+
+
+def test_sales_the_open_minute_reads_as_the_sole_visits_keep_their_exact_cost(conn):
+    # The control: with r2 the only visit, its own swap set the $2.00 and the poll fell in its open
+    # minute, so the 2 sales are Coke, resolved and exactly costed, with nothing estimated.
+    from vending import stock
+
+    open_minute_swap(conn, top_up=False)
+    [sale] = [s for s in stock.stock(conn).sales if s.units]
+    assert (sale.product, sale.units, sale.cost_cents, sale.estimated_cost_cents) == ("COKE20", 2, 160, None)
     day = daily(conn, date(2026, 11, 7), date(2026, 11, 7), now=AFTER)[0]
     assert (day.units_sold, day.units_costed, day.cost_of_sales_cents, day.cost_of_sales_complete) == (2, 2, 160, True)
+    assert (day.units_estimated, day.unattributed_stock_cents) == (0, 0)
     assert_adds_up_to_pnl(conn, [day], date(2026, 11, 7), date(2026, 11, 7))
 
 

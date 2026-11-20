@@ -468,3 +468,16 @@ def test_a_range_that_ends_before_the_opening_shows_no_balance(conn):
     report = pr.load(conn, date(2026, 10, 1), date(2026, 10, 20))
     _, body = pr.render(report)
     assert "Balance" not in body and "before the ledger opened" in body
+
+
+def test_unsplit_swap_sales_are_costed_exactly_none_with_the_estimate_beside_them(conn):
+    # #172 review: the cost cell says "costed exactly", and the estimate sits next to it, labelled.
+    from tests.test_ledger import NOW, OPENED, SWAP_ESTIMATE, unsplit_swap
+
+    unsplit_swap(conn)
+    [w] = [w for w in ledger.pnl_by_week(conn, OPENED, NOW) if w.units_sold]
+    estimate = f"estimate {pr.dollars(ledger.money(SWAP_ESTIMATE))} for 2 units, not in profit"
+    row = pr.week_row(w, date(2026, 11, 1), date(2026, 11, 30), (Fraction(0), False))
+    assert "0 of 2 units costed exactly" in row and estimate in row, row
+    total = pr.totals_row(get_pnl(conn, date(2026, 11, 1), date(2026, 11, 9)), [w])
+    assert "0 of 2 units costed exactly" in total and estimate in total, total
