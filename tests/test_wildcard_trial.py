@@ -474,11 +474,69 @@ def _swap_trial(conn):
     return get_machine_state(conn, now=datetime(2026, 10, 24, 2, tzinfo=timezone.utc)).wildcard_trial
 
 
-def test_any_sale_in_the_poll_window_over_a_swap_leaves_the_trial_unknown(conn):
-    """Even when the counters seem to split it (the price changed), nothing proves which product the unit was."""
+def test_a_sale_the_counters_settled_at_a_swap_gives_a_verdict_not_unknown(conn):
+    """The price changed from $2.50 to $3.00 and the window's $3.00 is one unit at the new price: the stock replay
+    books that unit to AAA (#173), so the trial has nothing to doubt. AAA's 1 unit is gone, so it held no stock."""
     _swap_with_a_sale_in_its_window(conn, new_price=300)
     t = _swap_trial(conn)
+    assert t.verdict == TOO_EARLY and (t.units_sold, t.class_days_in_stock) == (0, 0), t
+    counted = stock.stock(conn, until=datetime(2026, 10, 24, 2, tzinfo=timezone.utc))
+    assert [(x.product, x.units) for x in counted.sales if x.slot == "15"] == [("AAA", 1)]
+
+
+def _swap_then_a_week(conn, window_units, window_cents, per_day=3):
+    """Slot 15 held ZZZ at $2.50 (10 units from 9 Oct), polled at 100 units and $250.00 at 2 PM Eastern on Friday
+    16 Oct; at SINCE it switches to 20 AAA, now $3.00. The first poll after the swap reads `window_units` more
+    units and `window_cents` more cents, then each class day sells `per_day` at $3.00, seen at its evening poll."""
+    from tests.conftest import TEST_SLOTS
+
+    fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 10, 0, 0),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (250, 100, 25000)})
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0))
+    units, cents = 100 + window_units, 25000 + window_cents
+    rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, units, cents)})]
+    for n, day in enumerate(DAYS):
+        units, cents = units + per_day, cents + 300 * per_day
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+
+
+@pytest.mark.parametrize("window_units, window_cents, old, new", [
+    (1, 300, 0, 1),    # one unit at the new price: all AAA's
+    (2, 550, 1, 1),    # $2.50 + $3.00: one of each
+    (1, 250, 1, 0),    # one unit at the old price: all ZZZ's
+])
+def test_a_swap_the_counters_settled_is_judged_on_the_days_after_it(conn, window_units, window_cents, old, new):
+    _swap_then_a_week(conn, window_units, window_cents)
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    counted = stock.stock(conn, until=FRESH)
+    split = sorted((x.product, x.units) for x in counted.sales if x.slot == "15" and x.at.day == 16)
+    assert split == sorted([("ZZZ", old)] * bool(old) + [("AAA", new)] * bool(new)), split
+    # The window with the swap isn't counted, units or days; the six class days after it are.
+    assert (t.verdict, t.units_sold, t.class_days_in_stock) == (PASS, 18, 6), t
+
+
+def test_a_sale_the_counters_cant_split_across_a_swap_still_leaves_a_week_unknown(conn):
+    """The same week, but the price is $3.00 at both polls around the window's one unit: no price change to split
+    it by, so the replay leaves it unattributed and the trial stays unknown however good the week after is."""
+    from tests.conftest import TEST_SLOTS
+
+    fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 10, 0, 0),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100, 25000)})
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0))
+    units, cents = 101, 25300
+    rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, units, cents)})]
+    for n, day in enumerate(DAYS):
+        units, cents = units + 3, cents + 900
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
     assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
+    assert "nothing can split them" in t.reason, t
 
 
 def test_a_sale_the_counters_cant_split_across_a_swap_leaves_the_trial_unknown(conn):
