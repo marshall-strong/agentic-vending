@@ -205,6 +205,16 @@ def test_a_search_over_four_or_more_prices_stops_at_its_bound_and_leaves_the_uni
     assert time.perf_counter() - started < 2.0
 
 
+def test_a_proven_split_among_four_prices_is_found_whatever_the_number_of_units():
+    # round 2: only the top price can take 2,000,000 cents over 5,000 units, and the search used to spend its whole budget on
+    # counts the prices' bounds rule out, then give up (the units unknown, the slot's average skewed)
+    assert split_among(5_000, 2_000_000, [100, 200, 300, 400]) == [(100, 0), (200, 0), (300, 0), (400, 5_000)]
+    assert split_among(5_000, 2_500_000, [100, 200, 300, 400, 500]) == [(100, 0), (200, 0), (300, 0), (400, 0), (500, 5_000)]
+    # one unit one step down from all at the top price: still the only split, a billion units over
+    assert split_among(10 ** 9, 4 * 10 ** 11 - 100, [100, 200, 300, 400]) == [
+        (100, 0), (200, 0), (300, 1), (400, 10 ** 9 - 1)]
+
+
 def test_split_among_refuses_a_negative_number_of_units():
     assert split_among(-1, -150, [150]) is None
     assert split_among(-2, -500, [150, 250]) is None

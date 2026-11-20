@@ -270,6 +270,18 @@ def test_a_lab_listing_one_receipt_does_not_silence_the_warning_for_another_in_t
     assert "WARNING" not in capsys.readouterr().out
 
 
+def test_a_minute_only_lab_entry_from_an_older_analysis_does_not_silence_the_warning_at_exactly_that_minute(tmp_path, capsys):
+    # a visit fulfilled at exactly 11:30:00; an older lab_data.json wrote "11:30" (no seconds), which reads as 11:30:00
+    first = (FRIDAY + timedelta(hours=3.1), FRIDAY + timedelta(hours=4.5))
+    lab = lab_listing((first[1], "unknown"))
+    lab["refill_evidence"]["visits_without_window"][0]["fulfilled_at"] = first[1].isoformat(timespec="minutes")
+    argv = write_data(tmp_path, door({3: 1}, FRIDAY), [first], lab)
+    vw.main(argv)
+    assert "WARNING" in capsys.readouterr().out
+    visits = vw.analyse(door({3: 1}, FRIDAY), polls(range(13), FRIDAY), [], lab, receipts=[first])["visits"]
+    assert visits[0]["grade"] is None
+
+
 def test_a_visit_without_a_door_window_is_graded_as_having_none(tmp_path):
     done = receipt(5.25, 5.5)[1]
     lab = lab_listing((done, "ambiguous"))

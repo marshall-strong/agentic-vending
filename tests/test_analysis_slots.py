@@ -579,6 +579,55 @@ def test_the_exports_stop_at_the_fall_cut(conn, schema_url, tmp_path, monkeypatc
     assert units == [0, 1, 1, 2]           # slot 15's rises only
 
 
+def _load_csvs(tmp_path, sales, readings):
+    """sales_analysis.load on CSVs written from `sales` rows (slot, at, units, cents) and `readings` rows (slot, at, lifetime
+    units, lifetime cents, price or "" for a blank). A normal run, the stored assignment REDRAWN."""
+    import argparse
+    import csv
+
+    pytest.importorskip("pandas")
+    pytest.importorskip("statsmodels")
+    pytest.importorskip("sklearn")
+    import sales_analysis
+
+    def write(name, header, rows):
+        with open(tmp_path / name, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows([header, *rows])
+    write("s.csv", ["slot", "row", "col", "at_eastern", "units", "cents"], [(s, s[0], s[1], at, u, c) for s, at, u, c in sales])
+    write("r.csv", ["slot", "row", "col", "at_eastern", "lifetime_units", "lifetime_sales_cents", "price_cents"],
+          [(s, s[0], s[1], at, u, c, p) for s, at, u, c, p in readings])
+    write("p.csv", ["at_eastern"], [(at,) for at in sorted({r[1] for r in readings})])
+    write("m.csv", ["at_eastern", "units", "cents"], [(r[1], 0, 0) for r in readings[:1]])
+    (tmp_path / "cal.json").write_text("{}", encoding="utf-8")
+    sales_analysis.configure(slots_config.DEVICE_ID, REDRAWN, slots_config.SOURCE_SERVER, assigned=REDRAWN)
+    return sales_analysis.load(argparse.Namespace(
+        sales=tmp_path / "s.csv", readings=tmp_path / "r.csv", polls=tmp_path / "p.csv", machine=tmp_path / "m.csv",
+        calendar=tmp_path / "cal.json", doors=None, photos=tmp_path / "none.json", planogram=tmp_path / "none.json"))
+
+
+POLLS = [f"2026-12-10T{h:02d}:00:00-05:00" for h in (9, 10, 11)]
+
+
+def test_a_blank_price_in_one_slot_does_not_stop_another_slots_price_split(tmp_path):
+    # slot 11 listed 150 then 250 and sold 2 units for 400 cents over a window a misread widened (both counters read low at
+    # 10:00); slot 24's price is blank at 10:00. One blank makes pandas read the whole price column as floats.
+    from boundary_units import price_sales, priced_average
+    readings = [("11", POLLS[0], 10, 1000, 150), ("11", POLLS[1], 4, 500, 150), ("11", POLLS[2], 12, 1400, 250),
+                ("24", POLLS[0], 3, 750, 250), ("24", POLLS[1], 3, 750, ""), ("24", POLLS[2], 3, 750, 250)]
+    sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 2, 400)], readings)
+    assert reads.price_cents.dtype.kind == "f"                         # the premise: floats, with a NaN in them
+    r_ = reads[reads.slot == "11"].sort_values("t")
+    parts = price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
+                        [(r_.t.iloc[1], r_.t.iloc[2], 2, 400)])
+    assert [p[:5] for p in parts] == [(150, 250, 1, 1, 0)]             # one unit at each price: 150 + 250 = 400 cents
+    assert priced_average(parts) == (200, 0)
+    # the slot with the blank price: its own units are priced by what is known, and nothing raises
+    r_ = reads[reads.slot == "24"].sort_values("t")
+    out = price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
+                      [(r_.t.iloc[1], r_.t.iloc[2], 1, 250)])
+    assert out[0][:2] == (None, 250)
+
+
 def _fulfilled(conn, request_id, at):
     """A fulfilled purchase request of ours, fulfilled at `at` (UTC text), with no lines: the receipt export needs nothing else."""
     conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status, fulfilled_at)"

@@ -129,9 +129,10 @@ def test_the_lab_listing_keeps_the_full_fulfilment_time_and_tells_receipts_of_on
     assert not is_listed(listing, later, "unknown") and not is_listed(listing, done, "ambiguous")      # kind must match
     assert not is_listed(listing, done + timedelta(seconds=1), "unknown")                               # to the second
     assert is_listed(listing, done.astimezone(timezone.utc), "unknown")                                 # the same instant
-    # an entry from an older analysis (minutes only), a naive time, or no time lists nothing
+    # an entry from an older analysis (minutes only, which reads as :00 and would match a visit at exactly that minute), a
+    # naive time, or no time lists nothing
     for odd in ({"fulfilled_at": "2026-12-04T11:30-05:00", "window": "unknown"},
                 {"fulfilled_at": "2026-12-04T11:30:00", "window": "unknown"},
                 {"fulfilled_at": None, "window": "unknown"}, {"window": "unknown"}):
-        assert is_listed([odd], done, "unknown") == (odd.get("fulfilled_at") == "2026-12-04T11:30-05:00")
+        assert not is_listed([odd], done, "unknown")
     assert not is_listed([], done, "unknown")
