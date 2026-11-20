@@ -408,9 +408,10 @@ def test_a_period_that_ends_between_a_swap_and_the_next_poll_books_the_split_wit
         assert getattr(first, name) + getattr(second, name) == getattr(whole, name), name
 
 
-def test_an_unsplit_swap_window_stays_in_cost_of_sales_and_says_why(conn):
-    # #112: as above, but the 17:00 poll shows 2 units and 700 cents, which fits no split of
-    # $2.50 and $4.00. The 2 units' cost (2 Red Bull at 150c) stays in cost of sales, by week too.
+def unsplit_swap(conn):
+    """#112: Coke at $2.50 until a swap to Red Bull at $4.00 at 12:00 on Sun 8 Nov; the 17:00 poll
+    shows 2 units and 700 cents, which fits no split of $2.50 and $4.00. 8 Coke at UNIT_COST were
+    loaded and 7 pulled, so 1 Coke is written off at the swap; Red Bull cost 150c each."""
     open_ledger(conn)
     deliver(conn, "r1")
     record_request(conn, "r2", OPENED + timedelta(days=6), False, BODY)
@@ -420,16 +421,32 @@ def test_an_unsplit_swap_window_stays_in_cost_of_sales_and_says_why(conn):
         slot_reassigned=True, resolved_at="2026-11-08T12:00:00Z"), fulfilled_at="2026-11-08T12:30:00Z"), NOW)
     store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
     store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25700)})
+
+
+# The 2 units of the unsplit swap, at the midpoint of a Coke's and a Red Bull's cost (#172 item 5).
+SWAP_ESTIMATE = (UNIT_COST + 150) / 2 * 2
+
+
+def test_an_unsplit_swap_window_is_estimated_apart_from_exact_cost_of_sales(conn):
+    # #172 item 5: which product sold is unknown, so neither product's cost is exact. The
+    # exact cost of sales leaves them out, the estimate is reported apart, and the P&L says
+    # cost of sales is incomplete, by week too, as the money chart does.
+    unsplit_swap(conn)
     p = ledger.pnl(conn, OPENED, NOW)
-    # Their cost is in cost of sales, so they count as costed: the P&L page and get_pnl show a
-    # known figure instead of "unknown", and the note says the product may be wrong.
-    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 2, 300)
-    assert p.cost_of_sales_complete
-    assert any("can't split" in n and "may be the wrong product's" in n for n in p.notes)
+    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 0, 0)
+    assert (p.units_estimated, p.estimated_cost_of_sales_cents) == (2, SWAP_ESTIMATE)
+    assert not p.cost_of_sales_complete
+    assert any("can't split" in n and "estimate" in n for n in p.notes)
     assert not any("have no known cost" in n for n in p.notes)
     weeks = ledger.pnl_by_week(conn, OPENED, NOW)
-    assert sum(w.cost_of_sales_cents for w in weeks) == 300
-    assert all(w.cost_of_sales_complete for w in weeks)
+    assert sum(w.units_costed for w in weeks) == 0 and sum(w.cost_of_sales_cents for w in weeks) == 0
+    assert sum(w.units_estimated for w in weeks) == 2
+    assert sum(w.estimated_cost_of_sales_cents for w in weeks) == SWAP_ESTIMATE
+    assert not all(w.cost_of_sales_complete for w in weeks)
+    # The agent's get_pnl shows the estimate apart, never inside cost of sales or net.
+    reply = get_pnl(conn, date(2026, 11, 1), date(2026, 11, 9))
+    assert (reply.units_costed, reply.cost_of_sales, reply.cost_of_sales_complete) == (0, "0.00", False)
+    assert (reply.units_estimated, reply.estimated_cost_of_sales) == (2, money(SWAP_ESTIMATE))
 
 
 def test_purchases_and_the_stock_they_bring_go_by_the_same_clock(conn):

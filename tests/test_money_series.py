@@ -14,7 +14,9 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 
 from tests.conftest import store_poll  # noqa: E402
-from tests.test_ledger import EASTERN, NOW, OPENED, UNIT_COST, deliver, open_ledger, sell  # noqa: E402
+from tests.test_ledger import (  # noqa: E402
+    EASTERN, NOW, OPENED, SWAP_ESTIMATE, UNIT_COST, deliver, open_ledger, sell, unsplit_swap,
+)
 from tests.test_sync_requests import BODY, fulfilled, later, receipt  # noqa: E402
 from vending import ledger, money_series  # noqa: E402
 from vending.money_series import as_json, by_week, cumulative, daily, weekly  # noqa: E402
@@ -32,7 +34,8 @@ PNL = {
     "visit_fees_cents": lambda p: p.visit_fees_cents, "token_spend_cents": lambda p: p.token_spend_cents,
     "adjustments_cents": lambda p: p.adjustments_cents, "net_known_cents": lambda p: p.net_cents,
     "purchases_cents": lambda p: p.receipts_cents, "capital_cents": lambda p: p.capital_cents,
-    "tax_remitted_cents": lambda p: p.tax_remitted_cents,
+    "tax_remitted_cents": lambda p: p.tax_remitted_cents, "units_estimated": lambda p: p.units_estimated,
+    "estimated_cost_of_sales_cents": lambda p: p.estimated_cost_of_sales_cents,
 }
 
 
@@ -138,6 +141,34 @@ def test_a_counter_misread_or_restart_is_read_as_the_ledger_reads_it(conn):
     assert later_start[0].units_sold == 104
     assert_adds_up_to_pnl(conn, later_start, date(2026, 11, 4), date(2026, 11, 6))
     assert_cash_is_the_balance(conn, later_start)
+
+
+def test_an_unsplit_swap_is_estimated_apart_the_same_in_the_pnl_and_the_series(conn):
+    # #172 item 5: the P&L counted an unsplit swap window's cost as exact while the money
+    # chart left it out. Now both leave it out of exact cost of sales and report the estimate apart.
+    unsplit_swap(conn)                                     # the 2 units seen at 12:00 Eastern on Sun 8 Nov
+    first, last = date(2026, 11, 6), date(2026, 11, 14)
+    p = ledger.pnl(conn, *window(first, last))
+    by_week_pnl = ledger.pnl_by_week(conn, *window(first, last))
+    days = daily(conn, first, last, now=AFTER)
+    weeks = by_week(days, date(2026, 10, 31))
+    [sale_day] = [d for d in days if d.units_sold]
+    [sale_week] = [w for w in weeks if w.units_sold]
+    [sale_pnl_week] = [w for w in by_week_pnl if w.units_sold]
+    expected = (2, 0, 0, 2, SWAP_ESTIMATE, False)
+    for row in (p, sale_pnl_week, sale_day, sale_week):
+        assert (row.units_sold, row.units_costed, row.cost_of_sales_cents, row.units_estimated,
+                row.estimated_cost_of_sales_cents, row.cost_of_sales_complete) == expected, row
+    # The estimate never goes into exact profit: gross profit and net stay unknown.
+    assert (sale_day.gross_profit_cents, sale_day.net_cents) == (None, None)
+    assert sale_day.gross_profit_known_cents == sale_day.revenue_ex_tax_cents
+    assert any("estimate" in n for n in sale_day.notes) and any("estimate" in n for n in sale_week.notes)
+    assert_adds_up_to_pnl(conn, days, first, last)
+    assert_adds_up_to_pnl(conn, weeks, first, last)
+    row = as_json(sale_day)
+    assert (row["units_estimated"], row["estimated_cost_of_sales"]) == (2, ledger.money(SWAP_ESTIMATE))
+    assert row["exact_cents"]["estimated_cost_of_sales"] == str(SWAP_ESTIMATE)
+    assert (row["cost_of_sales"], row["gross_profit"], row["net"]) == ("0.00", None, None)
 
 
 def test_days_are_eastern_and_1_nov_2026_has_25_hours(conn):

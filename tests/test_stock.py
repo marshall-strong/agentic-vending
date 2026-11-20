@@ -330,6 +330,24 @@ def test_an_unsplit_window_keeps_the_books_whole():
     assert sold + lost + on_hand == 2000
 
 
+def test_an_unsplit_window_is_estimated_at_the_midpoint_only_when_both_candidate_costs_are_known():
+    # #172 item 5: the 2 units are an Arizona (the 50c unit written off at the swap) or a
+    # Red Bull (the 150c units they were taken from), so the estimate is the midpoint, 100c each.
+    odd = [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20500, 400)]
+    [sale] = book(swap(), counters=odd).sales
+    assert (sale.product, sale.cost_cents, sale.estimated_cost_cents) == (None, None, (50 + 150) / 2 * 2)
+    # The new product's cost unknown (no total_paid): no estimate.
+    [sale] = book(swap(total_paid=None), counters=odd).sales
+    assert (sale.cost_cents, sale.estimated_cost_cents) == (None, None)
+    # The old product's cost unknown: no estimate either.
+    old_unknown = [line(sku="ARIZONA", units_loaded=10, total_paid=None), swap()[1]]
+    [sale] = book(old_unknown, counters=odd).sales
+    assert (sale.cost_cents, sale.estimated_cost_cents) == (None, None)
+    # A sale the counters split has an exact cost and no estimate.
+    split = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    assert [(s.cost_cents, s.estimated_cost_cents) for s in split.sales] == [(50, None), (150, None)]
+
+
 def test_a_poll_during_the_visit_starts_a_window_of_only_the_new_product():
     # Marshall's case: Arizona at $2.50 swapped for Red Bull at $3.50. The price is set during
     # the visit, a poll lands at 2h45m with the new price, and the receipt resolves at 3h.
