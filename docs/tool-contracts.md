@@ -211,7 +211,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   from the ledger's opening to today.
 - **Outputs**: `revenue` (tax included), `tax_set_aside`, `revenue_ex_tax`, `units_sold`,
   `units_costed`, `cost_of_sales` (first-in, first-out cost from receipts) and
-  `cost_of_sales_complete`, `gross_margin`, `shrinkage` and `shrinkage_units` (units lost without
+  `cost_of_sales_complete`, `units_estimated` and `estimated_cost_of_sales` (an estimate for
+  units sold across a swap the counters can't split, in no profit figure), `gross_margin`,
+  `shrinkage` and `shrinkage_units` (units lost without
   a sale), `visit_fees`, `visits`, `token_spend`, `adjustments`, `net`; also `purchases`,
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
   (`inventory_machine`, `inventory_closet`, `inventory`, `inventory_complete`); per-week revenue
@@ -226,8 +228,10 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   - `end` before `start`: `success: false`.
   - Units sold that no receipt can cost: `cost_of_sales_complete: false` and a note saying how
     many. Cost of sales is never "unknown" as a whole. Units sold across a product change the
-    counters can't split (#112) count as costed, at the cost of the new product's oldest units, with a note
-    that it may be the wrong product's.
+    counters can't split (#112) are not costed: which product sold is unknown. `units_estimated` and
+    `estimated_cost_of_sales` give an estimate apart, the midpoint of the two products' unit costs
+    when both are known, with a note. It is never in `cost_of_sales`, `gross_margin` or `net`, and
+    the money series counts them the same way (#172 item 5).
   - Stock whose cost is unknown: `inventory_complete: false` and a note.
 - **Owner**: Marshall Strong (issue #23, PR #35).
 

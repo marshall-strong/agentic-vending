@@ -50,7 +50,10 @@ Competition money only: counting starts at the ledger's opening, so model calls 
 Lines leave a gap on any day a value is unknown (cash and net worth too), and a known day between
 unknown ones shows as a dot. Rolling totals and selected ranges recover when their own days have
 complete costs. In the weekly view a week with an unknown cost gets a dashed "?" box, the label
-"incomplete" and no profit dot.
+"incomplete" and no profit dot. Units sold across a product swap the counters can't split have no
+exact cost, so their day's gross profit and net are unknown too. The series carries an estimate
+for them apart (`units_estimated`, `estimated_cost_of_sales`), and the day's note in the tooltip
+states it as an estimate. It is never drawn into a cost or profit line (#172 item 5).
 
 **Exact money.** The page sums exact cents before it rounds values for display, and every value
 label keeps its cents; only axis ticks are rounded.
