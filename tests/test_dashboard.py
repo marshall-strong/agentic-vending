@@ -695,7 +695,7 @@ def test_the_machine_lights_only_our_slots_from_slots(page_conn, even_columns):
     assert drawn(page) == list(EVEN) and page.count('class="ma-lane ma-notours"') == 20
     assert '<article class="ma-lane ma-notours" id="lane-15" aria-label="Selection 15: not ours">' in page
     assert "No plan yet" in page and '<p class="empty v-next">No plan yet' in page
-    assert page.count("<b>?</b> no record yet") == 40       # no receipts: never a made-up count (Now and Friday)
+    assert page.count("<b>?</b> no record yet") == 40       # no receipts: never a made-up count (Now and Next restock)
     assert 'class="seg" role="group" aria-label="Show" hidden' in page   # the toggle needs JS
 
 
@@ -724,7 +724,7 @@ def test_now_and_next_friday(conn, page_conn, even_columns, open_ledger):
     assert view["16"]["next"]["pulled"] is True
     assert view["18"]["next"]["in_plan"] is False and view["18"]["change"] is None
     page = dashboard.render(snap)
-    assert '<s>$2.50</s> &rarr; <b>$2.75</b> from Friday' in page   # the tag next Friday, old price struck
+    assert '<s>$2.50</s> &rarr; <b>$2.75</b> from the next restock' in page   # the tag after it, old price struck
     assert '<p class="ma-nm">No record yet</p>' in page
     assert "&lt;i&gt;sells out&lt;/i&gt;" in page and "<i>sells out</i>" not in page
     assert '<span class="ma-chip bad">pulled</span>' in page
@@ -959,7 +959,7 @@ def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json
         assert not shows(page, figure) and not shows(state, figure), figure
     card = lane_html(page, "12")
     assert 'class="ma-lane ma-notours"' in page and "Not ours" in card and "<svg" not in card
-    assert "+2 back Friday" in lane_html(page, "15")        # ours is drawn: fill 7 less 5 on hand
+    assert "+2 at restock" in lane_html(page, "15")        # ours is drawn: fill 7 less 5 on hand
 
 
 def test_a_selection_reassigned_away_stops_being_drawn(conn, page_conn, open_ledger):
@@ -989,15 +989,15 @@ def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn, open_l
         {"slot": "25", "product": "CAN-12", "fill_to": 8}))
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
     coke, shake, can, out, unknown = (lane_html(page, s) for s in ("15", "16", "17", "18", "25"))
-    assert "<b>5</b> of 7" in coke and "+2 back Friday" in coke and "+2 added" in coke
+    assert "<b>5</b> of 7" in coke and "+2 at restock" in coke and "+2 added" in coke
     assert coke.count('class="ma-ghost ma-go"') == 2 and coke.count('class="ma-fill"') == 2
     # No capacity: no empty slots beyond what the plan fills, and it says so.
-    assert "capacity not counted yet" in shake and "+3 back Friday" in shake
+    assert "capacity not counted yet" in shake and "+3 at restock" in shake
     assert shake.count("ma-ghost") == 3 and "<b>2</b> on hand" in shake
     assert "plan 4, nothing to add" in can and "+" not in can.split("ma-chips")[1].split("</p>")[0]
     assert "not in plan" in out
     # 25 holds no record: a product the plan puts in, never a made-up count before it.
-    assert "<b>?</b> no record yet" in unknown and "new product Friday" in unknown
+    assert "<b>?</b> no record yet" in unknown and "new product at restock" in unknown
     # A lane with a product but no count says ? and +? (photo count of a product with no units).
     view = {"15": {"now": {"product": "COKE-20OZ", "units": None, "price": "2.50", "source": "receipt",
                            "counted_at": None},
@@ -1006,7 +1006,7 @@ def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn, open_l
     products = {"catalog": {"COKE-20OZ": {"name": "Coke", "line": "Coca-Cola", "flavor": None,
                                           "size": "20 oz bottle"}}, "overrides": {}}
     html = dashboard.machine_art.closeup_html(view, products, True)
-    assert "<b>?</b> of 7" in html and "+? back Friday" in html and "filled to 7" in html
+    assert "<b>?</b> of 7" in html and "+? at restock" in html and "filled to 7" in html
     assert "ma-unk" in html and "units unknown" in html
 
 
@@ -1064,16 +1064,16 @@ def test_a_swap_and_a_price_change_on_friday(conn, page_conn, open_ledger):
         {"slot": "17", "fill_to": 0, "reason": "slow"}))
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
     swap, price, pulled = lane_html(page, "15"), lane_html(page, "16"), lane_html(page, "17")
-    # The swap draws the new package and look on Friday, chips "swap", and gives the reason on one line.
+    # The swap draws the new package and look at the next restock, chips "swap", and gives the reason on one line.
     assert '<g class="v-now">' in swap and '<g class="v-next ma-swapin">' in swap
     assert "#ma-p-bottle-20" in swap and "#ma-p-bottle-16-glass" in swap
-    assert '<span class="ma-chip info">swap</span>' in swap and "swap Friday" in swap
+    assert '<span class="ma-chip info">swap</span>' in swap and "swap at restock" in swap
     assert '<p class="ma-nm v-next">Topo Chico' in swap
     why = swap.split('<p class="ma-why"')[1].split("</p>")[0]
     assert "&lt;b&gt;2 old&lt;/b&gt;" in why and "<b>2 old</b>" not in why and "\n" not in why.split(">", 1)[1]
     assert why.endswith("…") and len(why.split(">", 1)[1]) < 200
-    # The price change: Friday's tag strikes the old price, and the reason sits under it.
-    assert "<s>$1.00</s> &rarr; <b>$1.25</b> from Friday" in price and ">sold out 3 Fridays running</p>" in price
+    # The price change: the tag after the restock strikes the old price, and the reason sits under it.
+    assert "<s>$1.00</s> &rarr; <b>$1.25</b> from the next restock" in price and ">sold out 3 Fridays running</p>" in price
     assert 'stroke="#d6232a"' in price and ">$1.25</text>" in price
     assert '<span class="ma-chip bad">pulled</span>' in pulled and "<b>0</b> pulled" in pulled
 
@@ -1195,8 +1195,8 @@ def test_a_shelf_with_nothing_planned_says_so_rather_than_plus_zero():
     html = machine_art.closeup_html(view, {"catalog": {}, "overrides": {}}, True)
     shelf4 = html[html.index('href="#shelf-4"'):html.index("</a>", html.index('href="#shelf-4"'))]
     shelf5 = html[html.index('href="#shelf-5"'):html.index("</a>", html.index('href="#shelf-5"'))]
-    assert "? on hand &middot; no Friday plan" in shelf4 and "+0" not in shelf4
-    assert '<span class="ma-fr">+0</span> Friday' in shelf5      # planned, and already full
+    assert "? on hand &middot; no restock plan" in shelf4 and "+0" not in shelf4
+    assert '<span class="ma-fr">+0</span> at restock' in shelf5      # planned, and already full
 
 
 @pytest.mark.parametrize("size, key", [
@@ -1427,15 +1427,20 @@ def _first_fill_plan(conn, tmp_path):
     plan_store.pick(conn, plan_id, "Test Picker")
 
 
-def test_the_plan_cell_says_first_fill_before_the_lock_and_friday_after(conn, page_conn, tmp_path, monkeypatch):
+def test_the_plan_cell_says_first_fill_before_the_lock_and_next_restock_after(conn, page_conn, tmp_path, monkeypatch):
     _first_fill_plan(conn, tmp_path)
     first = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 6}, {"slot": "16", "fill_to": 4}))
     second = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, second, "submitted", plan=plan({"slot": "15", "fill_to": 7}, {"slot": "16", "fill_to": 0}))
+    for run, back in ((first, 2), (second, 1)):        # made on Mon 9 Nov, whatever day the tests run
+        conn.execute("update agent_runs set started_at = %s where id = %s", (MONDAY - timedelta(hours=back), run))
     after = dashboard.snapshot(page_conn, MONDAY)                  # the autouse fixture puts the lock behind us
     cell = status_cells(after)[5]
-    assert ">For Friday<" in cell and "2 changes" in cell and f"run #{second} submitted" in cell
+    assert ">For the next restock<" in cell and "2 changes" in cell and f"run #{second} submitted" in cell
+    # The plan was made on Mon 9 Nov: the restock it is for is the Friday visit after Thursday's cutoff.
+    assert '"sub">Fri 13 Nov &middot; 2 changes' in cell
+    assert '<span class="vm-when">Next restock &middot; Fri 13 Nov</span>' in dashboard.render(after)
     assert "first fill" not in cell.lower()
     monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
     before = dashboard.snapshot(page_conn, MONDAY)
@@ -1566,7 +1571,7 @@ def test_the_front_and_close_up_carry_nothing_about_a_selection_that_is_not_ours
         assert len(cells) == 20 and all(
             re.fullmatch(r'<span class="fc-n">\d\d</span><span class="fc-t">Not ours', c) for c in cells)
         assert '<article class="ma-lane ma-notours" id="lane-15" aria-label="Selection 15: not ours">' in page
-        assert "back Friday" in lane_html(page, "12")
+        assert "at restock" in lane_html(page, "12")
 
 
 def test_the_facts_say_where_each_number_comes_from(conn, page_conn):
@@ -1586,3 +1591,36 @@ def test_without_an_assignment_attention_still_shows_beside_an_empty_machine(con
     vm = section(page, '<section id="vm"', "</section>")
     assert 'id="attention"' in vm and "Which selections are ours isn&#x27;t known" in vm
     assert '<nav class="fm"' not in vm and 'class="vm-panel"' not in vm
+
+
+@pytest.mark.parametrize("visit, started, shown", [
+    ("scheduled", datetime(2026, 12, 7, 15, tzinfo=timezone.utc), "Fri 11 Dec"),       # Monday: that week's Friday
+    ("scheduled", datetime(2026, 12, 11, 3, tzinfo=timezone.utc), "Fri 11 Dec"),       # Thu 22:00 Eastern: before the cutoff
+    ("scheduled", datetime(2026, 12, 11, 6, tzinfo=timezone.utc), "Fri 18 Dec"),       # Fri 01:00 Eastern: past it
+    ("midweek", datetime(2026, 12, 7, 15, tzinfo=timezone.utc), "midweek visit"),     # the plan records no day
+])
+def test_the_next_restock_is_the_friday_after_the_cutoff_or_a_midweek_visit(visit, started, shown):
+    if dashboard.next_cutoff(started) is None:
+        pytest.skip("no IANA time-zone data to place the cutoff")
+    assert dashboard._restock({"visit": visit, "run": {"started_at": started}}) == shown
+    assert dashboard._restock(None) is None
+
+
+def test_the_page_says_next_restock_for_what_the_plan_does_and_friday_only_for_the_day(conn, page_conn, even_columns):
+    fulfilled(conn, "pr-1", "12", "COKE-20OZ", units_loaded=4, paid="4.80", at=MONDAY - timedelta(days=3))
+    first = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "12", "fill_to": 6}, {"slot": "14", "fill_to": 4}))
+    second = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, second, "submitted", plan={**plan(
+        {"slot": "12", "fill_to": 7, "sale_price": "2.75"}, {"slot": "14", "fill_to": 0}), "visit": "midweek"})
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    page = dashboard.render(snap)
+    assert '<button type="button" data-view="next" aria-pressed="false">Next restock</button>' in page
+    assert '<span class="vm-when">Next restock &middot; midweek visit</span>' in page
+    assert "midweek visit &middot; 2 changes" in status_cells(snap)[5]
+    assert "+3 at restock" in lane_html(page, "12") and "pulled at restock" in lane_html(page, "14")
+    assert "<dt>Next restock</dt>" in page and "pulled at the next restock" in page
+    # "Friday" is left only where it is the day: the cutoff and the order deadline, and the requests' visit type.
+    machine = page[page.index('<section id="vm"'):page.index('<section id="money"')]
+    assert "Friday" not in re.sub(r"<[^>]+>", " ", machine).replace("free Friday visit", "")
+    assert "Friday" not in dashboard._status_bar(snap)

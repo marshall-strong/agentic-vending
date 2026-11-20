@@ -145,7 +145,7 @@ def test_the_page_draws_every_panel_from_the_snapshots_own_selections(no_databas
         assert anchor in page, anchor
     assert "Opening" in page or "opening" in page
     assert "How it decided" in page and "pr-001" in page and "pr-002" in page and "GORGIE Electrolyte Water" in page
-    assert "COCA-ORIGINAL-20BOT" in page and "from Friday" in page and "6 of 20 slots changed" in page
+    assert "COCA-ORIGINAL-20BOT" in page and "from the next restock" in page and "6 of 20 slots changed" in page
     assert "Our slots" not in page and "vmc1" not in page
 
 

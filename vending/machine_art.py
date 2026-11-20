@@ -1,4 +1,7 @@
-"""The machine close-up on the dashboard: each of our lanes drawn top-down, Now and Next Friday.
+"""The machine close-up on the dashboard: each of our lanes drawn top-down, Now and Next restock.
+
+"Next restock" is the plan's next visit: almost always the free Friday visit, but a paid midweek
+visit is a restock too, and either can change anything.
 
 `vending.dashboard` calls `split_html` for "In the machine": the machine's whole front, and the
 close-up of a picked selection's shelf with its facts. It draws no photos: every package is
@@ -496,8 +499,8 @@ class Lane:
         self.next = nxt
         self.fill = _int(view["fill_to"])
         self.next_item = self.now_item
-        self.swap = False      # Friday replaces the product in the lane with another
-        self.new = False       # Friday puts a product into a lane with none on record
+        self.swap = False      # the next restock replaces the product in the lane with another
+        self.new = False       # the next restock puts a product into a lane with none on record
         self.pulled = bool(nxt and nxt["pulled"])
         self.next_units = self.units
         if nxt is not None and nxt["in_plan"]:
@@ -518,14 +521,14 @@ class Lane:
 
     @property
     def back(self) -> int | None:
-        """How many go back Friday: the plan's fill less the units on hand, when both are known."""
+        """How many go back at the next restock: the plan's fill less the units on hand, when both are known."""
         if self.fill is None or self.units is None or self.swap or self.pulled:
             return None
         return max(self.fill - self.units, 0)
 
     @property
     def added(self) -> int | None:
-        """Units that go into the lane Friday: the refill, or all of a swap's or a new product's."""
+        """Units that go into the lane at the next restock: the refill, or all of a swap's or a new product's."""
         if self.swap or self.new:
             return self.next_units
         return self.back
@@ -558,16 +561,16 @@ class Lane:
         elif not nxt["in_plan"]:
             parts.append("not in the plan")
         elif self.pulled:
-            parts.append("pulled on Friday")
+            parts.append("pulled at the next restock")
         elif (self.swap or self.new) and self.next_item:
-            parts.append(f"{'swapped' if self.swap else 'loaded'} Friday to {self.next_item.name}"
+            parts.append(f"{'swapped' if self.swap else 'loaded'} at the next restock to {self.next_item.name}"
                          + (f", {self.next_units} loaded" if self.next_units is not None else ""))
         elif self.fill is not None:
             back = self.back
-            parts.append(f"filled to {self.fill} on Friday"
+            parts.append(f"filled to {self.fill} at the next restock"
                          + ("" if back is None else f", {back} go back" if back else ", nothing to add"))
         if nxt and nxt["old_price"] is not None:
-            parts.append(f"price {money(nxt['old_price'])} to {money(nxt['price'])} Friday")
+            parts.append(f"price {money(nxt['old_price'])} to {money(nxt['price'])} at the next restock")
         if self.change and self.change.get("reason"):
             parts.append(f"reason: {_cut(self.change['reason'])}")
         return ". ".join(parts) + "."
@@ -640,8 +643,8 @@ def _badge(x: float, y: float, text: str, cls: str, fill: str, ink: str) -> str:
 
 def _layer(lane: Lane, item: Item, have: int | None, want: int | None, cap: int | None, estimate: bool,
            animate: bool) -> str:
-    """The packages on one rail. `have` is on the rail now (None: unknown), `want` after Friday
-    (None: the same as now). With `animate`, the slots Friday fills drop in on the Next Friday view."""
+    """The packages on one rail. `have` is on the rail now (None: unknown), `want` after the next restock
+    (None: the same as now). With `animate`, the slots the restock fills drop in on the Next restock view."""
     s, xc, yb = _rail(lane.col)
     pitch = item.pitch(cap)
     unknown = have is None
@@ -703,7 +706,7 @@ def _tag(price: Any, x: float = 54, w: float = 40) -> str:
 
 
 def _price_change(old: Any, new: Any) -> str:
-    """Friday's tag: the old price struck through, then the new one, outlined."""
+    """The tag after the next restock: the old price struck through, then the new one, outlined."""
     return (f'<rect x="35" y="183" width="28" height="16" rx="3" fill="#c9ccd1"/><text x="49" y="194.6" '
             f'text-anchor="middle" font-size="8" font-weight="800" fill="#4a5059" font-family="Arial,sans-serif">'
             f'{_e(money(old))}</text><line x1="37" y1="191.6" x2="61" y2="191.6" stroke="#d6232a" stroke-width="1.6"/>'
@@ -756,28 +759,28 @@ def lane_card(lane: Lane, prev: str | None, nxt_slot: str | None, linked: bool) 
     item, nxt = lane.now_item, lane.next
     estimate = lane.source == "photo" and not lane.counted_empty
     now_count = lane.count_text(lane.units, lane.cap, item, estimate)
-    # Now: what Friday does to the lane.
+    # Now: what the next restock does to the lane.
     if nxt is None:
         now_chip = _chip("no plan yet")
     elif not nxt["in_plan"]:
         now_chip = _chip("not in plan")
     elif lane.pulled:
-        now_chip = _chip("pulled Friday", "bad")
+        now_chip = _chip("pulled at restock", "bad")
     elif lane.swap and lane.next_item:
-        now_chip = _chip("swap Friday", "info")
+        now_chip = _chip("swap at restock", "info")
     elif lane.new and lane.next_item:
-        now_chip = _chip("new product Friday", "info")
+        now_chip = _chip("new product at restock", "info")
     elif lane.fill is None:
         now_chip = _chip("price change" if nxt["old_price"] is not None else "keep as is")
     elif lane.units is None:
-        now_chip = _chip("+? back Friday", "unk")
+        now_chip = _chip("+? at restock", "unk")
     elif lane.back:
-        now_chip = _chip(f"+{lane.back} back Friday", "fri")
+        now_chip = _chip(f"+{lane.back} at restock", "fri")
     else:
         now_chip = _chip(f"plan {lane.fill}, nothing to add")
     if lane.units == 0:
         now_chip = _chip("empty", "bad") + " " + now_chip
-    # Next Friday.
+    # Next restock.
     next_item = lane.next_item
     if nxt is None or not nxt["in_plan"]:
         next_count, next_chip = now_count, now_chip
@@ -815,7 +818,7 @@ def lane_card(lane: Lane, prev: str | None, nxt_slot: str | None, linked: bool) 
             target.append(f'<p class="ma-nt">capacity {cap} ({it.cap_note})</p>')
     if nxt is not None and nxt["old_price"] is not None:
         notes_next.append(f'<p class="ma-nt ma-price"><s>{_e(money(nxt["old_price"]))}</s> &rarr; '
-                          f'<b>{_e(money(nxt["price"]))}</b> from Friday</p>')
+                          f'<b>{_e(money(nxt["price"]))}</b> from the next restock</p>')
     reason = (lane.change or {}).get("reason")
     if reason:
         notes_next.append(f'<p class="ma-why" title="{_e(" ".join(str(reason).split()))}">{_e(_cut(reason))}</p>')
@@ -865,28 +868,28 @@ def _gauge(units: int | None, size: int, cls: str) -> str:
 
 
 def _front_marks(lane: Lane) -> str:
-    """What Friday does to the lane, as one or two small badges on its front cell."""
+    """What the next restock does to the lane, as one or two small badges on its front cell."""
     nxt = lane.next
     if nxt is None or not nxt["in_plan"]:
         return ""
     marks = []
     if lane.pulled:
-        marks.append(("pull", "bad", "pulled Friday"))
+        marks.append(("pull", "bad", "pulled at the next restock"))
     elif lane.swap and lane.next_item is not None:
-        marks.append(("swap", "info", f"swapped Friday to {lane.next_item.name}"))
+        marks.append(("swap", "info", f"swapped at the next restock to {lane.next_item.name}"))
     elif lane.new and lane.next_item is not None:
-        marks.append(("new", "info", f"loaded Friday with {lane.next_item.name}"))
+        marks.append(("new", "info", f"loaded at the next restock with {lane.next_item.name}"))
     elif lane.back:
-        marks.append((f"+{lane.back}", "fri", f"{lane.back} go back Friday"))
+        marks.append((f"+{lane.back}", "fri", f"+{lane.back} at restock"))
     elif lane.fill and lane.units is None:
-        marks.append(("+?", "unk", f"filled to {lane.fill} Friday; how many go back is unknown"))
+        marks.append(("+?", "unk", f"filled to {lane.fill} at the next restock; how many go back is unknown"))
     if nxt["old_price"] is not None and not lane.pulled:
-        marks.append(("$", "warn", f"price {money(nxt['old_price'])} to {money(nxt['price'])} Friday"))
+        marks.append(("$", "warn", f"price {money(nxt['old_price'])} to {money(nxt['price'])} at the next restock"))
     return "".join(f'<span class="fc-mk {tone}" title="{_e(title)}">{_e(tag)}</span>' for tag, tone, title in marks)
 
 
 def _front_art(lane: Lane, after_item: Item | None, after_units: int | None) -> str:
-    """The front package of the lane, Now and Friday, true to size against every other cell."""
+    """The front package of the lane, Now and after the next restock, true to size against every other cell."""
     parts = []
     at = "translate(23 66) scale(0.285)"
     blank = "EMPTY" if lane.counted_empty else "?"
@@ -909,8 +912,8 @@ def _front_count(units: int | None, cap: int | None, estimate: bool, cls: str) -
 
 
 def front_cell(lane: Lane) -> str:
-    """One of our selections on the machine's front: number, Friday badge, package, count against
-    capacity, price, name and fill bar, Now and Friday. A link that opens the selection's close-up."""
+    """One of our selections on the machine's front: number, next-restock badge, package, count against
+    capacity, price, name and fill bar, Now and Next restock. A link that opens the selection's close-up."""
     estimate = lane.source == "photo" and not lane.counted_empty
     nxt = lane.next
     planned = nxt is not None and nxt["in_plan"]
@@ -956,21 +959,21 @@ def _not_ours_cell(slot: str) -> str:
 
 
 def _shelf_line(lanes: dict[str, Lane], mine: list[str]) -> str:
-    """'14 on hand · +15 Friday' for a shelf's lanes of ours."""
+    """'14 on hand · +15 at restock' for a shelf's lanes of ours."""
     known = [lanes[s].units for s in mine if lanes[s].units is not None]
     seen = f"{sum(known)}{'+?' if len(known) < len(mine) else ''}" if known else "?"
     backs = [lanes[s].added for s in mine if lanes[s].added is not None]
     open_ = any(lanes[s].fill is not None and lanes[s].added is None and not lanes[s].pulled for s in mine)
     planned = any(lanes[s].fill is not None or lanes[s].swap or lanes[s].new or lanes[s].pulled for s in mine)
     back = f"+{sum(backs)}{'+?' if open_ else ''}" if backs else "+?" if open_ else "+0" if planned else ""
-    friday = f'<span class="ma-fr">{back}</span> Friday' if back else "no Friday plan"
-    return f'{seen} on hand &middot; {friday}'
+    restock = f'<span class="ma-fr">{back}</span> at restock' if back else "no restock plan"
+    return f'{seen} on hand &middot; {restock}'
 
 
 def front_html(lanes: dict[str, Lane], ours: set[str]) -> str:
     """The machine's whole front, 5 shelves of 8. Ours show their package, count, price, name, fill
-    bar and Friday badge, and open their close-up; every other selection is a grey "Not ours" cell
-    half as wide, with its number only. Beside each shelf, what it holds and what Friday adds."""
+    bar and next-restock badge, and open their close-up; every other selection is a grey "Not ours" cell
+    half as wide, with its number only. Beside each shelf, what it holds and what the next restock adds."""
     rows = []
     for r in range(1, SHELVES + 1):
         mine = [f"{r}{c}" for c in range(1, COLUMNS + 1) if f"{r}{c}" in ours]
@@ -988,8 +991,8 @@ def front_html(lanes: dict[str, Lane], ours: set[str]) -> str:
 
 # --- The picked selection's facts, under its shelf -------------------------------------------------
 
-def _friday(lane: Lane) -> tuple[str, str]:
-    """What Friday does to the lane, in words (escaped), and its tone."""
+def _restock(lane: Lane) -> tuple[str, str]:
+    """What the next restock does to the lane, in words (escaped), and its tone."""
     nxt = lane.next
     if nxt is None:
         return "No plan yet.", ""
@@ -1012,7 +1015,7 @@ def _friday(lane: Lane) -> tuple[str, str]:
 
 def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first: Mapping | None = None) -> str:
     """The picked selection's facts in words, each saying where it comes from: product, on hand,
-    price, what the slot sold, Friday, capacity and the agent's whole reason. `first` is the
+    price, what the slot sold, the next restock, capacity and the agent's whole reason. `first` is the
     selection's line in the plan for the first fill, before the slot lock. Shown with its shelf
     while the selection is picked."""
     item, nxt = lane.now_item, lane.next
@@ -1032,16 +1035,16 @@ def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first
         on_hand += " &middot; from receipts and polls"
     price = f"{_e(money(lane.price))} on the tag" if lane.price is not None else "unknown: no price from the polls"
     if nxt is not None and nxt["old_price"] is not None:
-        price += f' &middot; <b class="sd-up">{_e(money(nxt["price"]))}</b> from Friday'
+        price += f' &middot; <b class="sd-up">{_e(money(nxt["price"]))}</b> from the next restock'
     if sold is None or sold.get("sold") is None:
         sales = "unknown: no sales from the polls"
     else:
         per_day = sold.get("per_day")
         sales = (f"{_e(sold['sold'])} {_e(span)}" + (f" &middot; {float(per_day):.1f} a day" if per_day is not None
                                                      else "") + ", whatever it held")
-    friday, tone = _friday(lane)
+    restock, tone = _restock(lane)
     rows = [("On hand", on_hand), ("Price", price), ("The slot sold", sales),
-            ("Friday", f'<span class="sd-fr {tone}">{friday}</span>' if tone else friday)]
+            ("Next restock", f'<span class="sd-fr {tone}">{restock}</span>' if tone else restock)]
     if first:
         rows.append(("First fill", _e(first["text"])))
     caps = []

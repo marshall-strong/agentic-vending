@@ -18,16 +18,16 @@ The page, top to bottom:
    switch and the latest run; when the machine was last polled and the next sync; the order
    cutoff countdown; spendable (from the ledger once it has opened; before that, only that
    it is development spend); catalog approvals; and the plan (for the first fill before the slot lock,
-   for Friday after).
+   for the next restock after).
  - In the machine, one screen: the machine's whole front (`vending.machine_art`), our
    selections (the stored assignment, `vending.slots.our_slots`) with their package, count,
-   price and Friday badge, the rest half as wide and marked "Not ours"; with no assignment
+   price and next-restock badge, the rest half as wide and marked "Not ours"; with no assignment
    stored it says so instead of guessing. Beside it, Needs attention (each thing that is wrong
    or about to be, in a sentence; on the Container App that includes the worker's latest sync,
    which the worker passes in as `syncs`, the same dict as its `/health`) and the plan's
    changes. Picking one of ours shows its shelf's lanes from above and its facts instead; on a
    phone that is a sheet. Now shows the tag price (polls) and the product and units on hand
-   (receipts, or a newer count); Next Friday shows the latest plan: the slots it fills, a
+   (receipts, or a newer count); Next restock shows the latest plan: the slots it fills, a
    swap, a pull, a new price. Anything without a record says unknown.
  - Pricing (`vending.pricing_panel`): for each of our selections, the shelf price, the unit cost
    (receipts, else expected from sourcing), the floor and whether the price is legal, the margin,
@@ -1246,10 +1246,10 @@ def _check_plan_fills(snap: dict) -> None:
 
 
 def machine_view(snap: dict) -> dict:
-    """What "In the machine" draws for each of our slots, Now and Next Friday. Reads nothing.
+    """What "In the machine" draws for each of our slots, Now and Next restock. Reads nothing.
 
     Now: the price on the tag from the latest poll, and the product and units on hand from the
-    receipts (`vending.stock`); each is None when there is no record of it. Next Friday: the latest
+    receipts (`vending.stock`); each is None when there is no record of it. Next restock: the latest
     plan's product, price and fill, falling back to Now for what the plan leaves as is. `next` is
     None when there is no plan.
     """
@@ -1398,7 +1398,7 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
                                            _first_fill_lines(snap))
     lede = ""
     if p is None:
-        lede = '<p class="empty v-next">No plan yet: Next Friday shows the machine as it is now.</p>'
+        lede = '<p class="empty v-next">No plan yet: Next restock shows the machine as it is now.</p>'
     off_face = [s for s in our_selections(snap) if s not in face]
     if off_face:
         lede += f'<p class="sub">Also ours, not on the {SHELVES}&times;{COLUMNS} face: {_e(", ".join(off_face))}</p>'
@@ -1415,16 +1415,19 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
               '<span class="honest">Stock is estimated from receipts and polls, not a sensor.</span> '
               '<span class="more">How to read it</span></summary>'
               "<p>Grey cells aren't ours: they show their number and nothing else, at half the width. On ours, the "
-              "number is units on hand (Now) or after the plan's fill (Next Friday), against the column's capacity; "
+              "number is units on hand (Now) or after the plan's fill (Next restock), against the column's capacity; "
               "<b>~3</b> is from a photo count, less sales since, so at least that many were seen; <b>?</b> means no "
               "receipt or count yet. The bar is units against capacity: hatched means unknown, outlined means no "
-              "capacity counted. The badge is what Friday does: <b>+N</b> back, swap, new, $ for a new price, pull. "
-              "In the close-up, dashed slots are empty room and \"+N back Friday\" is the plan's fill less the units "
+              "capacity counted. The badge is what the next restock does: <b>+N</b> back, swap, new, $ for a new "
+              "price, pull. The next restock is almost always the free Friday visit; a paid midweek visit is one too. "
+              "In the close-up, dashed slots are empty room and \"+N at restock\" is the plan's fill less the units "
               f"on hand. {polled}{stock_note}{shapes}Packages are drawn from the catalog size; they are not photos.</p>"
               "</details>")
     seg = ('<span class="seg" role="group" aria-label="Show" hidden>'
            '<button type="button" data-view="now" aria-pressed="true">Now</button>'
-           '<button type="button" data-view="next" aria-pressed="false">Next Friday</button></span>')
+           '<button type="button" data-view="next" aria-pressed="false">Next restock</button></span>')
+    when = _restock(p)
+    when = f'<span class="vm-when">Next restock &middot; {_e(when)}</span>' if when else ""
     panel = ('<aside class="vm-panel" aria-label="Close-up of the picked selection">'
              '<div class="vm-ph"><span class="vm-grab" aria-hidden="true"></span><span class="label">Close-up</span>'
              '<a class="vm-x" href="#vm" data-close aria-label="Close the close-up">'
@@ -1433,7 +1436,7 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
     scrim = '<a class="vm-scrim" href="#vm" data-close tabindex="-1" aria-hidden="true"></a>'
     return (f'<section id="vm" class="vm" data-view="now">{machine_art.selection_css(shown)}'
             f'<h2>In the machine <span class="hint">our {len(shown)} selections &middot; tap one to see it close up'
-            f'</span>{seg}</h2>{lede}'
+            f'</span>{when}{seg}</h2>{lede}'
             f'<div class="ops"><div class="ops-front">{front}{legend}</div>'
             f'<div class="ops-side">{home}{panel}</div></div>{scrim}</section>')
 
@@ -1542,7 +1545,7 @@ def _plan_html(snap: dict) -> str:
     cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]), _window(sales))
                     for s in p["slots"])
     columns = ('<div class="plan-head" aria-hidden="true"><span>Slot</span><span>Now</span>'
-               '<span>Next Friday</span><span></span></div>')
+               '<span>Next restock</span><span></span></div>')
     return head + controls + f'<div class="plan-grid" data-only="false">{columns}{cells}</div>'
 
 
@@ -1607,6 +1610,22 @@ def _switched(verb: str, at: datetime | None, by: str | None, now: datetime) -> 
         return ""
     return (verb + (f" {_time(at, 'ago', now)}" if at is not None else "")
             + (f" by {_e(by)}" if by else ""))
+
+
+def _restock(plan: dict | None) -> str | None:
+    """The restock an agent's plan is for, in words. Almost every restock is the free Friday visit:
+    "Fri 4 Dec", the Friday after the order cutoff that follows the plan's run. A paid midweek visit
+    is a restock too: "midweek visit", since the plan records no date for it. None without a plan,
+    or without the time-zone data to place the cutoff."""
+    if not plan:
+        return None
+    if plan.get("visit") == "midweek":
+        return "midweek visit"
+    cutoff = next_cutoff(plan["run"]["started_at"])
+    if cutoff is None:
+        return None
+    day = cutoff + timedelta(days=1)          # the cutoff is Thursday 23:59 Eastern; the visit is Friday
+    return f"{day:%a} {day.day} {day:%b}"
 
 
 def next_sync(now: datetime, syncs: dict | None = None) -> datetime | None:
@@ -1773,7 +1792,8 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
     else:
         cells.append(_cell("Catalog approvals", '<span class="dim">&mdash;</span>', "not available", "#requests"))
 
-    # The plan: before the slot lock, the plan for the first fill; from it, the agent's plan for Friday.
+    # The plan: before the slot lock, the plan for the first fill; from it, the agent's plan for the next
+    # restock (almost always the free Friday visit; a paid midweek visit is a restock too).
     plan = snap["plan"]
     p = plan["data"] if plan["ok"] else None
     tone = ""
@@ -1792,16 +1812,18 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
             sub = (f'{_plural(len(p["slots"]), "slot")} &middot; {cost}'
                    + ("" if p["picked"] else " &middot; latest, not picked"))
     else:
-        value = "For Friday"
+        value = "For the next restock"
         if not plan["ok"]:
             sub = "not available"
         elif p is None:
             sub = "no plan yet"
         else:
             run = p["run"]
+            when = _restock(p)
             moved = (_plural(sum(1 for x in p["slots"] if x["changed"]), "change") if p["previous_run"]
                      else f'first plan: {_plural(sum(1 for x in p["slots"] if x["now"] is not None), "slot")}')
-            sub = f'{moved} &middot; run #{run["id"]} {_e(run["status"])} {_time(run["started_at"], "ago", now)}'
+            sub = ((f"{_e(when)} &middot; " if when else "") + f'{moved} &middot; run #{run["id"]} '
+                   f'{_e(run["status"])} {_time(run["started_at"], "ago", now)}')
     cells.append(_cell("Plan", value, sub, "#plan", tone))
     return f'<nav class="strip" aria-label="Status">{"".join(cells)}</nav>'
 
@@ -2125,7 +2147,8 @@ a.pill { text-decoration:none }
 .vm[data-view="now"] .v-next, .vm[data-view="next"] .v-now { display:none !important }
 /* In the machine, one screen: the front on the left; on the right Needs attention and the plan's changes,
    or the picked selection close up. On a phone the front comes first and the close-up is a sheet. */
-.vm > h2 { margin-bottom:6px }
+.vm > h2 { margin-bottom:6px } .vm > h2 .vm-when { margin-left:auto; font-size:12px; font-weight:600; color:var(--muted) }
+.vm > h2 .vm-when + .seg { margin-left:0 }
 .ops { display:grid; grid-template-columns:minmax(0, 1fr); gap:12px; align-items:start }
 .ops-front { display:grid; gap:6px; min-width:0 }
 .ops-side, .ops-home { display:flex; flex-direction:column; gap:10px; min-width:0 }
@@ -2197,7 +2220,7 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
 /* The plan: one line per slot; the reason opens beneath. */
 .only { display:inline-flex; gap:6px; align-items:center; font-size:12px; margin:4px 0 8px; cursor:pointer }
 .only[hidden] { display:none }
-/* One row per slot, top to bottom: what is in it now beside what the plan asks for Friday. */
+/* One row per slot, top to bottom: what is in it now beside what the plan asks for the next restock. */
 .plan-grid { display:flex; flex-direction:column; gap:4px }
 .plan-head, .pc summary { display:grid; grid-template-columns:34px minmax(0, 1fr) minmax(0, 1.25fr) minmax(90px, auto);
   gap:4px 12px; align-items:baseline }
@@ -2273,7 +2296,7 @@ footer .visitors { margin:4px 0 0; font-size:11px; opacity:.8 }
   .sc:nth-child(odd) { border-left:0 } .sc:nth-child(-n+2) { border-top:0 } .sc .sv { font-size:15px }
   .plan-head { display:none }
   .pc summary { grid-template-columns:30px minmax(0, 1fr) } .pc summary .now::before { content:"now: " }
-  .pc summary .what, .pc summary .tags { grid-column:2 } .pc summary .what::before { content:"Friday: " }
+  .pc summary .what, .pc summary .tags { grid-column:2 } .pc summary .what::before { content:"Next restock: " }
   .pc summary .tags { justify-content:flex-start }
   .feed li { grid-template-columns:auto minmax(0, 1fr) } .feed .kind { display:none } }
 """
