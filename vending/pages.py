@@ -359,23 +359,29 @@ def _opened(conn: psycopg.Connection, now: datetime) -> ledger.Entry | NotYet:
     return opened
 
 
-def money_data(conn: psycopg.Connection) -> dict | NotYet:
-    """What the money chart carries (`money_chart.data`), from the opening to today, or NotYet.
-    One repeatable-read, read-only snapshot. Raises `SlotsNotRecorded` without our slot assignment."""
+@contextmanager
+def snapshot(conn: psycopg.Connection) -> Iterator[psycopg.Connection]:
+    """One repeatable-read, read-only transaction: every read inside it sees the same database."""
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
-        now = ledger.db_now(conn)
-        opened = _opened(conn, now)
-        if isinstance(opened, NotYet):
-            return opened
-        return money_chart.data(conn, now=now) or NotYet(None)
+        yield conn
+
+
+def money_data(conn: psycopg.Connection) -> dict | NotYet:
+    """What the money chart carries (`money_chart.data`), from the opening to today, or NotYet. Call it
+    inside a `snapshot`, the one the caller read our slot assignment in. Raises `SlotsNotRecorded`
+    without our slot assignment."""
+    now = ledger.db_now(conn)
+    opened = _opened(conn, now)
+    if isinstance(opened, NotYet):
+        return opened
+    return money_chart.data(conn, now=now) or NotYet(None)
 
 
 def spend_data(conn: psycopg.Connection) -> tuple[dev_spend.Report, dev_spend.Report]:
     """Development spend by week and by day, from one snapshot. It ends at the ledger's opening
     (`dev_spend.summarise`), so no competition money is in it."""
-    with conn.transaction():
-        conn.execute("set transaction isolation level repeatable read, read only")
+    with snapshot(conn):
         now = ledger.db_now(conn)
         recorded, opened = dev_spend.calls(conn), dev_spend.opening_at(conn)
     return (dev_spend.summarise(recorded, opened, "week", now),
@@ -385,13 +391,14 @@ def spend_data(conn: psycopg.Connection) -> tuple[dev_spend.Report, dev_spend.Re
 def pnl_data(conn: psycopg.Connection, query: pnl_report.Query) -> pnl_report.Report | NotYet:
     """The weekly P&L for `query`, or NotYet. The opening is checked before any date in the URL is used,
     and a start on or before the opening's day counts from the opening itself: a model call made before
-    it is development spend, not the competition's (#104). `pnl_report.load` is its own snapshot."""
+    it is development spend, not the competition's (#104). Call it inside a `snapshot`, the one the caller
+    read our slot assignment in."""
     opened = _opened(conn, ledger.db_now(conn))
     if isinstance(opened, NotYet):
         return opened
     first = opened.at.astimezone(pnl_report.EASTERN).date()
     start = query.start if query.start is not None and query.start > first else None
-    return pnl_report.load(conn, start, query.end, query.view)
+    return pnl_report.read(conn, start, query.end, query.view)
 
 
 def _chart_nav(here: str) -> str:
@@ -562,15 +569,15 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
                     conn, request, hide, (("Home", "/"), ("Agent dashboard", DASHBOARD)), rows)
                 return Reply(status, HTML, body)
             if path in (MONEY_CHART, PNL):
-                key = (path, query, stored_slots(conn))
-                if (hit := _cached(key)) is not None:
-                    return hit
-            if path == MONEY_CHART:
-                found = money_data(conn)
+                # One snapshot for the assignment and the chart, so a copy is kept under the assignment
+                # its figures counted, even if a reassignment commits while it is being built.
+                with snapshot(conn):
+                    key = (path, query, stored_slots(conn))
+                    if (hit := _cached(key)) is not None:
+                        return hit
+                    found = money_data(conn) if path == MONEY_CHART else pnl_data(conn, query)
             elif path == SPEND:
                 found = spend_data(conn)
-            elif path == PNL:
-                found = pnl_data(conn, query)
             else:
                 snap = dashboard.snapshot(conn, public=True, syncs=syncs)
         if path in (MONEY_CHART, PNL, SPEND):

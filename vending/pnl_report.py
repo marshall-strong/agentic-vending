@@ -138,23 +138,29 @@ def load(conn: psycopg.Connection, start: date | None, end: date | None, view: s
     """Every figure on the page, from one read-only snapshot."""
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
-        # The app's clock, as get_pnl uses for "today" (ledger.balance takes "now" from
-        # the database clock, ledger.db_now).
-        printed_at = datetime.now(EASTERN)
-        totals = get_pnl(conn, start, end)
-        if not totals.success:
-            return Report(start, end, printed_at, totals, view=view)
-        first_day, last_day = (t.astimezone(EASTERN).date() for t in (totals.start, totals.end))
-        # Count the Sat-to-Fri rows the table would show: a midweek start or end is a part week, but still a row.
-        rows = (_week_of(last_day) - _week_of(first_day)).days // 7 + 1
-        if rows > MAX_WEEKS:
-            refused = Pnl(success=False, message=f"Choose a range of at most {MAX_WEEKS} weeks.")
-            return Report(start, end, printed_at, refused, view=view)
-        weeks = ledger.pnl_by_week(conn, totals.start, totals.end)
-        # The balance at the end of the last day shown, where the table stops; now when there is no end
-        # date, or the end is today or later.
-        balance_at = None if end is None or last_day >= printed_at.date() else totals.end
-        return Report(start, end, printed_at, totals, weeks, get_account_balance(conn, balance_at), balance_at, view)
+        return read(conn, start, end, view)
+
+
+def read(conn: psycopg.Connection, start: date | None, end: date | None, view: str = "simple") -> Report:
+    """Every figure on the page, in the caller's transaction: `load` without a snapshot of its own, for a
+    caller that reads more in the same snapshot (`vending.pages` reads our slot assignment first)."""
+    # The app's clock, as get_pnl uses for "today" (ledger.balance takes "now" from
+    # the database clock, ledger.db_now).
+    printed_at = datetime.now(EASTERN)
+    totals = get_pnl(conn, start, end)
+    if not totals.success:
+        return Report(start, end, printed_at, totals, view=view)
+    first_day, last_day = (t.astimezone(EASTERN).date() for t in (totals.start, totals.end))
+    # Count the Sat-to-Fri rows the table would show: a midweek start or end is a part week, but still a row.
+    rows = (_week_of(last_day) - _week_of(first_day)).days // 7 + 1
+    if rows > MAX_WEEKS:
+        refused = Pnl(success=False, message=f"Choose a range of at most {MAX_WEEKS} weeks.")
+        return Report(start, end, printed_at, refused, view=view)
+    weeks = ledger.pnl_by_week(conn, totals.start, totals.end)
+    # The balance at the end of the last day shown, where the table stops; now when there is no end
+    # date, or the end is today or later.
+    balance_at = None if end is None or last_day >= printed_at.date() else totals.end
+    return Report(start, end, printed_at, totals, weeks, get_account_balance(conn, balance_at), balance_at, view)
 
 
 def _week_of(day: date) -> date:

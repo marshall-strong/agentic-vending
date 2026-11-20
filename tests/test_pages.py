@@ -929,12 +929,19 @@ def test_the_chart_pages_follow_the_pages_rules_when_they_cant_serve(monkeypatch
 
 
 class _Quiet:
-    """A connection that is never used: the loaders are replaced."""
+    """A connection that is never used: the loaders are replaced. It opens a snapshot as a real one does."""
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         return False
+
+    def transaction(self):
+        from contextlib import nullcontext
+        return nullcontext()
+
+    def execute(self, *args):
+        return None
 
 
 def test_a_chart_loader_or_renderer_that_fails_never_shows_its_error(monkeypatch, capsys):
@@ -1149,3 +1156,34 @@ def test_a_kept_money_chart_skips_its_replay_only_for_the_same_assignment(monkey
     assert pages.respond(pages.MONEY_CHART) is first and loads == [("15", "16")]
     slots[0] = ("12", "14")
     assert pages.respond(pages.MONEY_CHART) is not first and loads == [("15", "16"), ("12", "14")]
+
+
+# --- Review round 2 (Sol, 19 Nov) --------------------------------------------------------------------
+
+def test_a_kept_chart_is_the_one_its_assignment_counted_even_if_it_changes_mid_request(site, conn, monkeypatch):
+    """A reassignment committed after the page reads the assignment, but before it builds the chart, must
+    not be kept under the assignment it read: both come from one snapshot."""
+    _competition(conn)
+    real, moved = pages.stored_slots, []
+
+    def then_reassign(c):
+        slots = real(c)
+        if not moved:                   # committed on the test's own (writer) connection
+            conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
+            moved.append(slots)
+        return slots
+    monkeypatch.setattr(pages, "stored_slots", then_reassign)
+    from tests.conftest import TEST_SLOTS
+    from vending import pnl_report
+    for path, query, counted_a in ((pages.MONEY_CHART, None, lambda page: "slot 15: " in page),
+                                   (pages.PNL, pnl_report.parse("/"), lambda page: _units(page) == "5")):
+        moved.clear()
+        conn.execute("update slot_assignment set slots = %s", (list(TEST_SLOTS),))
+        status, _, page = _get(site, path)
+        assert status == 200 and moved == [TEST_SLOTS], path
+        kept = {key: reply for key, (_, reply) in pages._cache.items() if key[0] == path}
+        assert list(kept) == [(path, query, TEST_SLOTS)], path
+        # The page and its kept copy are assignment A's, the one in the key.
+        assert counted_a(page) and counted_a(next(iter(kept.values())).body), path
+        pages._cache.clear()
+
