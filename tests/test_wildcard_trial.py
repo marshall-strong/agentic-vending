@@ -612,10 +612,10 @@ def test_a_recovered_misread_doesnt_hide_an_unsplit_swap_sale(conn):
     assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
 
 
-def test_a_poll_at_the_swaps_moment_with_door_times_is_settled_by_them(conn):
-    """The same polls as the round-1 tie case, but the receipt says the door was open from 19:40 to 20:00: the
-    replay settles the window that starts at 20:00 by the door, all of it the new drink's, so the trial trusts it.
-    Without door times (the test above) the same window stays unknown."""
+def test_a_poll_at_the_swaps_moment_is_unknown_even_with_door_times(conn):
+    """The same polls as the round-1 tie case, with the receipt's door open from 19:40 to 20:00. The replay settles
+    the window that starts at 20:00 by the door, but the trial doesn't rely on that: a window that starts at the
+    swap's own moment is always unknown (Kevin, round 3)."""
     _swap_with_polls_then_a_week(conn, [
         ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
         ("p1", SINCE.isoformat(), (250, 100, 25000)),
@@ -623,7 +623,22 @@ def test_a_poll_at_the_swaps_moment_with_door_times_is_settled_by_them(conn):
     conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
                  (SINCE - timedelta(minutes=20), SINCE))
     t = get_machine_state(conn, now=FRESH).wildcard_trial
-    assert t.verdict == PASS, t
+    assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
+
+
+def test_an_untimed_receipt_at_the_swaps_moment_doesnt_make_the_tie_settled(conn):
+    """An untimed receipt loads OTHER into slot 15 at 20:00, the door-timed AAA visit closes at 20:00, and a poll
+    lands at 20:00. The replay skips the untimed change, so the window starting at 20:00 is booked to AAA, whose
+    own receipt has door times; that tells nothing about the OTHER change."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("p1", SINCE.isoformat(), (250, 100, 25000)),
+        ("p2", "2026-10-16T21:00:00+00:00", (250, 101, 25250))])
+    fulfilled(conn, "r2", SINCE, ("15", "OTHER", "primary", "10.00", 5, 0, 0))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
+                 (SINCE - timedelta(minutes=20), SINCE))
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert (t.product, t.verdict) == ("AAA", UNKNOWN), t
 
 
 def test_door_times_the_replay_cant_use_dont_settle_a_tie(conn):
