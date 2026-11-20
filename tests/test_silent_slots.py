@@ -137,6 +137,19 @@ def test_the_old_products_sale_split_at_a_swap_doesnt_make_the_slot_quiet_later(
     assert [(s.slot, s.quiet_since) for s in silent[:2]] == [("17", R0), ("28", R0)]
 
 
+def test_a_sale_booked_at_the_runs_first_load_empties_the_slot(conn):
+    # Review round 3, case (h). A poll at the 16 Oct load's own moment reads all 10 of slot 17's units sold. The
+    # replay applies the load, then the sale, so 17 stood empty until 5 more went in on Tue 27 Oct. Since the
+    # window began it held stock as Wed 28 and Thu 29 began, so 2 of 4 days: not silent after 4.
+    machine(conn, sales={"17": [(R0, 10)]})
+    store_poll(conn, "at-load", R0.isoformat(), {"17": (300, 110, 33000)})
+    fulfilled(conn, "rt", datetime(2026, 10, 27, 15, tzinfo=UTC), ("17", "CCC", "primary", "5.00", 5, 0, 0))
+    count(conn, "17", 5, at=datetime(2026, 10, 28, 15, tzinfo=UTC))
+    assert [(s.at, s.product, s.units) for s in stock.stock(conn, until=NOW).sales if s.slot == "17"] == [
+        (R0, "CCC", 10)]
+    assert why(report(conn), "17") == f"2 of {SILENT_DAYS} in-stock class days seen since the window began; not silent yet"
+
+
 def test_a_thursday_morning_run_hasnt_seen_four_class_days(conn):
     machine(conn, last=datetime(2026, 10, 29, 14, tzinfo=UTC))      # 10 AM Thursday
     r = report(conn, now=datetime(2026, 10, 29, 15, tzinfo=UTC))

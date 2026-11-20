@@ -719,3 +719,116 @@ def test_a_class_day_is_silent_only_once_a_reading_after_its_end_shows_no_sale(c
     five_coke(conn, days=(2, 3, 4, 5, 6, 9), late=("2026-11-10T05:10:00+00:00",))
     s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 10, 5, 30, tzinfo=timezone.utc)).data)["15"]
     assert (s.class_days_in_stock, s.class_days_since_sale) == (7, 6)
+
+
+# --- Review round 3: one stock history per slot, from the replay ---------------------------------------------
+
+UTC = timezone.utc
+
+
+def coke(conn, reads):
+    """Slot 15: 5 Coke in on Fri 30 Oct (3:30 PM Eastern), between polls at 2 PM and 6 PM reading its units counter
+    at 100, then a poll at each `(UTC time, lifetime units)` in `reads`."""
+    store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100)})
+    fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=UTC), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    store_poll(conn, "p1", "2026-10-30T22:00:00+00:00", {"15": (250, 100)})
+    for n, (at, units) in enumerate(reads):
+        store_poll(conn, f"q{n}", at, {"15": (250, units)})
+
+
+def evening(day, units=100):
+    """A reading at 5 PM Eastern on that November day."""
+    return f"2026-11-{day:02d}T22:00:00+00:00", units
+
+
+def lose(conn, units, at, position=0):
+    """`units` Coke recorded lost from slot 15 at `at`, against r1's line."""
+    conn.execute("insert into purchase_line_losses (request_id, line_no, position, location, sku, units, recorded_at)"
+                 " values ('r1', 0, %s, 'coil', 'COKE20', %s, %s)", (position, units, at))
+
+
+def slot_15(conn, now):
+    return by_slot(get_machine_state(conn, now=now).data)["15"]
+
+
+def test_an_unsettled_counter_drop_proves_no_silence(conn):
+    # Round 3, case (a). Slot 15 reads 100 every evening to Thursday; a good poll early on Saturday reads 5, a drop
+    # the next poll hasn't settled (a misread or a restart). Mon to Wed are watched to their end by readings that
+    # agree; Thursday and Friday aren't. So the clock stays at 3, not 5.
+    coke(conn, [evening(d) for d in (2, 3, 4, 5)] + [("2026-11-07T06:00:00+00:00", 5)])
+    assert slot_15(conn, datetime(2026, 11, 7, 7, tzinfo=UTC)).class_days_since_sale == 3
+
+
+def test_an_empty_count_before_a_refill_is_a_break(conn):
+    # Round 3, case (b). A door count finds slot 15 empty on Tue 3 Nov (the 5 Coke went with no sale or recorded
+    # loss), and 5 more go in on Thursday. The clock counts from the refill: Fri 6 and Mon 9, read just after
+    # midnight on Tuesday, so 2, not 6. The rate's in-stock days break there too: Mon 2 and Tue 3, then Fri 6 to
+    # Tue 10. Slot 16, known only from a count, has no clock.
+    five_coke(conn, days=(2, 3, 4, 5, 6, 9), late=("2026-11-10T06:00:00+00:00",))
+    conn.execute("insert into slot_counts (count_id, counted_at, counted_by, source, device_id, selection, product,"
+                 " units, exact) values ('c1', %s, 'kevin', 'door', 'vmc1', '15', null, 0, true),"
+                 " ('c1', %s, 'kevin', 'door', 'vmc1', '16', 'PEPSI20', 4, true)",
+                 (datetime(2026, 11, 3, 15, tzinfo=UTC),) * 2)
+    fulfilled(conn, "r2", datetime(2026, 11, 5, 19, tzinfo=UTC), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    states = by_slot(get_machine_state(conn, now=datetime(2026, 11, 10, 6, 30, tzinfo=UTC)).data)
+    s = states["15"]
+    assert (s.stock_on_hand, s.class_days_in_stock, s.class_days_since_sale) == (10, 5, 2)
+    assert (states["16"].counted_on_hand, states["16"].class_days_since_sale) == (4, None)
+
+
+def test_a_loss_recorded_after_now_doesnt_change_the_rate(conn):
+    # Round 3, case (c). Read on Tue 10 Nov at 6 PM Eastern; the 5 Coke are recorded lost on Fri 13 Nov, after
+    # that. As of Tuesday the slot held stock from Mon 2 to Tue 10: 7 in-stock class days, not 10. The clock has
+    # watched 6 of them to their end.
+    five_coke(conn, days=(2, 3, 4, 5, 6, 9, 10))
+    lose(conn, 5, datetime(2026, 11, 13, 15, tzinfo=UTC))
+    s = slot_15(conn, datetime(2026, 11, 10, 23, tzinfo=UTC))
+    assert (s.stock_on_hand, s.class_days_in_stock, s.class_days_since_sale) == (5, 7, 6)
+
+
+def test_a_pull_of_another_sku_that_the_replay_ignores_leaves_the_stock(conn):
+    # Round 3, case (d). On Wednesday a receipt line pulls 5 PEPSI20 from slot 15, which holds 5 Coke: the replay
+    # warns and leaves slot 15's count alone, so neither the rate nor the clock stops there. The clock is 6, not 0.
+    five_coke(conn, days=(2, 3, 4, 5, 6, 9), late=("2026-11-10T06:00:00+00:00",))
+    fulfilled(conn, "r2", datetime(2026, 11, 4, 19, tzinfo=UTC), ("15", None, "unavailable", None, 0, 0, 0))
+    conn.execute("update purchase_lines set units_pulled = 5, pulled_sku = 'PEPSI20' where request_id = 'r2'")
+    s = slot_15(conn, datetime(2026, 11, 10, 6, 30, tzinfo=UTC))
+    assert (s.stock_on_hand, s.class_days_in_stock, s.class_days_since_sale) == (5, 7, 6)
+
+
+def test_an_oversized_later_loss_keeps_the_runs_first_loss(conn):
+    # Round 3, case (e). 4 of the 5 Coke are recorded lost at the load's own moment, and the 1 left sells on
+    # Monday, so the slot is empty from then. On Friday 10 more are recorded lost, though none are there. The
+    # slot held stock on Mon 2 only: 1 in-stock class day, not 5.
+    coke(conn, [evening(d, 101) for d in (2, 3, 4, 5, 6)])
+    lose(conn, 4, datetime(2026, 10, 30, 19, 30, tzinfo=UTC))
+    lose(conn, 10, datetime(2026, 11, 6, 15, tzinfo=UTC), position=1)
+    s = slot_15(conn, datetime(2026, 11, 6, 23, tzinfo=UTC))
+    assert (s.stock_on_hand, s.class_days_in_stock) == (0, 1)
+
+
+def test_a_loss_at_the_moment_asked_about_leaves_the_clock_at_zero(conn):
+    # Round 3, case (f). The 5 Coke are recorded lost at the very moment the state is read: the slot is empty.
+    five_coke(conn, days=(2, 3, 4, 5, 6, 9), late=("2026-11-10T06:00:00+00:00",))
+    now = datetime(2026, 11, 10, 6, 30, tzinfo=UTC)
+    lose(conn, 5, now)
+    s = slot_15(conn, now)
+    assert (s.stock_on_hand, s.class_days_since_sale) == (0, 0)
+
+
+def test_the_first_reading_of_a_slot_proves_nothing_before_it(conn):
+    # Round 3, case (g). Slot 15 is loaded on Fri 30 Oct, but no poll reads its counter until Thu 5 Nov at 5 PM
+    # Eastern. Only Fri 6 and Mon 9 are watched end to end: 2, not 6.
+    store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"16": (300, 50)})
+    fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=UTC), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    for n, at in enumerate((evening(5)[0], evening(6)[0], evening(9)[0], "2026-11-10T06:00:00+00:00")):
+        store_poll(conn, f"q{n}", at, {"15": (250, 100), "16": (300, 50)})
+    assert slot_15(conn, datetime(2026, 11, 10, 6, 30, tzinfo=UTC)).class_days_since_sale == 2
+
+
+def test_a_counter_restart_proves_nothing_before_the_reading_after_it(conn):
+    # Round 3, case (g). Slot 15's counter reads 100 to Tuesday, then 3 from Wednesday on: a restart the next poll
+    # confirms. What sold between Tuesday's and Wednesday's polls went with the old count, so a sale there can't be
+    # ruled out, and the clock counts only what was watched after it: Thu 5, Fri 6 and Mon 9, so 3, not 6.
+    coke(conn, [evening(2), evening(3)] + [evening(d, 3) for d in (4, 5, 6, 9)] + [("2026-11-10T06:00:00+00:00", 3)])
+    assert slot_15(conn, datetime(2026, 11, 10, 6, 30, tzinfo=UTC)).class_days_since_sale == 3
