@@ -461,10 +461,11 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
     Only the current product's loads and sales count (#172). The old product's share of a window
     split at the change is booked at the poll after it, so it is left out by product, not by time.
     Units the replay left unattributed (`SaleCost.unattributed`) may have been either product's, so
-    they are in neither the units nor the stock spans, and the class days their window reaches into
-    after the change (`class_days_after(since, at)`) are left out of the in-stock days: a swap
-    polled the same day loses none, and a window over a poll gap neither lowers the rate nor counts
-    as days in stock that sold nothing.
+    they are not in the units, and the class days their window reaches into after the change
+    (`class_days_after(since, at)`) are left out of the in-stock days: a swap polled the same day
+    loses none, and a window over a poll gap neither lowers the rate nor counts as days in stock
+    that sold nothing. They still leave the stock spans, as they leave the replay's count: the slot
+    held stock only if they weren't this product's, so it may have stood empty after them.
     """
     demands = {}
     for slot, count in counts.items():
@@ -472,7 +473,8 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
                       if at >= count.since and sku == count.product]
         since = [s for s in sales if s.slot == slot and s.at > count.since]
         slot_sales = [(s.at, s.units) for s in since if s.product == count.product and not s.unattributed]
-        spans = demand.in_stock_spans(slot_loads, slot_sales, now, count.units)
+        unknown = [(s.at, s.units) for s in since if s.unattributed]
+        spans = demand.in_stock_spans(slot_loads, slot_sales + unknown, now, count.units)
         unplaced = {day for s in since if s.unattributed for day in class_days_after(count.since, s.at)}
         days = len(set(demand.class_days_in_stock(spans)) - unplaced)
         demands[slot] = demand.estimate(sum(units for _, units in slot_sales), days,
