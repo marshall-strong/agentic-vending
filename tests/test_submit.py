@@ -10,13 +10,21 @@ psycopg = pytest.importorskip("psycopg")
 from datetime import datetime, timezone  # noqa: E402
 
 from tests.conftest import open_in, store_poll  # noqa: E402
-from tests.test_desired_state import coke_sourcing, desired, fake, ready, restock_15, stocked  # noqa: E402,F401
+from tests.test_desired_state import NOW, coke_sourcing, desired, fake, ready, restock_15, stocked  # noqa: E402,F401
 from tests.test_server import call, db  # noqa: E402,F401
 from tests.test_sync_requests import fulfilled, receipt  # noqa: E402
 from vending import ledger, submissions  # noqa: E402
 from vending.config import set_value  # noqa: E402
 from vending.purchase_requests import store  # noqa: E402
 
+
+
+@pytest.fixture(autouse=True)
+def monday(monkeypatch):
+    """The database clock pinned to `NOW`, a Monday before every cutoff. These tests go through the MCP
+    server, which reads "now" from the database (`ledger.db_now`), so on the real clock they all failed from
+    Thursday 23:59 to the week's turn with `past_cutoff`."""
+    monkeypatch.setattr(ledger, "db_now", lambda conn: NOW)
 
 def submit(expected_plan_hash=None, **arguments):
     body = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()], **arguments).model_dump()
