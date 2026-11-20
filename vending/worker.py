@@ -1,6 +1,6 @@
 """The long-running process in the Container App: the scheduled syncs, a health check and the public pages.
 
-    python -m vending.worker            # every SYNC_EVERY_MINUTES (60), forever
+    python -m vending.worker            # every SYNC_EVERY_MINUTES (60), forever, at SYNC_AT_MINUTE (5) past the hour
     python -m vending.worker --once     # one round, then exit with the worst exit code
 
 Each round runs, in order, `python -m vending.slots check`,
@@ -8,7 +8,11 @@ Each round runs, in order, `python -m vending.slots check`,
 `python -m vending.sync_catalog` and `python -m vending.sync_product_requests`, in this process. `slots check` goes first. It
 only confirms our slot assignment: if the server gives a different one, or none
 is stored, it changes nothing and fails the round until a person runs
-`python -m vending.slots record` (`vending.slots`). Besides the hourly rounds,
+`python -m vending.slots record` (`vending.slots`). The hourly rounds run at
+SYNC_AT_MINUTE (5) minutes past the hour, UTC, because the course staff's poller
+reads the machine on the hour: a new poll reaches the dashboard about five
+minutes after it is taken, not up to an hour later. `off` runs a round every
+SYNC_EVERY_MINUTES from the last, as before. Besides the hourly rounds,
 rounds run 1, 5 and 15 minutes after the slot lock (`SLOTS_LOCK_AT`, the start),
 so the check that confirms the assignment for the competition doesn't wait up to
 an hour, with every reader refusing meanwhile. The schedule uses this host's
@@ -468,10 +472,31 @@ def _slot_lock() -> datetime | None:
         return None
 
 
-def next_round(now: datetime, every_minutes: float, lock: datetime | None) -> datetime:
-    """When the next round runs: `every_minutes` from `now`, or sooner, at the next of the extra rounds after the
-    slot lock (AFTER_LOCK) that falls in between. Their check confirms our assignment for the competition."""
-    due = now + timedelta(minutes=every_minutes)
+def aligns(every_minutes: float) -> bool:
+    """Whether rounds `every_minutes` apart can keep to the same minutes past every hour."""
+    return every_minutes > 0 and (60 % every_minutes == 0 or every_minutes % 60 == 0)
+
+
+def next_round(now: datetime, every_minutes: float, lock: datetime | None,
+               at_minute: float | None = None) -> datetime:
+    """When the next round runs, or sooner, at the next of the extra rounds after the slot lock (AFTER_LOCK)
+    that falls in between. Their check confirms our assignment for the competition.
+
+    With `at_minute`, rounds keep to that many minutes past the hour (UTC), `every_minutes` apart: the
+    first such time after `now`. A round that ran late, or an extra round, doesn't move the ones after it.
+    Without it, the next round is `every_minutes` after `now`. `every_minutes` must align (`aligns`)."""
+    if at_minute is None:
+        due = now + timedelta(minutes=every_minutes)
+    else:
+        step = timedelta(minutes=every_minutes)
+        # Under an hour apart, the first round of the hour is the minute modulo the gap: every 15 at
+        # minute 20 is :05, :20, :35 and :50, so a start at :02 runs at :05, not :20.
+        first = at_minute % every_minutes if every_minutes < 60 else at_minute
+        due = now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=first)
+        if every_minutes % 60 == 0:      # every few hours: count from midnight, so the hours stay put too
+            due = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=at_minute)
+        while due <= now:
+            due += step
     if lock is not None:
         extra = [lock + after for after in AFTER_LOCK if now < lock + after < due]
         if extra:
@@ -496,6 +521,9 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
     parser.add_argument("--once", action="store_true", help="one round, then exit with the worst exit code")
     parser.add_argument("--every", type=float, default=float(os.environ.get("SYNC_EVERY_MINUTES") or 60),
                         help="minutes between rounds (default SYNC_EVERY_MINUTES or 60)")
+    parser.add_argument("--at-minute", default=os.environ.get("SYNC_AT_MINUTE") or "5",
+                        help="minutes past the hour (UTC) the rounds keep to, or off "
+                             "(default SYNC_AT_MINUTE or 5: the staff's poller reads the machine on the hour)")
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("JOB_TIMEOUT_MINUTES") or 30),
                         help="minutes each job may run (default JOB_TIMEOUT_MINUTES or 30)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8080),
@@ -505,6 +533,17 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         parser.error("--every must be above zero")
     if args.timeout <= 0:
         parser.error("--timeout must be above zero")
+    at_minute = None
+    if args.at_minute.strip().lower() != "off":
+        try:
+            at_minute = float(args.at_minute)
+        except ValueError:
+            parser.error("--at-minute must be a number of minutes, or off")
+        if not 0 <= at_minute < 60:
+            parser.error("--at-minute must be from 0 to under 60")
+        if not aligns(args.every):
+            parser.error(f"--every {args.every:g} can't keep to the same minute every hour: "
+                         "use a number that divides 60 or a multiple of 60, or --at-minute off")
     if reads is None and jobs is None and not args.once:
         from vending import visit_polls    # imported here: it needs the database driver, and the worker's other code doesn't
 
@@ -525,7 +564,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             if args.once:
                 return max((r.exit_code if r.exit_code is not None else 1) for r in state.results)
             now = clock()
-            due = next_round(now, args.every, _slot_lock())
+            due = next_round(now, args.every, _slot_lock(), at_minute)
             state.next_round_at = due.isoformat()
             log(f"next round at {due:%Y-%m-%d %H:%M:%S} UTC")
             while True:

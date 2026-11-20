@@ -46,8 +46,8 @@ def test_the_loop_sleeps_between_rounds_and_stops_on_interrupt():
         sleeps.append(seconds)
         if len(sleeps) == 2:
             raise KeyboardInterrupt
-    code = worker.main(["--every", "5", "--port", "0"], jobs=[("a", lambda: rounds.append(1) or 0)],
-                       sleep=sleep, log=lambda _: None)
+    code = worker.main(["--every", "5", "--at-minute", "off", "--port", "0"],
+                       jobs=[("a", lambda: rounds.append(1) or 0)], sleep=sleep, log=lambda _: None)
     assert code == 0 and len(rounds) == 2 and sleeps == [300.0, 300.0]
 
 
@@ -283,5 +283,65 @@ def test_the_loop_sleeps_until_the_round_after_the_lock(monkeypatch):
     def sleep(seconds):
         sleeps.append(seconds)
         raise KeyboardInterrupt
-    worker.main(["--every", "60", "--port", "0"], jobs=[("a", lambda: 0)], sleep=sleep, log=lambda _: None)
+    worker.main(["--every", "60", "--at-minute", "off", "--port", "0"], jobs=[("a", lambda: 0)], sleep=sleep,
+                log=lambda _: None)
     assert 600 < sleeps[0] < 680
+
+
+def test_rounds_keep_to_a_few_minutes_after_the_staff_poll():
+    # The staff's poller reads the machine on the hour, so a round at :05 brings each poll in within
+    # about five minutes, whenever the worker happened to start.
+    from datetime import datetime, timedelta, timezone
+
+    started = datetime(2026, 11, 19, 18, 42, 58, tzinfo=timezone.utc)   # a restart at 18:42
+    assert worker.next_round(started, 60, None, 5) == datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)
+    assert worker.next_round(started, 60, None) == started + timedelta(hours=1)        # off: as before
+    early = datetime(2026, 11, 19, 19, 2, tzinfo=timezone.utc)
+    assert worker.next_round(early, 60, None, 5) == datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)
+    on_time = datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)                       # a round that took no time
+    assert worker.next_round(on_time, 60, None, 5) == datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
+    assert worker.next_round(started, 15, None, 5) == datetime(2026, 11, 19, 18, 50, tzinfo=timezone.utc)
+    assert worker.next_round(started, 120, None, 5) == datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
+    # Under an hour apart with the minute past the gap: every 15 at minute 20 keeps to :05, :20, :35, :50.
+    assert worker.next_round(datetime(2026, 11, 19, 19, 2, tzinfo=timezone.utc), 15, None, 20) ==         datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)
+    assert worker.next_round(datetime(2026, 11, 19, 20, 1, tzinfo=timezone.utc), 15, None, 20) ==         datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
+    late = datetime(2026, 11, 19, 23, 58, tzinfo=timezone.utc)                         # across midnight
+    assert worker.next_round(late, 60, None, 5) == datetime(2026, 11, 20, 0, 5, tzinfo=timezone.utc)
+
+
+def test_the_slot_lock_rounds_still_come_first_and_the_hour_comes_back():
+    from datetime import datetime, timedelta, timezone
+
+    lock = datetime(2026, 12, 3, 5, tzinfo=timezone.utc)                              # midnight Eastern
+    assert worker.next_round(lock - timedelta(minutes=20), 60, lock, 5) == lock + timedelta(minutes=1)
+    assert worker.next_round(lock + timedelta(minutes=1), 60, lock, 5) == lock + timedelta(minutes=5)
+    assert worker.next_round(lock + timedelta(minutes=5), 60, lock, 5) == lock + timedelta(minutes=15)
+    assert worker.next_round(lock + timedelta(minutes=15), 60, lock, 5) == lock + timedelta(hours=1, minutes=5)
+
+
+def test_the_loop_sleeps_until_the_minute_past_the_hour(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(worker, "_slot_lock", lambda: None)
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        raise KeyboardInterrupt
+    before = datetime.now(timezone.utc)
+    worker.main(["--every", "60", "--at-minute", "5", "--port", "0"], jobs=[("a", lambda: 0)], sleep=sleep,
+                log=lambda _: None)
+    due = before + timedelta(seconds=sleeps[0])
+    assert 0 < sleeps[0] <= 3600 and due.minute in (4, 5)         # 4: the clock moved on while the round ran
+
+
+@pytest.mark.parametrize("args", [["--at-minute", "60"], ["--at-minute", "-1"], ["--at-minute", "soon"],
+                                  ["--every", "7"], ["--every", "90"]])
+def test_a_minute_past_the_hour_needs_rounds_that_fit_the_hour(args):
+    with pytest.raises(SystemExit):
+        worker.main([*args, "--port", "0"], jobs=[], log=lambda _: None)
+
+
+def test_off_keeps_any_every():
+    assert worker.main(["--every", "7", "--at-minute", "off", "--once", "--port", "0"],
+                       jobs=[("a", lambda: 0)], log=lambda _: None) == 0
