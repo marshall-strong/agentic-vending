@@ -56,9 +56,9 @@ If all three work, you're set up. The rest of the commands:
 
 | Command | What you get |
 | --- | --- |
-| `history --start 2026-10-20 --end 2026-10-21` | Stored polls in that range: `session_id`, `started_at`, size. Dates are UTC days. |
-| `raw SESSION_ID --out poll.dex` | One stored poll as the raw EVA-DTS text the machine sent |
-| `latest --out latest.dex` | The newest stored poll, raw |
+| `history --start 2026-10-20 --end 2026-10-21` | Stored polls in that range: `session_id`, `started_at`, size, and nothing else the reply holds. Dates are UTC days. |
+| `raw SESSION_ID --out poll.dex` | Saves one stored poll, the raw EVA-DTS text the machine sent, to a file for archiving. Printed instead, a poll from the fall cut on shows only our selections |
+| `latest --out latest.dex` | Saves the newest stored poll, raw, likewise |
 | `products` | The catalog we can order from: single items with `line`, `flavor` and `size`, no prices or pack sizes (three products on 29 Oct, one a test entry) |
 | `request REQUEST_ID` | Where one of our purchase requests has got to |
 
@@ -66,17 +66,17 @@ If all three work, you're set up. The rest of the commands:
 
 ## Other ways in
 
-**The Swagger page is the best way to see what each route takes and returns.** Open http://aihub-pi:8000/docs (Tailscale on), click **Authorize**, paste the key into `X-API-Key`, then use **Try it out** on any `GET` route.
+**The Swagger page is the best way to see what each route takes and returns.** Open http://aihub-pi:8000/docs (Tailscale on), click **Authorize**, paste the key into `X-API-Key`, then use **Try it out** only on the metadata routes: `GET /health`, `/api/v1/slots` and `/api/v1/products`. Don't try the history or poll routes there: their replies hold, or list, whole polls, which carry every selection and the machine-wide totals. Read polls through `scripts/bridge.py`, which shows a poll from the fall cut on only as our selections (`docs/integrity.md`).
 
-**From PowerShell**, read the key out of `.env` and call any `GET` route. Each line is one statement:
+**From PowerShell**, read the key out of `.env` and call a metadata route (the same three). Each line is one statement:
 
 ```
 $key = (Get-Content .env | Where-Object { $_ -like 'DEX_API_KEY=*' }) -replace '^DEX_API_KEY=', ''
 Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/slots' -Headers @{ 'X-API-Key' = $key }
-Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/history?start=2026-10-21&end=2026-10-21' -Headers @{ 'X-API-Key' = $key }
+Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/products' -Headers @{ 'X-API-Key' = $key }
 ```
 
-**Skip the course Postman collection.** It dates from September and only has `/health`, the live poll and an old parse route; the history and purchasing routes aren't in it. If you prefer Postman anyway, import the routes from http://aihub-pi:8000/openapi.json, and keep any Postman environment file out of the repo: it holds the key in plain text.
+**Skip the course Postman collection.** It dates from September and only has `/health`, the live poll and an old parse route; the history and purchasing routes aren't in it. If you prefer Postman anyway, import the routes from http://aihub-pi:8000/openapi.json and use the same three metadata routes only, and keep any Postman environment file out of the repo: it holds the key in plain text.
 
 ## Rules
 

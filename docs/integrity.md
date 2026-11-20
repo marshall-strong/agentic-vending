@@ -75,8 +75,10 @@ repo root points here.
   selections in SQL. Dashboard response filtering is an additional display check.
 - **The bridge script stops at the fall cut too.** `scripts/bridge.py` (`raw`, `latest`,
   `poll --live`) prints a poll taken from the cut on rebuilt from our selections and the door
-  counter only: no other selection and no machine-wide total. A poll from before the cut prints
-  whole (`vending.start.on_or_after_fall_cut`; `tests/test_post_start.py`).
+  counter only: no other selection and no machine-wide total. Only a poll the bridge places before
+  the cut prints whole (the listing's time, our `polls` table's, or the live read's `Date`); one
+  at an unknown time is treated as from the cut. It prints no unchecked field of a reply, and no
+  route's error reply (`vending.start.fall_cut`; `tests/test_post_start.py`).
 - **The fall analysis stops at the fall cut.** `analysis/export_sales.py --fall-all` writes
   per-selection rows for all 40 selections, but only from polls before the cut
   (`analysis/slots_config.py`, `fall_end`: `FALL_CUTOFF`, never later than 3 Dec 2026 00:00

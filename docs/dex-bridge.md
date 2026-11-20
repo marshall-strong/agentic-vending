@@ -33,8 +33,8 @@ the tailnet is down, not the bridge.
 | `health` | `GET /health` | Bridge status. The only route that needs no key |
 | `slots` | `GET /api/v1/slots` | The selections the server currently assigns us on `vmc1`; it may change before 3 Dec |
 | `products` | `GET /api/v1/products` | What we can order, as single items: `sku`, `name`, `line`, `flavor`, `size`. No prices and no pack sizes. Three products on 29 Oct, one of them a test entry |
-| `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes`. **At most 500 per request**: a longer range comes back with `truncated: true`, so ask a day or a week at a time |
-| `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text (from the fall cut on, only our selections; see [below](#from-the-fall-cut-what-each-command-prints)) |
+| `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes` and `truncated`, each checked, and nothing else the reply holds. An entry whose session ID isn't one is left out, and stderr counts it. **At most 500 per request**: a longer range comes back with `truncated: true`, so ask a day or a week at a time |
+| `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text (from the fall cut on, or at an unknown time, only our selections; see [below](#from-the-fall-cut-what-each-command-prints)) |
 | `latest [--summary] [--out FILE]` | history + raw | The newest stored poll. `--summary` prints price and lifetime sales for our slots, from the stored assignment |
 | `request REQUEST_ID` | `GET /api/v1/purchase-requests/{id}` | `pending`, `rejected` with a `decision_note`, or the full receipts |
 | `poll --live [--out FILE]` | `POST /api/v1/poll` | Reads the machine right now. Refuses without `--live` |
@@ -101,12 +101,25 @@ never later than the 3 Dec 2026 00:00 Eastern start (`vending.start.fall_cut`,
 outside our assignment, or any machine-wide total, to a person, the agent or a page. From the start
 the raw poll carries all 40 selections, the other team's 20 too. Storing the raw poll is fine.
 "Ours" means the stored assignment (`vending.slots.our_slots`, so the script needs
-`DATABASE_URL`), never a fresh `slots` answer. A poll is "from the cut" when its `started_at` is
-at or after the cut. `raw` isn't told when its poll was taken, so it places the poll at now: from
-the cut on, it treats every poll as one from the cut. A `FALL_CUTOFF` that isn't a time with its
-offset stops the command (exit 2) before any poll is read.
+`DATABASE_URL`), never a fresh `slots` answer.
 
-| Command | Poll from before the fall cut | Poll from the fall cut on |
+**When a poll was taken comes from the bridge, never from your computer's clock.** A poll prints
+whole only when that time is before the cut. A poll with no known time counts as one from the cut,
+and stderr says why.
+
+- `latest`: the listing's `started_at`. One without a time-zone offset is unknown.
+- `raw SESSION_ID`: the time our `polls` table holds for the session, which the history sync
+  (`python -m vending.sync_history`) copies from the bridge's listing. A session the table doesn't
+  have yet, or no `DATABASE_URL`, is unknown.
+- `poll --live`: the bridge's `Date` header. The bridge writes it after the read, so the read
+  can't be later. A read from another caller (`X-Poll-Cached: true`) is `X-Poll-Age-Seconds` older
+  still. With no readable `Date`, the time is unknown.
+
+The cut is settled before the bridge is asked anything: a `FALL_CUTOFF` that isn't a time with
+its offset stops `raw`, `latest` (with `--summary` too) and `poll --live` with exit 2, with no
+request sent.
+
+| Command | Poll from before the fall cut | Poll from the fall cut on, or at an unknown time |
 |---|---|---|
 | `raw SESSION_ID` | The whole poll, as stored | A rebuilt view (below) on stdout, and a note on stderr saying how many lines were left out |
 | `latest` | The whole poll | The rebuilt view, and the note |
@@ -126,12 +139,14 @@ cash and card records), `ID1`, the other `PA` records, the envelope and `G85` (i
 wouldn't match). With no readable assignment, the view has no `PA` records and stderr says
 "no selection is printed".
 
-**Nothing prints the whole of a poll from the fall cut on.** The `--unredacted` flag is gone. To look
-at the raw bytes for archiving, save them with `--out`.
+**Nothing prints the whole of a poll from the fall cut on.** The `--unredacted` flag is gone.
+`--out FILE` is archival storage: it keeps the raw bytes in a regular file, because storing the
+poll is fine. It is not a way to read them. Reading a saved poll from the cut on follows the same
+rule as printing it: only our selections, and no machine-wide total.
 
-**Errors.** From `history`, `raw`, `latest` and `poll`, an error shows only the status and its
-standard phrase, for example `404: Not Found`, never the bridge's reply. Other routes still
-show what the bridge said.
+**Errors.** From every route, an error shows only the status and its standard phrase, for example
+`404: Not Found`, never the bridge's reply: an error reply could carry a poll's records. A reply
+that isn't JSON where JSON is expected isn't printed either.
 
 ## Purchase requests, in short
 
