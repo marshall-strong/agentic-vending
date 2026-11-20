@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import sys
 import uuid
 from contextlib import contextmanager
@@ -573,7 +574,13 @@ def _require_local(url: str) -> None:
         params = conninfo_to_dict(url)
     except ProgrammingError:
         sys.exit("DATABASE_URL can't be parsed, so it can't be shown to be local")
-    hosts = params.get("host", "").split(",") + params.get("hostaddr", "").split(",")
+    # The environment can redirect a connection too: PGHOSTADDR wins over the URL's host, and a
+    # service file can name any server. Refuse both, and a service named in the URL.
+    if params.get("service") or os.environ.get("PGSERVICE") or os.environ.get("PGSERVICEFILE"):
+        sys.exit("DATABASE_URL or the environment names a Postgres service, which can point anywhere; "
+                 "this tool only runs on a scratch Postgres on this machine")
+    hosts = (params.get("host", "").split(",") + params.get("hostaddr", "").split(",")
+             + os.environ.get("PGHOSTADDR", "").split(","))
     if any(h and h not in ("127.0.0.1", "localhost", "::1") for h in hosts) or not params.get("host"):
         sys.exit("DATABASE_URL isn't a local database; this tool only runs on a scratch Postgres on this machine")
 

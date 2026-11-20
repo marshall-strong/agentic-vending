@@ -276,6 +276,20 @@ def test_the_generator_refuses_a_database_that_isnt_local():
     make._require_local("postgresql://u:p@127.0.0.1:5432/x")
 
 
+@pytest.mark.parametrize("env, url", [
+    ({"PGHOSTADDR": "203.0.113.5"}, "postgresql://u:p@127.0.0.1:5432/x"),   # PGHOSTADDR beats the URL's host
+    ({"PGSERVICE": "azure"}, "postgresql://u:p@127.0.0.1:5432/x"),
+    ({}, "postgresql://u:p@127.0.0.1:5432/x?service=azure"),
+])
+def test_the_generator_refuses_an_environment_that_redirects_the_connection(monkeypatch, env, url):
+    for name in ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(SystemExit):
+        make._require_local(url)
+
+
 def test_the_week_is_made_up_from_a_fixed_moment():
     assert make.AS_OF == datetime.fromisoformat("2026-12-09T15:00:00+00:00")
     sim = make.simulate()
