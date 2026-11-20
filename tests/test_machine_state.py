@@ -471,20 +471,24 @@ def test_door_openings_with_no_receipt_of_ours_change_nothing(conn):
 
 # --- Demand across a product change (#172 item 3) -----------------------------------
 
-def swap(conn, new_sku, polls, now):
-    """Slot 15: Coke loaded Fri 23 Oct, swapped for `new_sku` at the Friday visit of 30 Oct (3:30 PM Eastern).
+def swap(conn, new_sku, polls, now, units=20, then=None):
+    """Slot 15: Coke loaded Fri 23 Oct, swapped for `units` of `new_sku` at the Friday visit of 30 Oct
+    (3:30 PM Eastern).
 
     `polls` are (time, (price, units, cents)) after the last pre-swap poll; no door times, so a window
-    across the swap is split by the cents counter, or left unattributed when it can't be."""
+    across the swap is split by the cents counter, or left unattributed when it can't be. `then(conn)`
+    adds later receipts before the state is read."""
     store_poll(conn, "p0", "2026-10-23T12:00:00+00:00", {"15": (200, 100, 20000)})
     fulfilled(conn, "r1", datetime(2026, 10, 23, 19, 30, tzinfo=timezone.utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
     store_poll(conn, "p1", "2026-10-28T12:00:00+00:00", {"15": (200, 104, 20800)})
     store_poll(conn, "p2", "2026-10-30T18:00:00+00:00", {"15": (200, 106, 21200)})   # 14 Cokes left
-    fulfilled(conn, "r2", datetime(2026, 10, 30, 19, 30, tzinfo=timezone.utc), ("15", new_sku, "primary", "20.00", 20, 0, 0))
+    fulfilled(conn, "r2", datetime(2026, 10, 30, 19, 30, tzinfo=timezone.utc), ("15", new_sku, "primary", "20.00", units, 0, 0))
     conn.execute("update purchase_lines set units_pulled = 13, pulled_sku = 'COKE20', slot_reassigned = true"
                  " where request_id = 'r2'")
     for n, (at, reading) in enumerate(polls):
         store_poll(conn, f"q{n}", at, {"15": reading})
+    if then is not None:
+        then(conn)
     return by_slot(get_machine_state(conn, now=now).data)["15"]
 
 
@@ -546,3 +550,18 @@ def test_demand_counts_only_the_current_products_loads():
     sold = machine_state.stock.SaleCost(datetime(2026, 11, 2, 22, tzinfo=utc), "15", "PEPSI20", 2, 2, None)
     d = _demands({"15": pepsi}, _loads(receipts, now), (sold,), {"15": (250, 0)}, now)
     assert (d["15"].units_sold, d["15"].class_days_in_stock) == (2, 2)
+
+
+def test_unattributed_sales_can_empty_the_slot_so_its_days_arent_counted_in_stock(conn):
+    # Review round 1, item 1. The swap puts in 1 Pepsi. Monday's poll, the first after it, shows 1 unit
+    # sold that the counters can't place, so 0 or 1 Pepsi is left: it may have stood empty all week.
+    # 5 more go in on Fri 6 Nov. Only Mon 9 Nov is surely in stock, so it is not 0 sold over 5 days.
+    s = swap(conn, "PEPSI20", [
+        ("2026-11-02T14:00:00+00:00", (200, 107, 21400)),
+        ("2026-11-04T14:00:00+00:00", (200, 107, 21400)),
+        ("2026-11-06T14:00:00+00:00", (200, 107, 21400)),
+        ("2026-11-09T14:00:00+00:00", (200, 107, 21400)),
+    ], now=datetime(2026, 11, 9, 22, tzinfo=timezone.utc), units=1, then=lambda conn: fulfilled(
+        conn, "r3", datetime(2026, 11, 6, 19, 30, tzinfo=timezone.utc), ("15", "PEPSI20", "primary", "5.00", 5, 0, 0)))
+    assert (s.product, s.stock_on_hand) == ("PEPSI20", 5)
+    assert (s.class_days_in_stock, s.rate_basis.startswith("fall prior")) == (1, True)
