@@ -38,6 +38,9 @@ from typing import Any
 from vending import capacity, config
 
 SHELVES, COLUMNS = 5, 8
+# The mark on the wildcard slot (#166, config `wildcard_slot`): the one fixed slot that tests products.
+WILD_TITLE = "The wildcard: the one fixed slot that tests products and may sell above the regular ceiling"
+WILD_PILL = f'<span class="pill wild" title="{WILD_TITLE}">wildcard</span>'
 
 # --- Package shapes -------------------------------------------------------------------------------
 # d = body diameter (or width), h = overall height, in mm. Bottles add body, shoulder, neck and
@@ -489,6 +492,7 @@ class Lane:
     def __init__(self, slot: str, view: dict, products: dict | None):
         now, nxt = view["now"], view["next"]
         self.slot, self.view, self.change = slot, view, view.get("change")
+        self.wildcard = bool(view.get("wildcard"))
         self.shelf, self.col = (int(slot[0]), int(slot[1])) if len(slot) == 2 and slot.isdigit() else (0, 0)
         self.source = now["source"]
         self.counted = self.source in ("photo", "door")
@@ -541,7 +545,7 @@ class Lane:
         return f"<b>{shown}</b>{tail}"
 
     def aria(self) -> str:
-        parts = [f"Selection {self.slot}"]
+        parts = [f"Selection {self.slot}" + (", the wildcard" if self.wildcard else "")]
         item = self.now_item
         if self.counted_empty:
             parts.append("counted empty")
@@ -836,10 +840,11 @@ def lane_card(lane: Lane, prev: str | None, nxt_slot: str | None, linked: bool) 
                + (f'<a href="#lane-{_e(nxt_slot)}" data-lane="{_e(nxt_slot)}" aria-label="Next lane, selection '
                   f'{_e(nxt_slot)}">&rsaquo;</a>' if nxt_slot else '<span></span>') + '</div>')
     plan_link = (f'<a class="ma-plan" href="#slot-{_e(lane.slot)}">plan row</a>' if linked else "")
-    classes = ["ma-lane"] + (["ma-changed"] if lane.change else [])
+    classes = ["ma-lane"] + (["ma-changed"] if lane.change else []) + (["ma-wild"] if lane.wildcard else [])
     return (f'<article class="{" ".join(classes)}" id="lane-{_e(lane.slot)}" role="group" '
             f'aria-label="{_e(lane.aria())}">{nav}{lane_svg(lane)}<div class="ma-meta">{head_now}{head_next}'
-            f'<p class="ma-ct"><span class="v-now">{now_count}</span><span class="v-next">{next_count}</span></p>'
+            + (f'<p class="ma-wl" title="{WILD_TITLE}">wildcard</p>' if lane.wildcard else "")
+            + f'<p class="ma-ct"><span class="v-now">{now_count}</span><span class="v-next">{next_count}</span></p>'
             f'<p class="ma-chips"><span class="v-now">{now_chip}</span><span class="v-next">{next_chip}</span></p>'
             + (f'<div class="v-now">{"".join(notes_now)}</div>' if notes_now else "")
             + (f'<div class="v-next">{"".join(notes_next)}</div>' if notes_next else "")
@@ -945,10 +950,12 @@ def front_cell(lane: Lane) -> str:
     bar = (f'<span class="fc-g{tone}">' + _gauge(lane.units, now_size, "v-now")
            + (_gauge(after_units, next_size, "v-next fri") if planned else _gauge(lane.units, now_size, "v-next"))
            + "</span>")
-    classes = "fc" + (" fc-chg" if lane.change else "") + (" fc-zero" if lane.units == 0 else "")
+    classes = ("fc" + (" fc-chg" if lane.change else "") + (" fc-zero" if lane.units == 0 else "")
+               + (" fc-wild" if lane.wildcard else ""))
+    wild = f'<span class="fc-w" title="{WILD_TITLE}">W</span>' if lane.wildcard else ""
     return (f'<a class="{classes}" href="#sel-{_e(lane.slot)}" data-sel="{_e(lane.slot)}" '
             f'aria-label="{_e(lane.aria())} Opens its close-up.">'
-            f'<span class="fc-top"><span class="fc-n">{_e(lane.slot)}</span>{_front_marks(lane)}</span>'
+            f'<span class="fc-top"><span class="fc-n">{_e(lane.slot)}</span>{wild}{_front_marks(lane)}</span>'
             f'<span class="fc-mid">{_front_art(lane, after_item, after_units)}<span class="fc-st">{counts}{price}'
             f'</span></span>{names}{bar}</a>')
 
@@ -1047,6 +1054,9 @@ def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first
             ("Next restock", f'<span class="sd-fr {tone}">{restock}</span>' if tone else restock)]
     if first:
         rows.append(("First fill", _e(first["text"])))
+    if lane.wildcard:
+        rows.append(("Wildcard", "the one fixed slot that tests products for the others; it may sell above the "
+                                 "regular ceiling (config <code>wildcard_slot</code>)"))
     caps = []
     for it, cap in ((item, lane.cap), (lane.next_item if lane.next_item is not item else None, lane.next_cap)):
         if it is not None and cap is None:
@@ -1069,7 +1079,8 @@ def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first
     detail = f"<small>{_e(item.detail)}</small>" if item is not None and item.detail else ""
     return (f'<div class="sd" id="sel-{_e(lane.slot)}" data-sel="{_e(lane.slot)}" tabindex="-1">'
             f'<div class="sd-art" aria-hidden="true"></div><div class="sd-body">'
-            f'<div class="sd-h"><span class="sd-n">{_e(lane.slot)}</span><div class="sd-t"><b>{_e(name)}</b>{detail}'
+            f'<div class="sd-h"><span class="sd-n">{_e(lane.slot)}</span><div class="sd-t"><b>{_e(name)}</b>'
+            f'{" " + WILD_PILL if lane.wildcard else ""}{detail}'
             f'</div>{plan_link}</div><dl class="sd-g">{grid}</dl>{why}</div></div>')
 
 
@@ -1163,6 +1174,10 @@ a.fc:hover { border-color:#7d8896; background:#1c2635 } a.fc:focus-visible { out
 .fc-mk.info { background:#18345e; color:#9cc3ff } .fc-mk.warn { background:#4b3309; color:#f7c96b }
 .fc-mk.bad { background:#541b20; color:#ffb0a8 } .fc-mk.fri { background:#0f4a37; color:#7ff0c4 }
 .fc-mk.unk { background:#4a3508; color:#f8cd75 }
+.fc-wild { border-color:#c99a2e; border-style:dashed } .fc-w { font:800 9px/1 Arial, sans-serif; padding:2px 4px; border-radius:3px;
+  background:#c99a2e; color:#1b1404 }
+.ma-wl { margin:2px 0 0; display:inline-block; font-size:10px; font-weight:800; padding:1px 6px; border-radius:999px;
+  background:#4a3508; color:#f8cd75 } .ma-wild { box-shadow:inset 0 -3px 0 #c99a2e }
 .fc-mid { display:flex; align-items:center; gap:3px; min-height:44px }
 .fc-art { flex:none; display:block; width:29px; height:44px }
 .fc-st { display:flex; flex-direction:column; gap:1px; min-width:0 }

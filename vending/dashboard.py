@@ -112,6 +112,8 @@ SYNC_AT_MINUTE = 5
 APPROVALS_DUE = datetime(2026, 11, 26, 5, 0, tzinfo=timezone.utc)
 # The machine's face: 5 shelves of 8 selections. Row r, column c is selection "rc".
 SHELVES, COLUMNS = machine_art.SHELVES, machine_art.COLUMNS
+# The mark on the wildcard slot's rows (#166): the one fixed slot that tests products.
+WILD = machine_art.WILD_PILL
 # What a free-text product name says about its package, for a lane named by a count.
 _package = machine_art.package_from_name
 
@@ -265,6 +267,14 @@ def _our_slots(conn: psycopg.Connection) -> dict:
         return {"ok": False, "why": f"{error}. Run `python -m vending.db migrate` on this database."}
     except SlotsNotRecorded as error:
         return {"ok": False, "why": str(error)}
+
+
+def _wildcard(conn: psycopg.Connection, ours: tuple[str, ...]) -> str | None:
+    """The wildcard slot (config `wildcard_slot`, set once, #166), when it is one of ours; else None.
+    A wildcard the stored assignment doesn't give us is never marked."""
+    row = _optional(conn, "select value from config where key = 'wildcard_slot'")
+    value = row["value"] if row else None
+    return value if isinstance(value, str) and value in ours else None
 
 
 def our_selections(snap: dict) -> tuple[str, ...]:
@@ -837,6 +847,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime |
     snap = {
         "as_of": now,
         "ours": ours,
+        "wildcard": _wildcard(conn, slots),
         "status": _status(conn, now, live_since),
         "plan": _panel(lambda: _plan(conn, slots, now, assignment_at)),
         "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots)),
@@ -1293,7 +1304,7 @@ def machine_view(snap: dict) -> dict:
                           else ["dropped"])
                 change = {"labels": labels, "kind": _change_kind(labels), "reason": (entry or {}).get("reason")}
         out[slot] = {"now": now, "next": nxt, "change": change, "fill_to": _fill(entry),
-                     "reason": (entry or {}).get("reason")}
+                     "reason": (entry or {}).get("reason"), "wildcard": slot == snap.get("wildcard")}
     return out
 
 
@@ -1331,7 +1342,9 @@ def _changes_html(snap: dict, view: dict) -> str:
         else:
             title += f' <span class="hint">{"picked plan" if p["picked"] else "latest, not picked"}</span>'
             rows = "".join(
-                "<li>" + _pick(row["slot"], f'<b>{_e(row["slot"])}</b><span>{_e(row["product"] or "no product")} '
+                "<li>" + _pick(row["slot"], f'<b>{_e(row["slot"])}</b><span>'
+                                            + (f"{WILD} " if row["slot"] == snap.get("wildcard") else "")
+                                            + f'{_e(row["product"] or "no product")} '
                                             f'&middot; {plan_rounds.format_cents(row["price_cents"])} &middot; '
                                             f'{_plural(row["units"], "unit")}</span>', view) + "</li>"
                 for row in p["slots"])
@@ -1352,6 +1365,7 @@ def _changes_html(snap: dict, view: dict) -> str:
                   for s in p["slots"] if s["changed"] and s["slot"] not in view]
         rows = "".join(
             "<li>" + _pick(slot, f'<span class="dotk {c["kind"]}"></span><b>{_e(slot)}</b><span>{_e(", ".join(c["labels"]))}'
+                                 + (f" {WILD}" if slot == snap.get("wildcard") else "")
                                  + (f'<span class="why">{_e(c["reason"])}</span>' if c["reason"] else "") + "</span>",
                            view) + "</li>"
             for slot, c in items)
@@ -1441,12 +1455,14 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
             f'<div class="ops-side">{home}{panel}</div></div>{scrim}</section>')
 
 
-def _slot_num(slot: str) -> str:
-    """A plan row's slot number. One on the machine's face is a link that picks it in the close-up."""
+def _slot_num(slot: str, wildcard: str | None = None) -> str:
+    """A plan row's slot number. One on the machine's face is a link that picks it in the close-up;
+    the wildcard's says so."""
+    mark = f" {WILD}" if slot == wildcard else ""
     if re.fullmatch(rf"[1-{SHELVES}][1-{COLUMNS}]", slot):
         return (f'<a class="num" href="#sel-{_e(slot)}" data-sel="{_e(slot)}" '
-                f'aria-label="Selection {_e(slot)}: show it in the machine">{_e(slot)}</a>')
-    return f'<b class="num">{_e(slot)}</b>'
+                f'aria-label="Selection {_e(slot)}: show it in the machine">{_e(slot)}</a>{mark}')
+    return f'<b class="num">{_e(slot)}</b>{mark}'
 
 
 def _fill_check_html(check: str, reason: str | None) -> str:
@@ -1456,7 +1472,7 @@ def _fill_check_html(check: str, reason: str | None) -> str:
 
 
 def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
-               window: str = "the window") -> str:
+               window: str = "the window", wildcard: str | None = None) -> str:
     """One slot of the plan as a <details>: what it asks for in the summary; the reason, what it was
     and what the slot holds and sold inside."""
     slot, entry, changed = s["slot"], s["now"], compared and s["changed"]
@@ -1503,7 +1519,7 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
     if on_hand is not None:
         now_bits.append(f"{on_hand} left")
     return (f'<details class="pc{" changed" if changed else ""}" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary>{_slot_num(slot)}<span class="now">{" &middot; ".join(now_bits)}</span>'
+            f'<summary>{_slot_num(slot, wildcard)}<span class="now">{" &middot; ".join(now_bits)}</span>'
             f'<span class="what">{what}</span><span class="tags">{tags}</span></summary>{"".join(body)}</details>')
 
 
@@ -1542,14 +1558,15 @@ def _plan_html(snap: dict) -> str:
         controls = (f'<div class="chips">{chips}</div>'
                     '<label class="only" hidden><input type="checkbox" id="changed-only"> '
                     'Show changed slots only</label>')
-    cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]), _window(sales))
+    cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]), _window(sales),
+                               snap.get("wildcard"))
                     for s in p["slots"])
     columns = ('<div class="plan-head" aria-hidden="true"><span>Slot</span><span>Now</span>'
                '<span>Next restock</span><span></span></div>')
     return head + controls + f'<div class="plan-grid" data-only="false">{columns}{cells}</div>'
 
 
-def _first_fill_cell(row: dict) -> str:
+def _first_fill_cell(row: dict, wildcard: str | None = None) -> str:
     slot, checks = row["slot"], row["checks"]
     check, reason = row.get("fill_check"), row["reason"]
     fill_note = _fill_check_html(check, reason) if check else ""
@@ -1567,7 +1584,7 @@ def _first_fill_cell(row: dict) -> str:
                 price, f"Capacity {cap}", f"Fill cost share {cost}"]
     problems = "".join(f'<div class="sub">{_e(reason)}</div>' for reason in checks["refusals"])
     return (f'<details class="pc" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary>{_slot_num(slot)}<span class="what">{_e(row["product"])}'
+            f'<summary>{_slot_num(slot, wildcard)}<span class="what">{_e(row["product"])}'
             f' &middot; {plan_rounds.format_cents(row["price_cents"])}'
             f' &middot; {_plural(row["units"], "unit")}{fill_note}</span></summary>{reason_detail}'
             f'<div class="was"><span class="label">Code checks</span>'
@@ -1598,7 +1615,7 @@ def _plan_section(snap: dict) -> str:
             cost = (f"{plan_rounds.format_cents(expected)} expected, {plan_rounds.format_cents(maximum)} at most"
                     if expected is not None and maximum is not None else "unknown")
             hint += f" &middot; Fill cost {cost} against the proposed {cap} cap"
-            cells = "".join(_first_fill_cell(row) for row in p["slots"])
+            cells = "".join(_first_fill_cell(row, snap.get("wildcard")) for row in p["slots"])
             body = f'<div class="plan-grid first-fill">{cells}</div>'
     return ('<section id="plan"><h2>Plan for the first fill (stocked ~30 Nov) '
             f'<span class="hint">{hint}</span></h2>{body}</section>')
@@ -2217,6 +2234,7 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
 .vm-legend { font-size:12px; color:var(--muted) } .vm-legend p { margin:6px 0 0 }
 .vm-legend > summary .dotk { margin-left:6px } .vm-legend .honest { margin:0 } .vm-legend .more { text-decoration:underline }
 .pc summary a.num { font-weight:700; color:var(--accent) }
+.pill.wild { background:#4a3508; color:#f8cd75; border:1px solid #c99a2e } a.chg .pill.wild { margin-left:4px } .sd-t .pill.wild { margin-right:6px }
 /* The plan: one line per slot; the reason opens beneath. */
 .only { display:inline-flex; gap:6px; align-items:center; font-size:12px; margin:4px 0 8px; cursor:pointer }
 .only[hidden] { display:none }

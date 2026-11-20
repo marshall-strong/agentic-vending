@@ -1624,3 +1624,42 @@ def test_the_page_says_next_restock_for_what_the_plan_does_and_friday_only_for_t
     machine = page[page.index('<section id="vm"'):page.index('<section id="money"')]
     assert "Friday" not in re.sub(r"<[^>]+>", " ", machine).replace("free Friday visit", "")
     assert "Friday" not in dashboard._status_bar(snap)
+
+
+def _set_wildcard(conn, slot: str) -> None:
+    from psycopg.types.json import Jsonb
+    conn.execute("insert into config (key, value, updated_by) values ('wildcard_slot', %s, 'test')"
+                 " on conflict (key) do update set value = excluded.value", (Jsonb(slot),))
+
+
+def test_the_wildcard_slot_is_marked_on_the_front_the_close_up_and_the_plan(conn, page_conn):
+    _set_wildcard(conn, "37")
+    first = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "37", "fill_to": 4}, {"slot": "15", "fill_to": 4}))
+    second = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, second, "submitted", plan=plan({"slot": "37", "fill_to": 6, "sale_price": "7.50"},
+                                                           {"slot": "15", "fill_to": 4}))
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    assert snap["wildcard"] == "37" and '"wildcard": "37"' in dashboard.to_json(snap)
+    page = dashboard.render(snap)
+    cell = section(front_of(page), 'href="#sel-37"', "</a>")
+    assert "fc-wild" in page.split('href="#sel-37"')[0][-40:] and '>W</span>' in cell
+    assert "Selection 37, the wildcard." in page
+    assert '<p class="ma-wl"' in lane_html(page, "37") and 'class="ma-lane ma-changed ma-wild"' in page
+    facts = section(page, '<div class="sd" id="sel-37"', '<div class="sd" id="sel-38"')
+    assert "<dt>Wildcard</dt>" in facts and ">wildcard</span>" in facts
+    changes = section(page, '<a class="chg" href="#sel-37"', "</a>")
+    assert ">wildcard</span>" in changes
+    rows = section(page, '<section id="plan">', "</section>")
+    assert re.search(r'data-sel="37"[^>]*>37</a> <span class="pill wild"', rows)
+    # Only the one slot: no other selection carries the mark.
+    assert page.count('class="fc fc-wild"') + page.count('fc-chg fc-wild"') == 1 and page.count("<dt>Wildcard</dt>") == 1
+
+
+def test_a_wildcard_that_is_not_ours_is_never_marked(conn, page_conn, even_columns):
+    _set_wildcard(conn, "37")                    # 37 isn't in the stored assignment here
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    page = dashboard.render(snap)
+    assert snap["wildcard"] is None and ' fc-wild"' not in page and 'class="ma-wl"' not in page
+    assert "<dt>Wildcard</dt>" not in page and ">wildcard</span>" not in page
+    assert 'data-sel="37"' not in page
