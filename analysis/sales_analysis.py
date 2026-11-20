@@ -1297,7 +1297,9 @@ def main():
     #    window really starts); a sale before the slot's first reading takes that reading.
     #    When the price at the interval's closing poll differs, the units are split between the two prices by the interval's
     #    units and cents (boundary_units.price_sales), if the unit and cents counters rose over the same window (a misread
-    #    in one of them moves its window's start); units the counters can't split are left out of the average price and
+    #    in one of them moves its window's start); a price listed only between the two (150, 250, 150 across a window
+    #    widened by a misread) is a price the units may have sold at too, so every price seen in the window takes part, and
+    #    the split must be the one whole split that fits; units the counters can't split are left out of the average price and
     #    counted in price_unknown_units, never credited to the opening price. Takings (cents) are never changed.
     #  * price on a day (slot_daily.p) = the listed price at 12:00 noon ET: the last reading before noon, or, on a day with
     #    no reading before noon, the day's first reading; days with no reading carry the last price forward.
@@ -1306,7 +1308,7 @@ def main():
         r_ = rd[rd.slot == s]
         priced.update(zip(g.index, price_sales(list(zip(r_.t, r_.lifetime_units, r_.lifetime_sales_cents, r_.price_cents)),
                                                list(zip(g.prev, g.t, g.units, g.cents)))))
-    for k, col in enumerate(["price_at_sale", "price_close", "units_open", "units_close", "units_unknown"]):
+    for k, col in enumerate(["price_at_sale", "price_close", "units_open", "units_close", "units_unknown", "units_other"]):
         sales[col] = [priced[i][k] for i in sales.index]
     sales = sales.sort_values(["t", "slot"]).reset_index(drop=True)
     sale_list = {s: list(sales[sales.slot == s].sort_values("t")[["prev", "t", "units"]].itertuples(index=False)) for s in slots}
@@ -1328,7 +1330,7 @@ def main():
         # average price = units-weighted price in effect at each sale on regular-era class days; a slot with no such sale
         # takes the mean of its noon listed price over those days
         sc = su[su.date.isin(set(reg_class))]
-        avg_p, avg_rule, unknown = slot_average_price(zip(sc.price_at_sale, sc.price_close, sc.units_open, sc.units_close, sc.units_unknown),
+        avg_p, avg_rule, unknown = slot_average_price(zip(sc.price_at_sale, sc.price_close, sc.units_open, sc.units_close, sc.units_unknown, sc.units_other),
                                                       lambda: price_day.loc[reg_class, s].mean())
         last_sale = su.t.max() if len(su) else None
         slot_rows.append(dict(
