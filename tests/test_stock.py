@@ -985,3 +985,19 @@ def test_a_read_inside_the_visit_attributes_every_unit_where_hourly_polls_cannot
     for stock, unknown in ((no_read_inside, 2), (hourly, 4)):
         assert sum(s.units for s in stock.sales if s.cost_cents is None) == unknown
         assert any("the counters can't split them" in w for w in stock.warnings)
+
+
+def test_a_sale_carries_the_poll_its_window_was_measured_from():
+    """`SaleCost.since`: the window is (since, at], the counters' own, for each share of a split window and for
+    a window left whole; after a misread it is the good poll before it, not the misread."""
+    split = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    assert [(s.product, s.since, s.at) for s in split.sales] == [
+        ("ARIZONA", hours(1), hours(5)), ("REDBULL", hours(1), hours(5))]
+    whole = book(swap(sku="COKE20", total_paid="8.00"),
+                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(2), 100, 20000, 200),
+                           ("15", hours(5), 102, 20400, 200)])
+    assert [(s.product, s.since, s.at) for s in whole.sales] == [(None, hours(2), hours(5))]
+    misread = book(swap(sku="COKE20", total_paid="8.00"),
+                   counters=[("15", hours(1), 100, 20000, 200), ("15", hours(4), 40, 8000, 200),
+                             ("15", hours(5), 102, 20400, 200)])
+    assert [(s.product, s.since, s.at) for s in misread.sales] == [(None, hours(1), hours(5))]

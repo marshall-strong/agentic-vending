@@ -563,3 +563,47 @@ def test_a_sale_booked_by_a_poll_at_the_swaps_own_moment_leaves_the_trial_unknow
     _swap_with_a_sale_in_its_window(conn, new_price=250, first_at=SINCE.isoformat())
     t = _swap_trial(conn)
     assert t.verdict == UNKNOWN and "switch to AAA" in t.reason, t
+
+
+def _swap_with_polls_then_a_week(conn, rows):
+    """Slot 15 held ZZZ at $2.50 from 9 Oct; at SINCE it switches to 20 AAA. `rows` are the polls around the swap,
+    `(session_id, ISO time, (price, units, cents))`; then each class day sells 3 at $3.00, seen at its evening poll,
+    so the week after is a pass whatever happened around the swap."""
+    from tests.conftest import TEST_SLOTS
+
+    fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 10, 0, 0),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0))
+    rows = [(sid, at, {"15": reading}) for sid, at, reading in rows]
+    units, cents = rows[-1][2]["15"][1:]
+    for n, day in enumerate(DAYS):
+        units, cents = units + 3, cents + 900
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+
+
+def test_a_sale_in_the_window_after_a_poll_at_the_swaps_own_moment_leaves_the_trial_unknown(conn):
+    """The poll at the receipt's time still reads the old $2.50: it came before the worker swapped. The next poll
+    reads $3.00 and one more unit, at $2.50 in the cents: the old drink's. The replay's window starts at the receipt
+    time, so it books that unit to AAA, but nothing settled it: the window may hold the swap."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("p1", SINCE.isoformat(), (250, 100, 25000)),
+        ("p2", "2026-10-16T21:00:00+00:00", (300, 101, 25250))])
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
+
+
+def test_a_recovered_misread_doesnt_hide_an_unsplit_swap_sale(conn):
+    """Swap at 20:00, the polls read 18:00 normal, 21:00 a low misread, 22:00 recovered. The one unit sold is in the
+    window from 18:00 to 22:00 (the misread is no poll), at $2.50 on both sides: the replay leaves it unattributed,
+    booked at 22:00, after the first poll that follows the swap."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("m1", "2026-10-16T21:00:00+00:00", (250, 40, 10000)),
+        ("p2", "2026-10-16T22:00:00+00:00", (250, 101, 25250))])
+    counted = stock.stock(conn, until=FRESH)
+    assert [(x.product, x.units) for x in counted.sales if x.slot == "15" and x.unattributed] == [(None, 1)]
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
