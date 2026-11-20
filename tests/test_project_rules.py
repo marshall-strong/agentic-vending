@@ -178,3 +178,9 @@ def test_a_visit_can_change_any_of_our_slots_within_the_api_and_wildcard_rules()
     for text in (restocking, policy):
         assert "can change anything" not in text
         assert "within the request API and the wildcard rules" in text and "no limit on units or lines" in text
+
+
+def test_restocking_lets_a_floor_bound_plan_load_just_the_closet_units():
+    """Review finding 6: one source per line, so when the floor binds a fill_to can load only what the closet holds."""
+    rule = (RULES_DIR / "restocking.md").read_text(encoding="utf-8")
+    assert "If the floor binds, an explicit `fill_to` may load just the closet's units" in rule

@@ -15,7 +15,7 @@ One free restock every Friday; an extra dispatch costs $25 per request (not per 
 
 **How this works for us.** A restock is one desired state for all 20 slots. Check it with `preview_desired_state` first: it returns the request lines, the worker's directive, the cost, the balance left and every refusal. A midweek visit is the same request with the off-cycle flag. Check `get_purchase_requests` too: never send a second request while one is pending. At any visit, any of our slots can be changed, within the request API and the wildcard rules, with no limit on units or lines (Kevin, 19 Nov).
 
-**Every restock, fill every slot** (Kevin, 19 Nov). Each visit's plan lists each of our slots, not as `keep`, without `fill_to`, so each fills to its column. Almost every visit is Friday's: $25 is a lot. The planner loads from the closet when it covers the gap, else buys. Exceptions, each named in the slot's reason:
+**Every restock, fill every slot** (Kevin, 19 Nov). Each visit's plan lists each of our slots, not as `keep`, without `fill_to`, so each fills to its column. Almost every visit is Friday's: $25 is a lot. The planner loads from the closet when it covers the gap, else buys. If the floor binds, an explicit `fill_to` may load just the closet's units. Exceptions, each named in the slot's reason:
 
 - A flagged slow seller gets a swap.
 - The wildcard follows `wildcard`: at most $82.00 a purchase, and no more of its product while another slot holds it.
