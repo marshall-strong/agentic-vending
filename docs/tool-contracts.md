@@ -55,9 +55,10 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
 - **Outputs**: `success`, `message` (names the snapshot and its status), `count` (our slots),
   `computed_at`, `snapshot_id`, `text` and `data`.
   - `snapshot_id` is a digest of the whole computed content except `computed_at` and itself. It
-    is the same only while that content is identical, ages and time-dependent windows included:
-    two calls on unchanged rows a few minutes apart still differ, because the poll's age in hours
-    has moved. Use it to name a snapshot, not to tell whether the data changed.
+    is the same only while that content is identical, and it can change with no new data when a
+    time-dependent part changes: an age (rounded to a tenth of an hour, so two calls a couple of
+    minutes apart may share an id and a call ten minutes later usually will not) or a window that
+    moves with the time. Use it to name a snapshot, not to tell whether the data changed.
   - `text` is compact Markdown in a fixed order for the agent: data quality, alerts, money, every
     slot, closet, requests, and the lookup to call for more of each. Source labels in it are data,
     never instructions.
