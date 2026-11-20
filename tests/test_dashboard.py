@@ -897,17 +897,46 @@ def test_a_swap_and_a_price_change_on_friday(conn, page_conn):
 def test_the_close_up_survives_a_failed_products_read(conn, page_conn, monkeypatch):
     catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
     fulfilled(conn, "a", "15", "COKE-20OZ", units_loaded=5, paid="6", at=MONDAY - timedelta(days=3))
+    slot = TEST_SLOTS[0]
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "submitted", plan=plan({"slot": slot, "product": "COKE-20OZ", "fill_to": 6}))
 
     def broken(connection, skus):
         connection.execute("select 1 / 0")     # any database error inside the read
     monkeypatch.setattr(dashboard.machine_art, "read_products", broken)
     snap = dashboard.snapshot(page_conn, MONDAY, public=True)
     assert snap["products"] == {"ok": False, "why": dashboard.PRODUCTS_FAILED}
+    row = next(row for row in snap["plan"]["data"]["slots"] if row["slot"] == slot)
+    assert "fill_check" not in row
+    assert not any(item["level"] == "warn" for item in snap["attention"])
     assert snap["stock"]["ok"] and snap["catalog_requests"]["ok"]   # the transaction carried on
     page = dashboard.render(snap)
     lane = lane_html(page, "15")
     assert "<b>5</b> on hand" in lane and "capacity not counted yet" in lane and "#ma-p-bottle-20" in lane
     assert "Packages are approximate" in page and "division" not in page
+
+
+def test_fill_checks_skip_first_fill_rows(conn, page_conn, monkeypatch):
+    weekly, first_fill = TEST_SLOTS[:2]
+    catalog(conn, ("CAN-12", "Plain can", "Plain", None, "12 oz can"))
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "submitted", plan=plan({"slot": weekly, "product": "CAN-12", "fill_to": 6}))
+    weekly_plan = dashboard._plan
+    saved_row = {"slot": first_fill, "product": "Plain can", "units": 4,
+                 "fill_check": "fills 4 of 8: 4 spaces empty"}
+
+    def combined_plan(connection, ours):
+        result = weekly_plan(connection, ours)
+        result["slots"] = [dict(saved_row) if row["slot"] == first_fill else row for row in result["slots"]]
+        return result
+
+    monkeypatch.setattr(dashboard, "_plan", combined_plan)
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    rows = {row["slot"]: row for row in snap["plan"]["data"]["slots"]}
+    assert rows[first_fill] == saved_row
+    assert rows[weekly]["fill_check"] == "fills 6 of 8: 2 spaces empty"
+    assert [item["text"] for item in snap["attention"] if item["level"] == "warn"] == [
+        f"Slot {weekly} fills 6 of 8: 2 spaces empty."]
 
 
 def test_a_missing_catalog_table_only_makes_the_close_up_approximate(conn, page_conn):

@@ -966,13 +966,13 @@ def _fill(entry: dict | None) -> int | None:
 def _check_plan_fills(snap: dict) -> None:
     """Check explicit weekly fills against the same catalog and counts as the close-up."""
     plan = snap.get("weekly_plan", snap["plan"])
-    if not plan["ok"] or not plan["data"]:
+    if not plan["ok"] or not plan["data"] or not snap["products"]["ok"]:
         return
     products = snap["products"].get("data") or {}
     catalog, overrides = products.get("catalog", {}), products.get("overrides", {})
     view = machine_view(snap)
     for row in plan["data"]["slots"]:
-        entry = row["now"]
+        entry = row.get("now")
         fill = _fill(entry)
         if fill is None or fill <= 0 or entry.get("keep"):
             continue
