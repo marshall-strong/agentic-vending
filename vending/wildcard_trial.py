@@ -49,7 +49,9 @@ for units marked unattributed in it (nothing shows how long the new stock lasted
 not for a window the counters settled: its units went to a product, the old one's
 share leaves the new stock's count, and the interval is left out either way. The
 slot's first receipt has no earlier product for the replay to split from, so any
-sale in the window holding that load leaves the verdict unknown.
+sale in the window holding that load leaves the verdict unknown. So does a window
+that starts at the swap's own moment, and a window the polls measured across a
+misread is judged by where it really starts.
 Units sold past what the receipts loaded have no cost, so they make the profit
 unknown rather than free.
 
@@ -416,11 +418,11 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
     held_before = any(at < w.since for at, _ in loads.get(slot, []))
     across = _unsplit_over(slot, w.since, readings, sales, held_before)
     if across:
-        # Units sold in the poll window that holds the swap that nothing settled may be the old product's or the
+        # Units sold in a window that holds the swap that nothing settled may be the old product's or the
         # trial's, so how long the trial's own stock lasted is unknown. Fail closed. That is the units the stock
-        # replay carries as unattributed (#172), or any, when this is the slot's first receipt. A window the
-        # counters or door times did settle isn't here: the replay booked its units to a product, and the
-        # interval holding the swap is left out of the measure anyway.
+        # replay carries as unattributed (#172), a window that starts at the swap's own moment, or any, when this
+        # is the slot's first receipt. A window the counters or door times did settle isn't here: the replay
+        # booked its units to a product, and the interval holding the swap is left out of the measure anyway.
         return Trial(None, slot, False, UNKNOWN, (
             f"{sum(s.units for s in across)} units sold in the poll window over slot {slot}'s switch to {w.product} "
             f"(booked at {across[0].at:%Y-%m-%d %H:%M} UTC), and nothing can split them for sure between the old "
@@ -467,23 +469,34 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
 
 def _unsplit_over(slot: str, swap: datetime, readings: list[Reading], sales: tuple[stock.SaleCost, ...],
                   held_before: bool) -> list[stock.SaleCost]:
-    """The slot's sales booked in the poll window that holds `swap`, ends included, that nothing settled. Pure.
+    """The slot's sales whose measured window (`SaleCost.since` to `at`) holds `swap`, that nothing settled. Pure.
 
-    The window runs from the last poll before the swap to the first one after it. A poll at the swap's own moment
-    is inside it, not an end: a visit's time is when it finished, so that poll may have read either product.
+    The window is the replay's own, so one that spans a misread or a gap in the polls is judged by where it
+    really starts, not by the polls around the swap. Both ends are inside it: a visit's time is when it
+    finished, so a poll at the swap's own moment may have read either product.
 
-    With `held_before` (an earlier receipt put a product in the slot) the stock replay split the window by our
+    With `held_before` (an earlier receipt put a product in the slot) the stock replay split such a window by our
     receipt, the counters and the price at each end, and carries what it couldn't as unattributed
     (`SaleCost.product` None): only those are returned, not the units it booked to a product, the old one's
-    share of a split window included. Without it, this load is the slot's first receipt: the replay sees no
-    change, so it books every sale after the load to the new product, but units sold in the window may have been
-    what stood in the slot before. Nothing splits them, so every sale in the window is returned.
+    share of a split window included. Two cases are returned whatever the replay booked them to:
+    - A window that starts at the swap's own moment. The replay takes the swap to be before it, but the poll
+      that started it may have come before the worker swapped, so it may hold the old product's sales.
+    - Every window, when this load is the slot's first receipt: the replay sees no change, so it books every
+      sale after the load to the new product, but units sold in the window may have been what stood in the slot
+      before. Nothing splits them.
+    A sale with no recorded window (a replay fed by hand) is judged by the polls around the swap instead, and
+    every one there is returned.
     """
     before = [at for at, _, _, _ in readings if at < swap]
     after = [at for at, _, _, _ in readings if at > swap]
     lo, hi = (max(before) if before else swap), (min(after) if after else None)
-    return sorted((s for s in sales if s.slot == slot and s.units > 0 and (s.product is None or not held_before)
-                   and lo <= s.at and (hi is None or s.at <= hi)), key=lambda s: s.at)
+
+    def unsplit(s: stock.SaleCost) -> bool:
+        if s.since is None:
+            return lo <= s.at and (hi is None or s.at <= hi)
+        return s.since <= swap <= s.at and (s.product is None or not held_before or s.since == swap)
+
+    return sorted((s for s in sales if s.slot == slot and s.units > 0 and unsplit(s)), key=lambda s: s.at)
 
 
 def judged_by(now: datetime) -> datetime:

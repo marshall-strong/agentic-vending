@@ -115,6 +115,7 @@ class Movement:
     price_after: int | None = None       # sale: the slot's price at `at`, in cents
     price_prior: int | None = None       # sale: the price at the poll before `since`, in cents
     prior_at: datetime | None = None     # sale: when that poll was taken
+    window_since: datetime | None = None # sale: the counters' window start; `since` moves when a window is split
     booked_at: datetime | None = None    # sale_before_change: the poll that measured its window
     changes: int = 0                     # sale: product changes inside a window left unsplit
     opened_at: datetime | None = None    # purchase, load: the door opened then; `at` is door close (None: no door times)
@@ -194,6 +195,7 @@ class SaleCost:
     taken_at: datetime | None = None   # when the units left the count, if before `at`
     unattributed_cost_cents: Fraction | None = None   # an unsplit window's cost; see above
     unattributed: str = ""             # why the product is unknown; empty when it is known
+    since: datetime | None = None      # the poll before `at`: the measured window is (since, at]
 
 
 @dataclass(frozen=True)
@@ -415,7 +417,7 @@ def sales_from_counters(rows: list[tuple]) -> list[Movement]:
                                   price_before=prices.get((selection, start)),
                                   price_after=prices.get((selection, at)),
                                   price_prior=prices.get((selection, before.get(start))),
-                                  prior_at=before.get(start)))
+                                  prior_at=before.get(start), window_since=start))
     return moves
 
 
@@ -907,7 +909,8 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                              f"{slot.product}'s count, which may be the wrong product's")
                 slot.unattributed += m.units
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
-                                      unattributed=f"sold while {m.door_conflict}'s door times say the door was open"))
+                                      unattributed=f"sold while {m.door_conflict}'s door times say the door was open",
+                                      since=m.window_since))
             elif m.kind == "sale" and (across_change or m.changes):
                 # Still taken from the count (the new one, unless the door times show the
                 # window ended before it went in), so on hand errs low, but their cost
@@ -931,12 +934,13 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 # Main costed a window it read as all new in cost_cents; it stays there (see `SaleCost`).
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, cost if m.read_as_new else None,
                                       unattributed_cost_cents=None if m.read_as_new else cost,
-                                      unattributed=f"sold {across}; the counters can't split them"))
+                                      unattributed=f"sold {across}; the counters can't split them",
+                                      since=m.window_since))
             else:
                 slot.sold += m.units
                 slot.at_most = max(0, slot.at_most - m.units)
                 sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, costed, cost,
-                                      taken_at=m.at if m.booked_at else None))
+                                      taken_at=m.at if m.booked_at else None, since=m.window_since))
 
     for name, slot in sorted(slots.items()):
         if slot.oversold:

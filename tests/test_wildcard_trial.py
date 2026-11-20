@@ -257,22 +257,25 @@ def test_a_missing_price_never_turns_a_price_test_into_a_trial(conn):
 
 
 def test_money_comes_from_the_same_windows_as_the_units(conn):
-    # The units counter misread at the first poll after the load, so the units window runs from before the
-    # load and is left out. The cents window from that poll must be left out with it: $3.00 of takings on
-    # no counted units would be profit from nothing.
+    # The units counter misread at the second poll after the load, so the units window runs from the poll
+    # before it, and the cents window from the misread poll must join it: that unit and its $3.00 count
+    # together, or $3.00 of takings on no counted units would be profit from nothing. (At the first poll
+    # after a slot's first load the window would span the load, and its one unit is unknown: see
+    # `_unsplit_over`.)
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
     stock_the_rest(conn)
-    store_poll(conn, "p1", "2026-10-16T21:00:00+00:00", {"15": (300, 5, 30000), "16": (200, 50)})
-    rows = [("p2", "2026-10-16T22:00:00+00:00", {"15": (300, 101), "16": (200, 50)})]
+    store_poll(conn, "p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100, 30000), "16": (200, 50)})
+    store_poll(conn, "p2", "2026-10-16T22:00:00+00:00", {"15": (300, 5, 30000), "16": (200, 50)})
+    rows = [("p3", "2026-10-16T23:00:00+00:00", {"15": (300, 101), "16": (200, 50)})]
     rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, 104 + 3 * n), "16": (200, 52 + 2 * n)})
              for n, day in enumerate(DAYS)]
     polls(conn, rows)
     set_wildcard(conn, "15")
     t = get_machine_state(conn, now=NOW).wildcard_trial
-    # The profit is 18 units' worth: $54.00 of takings, $50.00 without tax, less 18 x $0.50.
-    assert (t.units_sold, t.class_days_in_stock) == (18, 6)
-    assert t.profit_per_class_day == f"{(5000 - 900) / 100 / 6:.2f}"
+    # The profit is 19 units' worth: $57.00 of takings, $52.78 without tax (422 cents of tax inside), less 19 x $0.50.
+    assert (t.units_sold, t.class_days_in_stock) == (19, 6)
+    assert t.profit_per_class_day == f"{(5700 - 422 - 950) / 100 / 6:.2f}"
 
 
 def test_days_without_polls_are_not_days_with_no_sales(conn):
