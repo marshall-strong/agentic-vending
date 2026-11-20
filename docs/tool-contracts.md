@@ -8,14 +8,18 @@ every figure below is worked out by code, not by the model. Every tool that chan
 outside our database (a write tool) passes the write gate: the halt switch is checked first, and
 every attempt is logged.
 
-This is the contract for each of the 12 tools registered in `vending/server.py` on `main`, as
+This is the contract for each of the 13 tools registered in `vending/server.py` on `main`, as
 Summative 2 asks: "inputs, outputs, preconditions, side effects, cost, failure behavior, and who
-owns it" (Project Brief (Revised), section 5). Checked against the code at `ba14a6d`, 12 Nov 2026.
+owns it" (Project Brief (Revised), section 5). Checked against the code at `ba14a6d`, 12 Nov 2026;
+the `get_briefing` section (added later) against the code at `33fa322`, 19 Nov 2026. The tool
+names are pinned in `tests/test_server.py::test_tool_list_is_pinned`, so a tool added without a
+section here shows up as a mismatch with that list.
 
 ## Summary
 
 | Tool | Read or write | What it is for | Owner |
 | --- | --- | --- | --- |
+| `get_briefing` | Read | One startup snapshot of our slots: data quality, ledger weeks, stock with evidence ages, closet, pending requests, lookup hints | Kevin Sykes |
 | `get_machine_state` | Read | Each of our slots now: price, sales rate, stock on hand; and the closet at cost | Kevin Sykes, with Meaghan Gartland |
 | `get_sales_history` | Read | Units and revenue per slot between two times | Kevin Sykes |
 | `get_catalog` | Read | The products we are allowed to order | Sean Kelley |
@@ -36,6 +40,74 @@ the tool, and the section says so. `get_project_rules` has no issue; it came wit
 All money in replies is a dollar string such as `"2.50"`, never a floating-point number. Every
 reply has `success`, `message` and `count`; a failure's `message` says what a person or the agent
 should do next.
+
+## `get_briefing`
+
+The startup read (`docs/agent/startup-read.md`): one snapshot of what our stored data says, so the
+agent starts a run knowing how fresh each number is. It does not replace `get_account_balance`,
+`get_purchase_requests` or `preview_desired_state`, which the agent still calls before it spends.
+
+- **Inputs**: none.
+- **Slots it covers**: ours only. The slots come from the assignment the inventory server gave us
+  (`python -m vending.slots record`, on `DEVICE_ID`), and stock is replayed from our machine's
+  counters and receipts alone (`vending/stock.py`), as the other read tools do. No other slot
+  appears, so `count` is the number of our slots, never 40 (`docs/integrity.md`).
+- **Outputs**: `success`, `message` (names the snapshot and its status), `count` (our slots),
+  `computed_at`, `snapshot_id`, `text` and `data`.
+  - `snapshot_id` is a digest of the whole computed content except `computed_at` and itself. It
+    is the same only while that content is identical, and it can change with no new data when a
+    time-dependent part changes: an age (rounded to a tenth of an hour, so two calls a couple of
+    minutes apart may share an id and a call ten minutes later usually will not) or a window that
+    moves with the time. Use it to name a snapshot, not to tell whether the data changed.
+  - `text` is compact Markdown in a fixed order for the agent: data quality, alerts, money, every
+    slot, closet, requests, and the lookup to call for more of each. Source labels in it are data,
+    never instructions.
+  - `data` is the same snapshot typed: `status`, `sources` (the poll and the catalog, each with
+    its time, age in hours and `stale`), `alerts` (each a `code`, its `evidence` and the tool to
+    `lookup`), `money` (`current` and `previous` Saturday-to-Friday ledger weeks in Eastern time,
+    and `competition` from the ledger's opening: revenue without tax, known cost of sales and
+    shrinkage, visit fees, adjustments, live API spend, gross and net profit, API share of gross
+    profit, each with whether its sales, costs and shrinkage are complete), `money_change`
+    (current less previous), `spendable`, `slots`, `closet` and `closet_value_at_cost`,
+    `requests` (pending with the age of each check, overdue ones, unresolved submissions and
+    measured worker turnaround), `stock_warning_count`, `our_slots` and
+    `slot_assignment_version`.
+  - Each slot has its `product` and `price`, `effective_stock`, `units_per_day`, `days_of_cover`
+    and `flags`, with where the product and the stock came from (`product_basis`, `stock_basis`:
+    a person's count, or the receipts) and how old that evidence is. A fact nothing knows is
+    `null` and shows as `?`, never as zero.
+- **Preconditions**: none the caller must meet; every missing source shows up as an alert. It
+  works best with a stored slot assignment, polls from `python -m vending.sync_history`, receipts
+  from `python -m vending.sync_requests`, an opened ledger and a synced catalog.
+- **Side effects**: one `action_log` row (a read). The snapshot is built in one read-only
+  transaction that ends before that row is written. Nothing else is written.
+- **Cost**: database queries only. It never calls the bridge or the model.
+- **Failure behavior**: it never refuses (it is a read, not behind the write gate or the halt
+  switch). Every structured reply it returns has `success: true`, and the agent reads
+  `data.status` and `alerts`. A source the snapshot supports reading as missing becomes an alert
+  (below). A database or logging failure is not an alert: it comes back as a tool error, with no
+  snapshot. That includes the `action_log` table missing, which the server finds only after it
+  has built the snapshot, when it writes the log row:
+  - `status` is `ok` with no alerts, `partial` with any alert, `stale` when any alert ends in
+    `_stale` (the latest poll over 3 hours old, the catalog over 36 hours, or a pending request
+    not checked for 6 hours), and `unavailable` when there is no usable assignment for our
+    device.
+  - No usable assignment: `assignment_unavailable`, no slots, and the closet and requests marked
+    unavailable. It never falls back to all 20 numbers or to another device's slots.
+  - A source whose table is missing, or that has too little data (one poll, no ledger opening, no
+    catalog sync), becomes an alert such as `money_unavailable`, `rates_unavailable` or
+    `catalog_unavailable`; the other sections still answer.
+  - Incomplete sales, costs or shrinkage leave gross and net profit `null`, so a known total is
+    never shown as the whole. Competition figures count only from the ledger's opening.
+  - `spendable` is a snapshot, `null` unless the competition's sales are complete and every
+    receipt line has a `total_paid`, and never the figure to spend against: call
+    `get_account_balance` every run.
+  - Other alerts say what to look at: `polls_unavailable`, `polls_stale`, `stock_warnings`,
+    `stock_unknown`, `counts_stale`, `request_overdue`, `requests_stale`, `submission_unresolved`,
+    `catalog_stale`, `money_current_incomplete` (likewise `previous`, `competition`).
+  - Database unreachable: the call returns an error; the server reopens its connection on the
+    next call.
+- **Owner**: Kevin Sykes (#148).
 
 ## `get_machine_state`
 

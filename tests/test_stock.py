@@ -985,3 +985,43 @@ def test_a_read_inside_the_visit_attributes_every_unit_where_hourly_polls_cannot
     for stock, unknown in ((no_read_inside, 2), (hourly, 4)):
         assert sum(s.units for s in stock.sales if s.cost_cents is None) == unknown
         assert any("the counters can't split them" in w for w in stock.warnings)
+
+
+def test_a_sale_carries_the_poll_its_window_was_measured_from():
+    """`SaleCost.since`: the window is (since, at], the counters' own, for each share of a split window and for
+    a window left whole; after a misread it is the good poll before it, not the misread."""
+    split = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    assert [(s.product, s.since, s.at) for s in split.sales] == [
+        ("ARIZONA", hours(1), hours(5)), ("REDBULL", hours(1), hours(5))]
+    whole = book(swap(sku="COKE20", total_paid="8.00"),
+                 counters=[("15", hours(1), 100, 20000, 200), ("15", hours(2), 100, 20000, 200),
+                           ("15", hours(5), 102, 20400, 200)])
+    assert [(s.product, s.since, s.at) for s in whole.sales] == [(None, hours(2), hours(5))]
+    misread = book(swap(sku="COKE20", total_paid="8.00"),
+                   counters=[("15", hours(1), 100, 20000, 200), ("15", hours(4), 40, 8000, 200),
+                             ("15", hours(5), 102, 20400, 200)])
+    assert [(s.product, s.since, s.at) for s in misread.sales] == [(None, hours(1), hours(5))]
+
+
+def test_a_hand_built_sale_keeps_its_window_start_through_a_split():
+    """A sale `Movement` made with only `since` (no counters' `window_since`) still reports where its window began,
+    for a window left whole and for both shares of a split one."""
+    from vending.stock import Movement
+
+    whole = replay(movements_from_receipts([line(units_loaded=10)], []) + [
+        Movement(hours(5), "sale", "15", None, units=1, since=hours(2))])
+    assert [(s.since, s.at) for s in whole.sales] == [(hours(2), hours(5))]
+    sale = Movement(hours(5), "sale", "15", None, units=2, since=hours(1), cents=600, price_before=200, price_after=400)
+    split = replay(movements_from_receipts(swap(), []) + [sale])
+    assert [(s.product, s.since) for s in split.sales] == [("ARIZONA", hours(1)), ("REDBULL", hours(1))]
+
+
+
+def test_movements_keep_their_positional_field_order():
+    """`booked_at` is the 19th field: a caller that passes it positionally must not have it land in `window_since`,
+    which was added later and comes last."""
+    from vending.stock import Movement
+
+    positional = Movement(hours(5), "sale_before_change", "15", "ARIZONA", 1, 0, 0, 0, None, None, False, "",
+                          None, None, None, None, None, None, hours(6))
+    assert positional.booked_at == hours(6) and positional.window_since is None

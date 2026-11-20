@@ -121,6 +121,13 @@ class Movement:
     seq: int = 0                         # receipt movements: the request's place in submission order (0: unknown)
     door: tuple[datetime, datetime] | None = None   # receipt movements: the receipt's door times, even if not used
     notes: tuple[StockWarning, ...] = ()  # warnings to pass on when this movement is replayed, each with its slot
+    # Last, so no earlier field's position moves: a sale's counters window start; `since` moves when it is split.
+    window_since: datetime | None = None
+
+    def __post_init__(self) -> None:
+        # A sale made with only `since` still knows where its window began once a split moves `since`.
+        if self.window_since is None and self.kind == "sale" and self.since is not None:
+            object.__setattr__(self, "window_since", self.since)
     door_conflict: str = ""              # sale: the receipt it contradicts, by selling with the door open
     split: bool = False                  # sale: already split at its changes; another pass leaves it alone
     read_as_new: bool = False            # sale: unsplit, but main booked it all to the new product (`_old_units`)
@@ -194,6 +201,7 @@ class SaleCost:
     taken_at: datetime | None = None   # when the units left the count, if before `at`
     unattributed_cost_cents: Fraction | None = None   # an unsplit window's cost; see above
     unattributed: str = ""             # why the product is unknown; empty when it is known
+    since: datetime | None = None      # the poll before `at`: the measured window is (since, at]
 
 
 @dataclass(frozen=True)
@@ -415,7 +423,7 @@ def sales_from_counters(rows: list[tuple]) -> list[Movement]:
                                   price_before=prices.get((selection, start)),
                                   price_after=prices.get((selection, at)),
                                   price_prior=prices.get((selection, before.get(start))),
-                                  prior_at=before.get(start)))
+                                  prior_at=before.get(start), window_since=start))
     return moves
 
 
@@ -907,7 +915,8 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                              f"{slot.product}'s count, which may be the wrong product's")
                 slot.unattributed += m.units
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
-                                      unattributed=f"sold while {m.door_conflict}'s door times say the door was open"))
+                                      unattributed=f"sold while {m.door_conflict}'s door times say the door was open",
+                                      since=m.window_since))
             elif m.kind == "sale" and (across_change or m.changes):
                 # Still taken from the count (the new one, unless the door times show the
                 # window ended before it went in), so on hand errs low, but their cost
@@ -931,12 +940,13 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 # Main costed a window it read as all new in cost_cents; it stays there (see `SaleCost`).
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, cost if m.read_as_new else None,
                                       unattributed_cost_cents=None if m.read_as_new else cost,
-                                      unattributed=f"sold {across}; the counters can't split them"))
+                                      unattributed=f"sold {across}; the counters can't split them",
+                                      since=m.window_since))
             else:
                 slot.sold += m.units
                 slot.at_most = max(0, slot.at_most - m.units)
                 sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, costed, cost,
-                                      taken_at=m.at if m.booked_at else None))
+                                      taken_at=m.at if m.booked_at else None, since=m.window_since))
 
     for name, slot in sorted(slots.items()):
         if slot.oversold:

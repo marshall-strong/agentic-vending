@@ -257,22 +257,25 @@ def test_a_missing_price_never_turns_a_price_test_into_a_trial(conn):
 
 
 def test_money_comes_from_the_same_windows_as_the_units(conn):
-    # The units counter misread at the first poll after the load, so the units window runs from before the
-    # load and is left out. The cents window from that poll must be left out with it: $3.00 of takings on
-    # no counted units would be profit from nothing.
+    # The units counter misread at the second poll after the load, so the units window runs from the poll
+    # before it, and the cents window from the misread poll must join it: that unit and its $3.00 count
+    # together, or $3.00 of takings on no counted units would be profit from nothing. (At the first poll
+    # after a slot's first load the window would span the load, and its one unit is unknown: see
+    # `_unsplit_over`.)
     store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100), "16": (200, 50)})
     fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0), ("16", "BBB", "primary", "10.00", 20, 0, 0))
     stock_the_rest(conn)
-    store_poll(conn, "p1", "2026-10-16T21:00:00+00:00", {"15": (300, 5, 30000), "16": (200, 50)})
-    rows = [("p2", "2026-10-16T22:00:00+00:00", {"15": (300, 101), "16": (200, 50)})]
+    store_poll(conn, "p1", "2026-10-16T21:00:00+00:00", {"15": (300, 100, 30000), "16": (200, 50)})
+    store_poll(conn, "p2", "2026-10-16T22:00:00+00:00", {"15": (300, 5, 30000), "16": (200, 50)})
+    rows = [("p3", "2026-10-16T23:00:00+00:00", {"15": (300, 101), "16": (200, 50)})]
     rows += [(f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, 104 + 3 * n), "16": (200, 52 + 2 * n)})
              for n, day in enumerate(DAYS)]
     polls(conn, rows)
     set_wildcard(conn, "15")
     t = get_machine_state(conn, now=NOW).wildcard_trial
-    # The profit is 18 units' worth: $54.00 of takings, $50.00 without tax, less 18 x $0.50.
-    assert (t.units_sold, t.class_days_in_stock) == (18, 6)
-    assert t.profit_per_class_day == f"{(5000 - 900) / 100 / 6:.2f}"
+    # The profit is 19 units' worth: $57.00 of takings, $52.78 without tax (422 cents of tax inside), less 19 x $0.50.
+    assert (t.units_sold, t.class_days_in_stock) == (19, 6)
+    assert t.profit_per_class_day == f"{(5700 - 422 - 950) / 100 / 6:.2f}"
 
 
 def test_days_without_polls_are_not_days_with_no_sales(conn):
@@ -474,11 +477,69 @@ def _swap_trial(conn):
     return get_machine_state(conn, now=datetime(2026, 10, 24, 2, tzinfo=timezone.utc)).wildcard_trial
 
 
-def test_any_sale_in_the_poll_window_over_a_swap_leaves_the_trial_unknown(conn):
-    """Even when the counters seem to split it (the price changed), nothing proves which product the unit was."""
+def test_a_sale_the_counters_settled_at_a_swap_gives_a_verdict_not_unknown(conn):
+    """The price changed from $2.50 to $3.00 and the window's $3.00 is one unit at the new price: the stock replay
+    books that unit to AAA (#173), so the trial has nothing to doubt. AAA's 1 unit is gone, so it held no stock."""
     _swap_with_a_sale_in_its_window(conn, new_price=300)
     t = _swap_trial(conn)
+    assert t.verdict == TOO_EARLY and (t.units_sold, t.class_days_in_stock) == (0, 0), t
+    counted = stock.stock(conn, until=datetime(2026, 10, 24, 2, tzinfo=timezone.utc))
+    assert [(x.product, x.units) for x in counted.sales if x.slot == "15"] == [("AAA", 1)]
+
+
+def _swap_then_a_week(conn, window_units, window_cents, per_day=3):
+    """Slot 15 held ZZZ at $2.50 (10 units from 9 Oct), polled at 100 units and $250.00 at 2 PM Eastern on Friday
+    16 Oct; at SINCE it switches to 20 AAA, now $3.00. The first poll after the swap reads `window_units` more
+    units and `window_cents` more cents, then each class day sells `per_day` at $3.00, seen at its evening poll."""
+    from tests.conftest import TEST_SLOTS
+
+    fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 10, 0, 0),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (250, 100, 25000)})
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0))
+    units, cents = 100 + window_units, 25000 + window_cents
+    rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, units, cents)})]
+    for n, day in enumerate(DAYS):
+        units, cents = units + per_day, cents + 300 * per_day
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+
+
+@pytest.mark.parametrize("window_units, window_cents, old, new", [
+    (1, 300, 0, 1),    # one unit at the new price: all AAA's
+    (2, 550, 1, 1),    # $2.50 + $3.00: one of each
+    (1, 250, 1, 0),    # one unit at the old price: all ZZZ's
+])
+def test_a_swap_the_counters_settled_is_judged_on_the_days_after_it(conn, window_units, window_cents, old, new):
+    _swap_then_a_week(conn, window_units, window_cents)
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    counted = stock.stock(conn, until=FRESH)
+    split = sorted((x.product, x.units) for x in counted.sales if x.slot == "15" and x.at.day == 16)
+    assert split == sorted([("ZZZ", old)] * bool(old) + [("AAA", new)] * bool(new)), split
+    # The window with the swap isn't counted, units or days; the six class days after it are.
+    assert (t.verdict, t.units_sold, t.class_days_in_stock) == (PASS, 18, 6), t
+
+
+def test_a_sale_the_counters_cant_split_across_a_swap_still_leaves_a_week_unknown(conn):
+    """The same week, but the price is $3.00 at both polls around the window's one unit: no price change to split
+    it by, so the replay leaves it unattributed and the trial stays unknown however good the week after is."""
+    from tests.conftest import TEST_SLOTS
+
+    fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 10, 0, 0),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    store_poll(conn, "p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100, 25000)})
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0))
+    units, cents = 101, 25300
+    rows = [("p1", "2026-10-16T21:00:00+00:00", {"15": (300, units, cents)})]
+    for n, day in enumerate(DAYS):
+        units, cents = units + 3, cents + 900
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
     assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
+    assert "nothing can split them" in t.reason, t
 
 
 def test_a_sale_the_counters_cant_split_across_a_swap_leaves_the_trial_unknown(conn):
@@ -505,3 +566,152 @@ def test_a_sale_booked_by_a_poll_at_the_swaps_own_moment_leaves_the_trial_unknow
     _swap_with_a_sale_in_its_window(conn, new_price=250, first_at=SINCE.isoformat())
     t = _swap_trial(conn)
     assert t.verdict == UNKNOWN and "switch to AAA" in t.reason, t
+
+
+def _swap_with_polls_then_a_week(conn, rows):
+    """Slot 15 held ZZZ at $2.50 from 9 Oct; at SINCE it switches to 20 AAA. `rows` are the polls around the swap,
+    `(session_id, ISO time, (price, units, cents))`; then each class day sells 3 at $3.00, seen at its evening poll,
+    so the week after is a pass whatever happened around the swap."""
+    from tests.conftest import TEST_SLOTS
+
+    fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 10, 0, 0),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0))
+    rows = [(sid, at, {"15": reading}) for sid, at, reading in rows]
+    units, cents = rows[-1][2]["15"][1:]
+    for n, day in enumerate(DAYS):
+        units, cents = units + 3, cents + 900
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+
+
+def test_a_sale_in_the_window_after_a_poll_at_the_swaps_own_moment_leaves_the_trial_unknown(conn):
+    """The poll at the receipt's time still reads the old $2.50: it came before the worker swapped. The next poll
+    reads $3.00 and one more unit, at $2.50 in the cents: the old drink's. The replay's window starts at the receipt
+    time, so it books that unit to AAA, but nothing settled it: the window may hold the swap."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("p1", SINCE.isoformat(), (250, 100, 25000)),
+        ("p2", "2026-10-16T21:00:00+00:00", (300, 101, 25250))])
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
+
+
+def test_a_recovered_misread_doesnt_hide_an_unsplit_swap_sale(conn):
+    """Swap at 20:00, the polls read 18:00 normal, 21:00 a low misread, 22:00 recovered. The one unit sold is in the
+    window from 18:00 to 22:00 (the misread is no poll), at $2.50 on both sides: the replay leaves it unattributed,
+    booked at 22:00, after the first poll that follows the swap."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("m1", "2026-10-16T21:00:00+00:00", (250, 40, 10000)),
+        ("p2", "2026-10-16T22:00:00+00:00", (250, 101, 25250))])
+    counted = stock.stock(conn, until=FRESH)
+    assert [(x.product, x.units) for x in counted.sales if x.slot == "15" and x.unattributed] == [(None, 1)]
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
+
+
+def test_a_poll_at_the_swaps_moment_is_unknown_even_with_door_times(conn):
+    """The same polls as the round-1 tie case, with the receipt's door open from 19:40 to 20:00. The replay settles
+    the window that starts at 20:00 by the door, but the trial doesn't rely on that: a window that starts at the
+    swap's own moment is always unknown (Kevin, round 3)."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("p1", SINCE.isoformat(), (250, 100, 25000)),
+        ("p2", "2026-10-16T21:00:00+00:00", (300, 101, 25300))])
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
+                 (SINCE - timedelta(minutes=20), SINCE))
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
+
+
+def test_an_untimed_receipt_at_the_swaps_moment_doesnt_make_the_tie_settled(conn):
+    """An untimed receipt loads OTHER into slot 15 at 20:00, the door-timed AAA visit closes at 20:00, and a poll
+    lands at 20:00. The replay skips the untimed change, so the window starting at 20:00 is booked to AAA, whose
+    own receipt has door times; that tells nothing about the OTHER change."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("p1", SINCE.isoformat(), (250, 100, 25000)),
+        ("p2", "2026-10-16T21:00:00+00:00", (250, 101, 25250))])
+    fulfilled(conn, "r2", SINCE, ("15", "OTHER", "primary", "10.00", 5, 0, 0))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
+                 (SINCE - timedelta(minutes=20), SINCE))
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == UNKNOWN and "over slot 15's switch to AAA" in t.reason, t
+
+
+def test_door_times_the_replay_cant_use_dont_settle_a_tie(conn):
+    """Two requests' visits to slot 15 that share a minute: the replay times both by `resolved_at`, as without door
+    times, so a window starting at the swap isn't settled by the door."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("p1", SINCE.isoformat(), (250, 100, 25000)),
+        ("p2", "2026-10-16T21:00:00+00:00", (300, 101, 25300))])
+    fulfilled(conn, "r9", datetime(2026, 10, 12, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 1, 0, 0))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
+                 (SINCE - timedelta(minutes=20), SINCE))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r9'",
+                 (SINCE - timedelta(minutes=20), SINCE))   # the same minutes: which visit came first can't be told
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == UNKNOWN, t
+
+
+def test_a_sale_with_no_recorded_window_is_placed_by_the_counter_history():
+    """Swap at 20:00, readings at 18:00, a misread at 21:00 and 22:00: a sale booked at 22:00 with no `since`
+    has its window from 18:00 (`counters.windows`), so it spans the swap, though the first poll after the swap is
+    21:00. One whose window the history can't place is returned too."""
+    from vending.wildcard_trial import _unsplit_over
+
+    t = lambda h, m=0: datetime(2026, 10, 16, h, m, tzinfo=timezone.utc)
+    readings = [(t(18), 100, 25000, 250), (t(21), 40, 10000, 250), (t(22), 101, 25250, 250)]
+    sale = stock.SaleCost(t(22), "15", None, 1, 1, None)
+    assert _unsplit_over("15", t(20), readings, (sale,), True) == [sale]
+    unplaced = stock.SaleCost(t(23), "15", "AAA", 1, 1, None)   # no reading at 23:00: no window to place it by
+    assert _unsplit_over("15", t(20), readings, (unplaced,), True) == [unplaced]
+    before = stock.SaleCost(t(18), "15", None, 1, 1, None)      # booked at the last poll before the swap
+    assert _unsplit_over("15", t(20), readings, (before,), True) == []
+
+
+def test_the_planner_reads_loads_from_the_receipts_its_replay_used(conn, monkeypatch):
+    """Slot 15's only receipt is its first AAA load, with a $3 sale in the window spanning it: the replay, with no
+    earlier product, books it to AAA, and the trial must call that unknown. A late ZZZ receipt for slot 15 lands
+    between the planner's replay and its load history. If the load history is read again, it sees ZZZ first, takes
+    this for a swap the replay split, and trusts the booking: a PASS from two different snapshots."""
+    from types import SimpleNamespace
+
+    from tests.conftest import TEST_SLOTS
+    from tests.test_ledger import open_ledger
+    from vending import planning
+
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    fulfilled(conn, "rx", datetime(2026, 10, 9, 20, tzinfo=timezone.utc),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0))
+    rows = [("p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100, 30000)}),
+            ("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 101, 30300)})]
+    units, cents = 101, 30300
+    for n, day in enumerate(DAYS):
+        units, cents = units + 3, cents + 900
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+    assert get_machine_state(conn, now=FRESH).wildcard_trial.verdict == UNKNOWN   # one snapshot: unknown
+
+    late = []
+
+    class LateReceipt(SimpleNamespace):
+        def stock(self, *args, **kwargs):
+            out = stock.stock(*args, **kwargs)
+            fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc),
+                      ("15", "ZZZ", "primary", "10.00", 10, 0, 0))
+            late.append("r0")
+            return out
+
+        def __getattr__(self, name):
+            return getattr(stock, name)
+
+    monkeypatch.setattr(planning, "stock", LateReceipt())
+    gathered = planning.gather(conn, [], FRESH)
+    assert late == ["r0"]
+    assert gathered.current.wildcard_verdict == UNKNOWN
