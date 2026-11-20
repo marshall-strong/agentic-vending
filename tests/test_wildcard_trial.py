@@ -638,7 +638,7 @@ def test_an_untimed_receipt_at_the_swaps_moment_doesnt_make_the_tie_settled(conn
     conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
                  (SINCE - timedelta(minutes=20), SINCE))
     t = get_machine_state(conn, now=FRESH).wildcard_trial
-    assert (t.product, t.verdict) == ("AAA", UNKNOWN), t
+    assert t.verdict == UNKNOWN and "over slot 15's switch to AAA" in t.reason, t
 
 
 def test_door_times_the_replay_cant_use_dont_settle_a_tie(conn):
