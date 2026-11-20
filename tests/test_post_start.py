@@ -210,6 +210,16 @@ def _target(name: str, tmp_path: Path) -> str:
     return name
 
 
+def test_an_out_target_names_no_temp_folder(tmp_path):
+    """pytest numbers its temp folders by run, and a run named pytest-987 printed the folder in an
+    --out error, so `leaked` matched the sentinel price and failed these tests at random (20 in one
+    run). Any folder above could hold such a number, so a target names no folder at all."""
+    folder = tmp_path / f"run-{SENTINEL_PRICE}"
+    folder.mkdir()
+    for name in ("NUL in a folder", "a directory"):
+        assert not leaked(_target(name, folder)), _target(name, folder)
+
+
 @pytest.mark.parametrize("name", TARGETS)
 def test_out_refuses_anything_but_a_regular_file(script, capsys, tmp_path, monkeypatch, name):
     target = _target(name, tmp_path)
