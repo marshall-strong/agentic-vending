@@ -347,7 +347,11 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
     assert snap["sales"]["data"]["stale"] is False
     assert snap["spend"]["data"]["drinks"]["paid"] == Decimal("9.60")
     page = dashboard.render(snap)
-    assert "3 on hand of COKE-20OZ &middot; 5 sold this week" in page
+    assert "3 on hand of COKE-20OZ &middot; the slot sold 5 in the 3 d 23 h to the last poll, whatever it held" in page
+    # The tile says how fresh the poll is, never a lone window-start date that reads like an update time (#172).
+    assert "last poll &middot; our slots sold 5 units in the 3 d 23 h to it" in page
+    assert "since the last poll" not in page
+    assert "sold since" not in page
     assert "<s>$2.50</s> <b>$2.75</b>" in page             # the tag now, and what the plan sets it to
     assert '"paid": "9.60"' in dashboard.to_json(snap)
 
@@ -1064,3 +1068,17 @@ def test_no_sync_item_unless_the_latest_round_failed(page_conn, given):
     snap = dashboard.snapshot(page_conn, MONDAY, syncs=given)
     assert not any("sync round" in a["text"] for a in snap["attention"])
     assert snap["syncs"] == given
+
+
+def test_the_sales_window_says_how_long_it_really_is():
+    from datetime import datetime, timedelta, timezone
+    end = datetime(2026, 12, 9, 15, tzinfo=timezone.utc)
+
+    def words(span):
+        return dashboard._window({"ok": True, "data": {"window_start": end - span, "as_of": end}})
+    assert words(timedelta(days=7)) == "the 7 days"
+    assert words(timedelta(days=7, minutes=40)) == "the 7 days"              # a poll a little early or late
+    assert words(timedelta(days=3, hours=23)) == "the 3 d 23 h"
+    assert words(timedelta(days=10)) == "the 10 d"                           # a gap in the polls: not "the 7 days"
+    assert words(timedelta(seconds=30)) == "under a minute"
+
