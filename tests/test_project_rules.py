@@ -165,7 +165,7 @@ def test_the_prompt_gives_the_cash_short_recipe_and_cannot_skip_a_fill_on_cost()
     from vending.agent import SYSTEM
 
     assert "If no change is worth what it costs, skip the week" not in SYSTEM
-    assert "never skip a fill because it seems not worth its cost" in SYSTEM
+    assert "Never skip a fill because it seems not worth its cost" in SYSTEM
     for phrase in ("one entry per assigned slot", "leave fill_to out for a full fill", "an explicit fill_to",
                    "keep where no load fits", "preview again", "The order of entries sets no priority",
                    "Name every slot left short in the update"):
@@ -189,3 +189,14 @@ def test_restocking_lets_a_floor_bound_plan_load_just_the_closet_units():
     """Review finding 6: one source per line, so when the floor binds a fill_to can load only what the closet holds."""
     rule = (RULES_DIR / "restocking.md").read_text(encoding="utf-8")
     assert "If the floor binds, an explicit `fill_to` may load just the closet's units" in rule
+
+
+def test_skips_are_narrow_on_the_card_and_in_the_prompt():
+    """Sol, round 2, finding 3: "if unsure, skip" covers the one uncertain action, not the week; and a week whose every
+    feasible plan is refused is skipped with the refusals reported."""
+    from vending.agent import SYSTEM
+
+    card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8")
+    assert "If unsure of one action, skip that action, plan the rest, and say why." in card
+    assert "If unsure, skip the action and say why." not in card
+    assert "stock is needed but every feasible plan is refused: report the skip with the refusals" in SYSTEM

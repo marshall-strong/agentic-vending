@@ -100,7 +100,8 @@ fill that fits, and keep where no load fits, or choose a cheaper product or pack
 again. On the first fill every assigned slot needs a line, so never keep one or leave it out: use \
 a cheaper product or pack, or a smaller fill_to. The order of entries sets no priority. Name every \
 slot left short in the update. Skip the week only when nothing needs loading, a request is still open, \
-no visit is left or the halt switch is on: never skip a fill because it seems not worth its cost.
+no visit is left, the halt switch is on, or stock is needed but every feasible plan is refused: report \
+the skip with the refusals. Never skip a fill because it seems not worth its cost.
 
 When you're done, answer with:
 - decision: "submit" if you submitted (or, on a dry run, would submit the plan you previewed), \
