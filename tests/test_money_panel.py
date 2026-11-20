@@ -239,12 +239,12 @@ def test_only_a_test_purchase_leaves_stock_on_hand_unknown(conn, page_conn):
     assert data["balance"] == "600.00" and data["receipts"] == "0.00" and data["pnl"]["inventory"] is None
 
 
-def test_a_missing_ledger_table_blanks_only_the_money_panel(conn, page_conn):
+def test_a_missing_ledger_table_blanks_only_the_panels_that_need_it(conn, page_conn):
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
     conn.execute("drop table ledger_entries cascade")
     snap = dashboard.snapshot(page_conn, NOW)
     panels = {k: v for k, v in snap.items() if isinstance(v, dict) and "ok" in v}
-    assert "money" in panels and [k for k, v in panels.items() if not v["ok"]] == ["money"]
+    assert {k for k, v in panels.items() if not v["ok"]} == {"money", "leaderboards"}
     assert "ledger_entries" in snap["money"]["why"]
     page = dashboard.render(snap)
     assert "Not available" in page and 'id="vm"' in page

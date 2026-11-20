@@ -63,7 +63,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import capacity, db, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
+from vending import capacity, db, leaderboards, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
 from vending import pricing_panel
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
@@ -595,6 +595,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         "spend": _panel(lambda: _spend(conn, now)),
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
         "money": _panel(lambda: _money_panel(conn, now)),
+        "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
         "purchase_requests": _panel(lambda: _rows(conn, """
             select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,
                    count(l.line_no) as lines,
@@ -757,7 +758,8 @@ def attention(snap: dict) -> list[dict]:
 
     for key, name in (("plan", "Plan"), ("runs", "Runs"), ("activity", "Tool calls"), ("sales", "Sales"),
                       ("stock", "Stock"), ("purchase_requests", "Purchase requests"),
-                      ("catalog_requests", "Catalog requests"), ("money", "Money")):
+                      ("catalog_requests", "Catalog requests"), ("money", "Money"),
+                      ("leaderboards", "Leaderboards")):
         if key in snap and not snap[key]["ok"]:
             add("info", f"{name} isn't available: {snap[key]['why']}")
 
@@ -1749,6 +1751,7 @@ footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8p
 
 STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 STYLE += pricing_panel.STYLE   # the pricing panel's own rules
+STYLE += leaderboards.STYLE
 
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
@@ -1925,6 +1928,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
              " &middot; the competition counts from the ledger's opening; spend before it is development"
              f'</span></h2>{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
+    boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
+              if "leaderboards" in snap else "")
     body = (head + _tiles(snap) + _attention_html(items) + money + _cabinet_html(snap) + pricing
             + _plan_section(snap)
             + '<div class="grid2">'
@@ -1939,6 +1944,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + f'<section id="closet"><h2>Back stock <span class="hint">the closet, from receipts</span></h2>'
               f'{_closet_html(snap["stock"])}</section>'
             + "</div>"
+            + boards
             + ('<footer>Made-up data from a fixed snapshot, shown with the live page\'s own code. Nothing here is '
                f'read from our database. The live page is <a href="{DEMO_LIVE_HREF}">{DEMO_LIVE_HREF}</a>.</footer>'
                if demo else
