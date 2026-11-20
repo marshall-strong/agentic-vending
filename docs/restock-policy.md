@@ -49,7 +49,7 @@ Kept full, the 20 slots would sell about 23.3 units a class day (`analysis/REPOR
 3. **Exceptions**, each named as the slot's reason in the plan:
    - A flagged slow seller is swapped, not refilled (rule 3).
    - The wildcard follows `docs/agent/wildcard.md`: at most $82.00 a purchase, and no loading more of its product while another slot holds it.
-   - **The $53.00 spendable floor** (rule 4). Fill every column as long as spendable stays at or above $53.00 after the request, at most-we-pay cost. If it can't, fill the fastest sellers (`units_per_class_day`) first and name the slots left short.
+   - **The $53.00 spendable floor** (rule 4). Fill every column as long as spendable stays at or above $53.00 after the request, at most-we-pay cost. If it can't, fill slots in rule 4's order (most margin per class day first) and name the slots left short.
 4. **Breaks and the end.** Filling is still right before the Winter Holiday Break and in the last weeks. End stock counts at cost (A5, confirmed), so unsold units cost no profit.
 
 This replaces the earlier rule 1: fill from the closet, then buy a pack only when slot plus closet covered less than 2 weeks of sales.
@@ -154,7 +154,7 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 **Rule.** After an order, at its most-we-pay cost, the spendable balance must still hold the **spendable floor, $53** (Proposed in #90, which owns it). If it would not, cut in this order (Proposed):
 
 1. Purchases for slow sellers and flagged slots.
-2. Purchases where the closet already covers a week.
+2. Nothing for a slot the closet can fill without buying: it costs no cash, so it is always filled.
 3. Then keep slots by margin per class day (rate × margin), highest first.
 
 **Day one:** all 20 slots must be filled (#106 rows 2 and 10), so nothing can be dropped. The floor is met by product and pack choice (#90).
