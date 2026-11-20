@@ -1447,10 +1447,12 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
     when = f'<span class="vm-when">Next restock &middot; {_e(when)}</span>' if when else ""
     panel = ('<aside class="vm-panel" aria-label="Close-up of the picked selection">'
              '<div class="vm-ph"><span class="vm-grab" aria-hidden="true"></span><span class="label">Close-up</span>'
-             '<a class="vm-x" id="vm-close" href="#vm" data-close aria-label="Close the close-up">'
+             # "?#vm", not "#vm": without scripts closing must load the page without ?sel=, or the timed
+             # reload would open the pick again. With scripts the click is handled in place.
+             '<a class="vm-x" id="vm-close" href="?#vm" data-close aria-label="Close the close-up">'
              '<span aria-hidden="true">&times;</span> Close</a></div>'
              f'{panels}</aside>')
-    scrim = '<a class="vm-scrim" href="#vm" data-close tabindex="-1" aria-hidden="true"></a>'
+    scrim = '<a class="vm-scrim" href="?#vm" data-close tabindex="-1" aria-hidden="true"></a>'
     return (f'<section id="vm" class="vm" data-view="now">{machine_art.selection_css(shown)}'
             f'<h2>In the machine <span class="hint">our {len(shown)} selections &middot; tap one to see it close up'
             f'</span>{when}{seg}</h2>{lede}'

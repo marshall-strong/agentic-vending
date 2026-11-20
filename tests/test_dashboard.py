@@ -1517,8 +1517,8 @@ def test_picking_from_a_plan_section_row(conn, page_conn, tmp_path, monkeypatch)
 def test_the_close_up_has_a_close_button_and_the_pick_survives_a_refresh(page_conn):
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
     panel = section(page, '<aside class="vm-panel"', "</aside>")
-    assert '<a class="vm-x" id="vm-close" href="#vm" data-close aria-label="Close the close-up">' in panel
-    assert '<a class="vm-scrim" href="#vm" data-close tabindex="-1" aria-hidden="true"></a>' in page
+    assert '<a class="vm-x" id="vm-close" href="?#vm" data-close aria-label="Close the close-up">' in panel
+    assert '<a class="vm-scrim" href="?#vm" data-close tabindex="-1" aria-hidden="true"></a>' in page
     script, style = dashboard.SCRIPT, dashboard.STYLE
     # Close, Escape or a tap outside return the side to Needs attention and the plan's changes.
     assert "if (close) { e.preventDefault(); shut(); }" in script and "e.key === 'Escape'" in script
@@ -1710,3 +1710,18 @@ def test_without_scripts_a_shelf_link_opens_its_first_selection_of_ours(page_con
     # Each shelf's link targets a selection of ours (so a phone's sheet opens), the first on that shelf.
     assert rails == [(str(r), f"?sel={r}2#sel-{r}2") for r in range(1, 6)]
     assert 'href="#shelf-' not in page
+
+
+
+def test_without_scripts_closing_the_close_up_stays_closed_through_the_reload(page_conn):
+    from urllib.parse import parse_qs, urljoin, urlsplit
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    here = "http://127.0.0.1:8765/?refresh=1&sel=15#sel-15"          # a pick kept by the timed reload
+    page = dashboard.render(snap, picked="15")
+    for link in ("vm-x", "vm-scrim"):
+        href = re.search(rf'<a class="{link}"[^>]* href="([^"]*)"', page).group(1)
+        followed = urljoin(here, href.replace("&amp;", "&"))
+        assert "sel" not in parse_qs(urlsplit(followed).query), (link, followed)   # a real load, without the pick
+        # The page that link loads reloads itself without a pick too, so the sheet stays closed.
+        picked = parse_qs(urlsplit(followed).query).get("sel", [None])[0]
+        assert _reload(dashboard.render(snap, picked=picked)) == "?refresh=1", link

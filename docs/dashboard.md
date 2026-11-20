@@ -120,7 +120,7 @@ slot or arguments, the tool-call filter, the Now / Next restock choice, the sele
 the changed-only switch, and the verdict in the tab title. A new visit starts with nothing picked,
 so Needs attention shows. Without JavaScript the machine shows Now, each selection's link
 (`?sel=15#sel-15`) still opens its close-up, and the timed reload keeps that pick while the stored
-assignment makes it ours; a shelf's link opens its first selection of ours, so a phone's sheet opens
+assignment makes it ours (Close loads the page without it, so it stays closed); a shelf's link opens its first selection of ours, so a phone's sheet opens
 too. The plan shows every slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
 page and says how old it is. Without JavaScript it reloads the whole page instead.
 
