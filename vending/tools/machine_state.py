@@ -31,7 +31,7 @@ Built from our database only; it never reads the machine.
   `class_days_of_stock_left` divides the units on hand (the count's when it is
   newer) by it. Only the current product's sales count: units sold across its
   product change that the replay can't place (unattributed, #172) are left
-  out, with the class days their poll window reaches after the change, and
+  out, with the class days their poll window covers, and
   out of `units_sold_since_load` too. `units_per_day` stays as before: the
   last 7 calendar days, empty days and weekends included, so it reads low for
   a slot that sold out.
@@ -55,7 +55,7 @@ those slots. A count that saw a slot empty gives `counted_on_hand` 0 and
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 
@@ -63,7 +63,7 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import config, counters, demand, slot_counts, stock, wildcard_trial
-from vending.class_days import class_days_after
+from vending.class_days import eastern_date
 from vending.planner import AGREED_CEILING_CENTS
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
@@ -461,10 +461,10 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
     Only the current product's loads and sales count (#172). The old product's share of a window
     split at the change is booked at the poll after it, so it is left out by product, not by time.
     Units the replay left unattributed (`SaleCost.unattributed`) may have been either product's, so
-    they are not in the units, and the class days their window reaches into after the change
-    (`class_days_after(since, at)`) are left out of the in-stock days: a swap polled the same day
-    loses none, and a window over a poll gap neither lowers the rate nor counts as days in stock
-    that sold nothing. They still leave the stock spans, as they leave the replay's count: the slot
+    they are not in the units, and the days their poll window covers (`SaleCost.since` to `at`,
+    Eastern) are left out of the in-stock days: a swap polled the same day loses none, since the
+    day a product goes in never counts, and a window over a poll gap neither lowers the rate nor
+    counts as days in stock that sold nothing. They still leave the stock spans, as they leave the replay's count: the slot
     held stock only if they weren't this product's, so it may have stood empty after them.
     """
     demands = {}
@@ -475,11 +475,17 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
         slot_sales = [(s.at, s.units) for s in since if s.product == count.product and not s.unattributed]
         unknown = [(s.at, s.units) for s in since if s.unattributed]
         spans = demand.in_stock_spans(slot_loads, slot_sales + unknown, now, count.units)
-        unplaced = {day for s in since if s.unattributed for day in class_days_after(count.since, s.at)}
+        unplaced = {day for s in since if s.unattributed for day in _dates(s.since or count.since, s.at)}
         days = len(set(demand.class_days_in_stock(spans)) - unplaced)
         demands[slot] = demand.estimate(sum(units for _, units in slot_sales), days,
                                         latest.get(slot, (None, None))[0])
     return demands
+
+
+def _dates(start: datetime, end: datetime) -> set[date]:
+    """The Eastern dates from `start`'s to `end`'s, both included. Pure."""
+    first, last = eastern_date(start), eastern_date(end)
+    return {first + timedelta(days=n) for n in range((last - first).days + 1)}
 
 
 def _sold_since_load(sales: tuple[stock.SaleCost, ...], last_loaded: dict[str, datetime]) -> dict[str, int]:

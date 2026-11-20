@@ -319,6 +319,15 @@ def test_sales_across_a_change_the_counters_cannot_split_keep_their_cost_unattri
     assert (slot.product, slot.loaded, slot.sold, slot.unattributed, slot.units) == ("COKE20", 10, 0, 2, 8)
 
 
+def test_every_sale_carries_the_poll_before_it():
+    # `SaleCost.since`: the window each sale was measured over is (since, at], whichever share it is.
+    split = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    same = book(swap(sku="COKE20", total_paid="8.00"),
+                counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20400, 200)])
+    assert [(s.since, s.at, s.product) for s in split.sales + same.sales] == [
+        (hours(1), hours(5), "ARIZONA"), (hours(1), hours(5), "REDBULL"), (hours(1), hours(5), None)]
+
+
 def test_an_unsplit_window_keeps_the_books_whole():
     # Marshall's check on #112: 10 Arizona at 50c and 10 Red Bull at 150c bought (2000c);
     # cost of sales + shrinkage + slot + closet must add back to 2000, as on main.
