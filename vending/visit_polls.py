@@ -196,7 +196,7 @@ def _not_confirmed(conn, session_id: str | None, sent: datetime) -> str | None:
     if not row[0]:
         return "its checksum failed or it isn't EVA-DTS"
     if row[1] != DEVICE_ID:
-        return f"it is stored under device {row[1]!r}, not {DEVICE_ID!r}"
+        return "device mismatch"      # not the device it was stored under: the listing's word, read by people
     return None
 
 

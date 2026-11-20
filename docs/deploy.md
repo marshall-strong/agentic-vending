@@ -20,7 +20,7 @@ outcome per job (a `503` means the last round failed). Its root, `GET /`, is the
 page for people: whether the last round passed, each job's outcome, when the last and next rounds
 run (Eastern time), and links to the docs. It reloads itself every minute and works on a phone.
 Both are public, so they show exit codes and outcomes only, never error text (a database error
-names the host and user); the errors are in the log. The page is built from the same data as
+names the host and user); the errors are in the log, a database error as its class and SQLSTATE. The page is built from the same data as
 `/health`, so it can't show more. `docker/entrypoint.sh` joins the tailnet first and
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
@@ -81,7 +81,8 @@ A read holds the bridge's one serial line, and anyone else's poll gets a `409` w
   failure is an error status, a timeout, a bridge that is down, or a step that broke; a read that went
   out but whose row is "not confirmed" is not one;
 - **a failed read never fails the round or `/health`.** Reads are not jobs of the round and appear in
-  neither. Only the log shows them.
+  neither. Only the log shows them, and it names a status, a size or a reason of our own, never what the
+  bridge sent back (`docs/integrity.md`, "Logs carry no poll bytes").
 
 Each step first re-reads our pending purchase requests (plain GETs, not machine reads), so a receipt
 is seen within a minute. The reads stop for the day once a request of ours was fulfilled that day and a

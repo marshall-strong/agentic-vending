@@ -89,6 +89,10 @@ discarded -- we paid 8.5 seconds of the machine's time for it and it may be
 worth reading later -- but keeping it out of the main directory means
 `data/snapshots/*.dex` stays trustworthy for whatever reads it next.
 
+The log line for such a run, and for a refused poll, says which check failed ("first record doesn't
+start with DXS", "returned 502 Bad Gateway") and never quotes a record of the document or the reply's
+body. Only the archive keeps the bytes (`docs/integrity.md`, "Logs carry no poll bytes").
+
 ## Cadence
 
 **The recommendation: every 30 minutes from 07:37 to 18:37, seven days a week.

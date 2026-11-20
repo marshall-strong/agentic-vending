@@ -79,7 +79,8 @@ def _int(value: str) -> int:
         return int(value) if value.strip() else 0
     except ValueError:
         # A plain ValueError would escape the sync and stop it on this poll for good.
-        raise ParseError(f"expected a number, got {value!r}") from None
+        # Not the field: it is a figure from the document, and a message can reach a log.
+        raise ParseError("a field that should be a number isn't one") from None
 
 
 def _to_cents(value: int, decimal_places: int) -> int:

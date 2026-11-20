@@ -2,6 +2,7 @@
 database, and is skipped when psycopg isn't installed, DATABASE_URL isn't set
 or the database is down."""
 
+import hashlib
 import threading
 import time
 import uuid
@@ -32,6 +33,11 @@ def conn(database_url):
     connection.close()
 
 
+def sid(name: str) -> str:
+    """A session id like the bridge's (32 hex digits) for a name a test can read."""
+    return hashlib.sha256(name.encode()).hexdigest()[:32]
+
+
 META = {"session_id": "s1", "device_id": "vmc1", "started_at": "2026-10-01T12:00:00+00:00"}
 
 
@@ -55,10 +61,11 @@ def test_checksum_failure_keeps_raw_but_no_counters(conn):
 
 
 class FakeBridge:
-    """Serves stored history from a dict. A value that is an exception is raised."""
+    """Serves stored history from a dict. A value that is an exception is raised. `raws` is keyed by the
+    name a test gave the poll (`poll_meta`), which is `sid` of the session id the bridge lists."""
 
     def __init__(self, days, raws):
-        self.days, self.raws = days, raws
+        self.days, self.raws = days, {sid(name): raw for name, raw in raws.items()}
 
     def history(self, day):
         result = self.days.get(day, [])
@@ -73,8 +80,8 @@ class FakeBridge:
         return result
 
 
-def poll_meta(session_id, started_at):
-    return {"session_id": session_id, "started_at": started_at}
+def poll_meta(name, started_at):
+    return {"session_id": sid(name), "started_at": started_at}
 
 
 def test_one_bad_day_or_poll_does_not_stop_the_sync(conn):
@@ -88,7 +95,7 @@ def test_one_bad_day_or_poll_does_not_stop_the_sync(conn):
     )
     report = sync(conn, bridge, date(2026, 10, 1), date(2026, 10, 3), log=lambda _: None)
     assert (report.days, report.new, report.failed_days, report.failed_polls) == (3, 2, 1, 1)
-    assert {r[0] for r in conn.execute("select session_id from polls")} == {"a", "b"}
+    assert {r[0] for r in conn.execute("select session_id from polls")} == {sid("a"), sid("b")}
 
 
 def test_unreachable_bridge_stops_the_sync(conn):
@@ -97,11 +104,11 @@ def test_unreachable_bridge_stops_the_sync(conn):
         sync(conn, bridge, date(2026, 10, 1), date(2026, 10, 2), log=lambda _: None)
 
 
-def poll_routes(session_ids, **answers):
-    """Routes for a one-day listing of `session_ids`, each serving a good poll
-    unless `answers` says otherwise."""
-    polls = [{"session_id": s, "started_at": f"2026-10-01T{hour:02}:00:00+00:00"} for hour, s in enumerate(session_ids)]
-    raws = {f"{HISTORY}/{s}/raw": answers.get(s, Answer(body=build(SAMPLE))) for s in session_ids}
+def poll_routes(names, **answers):
+    """Routes for a one-day listing of the polls called `names` (session id `sid(name)`), each serving a
+    good poll unless `answers` says otherwise."""
+    polls = [{"session_id": sid(s), "started_at": f"2026-10-01T{hour:02}:00:00+00:00"} for hour, s in enumerate(names)]
+    raws = {f"{HISTORY}/{sid(s)}/raw": answers.get(s, Answer(body=build(SAMPLE))) for s in names}
     return {HISTORY: listing(*polls), **HEALTHY, **raws}
 
 
@@ -135,12 +142,12 @@ def test_a_poll_whose_connection_always_drops_does_not_stall_every_run(conn, no_
         second = sync(conn, bridge, day, day, log=lambda _: None)
     assert (first.new, first.failed_polls) == (2, 1)
     assert (second.new, second.failed_polls) == (0, 1)
-    assert {r[0] for r in conn.execute("select session_id from polls")} == {"before", "after"}
+    assert {r[0] for r in conn.execute("select session_id from polls")} == {sid("before"), sid("after")}
 
 
 def test_a_run_with_a_poll_that_always_drops_finishes_and_exits_1(conn, run_main):
     assert run_main(poll_routes(["drops", "after"], drops=DROP), "--since", "2026-10-01") == 1
-    assert [r[0] for r in conn.execute("select session_id from polls")] == ["after"]
+    assert [r[0] for r in conn.execute("select session_id from polls")] == [sid("after")]
 
 
 def test_a_rejected_key_on_a_poll_still_stops_the_run(conn, run_main):
@@ -212,7 +219,7 @@ def test_a_retry_pass_leaves_a_still_bad_poll_and_a_checksum_failure_alone(conn)
     report = sync(conn, bridge, day, day, log=lambda _: None, retry_bad=True)
     assert (report.new, report.unparseable, report.failed_polls) == (0, 1, 0)
     assert conn.execute("select session_id, crc_ok from polls order by session_id").fetchall() == [
-        ("bad", None), ("crc", False)]
+        *sorted([(sid("bad"), None), (sid("crc"), False)], key=lambda row: row[0])]
 
 
 def test_store_never_replaces_a_readable_poll(conn):

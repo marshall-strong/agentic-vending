@@ -203,7 +203,7 @@ def test_a_cut_off_answer_is_unknown_not_a_crash(db, fake):  # noqa: F811
     fake.cut = True
     reply = submit()
     assert not reply["success"] and reply["status"] == "unknown"
-    assert "IncompleteRead" in reply["message"] and "Don't submit again" in reply["message"]
+    assert "short read:" in reply["message"] and "Don't submit again" in reply["message"]
     assert db.execute("select status from purchase_submissions").fetchall() == [("unknown",)]
 
 
