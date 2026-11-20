@@ -1866,6 +1866,516 @@
    }
   }
  },
+ "leaderboards": {
+  "ok": true,
+  "data": {
+   "opened": true,
+   "unlinked_units": 0,
+   "units_estimated": 0,
+   "this_week": {
+    "product": [
+     {
+      "name": "Red Bull 250 ml",
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 14,
+      "loaded": 11,
+      "available": 14,
+      "revenue": "38.89",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Coca-Cola 20 oz",
+      "sku": "COCA-ORIGINAL-20BOT",
+      "units": 12,
+      "loaded": 7,
+      "available": 15,
+      "revenue": "27.77",
+      "sell_through": 80.0
+     },
+     {
+      "name": "Mountain Dew 20 oz",
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 8,
+      "loaded": 3,
+      "available": 8,
+      "revenue": "18.52",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Monster 16 oz",
+      "sku": "MONSTER-ORIGINAL-16CAN",
+      "units": 6,
+      "loaded": 0,
+      "available": 7,
+      "revenue": "18.06",
+      "sell_through": 85.7
+     },
+     {
+      "name": "Diet Coke 20 oz",
+      "sku": "COCA-DIET-20BOT",
+      "units": 5,
+      "loaded": 0,
+      "available": 6,
+      "revenue": "11.58",
+      "sell_through": 83.3
+     },
+     {
+      "name": "bubly Strawberry 12 oz",
+      "sku": "BUBLY-STRAWBER-12CAN",
+      "units": 4,
+      "loaded": 0,
+      "available": 7,
+      "revenue": "6.48",
+      "sell_through": 57.1
+     },
+     {
+      "name": "Mountain Dew Baja Blast 20 oz",
+      "sku": "MOUNTAIN-BAJA_BLA-20BOT",
+      "units": 4,
+      "loaded": 0,
+      "available": 6,
+      "revenue": "9.26",
+      "sell_through": 66.7
+     },
+     {
+      "name": "Pepsi 20 oz",
+      "sku": "PEPSI-ORIGINAL-20BOT",
+      "units": 4,
+      "loaded": 0,
+      "available": 4,
+      "revenue": "9.26",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Coke Zero 20 oz",
+      "sku": "COCA-ZERO_SUG-20BOT",
+      "units": 3,
+      "loaded": 0,
+      "available": 6,
+      "revenue": "6.95",
+      "sell_through": 50.0
+     },
+     {
+      "name": "Dr Pepper 20 oz",
+      "sku": "DRPEPPER-ORIGINAL-20BOT",
+      "units": 3,
+      "loaded": 0,
+      "available": 6,
+      "revenue": "6.94",
+      "sell_through": 50.0
+     }
+    ],
+    "flavor": [
+     {
+      "name": "Unknown",
+      "sku": null,
+      "units": 62,
+      "loaded": 21,
+      "available": 86,
+      "revenue": "154.87",
+      "sell_through": 72.1
+     },
+     {
+      "name": "Baja Blast",
+      "sku": null,
+      "units": 4,
+      "loaded": 0,
+      "available": 6,
+      "revenue": "9.26",
+      "sell_through": 66.7
+     },
+     {
+      "name": "Strawberry",
+      "sku": null,
+      "units": 4,
+      "loaded": 0,
+      "available": 7,
+      "revenue": "6.48",
+      "sell_through": 57.1
+     },
+     {
+      "name": "Lime",
+      "sku": null,
+      "units": 3,
+      "loaded": 0,
+      "available": 8,
+      "revenue": "6.25",
+      "sell_through": 37.5
+     },
+     {
+      "name": "Chocolate",
+      "sku": null,
+      "units": 2,
+      "loaded": 0,
+      "available": 9,
+      "revenue": "7.40",
+      "sell_through": 22.2
+     },
+     {
+      "name": "dark",
+      "sku": null,
+      "units": 2,
+      "loaded": 0,
+      "available": 7,
+      "revenue": "4.63",
+      "sell_through": 28.6
+     },
+     {
+      "name": "Paradise Paloma",
+      "sku": null,
+      "units": 2,
+      "loaded": 0,
+      "available": 8,
+      "revenue": "3.24",
+      "sell_through": 25.0
+     }
+    ],
+    "brand": [
+     {
+      "name": "Red Bull",
+      "sku": null,
+      "units": 14,
+      "loaded": 11,
+      "available": 14,
+      "revenue": "38.89",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Coca-Cola",
+      "sku": null,
+      "units": 12,
+      "loaded": 7,
+      "available": 15,
+      "revenue": "27.77",
+      "sell_through": 80.0
+     },
+     {
+      "name": "Mountain Dew",
+      "sku": null,
+      "units": 12,
+      "loaded": 3,
+      "available": 14,
+      "revenue": "27.78",
+      "sell_through": 85.7
+     },
+     {
+      "name": "bubly",
+      "sku": null,
+      "units": 6,
+      "loaded": 0,
+      "available": 15,
+      "revenue": "9.72",
+      "sell_through": 40.0
+     },
+     {
+      "name": "Monster",
+      "sku": null,
+      "units": 6,
+      "loaded": 0,
+      "available": 7,
+      "revenue": "18.06",
+      "sell_through": 85.7
+     },
+     {
+      "name": "Diet Coke",
+      "sku": null,
+      "units": 5,
+      "loaded": 0,
+      "available": 6,
+      "revenue": "11.58",
+      "sell_through": 83.3
+     },
+     {
+      "name": "Pepsi",
+      "sku": null,
+      "units": 4,
+      "loaded": 0,
+      "available": 4,
+      "revenue": "9.26",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Coke Zero",
+      "sku": null,
+      "units": 3,
+      "loaded": 0,
+      "available": 6,
+      "revenue": "6.95",
+      "sell_through": 50.0
+     },
+     {
+      "name": "Dr Pepper",
+      "sku": null,
+      "units": 3,
+      "loaded": 0,
+      "available": 6,
+      "revenue": "6.94",
+      "sell_through": 50.0
+     },
+     {
+      "name": "Recess",
+      "sku": null,
+      "units": 3,
+      "loaded": 0,
+      "available": 8,
+      "revenue": "6.25",
+      "sell_through": 37.5
+     }
+    ]
+   },
+   "since_opening": {
+    "product": [
+     {
+      "name": "Red Bull 250 ml",
+      "sku": "REDBULL-ORIGINAL-8_4CAN",
+      "units": 22,
+      "loaded": 22,
+      "available": 22,
+      "revenue": "61.12",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Coca-Cola 20 oz",
+      "sku": "COCA-ORIGINAL-20BOT",
+      "units": 18,
+      "loaded": 21,
+      "available": 21,
+      "revenue": "41.65",
+      "sell_through": 85.7
+     },
+     {
+      "name": "Mountain Dew 20 oz",
+      "sku": "MOUNTAIN-ORIGINAL-20BOT",
+      "units": 10,
+      "loaded": 10,
+      "available": 10,
+      "revenue": "23.15",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Monster 16 oz",
+      "sku": "MONSTER-ORIGINAL-16CAN",
+      "units": 7,
+      "loaded": 8,
+      "available": 8,
+      "revenue": "21.07",
+      "sell_through": 87.5
+     },
+     {
+      "name": "Pepsi 20 oz",
+      "sku": "PEPSI-ORIGINAL-20BOT",
+      "units": 7,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "16.20",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Diet Coke 20 oz",
+      "sku": "COCA-DIET-20BOT",
+      "units": 6,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "13.90",
+      "sell_through": 85.7
+     },
+     {
+      "name": "bubly Strawberry 12 oz",
+      "sku": "BUBLY-STRAWBER-12CAN",
+      "units": 5,
+      "loaded": 8,
+      "available": 8,
+      "revenue": "8.10",
+      "sell_through": 62.5
+     },
+     {
+      "name": "Mountain Dew Baja Blast 20 oz",
+      "sku": "MOUNTAIN-BAJA_BLA-20BOT",
+      "units": 5,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "11.58",
+      "sell_through": 71.4
+     },
+     {
+      "name": "Coke Zero 20 oz",
+      "sku": "COCA-ZERO_SUG-20BOT",
+      "units": 4,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "9.27",
+      "sell_through": 57.1
+     },
+     {
+      "name": "Dr Pepper 20 oz",
+      "sku": "DRPEPPER-ORIGINAL-20BOT",
+      "units": 4,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "9.25",
+      "sell_through": 57.1
+     }
+    ],
+    "flavor": [
+     {
+      "name": "Unknown",
+      "sku": null,
+      "units": 86,
+      "loaded": 110,
+      "available": 110,
+      "revenue": "214.82",
+      "sell_through": 78.2
+     },
+     {
+      "name": "Baja Blast",
+      "sku": null,
+      "units": 5,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "11.58",
+      "sell_through": 71.4
+     },
+     {
+      "name": "Strawberry",
+      "sku": null,
+      "units": 5,
+      "loaded": 8,
+      "available": 8,
+      "revenue": "8.10",
+      "sell_through": 62.5
+     },
+     {
+      "name": "Lime",
+      "sku": null,
+      "units": 3,
+      "loaded": 8,
+      "available": 8,
+      "revenue": "6.25",
+      "sell_through": 37.5
+     },
+     {
+      "name": "Chocolate",
+      "sku": null,
+      "units": 2,
+      "loaded": 9,
+      "available": 9,
+      "revenue": "7.40",
+      "sell_through": 22.2
+     },
+     {
+      "name": "dark",
+      "sku": null,
+      "units": 2,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "4.63",
+      "sell_through": 28.6
+     },
+     {
+      "name": "Paradise Paloma",
+      "sku": null,
+      "units": 2,
+      "loaded": 8,
+      "available": 8,
+      "revenue": "3.24",
+      "sell_through": 25.0
+     }
+    ],
+    "brand": [
+     {
+      "name": "Red Bull",
+      "sku": null,
+      "units": 22,
+      "loaded": 22,
+      "available": 22,
+      "revenue": "61.12",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Coca-Cola",
+      "sku": null,
+      "units": 18,
+      "loaded": 21,
+      "available": 21,
+      "revenue": "41.65",
+      "sell_through": 85.7
+     },
+     {
+      "name": "Mountain Dew",
+      "sku": null,
+      "units": 15,
+      "loaded": 17,
+      "available": 17,
+      "revenue": "34.73",
+      "sell_through": 88.2
+     },
+     {
+      "name": "bubly",
+      "sku": null,
+      "units": 7,
+      "loaded": 16,
+      "available": 16,
+      "revenue": "11.34",
+      "sell_through": 43.8
+     },
+     {
+      "name": "Monster",
+      "sku": null,
+      "units": 7,
+      "loaded": 8,
+      "available": 8,
+      "revenue": "21.07",
+      "sell_through": 87.5
+     },
+     {
+      "name": "Pepsi",
+      "sku": null,
+      "units": 7,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "16.20",
+      "sell_through": 100.0
+     },
+     {
+      "name": "Diet Coke",
+      "sku": null,
+      "units": 6,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "13.90",
+      "sell_through": 85.7
+     },
+     {
+      "name": "Coke Zero",
+      "sku": null,
+      "units": 4,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "9.27",
+      "sell_through": 57.1
+     },
+     {
+      "name": "Dr Pepper",
+      "sku": null,
+      "units": 4,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "9.25",
+      "sell_through": 57.1
+     },
+     {
+      "name": "Sprite",
+      "sku": null,
+      "units": 4,
+      "loaded": 7,
+      "available": 7,
+      "revenue": "9.25",
+      "sell_through": 57.1
+     }
+    ]
+   }
+  }
+ },
  "purchase_requests": {
   "ok": true,
   "data": [
