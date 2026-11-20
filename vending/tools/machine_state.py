@@ -29,8 +29,12 @@ Built from our database only; it never reads the machine.
   days it held stock, once it has 5 such days; before that, the fall rate of
   the segment priced nearest it. `rate_basis` says which, and
   `class_days_of_stock_left` divides the units on hand (the count's when it is
-  newer) by it. `units_per_day` stays as before: the last 7 calendar days,
-  empty days and weekends included, so it reads low for a slot that sold out.
+  newer) by it. Only the current product's sales count: units sold across its
+  product change that the replay can't place (unattributed, #172) are left
+  out, with the class days their poll window reaches after the change, and
+  out of `units_sold_since_load` too. `units_per_day` stays as before: the
+  last 7 calendar days, empty days and weekends included, so it reads low for
+  a slot that sold out.
 
 `wildcard_trial` is the product on trial in the wildcard slot
 (`vending.wildcard_trial`): its units over the in-stock class days the polls
@@ -59,6 +63,7 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import config, counters, demand, slot_counts, stock, wildcard_trial
+from vending.class_days import class_days_after
 from vending.planner import AGREED_CEILING_CENTS
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
@@ -427,38 +432,51 @@ def _seen(conn: psycopg.Connection, until: datetime | None = None) -> dict[str, 
         return {}
 
 
-def _last_loaded(loads: dict[str, list[tuple[datetime, int]]]) -> dict[str, datetime]:
+def _last_loaded(loads: dict[str, list[tuple[datetime, int, str]]]) -> dict[str, datetime]:
     """When each slot last had units put in it, from fulfilled receipts.
 
     A load is dated on the receipt clock (`stock.receipt_lines`), the same
     moment `vending.stock` puts the units in: door close when the replay uses
     the receipt's door times, else the line's `resolved_at`.
     """
-    return {slot: max(at for at, _ in slot_loads) for slot, slot_loads in loads.items()}
+    return {slot: max(at for at, _, _ in slot_loads) for slot, slot_loads in loads.items()}
 
 
-def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime, int]]]:
+def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime, int, str]]]:
     """Every time each slot had units put in it, from fulfilled receipts (`stock.receipt_lines`), as
-    `(at, units)`, dated like `_last_loaded`. A load dated after `now` hasn't happened yet, as in
+    `(at, units, sku)`, dated like `_last_loaded`. A load dated after `now` hasn't happened yet, as in
     the stock as of `now`, so it is left out: it can't make `days_since_loaded` negative."""
-    loads: dict[str, list[tuple[datetime, int]]] = {}
+    loads: dict[str, list[tuple[datetime, int, str]]] = {}
     for line in receipts:
         if (line["outcome"] in LOADING and line["units_loaded"] and line["at"] is not None
                 and line["at"] <= now):
-            loads.setdefault(line["slot"], []).append((line["at"], line["units_loaded"]))
+            loads.setdefault(line["slot"], []).append((line["at"], line["units_loaded"], line["sku"]))
     return loads
 
 
-def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[datetime, int]]],
+def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[datetime, int, str]]],
              sales: tuple[stock.SaleCost, ...], latest: Counters, now: datetime) -> dict[str, demand.Demand]:
-    """Each receipted slot's in-stock rate (or prior) for its current product, since it went in. Pure."""
+    """Each receipted slot's in-stock rate (or prior) for its current product, since it went in. Pure.
+
+    Only the current product's loads and sales count (#172). The old product's share of a window
+    split at the change is booked at the poll after it, so it is left out by product, not by time.
+    Units the replay left unattributed (`SaleCost.unattributed`) may have been either product's, so
+    they are in neither the units nor the stock spans, and the class days their window reaches into
+    after the change (`class_days_after(since, at)`) are left out of the in-stock days: a swap
+    polled the same day loses none, and a window over a poll gap neither lowers the rate nor counts
+    as days in stock that sold nothing.
+    """
     demands = {}
     for slot, count in counts.items():
-        slot_loads = [(at, units) for at, units in loads.get(slot, []) if at >= count.since]
-        slot_sales = [(s.at, s.units) for s in sales if s.slot == slot and s.at > count.since]
+        slot_loads = [(at, units) for at, units, sku in loads.get(slot, [])
+                      if at >= count.since and sku == count.product]
+        since = [s for s in sales if s.slot == slot and s.at > count.since]
+        slot_sales = [(s.at, s.units) for s in since if s.product == count.product and not s.unattributed]
         spans = demand.in_stock_spans(slot_loads, slot_sales, now, count.units)
-        demands[slot] = demand.estimate(sum(units for _, units in slot_sales),
-                                        len(demand.class_days_in_stock(spans)), latest.get(slot, (None, None))[0])
+        unplaced = {day for s in since if s.unattributed for day in class_days_after(count.since, s.at)}
+        days = len(set(demand.class_days_in_stock(spans)) - unplaced)
+        demands[slot] = demand.estimate(sum(units for _, units in slot_sales), days,
+                                        latest.get(slot, (None, None))[0])
     return demands
 
 
@@ -468,12 +486,14 @@ def _sold_since_load(sales: tuple[stock.SaleCost, ...], last_loaded: dict[str, d
     The replay reads the counters through `vending.counters`, so a misread
     poll or a board swap counts the same here as in `stock_on_hand` and the ledger.
     The old product's share of a window split at a product change left the
-    count at the change (`taken_at`), so it is not sold since that load.
+    count at the change (`taken_at`), so it is not sold since that load. Units
+    the replay left unattributed (#172) may have been the old product's, so
+    they aren't counted either.
     """
     sold = dict.fromkeys(last_loaded, 0)
     for sale in sales:
         loaded_at = last_loaded.get(sale.slot)
-        if loaded_at is not None and (sale.taken_at or sale.at) > loaded_at:
+        if loaded_at is not None and not sale.unattributed and (sale.taken_at or sale.at) > loaded_at:
             sold[sale.slot] += sale.units
     return sold
 

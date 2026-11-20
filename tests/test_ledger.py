@@ -530,7 +530,7 @@ def test_a_line_resolved_before_the_opening_with_its_door_closed_after_counts_th
         # Opening stock holds nothing of r2's: it was left out, not replayed at 14:55.
         assert stock.stock(conn, until=opened).slots == ()
     loads = machine_state._loads(stock.receipt_lines(conn), NOW).get("15", [])
-    assert max(at for at, _ in loads) == (datetime(2026, 11, 7, 15, 5, tzinfo=timezone.utc) if counts
+    assert max(at for at, _, _ in loads) == (datetime(2026, 11, 7, 15, 5, tzinfo=timezone.utc) if counts
                                           else datetime(2026, 11, 7, 14, 55, tzinfo=timezone.utc))
 
 
