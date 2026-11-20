@@ -37,6 +37,13 @@ leaves them out. Adjustments are corrections to the books (a bottle deposit, a
 refund), so the P&L counts them. Shrinkage, the cost of units lost without a
 sale, comes from `vending.stock` and is its own P&L line.
 
+Cost of sales is exact: only sales whose cost the receipts know
+(`summarize_sales`). Units sold across a product change the counters can't
+split may be either product, so their cost is not exact. They are left out of
+cost of sales, which is then incomplete, and reported apart as an estimate
+(`units_estimated`, `estimated_cost_of_sales_cents`) that no profit figure
+includes (#172 item 5). The money series counts them the same way.
+
 Money is exact (`Fraction` cents, `numeric` in the database) until it is shown.
 `money()` rounds half up to the cent only then.
 
@@ -148,7 +155,7 @@ class Pnl:
     end: datetime
     takings: Takings
     units_sold: int                         # every rise in our 20 slots' unit counters in the window
-    units_costed: int                       # of those, the units with a cost: from receipts, or an unsplit swap window (#112)
+    units_costed: int                       # of those, the units with an exact cost from receipts
     cost_of_sales_cents: Fraction           # of the costed units; 0 when nothing sold
     shrinkage_units: int                    # lost without a sale, written off or changed away
     shrinkage_cents: Fraction               # of the shrinkage whose cost is known
@@ -164,9 +171,12 @@ class Pnl:
     inventory_closet_cents: Fraction | None
     inventory_complete: bool
     notes: tuple[str, ...]
+    units_estimated: int = 0                # sold across a product change the counters can't split; not costed
+    estimated_cost_of_sales_cents: Fraction = Fraction(0)   # their estimate: in no profit figure (#172)
 
     @property
     def cost_of_sales_complete(self) -> bool:
+        """Every unit sold has an exact cost. False while any is estimated or has no cost at all."""
         return self.units_costed == self.units_sold
 
     @property
@@ -209,6 +219,8 @@ class WeekPnl:
     visits: int
     token_spend_cents: Fraction
     adjustments_cents: Fraction
+    units_estimated: int = 0
+    estimated_cost_of_sales_cents: Fraction = Fraction(0)   # in no profit figure, as in `Pnl`
 
     @property
     def cost_of_sales_complete(self) -> bool:
@@ -467,14 +479,44 @@ def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance 
                    tuple(notes))
 
 
-def _has_cost(s: stock.SaleCost) -> bool:
-    """Whether a sale's cost is in cost of sales: from its receipts, or kept from an unsplit product change."""
-    return s.cost_cents is not None or s.unattributed_cost_cents is not None
+@dataclass(frozen=True)
+class SalesCost:
+    """What some sales cost: exactly, and apart from that, as an estimate (`summarize_sales`)."""
+    units_costed: int
+    cost_of_sales_cents: Fraction
+    units_estimated: int
+    estimated_cost_of_sales_cents: Fraction
 
 
-def _sale_cost(s: stock.SaleCost) -> Fraction:
-    """What a sale adds to cost of sales: its known cost, or the cost an unsplit window took (#112)."""
-    return s.cost_cents if s.cost_cents is not None else (s.unattributed_cost_cents or Fraction(0))
+def summarize_sales(sales: Iterable[stock.SaleCost]) -> SalesCost:
+    """The cost of sales the P&L, its weeks and the money series all count, by one rule.
+
+    Exact: the sales with a `cost_cents`, their `costed_units` and cost. Estimated:
+    the sales with no exact cost but an `estimated_cost_cents` (an unsplit product
+    change, #172 item 5), all their units. Those are never in the exact figures, so
+    cost of sales is incomplete while there are any.
+    """
+    sales = list(sales)
+    exact = [s for s in sales if s.cost_cents is not None]
+    guessed = [s for s in sales if s.cost_cents is None and s.estimated_cost_cents is not None]
+    return SalesCost(sum(s.costed_units for s in exact), sum((s.cost_cents for s in exact), Fraction(0)),
+                     sum(s.units for s in guessed), sum((s.estimated_cost_cents for s in guessed), Fraction(0)))
+
+
+def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
+    """Notes on the units sold whose cost isn't exact; `what` names the figures that leave it out."""
+    notes = []
+    if cost.units_estimated:
+        notes.append(f"{cost.units_estimated} of {units_sold} units sold across a product change the counters "
+                     f"can't split, so which product sold is unknown; {what} leave their cost out. It is estimated "
+                     f"apart at {money(cost.estimated_cost_of_sales_cents)} (the midpoint of the two products' "
+                     "costs); the estimate is in no profit figure")
+    unknown = units_sold - cost.units_costed - cost.units_estimated
+    if unknown > 0:
+        notes.append(f"{unknown} of {units_sold} units sold have no known cost (sold from a slot before we first "
+                     "loaded it, past what we loaded, or across a product change with no estimate), "
+                     f"so {what} leave their cost out")
+    return notes
 
 
 def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
@@ -503,21 +545,11 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     counted = stock.stock(conn, until=end)
     # A rise is booked to the later poll, so the window's sales are the rises at polls after `start`.
     sales = [s for s in counted.sales if start < s.at <= end]
-    # Sold across a product change the counters can't split: costed at the new product's oldest units (#112).
-    # They count as costed, since their cost is in cost of sales; the note says the product may be wrong.
-    guessed = sum(s.costed_units for s in sales if s.unattributed_cost_cents is not None)
-    units_costed = sum(s.costed_units for s in sales if _has_cost(s))
-    cost = sum((_sale_cost(s) for s in sales), Fraction(0))
+    cost = summarize_sales(sales)
     if not units:
         notes.append("no sales in the window")
     else:
-        if guessed:
-            notes.append(f"{guessed} of {units} units sold across a product change the counters can't split; "
-                         "cost of sales includes them at the cost of the new product's oldest units, which may be the wrong "
-                         "product's")
-        if units_costed < units:
-            notes.append(f"{units - units_costed} of {units} units sold have no known cost (sold from a slot before "
-                         "we first loaded it, or past what we loaded), so cost of sales and margin leave their cost out")
+        notes += sales_cost_notes(units, cost, "cost of sales and margin")
     if sold.cents and not counted.slots:
         notes.append("the machine sold units but no receipts are stored, so nothing can be costed yet")
     lost = [s for s in counted.shrinkage if start < s.at <= end]
@@ -528,10 +560,11 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     machine, closet, inventory_complete = _inventory(counted)
     if not inventory_complete:
         notes.append("some units on hand have no known cost, so inventory at cost leaves them out")
-    return Pnl(start, end, sold, units, units_costed, cost, sum(s.units for s in lost), shrinkage, shrinkage_complete,
-               receipts, fees, visits, -_sum(recorded, "tokens"), _sum(recorded, "adjustment"),
-               _sum(recorded, "capital"), -_sum(recorded, "tax_remitted"),
-               machine, closet, inventory_complete, tuple(notes))
+    return Pnl(start, end, sold, units, cost.units_costed, cost.cost_of_sales_cents, sum(s.units for s in lost),
+               shrinkage, shrinkage_complete, receipts, fees, visits, -_sum(recorded, "tokens"),
+               _sum(recorded, "adjustment"), _sum(recorded, "capital"), -_sum(recorded, "tax_remitted"),
+               machine, closet, inventory_complete, tuple(notes),
+               cost.units_estimated, cost.estimated_cost_of_sales_cents)
 
 
 def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> list[WeekPnl]:
@@ -550,13 +583,10 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
     for r in rises_between(_counter_rows(conn, "lifetime_units", end), start, end)[2]:
         units[week(r.at)] += r.amount
     counted = stock.stock(conn, until=end)
-    costed: dict[date, int] = defaultdict(int)
-    cost: dict[date, Fraction] = defaultdict(Fraction)
+    weeks_sales: dict[date, list[stock.SaleCost]] = defaultdict(list)
     for s in counted.sales:
         if start < s.at <= end:
-            if _has_cost(s):
-                costed[week(s.at)] += s.costed_units
-            cost[week(s.at)] += _sale_cost(s)
+            weeks_sales[week(s.at)].append(s)
     lost_units: dict[date, int] = defaultdict(int)
     lost_cost: dict[date, Fraction] = defaultdict(Fraction)
     lost_unknown: set[date] = set()
@@ -587,9 +617,11 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
     day, last = week(start), week(end)
     while day <= last:
         w = sold.get(day)
-        out.append(WeekPnl(day, w.takings_cents if w else 0, w.tax_cents if w else 0, units[day], costed[day],
-                           cost[day], lost_units[day], lost_cost[day], day not in lost_unknown, fees[day],
-                           visits[day], tokens[day], adjustments[day]))
+        cost = summarize_sales(weeks_sales[day])
+        out.append(WeekPnl(day, w.takings_cents if w else 0, w.tax_cents if w else 0, units[day], cost.units_costed,
+                           cost.cost_of_sales_cents, lost_units[day], lost_cost[day], day not in lost_unknown,
+                           fees[day], visits[day], tokens[day], adjustments[day],
+                           cost.units_estimated, cost.estimated_cost_of_sales_cents))
         day += timedelta(days=7)
     return out
 

@@ -159,6 +159,9 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
         "committed": pending,
         "pnl": {
             "units_sold": p.units_sold, "units_costed": p.units_costed,
+            # Sold across a product change the counters can't split: an estimate, in no figure below (#172).
+            "units_estimated": p.units_estimated,
+            "estimated_cost_of_sales": m(p.estimated_cost_of_sales_cents) if p.units_estimated else None,
             "revenue_ex_tax": m(p.revenue_ex_tax_cents),
             "cost_of_sales": m(p.cost_of_sales_cents) if p.cost_of_sales_complete else None,
             "gross_margin": m(p.gross_margin_cents) if p.cost_of_sales_complete else None,
@@ -333,7 +336,7 @@ def html(panel: dict) -> str:
     meters = (_meter("Model spend", d["tokens"], MODEL_BUDGET_CENTS, "live calls, from the ledger")
               + _meter("Midweek visits", d["visit_fees"], VISIT_BUDGET_CENTS,
                        f'{d["visits"]} visit{"" if d["visits"] == 1 else "s"}'))
-    pnl_rows = "".join(f'<tr><td>{label}</td><td class="n">{value}</td></tr>' for label, value in (
+    rows = [
         ("Revenue without tax", _usd(p["revenue_ex_tax"])),
         ("Cost of the units sold", _usd(p["cost_of_sales"])),
         ("Gross margin", _usd(p["gross_margin"])),
@@ -342,7 +345,13 @@ def html(panel: dict) -> str:
         ("Model spend", _usd(p["tokens"])),
         ("<b>Profit</b>", f'<b>{_usd(p["net"])}</b>'),
         ("Stock on hand, at cost", _usd(p["inventory"]) + ("" if p["inventory_complete"] else " (some costs unknown)")),
-    ))
+    ]
+    if p.get("units_estimated"):
+        # Below the profit and labelled: an estimate is never folded into a profit figure (#172).
+        units = p["units_estimated"]
+        rows.append((f"Estimated cost of {units} unit{'' if units == 1 else 's'} sold across a swap the counters "
+                     "can't split (an estimate, not in profit)", _usd(p["estimated_cost_of_sales"])))
+    pnl_rows = "".join(f'<tr><td>{label}</td><td class="n">{value}</td></tr>' for label, value in rows)
     notes = "".join(f"<li>{_e(n)}</li>" for n in d["notes"])
     return (f'<div class="mtiles">{tiles}</div>'
             f'<h3>Where the money has gone</h3>{_split_bar(d)}{pend}'

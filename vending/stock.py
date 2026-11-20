@@ -33,8 +33,9 @@ turns receipts into stock movements and replays them in time order:
   unattributed (#172): booked to neither product, with the reason
   (`SaleCost.unattributed`, `SlotCount.unattributed`). They still leave the
   slot's known count and keep the cost taken from it (`unattributed_cost_cents`):
-  that of the new product's oldest units, which may be the wrong product's; the ledger
-  counts it in cost of sales and says so in a note, so profit isn't overstated.
+  that of the new product's oldest units, which may be the wrong product's. So
+  the ledger leaves them out of exact cost of sales and reports an estimate
+  apart (`estimated_cost_cents`, #172 item 5).
 
 A slot's count starts again whenever its product changes, so `loaded` and
 `sold` are since the last change, and on hand is loaded - sold - unattributed
@@ -180,14 +181,19 @@ class SaleCost:
     `cost_cents` is what those of known cost cost, and `costed_units` is how
     many of them that is; the rest had no known cost or were past the count
     (oversold). `cost_cents` is None only when every unit counted had no known cost.
-    The ledger's cost of sales is the sum of these, plus `unattributed_cost_cents`:
-    for units sold across a product change the counters can't split, the cost
-    they took out of the new product's count. Their product is unknown, so
-    `product` is None, `unattributed` says why, and `cost_cents` stays None,
-    but the cost still lands in cost of sales and the books add up (#112,
-    #172). A window main read as all the new product's, and #172 leaves
-    unattributed, keeps that cost in `cost_cents` instead, as main had it, so
-    the money series still counts it as the ledger does. `at` is the poll that
+    The ledger's exact cost of sales is the sum of `cost_cents`
+    (`ledger.summarize_sales`). Units sold across a product change the
+    counters can't split have no exact cost: their product is unknown, so
+    `product` and `cost_cents` are None and `unattributed` says why.
+    `unattributed_cost_cents` is the cost they took out of the new product's
+    count, so the stock's books add up (#112, #172), but it may be the wrong
+    product's. `estimated_cost_cents` is what the ledger reports apart, as an
+    estimate: for a window across one change, the midpoint of the two
+    candidate unit costs (the old product's oldest unit left at the change,
+    the new product's oldest unit) times the units, when both are known;
+    otherwise None (#172 item 5). A window main read as all the new
+    product's, and #172 leaves unattributed, keeps that cost in `cost_cents`
+    instead, as main had it. `at` is the poll that
     measured the units, the same moment the takings book them to. The old
     product's share of a window split at a product change left its count
     earlier, at the change: that is `taken_at`.
@@ -202,6 +208,7 @@ class SaleCost:
     unattributed_cost_cents: Fraction | None = None   # an unsplit window's cost; see above
     unattributed: str = ""             # why the product is unknown; empty when it is known
     since: datetime | None = None      # the poll before `at`: the measured window is (since, at]
+    estimated_cost_cents: Fraction | None = None      # an unsplit window's estimate; see above
 
 
 @dataclass(frozen=True)
@@ -723,6 +730,11 @@ class _Pool:
         return tuple((layer.units, layer.unit_cost) for layer in self.layers)
 
 
+def _oldest_unit_cost(pool: _Pool) -> Fraction | None:
+    """The cost of the unit that leaves the pool next, first in, first out; None when empty or unknown."""
+    return pool.layers[0].unit_cost if pool.layers else None
+
+
 def _cost(layers: list[_Layer]) -> Fraction | None:
     """What the layers cost in all, or None if any of them has no known cost."""
     known, cost = _known(layers)
@@ -781,6 +793,7 @@ class _Slot:
     last_moved: datetime | None = None
     replaced: str | None = None   # the product this one replaced, if the slot changed
     written_off: int = 0          # units of `replaced` written off as shrinkage at the change
+    replaced_unit_cost: Fraction | None = None   # the oldest of those units' cost: a candidate for unsplit sales
     unattributed: int = 0         # sold in windows that can't be split; not in `sold`
     at_most: int = 0              # on hand if none of those were this product: loaded less everything else out
 
@@ -848,7 +861,8 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 write_off(m.at, f"slot {m.slot}", slot.product, slot.pool.layers)
             if slot is None or changed:
                 slot = slots[m.slot] = _Slot(product=m.sku, since=m.at, replaced=slot.product if changed else None,
-                                             written_off=slot.pool.units if changed else 0)
+                                             written_off=slot.pool.units if changed else 0,
+                                             replaced_unit_cost=_oldest_unit_cost(slot.pool) if changed else None)
             if m.kind == "purchase":
                 survivors = m.to_slot + m.to_closet
                 each = None if m.paid_cents is None or not survivors else m.paid_cents / survivors
@@ -898,6 +912,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 warn(None if where == "the closet" else m.slot,
                      f"{m.ref}: {m.units} units of {m.sku} lost in {where} but we counted only {gone}")
         elif m.kind in ("sale", "sale_before_change") and slot is not None:
+            oldest = _oldest_unit_cost(slot.pool)
             taken, costed, cost = slot.pool.take(m.units)
             slot.oversold += m.units - taken
             if m.kind == "sale_before_change" and taken < m.units:
@@ -937,11 +952,18 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                                 f"costed at the oldest units taken from {slot.product}'s count, which may be the wrong "
                                 f"product's{written_off}")
                 slot.unattributed += m.units
+                # Across one change the sale is the old product's or the new one's: estimate at the
+                # midpoint of their oldest units' costs, when both are known (#172 item 5).
+                estimate = None
+                if (across_change and m.changes <= 1 and not m.read_as_new
+                        and slot.replaced_unit_cost is not None and oldest is not None):
+                    estimate = (slot.replaced_unit_cost + oldest) / 2 * m.units
                 # Main costed a window it read as all new in cost_cents; it stays there (see `SaleCost`).
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, cost if m.read_as_new else None,
                                       unattributed_cost_cents=None if m.read_as_new else cost,
                                       unattributed=f"sold {across}; the counters can't split them",
-                                      since=m.window_since))
+                                      since=m.window_since,
+                                      estimated_cost_cents=estimate))
             else:
                 slot.sold += m.units
                 slot.at_most = max(0, slot.at_most - m.units)

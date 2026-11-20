@@ -38,6 +38,8 @@ class Pnl(Reply):
     units_costed: int | None = None
     cost_of_sales: str | None = None
     cost_of_sales_complete: bool | None = None
+    units_estimated: int | None = None              # sold across a swap the counters can't split
+    estimated_cost_of_sales: str | None = None      # their estimate: not in cost_of_sales, margin or net
     gross_margin: str | None = None
     shrinkage: str | None = None
     shrinkage_units: int | None = None
@@ -92,6 +94,8 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         units_costed=p.units_costed,
         cost_of_sales=ledger.money(p.cost_of_sales_cents),
         cost_of_sales_complete=p.cost_of_sales_complete,
+        units_estimated=p.units_estimated,
+        estimated_cost_of_sales=ledger.money(p.estimated_cost_of_sales_cents),
         gross_margin=ledger.money(p.gross_margin_cents),
         shrinkage=ledger.money(p.shrinkage_cents),
         shrinkage_units=p.shrinkage_units,
