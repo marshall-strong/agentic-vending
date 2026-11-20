@@ -465,7 +465,7 @@ def test_the_sync_command_with_a_mixed_listing_stores_the_good_poll_and_prints_n
     assert sync_history.main(["--since", DAY, "--until", DAY]) == 1                  # the bad rows are counted
     said = capsys.readouterr()
     assert [(r[0], bytes(r[1])) for r in conn.execute("select session_id, raw from polls")] == [(SID, good)]
-    assert "1 new" in said.out and "3 polls the bridge couldn't return" in said.out
+    assert "1 new" in said.out and "3 polls skipped" in said.out
     assert_clean(said.out, said.err)
     assert "2026-02-30" not in said.out + said.err
 
@@ -548,6 +548,108 @@ def test_a_job_that_crashes_on_a_bridge_error_leaves_no_poll_bytes_in_the_log(se
     [result] = worker.run_round([("visit_read", job)], logged.append)
     assert result.outcome == "crashed"
     assert_clean("\n".join(logged), result.error)
+
+
+ROW_TEXT = f"the database said\nDETAIL:  Failing row contains ({PA1}, {PA2}, {VA1})"
+
+
+@pytest.mark.parametrize("error", [
+    pytest.param(lambda psycopg: psycopg.errors.CheckViolation(ROW_TEXT), id="check violation"),
+    pytest.param(lambda psycopg: psycopg.OperationalError(ROW_TEXT), id="operational"),
+    pytest.param(lambda psycopg: psycopg.DataError(ROW_TEXT), id="data error"),
+])
+def test_a_job_that_crashes_on_a_database_error_is_logged_as_its_class_and_sqlstate_only(error):
+    import psycopg
+
+    def job():
+        raise error(psycopg)
+
+    logged = []
+    [result] = worker.run_round([("sync_history", job)], logged.append)
+    assert result.outcome == "crashed" and "SQLSTATE" in result.error
+    assert type(error(psycopg)).__name__ in result.error
+    assert_clean(result.error, "\n".join(logged))
+
+
+def test_a_job_that_crashes_on_another_error_still_logs_its_text():
+    def job():
+        raise RuntimeError("the halt switch file is unreadable")
+
+    [result] = worker.run_round([("sync_history", job)], lambda _: None)
+    assert result.error == "RuntimeError: the halt switch file is unreadable"
+
+
+@pytest.fixture
+def connection_lost(monkeypatch):
+    """The first poll the sync stores finds the connection gone, and the database's message quotes the row."""
+    import psycopg
+
+    def store(conn, meta, raw):
+        conn.close()
+        raise psycopg.OperationalError(ROW_TEXT)
+
+    monkeypatch.setattr(sync_history, "store", store)
+
+
+def test_a_sync_that_loses_its_connection_raises_an_error_with_no_row_text(schema_url, serve, connection_lost):
+    lines = []
+    with open_in(*schema_url) as own:
+        bridge = Bridge(base_url=serve({HISTORY: listing(POLL), RAW: Answer(body=build(SAMPLE))}).url, api_key=KEY)
+        with pytest.raises(Exception) as raised:
+            sync_history.sync(own, bridge, datetime(2026, 10, 1).date(), datetime(2026, 10, 1).date(), log=lines.append)
+    assert "OperationalError" in str(raised.value)
+    assert_clean(raised.value, repr(raised.value), traceback_of(raised.value), "\n".join(lines))
+    assert raised.value.__cause__ is None and raised.value.__suppress_context__
+
+
+def test_the_sync_command_that_loses_its_connection_prints_no_row_text(own_connection, serve, monkeypatch, connection_lost):
+    monkeypatch.setenv("DEX_BASE_URL", serve({HISTORY: listing(POLL), RAW: Answer(body=build(SAMPLE))}).url)
+    monkeypatch.setenv("DEX_API_KEY", KEY)
+    with pytest.raises(Exception) as raised:
+        sync_history.main(["--since", DAY, "--until", DAY])
+    assert_clean(traceback_of(raised.value))
+
+
+def test_the_sync_job_that_loses_its_connection_shows_no_row_text_in_the_worker_log(
+        own_connection, serve, monkeypatch, connection_lost):
+    monkeypatch.setenv("DEX_BASE_URL", serve({HISTORY: listing(POLL), RAW: Answer(body=build(SAMPLE))}).url)
+    monkeypatch.setenv("DEX_API_KEY", KEY)
+    logged = []
+    [result] = worker.run_round([("sync_history", lambda: sync_history.main(["--since", DAY, "--until", DAY]))],
+                                logged.append)
+    assert result.outcome == "crashed" and "OperationalError" in result.error
+    assert_clean(result.error, "\n".join(logged), json.dumps(worker.State(results=[result]).public()))
+
+
+# --- What the sync command says when storage fails ---------------------------------------------------------
+
+def storage_failed_routes():
+    """A day with a good poll and one the database refuses (a NUL byte in its serial)."""
+    rows = [POLL, {"session_id": SID2, "started_at": "2026-10-01T13:00:00+00:00"}]
+    return {HISTORY: listing(*rows), RAW: Answer(body=build(SAMPLE)),
+            f"{HISTORY}/{SID2}/raw": Answer(body=poll_with_serial("RVV\x00NG"))}
+
+
+def test_a_storage_failure_is_named_in_the_summary_with_the_command_that_retries_it(
+        conn, own_connection, serve, monkeypatch, capsys):
+    monkeypatch.setenv("DEX_BASE_URL", serve(storage_failed_routes()).url)
+    monkeypatch.setenv("DEX_API_KEY", KEY)
+    assert sync_history.main(["--since", "2026-09-30", "--until", DAY]) == 1
+    said = capsys.readouterr()
+    text = said.out + said.err
+    # The earliest day it failed on, and the command that fetches it again.
+    assert "python -m vending.sync_history --since 2026-09-30" in text
+    assert "storage failed" in text and "polls skipped" in text and "couldn't return" not in text
+    assert [r[0] for r in conn.execute("select session_id from polls")] == [SID]
+    assert_clean(text)
+
+
+def test_a_run_with_no_storage_failure_does_not_suggest_a_rerun(own_connection, serve, monkeypatch, capsys):
+    monkeypatch.setenv("DEX_BASE_URL", serve({HISTORY: listing(POLL), RAW: Answer(body=build(SAMPLE))}).url)
+    monkeypatch.setenv("DEX_API_KEY", KEY)
+    assert sync_history.main(["--since", DAY, "--until", DAY]) == 0
+    said = capsys.readouterr()
+    assert "--since" not in said.out + said.err and "storage failed" not in said.out + said.err
 
 
 # --- vending/visit_polls.py --------------------------------------------------------------------------
@@ -708,19 +810,59 @@ def test_the_dry_run_still_logs_plain_health_values(snapshot):
 
 # --- scripts/check_archive.py ----------------------------------------------------------------------------
 
-def test_the_archive_check_prints_the_reason_code_and_never_an_old_detail(tmp_path, monkeypatch, capsys):
-    # Logs written before the fix can hold a snippet of the reply in `detail`.
+@pytest.fixture
+def archive_report(tmp_path, monkeypatch, capsys):
+    """`archive_report(log_text)` is what scripts/check_archive.py prints for a poll.log holding `log_text`."""
     spec = importlib.util.spec_from_file_location("check_archive_under_test", ROOT / "scripts" / "check_archive.py")
     script = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(script)
     (tmp_path / "data" / "snapshots").mkdir(parents=True)
     (tmp_path / "data" / "snapshots" / "20261119T120000Z.dex").write_bytes(b"x")
     (tmp_path / "data" / "logs").mkdir(parents=True)
-    (tmp_path / "data" / "logs" / "poll.log").write_text(
-        '2026-11-19T12:30:00Z level=ERROR event=poll_failed reason=bridge_error '
-        f'detail="POST /api/v1/poll returned 502 Bad Gateway. Response: {PA1} {PA2} {VA1}" exit=6\n', encoding="utf-8")
     monkeypatch.setattr(script, "repo_root", lambda: tmp_path)
-    script.main(["--log-lines", "5"])
-    out = capsys.readouterr().out
-    assert "Most recent error" in out and "reason=bridge_error" in out
+
+    def report(log_text):
+        (tmp_path / "data" / "logs" / "poll.log").write_text(log_text, encoding="utf-8")
+        script.main(["--log-lines", "5"])
+        return capsys.readouterr().out
+
+    return report
+
+
+# Lines as the script wrote them before the reply was kept out of the log: `detail` held a snippet of the reply
+# and `problems` the first and last record of a document. The records can say anything, `reason=` included.
+LEGACY_LINES = {
+    "poll_failed with a snippet": (
+        '2026-11-19T12:30:00Z level=ERROR event=poll_failed reason=bridge_error '
+        f'detail="POST /api/v1/poll returned 502 Bad Gateway. Response: {PA1} {PA2} {VA1}" exit=6\n',
+        "reason=bridge_error"),
+    "snippet that says reason=": (
+        '2026-11-19T12:30:00Z level=ERROR event=poll_failed reason=bridge_error '
+        f'detail="POST /api/v1/poll returned 502 Bad Gateway. Response: reason={PA1} {PA2}" exit=6\n',
+        "reason=bridge_error"),
+    "invalid_snapshot with records": (
+        '2026-11-19T12:30:00Z level=ERROR event=invalid_snapshot file=data\\snapshots\\invalid\\20261119T123000Z.dex '
+        f'bytes=4341 lines=210 cached=false age_seconds=0.0 session={SID} sha256=320e4abb364c63c4 elapsed=8.7s '
+        f"problems=\"first record is 'reason={PA1} {PA2}', expected it to start with DXS; "
+        f"last record is 'reason={VA1}', expected it to start with DXE\" exit=7\n",
+        "reason=invalid_snapshot"),
+    "reason that is not a code": (
+        f'2026-11-19T12:30:00Z level=ERROR event=poll_failed reason={PA1} detail=x exit=6\n',
+        "reason=unrecognised"),
+    "no prefix": (f'reason=bridge_error {PA1} level=ERROR {PA2}\n', "reason=unrecognised"),
+}
+
+
+@pytest.mark.parametrize("line, says", LEGACY_LINES.values(), ids=LEGACY_LINES)
+def test_the_archive_check_prints_a_reason_code_and_never_text_from_an_old_line(archive_report, line, says):
+    out = archive_report(line)
+    assert "Most recent error" in out and says in out
+    assert_clean(out)
+
+
+def test_the_archive_check_reads_the_reason_of_the_last_structured_error(archive_report):
+    old, new = LEGACY_LINES["poll_failed with a snippet"][0], (
+        "2026-11-19T13:00:00Z level=ERROR event=poll_failed reason=timeout detail=\"http://x did not respond\" exit=4\n")
+    out = archive_report(old + new)
+    assert "reason=timeout" in out and "2026-11-19T13:00:00Z" in out
     assert_clean(out)
