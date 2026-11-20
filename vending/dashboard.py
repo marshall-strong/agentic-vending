@@ -1793,7 +1793,11 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
     elif spend["ok"]:
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
         label, period = "Spent so far", ""
-        if money and money["ok"] and not money["data"].get("problem"):
+        # "Ledger not open" only when the ledger said so. A ledger that couldn't be read, or couldn't
+        # give a balance (no slot assignment, say), has an unknown balance, not an unopened one.
+        unopened = bool(money and money["ok"] and not money["data"].get("problem"))
+        state = "Ledger not open" if unopened else "Balance unavailable"
+        if unopened:
             # No opening yet (or one dated ahead): all of this is development and test spend (#104).
             # A ledger that can't answer says nothing about the period, so the cell claims none.
             opens = money["data"].get("opens_at")
@@ -1801,7 +1805,7 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
             period = (" &middot; development and test, not from the $600"
                       + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else ""))
         unpriced = f' ({m["unpriced"]} without a cost)' if m["unpriced"] else ""
-        cells.append(_cell("Spendable", '<span class="dim">Ledger not open</span>',
+        cells.append(_cell("Spendable", f'<span class="dim">{state}</span>',
                            f'{label}: drinks {_money(dr["paid"])}, model {_money(m["total"])}{unpriced}{period}',
                            "#money", link=spend_link))
     else:

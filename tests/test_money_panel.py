@@ -176,6 +176,10 @@ def test_without_our_slot_assignment_the_panel_says_so_and_the_page_still_render
     page = dashboard.render(snap)
     assert "No balance:" in page and 'id="vm"' in page
     assert "Spent so far" in page and "Spent before the opening" not in page    # the period is unknown
+    # The ledger is open; it just can't give a balance. The Spendable cell says that, not "not open".
+    cell = dashboard._status_bar(snap).split('<span class="label">Spendable</span>')[1].split("</a>")[0]
+    assert '<span class="sv"><span class="dim">Balance unavailable</span></span>' in cell
+    assert "Ledger not open" not in page
 
 
 def test_once_the_ledger_is_open_the_spent_tile_reads_it(conn, page_conn):
