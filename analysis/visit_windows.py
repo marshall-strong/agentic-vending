@@ -43,7 +43,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from door_events import our_visits, read_receipts  # noqa: E402  (standard library only)
+from door_events import is_listed, our_visits, read_receipts  # noqa: E402  (standard library only)
 from slots_config import START  # noqa: E402
 
 MERGE_H = 3                                        # rises within 3 h are one visit (sales_analysis.VISIT_MERGE_H)
@@ -131,16 +131,14 @@ def grade_of(visit: dict, lab: dict | None) -> str | None:
     """The analysis's refill grade for the visit with the same window start, if lab data is there.
 
     A visit with no door window (ambiguous or unknown) can't be graded from the door counter, so the analysis lists it
-    in refill_evidence.visits_without_window instead of grading it. When the lab data lists this receipt with this kind
-    of window, its grade is NO_WINDOW_GRADE; when it doesn't, the lab data wasn't made from these receipts: None, like
-    any visit the lab data has never seen."""
+    in refill_evidence.visits_without_window instead of grading it. When the lab data lists this receipt (the same
+    fulfilment instant, to the second) with this kind of window, its grade is NO_WINDOW_GRADE; when it doesn't, the lab
+    data wasn't made from these receipts: None, like any visit the lab data has never seen."""
     if not lab:
         return None
     if visit["window"] != "known":
-        key = visit["first"].isoformat(timespec="minutes")[:16]
-        listed = lab.get("refill_evidence", {}).get("visits_without_window", [])
-        return NO_WINDOW_GRADE if any(str(w.get("fulfilled_at", ""))[:16] == key and w.get("window") == visit["window"]
-                                      for w in listed) else None
+        listed = (lab.get("refill_evidence") or {}).get("visits_without_window") or []
+        return NO_WINDOW_GRADE if is_listed(listed, visit["first"], visit["window"]) else None
     key = visit["from"].isoformat(timespec="minutes")[:16]
     for v in lab.get("visits", []):
         if str(v.get("start", ""))[:16] == key:

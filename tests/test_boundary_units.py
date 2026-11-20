@@ -171,6 +171,40 @@ def test_a_missing_end_price_does_not_skip_the_split_among_the_prices_seen():
     assert price_sales(readings, [(T[1], T[2], 3, 650)])[0] == (150, None, 1, 0, 0, ((250, 2),))
 
 
+def test_split_among_agrees_with_counting_every_way_for_small_cases():
+    from collections import Counter
+    from itertools import combinations, combinations_with_replacement
+
+    every = (100, 150, 250, 300, 450)
+    for k in range(1, 6):
+        for prices in combinations(every, k):
+            for units in range(0, 6):
+                ways: dict[int, list] = {}
+                for sold in combinations_with_replacement(prices, units):
+                    count = Counter(sold)
+                    ways.setdefault(sum(sold), []).append([(p, count.get(p, 0)) for p in prices])
+                for cents in range(-50, units * 450 + 100, 50):
+                    want = ways[cents][0] if len(ways.get(cents, [])) == 1 else None
+                    assert split_among(units, cents, list(reversed(prices))) == want, (prices, units, cents)
+
+
+def test_a_search_over_four_or_more_prices_stops_at_its_bound_and_leaves_the_units_unknown(monkeypatch):
+    import boundary_units
+
+    prices = [100, 200, 300, 400]
+    assert split_among(20, 8000, prices) == [(100, 0), (200, 0), (300, 0), (400, 20)]       # all at the top: the one split
+    assert split_among(2, 600, [100, 200, 300, 400, 500]) is None                             # 100+500, 200+400, 300+300
+    assert split_among(2, 900, [100, 200, 300, 400, 500]) == [(100, 0), (200, 0), (300, 0), (400, 1), (500, 1)]
+    monkeypatch.setattr(boundary_units, "MAX_NODES", 3)
+    assert split_among(20, 8000, prices) is None                                              # past the bound: unknown
+    monkeypatch.undo()
+    # a huge count over many prices ends at the bound, not after the counts
+    import time
+    started = time.perf_counter()
+    assert split_among(10 ** 12, 10 ** 12 * 250, [100, 200, 300, 400, 500]) is None
+    assert time.perf_counter() - started < 2.0
+
+
 def test_split_among_refuses_a_negative_number_of_units():
     assert split_among(-1, -150, [150]) is None
     assert split_among(-2, -500, [150, 250]) is None

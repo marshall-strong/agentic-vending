@@ -88,7 +88,7 @@ from slots_config import SOURCE_CLI, SOURCE_FALL, SOURCE_SERVER, check_before_st
 from slots_config import exempt_from_start  # noqa: E402
 from slots_config import ranges as slot_ranges  # noqa: E402
 from boundary_units import price_sales, slot_average_price  # noqa: E402
-from door_events import START, our_visits, read_receipts  # noqa: E402
+from door_events import START, our_visits, read_receipts, unplaced_listing  # noqa: E402
 from vending.counters import rises as counter_rises  # noqa: E402
 from vending.slots import DEVICE_ID  # noqa: E402  (configure() sets the device and slots this run uses)
 
@@ -2038,8 +2038,7 @@ def main():
                 f"the first opening. Likely refill = >= {LIKELY_MIN} resumed slots"
                 f"{'; possible top-up = 1' if LIKELY_MIN > 1 else ' (with this few slots, one resumed slot is already likely)'}."),
         capacity_max=CAPACITY_MAX, silent_days=SILENT_DAYS, resume_days=RESUME_DAYS, likely_min=LIKELY_MIN,
-        visits_without_window=[dict(fulfilled_at=iso(done), window=kind, candidate_rises=[iso(c) for c in cands])
-                               for done, kind, cands in unplaced],
+        visits_without_window=unplaced_listing(unplaced),      # full fulfilment time: visit_windows matches receipts by it
         per_visit={str(v["id"]): dict(evidence=v["evidence"], proven_slots=v["proven_slots"], pair_proof_slots=v["pair_proof_slots"],
                                       resumed_slots=v["resumed_slots"], outcome_refill_slots=v["outcome_refill_slots"]) for v in vis},
         per_slot=per_slot_ev,

@@ -5,6 +5,7 @@ uses it for the average price. The same rule as vending/stock.py `_old_units`, w
 from __future__ import annotations
 
 from bisect import bisect_right
+from math import gcd
 
 from vending.counters import windows
 
@@ -26,30 +27,83 @@ def split_boundary(units: int, cents: int | None, p_open: int | None, p_close: i
     return (old, units - old, 0) if not rest and 0 <= old <= units else (0, 0, units)
 
 
+MAX_NODES = 5_000        # the most steps a search over four or more prices may take; past it the units stay unknown
+
+
+def _three(units: int, cents: int, prices: list[int]) -> tuple[int, list[tuple[int, int]] | None]:
+    """`(how many whole splits fit, one of them)` of `units` and `cents` among three prices, counted up to a limit, not searched.
+
+    With prices `a < b < c` and counts `x, y, z`: `x + y + z = units` and `a*x + b*y + c*z = cents`. Taking `a` off every
+    price, `(b - a)*y + (c - a)*z = cents - a*units`: one linear equation in two counts, whose solutions are one
+    solution and its steps (`y` up by `(c - a)/g`, `z` down by `(b - a)/g`). Counting the steps that keep every count whole
+    and not below zero gives the number of splits. No steps, no fit; the number is exact (it may be large), so the caller
+    can tell one from several. The one returned is the first, which is valid when any fits."""
+    a, b, c = prices
+    d1, d2, rest = b - a, c - a, cents - a * units
+    g = gcd(d1, d2)
+    if rest < 0 or rest % g:
+        return 0, None
+    d1, d2, rest = d1 // g, d2 // g, rest // g
+    y0 = rest * pow(d1, -1, d2) % d2                      # the smallest y that is whole and not below zero (d1, d2 coprime)
+    z0 = (rest - d1 * y0) // d2
+    steps = min(z0 // d1, (units - y0 - z0) // (d2 - d1))  # z must stay >= 0, and x = units - y - z must too
+    if steps < 0:
+        return 0, None
+    return steps + 1, [(a, units - y0 - z0), (b, y0), (c, z0)]
+
+
 def split_among(units: int, cents: int | None, prices: list[int]) -> list[tuple[int, int]] | None:
     """`(price, units)` for each of `prices` when exactly one way of selling `units` at them takes in `cents`, else None.
 
     None means no whole split fits (a misread, or a price not seen) or several do, so nothing says which: the units are
-    unknown, not credited to any price. Needs `cents`; the prices are distinct."""
-    if cents is None or not prices:
+    unknown, not credited to any price. Needs `cents` and a number of units that isn't negative; the prices are listed
+    once each.
+
+    The work is bounded however large the counters' jump is. Every sale is `units * lowest price` plus a whole
+    number of the prices' differences, so a total that isn't is turned away at once (the gcd of the differences). One,
+    two and three prices are solved algebraically. Four or more are searched over all but the last three, and the search
+    stops after MAX_NODES steps: the units are then unknown, not guessed."""
+    prices = sorted(set(prices))
+    if units < 0 or cents is None or not prices:
         return None
-    prices = sorted(prices)
+    extra = cents - units * prices[0]
+    spread = 0
+    for p in prices[1:]:
+        spread = gcd(spread, p - prices[0])
+    if extra < 0 or (spread and extra % spread) or cents > units * prices[-1]:
+        return None
+    if len(prices) == 1:
+        return [(prices[0], units)]
+    if len(prices) == 2:
+        old, rest = divmod(prices[1] * units - cents, prices[1] - prices[0])
+        return [(prices[0], old), (prices[1], units - old)] if not rest and 0 <= old <= units else None
+    if len(prices) == 3:
+        count, split = _three(units, cents, prices)
+        return split if count == 1 else None
+    budget = MAX_NODES
     found: list[list[tuple[int, int]]] = []
 
-    def walk(i: int, left: int, owed: int, taken: list[tuple[int, int]]) -> None:
-        if len(found) > 1:
-            return
-        if i == len(prices) - 1:
-            if left * prices[i] == owed:
-                found.append([*taken, (prices[i], left)])
-            return
-        rest = prices[i + 1:]
+    def walk(i: int, left: int, owed: int, taken: list[tuple[int, int]]) -> bool:
+        """False when the budget ran out."""
+        nonlocal budget
+        if len(prices) - i == 3:
+            count, split = _three(left, owed, prices[i:])
+            found.extend([[*taken, *split]] * min(count, 2) if split else [])
+            return True
         for n in range(left + 1):
-            after = owed - n * prices[i]
-            if min(rest) * (left - n) <= after <= max(rest) * (left - n):       # what's left can still be reached
-                walk(i + 1, left - n, after, [*taken, (prices[i], n)])
+            budget -= 1
+            if budget < 0:
+                return False
+            after, left_over = owed - n * prices[i], left - n
+            if prices[i + 1] * left_over <= after <= prices[-1] * left_over:      # what's left can still be reached
+                if not walk(i + 1, left_over, after, [*taken, (prices[i], n)]):
+                    return False
+                if len(found) > 1:
+                    return True
+        return True
 
-    walk(0, units, cents, [])
+    if not walk(0, units, cents, []):
+        return None
     return found[0] if len(found) == 1 else None
 
 
@@ -66,7 +120,8 @@ def price_sales(readings, sales) -> list[tuple[int | None, int | None, int, int,
     changed back, say 150, 250, 150. Every price seen in the window is a price the units may have sold at, so the units
     and cents are split among all of them, when exactly one whole split fits (`split_among`); `other` is `(price,
     units)` for the units at a price that is neither the opening nor the closing one (none in the common case, with
-    two prices at most). With the opening and closing price alone, or one price, the split is `split_boundary`'s.
+    two prices at most). A window with one price takes `split_boundary`'s rule. An end with no price reading doesn't
+    stop the split: the prices that were seen are split among, and the units at the missing end's price are none.
 
     The units and cents of a poll can be measured from different polls (vending.counters.windows: a misread in one
     counter and not the other). Then the cents do not cover the same units, so a sale whose prices differ is not
@@ -85,11 +140,10 @@ def price_sales(readings, sales) -> list[tuple[int | None, int | None, int, int,
         same = unit_from.get(at) is not None and unit_from.get(at) == cents_from.get(at)
         cents = int(cents) if same else None
         seen = sorted({r[3] for r in readings[first:bisect_right(times, at)] if r[3] is not None})
-        two_ends_only = len(seen) <= 1 or (len(seen) == 2 and opening != closing)     # the common case
-        if opening is None or closing is None or two_ends_only:
+        if len(seen) < 2:                       # one price all through the window (or none seen): nothing to split
             out.append((opening, closing, *split_boundary(int(units), cents, opening, closing), ()))
             continue
-        split = split_among(int(units), cents, seen)
+        split = split_among(int(units), cents, seen)          # a missing end price doesn't hide the prices that were seen
         if split is None:
             out.append((opening, closing, 0, 0, int(units), ()))
             continue
