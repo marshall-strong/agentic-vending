@@ -115,13 +115,14 @@ class Movement:
     price_after: int | None = None       # sale: the slot's price at `at`, in cents
     price_prior: int | None = None       # sale: the price at the poll before `since`, in cents
     prior_at: datetime | None = None     # sale: when that poll was taken
-    window_since: datetime | None = None # sale: the counters' window start; `since` moves when a window is split
     booked_at: datetime | None = None    # sale_before_change: the poll that measured its window
     changes: int = 0                     # sale: product changes inside a window left unsplit
     opened_at: datetime | None = None    # purchase, load: the door opened then; `at` is door close (None: no door times)
     seq: int = 0                         # receipt movements: the request's place in submission order (0: unknown)
     door: tuple[datetime, datetime] | None = None   # receipt movements: the receipt's door times, even if not used
     notes: tuple[StockWarning, ...] = ()  # warnings to pass on when this movement is replayed, each with its slot
+    # Last, so no earlier field's position moves: a sale's counters window start; `since` moves when it is split.
+    window_since: datetime | None = None
 
     def __post_init__(self) -> None:
         # A sale made with only `since` still knows where its window began once a split moves `since`.

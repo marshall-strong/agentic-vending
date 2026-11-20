@@ -115,7 +115,8 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     notes.extend(balance.notes)
     spendable = math.floor(balance.spendable_cents)
 
-    counted = stock.stock(conn, until=now)
+    receipts = stock.receipt_lines(conn)    # read once: the stock and the trial's loads share these rows
+    counted = stock.stock(conn, until=now, lines=receipts)
     notes.extend(counted.warnings)
     by_slot = {s.slot: s for s in counted.slots}
     prices, poll_at = _latest_prices(conn, settings.slots)
@@ -160,7 +161,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     if settings.wildcard_slot is not None:
         # For the promotion gate: the same verdict and silent slots get_machine_state shows the agent.
         counts = {c.slot: c for c in counted.slots if c.slot in settings.slots}
-        loads = stock.loads(conn, now)
+        loads = stock.loads(conn, now, lines=receipts)
         trial = wildcard_trial.trial(conn, now, counts, loads, counted.sales, settings.slots, settings.wildcard_slot)
         verdict = trial.verdict if trial is not None else None
         report = wildcard_trial.silent_slots(conn, now, counts, loads, counted.sales, settings.slots,
