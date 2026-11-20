@@ -216,7 +216,7 @@ PRE_OPENING_WRITES = (
     "config.set", "halt",
     "ledger.adjustment", "ledger.capital", "ledger.opening", "ledger.tax_remitted",
     "pages.grant",
-    "plan_store.load", "plan_store.pick",  # Written by the companion first-fill plan branch.
+    "plan_store.load", "plan_store.pick",  # Operator commands in vending.plan_store.
     "product_requests.resolve", "request_backlog.add", "request_backlog.drop", "request_backlog.move",
     "request_catalog_product", "set_wildcard_slot", "slot_counts", "slots.record",
     "sourcing.remove", "sourcing.set", "submissions.resolve", "submit_desired_state",
@@ -309,7 +309,7 @@ def _plan_text(value: str | None) -> str | None:
     return "(local file reference omitted)" if _FILE_REFERENCE.search(text) else text
 
 
-def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
+def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...], assignment_at: datetime | None) -> dict | None:
     with conn.cursor(row_factory=dict_row) as cur:
         # Use the same JSON decoder as the laptop-file loader.
         set_json_loads(json.loads, context=cur)
@@ -323,15 +323,17 @@ def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
     if set(row["slots"]) != set(ours):
         return {**current, "message": "planned for an earlier slot assignment: load a new plan"}
     checked = plan_rounds.parse_round(row["label"], row["plan"], row["projection"], ours, saved_at=row["loaded_at"])
+    older = _older_assignment(row["loaded_at"], assignment_at)
     return {**current, "fill_expected_cents": checked.fill_expected_cents,
             "fill_most_cents": checked.fill_most_cents, "fill_cap_cents": plan_rounds.FILL_CAP_CENTS,
             "slots": [{"slot": s.slot, "sku": s.sku, "product": _plan_text(s.product), "price_cents": s.price_cents,
-                       "units": s.units, "reason": _plan_text(s.why), "fill_check": s.fill_check,
+                       "units": s.units, "reason": OLD_ASSIGNMENT if older and s.why else _plan_text(s.why),
+                       "fill_check": s.fill_check,
                        "checks": {"floor_cents": s.floor_cents, "legal_price": s.legal_price,
                                   "capacity": s.capacity, "capacity_assumed": s.capacity_assumed,
                                   "expected_fill_share": _dollars(s.expected_cents),
                                   "max_fill_share": _dollars(s.most_cents),
-                                  "refusals": [_plan_text(message) for message in s.refusals]}}
+                                  "refusals": [] if older else [_plan_text(message) for message in s.refusals]}}
                       for s in checked.slots.values()]}
 
 
@@ -613,9 +615,14 @@ def hide_errors(snap: dict, *, public: bool = False) -> None:
 
 OLD_ASSIGNMENT = "Text omitted from before the current slot assignment."
 OUTSIDE_ASSIGNMENT = "Tool payload omitted for a selection outside the current slot assignment."
+POLL_REPLY_OMITTED = "Saved poll reply omitted because its selections could not be scoped."
 _DROP = object()
 _SLOT_KEYS = {"slot", "selection", "into_slot", "wildcard_slot"}
 _SLOT_LISTS = {"slots", "selections", "assigned_slots", "our_slots"}
+_POLL_REPLY_TOOLS = {"get_account_balance", "get_briefing", "get_machine_state", "get_pnl", "get_sales_history"}
+_POLL_ROW_FIELDS = {"slot", "product", "price", "units", "revenue", "revenue_ex_tax",
+                    "lifetime_units", "units_sold_in_window", "units_sold_since_load", "units_per_day",
+                    "stock_on_hand", "effective_stock", "recent_units"}
 
 
 def _older_assignment(at: datetime, assignment_at: datetime | None) -> bool:
@@ -646,6 +653,25 @@ def _scope_payload(value: Any, ours: set[str], key: str = "") -> Any:
     return scoped
 
 
+def _scope_poll_reply(value: Any, ours: set[str]) -> Any:
+    """Keep per-slot figures from structured replies. Saved prose and totals may mix selections."""
+    if not isinstance(value, dict):
+        return _DROP
+    for key in ("structuredContent", "result"):
+        if key in value:
+            value = value[key]
+            if not isinstance(value, dict):
+                return _DROP
+    rows = value.get("data")
+    if isinstance(rows, dict):   # get_briefing wraps its per-slot figures in the briefing
+        rows = rows.get("slots")
+    if not isinstance(rows, list):
+        return _DROP
+    return {"data": [{key: value for key, value in row.items()
+                      if key in _POLL_ROW_FIELDS and not isinstance(value, (dict, list))}
+                     for row in rows if isinstance(row, dict) and str(row.get("slot")) in ours]}
+
+
 def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
     """Scope the live dashboard to the current assignment before either response is built."""
     ours = set(our_selections(snap))
@@ -670,15 +696,18 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
             for step in run["steps"]:
                 if step["kind"] not in ("tool_call", "tool_result") or step["is_error"]:
                     continue
+                poll_reply = step["kind"] == "tool_result" and step["tool"] in _POLL_REPLY_TOOLS
                 try:
                     value = json.loads(step["content"], parse_float=Decimal)
                 except ValueError:
-                    if step["content"].lstrip().startswith(("{", "[")):
+                    if poll_reply:
+                        step["content"] = POLL_REPLY_OMITTED
+                    elif step["content"].lstrip().startswith(("{", "[")):
                         step["content"] = "Incomplete tool payload omitted."
                     continue
-                scoped = _scope_payload(value, ours)
+                scoped = _scope_poll_reply(value, ours) if poll_reply else _scope_payload(value, ours)
                 if scoped is _DROP:
-                    step["content"] = OUTSIDE_ASSIGNMENT
+                    step["content"] = POLL_REPLY_OMITTED if poll_reply else OUTSIDE_ASSIGNMENT
                 elif scoped != value:
                     step["content"] = to_json(scoped)
     if (activity := snap.get("activity")) and activity["ok"]:
@@ -692,6 +721,8 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
                 if args != row["arguments"]:
                     row["arguments"] = {} if args is _DROP else args
                     row["detail"] = OUTSIDE_ASSIGNMENT
+                elif row["kind"] == "read" and row["tool"] in _POLL_REPLY_TOOLS and row["detail"]:
+                    row["detail"] = POLL_REPLY_OMITTED
             # The assignment audit writer includes both the old and the new slot lists.
             if row["tool"] == "slots.record":
                 row["detail"] = "Slot assignment recorded. See the current assignment on this page."
@@ -772,7 +803,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         before_lock = False
     if before_lock:
         snap["weekly_plan"] = snap["plan"]
-        snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots)))
+        snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots, assignment_at)))
     hidden_runs = model_test_count["n"] if model_test_count else 0
     hidden_purchases = purchases["data"][1] if purchases["ok"] else 0
     if hidden_runs or hidden_purchases:

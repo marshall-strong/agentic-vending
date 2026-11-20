@@ -15,6 +15,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
 from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, open_in, store_poll
+from tests.test_dashboard import fulfilled, get, served  # noqa: F401 (the standalone server fixture)
 from tests.test_plan_rounds import day_one, projection, write
 from tests.test_plan_store import unassigned_slot
 from vending import agent_runs, dashboard, db, db_explorer, ledger, pages, plan_store, settings, slots, worker
@@ -502,10 +503,10 @@ def test_the_public_json_has_only_our_selections_in_its_counts(site, schema_url,
     status, _, body = _get(site, "/dashboard/state.json")
     counts = json.loads(body)["counts"]["data"]
     assert status == 200 and list(counts) == [ours] and counts[ours]["product"] == "Our Chips"
-    assert NOT_OURS not in body and "7.77" not in body
+    assert NOT_OURS not in body and '"7.77"' not in body
     sales, stock = json.loads(body)["sales"]["data"]["slots"], json.loads(body)["stock"]["data"]["slots"]
     assert theirs not in sales and theirs not in stock and set(sales) | set(stock) <= set(_stored(conn))
-    # The local snapshot, for the team, still has the whole count.
+    # The standalone snapshot applies the same assignment filter.
     with open_in(*schema_url) as local:
         assert sorted(dashboard.snapshot(local)["counts"]["data"]) == [ours]
 
@@ -615,6 +616,91 @@ def test_after_a_reassignment_the_public_json_drops_the_old_slots_stock(site, sc
         assert not any("slot 15" in w for w in stock["warnings"])
 
 
+@pytest.fixture
+def redraw_with_receipts(conn, monkeypatch):
+    now = conn.execute("select now()").fetchone()[0]
+    before, redraw = now - timedelta(minutes=20), now - timedelta(minutes=5)
+    retired, owned, new = "15", "16", unassigned_slot()
+    monkeypatch.setenv("FALL_CUTOFF", (before - timedelta(days=1)).isoformat())
+    monkeypatch.setattr(dashboard, "lock_at", lambda: now + timedelta(days=1))
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=before)
+    fulfilled(conn, "retired-receipt", retired, "RETIRED-RECEIPT-SKU", units_loaded=4, paid="4.00", at=before)
+    fulfilled(conn, "owned-receipt", owned, "OWNED-RECEIPT-SKU", units_loaded=4, paid="4.00", at=before)
+    store_poll(conn, "before-redraw", before.isoformat(), {retired: (9173, 852713), owned: (256, 4)})
+    conn.execute("update slot_assignment set slots = array_remove(slots, %s) || array[%s],"
+                 " first_read_at = %s, last_checked_at = %s", (retired, new, redraw, redraw))
+    return before, retired, owned, new
+
+
+def _dashboard_bodies(site, served):
+    yield tuple(get(served + path)[2] for path in ("/", "/state.json"))
+    yield tuple(_get(site, path)[2] for path in ("/dashboard", "/dashboard/state.json"))
+
+
+def test_redraw_hides_retired_receipt_stock_in_both_dashboards(site, served, redraw_with_receipts):
+    _, retired, owned, _ = redraw_with_receipts
+    for page, body in _dashboard_bodies(site, served):
+        assert "RETIRED-RECEIPT-SKU" not in page and "RETIRED-RECEIPT-SKU" not in body
+        assert "OWNED-RECEIPT-SKU" in page and "OWNED-RECEIPT-SKU" in body
+        stock = json.loads(body)["stock"]["data"]["slots"]
+        assert retired not in stock and stock[owned]["on_hand"] == 4
+
+
+@pytest.mark.parametrize("reply_time", ["before_redraw", "after_redraw"])
+def test_redraw_scopes_saved_poll_replies_in_both_dashboards(site, served, conn, redraw_with_receipts, reply_time):
+    before, retired, owned, _ = redraw_with_receipts
+    rows = [{"slot": retired, "price": "91.73", "units_sold_in_window": 852713},
+            {"slot": owned, "price": "2.57", "units_sold_in_window": 1, "product": "OWNED-REPLY"}]
+    reply_text = f"Selection {retired} had price 91.73 and 852713 sales"
+    detail = f"Saved audit summary for selection {retired}: 92.74 and 853714 sales"
+    saved = json.dumps({"data": rows, "content": [{"type": "text", "text": reply_text}]})
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.step(conn, run, 1, "tool_result", saved, tool="get_machine_state")
+    log(conn, "read", "get_machine_state", {}, "done", detail)
+    conn.execute("update action_log set result = %s where tool = 'get_machine_state'", (Jsonb({"data": rows}),))
+    if reply_time == "before_redraw":
+        conn.execute("update agent_runs set started_at = %s where id = %s", (before, run))
+        conn.execute("update action_log set at = %s where tool = 'get_machine_state'", (before,))
+
+    for page, body in _dashboard_bodies(site, served):
+        for marker in ("91.73", "852713", "92.74", "853714", "RETIRED-RECEIPT-SKU"):
+            assert marker not in page and marker not in body
+        assert "OWNED-RECEIPT-SKU" in page and "OWNED-RECEIPT-SKU" in body
+        if reply_time == "after_redraw":
+            assert "OWNED-REPLY" in page and "OWNED-REPLY" in body
+    assert conn.execute("select content from agent_steps where run_id = %s", (run,)).fetchone() == (saved,)
+    assert conn.execute("select detail, result from action_log where tool = 'get_machine_state'").fetchone() == (
+        detail, {"data": rows},
+    )
+
+
+def test_prelock_scopes_weekly_plan_and_earlier_first_fill_reasons(site, served, conn, tmp_path, redraw_with_receipts):
+    before, retired, owned, new = redraw_with_receipts
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "skipped", plan={"reason": "RETIRED-WEEKLY-SUMMARY", "slots": [
+        {"slot": retired, "product": "RETIRED-WEEKLY-ENTRY"},
+        {"slot": owned, "product": "OWNED-WEEKLY-ENTRY", "reason": "RETIRED-WEEKLY-REASON"},
+    ]})
+    conn.execute("update agent_runs set started_at = %s where id = %s", (before, run))
+    # The checked slot set still matches. The copy in the store predates this assignment's check.
+    rows = day_one(**{retired: {"slot": new}, owned: {"product": "OWNED-FIRST-FILL", "why": "RETIRED-FILL-REASON"}})
+    write(tmp_path, "round3", "3", {"day_one": rows})
+    saved = plan_store.load(conn, tmp_path, "3", "Test Loader")
+    conn.execute("update first_fill_plans set loaded_at = %s where id = %s", (before, saved))
+
+    for page, body in _dashboard_bodies(site, served):
+        assert "OWNED-FIRST-FILL" in page
+        snap = json.loads(body)
+        assert snap["plan"]["data"]["id"] == saved
+        assert snap["weekly_plan"]["data"]["run"]["id"] == run and "OWNED-WEEKLY-ENTRY" in body
+        for plan in (snap["plan"], snap["weekly_plan"]):
+            assert retired not in {entry["slot"] for entry in plan["data"]["slots"]}
+        for marker in ("RETIRED-FILL-REASON", "RETIRED-WEEKLY-SUMMARY",
+                       "RETIRED-WEEKLY-ENTRY", "RETIRED-WEEKLY-REASON"):
+            assert marker not in page and marker not in body
+        assert "from before the current slot assignment" in page
+
+
 def test_after_a_reassignment_plans_list_only_our_slots(site, schema_url, conn, monkeypatch):
     monkeypatch.setattr(dashboard, "lock_at", lambda: TEST_NOW - timedelta(days=30))
     newest = _stocked_then_reassigned(conn)
@@ -643,25 +729,27 @@ def test_with_no_assignment_the_public_json_has_no_slot_stock_or_plan_rows(site,
     assert OLD_SLOT not in body and "9.99" not in body
 
 
-def test_bad_slot_lock_setting_leaves_the_weekly_dashboard_available(site, conn, monkeypatch):
-    run = agent_runs.start(conn, mode="dry-run")
+def test_bad_slot_lock_setting_leaves_the_weekly_dashboard_available(site, conn, monkeypatch, capsys):
+    run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "skipped", plan={"slots": []}, update="Weekly dashboard test update.")
     monkeypatch.setenv("SLOTS_LOCK_AT", "2026-12-03")
 
     status, _, html = _get(site, "/dashboard")
     assert status == 200
-    assert "<h2>The plan " in html and "Weekly dashboard test update." in html
-    assert "SLOTS_LOCK_AT" in html
+    assert "<h2>The plan " in html and dashboard.OLD_ASSIGNMENT in html
+    assert "Weekly dashboard test update." not in html
+    assert dashboard.PUBLIC_PANEL_ERROR in html.replace("&#x27;", "'")
 
     status, _, body = _get(site, "/dashboard/state.json")
     assert status == 200
     snap = json.loads(body)
     assert snap["plan"]["data"]["run"]["id"] == run
     assert snap["plan"]["data"]["slots"] == []
-    assert not snap["ours"]["ok"] and "SLOTS_LOCK_AT" in snap["ours"]["why"]
+    assert snap["ours"] == {"ok": False, "why": dashboard.PUBLIC_PANEL_ERROR}
+    assert "SLOTS_LOCK_AT" in capsys.readouterr().err
 
 
-def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, conn, tmp_path, monkeypatch):
+def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, conn, tmp_path, monkeypatch, capsys):
     path = r"C:\Users\Made Up\private\first-fill.json"
     rows = day_one(**{"15": {"product": "Sample Cherry Soda", "why": "Made-up fixture reason."},
                       "16": {"why": f"See {path}"}, "17": {"price_cents": 25}})
@@ -703,7 +791,9 @@ def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, 
 
     conn.execute("drop table first_fill_plans")
     status, _, html = _get(site, "/dashboard")
-    assert status == 200 and "Plan for the first fill" in html and "python -m vending.db migrate" in html
+    assert status == 200 and "Plan for the first fill" in html
+    assert dashboard.PUBLIC_PANEL_ERROR in html.replace("&#x27;", "'")
+    assert "first_fill_plans" not in html and 'relation "first_fill_plans" does not exist' in capsys.readouterr().err
 
 
 def test_a_table_without_the_columns_a_row_filter_reads_shows_no_rows(schema_url, conn):

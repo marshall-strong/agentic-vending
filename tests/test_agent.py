@@ -451,7 +451,8 @@ def test_the_dashboard_shows_the_recorded_reasons(connect, conn):
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=NOW)
     go(connect, Script(preview(), tool_turn(submit()), answer("submit", reason="restock 15", slot_reasons=said)),
        tools, live=True)
-    shown = dashboard.snapshot(conn)["plan"]["data"]
+    snap = dashboard.snapshot(conn)
+    shown = snap.get("weekly_plan", snap["plan"])["data"]
     assert (shown["visit"], shown["reason"]) == ("scheduled", "restock 15")
     assert {s["slot"]: s["now"] for s in shown["slots"]}["15"]["reason"] == "Sold out by Tuesday."
 

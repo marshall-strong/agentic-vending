@@ -232,15 +232,17 @@ exact `write` tools appear:
 
 - `config.set`, `halt`, `pages.grant`, `slot_counts`, and `slots.record`
 - `ledger.adjustment`, `ledger.capital`, `ledger.opening`, and `ledger.tax_remitted`
-- `plan_store.load` and `plan_store.pick` from the first-fill plan branch
+- `plan_store.load` and `plan_store.pick`
 - `product_requests.resolve`, `request_catalog_product`, `request_backlog.add`,
   `request_backlog.drop`, and `request_backlog.move`
 - `set_wildcard_slot`, `submit_desired_state`, `submissions.resolve`, `sourcing.remove`, and `sourcing.set`
 
 All `ledger.tokens` rows follow the opening time, including entries recorded by an operator.
 
-Both routes use the current slot assignment. They omit plan entries and structured tool data
-for other selections. A note replaces run and activity text from before the current assignment.
+Both routes use the current slot assignment for stock, plans and saved tool replies. Before the
+lock, `plan` holds the first-fill plan and `weekly_plan` holds the agent's plan. A note replaces
+plan reasons and run and activity text from before the current assignment. Saved poll replies
+show figures only for rows that name a current selection. The stored audit records keep the full replies.
 The stored error text of failed calls, tool results and runs stays out of both responses.
 The public page keeps the confirmation when a submit succeeds and the run later fails.
 The public page gives a fixed message when a panel cannot read its data. The detail goes to

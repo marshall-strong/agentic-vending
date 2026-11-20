@@ -1076,7 +1076,7 @@ def test_the_close_up_survives_a_failed_products_read(conn, page_conn, open_ledg
     catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
     fulfilled(conn, "a", "15", "COKE-20OZ", units_loaded=5, paid="6", at=MONDAY - timedelta(days=3))
     slot = TEST_SLOTS[0]
-    run = agent_runs.start(conn, mode="live")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": slot, "product": "COKE-20OZ", "fill_to": 6}))
 
     def broken(connection, skus):
@@ -1103,8 +1103,8 @@ def test_fill_checks_skip_first_fill_rows(conn, page_conn, open_ledger, monkeypa
     saved_row = {"slot": first_fill, "product": "Plain can", "units": 4,
                  "fill_check": "fills 4 of 8: 4 spaces empty"}
 
-    def combined_plan(connection, ours, now):
-        result = weekly_plan(connection, ours, now)
+    def combined_plan(connection, ours, now, assignment_at):
+        result = weekly_plan(connection, ours, now, assignment_at)
         result["slots"] = [dict(saved_row) if row["slot"] == first_fill else row for row in result["slots"]]
         return result
 
