@@ -1015,12 +1015,3 @@ def test_a_hand_built_sale_keeps_its_window_start_through_a_split():
     split = replay(movements_from_receipts(swap(), []) + [sale])
     assert [(s.product, s.since) for s in split.sales] == [("ARIZONA", hours(1)), ("REDBULL", hours(1))]
 
-
-def test_door_timed_is_what_the_replay_uses_door_times_for():
-    from vending.stock import _usable_door_times, door_timed
-
-    both = line(request_id="a") | {"door_opened_at": hours(1), "door_closed_at": hours(2), "submitted_at": hours(0)}
-    other = line(request_id="b") | {"door_opened_at": hours(1), "door_closed_at": hours(2), "submitted_at": hours(0)}
-    assert door_timed(both) and not door_timed(line()) and not door_timed(both | {"door_closed_at": None})
-    # Visits to one slot that share a minute lose their door times, and the helper says so.
-    assert not any(door_timed(x) for x in _usable_door_times([both, other]))

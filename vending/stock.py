@@ -301,8 +301,8 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
         ref = f"{line['request_id']} line {line['line_no']}"
         slot, first = line["slot"], len(moves)
         opened, closed = line.get("door_opened_at"), line.get("door_closed_at")
-        door = line.get("door_recorded") or ((opened, closed) if door_timed(line) else None)
-        if not door_timed(line):
+        door = line.get("door_recorded") or (None if opened is None or closed is None else (opened, closed))
+        if opened is None or closed is None:
             opened, seq = None, 0
             pulled_at = loaded_at = line["resolved_at"]
         else:
@@ -329,12 +329,6 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
             loss["recorded_at"], "loss", loss["slot"], loss["sku"], units=loss["units"],
             location=loss["location"], ref=f"{loss['request_id']} line {loss['line_no']}"))
     return moves
-
-
-def door_timed(line: dict) -> bool:
-    """Whether the replay times this line by its request's door times: it has both, and `_usable_door_times`
-    left them (a line of visits that clash has them cleared). The one place that says so."""
-    return line.get("door_opened_at") is not None and line.get("door_closed_at") is not None
 
 
 def _usable_door_times(lines: list[dict]) -> list[dict]:
@@ -1006,7 +1000,8 @@ def receipt_lines(conn: psycopg.Connection) -> list[dict]:
         " from purchase_lines l join purchase_requests r using (request_id) where r.status = 'fulfilled'"
         " order by l.request_id, l.line_no")])
     for line in lines:
-        line["at"] = line["door_closed_at"] if door_timed(line) else line["resolved_at"]
+        door = line["door_opened_at"] is not None and line["door_closed_at"] is not None
+        line["at"] = line["door_closed_at"] if door else line["resolved_at"]
     return lines
 
 
