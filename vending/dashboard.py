@@ -61,6 +61,7 @@ from fractions import Fraction
 from functools import partial
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from typing import Any
 
 import psycopg
@@ -1322,7 +1323,7 @@ def _attention_card(items: list[dict]) -> str:
 def _pick(slot: str, inner: str, view: dict) -> str:
     """A row that picks one of our selections on the machine, or, for one not drawn there, opens its plan row."""
     if slot in view:
-        return f'<a class="chg" id="chg-{_e(slot)}" href="#sel-{_e(slot)}" data-sel="{_e(slot)}">{inner}</a>'
+        return f'<a class="chg" id="chg-{_e(slot)}" href="{machine_art.pick_href(slot)}" data-sel="{_e(slot)}">{inner}</a>'
     return f'<a class="chg" href="#slot-{_e(slot)}">{inner}</a>'
 
 
@@ -1462,7 +1463,7 @@ def _slot_num(slot: str, wildcard: str | None = None) -> str:
     the wildcard's says so."""
     mark = f" {WILD}" if slot == wildcard else ""
     if re.fullmatch(rf"[1-{SHELVES}][1-{COLUMNS}]", slot):
-        return (f'<a class="num" id="num-{_e(slot)}" href="#sel-{_e(slot)}" data-sel="{_e(slot)}" '
+        return (f'<a class="num" id="num-{_e(slot)}" href="{machine_art.pick_href(slot)}" data-sel="{_e(slot)}" '
                 f'aria-label="Selection {_e(slot)}: show it in the machine">{_e(slot)}</a>{mark}')
     return f'<b class="num">{_e(slot)}</b>{mark}'
 
@@ -2573,11 +2574,18 @@ DEMO_TITLE = "DEMO &middot; "
 LIVE_STORAGE, DEMO_STORAGE = "dash-", "demo-dash-"
 
 
+def pickable(snap: dict, picked: str | None) -> str | None:
+    """`picked` when it is one of our selections on the machine's face (the stored assignment), else None."""
+    face = re.fullmatch(rf"[1-{SHELVES}][1-{COLUMNS}]", picked or "")
+    return picked if face and picked in our_selections(snap) else None
+
+
 def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.json",
            nav: tuple[tuple[str, str], ...] = (), demo: bool = False,
-           charts: dict[str, str] | None = None) -> str:
+           charts: dict[str, str] | None = None, picked: str | None = None) -> str:
     """The page. `json_href` is where its JSON twin lives, and `nav` is (label, href) links to
-    sibling pages, for a server that mounts this page under a path beside others.
+    sibling pages, for a server that mounts this page under a path beside others. `picked` is the
+    request's `?sel=`: without scripts the timed reload keeps it, when it is one of ours.
 
     `demo` is for the made-up copy (`vending.demo`): a banner on top, "DEMO" in the tab title, and a
     fixed page. It never refreshes and keeps the times the server wrote, because the page's script would
@@ -2587,6 +2595,9 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     panel and the spend tile link to the ones given. Run on its own, the page has none."""
     charts = charts or {}
     now = snap["as_of"]
+    # Without scripts the page reloads itself; a pick of ours goes along (a #fragment never reaches us).
+    picked = pickable(snap, picked)
+    reload_to = f"?{visits.REFRESH_QUERY}" + (f"&sel={picked}#sel-{picked}" if picked else "")
     links = "".join(f' &middot; <a href="{_e(href)}">{_e(label)}</a>' for label, href in nav)
     items = snap.get("attention")
     if items is None:
@@ -2629,7 +2640,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     # The query marks the reload as one, so the visit counter doesn't count it (`vending.visits`).
     # The demo never reloads.
     reload = ("" if demo else
-              f'<noscript><meta http-equiv="refresh" content="{int(refresh)}; url=?{visits.REFRESH_QUERY}"></noscript>')
+              f'<noscript><meta http-equiv="refresh" content="{int(refresh)}; url={_e(reload_to)}"></noscript>')
     banner = (f'<div class="demo-banner" role="note">{_e(DEMO_BANNER)}<a href="{DEMO_LIVE_HREF}">{DEMO_LIVE_HREF}</a>'
               '</div>' if demo else "")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -2674,7 +2685,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(503, "text/html; charset=utf-8", _error_page(message))
         if path == "/state.json":
             return self._send(200, "application/json", to_json(snap))
-        self._send(200, "text/html; charset=utf-8", render(snap))
+        picked = parse_qs(urlsplit(self.path).query).get("sel", [None])[0]
+        self._send(200, "text/html; charset=utf-8", render(snap, picked=picked))
 
     def _send(self, code: int, content_type: str, body: str) -> None:
         data = body.encode("utf-8")

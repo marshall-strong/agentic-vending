@@ -1506,3 +1506,12 @@ def test_the_live_money_chart_carries_no_demo_copy(site, conn):
     texts = re.findall(r">([^<>]+)<", markup) + re.findall(r'"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`', script)
     assert [t for t in texts if re.search(r"mock|made.up|seeded", t, re.I)] == ['"mockTag"']
     assert [line for line in script.split("\n") if re.search(r"//.*(mock|seeded|made.up)", line, re.I)] == []
+
+
+def test_the_public_dashboard_keeps_a_pick_of_ours_through_its_no_script_reload(site):
+    # The pick links ask for ?sel=NN#sel-NN; the reload keeps a selection of ours, and nothing else.
+    kept = _get(site, "/dashboard?sel=15")[2]
+    assert 'content="30; url=?refresh=1&amp;sel=15#sel-15"' in kept
+    for other in ("12", "15%22%3E%3Cscript%3E", ""):     # not ours, not a selection, empty
+        page = _get(site, f"/dashboard?sel={other}")[2]
+        assert 'content="30; url=?refresh=1"' in page and "sel=12" not in page.split("<noscript>")[1][:120], other

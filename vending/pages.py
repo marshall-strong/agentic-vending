@@ -68,7 +68,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import psycopg
 from psycopg import sql
@@ -601,9 +601,10 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
         return _problem(path, 500, BROKEN)
     if path == STATE:
         return Reply(200, JSON, dashboard.to_json(snap))
+    picked = parse_qs(urlsplit(target).query).get("sel", [None])[0]    # checked against our slots by render
     page = dashboard.render(snap, json_href=STATE, charts=CHARTS,
                             nav=(("Home", "/"), ("Database", EXPLORER), ("Weekly P&L", PNL), ("Dev spend", SPEND),
-                                 ("Demo copy", demo.DEMO)))
+                                 ("Demo copy", demo.DEMO)), picked=picked)
     return Reply(200, HTML, page, CSP_DASHBOARD)
 
 

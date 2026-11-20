@@ -1193,8 +1193,8 @@ def test_a_shelf_with_nothing_planned_says_so_rather_than_plus_zero():
                                                         "fill_to": 3},
                    "change": None, "fill_to": 3}}
     html = machine_art.closeup_html(view, {"catalog": {}, "overrides": {}}, True)
-    shelf4 = html[html.index('href="#shelf-4"'):html.index("</a>", html.index('href="#shelf-4"'))]
-    shelf5 = html[html.index('href="#shelf-5"'):html.index("</a>", html.index('href="#shelf-5"'))]
+    shelf4 = html[html.index('id="rail-4"'):html.index("</a>", html.index('id="rail-4"'))]
+    shelf5 = html[html.index('id="rail-5"'):html.index("</a>", html.index('id="rail-5"'))]
     assert "? on hand &middot; no restock plan" in shelf4 and "+0" not in shelf4
     assert '<span class="ma-fr">+0</span> at restock' in shelf5      # planned, and already full
 
@@ -1478,12 +1478,12 @@ def test_nothing_is_picked_until_a_viewer_picks_and_the_side_shows_attention_and
     side = section(page, '<div class="ops-side">', '<aside class="vm-panel"')
     assert side.index('id="attention"') < side.index('id="plan-changes"')
     # Picking from a plan-change row: the whole row is the link.
-    row = section(side, '<a class="chg" id="chg-12" href="#sel-12"', "</a>")
+    row = section(side, '<a class="chg" id="chg-12" href="?sel=12#sel-12"', "</a>")
     assert 'data-sel="12"' in row and "fill 6 to 7" in row and "sells out" in row
-    assert 'href="#sel-14"' not in side                                        # 14 didn't change
+    assert '#sel-14"' not in side                                        # 14 didn't change
     # Picking from the front: each of ours is a link to its facts, with its whole aria label.
     front = front_of(page)
-    cells = re.findall(r'<a class="fc[^"]*" id="fc-\w+" href="#sel-(\w+)" data-sel="(\w+)" aria-label="([^"]+)"', front)
+    cells = re.findall(r'<a class="fc[^"]*" id="fc-\w+" href="\?sel=\w+#sel-(\w+)" data-sel="(\w+)" aria-label="([^"]+)"', front)
     assert [a for a, b, _ in cells if a == b] == list(EVEN)
     assert all(label.startswith(f"Selection {s}. ") and label.endswith("Opens its close-up.") for s, _, label in cells)
     for slot in EVEN:
@@ -1496,7 +1496,7 @@ def test_picking_from_a_plan_section_row(conn, page_conn, tmp_path, monkeypatch)
     run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "15", "fill_to": 6}))
     weekly = section(dashboard.render(dashboard.snapshot(page_conn, MONDAY)), '<section id="plan">', "</section>")
-    assert ('<a class="num" id="num-15" href="#sel-15" data-sel="15" aria-label="Selection 15: show it in the machine">15</a>'
+    assert ('<a class="num" id="num-15" href="?sel=15#sel-15" data-sel="15" aria-label="Selection 15: show it in the machine">15</a>'
             in weekly)
     _first_fill_plan(conn, tmp_path)
     monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
@@ -1642,13 +1642,13 @@ def test_the_wildcard_slot_is_marked_on_the_front_the_close_up_and_the_plan(conn
     snap = dashboard.snapshot(page_conn, MONDAY, public=True)
     assert snap["wildcard"] == "37" and '"wildcard": "37"' in dashboard.to_json(snap)
     page = dashboard.render(snap)
-    cell = section(front_of(page), 'href="#sel-37"', "</a>")
-    assert "fc-wild" in page.split('href="#sel-37"')[0][-40:] and '>W</span>' in cell
+    cell = section(front_of(page), 'href="?sel=37#sel-37"', "</a>")
+    assert "fc-wild" in page.split('href="?sel=37#sel-37"')[0][-60:] and '>W</span>' in cell
     assert "Selection 37, the wildcard." in page
     assert '<p class="ma-wl"' in lane_html(page, "37") and 'class="ma-lane ma-changed ma-wild"' in page
     facts = section(page, '<div class="sd" id="sel-37"', '<div class="sd" id="sel-38"')
     assert "<dt>Wildcard</dt>" in facts and ">wildcard</span>" in facts
-    changes = section(page, '<a class="chg" id="chg-37" href="#sel-37"', "</a>")
+    changes = section(page, '<a class="chg" id="chg-37" href="?sel=37#sel-37"', "</a>")
     assert ">wildcard</span>" in changes
     rows = section(page, '<section id="plan">', "</section>")
     assert re.search(r'data-sel="37"[^>]*>37</a> <span class="pill wild"', rows)
@@ -1686,3 +1686,27 @@ def test_the_restock_date_follows_the_planners_cutoff_minute(thursday, clock, sa
     friday = thu + timedelta(days=1 if same_week else 8)
     shown = dashboard._restock({"visit": "scheduled", "run": {"started_at": local.astimezone(timezone.utc)}})
     assert shown == f"{friday:%a} {friday.day} {friday:%b}", (local, shown)
+
+
+def _reload(page: str) -> str:
+    return re.search(r'<noscript><meta http-equiv="refresh" content="30; url=([^"]*)"></noscript>', page).group(1)
+
+
+def test_without_scripts_the_reload_keeps_a_pick_only_when_it_is_ours(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert _reload(dashboard.render(snap)) == "?refresh=1"
+    assert _reload(dashboard.render(snap, picked="15")) == "?refresh=1&amp;sel=15#sel-15"
+    # Not ours (12), not on the face, or not a selection at all: the reload carries nothing.
+    for bad in ("12", "99", "15#x", '15"><script>', "", None):
+        assert _reload(dashboard.render(snap, picked=bad)) == "?refresh=1", bad
+    # The pick links carry it in the query, so a click without scripts asks the server for it.
+    page = dashboard.render(snap)
+    assert 'id="fc-15" href="?sel=15#sel-15" data-sel="15"' in page and 'href="#sel-' not in page
+
+
+def test_without_scripts_a_shelf_link_opens_its_first_selection_of_ours(page_conn, even_columns):
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    rails = re.findall(r'<a class="fm-sh" id="rail-(\d)" href="([^"]*)" data-shelf="\d"', page)
+    # Each shelf's link targets a selection of ours (so a phone's sheet opens), the first on that shelf.
+    assert rails == [(str(r), f"?sel={r}2#sel-{r}2") for r in range(1, 6)]
+    assert 'href="#shelf-' not in page
