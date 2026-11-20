@@ -13,7 +13,8 @@ Where each figure comes from:
 - **Floor**: `vending.pricing`'s rule, as the planner applies it to a slot it restocks: the floor of
   the receipt cost (`floor_cents`) and of each sourcing option at its most-we-pay pack price
   (`pack_floor_cents`); the highest wins (`slot_floor_cents`). **Legal** is `check_price` against
-  that floor and the ceiling (`config.price_ceiling_cents`, default $6.50). With no cost known, the
+  that floor and the selection's ceiling, the planner's (`planner.Config.ceiling_for`: $6.50, or $8.00
+  for the one wildcard selection, #166). With no cost known, the
   floor is unknown: a price is then only checked for its 5-cent step and the ceiling.
 - **Margin**: per unit, what a sale keeps after the sales tax inside the shelf price
   (`config.tax_percent`, default 8%), less the unit cost.
@@ -40,15 +41,15 @@ from typing import Any
 
 import psycopg
 
-from vending import config
+from vending.planner import AGREED_CEILING_CENTS
 from vending.pricing import (DEFAULT_TAX_PERCENT, check_price, floor_cents, pack_floor_cents,
                              slot_floor_cents, to_cents)
 from vending.tools import machine_state
 
 # How far back the sparkline reaches.
 HISTORY_DAYS = 28
-# The planner's default ceiling when `config.price_ceiling_cents` is unset (`vending.planning.planner_config`).
-DEFAULT_CEILING_CENTS = 650
+# The ceiling shown when no assignment is stored, so nothing is checked: the planner's default.
+DEFAULT_CEILING_CENTS = AGREED_CEILING_CENTS
 RANKS = ("primary", "alternate")
 # The sparkline's drawing box, in px.
 SPARK_W, SPARK_H, SPARK_PAD = 112, 26, 3
@@ -77,16 +78,17 @@ def read(conn: psycopg.Connection, now: datetime, slots: tuple[str, ...], skus: 
         if o.sku in wanted:
             options.setdefault(o.sku, {})[o.rank] = o
     since = now - timedelta(days=HISTORY_DAYS)
-    return {"ceiling_cents": _setting(conn, "price_ceiling_cents", DEFAULT_CEILING_CENTS),
-            "tax_percent": _setting(conn, "tax_percent", DEFAULT_TAX_PERCENT),
+    ceiling, tax, wildcard, ceilings = DEFAULT_CEILING_CENTS, DEFAULT_TAX_PERCENT, None, {}
+    if slots:
+        # The planner's own settings, so each selection is checked against the ceiling the planner uses for it.
+        from vending import planning
+        settings = planning.planner_config(conn)
+        ceiling, tax, wildcard = settings.price_ceiling_cents, settings.tax_percent, settings.wildcard_slot
+        ceilings = {slot: settings.ceiling_for(slot) for slot in settings.slots}
+    return {"ceiling_cents": ceiling, "tax_percent": tax, "ceilings": ceilings,
+            "wildcard": wildcard, "wildcard_ceiling_cents": ceilings.get(wildcard) if wildcard else None,
             "options": options, "since": since,
             "history": machine_state.price_history(conn, now, since) if slots else []}
-
-
-def _setting(conn: psycopg.Connection, key: str, default: int) -> int:
-    """A whole-number setting as the planner reads it: its default unless the stored value is an int."""
-    value = config.get_value(conn, key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
 def build(snap: dict, slots: tuple[str, ...], raw: dict, now: datetime) -> dict:
@@ -94,13 +96,14 @@ def build(snap: dict, slots: tuple[str, ...], raw: dict, now: datetime) -> dict:
     held = _data(snap, "stock", {}).get("slots", {})
     sales = _data(snap, "sales", {}).get("slots", {})
     planned = _planned(snap)
-    tax, ceiling, options = raw["tax_percent"], raw["ceiling_cents"], raw["options"]
+    tax, options = raw["tax_percent"], raw["options"]
     history: dict[str, list[tuple[datetime, int]]] = {}
     for at, slot, cents in raw["history"]:
         history.setdefault(slot, []).append((at, cents))
     rows = []
     for slot in slots:
         h, sale = held.get(slot) or {}, sales.get(slot) or {}
+        ceiling = raw["ceilings"].get(slot, raw["ceiling_cents"])
         entry = planned.get(slot) if isinstance(planned.get(slot), dict) else None
         keep = bool(entry and entry.get("keep"))
         product, product_from = h.get("product"), "receipt" if h.get("product") else None
@@ -123,6 +126,7 @@ def build(snap: dict, slots: tuple[str, ...], raw: dict, now: datetime) -> dict:
             "slot": slot, "product": product, "product_from": product_from,
             "price": sale.get("price"),
             "unit_cost": _dollars(cost), "cost_basis": basis,
+            "ceiling": _dollars(ceiling),
             "floor": _dollars(floor), "floor_from": parts, "legal": legal, "problems": problems,
             "margin": None if price is None or cost is None else _dollars(Fraction(price * 100, 100 + tax) - cost),
             "sold_7d": sale.get("sold"), "per_class_day": sale.get("per_class_day"),
@@ -130,7 +134,8 @@ def build(snap: dict, slots: tuple[str, ...], raw: dict, now: datetime) -> dict:
             "next": _next(entry, keep, price, product, receipt, options, tax, ceiling),
             "history": _history(history.get(slot, [])),
         })
-    return {"ceiling": _dollars(ceiling), "tax_percent": tax, "history_days": HISTORY_DAYS,
+    return {"ceiling": _dollars(raw["ceiling_cents"]), "tax_percent": tax, "history_days": HISTORY_DAYS,
+            "wildcard": raw["wildcard"], "wildcard_ceiling": _dollars(raw["wildcard_ceiling_cents"]),
             "since": raw["since"], "until": now, "rows": rows}
 
 
@@ -341,7 +346,9 @@ def html(panel: dict, ours: dict) -> str:
     planned = sum(1 for r in rows if r["next"] and r["next"]["legal"] is False)
     flags = ([f'{illegal} shelf price{"" if illegal == 1 else "s"} not legal'] if illegal else []) + (
         [f'{planned} plan price{"" if planned == 1 else "s"} not legal'] if planned else [])
-    lede = (f'<p class="lede sub">Ceiling ${_e(d["ceiling"])}. Shelf prices include {_e(d["tax_percent"])}% sales tax; '
+    wild = (f'; the wildcard, {_e(d["wildcard"])}, may go to ${_e(d["wildcard_ceiling"])}'
+            if d.get("wildcard") and d.get("wildcard_ceiling") else "")
+    lede = (f'<p class="lede sub">Ceiling ${_e(d["ceiling"])}{wild}. Shelf prices include {_e(d["tax_percent"])}% sales tax; '
             f'margin is what one sale keeps after it, less the unit cost. <b>Expected</b> costs are from sourcing '
             f'(no receipt yet). The line is the shelf price at each poll over the last {_e(d["history_days"])} days.'
             + (f' <b class="bad-text">{"; ".join(flags)}.</b>' if flags else "")

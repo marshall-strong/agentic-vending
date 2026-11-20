@@ -187,3 +187,25 @@ def test_price_history_reads_our_slots_itself(conn):
     conn.execute("delete from slot_assignment")
     with pytest.raises(SlotsNotRecorded):
         machine_state.price_history(conn, MONDAY)
+
+
+def test_the_wildcard_is_held_to_its_own_ceiling(conn, page_conn):
+    # #166: the one wildcard may sell up to $8.00; every other selection stops at $6.50. Both the shelf
+    # price and the plan's price use the planner's ceiling for that selection.
+    from vending import config
+    catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"))
+    for slot in ("15", "16"):
+        fulfilled(conn, f"pr-{slot}", slot, "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
+    config.set_value(conn, "wildcard_slot", "15", "test")
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (750, 1), "16": (750, 1)})
+    run = agent_runs.start(conn, mode="dry-run")
+    agent_runs.finish(conn, run, "skipped", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "7.95"},
+                                                      {"slot": "16", "fill_to": 6, "sale_price": "7.25"}))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    found = rows(snap)
+    wildcard, regular = found["15"], found["16"]
+    assert (wildcard["legal"], wildcard["problems"], wildcard["ceiling"]) == (True, [], "8.00")
+    assert (wildcard["next"]["legal"], wildcard["next"]["problems"]) == (True, [])
+    assert (regular["legal"], regular["problems"], regular["ceiling"]) == (False, ["$7.50 is above the ceiling of $6.50"], "6.50")
+    assert regular["next"]["problems"] == ["$7.25 is above the ceiling of $6.50"]
+    assert "the wildcard, 15, may go to $8.00" in section(dashboard.render(snap))

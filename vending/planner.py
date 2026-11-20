@@ -311,6 +311,10 @@ class Config:
         if self.wildcard_slot is not None and self.wildcard_slot not in self.slots:
             raise ValueError(f"wildcard slot {self.wildcard_slot} is not one of ours")
 
+    def ceiling_for(self, slot: str) -> int:
+        """The highest sale price `slot` may have: the wildcard's ceiling for the wildcard, else the ceiling."""
+        return self.wildcard_ceiling_cents if slot == self.wildcard_slot else self.price_ceiling_cents
+
 
 # --- Outputs -----------------------------------------------------------------
 
@@ -690,8 +694,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 f"or keep the old price"), s.slot))
         floor = slot_floor_cents([p.floor_cents for p in s.parts]) if s.parts else 0
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
-        ceiling = config.wildcard_ceiling_cents if s.slot == config.wildcard_slot else config.price_ceiling_cents
-        refusals.extend(check_price(s.price_cents, floor, ceiling, s.slot))
+        refusals.extend(check_price(s.price_cents, floor, config.ceiling_for(s.slot), s.slot))
     refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle, warnings))
 
     # 8. The plan, with every refusal found.
