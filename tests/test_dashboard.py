@@ -732,8 +732,9 @@ def lane_html(page: str, slot: str) -> str:
 
 
 def shows(text: str, figure: str) -> bool:
-    """Whether `text` shows `figure` (a sentinel price or count)."""
-    return figure in text
+    """Whether `text` shows `figure` (a sentinel price or count) on its own: not inside a longer number,
+    such as the seconds of a timestamp ("02:54:58.766051" holds "8.76")."""
+    return re.search(rf"(?<![\d.:]){re.escape(figure)}(?![\d])", text) is not None
 
 
 def test_a_timestamp_s_seconds_dont_read_as_a_sentinel_figure():
@@ -765,8 +766,10 @@ def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json
     page, state = dashboard.render(snap), dashboard.to_json(snap)
     assert snap["products"]["ok"] and list(snap["products"]["data"]["catalog"]) == ["COKE-20OZ"]
     # (The request's own total, $5.55, stays in Requests: that is our money, not a lane.)
-    for leak in ("ZZ-RIVAL", "Zebra", "Mango", "Quokka", "9.87", "8.76", "4321"):
+    for leak in ("ZZ-RIVAL", "Zebra", "Mango", "Quokka"):
         assert leak not in page and leak not in state, leak
+    for figure in ("9.87", "8.76", "4321"):
+        assert not shows(page, figure) and not shows(state, figure), figure
     card = lane_html(page, "12")
     assert 'class="ma-lane ma-notours"' in page and "Not ours" in card and "<svg" not in card
     assert "+2 back Friday" in lane_html(page, "15")        # ours is drawn: fill 7 less 5 on hand
