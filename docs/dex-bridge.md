@@ -30,13 +30,13 @@ the tailnet is down, not the bridge.
 
 | Command | Route | What you get |
 |---|---|---|
-| `health` | `GET /health` | Bridge status. The only route that needs no key |
-| `slots` | `GET /api/v1/slots` | The selections the server currently assigns us on `vmc1`; it may change before 3 Dec |
-| `products` | `GET /api/v1/products` | What we can order, as single items: `sku`, `name`, `line`, `flavor`, `size`. No prices and no pack sizes. Three products on 29 Oct, one of them a test entry |
-| `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes`. **At most 500 per request**: a longer range comes back with `truncated: true`, so ask a day or a week at a time |
-| `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text (from the start, only our selections; see [below](#from-the-start-what-each-command-prints)) |
+| `health` | `GET /health` | Bridge status (`status` only). The only route that needs no key |
+| `slots` | `GET /api/v1/slots` | The selections the server currently assigns us on `vmc1`; it may change before 3 Dec. Checked as `python -m vending.slots record` checks it: a reply for another team, another machine or not 20 selections is refused, and none of it is printed |
+| `products` | `GET /api/v1/products` | What we can order, as single items: `sku`, `name`, `line`, `flavor`, `size`, and nothing else the reply holds. No prices and no pack sizes. Three products on 29 Oct, one of them a test entry |
+| `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes` and `truncated`, each checked, and nothing else the reply holds. An entry whose session ID isn't one is left out, and stderr counts it. **At most 500 per request**: a longer range comes back with `truncated: true`, so ask a day or a week at a time |
+| `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, rebuilt from our selections and the door counter (see [below](#what-raw-latest-and-poll-print)) |
 | `latest [--summary] [--out FILE]` | history + raw | The newest stored poll. `--summary` prints price and lifetime sales for our slots, from the stored assignment |
-| `request REQUEST_ID` | `GET /api/v1/purchase-requests/{id}` | `pending`, `rejected` with a `decision_note`, or the full receipts |
+| `request REQUEST_ID` | `GET /api/v1/purchase-requests/{id}` | `pending`, `rejected`, or the full receipts: the documented fields only, each checked. A `note`, `decision_note` or `loss_note` prints as its length, `(note omitted, N characters)` |
 | `poll --live [--out FILE]` | `POST /api/v1/poll` | Reads the machine right now. Refuses without `--live` |
 
 Examples:
@@ -92,29 +92,39 @@ What the machine does **not** tell us:
 `latest --summary` is a quick look only: it does not check the `G85` checksum. The real
 parser belongs in the history sync.
 
-## From the start: what each command prints
+## What raw, latest and poll print
 
-From the start (3 Dec 2026 00:00 Eastern, `vending/start.py`), a poll carries all 40
-selections, the other team's 20 too. Nothing we run may show their per-selection data, or any
-machine-wide total, to a person, the agent or a page (`docs/integrity.md`). Storing the raw poll
-is fine. "Ours" means the stored assignment (`vending.slots.our_slots`, so the script needs
-`DATABASE_URL`), never a fresh `slots` answer. A poll is "from the start" when its `started_at`
-is at or after the start. `raw` isn't told when its poll was taken, so on or after 3 Dec it
-treats every poll as one from the start.
+**This script never prints a whole poll.** All 40 selections' per-selection data, and the
+machine-wide totals, may be used only from polls taken before the fall cut: the setting
+`FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern when unset, and never later than the 3 Dec 2026 00:00
+Eastern start (`docs/integrity.md`, "Fall data"). The only times the script could judge that by
+are the bridge's (a listing's `started_at`, a reply's `Date`), and those can be wrong: a slow or
+proxied clock, or a time with no offset. So it doesn't judge: `raw`, `latest` and `poll --live`
+print every poll the same way, whatever its time. Pre-cut fall data for all 40 selections comes
+from `analysis/export_sales.py --fall-all`, which stops at the cut. The script doesn't read
+`FALL_CUTOFF`.
 
-| Command | Poll from before the start | Poll from the start |
-|---|---|---|
-| `raw SESSION_ID` | The whole poll, as stored | A rebuilt view (below) on stdout, and a note on stderr saying how many lines were left out |
-| `latest` | The whole poll | The rebuilt view, and the note |
-| `poll --live` | The whole poll | The rebuilt view, and the note |
-| `latest --summary` | JSON price and lifetime sales for our selections only | The same. The stored assignment is read first, before any poll. A selection that isn't ours is skipped at its `PA1`, before any of its fields are read. With no readable assignment it prints `[]`, reads no poll, and says why on stderr |
-| `--out FILE` (with `raw`, `latest` or `poll --live`) | Saves the whole poll, byte for byte | Saves the whole poll byte for byte, to a regular file only. It refuses `-`, a device (`/dev/stdout`, `/dev/tty`, `CON`, `NUL`, `COM1`, `\\.\...`), a pipe, a directory, or a link to any of them, exits 6 and writes nothing. Nothing is printed on stdout |
+From the start the raw poll carries all 40 selections, the other team's 20 too. Storing it is fine.
+"Ours" means the stored assignment (`vending.slots.our_slots`, so the script needs
+`DATABASE_URL`), never a fresh `slots` answer.
+
+| Command | What it prints, for any poll |
+|---|---|
+| `raw SESSION_ID` | A rebuilt view (below) on stdout, and a note on stderr saying how many lines were left out |
+| `latest` | The session and the time it checked on stderr, then the rebuilt view and the note |
+| `poll --live` | The rebuilt view, and the note |
+| `latest --summary` | JSON price and lifetime sales for our selections only. The stored assignment is read first, before any poll. A selection that isn't ours is skipped at its `PA1`, before any of its fields are read. With no readable assignment it prints `[]`, reads no poll, and says why on stderr |
+| `--out FILE` (with `raw`, `latest` or `poll --live`) | Archival storage: saves the whole poll byte for byte, to a regular file only. It refuses `-`, a device (`/dev/stdout`, `/dev/tty`, `CON`, `NUL`, `COM1`, `\\.\...`), a pipe, a directory, or a link to any of them, exits 6 and writes nothing. Nothing is printed on stdout |
 
 **The rebuilt view** is written anew from checked fields. No line is copied from the poll:
 
-- `ID4*<decimal places>`, so a price can be read;
-- for each of our selections, `PA1*<selection>*<price>` and `PA2*<counts>`;
-- the door counter, `EA2*DO*<counts>`.
+- `ID4*<decimal places>`, so a price can be read, when they are 0 to 2;
+- for each of our selections, `PA1*<selection>*<price>` and `PA2*<lifetime units>*<lifetime value>`;
+- the door counter, `EA2*DO*<since reset>*<lifetime>`.
+
+Only those fields are kept. A `PA2` belongs to a selection by the same block rules the history
+sync uses (`vending.evadts.records`): across `PA3`-`PA5`, `PA7` and `PA8` only. A selection listed
+twice prints none of its figures, and stderr says so. `latest --summary` reads the same way.
 
 A field counts only if it is a plain number. The first field that isn't ends its record.
 Everything else is left out: the other team's selections, the machine-wide totals (`VA1`, the
@@ -122,12 +132,21 @@ cash and card records), `ID1`, the other `PA` records, the envelope and `G85` (i
 wouldn't match). With no readable assignment, the view has no `PA` records and stderr says
 "no selection is printed".
 
-**Nothing prints the whole of a poll from the start.** The `--unredacted` flag is gone. To look
-at the raw bytes for archiving, save them with `--out`.
+**Nothing prints the whole of a poll.** The `--unredacted` flag is gone. `--out FILE` is archival
+storage: it keeps the raw bytes in a regular file, because storing the poll is fine. It is not a
+way to read them. Reading a saved poll taken from the cut on follows the same rule as printing it:
+only our selections, and no machine-wide total.
 
-**Errors.** From `history`, `raw`, `latest` and `poll`, an error shows only the status and its
-standard phrase, for example `404: Not Found`, never the bridge's reply. Other routes still
-show what the bridge said.
+**What this guards against.** The script keeps poll content off the screen. It doesn't verify
+catalog or status text against a server that deliberately disguises it: a product's name prints if
+it is one short line with no `*`, and `health` prints only a known status.
+
+**Errors.** From every route, an error shows only the status and its standard phrase, for example
+`404: Not Found`, never the bridge's reply: an error reply could carry a poll's records. A reply
+that isn't valid HTTP (a malformed status line, say) shows only the kind of fault, and a failed
+connection only the operating system's reason. A reply that isn't JSON where JSON is expected, or
+isn't the shape the script knows, isn't printed either. A failed read of the stored assignment
+names the error's kind, not its text.
 
 ## Purchase requests, in short
 

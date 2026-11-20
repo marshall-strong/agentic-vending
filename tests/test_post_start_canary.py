@@ -310,7 +310,7 @@ def test_the_bridge_script_with_the_stored_assignment(machine, assignment, scrip
     clean(err)
     lines = out.splitlines()
     assert {line.split("*")[1] for line in lines if line.startswith("PA1*")} == set(assignment)
-    assert set(lines) == ({"ID4*2", "EA2*DO*7*107", f"PA2*{OURS_AFTER}*{OUR_PRICE * OURS_AFTER}*0*0*0*0"}
+    assert set(lines) == ({"ID4*2", "EA2*DO*7*107", f"PA2*{OURS_AFTER}*{OUR_PRICE * OURS_AFTER}"}
                           | {f"PA1*{s}*{OUR_PRICE}" for s in assignment})
     assert "no selection is printed" not in err
 

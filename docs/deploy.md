@@ -289,7 +289,9 @@ runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row faile
 database error names the host and the user. Refusals keep their text. The pages' own errors show
 one plain sentence; the detail is in the container's log.
 `/db` also hides the machine-wide totals in `polls` (`total_paid_cents` and `total_paid_units`) in
-every row: from the start they include the other team's sales, and the total minus ours is theirs.
+every row. They may be used only from polls taken before the fall cut (`FALL_CUTOFF`, 18 Nov 2026
+00:00 Eastern when unset; `docs/integrity.md`), and from the cut on the total minus ours is the
+other selections' sales. The explorer can't test a poll's time, so it hides them for every poll.
 
 ### Setting up the read-only login (once)
 

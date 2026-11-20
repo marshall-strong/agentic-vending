@@ -105,34 +105,57 @@ def load_script():
 
 
 
-AFTER, BEFORE = "2026-12-04T15:00:00+00:00", "2026-12-02T15:00:00+00:00"
+# Poll times on each side of the fall cut (FALL_CUTOFF, 18 Nov 2026 00:00 Eastern when unset) and the
+# start. scripts/bridge.py prints every one of them the same way: only our selections and the door counter
+# (docs/integrity.md). Pre-cut fall data for all 40 comes from `analysis/export_sales.py --fall-all`.
+AFTER, BEFORE = "2026-12-04T15:00:00+00:00", "2026-11-10T15:00:00+00:00"
+BETWEEN, LAST_FALL_DAY = "2026-11-20T15:00:00+00:00", "2026-12-02T15:00:00+00:00"
+JUST_BEFORE_THE_CUT = "2026-11-18T04:59:50+00:00"    # 17 Nov, 23:59:50 Eastern
+EVERY_TIME = (BEFORE, JUST_BEFORE_THE_CUT, BETWEEN, LAST_FALL_DAY, AFTER)
+
+
+def http_date(moment: str) -> str:
+    """`moment` as an HTTP `Date` header gives it (RFC 9110: GMT, to the second)."""
+    from email.utils import format_datetime
+
+    return format_datetime(datetime.fromisoformat(moment).astimezone(timezone.utc), usegmt=True)
 
 
 @pytest.fixture
 def script(monkeypatch, assignment):
     """scripts/bridge.py, answering from a fake bridge with one stored poll, `script.poll`, taken
-    at `script.taken`. `script.ours` is our assignment. "Now" is the day after the start. The
-    fake answers only the history and poll routes, so a command that asks `/api/v1/slots` which
+    at `script.taken` by every account the bridge gives: the listing's `started_at` and a live
+    read's `Date` header. The script must print the same whatever they say.
+    `script.listing` replaces the whole listing. `script.ours` is our assignment. "Now", the
+    client's clock, is `script.now`, the day after the start unless a test moves it. The fake
+    answers only the history and poll routes, so a command that asks `/api/v1/slots` which
     selections are ours fails: ours come from the stored assignment only."""
     module = load_script()
     module.ours = assignment
     module.poll, module.taken = machine_poll(assignment, 13, SENTINEL_PRICE, SENTINEL_UNITS, 7), AFTER
     module.calls = []
+    module.now = datetime(2026, 12, 4, 15, 0, tzinfo=timezone.utc)
+    module.listing = module.live_headers = None
 
     def call(method, path, **kwargs):
         module.calls.append(path)
         assert path.startswith(module.POLL_ROUTES), f"the script asked {path} during a poll command"
+        if path == "/api/v1/poll":
+            headers = module.live_headers
+            return module.poll, ({"Date": http_date(module.taken)} if headers is None else headers)
         return module.poll, {}
 
     def get_json(path, **kwargs):
         module.calls.append(path)
         assert path == "/api/v1/history", f"the script asked {path} during a poll command"
+        if module.listing is not None:
+            return module.listing
         return {"polls": [{"session_id": "s1", "started_at": module.taken}]}
 
     class Now(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026, 12, 4, 15, 0, tzinfo=timezone.utc)
+            return module.now
 
     monkeypatch.setattr(module, "call", call)
     monkeypatch.setattr(module, "get_json", get_json)
@@ -145,7 +168,7 @@ def script(monkeypatch, assignment):
 def rebuilt(ours: tuple[str, ...], door: str = "EA2*DO*7*107") -> str:
     """Exactly what the script prints of `machine_poll(ours, 13, ...)` from the start: ID4's decimal
     places, the door counter, then each of ours in the poll's order, rebuilt from its fields."""
-    lines = ["ID4*2", door] + [r for s in sorted(ours) for r in (f"PA1*{s}*250", "PA2*13*3250*0*0*0*0")]
+    lines = ["ID4*2", door] + [r for s in sorted(ours) for r in (f"PA1*{s}*250", "PA2*13*3250")]
     return "".join(line + "\r\n" for line in lines)
 
 
@@ -168,10 +191,123 @@ def test_nothing_prints_the_whole_of_a_poll_from_the_start(script, capsys, argv)
     assert script.calls == []
 
 
-def test_a_poll_from_before_the_start_is_printed_whole(script, capsys):
-    script.taken = BEFORE
+POLL_ARGVS = [["latest"], ["raw", "s1"], ["poll", "--live"]]
+
+
+def at(script, taken: str) -> None:
+    """The stored poll was taken at `taken`, by every account of it, and the client's clock says so too."""
+    script.taken, script.now = taken, datetime.fromisoformat(taken)
+
+
+def http_calls(script) -> list[str]:
+    """The requests the script sent to the bridge."""
+    return [c for c in script.calls if c.startswith("/")]
+
+
+def machine_totals(script) -> tuple[int, int]:
+    """The VA1 totals of `script.poll`: the machine-wide cents and units."""
+    va1 = next(line for line in script.poll.decode().splitlines() if line.startswith("VA1*"))
+    return int(va1.split("*")[1]), int(va1.split("*")[2])
+
+
+@pytest.mark.parametrize("taken", EVERY_TIME)
+@pytest.mark.parametrize("argv", POLL_ARGVS)
+def test_every_poll_prints_only_our_selections_whatever_its_time(script, capsys, argv, taken):
+    """The bridge's times can be wrong (a slow or proxied `Date`, a listing time with no offset), so
+    the script never decides from them that a poll may print whole: before the cut, between the cut
+    and the start, and after, it prints only ours and the door counter."""
+    at(script, taken)
+    assert script.main(argv) == 0
+    out, err = capsys.readouterr()
+    assert out == rebuilt(script.ours)
+    assert not leaked(out, *machine_totals(script)) and not leaked(err, *machine_totals(script))
+    assert "20 of our selections" in err and "analysis/export_sales.py --fall-all" in err
+
+
+@pytest.mark.parametrize("value", ["18 Nov", "invalid", "2026-11-01T00:00:00-05:00", "2026-12-20T00:00:00-05:00"])
+@pytest.mark.parametrize("argv", POLL_ARGVS)
+def test_fall_cutoff_changes_nothing_the_script_prints(script, capsys, monkeypatch, argv, value):
+    """The script no longer reads the cut, so no FALL_CUTOFF, moved or malformed, opens a poll."""
+    monkeypatch.setenv("FALL_CUTOFF", value)
+    at(script, BEFORE)
+    assert script.main(argv) == 0
+    out, err = capsys.readouterr()
+    assert out == rebuilt(script.ours) and not leaked(out, *machine_totals(script))
+
+
+@pytest.mark.parametrize("taken", EVERY_TIME)
+def test_out_takes_only_a_regular_file_whatever_the_polls_time(script, capsys, tmp_path, monkeypatch, taken):
+    at(script, taken)
+    monkeypatch.chdir(tmp_path)
+    assert script.main(["latest", "--out", "-"]) == script.EXIT_REFUSED
+    out, err = capsys.readouterr()
+    assert out == "" and "regular file" in err and not leaked(err) and list(tmp_path.iterdir()) == []
+
+
+def test_the_help_says_where_whole_fall_polls_come_from(capsys):
+    with pytest.raises(SystemExit):
+        load_script().main(["--help"])
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "never prints a whole poll" in help_text and "analysis/export_sales.py --fall-all" in help_text
+
+
+# --- What a reply may put on the screen ---------------------------------------------------------------
+
+def test_history_prints_only_the_listings_known_fields(script, capsys):
+    import json
+
+    whole = script.poll.decode()
+    script.listing = {"polls": [{"session_id": "s1", "started_at": BETWEEN, "bytes": 4341, "raw": whole},
+                                {"session_id": "s2", "started_at": BETWEEN, "bytes": "PA1*11*987*"},
+                                {"session_id": "PA1*11*987*", "started_at": BETWEEN},
+                                {"session_id": "s3", "started_at": "VA1*987654"}],
+                      "truncated": False, "raw": whole, "note": f"VA1*{machine_totals(script)[0]}"}
+    assert script.main(["history"]) == 0
+    out, err = capsys.readouterr()
+    assert not leaked(out, *machine_totals(script)) and not leaked(err, *machine_totals(script))
+    assert "PA1*" not in out + err and "VA1" not in out + err
+    assert json.loads(out) == {"polls": [
+        {"session_id": "s1", "started_at": "2026-11-20T15:00:00+00:00", "bytes": 4341},
+        {"session_id": "s2", "started_at": "2026-11-20T15:00:00+00:00", "bytes": None},
+        {"session_id": "s3", "started_at": None, "bytes": None}], "truncated": False}
+    assert "1 entry left out" in err
+
+
+@pytest.mark.parametrize("listing", [["PA1*11*987*"], "VA1*987654", {"polls": "VA1*987654"}, {"polls": [1]}])
+def test_history_refuses_a_listing_of_the_wrong_shape(script, capsys, listing):
+    script.listing = listing
+    assert script.main(["history"]) == script.EXIT_BRIDGE
+    out, err = capsys.readouterr()
+    assert out == "" and "PA1*" not in err and "VA1" not in err and not leaked(err, 987654)
+
+
+@pytest.mark.parametrize("entry", [
+    {"session_id": f"PA1*11*{SENTINEL_PRICE}*", "started_at": BETWEEN},
+    {"session_id": "s1\nVA1*987654", "started_at": BETWEEN},
+    {"session_id": ["s1"], "started_at": BETWEEN},
+    {"started_at": BETWEEN}])
+def test_latest_refuses_a_listing_whose_newest_session_isnt_an_id(script, capsys, entry):
+    script.listing = {"polls": [entry]}
+    assert script.main(["latest"]) == script.EXIT_BRIDGE
+    out, err = capsys.readouterr()
+    assert out == "" and not leaked(err, 987654) and "PA1*" not in err and "VA1" not in err
+    assert http_calls(script) == ["/api/v1/history"]
+
+
+@pytest.mark.parametrize("started_at", [f"PA1*11*{SENTINEL_PRICE}*", "2026-11-10T15:00:00", None, 7919])
+def test_latest_with_an_unreadable_time_prints_no_raw_time(script, capsys, started_at):
+    script.listing = {"polls": [{"session_id": "s1", "started_at": started_at}]}
     assert script.main(["latest"]) == 0
-    assert capsys.readouterr().out == script.poll.decode()
+    out, err = capsys.readouterr()
+    assert out == rebuilt(script.ours)
+    assert not leaked(out, *machine_totals(script)) and not leaked(err, *machine_totals(script))
+    assert "PA1*" not in err and "session s1, taken at an unknown time" in err
+
+
+def test_latest_prints_the_session_and_time_it_checked(script, capsys):
+    at(script, BETWEEN)
+    assert script.main(["latest"]) == 0
+    assert "session s1, taken 2026-11-20T15:00:00+00:00" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("argv", [["latest"], ["raw", "s1"], ["poll", "--live"]])
@@ -234,11 +370,19 @@ def test_out_refuses_anything_but_a_regular_file(script, capsys, tmp_path, monke
     assert sorted(p.name for p in tmp_path.iterdir()) == before
 
 
-def test_out_before_the_start_is_as_it_was(script, capsys, tmp_path):
-    script.taken = BEFORE
-    saved = tmp_path / "poll.dex"
-    assert script.main(["latest", "--out", str(saved)]) == 0
-    assert saved.read_bytes() == script.poll
+def test_a_failed_assignment_read_prints_no_error_text(script, capsys, monkeypatch):
+    """A database error can quote what it was given; the note names the error's kind only."""
+    from vending import db
+
+    def broken():
+        raise RuntimeError(f"PA1*11*{SENTINEL_PRICE}* VA1*987654")
+
+    monkeypatch.setattr(script, "our_selections", script.stored_selections)
+    monkeypatch.setattr(db, "connect", broken)
+    assert script.main(["latest"]) == 0
+    out, err = capsys.readouterr()
+    assert out == "ID4*2\r\nEA2*DO*7*107\r\n" and "RuntimeError" in err
+    assert "PA1*" not in err and "VA1" not in err and not leaked(err, 987654)
 
 
 def test_with_no_stored_assignment_no_selection_is_printed(script, capsys, monkeypatch):
@@ -289,8 +433,8 @@ def test_rebuild_writes_only_checked_fields_of_ours_and_the_door():
             "PA1*16*x\nPA2*y\nG85*ABCD\nSE*20*0001\nDXE*1*1\n")
     shown, printed, left_out = load_script().rebuild(text, ("15", "16"))
     # A field that isn't a number ends its record there; a PA2 outside our block, PA3 and the
-    # rest are gone. `\n` in, `\n` out.
-    assert shown == "ID4*2\nPA1*15*250\nPA2*3*750*1*2\nEA2*DO*7*107\nPA1*16\n"
+    # rest are gone; PA2 keeps its units and value, EA2*DO its two counters. `\n` in, `\n` out.
+    assert shown == "ID4*2\nPA1*15*250\nPA2*3*750\nEA2*DO*7*107\nPA1*16\n"
     assert (printed, left_out) == (2, 15)
 
 
@@ -326,7 +470,320 @@ def test_a_poll_routes_error_shows_the_status_and_a_short_reason_only(monkeypatc
     assert SECRET.decode() not in err and "Reason From The Bridge" not in err and not leaked(err)
 
 
-def test_other_routes_still_say_what_the_bridge_said(monkeypatch, capsys):
-    module = _failing(monkeypatch, 422, b'{"detail": "no such request"}')
-    assert module.main(["request", "r1"]) == module.EXIT_BRIDGE
-    assert "422: no such request" in capsys.readouterr().err
+@pytest.mark.parametrize("argv", [["health"], ["slots"], ["products"], ["request", "r1"]])
+@pytest.mark.parametrize("code", [400, 401, 404, 409, 422, 429, 500])
+def test_no_routes_error_body_is_printed(monkeypatch, capsys, argv, code):
+    """Any route's error reply could carry a poll's records, so none is echoed: the status, its
+    standard phrase and a reason written here."""
+    body = b'{"detail": "' + SECRET + b'", "error": "VA1*987654*98765"}'
+    module = _failing(monkeypatch, code, body)
+    assert module.main(argv) != 0
+    out, err = capsys.readouterr()
+    assert out == "" and str(code) in err
+    assert SECRET.decode() not in err and "VA1" not in err and "Reason From The Bridge" not in err
+    assert not leaked(err, 987654, 98765)
+
+
+# --- The metadata routes: only the fields they are documented to have ----------------------------
+
+HIDDEN = f"PA1*11*{SENTINEL_PRICE}*\r\nPA2*{SENTINEL_UNITS}*{SENTINEL_CENTS}\r\nVA1*987654*98765"
+
+
+@pytest.fixture
+def bridge(monkeypatch):
+    """scripts/bridge.py with the real `get_json`, over a fake `call` that answers each path from
+    `bridge.replies` (JSON) and records it in `bridge.calls`."""
+    import json
+
+    module = load_script()
+    module.replies, module.calls = {}, []
+
+    def call(method, path, **kwargs):
+        module.calls.append(path)
+        return json.dumps(module.replies[path]).encode(), {}
+
+    monkeypatch.setattr(module, "call", call)
+    return module
+
+
+def shown(capsys) -> tuple[object, str]:
+    """(stdout as JSON, stderr), after checking neither carries a hidden record."""
+    import json
+
+    out, err = capsys.readouterr()
+    for text in (out, err):
+        assert "PA1*" not in text and "PA2*" not in text and "VA1" not in text, text
+        assert not leaked(text, 987654, 98765), text
+    return json.loads(out), err
+
+
+def test_health_prints_only_its_status(bridge, capsys):
+    bridge.replies["/health"] = {"status": "ok", "raw": HIDDEN, "detail": {"last": HIDDEN}}
+    assert bridge.main(["health"]) == 0
+    assert shown(capsys)[0] == {"status": "ok"}
+    for status in (HIDDEN, "degraded", "OK ", None, 1):
+        bridge.replies["/health"] = {"status": status}
+        assert bridge.main(["health"]) == 0
+        assert shown(capsys)[0] == {"status": "unexpected status"}
+
+
+def test_slots_prints_only_our_teams_checked_assignment(bridge, capsys):
+    ours = list(COLUMNS_5_TO_8)
+    bridge.replies["/api/v1/slots"] = {"team": "group-b", "device_id": "vmc1", "slots": ours, "raw": HIDDEN}
+    assert bridge.main(["slots"]) == 0
+    assert shown(capsys)[0] == {"team": "group-b", "device_id": "vmc1", "slots": sorted(ours)}
+
+
+@pytest.mark.parametrize("reply", [
+    {"team": "group-a", "device_id": "vmc1", "slots": list(COLUMNS_5_TO_8)},
+    {"team": HIDDEN, "device_id": "vmc1", "slots": list(COLUMNS_5_TO_8)},
+    {"team": "group-b", "device_id": HIDDEN, "slots": list(COLUMNS_5_TO_8)},
+    {"team": "group-b", "device_id": "vmc1", "slots": [*COLUMNS_5_TO_8[:19], HIDDEN]},
+    {"team": "group-b", "device_id": "vmc1"}, [HIDDEN], HIDDEN])
+def test_slots_refuses_any_other_reply_and_prints_none_of_it(bridge, capsys, reply):
+    bridge.replies["/api/v1/slots"] = reply
+    assert bridge.main(["slots"]) == bridge.EXIT_BRIDGE
+    out, err = capsys.readouterr()
+    assert out == "" and "PA1*" not in err and "VA1" not in err and not leaked(err, 987654)
+    assert "group-a" not in err
+
+
+@pytest.mark.parametrize("wrapped", [True, False])
+def test_products_prints_only_the_catalog_fields(bridge, capsys, wrapped):
+    items = [{"sku": "SKU-1", "name": "Cola", "line": "Classic", "flavor": "Cherry", "size": "12 oz",
+              "price": SENTINEL_PRICE, "raw": HIDDEN},
+             {"sku": "SKU-2", "name": HIDDEN, "line": None, "flavor": "Lime\nVA1*987654", "size": 12},
+             HIDDEN]
+    bridge.replies["/api/v1/products"] = {"products": items, "raw": HIDDEN} if wrapped else items
+    assert bridge.main(["products"]) == 0
+    printed, err = shown(capsys)
+    assert printed == [
+        {"sku": "SKU-1", "name": "Cola", "line": "Classic", "flavor": "Cherry", "size": "12 oz"},
+        {"sku": "SKU-2", "name": None, "line": None, "flavor": None, "size": None}]
+    assert "1 entry left out" in err
+
+
+def test_request_prints_no_free_text(bridge, capsys):
+    bridge.replies["/api/v1/purchase-requests/r1"] = {
+        "id": "r1", "status": "rejected", "created_at": "2026-11-20T15:00:00+00:00",
+        "decision_note": HIDDEN, "raw": HIDDEN}
+    assert bridge.main(["request", "r1"]) == 0
+    printed, _ = shown(capsys)
+    assert printed == {"id": "r1", "status": "rejected", "created_at": "2026-11-20T15:00:00+00:00",
+                       "decision_note": f"(note omitted, {len(HIDDEN)} characters)"}
+
+
+def test_a_fulfilled_request_prints_its_receipts_checked(bridge, capsys):
+    receipt = {"outcome": "loaded", "sku": "SKU-1", "store": "Wegmans", "packs_bought": 2, "units_per_pack": 12,
+               "units_bought": 24, "total_paid": "18.50", "unit_cost_paid": "0.7708", "units_loaded": 20,
+               "units_lost": 0, "loss_note": HIDDEN, "units_to_back_stock": 4, "units_from_back_stock": 0,
+               "units_pulled": 0, "pulled_sku": None, "slot_reassigned": False,
+               "resolved_at": "2026-11-20T16:00:00+00:00", "raw": HIDDEN,
+               "later_losses": [{"location": "closet", "sku": "SKU-1", "units": 2, "note": HIDDEN,
+                                 "recorded_at": "2026-11-21T15:00:00+00:00", "raw": HIDDEN}, HIDDEN]}
+    bridge.replies["/api/v1/purchase-requests/r2"] = {
+        "id": "r2", "status": "fulfilled", "device_id": "vmc1", "created_at": "2026-11-20T15:00:00+00:00",
+        "updated_at": "2026-11-20T16:00:00+00:00", "fulfilled_at": "2026-11-20T16:00:00+00:00",
+        "off_cycle": False, "note": HIDDEN, "decision_note": None, "total_paid": "18.50",
+        "door_opened_at": "2026-11-20T15:40:00+00:00", "door_closed_at": "2026-11-20T15:55:00+00:00",
+        "lines": [{"line": 1, "slot": "15", "source": "store", "primary": HIDDEN, "receipt": receipt}, HIDDEN]}
+    assert bridge.main(["request", "r2"]) == 0
+    printed, err = shown(capsys)
+    line = printed["lines"][0]
+    assert printed["note"] == f"(note omitted, {len(HIDDEN)} characters)" and printed["decision_note"] is None
+    assert printed["total_paid"] == "18.50" and printed["door_opened_at"] == "2026-11-20T15:40:00+00:00"
+    assert line["slot"] == "15" and "primary" not in line and len(printed["lines"]) == 1
+    assert line["receipt"]["units_loaded"] == 20 and line["receipt"]["unit_cost_paid"] == "0.7708"
+    assert line["receipt"]["loss_note"] == f"(note omitted, {len(HIDDEN)} characters)"
+    assert line["receipt"]["later_losses"] == [
+        {"location": "closet", "sku": "SKU-1", "units": 2, "recorded_at": "2026-11-21T15:00:00+00:00",
+         "note": f"(note omitted, {len(HIDDEN)} characters)"}]
+    assert "raw" not in line["receipt"]
+    assert "1 line left out" in err
+
+
+# --- A reply that isn't HTTP ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("argv", [["health"], ["slots"], ["history"], ["raw", "s1"], ["poll", "--live"],
+                                  ["request", "r1"]])
+@pytest.mark.parametrize("kind", ["BadStatusLine", "LineTooLong", "IncompleteRead", "RemoteDisconnected"])
+def test_a_reply_that_isnt_http_prints_a_fixed_message(monkeypatch, capsys, argv, kind):
+    import http.client
+    import urllib.request
+
+    module = load_script()
+    monkeypatch.setenv("DEX_BASE_URL", "http://bridge.test")
+    monkeypatch.setenv("DEX_API_KEY", "key")
+    errors = {"BadStatusLine": lambda: http.client.BadStatusLine(HIDDEN),
+              "LineTooLong": lambda: http.client.LineTooLong(HIDDEN),
+              "IncompleteRead": lambda: http.client.IncompleteRead(HIDDEN.encode()),
+              "RemoteDisconnected": lambda: http.client.RemoteDisconnected(HIDDEN)}
+
+    def urlopen(request, timeout):
+        raise errors[kind]()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(module, "our_selections", lambda: (COLUMNS_5_TO_8, None))
+    no_answer = kind == "RemoteDisconnected"   # the peer closed before any status: no answer at all
+    assert module.main(argv) == (module.EXIT_UNREACHABLE if no_answer else module.EXIT_BRIDGE)
+    out, err = capsys.readouterr()
+    assert out == "" and "PA1*" not in err and "VA1" not in err and not leaked(err, 987654, 98765), err
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85", "\r", "\n", "\x9b"])
+def test_short_text_is_one_line_by_any_line_break(bridge, capsys, separator):
+    bridge.replies["/api/v1/products"] = [{"sku": "SKU-1", "name": f"Cola{separator}VA1 987654"}]
+    assert bridge.main(["products"]) == 0
+    assert shown(capsys)[0] == [{"sku": "SKU-1", "name": None, "line": None, "flavor": None, "size": None}]
+
+
+def test_raw_help_doesnt_promise_raw_text(capsys):
+    with pytest.raises(SystemExit):
+        load_script().main(["raw", "--help"])
+    with pytest.raises(SystemExit):
+        load_script().main(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "raw EVA-DTS text" not in text and "rebuilt from our selections" in text
+
+
+# --- Requests that fail in ways HTTP doesn't name -------------------------------------------------
+
+@pytest.mark.parametrize("error", [ValueError, KeyError, UnicodeError, AttributeError, RuntimeError])
+@pytest.mark.parametrize("argv", [["health"], ["slots"], ["raw", "s1"], ["poll", "--live"]])
+def test_any_fault_in_a_request_prints_its_kind_only(monkeypatch, capsys, argv, error):
+    import urllib.request
+
+    module = load_script()
+    monkeypatch.setenv("DEX_BASE_URL", "http://bridge.test")
+    monkeypatch.setenv("DEX_API_KEY", "key")
+
+    def urlopen(request, timeout):
+        raise error(f"redirect to {HIDDEN}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(module, "our_selections", lambda: (COLUMNS_5_TO_8, None))
+    assert module.main(argv) == module.EXIT_BRIDGE
+    out, err = capsys.readouterr()
+    assert out == "" and error.__name__ in err and "Traceback" not in err
+    assert "PA1*" not in err and "VA1" not in err and not leaked(err, 987654, 98765), err
+
+
+def test_a_redirect_to_a_malformed_location_prints_no_part_of_it(monkeypatch, capsys):
+    """A real server: a 302 whose Location urllib can't parse, holding a VA1 record."""
+    import http.server
+    import threading
+
+    class Redirect(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", "http://[VA1*987654*98765/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Redirect)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        module = load_script()
+        monkeypatch.setenv("DEX_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
+        monkeypatch.setenv("DEX_API_KEY", "key")
+        assert module.main(["slots"]) == module.EXIT_BRIDGE
+    finally:
+        server.shutdown()
+        server.server_close()
+    out, err = capsys.readouterr()
+    assert out == "" and "Traceback" not in err
+    assert "VA1" not in err and not leaked(err, 987654, 98765), err
+
+
+# --- Malformed polls: the same selection blocks as vending.evadts ---------------------------------
+
+POLL_VIEWS = [["latest"], ["raw", "s1"], ["poll", "--live"], ["latest", "--summary"]]
+
+
+def poll_of(*records: str) -> bytes:
+    """A whole, checksummed poll of `records` (vending.evadts reads it as a good one)."""
+    return build(["ID1*TEST-MACHINE*0000**EVS3.0*", "ID4*2*1840*5", "VA1*987654*98765*0*0", *records])
+
+
+def printed_counters(script, argv, out: str) -> dict:
+    """Each of our selections' (units, value) the view printed, or None where it printed none."""
+    import json
+
+    if argv[-1] == "--summary":
+        rows = json.loads(out)
+        return {r["slot"]: (r["lifetime_units"], r["lifetime_sales"]) for r in rows
+                if r["lifetime_units"] is not None}
+    found, current = {}, None
+    for line in out.splitlines():
+        fields = line.split("*")
+        if fields[0] == "PA1":
+            current = fields[1]
+        elif fields[0] == "PA2" and current:
+            found[current] = (int(fields[1]), f"${int(fields[2]) / 100:,.2f}")
+            current = None
+    return found
+
+
+def evadts_counters(poll: bytes, ours) -> dict:
+    """Each of our selections' (units, value) by vending.evadts, the parser the sync stores."""
+    from vending import evadts
+
+    return {s.selection: (s.lifetime_units, f"${s.lifetime_sales_cents / 100:,.2f}")
+            for s in evadts.parse(poll).selections if s.selection in ours}
+
+
+@pytest.mark.parametrize("argv", POLL_VIEWS)
+@pytest.mark.parametrize("between", ["PA9*1", "XX1*2", "", "EA2*DO*1*2"])
+def test_a_pa2_across_another_record_isnt_attached(script, capsys, argv, between):
+    """vending.evadts ends a selection block at any record but PA3-PA5, PA7 and PA8: so does every view."""
+    first = script.ours[0]
+    script.poll = poll_of("EA2*DO*7*107", f"PA1*{first}*250", between, "PA2*13*3250*0*0",
+                          f"PA1*{script.ours[1]}*250", "PA3*1*2", "PA5*20261204", "PA2*13*3250")
+    assert script.main(argv) == 0
+    out, _ = capsys.readouterr()
+    assert printed_counters(script, argv, out) == evadts_counters(script.poll, script.ours)
+    assert first not in printed_counters(script, argv, out) and script.ours[1] in printed_counters(script, argv, out)
+
+
+@pytest.mark.parametrize("argv", POLL_VIEWS)
+def test_a_selection_listed_twice_prints_none_of_its_figures(script, capsys, argv):
+    first = script.ours[0]
+    script.poll = poll_of("EA2*DO*7*107", f"PA1*{first}*250", "PA2*13*3250",
+                          f"PA1*{script.ours[1]}*250", "PA2*13*3250",
+                          f"PA1*{first}*{SENTINEL_PRICE}", f"PA2*{SENTINEL_UNITS}*{SENTINEL_CENTS}")
+    assert script.main(argv) == 0
+    out, err = capsys.readouterr()
+    assert not leaked(out) and not leaked(err)
+    assert first not in printed_counters(script, argv, out) and script.ours[1] in printed_counters(script, argv, out)
+    assert f"PA1*{first}" not in out and "more than once" in err
+    if argv[-1] == "--summary":
+        import json
+
+        row = next(r for r in json.loads(out) if r["slot"] == first)
+        assert row == {"slot": first, "price": None, "lifetime_units": None, "lifetime_sales": None}
+
+
+def test_the_rebuilt_view_keeps_only_defined_fields(script, capsys):
+    ours = script.ours[0]
+    script.poll = poll_of("EA2*DO*7*107*55*9", f"PA1*{ours}*250*1*2", "PA2*13*3250*4*5*6")
+    assert script.main(["latest"]) == 0
+    out, _ = capsys.readouterr()
+    assert out == f"ID4*2\r\nEA2*DO*7*107\r\nPA1*{ours}*250\r\nPA2*13*3250\r\n"
+
+
+@pytest.mark.parametrize("scale", ["3", "9", "x", "-1"])
+def test_an_id4_scale_evadts_wouldnt_accept_prints_no_scale_and_no_money(script, capsys, scale):
+    import json
+
+    ours = script.ours[0]
+    script.poll = build(["ID1*TEST-MACHINE*0000**EVS3.0*", f"ID4*{scale}*1840*5", "EA2*DO*7*107",
+                         f"PA1*{ours}*250", "PA2*13*3250"])
+    assert script.main(["latest"]) == 0
+    out, _ = capsys.readouterr()
+    assert not out.startswith("ID4") and "ID4" not in out
+    assert script.main(["latest", "--summary"]) == 0
+    row = next(r for r in json.loads(capsys.readouterr().out) if r["slot"] == ours)
+    assert row["price"] is None and row["lifetime_sales"] is None and row["lifetime_units"] == 13

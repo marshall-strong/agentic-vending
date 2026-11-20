@@ -8,14 +8,17 @@ One command per question you might have about the machine or our account:
     python scripts/bridge.py products               what we can order (the catalog)
     python scripts/bridge.py history                stored polls for today (UTC)
     python scripts/bridge.py history --start 2026-10-01 --end 2026-10-07
-    python scripts/bridge.py raw SESSION_ID         one stored poll, as raw EVA-DTS text
-    python scripts/bridge.py latest                 the newest stored poll, raw
+    python scripts/bridge.py raw SESSION_ID         one stored poll, rebuilt from our selections
+    python scripts/bridge.py latest                 the newest stored poll, rebuilt likewise
     python scripts/bridge.py latest --summary       price and lifetime sales for our slots
     python scripts/bridge.py request REQUEST_ID     where a purchase request has got to
     python scripts/bridge.py poll --live            read the machine right now (see below)
 
-From the 3 Dec 2026 start, `raw`, `latest` and `poll` print a view rebuilt from
-our selections and the door counter only (see "From the start" below).
+**This script never prints a whole poll.** `raw`, `latest` and `poll --live`
+print every poll as a view rebuilt from our selections and the door counter
+only, whatever the poll's time (see below). Pre-cut fall data for all 40
+selections comes from `analysis/export_sales.py --fall-all`, which stops at the
+fall cut (`docs/integrity.md`, "Fall data").
 
 Settings come from `.env` at the repository root (copy `.env.example`), or from
 the environment: `DEX_BASE_URL` and `DEX_API_KEY`. You must be on Tailscale --
@@ -33,31 +36,40 @@ Two things this script deliberately does not do:
   because that is where the balance, price and halt checks live. Reading a
   request's status is fine, so `request` is here.
 
-**From the start (3 Dec 2026, `vending.start`).** From then a poll carries all
-40 selections, the other team's 20 too, and nothing may show their
-per-selection data or a machine-wide total that includes their sales
-(`docs/integrity.md`). Our selections are the stored assignment
-(`vending.slots.our_slots`, which needs `DATABASE_URL`), never a fresh
-`/api/v1/slots` answer. For a poll from the start:
+**Why never whole.** All 40 selections' data, and the machine-wide totals, may
+be used only from polls taken before the fall cut (`FALL_CUTOFF`, 18 Nov 2026
+00:00 Eastern when unset, never later than the 3 Dec 2026 start). The only
+times this script could judge that by are the bridge's (a listing's
+`started_at`, a reply's `Date`), and those can be wrong: a slow or proxied
+clock, or a time with no offset. So it doesn't judge. Our selections are the
+stored assignment (`vending.slots.our_slots`, which needs `DATABASE_URL`),
+never a fresh `/api/v1/slots` answer.
 
 - `raw`, `latest` and `poll --live` print a view rebuilt from checked fields,
-  not lines copied from the poll: `ID4` with its decimal places, `PA1` (the
-  selection and its price) and `PA2` (its counters) for each of our selections,
-  and the door counter `EA2*DO` with its counts. Nothing else: no envelope, no
-  `ID1`, no `G85` checksum, no other team's selection and no machine-wide total
+  not lines copied from the poll: `ID4` with its decimal places (0-2), `PA1`
+  (the selection and its price) and `PA2` (its lifetime units and value) for
+  each of our selections, and the door counter `EA2*DO` with its two counts.
+  A `PA2` belongs to a selection by `vending.evadts`'s block rules, and a
+  selection listed twice prints none of its figures. Nothing else: no envelope, no
+  `ID1`, no `G85` checksum, no other selection and no machine-wide total
   (`VA1`, the cash and card records, the rest). A note on stderr says how many
   lines were left out. When the assignment can't be read, no selection is
-  printed, and stderr says so. Nothing prints the whole poll.
-- `--out FILE` saves the raw bytes, because storing the poll is fine. It
-  writes only a regular file: it refuses `-`, a device (`/dev/stdout`, `CON`,
-  `NUL`), a pipe, a directory, or anything else that isn't a regular file.
+  printed, and stderr says so.
+- `--out FILE` is archival storage: it saves the raw bytes, because storing
+  the poll is fine, to a regular file only. It refuses `-`, a device
+  (`/dev/stdout`, `CON`, `NUL`), a pipe, a directory, or anything else that
+  isn't a regular file.
 - `latest --summary` reads the stored assignment first, and skips every
   selection that isn't ours before reading any of its fields.
 
-`raw` isn't told when its poll was taken, so from the start it treats every
-poll as one from the start. A poll from before the start prints whole, as
-before. An error from a poll route (`history`, `raw`, `poll`) shows the status
-and a short reason, never the bridge's reply.
+**Nothing the bridge sends is printed unchecked.** `history` prints each
+entry's `session_id`, `started_at` and `bytes`, checked, and `truncated`.
+`latest` prints the session and time it checked. `health`, `slots`,
+`products` and `request` print only their documented fields, each checked;
+free text (a request's notes) prints as its length. `slots` refuses a reply
+that isn't our team's assignment on our machine. An error from any route, or a
+reply that isn't HTTP, shows a fixed message, never the bridge's reply: a reply
+could carry a poll's records.
 
 Standard library only, except reading the stored assignment, so it runs
 anywhere Python 3.11 does with nothing to install.
@@ -66,6 +78,7 @@ anywhere Python 3.11 does with nothing to install.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -76,6 +89,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
+from collections import Counter
 from pathlib import Path
 
 # Exit codes, so a wrapper script can tell failures apart.
@@ -91,7 +105,7 @@ TIMEOUT_SECONDS = 15
 POLL_TIMEOUT_SECONDS = 30
 
 
-# Routes whose replies are polls or list them. Their error replies are never printed (see `call`).
+# Routes whose replies are polls or list them.
 POLL_ROUTES = ("/api/v1/history", "/api/v1/poll")
 
 
@@ -122,7 +136,7 @@ def repo_root() -> Path:
 # on how a value is quoted or commented. Standard library too.
 sys.path.insert(0, str(repo_root()))
 from vending import settings as env  # noqa: E402
-from vending.start import START, on_or_after_start  # noqa: E402
+from vending.evadts import records  # noqa: E402  (stdlib only: the sync's own selection-block rules)
 
 
 def settings() -> tuple[str, str]:
@@ -167,18 +181,9 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read(), dict(response.headers.items())
     except urllib.error.HTTPError as error:
-        if path.startswith(POLL_ROUTES):
-            # From the start a poll carries the other team's data, so a poll route's reply is never
-            # echoed, not even an error's: the status and its standard phrase only.
-            detail = status_phrase(error.code)
-        else:
-            body = error.read().decode("utf-8", errors="replace")
-            detail = body
-            try:
-                parsed = json.loads(body)
-                detail = parsed.get("error") or parsed.get("detail") or body
-            except (json.JSONDecodeError, AttributeError):
-                pass
+        # Any route's error reply could carry a poll's records, so none is echoed: the status
+        # and its standard phrase only, and the hints below, written here.
+        detail = status_phrase(error.code)
         if error.code in (401, 403):
             raise BridgeError(
                 f"{error.code}: the bridge rejected our key ({detail}). "
@@ -194,18 +199,43 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
         if error.code == 429:
             raise BridgeError(f"429: too many requests ({detail}). Slow down.", EXIT_BRIDGE) from None
         raise BridgeError(f"{error.code}: {detail}", EXIT_BRIDGE) from None
+    except http.client.RemoteDisconnected:
+        # Closed before any status line: no answer at all, like a refused connection.
+        raise BridgeError(f"Could not reach {base_url}: it closed the connection without answering. "
+                          "Is Tailscale connected? Run `tailscale status` and look for aihub-pi.",
+                          EXIT_UNREACHABLE) from None
+    except http.client.HTTPException as error:
+        # A malformed status line, an over-long header, a body cut short: the exception holds what
+        # the bridge sent, so only its kind is printed.
+        raise BridgeError(f"the bridge's reply wasn't valid HTTP ({type(error).__name__}); none of it is "
+                          "printed", EXIT_BRIDGE) from None
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        reason = getattr(error, "reason", error)
         raise BridgeError(
-            f"Could not reach {base_url} ({reason}). Is Tailscale connected? "
+            f"Could not reach {base_url} ({plain_reason(error)}). Is Tailscale connected? "
             "Run `tailscale status` and look for aihub-pi.",
             EXIT_UNREACHABLE,
         ) from None
+    except Exception as error:  # noqa: BLE001 -- a redirect to a malformed Location raises ValueError, say
+        # Its text or arguments can quote the reply, so only its kind is printed.
+        raise BridgeError(f"the request to the bridge failed ({type(error).__name__}); none of its text is "
+                          "printed", EXIT_BRIDGE) from None
+
+
+def plain_reason(error: BaseException) -> str:
+    """Why a connection failed, from the operating system's own words or the error's kind: never
+    text that could have come from the other end."""
+    reason = getattr(error, "reason", error)
+    if isinstance(reason, OSError) and reason.strerror:
+        return reason.strerror
+    return type(reason if isinstance(reason, BaseException) else error).__name__
 
 
 def get_json(path: str, **kwargs) -> object:
     body, _ = call("GET", path, **kwargs)
-    return json.loads(body)
+    try:
+        return json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        raise BridgeError(f"the reply from {path} isn't JSON; it isn't printed", EXIT_BRIDGE) from None
 
 
 def print_json(value: object) -> None:
@@ -221,58 +251,74 @@ def number(field: str) -> int | None:
     return int(field) if re.fullmatch(r"[0-9]{1,12}", field) else None
 
 
+def id4_scale(fields: list[str]) -> int | None:
+    """`ID4`'s decimal places when `vending.evadts` can convert them (0 to 2), else None."""
+    places = number(fields[1]) if len(fields) > 1 else None
+    return places if places is not None and places <= 2 else None
+
+
+def listed_twice(dex_text: str, ours: tuple[str, ...] | list[str]) -> list[str]:
+    """Those of `ours` with more than one `PA1` in the poll. Which block is theirs is ambiguous, so
+    none of their figures is shown."""
+    wanted = set(ours)
+    seen = Counter(sel for fields, sel in records(dex_text.splitlines()) if fields[0] == "PA1" and sel in wanted)
+    return sorted(sel for sel, n in seen.items() if n > 1)
+
+
+def note_listed_twice(dex_text: str, ours: tuple[str, ...] | list[str]) -> None:
+    twice = listed_twice(dex_text, ours)
+    if twice:
+        print(f"note: {', '.join(twice)} appear more than once in the poll, so none of their figures is "
+              "printed", file=sys.stderr)
+
+
 def summarize(dex_text: str, ours: tuple[str, ...] | list[str]) -> list[dict[str, object]]:
     """Price and lifetime units sold for each of `ours`, our selections from the stored assignment.
 
-    Records are `*`-separated, one per line. `PA1*<selection>*<price>` opens a
-    selection, and the `PA2*<units>*<value>*...` line after it holds that
-    selection's lifetime counters. Currency is an integer; `ID4-01` (the first
-    field after the tag, `ID4*2*...`) says how many decimal places it carries.
+    Records are `*`-separated, one per line, read by `vending.evadts`'s selection-block rules
+    (`records`): `PA1*<selection>*<price>` opens a selection, and the `PA2*<units>*<value>*...` that
+    belongs to it holds its lifetime counters. Currency is an integer; `ID4-01` (the first field
+    after the tag, `ID4*2*...`) says how many decimal places it carries: 2 when absent, and no money
+    is shown when it isn't 0 to 2.
 
     A selection that isn't one of `ours` is skipped at its `PA1`: only its name is compared, and
-    no other field of it, or of its `PA2`, is read. A field that isn't a plain number is None.
+    no other field of it, or of its `PA2`, is read. A field that isn't a plain number is None. A
+    selection listed twice (`listed_twice`) shows nothing.
 
     This does not validate the `G85` checksum, so treat it as a quick look, not
     as data to build on. The real parser belongs in the history sync.
     """
     wanted = set(ours)
-    decimals = 2
+    decimals: int | None = 2
     rows: dict[str, dict[str, int | None]] = {}
-    current: str | None = None
-    for line in dex_text.splitlines():
-        fields = line.strip().split("*")
+    for fields, sel in records(dex_text.splitlines()):
         tag = fields[0]
-        if not tag.startswith("PA"):
-            current = None
-        if tag == "ID4" and len(fields) > 1:
-            places = number(fields[1])
-            if places is not None and places <= 6:
-                decimals = places
-        elif tag == "PA1":
-            current = fields[1] if len(fields) > 1 and fields[1] in wanted else None
-            if current is not None:
-                rows[current] = {"price_cents": number(fields[2]) if len(fields) > 2 else None}
-        elif tag == "PA2" and current is not None:
-            rows[current]["lifetime_units"] = number(fields[1]) if len(fields) > 1 else None
-            rows[current]["lifetime_value_cents"] = number(fields[2]) if len(fields) > 2 else None
-            current = None
+        if tag == "ID4" and len(fields) > 1 and fields[1].strip():
+            decimals = id4_scale(fields)
+        elif tag == "PA1" and sel in wanted:
+            rows[sel] = {"price_cents": number(fields[2]) if len(fields) > 2 else None}
+        elif tag == "PA2" and sel in wanted:
+            rows[sel]["lifetime_units"] = number(fields[1]) if len(fields) > 1 else None
+            rows[sel]["lifetime_value_cents"] = number(fields[2]) if len(fields) > 2 else None
+    for sel in listed_twice(dex_text, ours):
+        rows[sel] = {}
 
-    scale = 10 ** decimals
+    scale = None if decimals is None else 10 ** decimals
     result = []
     for slot in ours:
         row = rows.get(slot, {})
         price, value = row.get("price_cents"), row.get("lifetime_value_cents")
         result.append({
             "slot": slot,
-            "price": f"${price / scale:.2f}" if price is not None else None,
+            "price": f"${price / scale:.2f}" if price is not None and scale else None,
             "lifetime_units": row.get("lifetime_units"),
-            "lifetime_sales": f"${value / scale:,.2f}" if value is not None else None,
+            "lifetime_sales": f"${value / scale:,.2f}" if value is not None and scale else None,
         })
     return result
 
 
 # --------------------------------------------------------------------------
-# From the start: only our selections (see the module docstring)
+# From the fall cut: only our selections (see the module docstring)
 # --------------------------------------------------------------------------
 
 def counts(fields: list[str]) -> list[str]:
@@ -286,50 +332,44 @@ def counts(fields: list[str]) -> list[str]:
 
 
 def rebuild(dex_text: str, ours: tuple[str, ...] | list[str]) -> tuple[str, int, int]:
-    """What a poll from the start may show: (text, how many of `ours` it prints, lines left out).
+    """What a poll may show, whenever it was taken: (text, how many of `ours` it prints, lines left out).
 
     Nothing is copied from the poll. Each line is written anew from a known tag and fields
     checked to be plain numbers, so a record nobody thought of, or a field that isn't a number,
-    can't come through:
+    can't come through. Only fields with a defined meaning are kept:
 
-    - `ID4*<decimal places>`, so a price can be read;
-    - for each `PA1` that names one of `ours`: `PA1*<selection>*<price>`, then `PA2*<counts>`
-      from a `PA2` that follows it in the same `PA` block;
-    - `EA2*DO*<counts>`, the door counter.
+    - `ID4*<decimal places>`, when they are 0 to 2 (what `vending.evadts` converts);
+    - for each `PA1` that names one of `ours`: `PA1*<selection>*<price>`, then `PA2*<units>*<value>`
+      from the `PA2` that belongs to it by `vending.evadts`'s block rules (`records`);
+    - `EA2*DO*<since reset>*<lifetime>`, the door counter.
 
     Every other line is left out, the envelope and `G85` too (its checksum would be wrong). A
-    selection that isn't ours is dropped at its `PA1`, before any other field of it is read. A
-    field that isn't a number ends its record there. Lines end as the poll's do.
+    selection that isn't ours is dropped at its `PA1`, before any other field of it is read. One
+    of ours listed twice (`listed_twice`) is dropped whole. A field that isn't a number ends its
+    record there. Lines end as the poll's do.
     """
-    wanted = set(ours)
+    wanted = set(ours) - set(listed_twice(dex_text, ours))
     newline = "\r\n" if "\r\n" in dex_text else "\n"
     out: list[str] = []
     printed = left_out = 0
-    current: str | None = None   # one of ours, whose PA2 may come next
-    for line in dex_text.splitlines():
-        if not line.strip():
-            continue
-        fields = line.strip().split("*")
+    for fields, sel in records(dex_text.splitlines()):
+        if not "*".join(fields).strip():
+            continue   # a blank line: no record, though it ends a block
         tag = fields[0]
         record = None
-        if not tag.startswith("PA"):
-            current = None
         if tag == "ID4":
-            places = counts(fields[1:2])
-            if places and places[0]:
-                record = f"ID4*{places[0]}"
-        elif tag == "PA1":
-            current = fields[1] if len(fields) > 1 and fields[1] in wanted else None
-            if current is not None:
-                record = "*".join(["PA1", current, *counts(fields[2:3])])
-                printed += 1
-        elif tag == "PA2" and current is not None:
-            found = counts(fields[1:])
+            scale = id4_scale(fields)
+            if scale is not None:
+                record = f"ID4*{scale}"
+        elif tag == "PA1" and sel in wanted:
+            record = "*".join(["PA1", sel, *counts(fields[2:3])])
+            printed += 1
+        elif tag == "PA2" and sel in wanted:
+            found = counts(fields[1:3])
             if found:
                 record = "*".join(["PA2", *found])
-            current = None
         elif tag == "EA2" and len(fields) > 1 and fields[1] == "DO":
-            record = "*".join(["EA2", "DO", *counts(fields[2:])])
+            record = "*".join(["EA2", "DO", *counts(fields[2:4])])
         if record is None:
             left_out += 1
         else:
@@ -349,37 +389,131 @@ def our_selections() -> tuple[tuple[str, ...], str | None]:
         with db.connect() as conn:
             return tuple(our_slots(conn)), None
     except Exception as error:  # noqa: BLE001 -- whatever went wrong, no selection is printed
-        return (), f"{type(error).__name__}: {str(error)[:200]}"
+        # Its kind only: a database error can quote what it was given.
+        return (), f"{type(error).__name__}; check DATABASE_URL and `python -m vending.slots record`"
 
 
-def show_poll(body: bytes, out: str | None, taken: datetime) -> None:
-    """Print a poll, or save it byte for byte. One from the start prints only as `rebuild` writes
-    it, and saves only to a regular file (`save`). One from before the start is as it always was."""
-    after = on_or_after_start(taken)
+def show_poll(body: bytes, out: str | None) -> None:
+    """Print a poll as `rebuild` writes it, or archive it byte for byte to a regular file (`save`).
+    Never whole, whenever it was taken: see the module docstring."""
     if out:
-        if after:
-            save(body, out)
-        else:
-            write_text(body, out)
-        return
-    if not after:
-        write_text(body, None)
+        save(body, out)
         return
     ours, why = our_selections()
     if why:
         print(f"note: our slot assignment can't be read ({why}), so no selection is printed",
               file=sys.stderr)
-    text, printed, left_out = rebuild(body.decode("utf-8", errors="replace"), ours)
-    print(f"note: a poll from the start ({START:%d %b %Y}): {printed} of our selections, rebuilt from "
-          f"checked fields; {left_out} lines left out (the other team's selections, the machine-wide "
-          "totals, the envelope and G85). --out FILE saves the whole poll", file=sys.stderr)
+    dex_text = body.decode("utf-8", errors="replace")
+    note_listed_twice(dex_text, ours)
+    text, printed, left_out = rebuild(dex_text, ours)
+    print(f"note: {printed} of our selections and the door counter, rebuilt from checked fields; "
+          f"{left_out} lines left out (the selections that aren't ours, the machine-wide totals, the "
+          "envelope and G85). This script never prints a whole poll: pre-cut fall data for all 40 "
+          "comes from analysis/export_sales.py --fall-all. --out FILE archives the raw poll",
+          file=sys.stderr)
     sys.stdout.write(text)
 
 
-def taken_at(started_at: str) -> datetime:
-    """A listing's `started_at` as an aware time. One with no zone is taken as UTC, like the bridge's."""
-    moment = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    return moment if moment.utcoffset() is not None else moment.replace(tzinfo=timezone.utc)
+# A session ID as the bridge gives them: letters, digits, `-` and `_`. Anything else is never printed.
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def checked_session(value: object) -> str | None:
+    return value if isinstance(value, str) and SESSION_ID.fullmatch(value) else None
+
+
+def checked_time(value: object) -> datetime | None:
+    """A listing's `started_at` as an aware time, or None. One with no offset is unknown, not a guess."""
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.utcoffset() is not None else None
+
+
+# Text a metadata reply may print: one short line with no `*`, the EVA-DTS field separator, so no
+# poll record can ride along in it. Anything else prints as null.
+# Line breaks of every kind are out too: C0 and C1 controls (`\r`, `\x85`), U+2028 and U+2029.
+PLAIN = re.compile(r"[^\x00-\x1f\x7f-\x9f\u2028\u2029*]{1,80}")
+# What `/health` is documented to answer (docs/dex-bridge.md). Anything else prints as "unexpected status".
+HEALTH_STATUSES = ("ok",)
+MONEY = re.compile(r"-?[0-9]{1,9}(\.[0-9]{1,4})?")
+
+
+def plain(value: object) -> str | None:
+    return value if isinstance(value, str) and PLAIN.fullmatch(value) else None
+
+
+def whole_number(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def money(value: object) -> str | int | None:
+    if type(value) is int:
+        return value
+    return value if isinstance(value, str) and MONEY.fullmatch(value) else None
+
+
+def when(value: object) -> str | None:
+    moment = checked_time(value)
+    return moment.isoformat() if moment else None
+
+
+def flag(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def omitted(value: object) -> str | None:
+    """Free text, such as a request's notes, as its length only: it could carry anything."""
+    if value is None:
+        return None
+    return f"(note omitted, {len(value)} characters)" if isinstance(value, str) else "(note omitted)"
+
+
+def projected(reply: dict, fields: dict) -> dict:
+    """The `fields` that `reply` has, each through its check. Nothing else of the reply."""
+    return {key: check(reply[key]) for key, check in fields.items() if key in reply}
+
+
+def note_left_out(count: int, one: str, many: str, why: str) -> None:
+    if count:
+        print(f"note: {count} {one if count == 1 else many} left out: {why}", file=sys.stderr)
+
+
+PRODUCT_FIELDS = ("sku", "name", "line", "flavor", "size")
+REQUEST_FIELDS = {"id": plain, "status": plain, "device_id": plain, "created_at": when, "updated_at": when,
+                  "fulfilled_at": when, "off_cycle": flag, "total_paid": money, "door_opened_at": when,
+                  "door_closed_at": when, "note": omitted, "decision_note": omitted}
+# A request, its lines and its receipts are our own: accounting and audit records we keep after a
+# reassignment (docs/integrity.md). So their selections aren't checked against the assignment.
+LINE_FIELDS = {"line": whole_number, "slot": plain, "source": plain}
+LOSS_FIELDS = {"location": plain, "sku": plain, "units": whole_number, "recorded_at": when, "note": omitted}
+RECEIPT_FIELDS = {
+    "outcome": plain, "sku": plain, "store": plain, "packs_bought": whole_number, "units_per_pack": whole_number,
+    "units_bought": whole_number, "total_paid": money, "unit_cost_paid": money, "units_loaded": whole_number,
+    "units_lost": whole_number, "loss_note": omitted, "units_to_back_stock": whole_number,
+    "units_from_back_stock": whole_number, "units_pulled": whole_number, "pulled_sku": plain,
+    "slot_reassigned": lambda v: flag(v) if isinstance(v, bool) else plain(v), "resolved_at": when,
+    "later_losses": lambda v: [projected(loss, LOSS_FIELDS) for loss in v if isinstance(loss, dict)]
+    if isinstance(v, list) else None,
+}
+
+
+def a_dict(reply: object, route: str) -> dict:
+    if not isinstance(reply, dict):
+        raise BridgeError(f"the reply from {route} isn't the object this script knows, so none of it is "
+                          "printed", EXIT_BRIDGE)
+    return reply
+
+
+def listed_polls(listing: object) -> list[dict]:
+    """The listing's `polls`, each a dict, or a BridgeError: a reply of any other shape isn't printed."""
+    polls = listing.get("polls") if isinstance(listing, dict) else None
+    if not isinstance(polls, list) or not all(isinstance(entry, dict) for entry in polls):
+        raise BridgeError("the bridge's listing isn't a list of polls, so nothing of it is printed", EXIT_BRIDGE)
+    return polls
 
 
 # --------------------------------------------------------------------------
@@ -391,15 +525,32 @@ def utc_today() -> str:
 
 
 def cmd_health(args: argparse.Namespace) -> None:
-    print_json(get_json("/health", needs_key=False))
+    reply = a_dict(get_json("/health", needs_key=False), "/health")
+    status = reply.get("status")
+    print_json({"status": status if isinstance(status, str) and status in HEALTH_STATUSES else "unexpected status"})
 
 
 def cmd_slots(args: argparse.Namespace) -> None:
-    print_json(get_json("/api/v1/slots"))
+    from vending.slots import DEVICE_ID, BadAssignment, parse
+
+    reply = get_json("/api/v1/slots")
+    try:   # the same checks `python -m vending.slots record` makes, our team's included
+        found = parse(reply)
+    except BadAssignment:
+        # Its message can quote the reply, so it isn't printed.
+        raise BridgeError("the slots reply isn't an assignment for our team (SLOTS_TEAM) of 20 selections "
+                          f"on {DEVICE_ID}, so none of it is printed", EXIT_BRIDGE) from None
+    print_json({"team": found.team, "device_id": found.device_id, "slots": list(found.slots)})
 
 
 def cmd_products(args: argparse.Namespace) -> None:
-    print_json(get_json("/api/v1/products"))
+    reply = get_json("/api/v1/products")
+    items = reply.get("products") if isinstance(reply, dict) else reply
+    if not isinstance(items, list):
+        raise BridgeError("the products reply isn't a list of products, so none of it is printed", EXIT_BRIDGE)
+    rows = [{key: plain(item.get(key)) for key in PRODUCT_FIELDS} for item in items if isinstance(item, dict)]
+    note_left_out(len(items) - len(rows), "entry", "entries", "not a product")
+    print_json(rows)
 
 
 def cmd_history(args: argparse.Namespace) -> None:
@@ -407,14 +558,23 @@ def cmd_history(args: argparse.Namespace) -> None:
     # at 8 pm the evening before in Rochester (EDT).
     start = args.start or utc_today()
     end = args.end or start
-    print_json(get_json("/api/v1/history",
-                        params={"start": start, "end": end, "limit": str(args.limit)}))
+    listing = get_json("/api/v1/history", params={"start": start, "end": end, "limit": str(args.limit)})
+    rows, left_out = [], 0
+    for entry in listed_polls(listing):
+        session = checked_session(entry.get("session_id"))
+        if session is None:
+            left_out += 1
+            continue
+        taken, size = checked_time(entry.get("started_at")), entry.get("bytes")
+        rows.append({"session_id": session, "started_at": taken.isoformat() if taken else None,
+                     "bytes": size if type(size) is int and size >= 0 else None})
+    note_left_out(left_out, "entry", "entries", "a session ID that isn't one")
+    print_json({"polls": rows, "truncated": listing.get("truncated") is True})
 
 
 def cmd_raw(args: argparse.Namespace) -> None:
     body, _ = call("GET", f"/api/v1/history/{urllib.parse.quote(args.session_id)}/raw")
-    # The route doesn't say when the poll was taken, so from the start every poll counts as one from it.
-    show_poll(body, args.out, datetime.now(timezone.utc))
+    show_poll(body, args.out)
 
 
 def cmd_latest(args: argparse.Namespace) -> None:
@@ -433,24 +593,45 @@ def cmd_latest(args: argparse.Namespace) -> None:
     yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
     listing = get_json("/api/v1/history",
                        params={"start": yesterday, "end": today.strftime("%Y-%m-%d"), "limit": "500"})
-    polls = listing.get("polls", [])
+    polls = listed_polls(listing)
     if not polls:
         raise BridgeError("No stored polls in the last two UTC days.", EXIT_BRIDGE)
-    if listing.get("truncated"):
+    if listing.get("truncated") is True:
         print("warning: the listing was truncated, so this may not be the newest poll",
               file=sys.stderr)
-    newest = polls[-1]
-    print(f"session {newest['session_id']}, taken {newest['started_at']}", file=sys.stderr)
+    session = checked_session(polls[-1].get("session_id"))
+    if session is None:
+        raise BridgeError("the newest poll in the listing has no session ID this script accepts, so it "
+                          "isn't fetched", EXIT_BRIDGE)
+    taken = checked_time(polls[-1].get("started_at"))
+    print(f"session {session}, taken {taken.isoformat() if taken else 'at an unknown time'}", file=sys.stderr)
 
-    body, _ = call("GET", f"/api/v1/history/{newest['session_id']}/raw")
+    body, _ = call("GET", f"/api/v1/history/{session}/raw")
     if args.summary:
-        print_json(summarize(body.decode("utf-8", errors="replace"), ours))
+        dex_text = body.decode("utf-8", errors="replace")
+        note_listed_twice(dex_text, ours)
+        print_json(summarize(dex_text, ours))
     else:
-        show_poll(body, args.out, taken_at(newest["started_at"]))
+        show_poll(body, args.out)
 
 
 def cmd_request(args: argparse.Namespace) -> None:
-    print_json(get_json(f"/api/v1/purchase-requests/{urllib.parse.quote(args.request_id)}"))
+    route = f"/api/v1/purchase-requests/{urllib.parse.quote(args.request_id)}"
+    reply = a_dict(get_json(route), "/api/v1/purchase-requests")
+    shown = projected(reply, REQUEST_FIELDS)
+    if "lines" in reply:
+        lines = reply["lines"] if isinstance(reply["lines"], list) else []
+        shown["lines"] = []
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            row = projected(line, LINE_FIELDS)
+            if "receipt" in line:
+                receipt = line["receipt"]
+                row["receipt"] = projected(receipt, RECEIPT_FIELDS) if isinstance(receipt, dict) else None
+            shown["lines"].append(row)
+        note_left_out(len(lines) - len(shown["lines"]), "line", "lines", "not a request line")
+    print_json(shown)
 
 
 def cmd_poll(args: argparse.Namespace) -> None:
@@ -465,16 +646,7 @@ def cmd_poll(args: argparse.Namespace) -> None:
     cached = {k.lower(): v for k, v in headers.items()}.get("x-poll-cached")
     if cached == "true":
         print("note: someone polled in the last 30 seconds; this is their read", file=sys.stderr)
-    show_poll(body, args.out, datetime.now(timezone.utc))
-
-
-def write_text(body: bytes, out: str | None) -> None:
-    """Print a raw document, or save it byte for byte so its checksum survives. Before the start only."""
-    if out:
-        Path(out).write_bytes(body)
-        print(f"wrote {len(body)} bytes to {out}", file=sys.stderr)
-    else:
-        sys.stdout.write(body.decode("utf-8", errors="replace"))
+    show_poll(body, args.out)
 
 
 # Windows device names. `CON`, `nul.txt` or `C:\x\COM1` open a device, not a file, in any folder.
@@ -492,7 +664,7 @@ def device_name(out: str) -> bool:
 
 
 def save(body: bytes, out: str) -> None:
-    """Save a poll from the start byte for byte, to a regular file and nowhere else.
+    """Archive a poll byte for byte, to a regular file and nowhere else.
 
     `--out` is for archiving, so it can't be a way round the rebuilt view: `-`, a device
     (`/dev/stdout`, `/dev/tty`, `CON`), a pipe, a socket or a directory is refused, and nothing
@@ -500,7 +672,7 @@ def save(body: bytes, out: str) -> None:
     one swapped in between is refused too.
     """
     def refuse(why: str) -> BridgeError:
-        return BridgeError(f"--out {out!r} {why}. A poll from the start is saved only to a regular "
+        return BridgeError(f"--out {out!r} {why}. A poll is saved only to a regular "
                            "file, never to the terminal, a device or a pipe.", EXIT_REFUSED)
 
     if out == "-" or device_name(out):
@@ -535,7 +707,11 @@ def save(body: bytes, out: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Talk to the DEX Bridge (the vending machine's Raspberry Pi).",
+        description="Talk to the DEX Bridge (the vending machine's Raspberry Pi). This script never "
+                    "prints a whole poll: raw, latest and poll --live show only our selections and the "
+                    "door counter, whatever the poll's time, and --out archives the raw poll to a regular "
+                    "file. Pre-cut fall data for all 40 selections comes from "
+                    "analysis/export_sales.py --fall-all, which stops at the fall cut.",
         epilog="See docs/dex-bridge.md for what each route returns.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -550,15 +726,15 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--limit", type=int, default=500)
     history.set_defaults(run=cmd_history)
 
-    raw = commands.add_parser("raw", help="one stored poll as raw EVA-DTS text")
+    raw = commands.add_parser("raw", help="one stored poll, rebuilt from our selections and the door counter")
     raw.add_argument("session_id")
-    raw.add_argument("--out", help="save to this file instead of printing")
+    raw.add_argument("--out", help="archive the raw poll to this regular file instead of printing")
     raw.set_defaults(run=cmd_raw)
 
-    latest = commands.add_parser("latest", help="the newest stored poll")
+    latest = commands.add_parser("latest", help="the newest stored poll, rebuilt from our selections likewise")
     latest.add_argument("--summary", action="store_true",
                         help="print price and lifetime sales for our slots instead of raw text")
-    latest.add_argument("--out", help="save the raw text to this file")
+    latest.add_argument("--out", help="archive the raw poll to this regular file")
     latest.set_defaults(run=cmd_latest)
 
     request = commands.add_parser("request", help="status of one of our purchase requests")
@@ -567,7 +743,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     poll = commands.add_parser("poll", help="read the machine live (needs --live)")
     poll.add_argument("--live", action="store_true", help="yes, really read the machine now")
-    poll.add_argument("--out", help="save to this file instead of printing")
+    poll.add_argument("--out", help="archive the raw poll to this regular file instead of printing")
     poll.set_defaults(run=cmd_poll)
 
     return parser

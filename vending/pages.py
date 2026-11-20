@@ -82,10 +82,10 @@ CSP = "default-src 'none'; style-src 'unsafe-inline'"
 CSP_DASHBOARD = CSP + "; script-src 'unsafe-inline'; connect-src 'self'"
 
 # What every explorer leaves out, however it is run (here at /db, or `python -m vending.db_explorer`).
-# VA1, the machine-wide lifetime totals: from the start (`vending.start.START`) they include the other
-# team's sales, and the total minus ours is theirs (`docs/integrity.md`). Hidden in every row, not
-# only from the start: `Hide` can't test a time, and nothing needs the pre-start ones. `raw` is safe
-# as it is: the explorer shows a bytea's size, never its bytes.
+# VA1, the machine-wide lifetime totals: usable only from polls taken before the fall cut
+# (`vending.start.fall_cut`); from the cut on, the total minus ours is the other selections' sales
+# (`docs/integrity.md`). Hidden for every poll: `Hide` can't test a time, and nothing needs the
+# pre-cut ones. `raw` is safe as it is: the explorer shows a bytea's size, never its bytes.
 TOTALS = {
     "polls": db_explorer.Hide("", "", ("total_paid_cents", "total_paid_units"), "(hidden)"),
 }
