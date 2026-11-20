@@ -28,6 +28,7 @@ def fresh(monkeypatch):
     not even one in the developer's `.env` (which `settings.get` falls back to)."""
     monkeypatch.setattr(pages, "_read_only_until", 0.0)
     monkeypatch.setattr(pages, "_logged", {})
+    monkeypatch.setattr(pages, "_cache", {})
     monkeypatch.delenv(pages.READER, raising=False)
     monkeypatch.delitem(settings._FILE, pages.READER, raising=False)
 
@@ -728,3 +729,478 @@ def test_the_public_json_money_panel_before_a_future_dated_opening(schema_url, r
     assert datetime.fromisoformat(money["data"]["opens_at"]) == opens
     assert "ZZ-SECRET-SKU" not in text and "SecretMart" not in text
     _only_counts_dollars_and_times(money["data"])
+
+
+# --- The chart pages: /dashboard/money, /dashboard/pnl, /dashboard/spend ------------------------------
+
+CHART_PATHS = (pages.MONEY_CHART, pages.PNL, pages.SPEND)
+
+
+def _inlined(page: str, const: str) -> dict:
+    """The JSON a chart page carries in place of /*DATA*/null."""
+    import re
+    found = re.search(rf"const {const} = (\{{.*?\}});\n", page, re.S)
+    assert found, f"no {const} data in the page"
+    return json.loads(found.group(1))
+
+
+def _scripts_allowed_by_hash(page: str, csp: str) -> None:
+    """Every inline script runs by its hash, and nothing else may run or be fetched."""
+    import base64
+    import hashlib
+    import re
+    scripts = re.findall(r"<script>(.*?)</script>", page, re.S)
+    assert scripts and page.count("<script") == len(scripts)
+    for code in scripts:
+        assert f"'sha256-{base64.b64encode(hashlib.sha256(code.encode()).digest()).decode()}'" in csp
+    assert "default-src 'none'" in csp and "'unsafe-inline'" not in csp.split("script-src", 1)[1].split(";")[0]
+    assert "connect-src" not in csp and "frame-ancestors 'none'" in csp and "form-action 'none'" in csp
+
+
+def _competition(conn):
+    """An opening on 1 Nov, a test call before it ($0.80, development) and a live call after ($0.40),
+    a delivery to slot 15 and five sold from it."""
+    from datetime import datetime
+
+    from tests.test_ledger import EASTERN, deliver, open_ledger, sell
+    from vending import ledger
+    ledger.record_tokens(conn, "0.80", "claude-opus-5-5", 10, 5, "test dry run",
+                         at=datetime(2026, 10, 30, 12, tzinfo=EASTERN))
+    open_ledger(conn)
+    deliver(conn, "r1")
+    sell(conn)
+    ledger.record_tokens(conn, "0.40", "claude-opus-5-5", 10, 5, "live agent run",
+                         at=datetime(2026, 11, 8, 12, tzinfo=EASTERN))
+
+
+def _written(conn) -> tuple:
+    """Row counts of every table a page could write to, to show none of them did."""
+    return tuple(conn.execute(f"select count(*) from {table}").fetchone()[0]
+                 for table in ("action_log", "ledger_entries", "page_visits", "config", "model_calls"))
+
+
+def test_the_money_chart_is_served_from_the_ledger_never_mock(site, conn):
+    _competition(conn)
+    before = _written(conn)
+    status, headers, page = _get(site, pages.MONEY_CHART)
+    assert status == 200 and headers["Content-Type"] == pages.HTML and headers["Cache-Control"] == "no-store"
+    _scripts_allowed_by_hash(page, headers["Content-Security-Policy"])
+    # Real data only: the mock switch is off for good and the MOCK banner and tag start hidden.
+    assert "const MOCK = false;" in page and '<div class="banner" id="banner" hidden>' in page
+    assert '<span class="mock" id="mockTag" hidden>' in page and "<title>Money chart</title>" in page
+    data = _inlined(page, "REAL")
+    # The opening, 1 Nov 00:00 UTC, is the evening of 31 Oct in Eastern time.
+    assert data["opening"]["day"] == "2026-10-31" and data["daily"][0]["date"] == "2026-10-31"
+    # Development spend before the opening is in no figure; the live call after it is.
+    assert sum(float(d["token_spend"]) for d in data["daily"]) == 0.40
+    assert '<a href="/dashboard" style="color:inherit">&larr; Agent dashboard</a>' in page
+    assert _get(site, pages.MONEY_CHART + "/")[0] == 200
+    assert _written(conn) == before
+
+
+def test_dev_spend_is_served_and_ends_at_the_opening(site, conn):
+    _competition(conn)
+    status, headers, page = _get(site, pages.SPEND)
+    assert status == 200 and headers["Content-Type"] == pages.HTML
+    _scripts_allowed_by_hash(page, headers["Content-Security-Policy"])
+    data = _inlined(page, "DATA")
+    weekly = data["weekly"]
+    assert weekly["source"] == "model_calls and the ledger" and weekly["opening_at"].startswith("2026-10-31T20:00")
+    # The test call before the opening is development spend; the live call after it is the competition's.
+    assert weekly["totals"]["total_usd"] == "0.8" and [r["label"] for r in weekly["runs"]] == ["dry run"]
+    assert "live agent run" not in page
+
+
+def test_the_pnl_is_served_under_its_own_path_and_never_counts_before_the_opening(site, conn):
+    import re
+
+    from tests.conftest import store_poll
+    # Five sold from slot 15 in October, before the opening: test sales, not the competition's.
+    store_poll(conn, "pre-1", "2026-10-25T17:00:00+00:00", {"15": (250, 90)})
+    store_poll(conn, "pre-2", "2026-10-28T17:00:00+00:00", {"15": (250, 95)})
+    _competition(conn)
+    before = _written(conn)
+
+    def units(page):
+        return re.search(r'Units sold</div><div class="tile-value">(\d+)<', page).group(1)
+    status, headers, page = _get(site, pages.PNL)
+    assert status == 200 and headers["Content-Security-Policy"] == pages.CSP_PNL and "<script" not in page
+    assert "Weekly P&amp;L" in page and "$0.40" in page and "$0.80" not in page
+    # Its form and links stay under /dashboard/pnl.
+    assert 'action="/dashboard/pnl"' in page and 'href="/dashboard/pnl?start=' in page and 'href="/?' not in page
+    assert 'href="/dashboard/pnl?view=detailed"' in page
+    # A start before the opening counts from the opening: October's sales and the development call stay out.
+    status, _, early = _get(site, f"{pages.PNL}?start=2026-10-01&end=2026-11-30&view=detailed")
+    assert status == 200 and "$0.40" in early and "$0.80" not in early and "$1.20" not in early
+    assert units(early) == units(page) and int(units(page)) > 0
+    status, _, bad = _get(site, f"{pages.PNL}?view=%3Cscript%3E")
+    assert status == 400 and "&lt;script&gt;" in bad and "<script>" not in bad
+    assert _written(conn) == before
+
+
+def test_before_the_opening_money_and_pnl_say_there_is_no_competition_data(site, conn):
+    from datetime import datetime, timedelta, timezone
+
+    from tests.test_ledger import EASTERN
+    from vending import ledger
+    ledger.record_tokens(conn, "0.80", "claude-opus-5-5", 10, 5, "test dry run",
+                         at=datetime(2026, 10, 30, 12, tzinfo=EASTERN))
+    for path in (pages.MONEY_CHART, pages.PNL, f"{pages.PNL}?start=2026-10-01&end=2026-12-31"):
+        status, headers, page = _get(site, path)
+        text = page.replace("&#x27;", "'")
+        said = ("No competition money yet: the chart starts at the ledger opening (about 30 Nov)."
+                if path == pages.MONEY_CHART else "There's no competition data until the ledger opens.")
+        assert status == 200 and said in text, path
+        assert "python -m vending.ledger open" in text and "$" not in text and "<script" not in page
+        # No mock values: no chart data and none of the page's seeded MOCK series. The money chart
+        # links its demo instead, the one page that may draw them.
+        assert "const REAL" not in page and "MOCK" not in page and "mockDays" not in page and "0.80" not in page
+        assert ('<a href="/dashboard/demo/money">See the demo with made-up data</a>' in page) == (path == pages.MONEY_CHART)
+    # Dev spend has real data before the opening: every call so far is development spend.
+    status, _, page = _get(site, pages.SPEND)
+    assert status == 200 and _inlined(page, "DATA")["weekly"]["totals"]["total_usd"] == "0.8"
+
+    opens = datetime.now(timezone.utc) + timedelta(days=3)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=opens)
+    pages._cache.clear()        # each page above is kept for a minute
+    for path in (pages.MONEY_CHART, pages.PNL):
+        status, _, page = _get(site, path)
+        when = f"{opens.astimezone(EASTERN):%a %d %b %Y %H:%M} Eastern"
+        assert status == 200 and when in page and "recorded ahead of time" in page and "const REAL" not in page
+
+
+def test_the_money_chart_names_no_selection_that_isnt_ours_now(site, conn):
+    """A receipt for a slot reassigned away from us: its money stays in the totals, its slot and product don't show."""
+    from datetime import datetime, timezone
+
+    from tests.test_dashboard import fulfilled
+    from tests.test_ledger import open_ledger
+    open_ledger(conn)
+    assert "15" in _stored(conn)
+    fulfilled(conn, "pr-old", "15", OLD_SLOT, units_loaded=2, paid="2.40",
+              at=datetime(2026, 11, 9, 15, tzinfo=timezone.utc))
+    fulfilled(conn, "pr-ours", "12", "OUR-SODA", units_loaded=2, paid="1.10",
+              at=datetime(2026, 11, 9, 16, tzinfo=timezone.utc))
+    conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
+    status, _, page = _get(site, pages.MONEY_CHART)
+    assert status == 200 and OLD_SLOT not in page and "slot 15" not in page
+    day = next(d for d in _inlined(page, "REAL")["daily"] if d["date"] == "2026-11-09")
+    assert day["purchases"] == "3.50"
+    assert sorted(e["detail"] for e in day["events"] if e["kind"] == "receipt") == [
+        "a line for a selection that isn't ours now", "slot 12: OUR-SODA"]
+
+
+def test_the_dashboard_links_to_its_charts_and_its_json_is_unchanged(site, conn):
+    status, _, page = _get(site, "/dashboard")
+    assert status == 200
+    # In the header: the money chart as a button beside the verdict, the others beside Home and Database.
+    assert '<a class="chartlink" href="/dashboard/money">Money chart</a>' in page
+    for href, label in ((pages.PNL, "Weekly P&amp;L"), (pages.SPEND, "Dev spend")):
+        assert f'<a href="{href}">{label}</a>' in page
+    # From the money panel, and from the spend tile.
+    assert ('<p class="charts">Charts: <a href="/dashboard/money">Money by day</a> &middot; '
+            '<a href="/dashboard/pnl">Weekly P&amp;L</a></p>') in page
+    assert '<a href="/dashboard/spend">Development spend by week</a>' in page
+    status, headers, body = _get(site, pages.STATE)
+    assert status == 200 and headers["Content-Type"] == pages.JSON and "/dashboard/money" not in body
+    assert "charts" not in json.loads(body)
+
+
+def test_the_dashboard_run_on_its_own_has_no_chart_links(schema_url):
+    with open_in(*schema_url) as local:
+        page = dashboard.render(dashboard.snapshot(local))
+    assert "/dashboard/money" not in page and 'class="charts"' not in page and "Development spend by week" not in page
+
+
+def test_the_chart_pages_follow_the_pages_rules_when_they_cant_serve(monkeypatch, capsys):
+    # Not set up yet.
+    for path in CHART_PATHS:
+        reply = pages.respond(path)
+        assert reply.status == 503 and "set up here yet" in reply.body.replace("&#x27;", "'")
+    monkeypatch.setenv(pages.READER, "set")
+
+    def down():
+        raise psycopg.OperationalError(SECRET)
+    monkeypatch.setattr(pages, "connect", down)
+    for path in CHART_PATHS:
+        reply = pages.respond(path)
+        assert reply.status == 503 and "db.example.net" not in reply.body and "g2_admin" not in reply.body
+    assert "db.example.net" in capsys.readouterr().err
+
+
+class _Quiet:
+    """A connection that is never used: the loaders are replaced. It opens a snapshot as a real one does."""
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def transaction(self):
+        from contextlib import nullcontext
+        return nullcontext()
+
+    def execute(self, *args):
+        return None
+
+
+def test_a_chart_loader_or_renderer_that_fails_never_shows_its_error(monkeypatch, capsys):
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "connect", _Quiet)
+    monkeypatch.setattr(pages, "stored_slots", lambda conn: ("15",))   # the fake connection holds none
+    monkeypatch.setattr(pages, "writable", lambda conn: [])
+
+    def failing(*args):
+        raise psycopg.errors.QueryCanceled(SECRET)
+    for name in ("money_data", "pnl_data", "spend_data"):
+        monkeypatch.setattr(pages, name, failing)
+    for path in CHART_PATHS:
+        reply = pages.respond(path)
+        assert reply.status == 503 and reply.body.count("db.example.net") == 0 and "can't read" in reply.body.replace("&#x27;", "'")
+    assert "db.example.net" in capsys.readouterr().err
+
+    def broken(*args):
+        raise RuntimeError(SECRET)
+    monkeypatch.setattr(pages, "money_data", lambda conn: {"daily": [{}]})
+    monkeypatch.setattr(pages.money_chart, "live_page", broken)
+    reply = pages.respond(pages.MONEY_CHART)
+    assert reply.status == 500 and "db.example.net" not in reply.body and "hit an error" in reply.body
+    # Without our slot assignment, a plain sentence, not the exception's.
+    from vending.slots import SlotsNotRecorded
+
+    def unrecorded(conn):
+        raise SlotsNotRecorded(SECRET)
+    monkeypatch.setattr(pages, "money_data", unrecorded)
+    reply = pages.respond(pages.MONEY_CHART)
+    assert reply.status == 503 and "slot assignment isn't recorded" in reply.body.replace("&#x27;", "'")
+    assert "db.example.net" not in reply.body
+
+
+def test_a_chart_page_waits_its_turn_for_a_connection(monkeypatch):
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(pages, "connect", lambda: pytest.fail("no connection should be opened"))
+    taken = threading.BoundedSemaphore(1)
+    taken.acquire()
+    monkeypatch.setattr(pages, "_slots", taken)
+    for path in CHART_PATHS:
+        reply = pages.respond(path)
+        assert reply.status == 503 and "busy" in reply.body
+    taken.release()
+
+
+def test_the_live_money_chart_refuses_an_empty_series_rather_than_draw_mock_data():
+    from vending import money_chart
+    for empty in (None, {}, {"opening": {}, "daily": []}):
+        with pytest.raises(money_chart.NoData):
+            money_chart.live_page(empty)
+    # The file the CLI writes with --demo still has its MOCK data; only the served page turns it off.
+    assert "const MOCK = false;" not in money_chart.page(None)
+
+
+def test_a_chart_policy_allows_only_scripts_it_can_hash():
+    assert "script-src 'sha256-" in pages.chart_csp("<html><body><script>1</script></body></html>")
+    for page in ("<script src=x></script>", '<script type="module">1</script>', "<p>no script</p>"):
+        with pytest.raises(RuntimeError):
+            pages.chart_csp(page)
+
+
+def test_a_cached_chart_is_served_without_a_connection_for_a_minute(monkeypatch):
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "connect", _Quiet)
+    monkeypatch.setattr(pages, "writable", lambda conn: [])
+    loads = []
+    monkeypatch.setattr(pages, "spend_data", lambda conn: loads.append(1) or ("weeks", "days"))
+    monkeypatch.setattr(pages, "spend_page", lambda weeks, days: f"<html><body><script>{len(loads)}</script></body></html>")
+    first = pages.respond(pages.SPEND)
+    assert first.status == 200 and loads == [1]
+    # Every connection taken: the kept page still answers, and no connection is asked for.
+    monkeypatch.setattr(pages, "connect", lambda: pytest.fail("no connection should be opened"))
+    taken = threading.BoundedSemaphore(1)
+    taken.acquire()
+    monkeypatch.setattr(pages, "_slots", taken)
+    monkeypatch.setattr(pages, "WAIT_SECONDS", 0.05)
+    assert pages.respond(pages.SPEND) is first and pages.respond(pages.SPEND + "/") is first and loads == [1]
+    # After CACHE_SECONDS it reads again (here: is told the page is busy, and keeps nothing).
+    key = (pages.SPEND, None)
+    pages._cache[key] = (0.0, first)
+    assert pages.respond(pages.SPEND).status == 503 and pages._cache[key][0] == 0.0
+    taken.release()
+
+
+def test_each_pnl_range_is_kept_apart_and_errors_are_never_kept(monkeypatch):
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "connect", _Quiet)
+    monkeypatch.setattr(pages, "stored_slots", lambda conn: ("15",))   # the fake connection holds none
+    monkeypatch.setattr(pages, "writable", lambda conn: [])
+    asked = []
+    monkeypatch.setattr(pages, "pnl_data", lambda conn, query: asked.append(query) or query)
+    monkeypatch.setattr(pages, "pnl_page", lambda q: (400 if q.view == "detailed" else 200, f"<p>{q}</p>"))
+    for target in (pages.PNL, pages.PNL, f"{pages.PNL}?start=2026-12-05", f"{pages.PNL}?view=detailed",
+                   f"{pages.PNL}?view=detailed"):
+        pages.respond(target)
+    # The whole run once (then kept), the other range once, and the 400 both times (never kept).
+    assert [(q.start is None, q.view) for q in asked] == [(True, "simple"), (False, "simple"),
+                                                          (True, "detailed"), (True, "detailed")]
+    # Kept at most CACHE_ENTRIES, dropping the soonest to expire.
+    monkeypatch.setattr(pages, "CACHE_ENTRIES", 2)
+    pages._cache.clear()
+    for day in ("2026-12-05", "2026-12-06", "2026-12-07"):
+        pages.respond(f"{pages.PNL}?start={day}")
+    assert len(pages._cache) == 2
+
+
+def test_visits_to_the_chart_pages_are_not_counted():
+    """`page_visits.page` allows only /login, /dashboard and /db (migration 016)."""
+    from vending import visits
+    assert not set(CHART_PATHS) & set(visits.PAGES)
+
+
+# --- The chart demos: /dashboard/demo/money and /dashboard/demo/spend -------------------------------
+
+def test_the_chart_demos_draw_made_up_data_under_a_banner_with_no_database(monkeypatch):
+    # Not even set up: a demo needs no login, no connection and no slot assignment.
+    monkeypatch.setattr(pages, "connect", lambda: pytest.fail("a demo opened a connection"))
+    monkeypatch.setattr(pages, "our_slots", lambda conn: pytest.fail("a demo read the slots"))
+    money = pages.respond(pages.DEMO_MONEY)
+    assert money.status == 200 and money.content_type == pages.HTML
+    _scripts_allowed_by_hash(money.body, money.csp)
+    # The page's own MOCK switch is left on, so it draws its seeded data, and says so twice.
+    assert "const REAL = /*DATA*/null;" in money.body and "const MOCK = !(REAL" in money.body
+    assert "DEMO: made-up data, not our machine" in money.body and "position:sticky" in money.body
+    assert '<div class="banner" id="banner"><strong>MOCK DATA:</strong>' in money.body
+    assert money.body.index("DEMO: made-up data") < money.body.index('id="banner"')
+    assert '<a href="/dashboard/money" style="color:#fff">the real page</a>' in money.body
+    spend = pages.respond(pages.DEMO_SPEND + "/")
+    assert spend.status == 200 and "DEMO: the runs the team wrote down" in spend.body
+    _scripts_allowed_by_hash(spend.body, spend.csp)
+    assert _inlined(spend.body, "DATA")["weekly"]["source"] == "from run notes, not the ledger"
+    # No demo for the P&L, and nothing else under /dashboard/demo/ is one of ours.
+    assert pages.respond("/dashboard/demo/pnl") is None and pages.respond("/dashboard/demo/money.json") is None
+
+
+def test_only_the_demo_routes_may_draw_mock_data(site, conn):
+    from tests.test_ledger import open_ledger
+    open_ledger(conn)
+    live = _get(site, pages.MONEY_CHART)[2]
+    demo = _get(site, pages.DEMO_MONEY)[2]
+    assert "const MOCK = false;" in live and "DEMO:" not in live and "const MOCK = false;" not in demo
+
+
+def test_a_demo_that_fails_never_shows_its_error(monkeypatch, capsys):
+    def broken(*args):
+        raise RuntimeError(SECRET)
+    monkeypatch.setattr(pages.money_chart, "page", broken)
+    reply = pages.respond(pages.DEMO_MONEY)
+    assert reply.status == 500 and "db.example.net" not in reply.body and "hit an error" in reply.body
+    assert "db.example.net" in capsys.readouterr().err
+
+
+# --- Review fixes (Sol, 19 Nov) ----------------------------------------------------------------------
+
+def _units(page: str) -> str | None:
+    import re
+    found = re.search(r'Units sold</div><div class="tile-value">(\d+)<', page)
+    return found and found.group(1)
+
+
+def test_a_kept_chart_follows_a_changed_or_removed_assignment(site, conn):
+    """Within the minute a chart is kept, a new or removed slot assignment still changes what it shows."""
+    from vending.money_series import NOT_OURS_LINE
+    _competition(conn)
+    money, pnl = _get(site, pages.MONEY_CHART)[2], _get(site, pages.PNL)[2]
+    assert "slot 15: " in money and _units(pnl) == "5"
+
+    conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
+    status, _, money = _get(site, pages.MONEY_CHART)
+    assert status == 200 and "slot 15: " not in money and NOT_OURS_LINE in money.replace("&#x27;", "'")
+    status, _, pnl = _get(site, pages.PNL)
+    assert status == 200 and _units(pnl) == "0"          # slot 15's sales aren't ours any more
+
+    conn.execute("delete from slot_assignment")
+    status, _, money = _get(site, pages.MONEY_CHART)
+    assert status == 503 and "slot assignment isn't recorded" in money.replace("&#x27;", "'")
+    status, _, pnl = _get(site, pages.PNL)
+    assert _units(pnl) is None and "slot 15" not in pnl
+
+
+def test_the_live_money_chart_carries_no_mock_generator(site, conn):
+    from tests.test_ledger import open_ledger
+    open_ledger(conn)
+    live, demo = _get(site, pages.MONEY_CHART)[2], _get(site, pages.DEMO_MONEY)[2]
+    for synthetic in ("Day-one fill: $165.60 of drinks", "let seed = 7", "Raised the five best sellers"):
+        assert synthetic not in live and synthetic in demo, synthetic
+    assert "function mockDays()" in live and "const MOCK = false;" in live   # a stub, never called
+
+
+def test_the_money_panel_links_the_served_pnl_only_where_it_is_served(site, schema_url, conn):
+    from tests.test_ledger import open_ledger
+    open_ledger(conn)
+    served = _get(site, "/dashboard")[2]
+    assert '<a href="/dashboard/pnl">the weekly P&amp;L</a>' in served
+    with open_in(*schema_url) as local:
+        alone = dashboard.render(dashboard.snapshot(local))
+    assert "Profit and loss since the opening" in alone
+    assert "/dashboard/pnl" not in alone and "Weekly detail: <code>python -m vending.pnl_report</code>" in alone
+
+
+def test_a_kept_money_chart_skips_its_replay_only_for_the_same_assignment(monkeypatch):
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "connect", _Quiet)
+    monkeypatch.setattr(pages, "writable", lambda conn: [])
+    slots, loads = [("15", "16")], []
+    monkeypatch.setattr(pages, "stored_slots", lambda conn: slots[0])
+    monkeypatch.setattr(pages, "money_data", lambda conn: loads.append(slots[0]) or {"daily": [{}]})
+    monkeypatch.setattr(pages, "money_page", lambda payload: f"<html><body><script>{len(loads)}</script></body></html>")
+    first = pages.respond(pages.MONEY_CHART)
+    assert pages.respond(pages.MONEY_CHART) is first and loads == [("15", "16")]
+    slots[0] = ("12", "14")
+    assert pages.respond(pages.MONEY_CHART) is not first and loads == [("15", "16"), ("12", "14")]
+
+
+# --- Review round 2 (Sol, 19 Nov) --------------------------------------------------------------------
+
+def test_a_kept_chart_is_the_one_its_assignment_counted_even_if_it_changes_mid_request(site, conn, monkeypatch):
+    """A reassignment committed after the page reads the assignment, but before it builds the chart, must
+    not be kept under the assignment it read: both come from one snapshot."""
+    _competition(conn)
+    real, moved = pages.stored_slots, []
+
+    def then_reassign(c):
+        slots = real(c)
+        if not moved:                   # committed on the test's own (writer) connection
+            conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
+            moved.append(slots)
+        return slots
+    monkeypatch.setattr(pages, "stored_slots", then_reassign)
+    from tests.conftest import TEST_SLOTS
+    from vending import pnl_report
+    for path, query, counted_a in ((pages.MONEY_CHART, None, lambda page: "slot 15: " in page),
+                                   (pages.PNL, pnl_report.parse("/"), lambda page: _units(page) == "5")):
+        moved.clear()
+        conn.execute("update slot_assignment set slots = %s", (list(TEST_SLOTS),))
+        status, _, page = _get(site, path)
+        assert status == 200 and moved == [TEST_SLOTS], path
+        kept = {key: reply for key, (_, reply) in pages._cache.items() if key[0] == path}
+        assert list(kept) == [(path, query, TEST_SLOTS)], path
+        # The page and its kept copy are assignment A's, the one in the key.
+        assert counted_a(page) and counted_a(next(iter(kept.values())).body), path
+        pages._cache.clear()
+
+
+def test_the_live_money_chart_carries_no_demo_copy(site, conn):
+    import re
+    from tests.test_ledger import open_ledger
+    open_ledger(conn)
+    live, demo = _get(site, pages.MONEY_CHART)[2], _get(site, pages.DEMO_MONEY)[2]
+    for copy in ("MOCK DATA:", "(seeded random data)", "Mock data, seeded.", "Mock data.",
+                 "AI planning runs are on Thursdays in this mock", '"Weekly plans"', '"AI plan"',
+                 '"Competition starts"', 'id="mockTag">MOCK<', "Money Chart Prototype", "seeded MOCK data"):
+        assert copy not in live and copy in demo, copy
+    # No visible text and no string in the script mentions mock, seeded or made-up data. The one name
+    # allowed is the id of the (emptied, hidden) tag the script looks up.
+    markup = re.sub(r"<(style|script)>.*?</\1>", "", live, flags=re.S)
+    script = "".join(re.findall(r"<script>(.*?)</script>", live, re.S))
+    texts = re.findall(r">([^<>]+)<", markup) + re.findall(r'"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`', script)
+    assert [t for t in texts if re.search(r"mock|made.up|seeded", t, re.I)] == ['"mockTag"']
+    assert [line for line in script.split("\n") if re.search(r"//.*(mock|seeded|made.up)", line, re.I)] == []

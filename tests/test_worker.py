@@ -345,3 +345,88 @@ def test_a_minute_past_the_hour_needs_rounds_that_fit_the_hour(args):
 def test_off_keeps_any_every():
     assert worker.main(["--every", "7", "--at-minute", "off", "--once", "--port", "0"],
                        jobs=[("a", lambda: 0)], log=lambda _: None) == 0
+
+
+# --- The chart pages behind the password ------------------------------------------------------------
+
+CHARTS = ("/dashboard/money", "/dashboard/pnl", "/dashboard/spend")
+
+
+def _ask(server, method: str, path: str, headers: dict | None = None):
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=20)
+    try:
+        # A POST with no body: the server refuses it without reading one, and on Windows a body it never
+        # read can make the client's send fail with WinError 10053 before the 405 arrives.
+        conn.request(method, path, body=b"" if method == "POST" else None, headers=headers or {})
+        reply = conn.getresponse()
+        return reply.status, dict(reply.getheaders()), reply.read().decode()
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def gated(monkeypatch):
+    """The worker's server with the password gate on, and every chart loader failing the test if reached."""
+    from vending import gate, pages
+
+    monkeypatch.setattr(gate, "ENABLED", True)
+    monkeypatch.setenv(gate.KEY_SETTING, "postgresql://reader:secret@example/db")
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "_cache", {})
+    for name in ("money_data", "pnl_data", "spend_data"):
+        monkeypatch.setattr(pages, name, lambda *args, _name=name: pytest.fail(f"{_name} reached without a sign-in"))
+    monkeypatch.setattr(pages, "connect", lambda: pytest.fail("a connection opened without a sign-in"))
+    server = worker.serve_health(worker.State(), 0)
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def test_the_chart_pages_send_a_signed_out_browser_to_the_password_page(gated):
+    from vending import gate
+
+    for path in CHARTS + tuple(p + "/" for p in CHARTS) + ("/dashboard/pnl?start=2026-12-05",):
+        status, headers, body = _ask(gated, "GET", path)
+        assert status == 303 and headers["Location"] == gate.login_location(path) and body == "", path
+    # A forged cookie is no better.
+    status, _, _ = _ask(gated, "GET", CHARTS[0], {"Cookie": f"{gate.COOKIE}=9999999999.forged"})
+    assert status == 303
+    # The dashboard's JSON twin still answers a signed-out refresh with JSON, as before.
+    status, headers, body = _ask(gated, "GET", "/dashboard/state.json")
+    assert status == 401 and headers["Content-Type"] == "application/json" and "signed out" in json.loads(body)["error"]
+
+
+def test_the_chart_pages_take_no_post_signed_in_or_not(gated):
+    from vending import gate
+
+    for path in CHARTS:
+        for headers in ({}, {"Cookie": f"{gate.COOKIE}={gate.token()}"}):
+            status, _, _ = _ask(gated, "POST", path, headers)
+            assert status == 405, path
+
+
+def test_a_signed_in_browser_gets_each_chart_page_with_its_policy(gated, monkeypatch):
+    from vending import gate, pages
+
+    seen = []
+
+    def respond(target, syncs=None):
+        seen.append(target)
+        return pages.Reply(200, pages.HTML, f"<p>{target}</p>", pages.CSP_PNL)
+    monkeypatch.setattr(pages, "respond", respond)
+    for path in CHARTS:
+        status, headers, body = _ask(gated, "GET", path, {"Cookie": f"{gate.COOKIE}={gate.token()}"})
+        assert status == 200 and body == f"<p>{path}</p>" and headers["Content-Security-Policy"] == pages.CSP_PNL
+        assert headers["Cache-Control"] == "no-store"
+    assert seen == list(CHARTS)
+
+
+def test_the_chart_demos_are_behind_the_password_too(gated, monkeypatch):
+    from vending import gate, pages
+
+    monkeypatch.setattr(pages, "demo_page", lambda path, now=None: pytest.fail("a demo rendered without a sign-in"))
+    for path in ("/dashboard/demo/money", "/dashboard/demo/spend"):
+        status, headers, _ = _ask(gated, "GET", path)
+        assert status == 303 and headers["Location"] == gate.login_location(path)
+        assert _ask(gated, "POST", path)[0] == 405

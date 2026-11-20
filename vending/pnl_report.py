@@ -138,23 +138,29 @@ def load(conn: psycopg.Connection, start: date | None, end: date | None, view: s
     """Every figure on the page, from one read-only snapshot."""
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
-        # The app's clock, as get_pnl uses for "today" (ledger.balance takes "now" from
-        # the database clock, ledger.db_now).
-        printed_at = datetime.now(EASTERN)
-        totals = get_pnl(conn, start, end)
-        if not totals.success:
-            return Report(start, end, printed_at, totals, view=view)
-        first_day, last_day = (t.astimezone(EASTERN).date() for t in (totals.start, totals.end))
-        # Count the Sat-to-Fri rows the table would show: a midweek start or end is a part week, but still a row.
-        rows = (_week_of(last_day) - _week_of(first_day)).days // 7 + 1
-        if rows > MAX_WEEKS:
-            refused = Pnl(success=False, message=f"Choose a range of at most {MAX_WEEKS} weeks.")
-            return Report(start, end, printed_at, refused, view=view)
-        weeks = ledger.pnl_by_week(conn, totals.start, totals.end)
-        # The balance at the end of the last day shown, where the table stops; now when there is no end
-        # date, or the end is today or later.
-        balance_at = None if end is None or last_day >= printed_at.date() else totals.end
-        return Report(start, end, printed_at, totals, weeks, get_account_balance(conn, balance_at), balance_at, view)
+        return read(conn, start, end, view)
+
+
+def read(conn: psycopg.Connection, start: date | None, end: date | None, view: str = "simple") -> Report:
+    """Every figure on the page, in the caller's transaction: `load` without a snapshot of its own, for a
+    caller that reads more in the same snapshot (`vending.pages` reads our slot assignment first)."""
+    # The app's clock, as get_pnl uses for "today" (ledger.balance takes "now" from
+    # the database clock, ledger.db_now).
+    printed_at = datetime.now(EASTERN)
+    totals = get_pnl(conn, start, end)
+    if not totals.success:
+        return Report(start, end, printed_at, totals, view=view)
+    first_day, last_day = (t.astimezone(EASTERN).date() for t in (totals.start, totals.end))
+    # Count the Sat-to-Fri rows the table would show: a midweek start or end is a part week, but still a row.
+    rows = (_week_of(last_day) - _week_of(first_day)).days // 7 + 1
+    if rows > MAX_WEEKS:
+        refused = Pnl(success=False, message=f"Choose a range of at most {MAX_WEEKS} weeks.")
+        return Report(start, end, printed_at, refused, view=view)
+    weeks = ledger.pnl_by_week(conn, totals.start, totals.end)
+    # The balance at the end of the last day shown, where the table stops; now when there is no end
+    # date, or the end is today or later.
+    balance_at = None if end is None or last_day >= printed_at.date() else totals.end
+    return Report(start, end, printed_at, totals, weeks, get_account_balance(conn, balance_at), balance_at, view)
 
 
 def _week_of(day: date) -> date:
@@ -371,14 +377,15 @@ def chart(weeks: list[ledger.WeekPnl], first: date, last: date) -> str:
             + "".join(bars) + "</svg>")
 
 
-def render(report: Report) -> tuple[int, str]:
-    """(HTTP status, page) for a report."""
-    controls = _controls(report.start, report.end, report.view, report.printed_at)
+def render(report: Report, base: str = "/", nav: str = "") -> tuple[int, str]:
+    """(HTTP status, page) for a report. `base` is the path the page is served at, which its links and
+    form point to; `nav` is HTML put above the title (links back, for a server that mounts the page)."""
+    controls = _controls(report.start, report.end, report.view, report.printed_at, base)
     printed = f"Printed {report.printed_at:%Y-%m-%d %H:%M %Z}"
     t = report.totals
     if not t.success:
         body = f'{controls}<p class="meta">{_e(printed)}</p><p class="error">{_e(t.message)}</p>'
-        return 200 if report.start is None and report.end is None else 400, page(body)
+        return 200 if report.start is None and report.end is None else 400, page(body, nav)
     first, last = t.start.astimezone(EASTERN).date(), t.end.astimezone(EASTERN).date()
     shown = _shown(report.balance, report.balance_at)
     head = f'<th scope="col">{_e(WEEK_HEADER)}</th>' + "".join(
@@ -396,13 +403,13 @@ def render(report: Report) -> tuple[int, str]:
             f' &middot; {_e(printed)}</p>{_tiles(t, report.weeks, shown, report.balance_at)}'
             + (f'<h2>Profit by week</h2>{figure}' if figure else "")
             + f'<h2>Weeks</h2>{table}{_balance(report.balance, report.balance_at)}{_notes(t, shown)}')
-    return 200, page(body)
+    return 200, page(body, nav)
 
 
-def _href(start: date | None, end: date | None, view: str) -> str:
+def _href(start: date | None, end: date | None, view: str, base: str = "/") -> str:
     query = [(n, d.isoformat()) for n, d in (("start", start), ("end", end)) if d is not None]
     query += [("view", view)] if view != "simple" else []
-    return "/" + (f"?{urlencode(query)}" if query else "")
+    return base + (f"?{urlencode(query)}" if query else "")
 
 
 def _link(label: str, href: str, active: bool) -> str:
@@ -410,17 +417,17 @@ def _link(label: str, href: str, active: bool) -> str:
     return f'<a href="{_e(href)}"{current}>{_e(label)}</a>'
 
 
-def _controls(start: date | None, end: date | None, view: str, now: datetime) -> str:
+def _controls(start: date | None, end: date | None, view: str, now: datetime, base: str = "/") -> str:
     """The date form, the range links, the view switch and how to print. None of it prints."""
     value = lambda d: "" if d is None else d.isoformat()  # noqa: E731
     keep = f'<input type="hidden" name="view" value="{_e(view)}">' if view != "simple" else ""
-    form = ('<form class="no-print" method="get" action="/">'
+    form = (f'<form class="no-print" method="get" action="{_e(base)}">'
             f'<label>From <input type="date" name="start" value="{_e(value(start))}"></label> '
             f'<label>to <input type="date" name="end" value="{_e(value(end))}"></label> {keep}'
             '<button type="submit">Show</button>'
             '<span class="hint">Empty dates mean the whole run: the opening day to today.</span></form>')
-    ranges = " ".join(_link(label, _href(s, e, view), (s, e) == (start, end)) for label, s, e in presets(now))
-    views = " ".join(_link(label, _href(start, end, v), v == view)
+    ranges = " ".join(_link(label, _href(s, e, view, base), (s, e) == (start, end)) for label, s, e in presets(now))
+    views = " ".join(_link(label, _href(start, end, v, base), v == view)
                      for label, v in (("Simple", "simple"), ("Detailed", "detailed")))
     return (f'<div class="controls no-print">{form}'
             f'<nav aria-label="Range" class="links"><span class="label">Range</span> {ranges}</nav>'
@@ -601,11 +608,16 @@ table.balance { width: auto; } table.balance th { padding-right: 24px; }
 """
 
 
-def page(body: str) -> str:
+def page(body: str, nav: str = "") -> str:
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>Weekly P&amp;L</title><style>{STYLE}</style></head>'
-            f'<body><h1>Weekly P&amp;L</h1>{body}</body></html>')
+            f'<body>{nav}<h1>Weekly P&amp;L</h1>{body}</body></html>')
+
+
+def bad_request_page(error: BadRequest, base: str = "/", nav: str = "") -> str:
+    """The page for a query it can't use: the controls, and what was wrong (the user's own input)."""
+    return page(f'{_controls(None, None, "simple", datetime.now(EASTERN), base)}<p class="error">{_e(error)}</p>', nav)
 
 
 # --- Serving ------------------------------------------------------------------------------------
@@ -622,9 +634,7 @@ class Handler(BaseHTTPRequestHandler):
         except LookupError:
             return self._send(404, "text/plain; charset=utf-8", "not found")
         except BadRequest as error:
-            return self._send(400, "text/html; charset=utf-8",
-                              page(f'{_controls(None, None, "simple", datetime.now(EASTERN))}'
-                                   f'<p class="error">{_e(error)}</p>'))
+            return self._send(400, "text/html; charset=utf-8", bad_request_page(error))
         try:
             with connect() as conn:
                 code, body = render(load(conn, query.start, query.end, query.view))

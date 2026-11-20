@@ -293,8 +293,10 @@ def _split_bar(d: dict) -> str:
             f'<div class="mkeys">{keys}</div><div class="sub">Money in: {money_in}.</div>')
 
 
-def html(panel: dict) -> str:
-    """The panel's inner HTML: a dashboard `_panel` dict, ok or not."""
+def html(panel: dict, pnl_href: str | None = None) -> str:
+    """The panel's inner HTML: a dashboard `_panel` dict, ok or not. `pnl_href` is where the server
+    serves the weekly P&L (`/dashboard/pnl` on the container); run on its own there is none, and the
+    panel names the command that prints it instead."""
     if not panel["ok"]:
         return f'<p class="empty">Not available: {_e(panel["why"])}</p>'
     d = panel["data"]
@@ -357,8 +359,10 @@ def html(panel: dict) -> str:
             f'<h3>Where the money has gone</h3>{_split_bar(d)}{pend}'
             f'<h3>Against the proposed budget</h3>{meters}'
             f'<div class="grid2 mlow"><div><h3>Profit and loss since the opening</h3><table class="mpnl">{pnl_rows}</table>'
-            '<p class="sub">Weekly detail: <code>python -m vending.pnl_report</code>.</p></div>'
-            f'<div>{plan}' + (f'<h3>Ledger notes</h3><ul class="mnotes">{notes}</ul>' if notes else "") + "</div></div>")
+            + (f'<p class="sub">Weekly detail: <a href="{_e(pnl_href)}">the weekly P&amp;L</a> on the team&#39;s '
+               'dashboard, or <code>python -m vending.pnl_report</code> on a laptop.</p></div>' if pnl_href else
+               '<p class="sub">Weekly detail: <code>python -m vending.pnl_report</code>.</p></div>')
+            + f'<div>{plan}' + (f'<h3>Ledger notes</h3><ul class="mnotes">{notes}</ul>' if notes else "") + "</div></div>")
 
 
 STYLE = """

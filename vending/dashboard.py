@@ -1269,8 +1269,11 @@ def _switched(verb: str, at: datetime | None, by: str | None, now: datetime) -> 
             + (f" by {_e(by)}" if by else ""))
 
 
-def _tiles(snap: dict) -> str:
+def _tiles(snap: dict, charts: dict[str, str] | None = None) -> str:
     now, s = snap["as_of"], snap["status"]
+    charts = charts or {}
+    # A link to the weekly chart of development spend, where a server mounts it.
+    spend_link = (f'<br><a href="{_e(charts["spend"])}">Development spend by week</a>' if "spend" in charts else "")
     tiles = []
 
     if s["halted"]:
@@ -1334,7 +1337,7 @@ def _tiles(snap: dict) -> str:
         # The total is summed exact by the panel and rounded once, not added up from the rounded parts.
         tiles.append(("Spent since the opening", f'<span class="big">{_money(Decimal(ledgered["spent"]))}</span>',
                       f'drinks {_money(Decimal(ledgered["receipts"]))}, visits {_money(Decimal(ledgered["visit_fees"]))}, '
-                      f'model {_money(Decimal(ledgered["tokens"]))} &middot; from the ledger'))
+                      f'model {_money(Decimal(ledgered["tokens"]))} &middot; from the ledger{spend_link}'))
     elif spend["ok"]:
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
         unpriced = f' &middot; {m["unpriced"]} without a cost' if m["unpriced"] else ""
@@ -1350,7 +1353,7 @@ def _tiles(snap: dict) -> str:
         tiles.append((label, f'<span class="big">{_money(dr["paid"])}</span>',
                       f'{period}drinks, {_plural(dr["fulfilled"], "fulfilled request")}{visits}<br>'
                       f'model {_money(m["total"])} over {_plural(m["runs"], "run")} '
-                      f'({_money(m["last_7_days"])} this week){unpriced}'))
+                      f'({_money(m["last_7_days"])} this week){unpriced}{spend_link}'))
     seen = snap.get("visits")
     if seen and not seen["ok"]:
         tiles.append(("Visitors", '<span class="big dim">Unavailable</span>',
@@ -1635,6 +1638,10 @@ section { background:var(--surface); border:1px solid var(--line); border-radius
   box-shadow:var(--shadow); min-width:0 }
 section > h2 { margin-bottom:8px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap }
 section > h2 .hint { font-weight:400; font-size:12px; color:var(--muted) }
+section > p.charts { margin:0 0 10px; font-size:13px }
+header.top a.chartlink { font-weight:600; font-size:14px; padding:4px 14px; border-radius:999px; text-decoration:none;
+  border:1px solid var(--accent); color:var(--accent) }
+header.top a.chartlink:hover, header.top a.chartlink:focus-visible { background:var(--accent); color:var(--surface) }
 .grid2 { display:grid; grid-template-columns:minmax(0, 1fr); gap:0 14px }
 @media (min-width:980px) { .grid2 { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr) } .grid2 > section { margin:0 0 14px } }
 .lede { margin:0 0 8px } .empty { color:var(--muted); background:var(--sunk); border:1px dashed var(--line); border-radius:8px;
@@ -1906,13 +1913,18 @@ LIVE_STORAGE, DEMO_STORAGE = "dash-", "demo-dash-"
 
 
 def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.json",
-           nav: tuple[tuple[str, str], ...] = (), demo: bool = False) -> str:
+           nav: tuple[tuple[str, str], ...] = (), demo: bool = False,
+           charts: dict[str, str] | None = None) -> str:
     """The page. `json_href` is where its JSON twin lives, and `nav` is (label, href) links to
     sibling pages, for a server that mounts this page under a path beside others.
 
     `demo` is for the made-up copy (`vending.demo`): a banner on top, "DEMO" in the tab title, and a
     fixed page. It never refreshes and keeps the times the server wrote, because the page's script would
-    otherwise measure "3 days ago" and "in 1 day" from the viewer's own clock, not the snapshot's."""
+    otherwise measure "3 days ago" and "in 1 day" from the viewer's own clock, not the snapshot's.
+
+    `charts` is where that server serves the chart pages, by name ("money", "pnl", "spend"): the money
+    panel and the spend tile link to the ones given. Run on its own, the page has none."""
+    charts = charts or {}
     now = snap["as_of"]
     links = "".join(f' &middot; <a href="{_e(href)}">{_e(label)}</a>' for label, href in nav)
     items = snap.get("attention")
@@ -1921,16 +1933,20 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     state = verdict(items)
     head =(f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
             f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
-            f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
+            + (f'<a class="chartlink" href="{_e(charts["money"])}">Money chart</a>' if "money" in charts else "")
+            + f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
             + ("fixed snapshot, never refreshes" if demo else f"refreshes every {int(refresh)} s")
             + f'</span> &middot; <a href="{_e(json_href)}">JSON</a>{links}</span></header>')
+    chart_links = " &middot; ".join(f'<a href="{_e(charts[name])}">{label}</a>' for name, label in
+                                    (("money", "Money by day"), ("pnl", "Weekly P&amp;L")) if name in charts)
     money = (f'<section id="money"><h2>Money <span class="hint">from the ledger &middot; exact to the cent'
              " &middot; the competition counts from the ledger's opening; spend before it is development"
-             f'</span></h2>{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
+             f'</span></h2>' + (f'<p class="charts">Charts: {chart_links}</p>' if chart_links else "")
+             + f'{money_panel.html(snap["money"], charts.get("pnl"))}</section>' if "money" in snap else "")
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
     boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
               if "leaderboards" in snap else "")
-    body = (head + _tiles(snap) + _attention_html(items) + money + _cabinet_html(snap) + pricing
+    body = (head + _tiles(snap, charts) + _attention_html(items) + money + _cabinet_html(snap) + pricing
             + _plan_section(snap)
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '

@@ -257,6 +257,36 @@ the count replaces it. `db/counts/2026-11-09-photo.json` is the first count, rea
 the machine on 9 Nov; its units are estimates and brands that couldn't be read are kept as the
 visible description.
 
+## The charts beside it
+
+On the Container App, three chart pages sit beside the dashboard, behind the same password. Each is
+built per request from the same read-only login, with the same error handling, and kept for 60
+seconds.
+
+| Route | What it shows | Linked from |
+|---|---|---|
+| `/dashboard/money` | The money chart ([`money-chart.md`](money-chart.md)): revenue, costs, profit, cash and net worth by day since the ledger's opening | The **Money chart** button in the header; "Money by day" in the money panel |
+| `/dashboard/pnl` | The weekly P&L ([`pnl-report.md`](pnl-report.md)), with its range and column choices in the URL | "Weekly P&L" in the header and the money panel |
+| `/dashboard/spend` | Development spend by week and day ([`dev-spend.md`](dev-spend.md)), up to the ledger's opening | "Dev spend" in the header; "Development spend by week" in the spend tile |
+| `/dashboard/demo/money` | The money chart with its seeded made-up data, under a DEMO banner | The live money chart before the opening |
+| `/dashboard/demo/spend` | Dev spend from the team's run notes, under a DEMO banner | Not linked |
+
+- **Real data only.** The live chart pages never draw the money chart's MOCK data. Only the two
+  demo routes do, and they read no database.
+- **Before the opening** the money chart says "No competition money yet: the chart starts at the
+  ledger opening" and links the demo; the P&L says there is no competition data until the ledger
+  opens. With an opening recorded ahead, both give its date.
+- **The opening is the boundary.** The money chart counts from the opening. The P&L checks the
+  opening before it reads any date in the URL, and a start on or before the opening's day counts
+  from the opening itself. Dev spend stops at the opening.
+- **Only our selections.** A receipt marker on the money chart names its slot and product only for
+  a selection in the current assignment.
+- `pages.money_page`, `pages.pnl_page` and `pages.spend_page` render each page from its data alone,
+  so made-up data can be drawn the same way.
+
+Run on its own (`python -m vending.dashboard`), the dashboard has no chart links: the CLIs write
+the charts instead.
+
 ## Safety
 
 - **It can't write.** Its connection sets `default_transaction_read_only`, so Postgres refuses
@@ -305,12 +335,9 @@ Times on the page show in your browser's time zone. On Windows, the cutoff date 
 
 Ideas for the team to react to. None of this is built.
 
-**A. The week's profit.** The Money panel shows profit since the opening; a week-by-week view
-(`ledger.pnl_by_week`, as `python -m vending.pnl_report` prints it) isn't on the page yet.
-
-**B. Plan history.** One card per week: the update, the slots that changed, the notes, what it
+**A. Plan history.** One card per week: the update, the slots that changed, the notes, what it
 cost. Everything it needs is in `agent_runs` once #39 writes it.
 
-**C. A live run.** Each tool call as it happens, the draft plans as they change, and the run's
+**B. A live run.** Each tool call as it happens, the draft plans as they change, and the run's
 budget. Each run's steps, its reasoning included, are now in `agent_steps` and show under
 How it decided, so what is left is a page that follows one run live and the run's budget.
