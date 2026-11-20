@@ -105,19 +105,25 @@ def load_script():
 
 
 
-AFTER, BEFORE = "2026-12-04T15:00:00+00:00", "2026-12-02T15:00:00+00:00"
+# AFTER is from the start. BEFORE is before the fall cut (FALL_CUTOFF, 18 Nov 2026 00:00 Eastern when
+# unset), the only polls whose whole machine may be shown. BETWEEN is from the cut but before the start:
+# the machine-wide data stops at the cut, not at the start (docs/integrity.md, "Fall data").
+AFTER, BEFORE = "2026-12-04T15:00:00+00:00", "2026-11-10T15:00:00+00:00"
+BETWEEN, LAST_FALL_DAY = "2026-11-20T15:00:00+00:00", "2026-12-02T15:00:00+00:00"
 
 
 @pytest.fixture
 def script(monkeypatch, assignment):
     """scripts/bridge.py, answering from a fake bridge with one stored poll, `script.poll`, taken
-    at `script.taken`. `script.ours` is our assignment. "Now" is the day after the start. The
+    at `script.taken`. `script.ours` is our assignment. "Now" is `script.now`, the day after the start
+    unless a test moves it (`raw` and `poll` place their poll at "now"). The
     fake answers only the history and poll routes, so a command that asks `/api/v1/slots` which
     selections are ours fails: ours come from the stored assignment only."""
     module = load_script()
     module.ours = assignment
     module.poll, module.taken = machine_poll(assignment, 13, SENTINEL_PRICE, SENTINEL_UNITS, 7), AFTER
     module.calls = []
+    module.now = datetime(2026, 12, 4, 15, 0, tzinfo=timezone.utc)
 
     def call(method, path, **kwargs):
         module.calls.append(path)
@@ -132,7 +138,7 @@ def script(monkeypatch, assignment):
     class Now(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026, 12, 4, 15, 0, tzinfo=timezone.utc)
+            return module.now
 
     monkeypatch.setattr(module, "call", call)
     monkeypatch.setattr(module, "get_json", get_json)
@@ -168,10 +174,74 @@ def test_nothing_prints_the_whole_of_a_poll_from_the_start(script, capsys, argv)
     assert script.calls == []
 
 
-def test_a_poll_from_before_the_start_is_printed_whole(script, capsys):
-    script.taken = BEFORE
-    assert script.main(["latest"]) == 0
+POLL_ARGVS = [["latest"], ["raw", "s1"], ["poll", "--live"]]
+
+
+def at(script, taken: str) -> None:
+    """The stored poll was taken at `taken`, and "now" is then too, so `raw` and `poll` place it there."""
+    script.taken, script.now = taken, datetime.fromisoformat(taken)
+
+
+def machine_totals(script) -> tuple[int, int]:
+    """The VA1 totals of `script.poll`: the machine-wide cents and units."""
+    va1 = next(line for line in script.poll.decode().splitlines() if line.startswith("VA1*"))
+    return int(va1.split("*")[1]), int(va1.split("*")[2])
+
+
+@pytest.mark.parametrize("argv", POLL_ARGVS)
+def test_a_poll_from_before_the_fall_cut_is_printed_whole(script, capsys, argv):
+    at(script, BEFORE)
+    assert script.main(argv) == 0
     assert capsys.readouterr().out == script.poll.decode()
+
+
+@pytest.mark.parametrize("taken", [BETWEEN, LAST_FALL_DAY])
+@pytest.mark.parametrize("argv", POLL_ARGVS)
+def test_a_poll_from_the_fall_cut_on_prints_only_our_selections(script, capsys, argv, taken):
+    """Between the fall cut and the start no other selection and no machine-wide total is shown."""
+    at(script, taken)
+    assert script.main(argv) == 0
+    out, err = capsys.readouterr()
+    assert out == rebuilt(script.ours)
+    assert not leaked(out, *machine_totals(script)) and not leaked(err, *machine_totals(script))
+    assert "20 of our selections" in err and "fall cut" in err
+
+
+def test_out_refuses_a_device_for_a_poll_from_the_fall_cut_on(script, capsys, tmp_path, monkeypatch):
+    at(script, BETWEEN)
+    monkeypatch.chdir(tmp_path)
+    assert script.main(["latest", "--out", "CON"]) == script.EXIT_REFUSED
+    out, err = capsys.readouterr()
+    assert out == "" and "regular file" in err and not leaked(err)
+
+
+@pytest.mark.parametrize("argv", POLL_ARGVS)
+def test_fall_cutoff_moves_the_boundary(script, capsys, monkeypatch, argv):
+    monkeypatch.setenv("FALL_CUTOFF", "2026-11-25T00:00:00-05:00")
+    at(script, BETWEEN)                                   # 20 Nov: before the moved cut, so whole
+    assert script.main(argv) == 0
+    assert capsys.readouterr().out == script.poll.decode()
+    at(script, "2026-11-26T15:00:00+00:00")               # after it: ours only
+    assert script.main(argv) == 0
+    assert capsys.readouterr().out == rebuilt(script.ours)
+
+
+@pytest.mark.parametrize("argv", POLL_ARGVS)
+def test_fall_cutoff_is_never_later_than_the_start(script, capsys, monkeypatch, argv):
+    monkeypatch.setenv("FALL_CUTOFF", "2026-12-20T00:00:00-05:00")
+    at(script, AFTER)
+    assert script.main(argv) == 0
+    out, err = capsys.readouterr()
+    assert out == rebuilt(script.ours) and not leaked(out, *machine_totals(script))
+
+
+@pytest.mark.parametrize("value", ["18 Nov", "2026-11-18T00:00:00"])
+def test_a_malformed_fall_cutoff_prints_no_poll(script, capsys, monkeypatch, value):
+    monkeypatch.setenv("FALL_CUTOFF", value)
+    at(script, BEFORE)
+    assert script.main(["latest"]) == script.EXIT_CONFIG
+    out, err = capsys.readouterr()
+    assert out == "" and "FALL_CUTOFF" in err and not leaked(err)
 
 
 @pytest.mark.parametrize("argv", [["latest"], ["raw", "s1"], ["poll", "--live"]])
