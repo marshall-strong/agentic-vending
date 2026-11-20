@@ -460,6 +460,9 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
 
     Only the current product's loads and sales count (#172). The old product's share of a window
     split at the change is booked at the poll after it, so it is left out by product, not by time.
+    Loads at the moment the product went in may belong to an earlier run of it (A, B, then A again
+    at one visit), so what the run had then is the replay's own count (`SlotCount.loaded`, in its
+    movement order) less its loads after that moment.
     Units the replay left unattributed (`SaleCost.unattributed`) may have been either product's, so
     they are not in the units, and the days their poll window covers (`SaleCost.since` to `at`,
     Eastern) are left out of the in-stock days: a swap polled the same day loses none, since the
@@ -469,8 +472,9 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
     """
     demands = {}
     for slot, count in counts.items():
-        slot_loads = [(at, units) for at, units, sku in loads.get(slot, [])
-                      if at >= count.since and sku == count.product]
+        later = [(at, units) for at, units, sku in loads.get(slot, []) if at > count.since and sku == count.product]
+        first = count.loaded - sum(units for _, units in later)
+        slot_loads = ([(count.since, first)] if first > 0 else []) + later
         since = [s for s in sales if s.slot == slot and s.at > count.since]
         slot_sales = [(s.at, s.units) for s in since if s.product == count.product and not s.unattributed]
         unknown = [(s.at, s.units) for s in since if s.unattributed]
