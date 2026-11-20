@@ -510,7 +510,10 @@ def test_no_sourcing_anywhere_says_how_to_add_a_table_row(db, fake):  # noqa: F8
 
 # --- Through the MCP client -------------------------------------------------------------------
 
-def test_preview_end_to_end(db, fake):  # noqa: F811
+def test_preview_end_to_end(db, fake, monkeypatch):  # noqa: F811
+    # Through the MCP server "now" is the database clock: pinned to NOW, a Monday before every cutoff, so
+    # the Costco restock isn't refused past_cutoff late in the week (as tests/test_submit.py pins it).
+    monkeypatch.setattr(ledger, "db_now", lambda conn: NOW)
     ready(db)
     stocked(db)
     body = desired(restock_15(), sourcing=[coke_sourcing()]).model_dump()
