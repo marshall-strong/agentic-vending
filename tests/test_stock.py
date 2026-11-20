@@ -1015,3 +1015,13 @@ def test_a_hand_built_sale_keeps_its_window_start_through_a_split():
     split = replay(movements_from_receipts(swap(), []) + [sale])
     assert [(s.product, s.since) for s in split.sales] == [("ARIZONA", hours(1)), ("REDBULL", hours(1))]
 
+
+
+def test_movements_keep_their_positional_field_order():
+    """`booked_at` is the 19th field: a caller that passes it positionally must not have it land in `window_since`,
+    which was added later and comes last."""
+    from vending.stock import Movement
+
+    positional = Movement(hours(5), "sale_before_change", "15", "ARIZONA", 1, 0, 0, 0, None, None, False, "",
+                          None, None, None, None, None, None, hours(6))
+    assert positional.booked_at == hours(6) and positional.window_since is None

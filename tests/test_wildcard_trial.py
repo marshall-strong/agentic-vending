@@ -671,3 +671,47 @@ def test_a_sale_with_no_recorded_window_is_placed_by_the_counter_history():
     assert _unsplit_over("15", t(20), readings, (unplaced,), True) == [unplaced]
     before = stock.SaleCost(t(18), "15", None, 1, 1, None)      # booked at the last poll before the swap
     assert _unsplit_over("15", t(20), readings, (before,), True) == []
+
+
+def test_the_planner_reads_loads_from_the_receipts_its_replay_used(conn, monkeypatch):
+    """Slot 15's only receipt is its first AAA load, with a $3 sale in the window spanning it: the replay, with no
+    earlier product, books it to AAA, and the trial must call that unknown. A late ZZZ receipt for slot 15 lands
+    between the planner's replay and its load history. If the load history is read again, it sees ZZZ first, takes
+    this for a swap the replay split, and trusts the booking: a PASS from two different snapshots."""
+    from types import SimpleNamespace
+
+    from tests.conftest import TEST_SLOTS
+    from tests.test_ledger import open_ledger
+    from vending import planning
+
+    open_ledger(conn, at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    fulfilled(conn, "rx", datetime(2026, 10, 9, 20, tzinfo=timezone.utc),
+              *[(s, f"X{s}", "primary", "5.00", 5, 0, 0) for s in TEST_SLOTS if s != "15"])
+    fulfilled(conn, "r1", SINCE, ("15", "AAA", "primary", "10.00", 20, 0, 0))
+    rows = [("p0", "2026-10-16T18:00:00+00:00", {"15": (300, 100, 30000)}),
+            ("p1", "2026-10-16T21:00:00+00:00", {"15": (300, 101, 30300)})]
+    units, cents = 101, 30300
+    for n, day in enumerate(DAYS):
+        units, cents = units + 3, cents + 900
+        rows.append((f"d{n}", f"2026-10-{day}T22:00:00+00:00", {"15": (300, units, cents)}))
+    polls(conn, rows)
+    set_wildcard(conn, "15")
+    assert get_machine_state(conn, now=FRESH).wildcard_trial.verdict == UNKNOWN   # one snapshot: unknown
+
+    late = []
+
+    class LateReceipt(SimpleNamespace):
+        def stock(self, *args, **kwargs):
+            out = stock.stock(*args, **kwargs)
+            fulfilled(conn, "r0", datetime(2026, 10, 9, 20, tzinfo=timezone.utc),
+                      ("15", "ZZZ", "primary", "10.00", 10, 0, 0))
+            late.append("r0")
+            return out
+
+        def __getattr__(self, name):
+            return getattr(stock, name)
+
+    monkeypatch.setattr(planning, "stock", LateReceipt())
+    gathered = planning.gather(conn, [], FRESH)
+    assert late == ["r0"]
+    assert gathered.current.wildcard_verdict == UNKNOWN
