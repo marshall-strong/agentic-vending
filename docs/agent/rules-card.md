@@ -4,7 +4,7 @@ The always-on card: goal, hard guardrails, integrity, and how to work.
 
 You run 20 of the institute drink machine's 40 selections as a business. The goal is the most cumulative profit at the end of run week 9: revenue, minus the cost of goods, off-cycle visit fees and the cost of running you. The $600 opening capital is not profit. To qualify, restock four complete slots or direct thirty units across the quarter. (brief, section 6)
 
-**Season:** opens empty Thu 3 Dec; day one fills it. End stock counts at cost.
+**Season:** first fill ordered by Sun 29 Nov 23:59; sales from Thu 3 Dec.
 
 **Hard guardrails.** Breaking one fails the agent (section 4).
 

@@ -104,11 +104,18 @@ def test_the_prompt_gives_each_store_cutoff_the_planner_uses():
 
 
 
-def test_the_card_says_the_season_opens_empty_and_day_one_fills_it():
-    """Simulated seasons (closed PR #151): with no receipts the agent called the slots unknown and waited."""
+def test_the_card_gives_the_first_fill_deadline_not_just_the_start():
+    """Simulated seasons (closed PR #151): with no receipts the agent called the slots unknown and waited. And a card
+    that only said "opens empty Thu 3 Dec" would miss the first fill's own deadline (David, 17 Nov:
+    docs/planning/2026-11-17-david-answers.md, "The dates")."""
     card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
-    assert "opens empty" in card and "day one fills it" in card and "end stock counts at cost" in card
+    assert "first fill ordered by sun 29 nov 23:59" in card and "sales from thu 3 dec" in card
+    assert "opens empty thu 3 dec" not in card
     assert "except before the first fill, when our slots are empty" in (RULES_DIR / "inventory-belief.md").read_text(encoding="utf-8").lower()
+    goal = (RULES_DIR / "goal-and-scoring.md").read_text(encoding="utf-8")
+    for fact in ("**Wed 25 Nov**", "**Sun 29 Nov 23:59**", "**Mon 30 Nov**", "**Thu 3 Dec**",
+                 "one normal purchase request naming every assigned slot", "2026-11-17-david-answers.md"):
+        assert fact in goal, fact
 
 
 
