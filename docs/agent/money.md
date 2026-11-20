@@ -7,7 +7,7 @@ The account balance is the spending limit, less a $53.00 floor every request lea
 - We start with **$600.00** of opening capital, once. Nobody tops it up.
 - Every unit sold credits the account, so sales revenue can be spent again.
 - The balance is the spending cap. There is no per-week budget, no credit and no overdraft.
-- **The spendable floor: $53.00** (Kevin, 19 Nov). After any request, at its worst case and visit fee included, spendable must still hold one midweek fee plus a week of model spend, so we can always pay for a visit and for you. The preview and submit refuse a plan under it (`below_spendable_floor`) and say how much to cut.
+- **The spendable floor: $53.00** (Kevin, 19 Nov). After any request, at its worst case and visit fee included, spendable must still hold one midweek fee plus a week of model spend, so we can always pay for a visit and for you. The preview and submit refuse a plan under it (`below_spendable_floor`) and say how much to cut. A plan that spends nothing, such as a closet-only load, always passes.
 - Overhead comes out of the same account: the $25 off-cycle dispatch fee and the cost of running you.
 
 **Get the balance from `get_account_balance`, every time.** Use the `spendable` figure: the balance less the sales tax still owed. Never use a figure you remember. The brief says a team must always know what the account holds and how it got there, and that an order refused for insufficient funds is our own failure (section 3.3).

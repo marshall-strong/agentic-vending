@@ -315,6 +315,17 @@ class Costs(unittest.TestCase):
         self.assertIn("slot 15 $12.00", message)
         self.assertIsNone(short.plan_hash)
 
+    def test_the_floor_never_blocks_a_plan_that_spends_nothing(self):
+        """Sol, round 2: the floor limits what a plan spends. A closet-only load costs $0, so it passes even with
+        spendable already under the floor; any purchase that would leave spendable under it is refused."""
+        free = plan(restock_15(), closet=[ClosetStock(MTDEW, 9, 50)], balance=5299)
+        self.assertTrue(free.ok, free.refusals)
+        self.assertEqual(free.cost.max_cents, 0)
+        penny = Sourcing(MTDEW, PurchaseOption("Walmart", 24, "0.01"))
+        self.assertEqual(plan(restock_15(), sourcing=[penny], balance=5301).cost.max_cents, 1)
+        self.assertTrue(plan(restock_15(), sourcing=[penny], balance=5301).ok)
+        self.assertEqual(codes(plan(restock_15(), sourcing=[penny], balance=5300)), ["below_spendable_floor"])
+
     def test_the_floor_is_a_setting(self):
         self.assertTrue(plan(restock_15(), balance=1200, config=replace(CONFIG, spendable_floor_cents=0)).ok)
 

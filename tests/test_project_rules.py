@@ -144,6 +144,7 @@ def test_the_docs_quote_the_spendable_floor_the_planner_enforces():
         assert floor in (RULES_DIR / f"{topic}.md").read_text(encoding="utf-8"), topic
     money = (RULES_DIR / "money.md").read_text(encoding="utf-8")
     assert "only spending limit" not in money and "below_spendable_floor" in money
+    assert "A plan that spends nothing, such as a closet-only load, always passes" in money
     policy = (RULES_DIR.parent / "restock-policy.md").read_text(encoding="utf-8")
     assert floor in policy and "SPENDABLE_FLOOR_CENTS" in policy
 

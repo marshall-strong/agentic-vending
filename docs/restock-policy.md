@@ -151,7 +151,7 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 ## 4. How the balance limits orders
 
-**Rule.** After an order, at its most-we-pay cost, the spendable balance must still hold the **spendable floor, $53.00** (Kevin, 19 Nov; first proposed in #90). The planner enforces it at preview and again at submit, on the balance at that moment (`vending/planner.py`, `SPENDABLE_FLOOR_CENTS`; config `spendable_floor_cents`), and refuses a plan under it with `below_spendable_floor`. If it would not, cut in this order (Proposed):
+**Rule.** After an order, at its most-we-pay cost, the spendable balance must still hold the **spendable floor, $53.00** (Kevin, 19 Nov; first proposed in #90). The planner enforces it at preview and again at submit, on the balance at that moment (`vending/planner.py`, `SPENDABLE_FLOOR_CENTS`; config `spendable_floor_cents`), and refuses a plan under it with `below_spendable_floor`. A plan that spends nothing (a closet-only load) always passes: the floor limits spending, not loading. If it would not, cut in this order (Proposed):
 
 1. Purchases for slow sellers and flagged slots.
 2. Nothing for a slot the closet can fill without buying: it costs no cash, so it is always filled.

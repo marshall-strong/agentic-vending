@@ -663,7 +663,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             f"max cost {_dollars(cost.max_cents)} (visit fee {_dollars(cost.visit_fee_cents)} "
             f"included) exceeds the spendable balance of {_dollars(current.balance_cents)}; "
             f"buy less or cheaper")))
-    elif cost.balance_left_at_max_cents < config.spendable_floor_cents:
+    # The floor limits what a plan spends: one that spends nothing (a closet-only load) never lowers spendable.
+    elif cost.max_cents > 0 and cost.balance_left_at_max_cents < config.spendable_floor_cents:
         refusals.append(Refusal("below_spendable_floor", _below_floor(cost, config.spendable_floor_cents)))
 
     floors: list[SlotFloor] = []
