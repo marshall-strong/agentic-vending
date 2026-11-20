@@ -240,7 +240,9 @@ def test_a_post_to_the_demo_is_405_signed_in_or_out(site):
     port, loaded = site
     for headers in ({}, signed_in(port)):
         for path in ("/dashboard/demo", "/dashboard/demo/state.json"):
-            status, _, _ = ask(port, "POST", path, b"x=1", {**headers, "Content-Type": "application/x-www-form-urlencoded"})
+            # No body: the server refuses a POST without reading one, and on Windows a body it never read
+            # can make the client's send fail with WinError 10053 before the 405 arrives.
+            status, _, _ = ask(port, "POST", path, b"", headers)
             assert status == 405, path
     assert loaded == []
 
