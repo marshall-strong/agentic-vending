@@ -50,8 +50,9 @@ not for a window the counters settled: its units went to a product, the old one'
 share leaves the new stock's count, and the interval is left out either way. The
 slot's first receipt has no earlier product for the replay to split from, so any
 sale in the window holding that load leaves the verdict unknown. So does a window
-that starts at the swap's own moment, and a window the polls measured across a
-misread is judged by where it really starts.
+that starts at the swap's own moment, unless the receipt's door times (which the
+replay can use) put the visit before that poll. A window the polls measured across
+a misread is judged by where it really starts.
 Units sold past what the receipts loaded have no cost, so they make the profit
 unknown rather than free.
 
@@ -416,7 +417,12 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
                 "whether its price test has ended is unknown"), price)
         start = back
     held_before = any(at < w.since for at, _ in loads.get(slot, []))
-    across = _unsplit_over(slot, w.since, readings, sales, held_before)
+    # The replay settles a window that starts at the swap's own moment by the door only if the receipt that put
+    # the product in has door times it can use (`stock.door_timed`, the replay's own test).
+    swap_lines = [line for line in stock.counted_lines(conn) if line["slot"] == slot and line["sku"] == w.product
+                  and line["at"] == w.since and line["outcome"] in ("primary", "alternate", "loaded")]
+    by_door = bool(swap_lines) and all(stock.door_timed(line) for line in swap_lines)
+    across = _unsplit_over(slot, w.since, readings, sales, held_before, by_door)
     if across:
         # Units sold in a window that holds the swap that nothing settled may be the old product's or the
         # trial's, so how long the trial's own stock lasted is unknown. Fail closed. That is the units the stock
@@ -468,7 +474,7 @@ def trial(conn: psycopg.Connection, now: datetime, counts: dict[str, stock.SlotC
 
 
 def _unsplit_over(slot: str, swap: datetime, readings: list[Reading], sales: tuple[stock.SaleCost, ...],
-                  held_before: bool) -> list[stock.SaleCost]:
+                  held_before: bool, by_door: bool = False) -> list[stock.SaleCost]:
     """The slot's sales whose measured window (`SaleCost.since` to `at`) holds `swap`, that nothing settled. Pure.
 
     The window is the replay's own, so one that spans a misread or a gap in the polls is judged by where it
@@ -479,22 +485,24 @@ def _unsplit_over(slot: str, swap: datetime, readings: list[Reading], sales: tup
     receipt, the counters and the price at each end, and carries what it couldn't as unattributed
     (`SaleCost.product` None): only those are returned, not the units it booked to a product, the old one's
     share of a split window included. Two cases are returned whatever the replay booked them to:
-    - A window that starts at the swap's own moment. The replay takes the swap to be before it, but the poll
-      that started it may have come before the worker swapped, so it may hold the old product's sales.
+    - A window that starts at the swap's own moment, unless `by_door`: the receipt has door times the replay
+      used, which put the swap's visit before that poll, so the replay's tag is settled. Without them the replay
+      takes the swap to be before the window, but the poll that started it may have come before the worker
+      swapped, so it may hold the old product's sales.
     - Every window, when this load is the slot's first receipt: the replay sees no change, so it books every
       sale after the load to the new product, but units sold in the window may have been what stood in the slot
       before. Nothing splits them.
-    A sale with no recorded window (a replay fed by hand) is judged by the polls around the swap instead, and
-    every one there is returned.
+    A sale with no recorded window is placed by the counter history in `readings` (`counters.windows`: after a
+    misread, a window starts at the good poll before it). One that history can't place is returned if it ended
+    at or after the swap: nothing rules out that it holds it.
     """
-    before = [at for at, _, _, _ in readings if at < swap]
-    after = [at for at, _, _, _ in readings if at > swap]
-    lo, hi = (max(before) if before else swap), (min(after) if after else None)
+    started = {at: begin for begin, at, _ in counters.windows([(at, units) for at, units, _, _ in readings])}
 
     def unsplit(s: stock.SaleCost) -> bool:
-        if s.since is None:
-            return lo <= s.at and (hi is None or s.at <= hi)
-        return s.since <= swap <= s.at and (s.product is None or not held_before or s.since == swap)
+        begin = s.since if s.since is not None else started.get(s.at)
+        if begin is None:
+            return s.at >= swap
+        return begin <= swap <= s.at and (s.product is None or not held_before or (begin == swap and not by_door))
 
     return sorted((s for s in sales if s.slot == slot and s.units > 0 and unsplit(s)), key=lambda s: s.at)
 
@@ -552,8 +560,7 @@ def pulls(conn: psycopg.Connection) -> dict[str, list[tuple[datetime, int]]]:
     clock are left out, as in `stock._receipts`."""
     timed = []
     for line in stock.counted_lines(conn):
-        door = line["door_opened_at"] is not None and line["door_closed_at"] is not None
-        at = line["door_opened_at"] if door else line["resolved_at"]
+        at = line["door_opened_at"] if stock.door_timed(line) else line["resolved_at"]
         if line["units_pulled"] and at is not None:
             timed.append((at, line["slot"], line["units_pulled"]))
     out: dict[str, list[tuple[datetime, int]]] = {}

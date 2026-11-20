@@ -122,6 +122,11 @@ class Movement:
     seq: int = 0                         # receipt movements: the request's place in submission order (0: unknown)
     door: tuple[datetime, datetime] | None = None   # receipt movements: the receipt's door times, even if not used
     notes: tuple[StockWarning, ...] = ()  # warnings to pass on when this movement is replayed, each with its slot
+
+    def __post_init__(self) -> None:
+        # A sale made with only `since` still knows where its window began once a split moves `since`.
+        if self.window_since is None and self.kind == "sale" and self.since is not None:
+            object.__setattr__(self, "window_since", self.since)
     door_conflict: str = ""              # sale: the receipt it contradicts, by selling with the door open
     split: bool = False                  # sale: already split at its changes; another pass leaves it alone
     read_as_new: bool = False            # sale: unsplit, but main booked it all to the new product (`_old_units`)
@@ -296,8 +301,8 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
         ref = f"{line['request_id']} line {line['line_no']}"
         slot, first = line["slot"], len(moves)
         opened, closed = line.get("door_opened_at"), line.get("door_closed_at")
-        door = line.get("door_recorded") or (None if opened is None or closed is None else (opened, closed))
-        if opened is None or closed is None:
+        door = line.get("door_recorded") or ((opened, closed) if door_timed(line) else None)
+        if not door_timed(line):
             opened, seq = None, 0
             pulled_at = loaded_at = line["resolved_at"]
         else:
@@ -324,6 +329,12 @@ def movements_from_receipts(lines: list[dict], losses: list[dict]) -> list[Movem
             loss["recorded_at"], "loss", loss["slot"], loss["sku"], units=loss["units"],
             location=loss["location"], ref=f"{loss['request_id']} line {loss['line_no']}"))
     return moves
+
+
+def door_timed(line: dict) -> bool:
+    """Whether the replay times this line by its request's door times: it has both, and `_usable_door_times`
+    left them (a line of visits that clash has them cleared). The one place that says so."""
+    return line.get("door_opened_at") is not None and line.get("door_closed_at") is not None
 
 
 def _usable_door_times(lines: list[dict]) -> list[dict]:
@@ -995,8 +1006,7 @@ def receipt_lines(conn: psycopg.Connection) -> list[dict]:
         " from purchase_lines l join purchase_requests r using (request_id) where r.status = 'fulfilled'"
         " order by l.request_id, l.line_no")])
     for line in lines:
-        door = line["door_opened_at"] is not None and line["door_closed_at"] is not None
-        line["at"] = line["door_closed_at"] if door else line["resolved_at"]
+        line["at"] = line["door_closed_at"] if door_timed(line) else line["resolved_at"]
     return lines
 
 
