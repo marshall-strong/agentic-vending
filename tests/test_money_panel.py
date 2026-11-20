@@ -175,7 +175,8 @@ def test_without_our_slot_assignment_the_panel_says_so_and_the_page_still_render
     assert any(a["level"] == "warn" and "can't give a balance" in a["text"] for a in snap["attention"])
     page = dashboard.render(snap)
     assert "No balance:" in page and 'id="vm"' in page
-    assert "Spent so far" in page and "Spent before the opening" not in page    # the period is unknown
+    # The ledger has opened, so the live spend counts from it; only the balance is unknown.
+    assert "Spent since the opening: drinks" in page and "Spent before the opening" not in page
     # The ledger is open; it just can't give a balance. The Spendable cell says that, not "not open".
     cell = dashboard._status_bar(snap).split('<span class="label">Spendable</span>')[1].split("</a>")[0]
     assert '<span class="sv"><span class="dim">Balance unavailable</span></span>' in cell

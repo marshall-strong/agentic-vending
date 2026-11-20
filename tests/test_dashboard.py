@@ -1430,9 +1430,9 @@ def _first_fill_plan(conn, tmp_path):
 
 def test_the_plan_cell_says_first_fill_before_the_lock_and_next_restock_after(conn, page_conn, tmp_path, monkeypatch):
     _first_fill_plan(conn, tmp_path)
-    first = agent_runs.start(conn, mode="live")
+    first = _live_run(conn)
     agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 6}, {"slot": "16", "fill_to": 4}))
-    second = agent_runs.start(conn, mode="live")
+    second = _live_run(conn)
     agent_runs.finish(conn, second, "submitted", plan=plan({"slot": "15", "fill_to": 7}, {"slot": "16", "fill_to": 0}))
     for run, back in ((first, 2), (second, 1)):        # made on Mon 9 Nov, whatever day the tests run
         conn.execute("update agent_runs set started_at = %s where id = %s", (MONDAY - timedelta(hours=back), run))
@@ -1468,10 +1468,10 @@ def test_the_first_fill_cost_reads_against_the_cap(page_conn, monkeypatch, most,
     assert shown in cell and cell.startswith(f' {tone}"' if tone else '" href')
 
 
-def test_nothing_is_picked_until_a_viewer_picks_and_the_side_shows_attention_and_changes(conn, page_conn, even_columns):
-    first = agent_runs.start(conn, mode="live")
+def test_nothing_is_picked_until_a_viewer_picks_and_the_side_shows_attention_and_changes(conn, page_conn, even_columns, open_ledger):
+    first = _live_run(conn)
     agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "12", "fill_to": 6}, {"slot": "14", "fill_to": 4}))
-    second = agent_runs.start(conn, mode="live")
+    second = _live_run(conn)
     agent_runs.finish(conn, second, "submitted", plan=plan(
         {"slot": "12", "fill_to": 7, "sale_price": "2.75", "reason": "sells out"}, {"slot": "14", "fill_to": 4}))
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
@@ -1493,8 +1493,8 @@ def test_nothing_is_picked_until_a_viewer_picks_and_the_side_shows_attention_and
         assert f'.vm:not([data-js]):has(#sel-{slot}:target) #lane-{slot}' in page
 
 
-def test_picking_from_a_plan_section_row(conn, page_conn, tmp_path, monkeypatch):
-    run = agent_runs.start(conn, mode="live")
+def test_picking_from_a_plan_section_row(conn, page_conn, tmp_path, monkeypatch, open_ledger):
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "15", "fill_to": 6}))
     weekly = section(dashboard.render(dashboard.snapshot(page_conn, MONDAY)), '<section id="plan">', "</section>")
     assert ('<a class="num" id="num-15" href="?sel=15#sel-15" data-sel="15" aria-label="Selection 15: show it in the machine">15</a>'
@@ -1545,16 +1545,16 @@ def test_not_ours_is_half_as_wide_on_the_front_and_in_the_close_up():
     assert panels.count('<article class="ma-lane" id="lane-11"') == 1 and panels.count('class="ma-lane ma-notours"') == 7
 
 
-def test_the_front_and_close_up_carry_nothing_about_a_selection_that_is_not_ours(conn, page_conn, even_columns):
+def test_the_front_and_close_up_carry_nothing_about_a_selection_that_is_not_ours(conn, page_conn, even_columns, open_ledger):
     catalog(conn, ("ZZ-RIVAL-SKU", "Zebra Fizz Rival", "Zebra Fizz", "Mango", "16 oz glass bottle"),
             ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
     fulfilled(conn, "pr-15", "15", "ZZ-RIVAL-SKU", units_loaded=6, paid="5.55", at=MONDAY - timedelta(days=3))
     fulfilled(conn, "pr-12", "12", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
     store_poll(conn, "p1", (MONDAY - timedelta(days=3)).isoformat(), {"15": (987, 4000), "12": (250, 10)})
     store_poll(conn, "p2", (MONDAY - timedelta(hours=2)).isoformat(), {"15": (987, 4321), "12": (250, 12)})
-    first = agent_runs.start(conn, mode="live")
+    first = _live_run(conn)
     agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 2}, {"slot": "12", "fill_to": 5}))
-    second = agent_runs.start(conn, mode="live")
+    second = _live_run(conn)
     agent_runs.finish(conn, second, "submitted", plan=plan(
         {"slot": "15", "product": "ZZ-RIVAL-SKU", "fill_to": 9, "sale_price": "8.76", "reason": "Quokka reason"},
         {"slot": "12", "fill_to": 6, "reason": "ours"}))
@@ -1575,7 +1575,7 @@ def test_the_front_and_close_up_carry_nothing_about_a_selection_that_is_not_ours
         assert "at restock" in lane_html(page, "12")
 
 
-def test_the_facts_say_where_each_number_comes_from(conn, page_conn):
+def test_the_facts_say_where_each_number_comes_from(conn, page_conn, open_ledger):
     catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
     fulfilled(conn, "pr-15", "15", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
@@ -1607,11 +1607,11 @@ def test_the_next_restock_is_the_friday_after_the_cutoff_or_a_midweek_visit(visi
     assert dashboard._restock(None) is None
 
 
-def test_the_page_says_next_restock_for_what_the_plan_does_and_friday_only_for_the_day(conn, page_conn, even_columns):
+def test_the_page_says_next_restock_for_what_the_plan_does_and_friday_only_for_the_day(conn, page_conn, even_columns, open_ledger):
     fulfilled(conn, "pr-1", "12", "COKE-20OZ", units_loaded=4, paid="4.80", at=MONDAY - timedelta(days=3))
-    first = agent_runs.start(conn, mode="live")
+    first = _live_run(conn)
     agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "12", "fill_to": 6}, {"slot": "14", "fill_to": 4}))
-    second = agent_runs.start(conn, mode="live")
+    second = _live_run(conn)
     agent_runs.finish(conn, second, "submitted", plan={**plan(
         {"slot": "12", "fill_to": 7, "sale_price": "2.75"}, {"slot": "14", "fill_to": 0}), "visit": "midweek"})
     snap = dashboard.snapshot(page_conn, MONDAY)
@@ -1633,11 +1633,11 @@ def _set_wildcard(conn, slot: str) -> None:
                  " on conflict (key) do update set value = excluded.value", (Jsonb(slot),))
 
 
-def test_the_wildcard_slot_is_marked_on_the_front_the_close_up_and_the_plan(conn, page_conn):
+def test_the_wildcard_slot_is_marked_on_the_front_the_close_up_and_the_plan(conn, page_conn, open_ledger):
     _set_wildcard(conn, "37")
-    first = agent_runs.start(conn, mode="live")
+    first = _live_run(conn)
     agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "37", "fill_to": 4}, {"slot": "15", "fill_to": 4}))
-    second = agent_runs.start(conn, mode="live")
+    second = _live_run(conn)
     agent_runs.finish(conn, second, "submitted", plan=plan({"slot": "37", "fill_to": 6, "sale_price": "7.50"},
                                                            {"slot": "15", "fill_to": 4}))
     snap = dashboard.snapshot(page_conn, MONDAY, public=True)
@@ -1739,3 +1739,62 @@ def test_the_status_bar_and_facts_say_how_long_the_sales_window_really_is():
     assert words(timedelta(days=3, hours=23)) == "in the last 3 d 23 h"
     assert words(timedelta(days=10)) == "in the last 10 d"                     # a gap: not "the last 7 days"
     assert words(timedelta(seconds=30)) == "in under a minute"
+
+
+# --- Main's panels inside the layout (#191 pricing, #193 leaderboards, #194 fill checks, #196 charts, #192) --
+
+def test_the_under_fill_flag_shows_in_the_side_card_and_the_facts_too(conn, page_conn, open_ledger):
+    under = TEST_SLOTS[0]
+    catalog(conn, ("BOTTLE-20", "Test bottle", "Plain", None, "20 oz bottle"))
+    set_value(conn, "capacity_overrides", {"BOTTLE-20": 8}, "test")
+    first = _live_run(conn)
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": under, "product": "BOTTLE-20", "fill_to": 4}))
+    second = _live_run(conn)
+    agent_runs.finish(conn, second, "submitted", plan=plan(
+        {"slot": under, "product": "BOTTLE-20", "fill_to": 6, "reason": "Budget < limit"}))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
+    row = section(page, f'<a class="chg" id="chg-{under}"', "</a>")
+    assert '<span class="pill warn">fills 6 of 8: 2 spaces empty</span>' in row and "Budget &lt; limit" in row
+    facts = section(page, f'<div class="sd" id="sel-{under}"', "</dl>")
+    assert '<dt>Fill check</dt><dd><span class="sd-fr unk">fills 6 of 8: 2 spaces empty</span></dd>' in facts
+    plan_row = page.split(f'id="slot-{under}"', 1)[1].split("</summary>", 1)[0]      # main's flag on The plan
+    assert "fills 6 of 8: 2 spaces empty" in plan_row
+
+
+def test_before_the_opening_the_spendable_cell_shows_no_test_figures_only_its_chart(conn, page_conn):
+    # A test purchase and a test run before any opening: development spend, which the live page doesn't count.
+    fulfilled(conn, "pr-test", "15", "COKE-20OZ", units_loaded=5, paid="6.25", at=MONDAY - timedelta(days=3))
+    run = _live_run(conn)
+    agent_runs.finish(conn, run, "submitted", cost_usd=Decimal("0.77"))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    cell = dashboard._status_bar(snap, charts={"spend": "/dashboard/spend"}).split("Spendable", 1)[1].split("</div>")[0]
+    assert "Before the opening" in cell and "development spend, not from the $600" in cell
+    assert "$6.25" not in cell and "$0.77" not in cell and "drinks" not in cell
+    assert '<a href="/dashboard/spend">Development spend by week</a>' in cell
+    # A link can't hold a link: the cell is a box, and its label alone links to the money panel.
+    assert '<a class="label" href="#money">Spendable</a>' in dashboard._status_bar(snap, charts={"spend": "/x"})
+    assert "Development spend by week" not in dashboard._status_bar(snap)       # run on its own: no chart
+
+
+def test_after_the_opening_the_spendable_cell_reads_the_ledger_and_links_its_chart(conn, page_conn, open_ledger):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    bar = dashboard._status_bar(snap, charts={"spend": "/dashboard/spend"})
+    cell = bar.split("Spendable", 1)[1].split("</div>")[0]
+    assert "$600.00" in cell and "Spent since the opening" in cell
+    assert '<a href="/dashboard/spend">Development spend by week</a>' in cell
+
+
+def test_the_pricing_leaderboards_and_charts_sit_inside_the_layout(conn, page_conn, open_ledger):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    page = dashboard.render(snap, charts={"money": "/dashboard/money", "pnl": "/dashboard/pnl",
+                                          "spend": "/dashboard/spend"})
+    # Status bar, the machine, then Pricing right after it, then Money; leaderboards after Back stock.
+    order = [page.index(anchor) for anchor in ('<nav class="strip"', '<section id="vm"', '<section id="pricing"',
+                                               '<section id="money"', '<section id="plan"', '<section id="closet"',
+                                               '<section id="leaderboards"', "<footer>")]
+    assert order == sorted(order)
+    head = page.split("</header>")[0]
+    assert '<a class="chartlink" href="/dashboard/money">Money chart</a>' in head
+    assert ('<p class="charts">Charts: <a href="/dashboard/money">Money by day</a> &middot; '
+            '<a href="/dashboard/pnl">Weekly P&amp;L</a></p>') in page
+    assert '<a href="/dashboard/spend">Development spend by week</a>' in page.split('<section id="vm"')[0]

@@ -1029,7 +1029,8 @@ def _restock(lane: Lane) -> tuple[str, str]:
     return f"Plan {lane.fill}: nothing to add.", ""
 
 
-def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first: Mapping | None = None) -> str:
+def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first: Mapping | None = None,
+                fill_check: str | None = None) -> str:
     """The picked selection's facts in words, each saying where it comes from: product, on hand,
     price, what the slot sold, the next restock, capacity and the agent's whole reason. `first` is the
     selection's line in the plan for the first fill, before the slot lock. Shown with its shelf
@@ -1061,6 +1062,9 @@ def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first
     restock, tone = _restock(lane)
     rows = [("On hand", on_hand), ("Price", price), ("The slot sold", sales),
             ("Next restock", f'<span class="sd-fr {tone}">{restock}</span>' if tone else restock)]
+    if fill_check:          # the plan's fill against the column's capacity (`capacity.fill_check`)
+        tone = "" if fill_check == capacity.NOT_COUNTED else "unk"
+        rows.append(("Fill check", f'<span class="sd-fr {tone}">{_e(fill_check)}</span>' if tone else _e(fill_check)))
     if first:
         rows.append(("First fill", _e(first["text"])))
     if lane.wildcard:
@@ -1096,7 +1100,8 @@ def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first
 # --- The whole machine view ------------------------------------------------------------------------
 
 def split_html(view: dict[str, dict], products: dict | None, linked: bool, sold: Mapping | None = None,
-               span: str = "in the last 7 days", first_fill: Mapping | None = None) -> tuple[str, str]:
+               span: str = "in the last 7 days", first_fill: Mapping | None = None,
+               fill_checks: Mapping | None = None) -> tuple[str, str]:
     """The machine's front, and the close-up's shelves: for each shelf with one of ours, its lanes
     drawn from above (not ours half as wide) and the facts of each of ours. Which one shows is the
     page's choice (`data-sel`, `selection_css`).
@@ -1118,7 +1123,8 @@ def split_html(view: dict[str, dict], products: dict | None, linked: bool, sold:
         where = {1: " (top)", SHELVES: " (bottom)"}.get(r, "")
         cards = "".join(lane_card(lanes[f"{r}{c}"], None, None, linked) if f"{r}{c}" in ours
                         else _not_ours(f"{r}{c}") for c in range(1, COLUMNS + 1))
-        details = "".join(detail_html(lanes[s], (sold or {}).get(s), span, linked, (first_fill or {}).get(s))
+        details = "".join(detail_html(lanes[s], (sold or {}).get(s), span, linked, (first_fill or {}).get(s),
+                                      (fill_checks or {}).get(s))
                           for s in mine)
         panels.append(f'<div class="ma-shelf" id="shelf-{r}" data-n="{r}" role="group" aria-label="Shelf {r}">'
                       f'<div class="ma-sh"><h3>Shelf {r}{where} &middot; {r}1&ndash;{r}{COLUMNS}</h3>'

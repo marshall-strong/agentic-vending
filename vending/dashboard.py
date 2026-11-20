@@ -1349,7 +1349,8 @@ def _changes_html(snap: dict, view: dict) -> str:
                                             + (f"{WILD} " if row["slot"] == snap.get("wildcard") else "")
                                             + f'{_e(row["product"] or "no product")} '
                                             f'&middot; {plan_rounds.format_cents(row["price_cents"])} &middot; '
-                                            f'{_plural(row["units"], "unit")}</span>', view) + "</li>"
+                                            f'{_plural(row["units"], "unit")}' + _fill_pill(row.get("fill_check"))
+                                            + "</span>", view) + "</li>"
                 for row in p["slots"])
             body = f'<ul class="changes ff">{rows}</ul>' if rows else '<p class="dim">The plan has no slots.</p>'
         return f'<div class="ops-card ops-chg" id="plan-changes"><h3>{title}{jump}</h3>{body}</div>'
@@ -1366,15 +1367,29 @@ def _changes_html(snap: dict, view: dict) -> str:
         items = [(slot, v["change"]) for slot, v in view.items() if v["change"]]
         items += [(s["slot"], {"labels": ["dropped"], "kind": "bad", "reason": None})
                   for s in p["slots"] if s["changed"] and s["slot"] not in view]
+        checks = {s["slot"]: s.get("fill_check") for s in p["slots"]}
         rows = "".join(
             "<li>" + _pick(slot, f'<span class="dotk {c["kind"]}"></span><b>{_e(slot)}</b><span>{_e(", ".join(c["labels"]))}'
-                                 + (f" {WILD}" if slot == snap.get("wildcard") else "")
+                                 + (f" {WILD}" if slot == snap.get("wildcard") else "") + _fill_pill(checks.get(slot))
                                  + (f'<span class="why">{_e(c["reason"])}</span>' if c["reason"] else "") + "</span>",
                            view) + "</li>"
             for slot, c in items)
         body = (f'<ul class="changes">{rows}</ul>' if rows else
                 f'<p class="dim">No slot changes since run #{p["previous_run"]}.</p>')
     return f'<div class="ops-card ops-chg" id="plan-changes">{head}{body}</div>'
+
+
+def _fill_pill(check: str | None) -> str:
+    """A plan row's under-fill flag (`capacity.fill_check`, #194) as a pill: a warning, or muted when the
+    capacity isn't counted."""
+    return f" {_pill(check, 'muted' if check == capacity.NOT_COUNTED else 'warn')}" if check else ""
+
+
+def _fill_checks(snap: dict) -> dict:
+    """Each selection's under-fill flag in the plan the machine shows for the next restock (`_check_plan_fills`)."""
+    plan = snap.get("weekly_plan", snap["plan"])
+    p = plan["data"] if plan["ok"] else None
+    return {s["slot"]: s["fill_check"] for s in (p or {}).get("slots", []) if s.get("fill_check")}
 
 
 def _first_fill_lines(snap: dict) -> dict:
@@ -1385,7 +1400,9 @@ def _first_fill_lines(snap: dict) -> dict:
     if not p or p.get("message"):
         return {}
     return {row["slot"]: {"text": f'{row["product"] or "no product"} · {plan_rounds.format_cents(row["price_cents"])} · '
-                                  f'{_plural(row["units"], "unit")}', "reason": row["reason"]}
+                                  f'{_plural(row["units"], "unit")}'
+                                  + (f' · {row["fill_check"]}' if row.get("fill_check") else ""),
+                          "reason": row["reason"]}
             for row in p["slots"]}
 
 
@@ -1412,7 +1429,7 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
         span = _window_words(sales["data"])
     front, panels = machine_art.split_html(shown, products["data"] if products["ok"] else None,
                                            p is not None and "weekly_plan" not in snap, sold, span,
-                                           _first_fill_lines(snap))
+                                           _first_fill_lines(snap), _fill_checks(snap))
     lede = ""
     if p is None:
         lede = '<p class="empty v-next">No plan yet: Next restock shows the machine as it is now.</p>'
@@ -1778,7 +1795,8 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
         cells.append(_cell("Order cutoff", _time(cutoff, "until", now), _time(cutoff, "etday"), "#requests",
                            "warn" if cutoff - now < CUTOFF_SOON else ""))
 
-    # Money: spendable from the ledger once it has opened; before that, development and test spend.
+    # Money: spendable from the ledger once it has opened; before that, only that it is development spend
+    # (the live page shows no test purchases, #192).
     spend, money = snap["spend"], snap.get("money")
     ledgered = money["data"] if money and money["ok"] and money["data"].get("opened") else None
     if ledgered:
@@ -1797,22 +1815,12 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
                            + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else ""),
                            "#money", link=spend_link))
     elif spend["ok"]:
+        # The ledger has opened (the live spend counts from it), but it couldn't give a balance (no slot
+        # assignment, say): the balance is unknown, not unopened. What was spent since the opening shows.
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
-        label, period = "Spent so far", ""
-        # "Ledger not open" only when the ledger said so. A ledger that couldn't be read, or couldn't
-        # give a balance (no slot assignment, say), has an unknown balance, not an unopened one.
-        unopened = bool(money and money["ok"] and not money["data"].get("problem"))
-        state = "Ledger not open" if unopened else "Balance unavailable"
-        if unopened:
-            # No opening yet (or one dated ahead): all of this is development and test spend (#104).
-            # A ledger that can't answer says nothing about the period, so the cell claims none.
-            opens = money["data"].get("opens_at")
-            label = "Spent before the opening"
-            period = (" &middot; development and test, not from the $600"
-                      + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else ""))
         unpriced = f' ({m["unpriced"]} without a cost)' if m["unpriced"] else ""
-        cells.append(_cell("Spendable", f'<span class="dim">{state}</span>',
-                           f'{label}: drinks {_money(dr["paid"])}, model {_money(m["total"])}{unpriced}{period}',
+        cells.append(_cell("Spendable", '<span class="dim">Balance unavailable</span>',
+                           f'Spent since the opening: drinks {_money(dr["paid"])}, model {_money(m["total"])}{unpriced}',
                            "#money", link=spend_link))
     else:
         cells.append(_cell("Spendable", '<span class="dim">&mdash;</span>', "not available", "#money"))
