@@ -94,6 +94,16 @@ def test_a_shared_misread_does_not_hide_a_price_change_before_it():
     assert average(readings, [(T[1], T[2], 3, 650)]) == ((150 + 2 * 250) / 3, 0)       # not 250 for all three
 
 
+def test_a_price_seen_only_inside_the_window_still_prices_its_units():
+    # S7 of #174: prices 150, 250, 150, both counters misread at T[1] and agree on the window from T[0]. The window opens and
+    # closes at 150, but 250 was listed in between: 3 units and 650 cents fit one split only (one at 150, two at 250)
+    readings = [(T[0], 10, 1000, 150), (T[1], 4, 500, 250), (T[2], 13, 1650, 150)]
+    assert average(readings, [(T[1], T[2], 3, 650)]) == (650 / 3, 0)         # old code: 150 for all three units
+    # the same window with other takings: 333 cents fit no split of 3 units at 150 and 250; 450 fit only all three at 150
+    assert average(readings, [(T[1], T[2], 3, 333)]) == (None, 3)            # unknown, never credited to 150
+    assert average(readings, [(T[1], T[2], 3, 450)]) == (150, 0)
+
+
 
 def test_a_sale_before_the_slots_first_reading_takes_that_reading():
     readings = [(T[1], 5, 750, 150)]
