@@ -599,7 +599,12 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         "catalog_requests": catalog,
         "catalog_counts": _catalog_counts(catalog),
     }
-    if now < lock_at():
+    try:
+        before_lock = now < lock_at()
+    except settings.SettingsError:
+        # The assignment panel explains the bad setting. Keep the weekly view available.
+        before_lock = False
+    if before_lock:
         snap["weekly_plan"] = snap["plan"]
         snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots)))
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))

@@ -556,6 +556,24 @@ def test_with_no_assignment_the_public_json_has_no_slot_stock_or_plan_rows(site,
     assert OLD_SLOT not in body and "9.99" not in body
 
 
+def test_bad_slot_lock_setting_leaves_the_weekly_dashboard_available(site, conn, monkeypatch):
+    run = agent_runs.start(conn, mode="dry-run")
+    agent_runs.finish(conn, run, "skipped", plan={"slots": []}, update="Weekly dashboard test update.")
+    monkeypatch.setenv("SLOTS_LOCK_AT", "2026-12-03")
+
+    status, _, html = _get(site, "/dashboard")
+    assert status == 200
+    assert "<h2>The plan " in html and "Weekly dashboard test update." in html
+    assert "SLOTS_LOCK_AT" in html
+
+    status, _, body = _get(site, "/dashboard/state.json")
+    assert status == 200
+    snap = json.loads(body)
+    assert snap["plan"]["data"]["run"]["id"] == run
+    assert snap["plan"]["data"]["slots"] == []
+    assert not snap["ours"]["ok"] and "SLOTS_LOCK_AT" in snap["ours"]["why"]
+
+
 def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, conn, tmp_path, monkeypatch):
     path = r"C:\Users\Made Up\private\first-fill.json"
     rows = day_one(**{"15": {"product": "Sample Cherry Soda", "why": "Made-up fixture reason."},
