@@ -145,7 +145,7 @@ def test_the_page_draws_every_panel_from_the_snapshots_own_selections(no_databas
         assert anchor in page, anchor
     assert "Opening" in page or "opening" in page
     assert "How it decided" in page and "pr-001" in page and "pr-002" in page and "GORGIE Electrolyte Water" in page
-    assert "COCA-ORIGINAL-20BOT" in page and "from Friday" in page and "6 of 20 slots changed" in page
+    assert "COCA-ORIGINAL-20BOT" in page and "from the next restock" in page and "6 of 20 slots changed" in page
     assert "Our slots" not in page and "vmc1" not in page
 
 
@@ -170,7 +170,8 @@ def test_the_demo_keeps_its_toggles_under_its_own_storage_keys(no_database):
     for text in (page, live):
         # Every key goes through the prefix: no literal key is left in the script.
         assert not re.search(r"""(?:getItem|save)\(\s*['"]dash-""", text)
-        assert len(re.findall(r"PFX \+ '(?:show|view|changed|shelf)'", text)) == 9
+        # show, view and changed: read once each, saved four times (the ops layout keeps no shelf key).
+        assert len(re.findall(r"PFX \+ '(?:show|view|changed|shelf)'", text)) == 7
     assert "'demo-dash-' + " not in page      # the prefix is a variable, set once
 
 

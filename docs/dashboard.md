@@ -14,7 +14,7 @@ script or another agent.
 
 ![The dashboard with sample data](dashboard/current.png)
 
-*Sample data from a throwaway database, not a real run. **The highlighted columns in this picture are not our real slots.** For the screenshot our slots were set to columns 2, 4, 6 and 8, to show the page follows `vending.slots`. Our real slots are the ones the stored server assignment names (`python -m vending.slots`).*
+*Made-up data from a throwaway database, not a real run, and the purple banner says so. **The selections lit in this picture are not our real slots.** For the screenshot the stored assignment was set to 20 scattered selections, to show the page follows `vending.slots`. Our real slots are the ones the stored server assignment names (`python -m vending.slots`).*
 
 The money panel (#48), with seeded test data rendered at a fixed time (9 Dec): an opening of $600, two fulfilled
 requests, three model calls and one pending request. Light, dark and phone:
@@ -30,41 +30,41 @@ what changed and why.
 
 | Part | What's in it | Where it comes from |
 |---|---|---|
-| Verdict | **OK**, **Check** or **Problem** next to the title (and in the browser tab), from the worst item in Needs attention | everything below |
-| Tiles | The halt switch and who last changed it, the latest live run and how long it has run, and the countdown to the Thursday 23:59 Eastern cutoff. The machine tile shows how old the last poll is and what our slots sold in the 7 days up to it. Once the ledger opens, the spend tile uses the ledger. The container also shows browsers, visits and sign-ins, all time and this week. [`deploy.md`](deploy.md#the-public-pages) | `config`, `agent_runs`, `polls`, `purchase_requests`, `vending.ledger`, `page_visits`, `page_visit_totals` |
-| Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours; on the Container App, a job in the worker's latest sync round didn't exit 0 (see [Sync health](#sync-health)). **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; a shelf price, or a price the plan sets, that isn't legal (see Pricing); and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot, and the worker's latest round |
-| In the machine | A close-up of our selections, one shelf at a time, beside a small drawing of the machine's front (5 shelves of 8; row r, column c is selection "rc") that picks the shelf. Which selections are ours comes only from the stored assignment (`vending.slots.our_slots`, kept by `python -m vending.slots record`), read on every page; with none stored the panel says so and draws nothing. Each of ours is a lane seen from above the front edge: the packages on the rail, dashed empty slots, its number plate and price tag, then the product, the count and what Friday does to it. Every other selection is a grey card with its number and "Not ours", and nothing else about it is in the page or `/state.json`. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next Friday** is the latest plan: the empty slots fill in, a swap draws the new product's package and colours, a pull empties the lane, a new price shows the old one struck through, and the agent's reason sits under the lane on one line. Beside it, each change with the agent's reason. "plan row" opens the selection in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs`, `catalog_products`, `config.capacity_overrides` |
+| Status bar | One row of six cells, each a link to its section. **Agent:** the verdict (**OK**, **Check** or **Problem**, from the worst item in Needs attention; the browser tab shows it too), the halt switch and who last changed it, and the latest run. **Machine poll:** how long ago the last poll was taken, its time in Eastern, when the worker's next sync should read the machine (the worker's own `next_round_at` when it serves the page, else `SYNC_AT_MINUTE` past the hour), and what our slots sold in the 7 days to that poll. The window's start date isn't shown: it read like an update time. **Order cutoff:** a countdown to Thursday 23:59 Eastern. **Spendable:** from the ledger once its opening entry is in the past, with what has been spent since the opening; if the ledger can't give a balance (no slot assignment, say), "Balance unavailable" and the spend since the opening. Before the opening it shows no test runs or test purchases, only that this is development spend, not from the \$600. Where the server serves the charts, the cell links the development-spend chart. **Catalog approvals:** approved, pending, rejected, any `sending` or `unknown`, the places left under the bridge's cap, and the 25 Nov deadline until it passes. **Plan:** before the slot lock, the plan for the first fill (its slots and its most-we-pay cost against the proposed \$366 cap); from the lock, the plan for the next restock: "For the next restock · Fri 4 Dec · 2 changes", or "midweek visit" for a paid off-cycle visit, which the plan records without a date. Almost every restock is the free Friday visit, the Friday after the Thursday cutoff that follows the plan's run; a paid \$25 midweek visit is a restock too, and either can change anything. On a phone the six cells wrap to two columns | `config`, `agent_runs`, `polls`, `purchase_requests`, `vending.ledger`, `product_requests`, `first_fill_plans` |
+| In the machine | One screen. On the left, the machine's whole front: 5 shelves of 8 (row r, column c is selection "rc"). Which selections are ours comes only from the stored assignment (`vending.slots.our_slots`, kept by `python -m vending.slots record`), read on every page; with none stored the section says so and draws nothing. Each of ours shows its number, a next-restock badge (+N back, swap, new, \$ for a new price, pull), its front package, units against capacity, the tag price, the product name and a fill bar. Every other selection is a grey cell half as wide with its number and "Not ours", and nothing else about it is in the page or `/state.json`. Beside each shelf, what our lanes on it hold and what the next restock adds. On the right, **Needs attention** and the plan's changes (before the lock, each line of the plan for the first fill; after it, each slot the latest plan changed, with the agent's reason). Tap one of ours on the front, a row of the plan's changes, or a slot number in The plan, and the right side shows that selection's shelf from above instead, with the picked lane wider and not-ours lanes half width, and its facts: on hand, price, what the slot sold, the next restock, the plan's fill check ("fills 6 of 8: 2 spaces empty", as on The plan's rows and the side card's), the first fill, capacity and the agent's whole reason, each saying where it comes from ("from receipts and polls", "unknown: no price from the polls"). **Close** (or Escape) goes back to Needs attention. The wildcard slot (config `wildcard_slot`, #166) is marked only when the stored assignment makes it ours: a **W** badge on the front, a "wildcard" chip on its lane, a Wildcard line in its facts, and a pill on its rows in the plan's changes and The plan. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next restock** is the latest plan (the toggle's hint gives its date: "Next restock · Fri 4 Dec", or "midweek visit"): the empty slots fill in, a swap draws the new product's package and colours, a pull empties the lane, and a new price shows the old one struck through | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs`, `first_fill_plans`, `catalog_products`, `config.capacity_overrides` |
 | Pricing | One row per selection of ours (the stored assignment, nothing else). **Now** is the shelf price from the latest poll. **Unit cost** is what the units in the slot cost, from the receipts; with no receipt cost it is the primary sourcing option's pack price over the pack size, labelled **expected** (the product is the receipts', else the plan's). **Floor** is the pricing gate's, as the planner sets it for a restock: the highest of the receipt cost's floor and each sourcing option's floor at its most-we-pay price (`pricing.floor_cents`, `pack_floor_cents`); hover it for the parts. **Legal** is `pricing.check_price` against that floor and the selection's ceiling, the planner's (`planner.Config.ceiling_for`: \$6.50, or \$8.00 for the one wildcard selection, #166); with no cost known the floor is unknown, and only the 5-cent step and the ceiling are checked. A price that isn't legal shades the row and says why. **Margin** is what one sale keeps after the sales tax inside the price, less the unit cost. **Sold** is units in the last 7 days and per class day (own rate, or the fall prior until the slot has 5 in-stock class days). **Plan** follows the plan that "The plan" shows: before the slot lock, the first-fill plan's price (marked **first fill**); from the lock, the agent's weekly plan. It shows the new price and the reason, checked the same way against the floor of the product that plan puts in (its sourcing rows, else the first-fill plan's own floor). A plan entry of an unexpected shape gives that row no plan price. The line is the shelf price at every poll over the last 28 days, a dot at each change; a change shows at the poll that first saw it | polls (`get_machine_state`, `machine_state.price_history`), `vending.stock`, `sourcing_options`, `config`, `agent_runs` |
-| The plan | Before the slot lock, the plan for the first fill. Each line shows the product, price and units. Open it for the agent's reason and the code's checks. The header compares the fill cost with the proposed $366 cap. The page shows the picked plan or labels the latest one "latest, not picked". A plan for an earlier assignment shows a message with no slots. From the lock, the agent's Friday plan shows its slot changes, reasons, weekly update and notes; each line also says what the slot sold in the 7 days to the last poll. That count is the slot's, not the product's: a swap at a visit inside the window adds the old product's sales (#172), and the page says so. | `first_fill_plans` before the lock, then `agent_runs`, `vending.stock` and `get_machine_state` |
+| Needs attention | Beside the machine, never cut short. One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours; on the Container App, a job in the worker's latest hourly sync didn't exit 0 (see [Sync health](#sync-health)). **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot, and the worker's latest sync |
+| The plan | Before the slot lock, the plan for the first fill. Each line shows the product, price and units. Open it for the agent's reason and the code's checks. The header compares the fill cost with the proposed $366 cap. The page shows the picked plan or labels the latest one "latest, not picked". A plan for an earlier assignment shows a message with no slots. From the lock, the agent's plan for the next restock shows its slot changes, reasons, weekly update and notes; each line also says what the slot sold in the 7 days to the last poll. That count is the slot's, not the product's: a swap at a visit inside the window adds the old product's sales (#172), and the page says so. | `first_fill_plans` before the lock, then `agent_runs`, `vending.stock` and `get_machine_state` |
 | Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it. Under each, **How it decided** opens the run's steps in order: the model's reasoning (a summary the API returns, never the raw chain of thought), anything it wrote, each tool call and what came back, with failed replies in red. A run in progress shows the steps so far | `agent_runs`, `agent_steps` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
 | Money | **Balance**, **spendable** (balance less the sales tax set aside) and **profit since the opening**. One bar shows where the money in (opening, capital, takings) has gone: drinks bought, midweek visits, model spend, tax handed over, tax set aside, and what is still spendable. Then model spend against the proposed \$9 and visit fees against the proposed \$50, the profit and loss since the opening (units sold across a swap the counters can't split have no exact cost, so cost of sales and profit show as unknown, and their estimate gets its own line, labelled as an estimate and not in profit, #172), the proposed split of the \$600 (#113), and the ledger's notes about the live period. **Committed:** what the pending purchase requests could still cost at most (the dearer of each line's primary and alternate at `packs x max_price_per_pack`, plus an off-cycle request's visit fee), since the ledger counts a purchase only once it is fulfilled. If any pending line has no price we can read, the most is unknown, never counted as \$0, and so is what stays spendable after it. The ledger figures count spending from the opening entry. Before the opening entry, it says how to record it; an opening entry dated in the future (recorded ahead with `--at`) keeps that view and says when the ledger opens. Receipts and visit fees from before the opening are test purchases: once the opening is recorded, stock on hand and cost of sales leave them out too (`stock.receipts_count_from`, #150). A submission sent with no usable answer (`sending` or `unknown` in `purchase_submissions`) counts as committed too, since it may exist at the bridge. Needs attention adds: **Problem** if spendable is below zero, or if pending requests could cost more than is spendable; **Check** if spendable would fall under the proposed \$53 floor, if requests are pending with no opening entry or before an opening dated ahead (the date in Eastern), if a submission is unsettled, if a pending line has no price we can read, or if the ledger can't give a balance (for example, our slot assignment isn't recorded); **Info** if model spend passes \$9. If reading the ledger passes the statement timeout, only this panel says it isn't available; the rest of the page still shows | `vending.ledger` (`balance`, `pnl`), `purchase_requests`, `purchase_submissions` |
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates). Then every catalog request, newest first: counts by status, the open (`pending`) ones against the bridge's cap and the places left, and each request's status, its SKU once it has one (an approved product may be added under a SKU we wouldn't guess), and the decision note | `purchase_requests`, `purchase_lines`, `product_requests` |
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
 | Product leaderboards | The ten best sellers by SKU, flavor, and brand for our current assignment. Each row shows units sold, revenue excluding tax, and sell-through. Sell-through divides units sold by units loaded since the opening. For this week (Saturday to Friday, Eastern), it divides units sold by starting stock plus units loaded. The rate is unavailable if sales exceed recorded stock. Sales with an unknown product stay out of the rankings. The panel counts those sales and labels the units with an estimated cost. | `vending.stock`, `vending.ledger`, `catalog_products` |
+| Footer | One small line on who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `page_visits`, `page_visit_totals` |
 
 ### The machine close-up
 
-![In the machine, dark theme](dashboard/machine-closeup-dark.png)
+![In the machine with selection 32 picked, dark theme](dashboard/machine-closeup-dark.png)
 
 | | |
 |---|---|
-| ![Light theme](dashboard/machine-closeup-light.png) | ![Next Friday](dashboard/machine-closeup-next-friday.png) |
-| Light theme | Next Friday: a swap (12), a price change (13) |
+| ![Light theme](dashboard/machine-closeup-light.png) | ![Next restock](dashboard/machine-closeup-next-friday.png) |
+| Light theme, before the slot lock: 32, the made-up wildcard, picked | After the lock, Next restock: a swap (31), new prices (13, 43, 58), a pull (51) |
 
-![A 390 px phone](dashboard/machine-closeup-phone-390.png)
+![A 390 px phone, with the close-up open as a sheet](dashboard/machine-closeup-phone-390.png)
 
-*Sample data in a throwaway local database, not a real run: the products, prices, plan and reasons
-are made up, and our selections were set to columns 1 to 4 for the picture. Seeded the evening of
-15 Nov 2026.*
+*Made-up data in a throwaway local database, not a real run, and the purple banner says so: the
+slot assignment (20 scattered selections), products, prices, sales, plans, reasons, requests and
+visits are invented. Seeded 19 Nov 2026.*
 
 How to read a lane:
 
-- **Count.** The big number is units on hand (Now) or after the plan's fill (Next Friday). **~4**
+- **Count.** The big number is units on hand (Now) or after the plan's fill (Next restock). **~4**
   is from a photo count: units seen down the rail, less sales since, so at least that many. **?**
   means no receipt or count yet; the rail behind the front item is then hatched, never drawn full or
   empty.
-- **+N back Friday** is the plan's `fill_to` less the units on hand, when both are known. With
+- **+N at restock** is the plan's `fill_to` less the units on hand, when both are known. With
   units unknown it is **+?**. With no plan there is no number, only "no plan yet". It is never
   capacity less units.
 - **Dashed slots** are empty room in the column, based on [package capacity](capacity.md).
@@ -72,7 +72,7 @@ How to read a lane:
 - **Fill check.** The current plan shows how many spaces a proposed fill leaves and the reason,
   if given. The same warning appears under Needs attention as a Check. A plan line with unknown
   capacity says "capacity not counted".
-- **Swap, pull, price.** On Next Friday a swap draws the new product, a pull shows the lane empty,
+- **Swap, pull, price.** On Next restock a swap draws the new product, a pull shows the lane empty,
   and a price change strikes the old tag through. The agent's reason is cut to one line; the full
   text is in the plan row.
 - **Named from a count.** Photo and door counts name a product in free text, not a SKU, so it
@@ -105,19 +105,23 @@ every flavor:
 word or two printed on the front package. A new package size (a 1 L bottle, say) is a new `SHAPES`
 entry with its diameter and height; anything else in the page needs no change.
 
-On a phone the shelf is a strip that shows two lanes at a time: swipe, drag its scroll bar, use the
-arrows on each lane, or focus it and use the arrow keys. From 820 px wide the whole shelf of 8
-shows at once. Every lane has an aria label that reads it out (product, count, Friday, price,
-reason); with reduced motion set, the Friday fill doesn't animate.
+On a phone the front comes first, then Needs attention and the plan's changes. Tapping one of ours
+opens its close-up as a sheet from the bottom: the picked lane large beside its facts, with the
+whole shelf under it. Close it with the button, a tap outside it, or Escape. Every selection on the
+front has an aria label that reads it out (product, count, next restock, price, reason); with
+reduced motion set, the restock fill and the sheet don't animate.
 
 A slot counts as changed when what the plan asks for changes (product, fill, price, keep). A
 reworded reason alone is not a change. The status and machine panels follow live runs.
 The plan compares with the previous live plan.
 
 The page refreshes itself in place every 30 seconds, keeping your scroll position, any open
-slot or arguments, the tool-call filter, the Now / Next Friday choice, the shelf you picked and the
-changed-only switch, and the verdict in the tab title. Without JavaScript the machine shows Now
-(the shelf links still work), the plan shows every slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
+slot or arguments, the tool-call filter, the Now / Next restock choice, the selection you picked and
+the changed-only switch, and the verdict in the tab title. A new visit starts with nothing picked,
+so Needs attention shows. Without JavaScript the machine shows Now, each selection's link
+(`?sel=15#sel-15`) still opens its close-up, and the timed reload keeps that pick while the stored
+assignment makes it ours (Close loads the page without it, so it stays closed); a shelf's link opens its first selection of ours, so a phone's sheet opens
+too. The plan shows every slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
 page and says how old it is. Without JavaScript it reloads the whole page instead.
 
 ## The demo copy
@@ -146,8 +150,8 @@ to it as "Demo copy"; the demo links back as "Live dashboard".
   count would need a new `page` value in `page_visits`, whose check allows `/login`, `/dashboard`
   and `/db` only (migration 016), so it is a migration; this change adds none. The counter never
   tries to write a demo view.
-- **Its toggles are its own.** The page keeps the Now / Next Friday choice, the shelf and the
-  filters in `localStorage`, which both pages share by address. The demo uses keys that start
+- **Its toggles are its own.** The page keeps the Now / Next restock choice, the changed-only
+  switch and the tool-call filter in `localStorage`, which both pages share by address. The demo uses keys that start
   `demo-dash-`, the live page `dash-`, so a switch flipped on the demo doesn't move the live page's.
 - **Signed out**, the demo's JSON answers 401 like the live JSON, and its page redirects to the
   password page. A POST to either is refused with 405. The demo can't set off anything that reads
@@ -174,7 +178,7 @@ made-up data (`vending/demo/make.py`), runs `snapshot()` on it, writes the file 
 
 ## Catalog requests
 
-The instructors must approve every day-one product by Wed 25 Nov 2026, so the panel lists all of
+The instructors must approve every product for the first fill by Wed 25 Nov 2026, so the panel lists all of
 our catalog requests, not the newest few. They are our own team's records, so the public page
 shows them too. Above the list:
 
@@ -254,10 +258,10 @@ The page shows only what something recorded, and says so when nothing did.
 
 - **Stock is estimated from receipts and polls, not a sensor.** Units on hand are what the
   fulfilled receipts loaded, minus what the polls' counters say sold, minus recorded losses.
-- **A plan is a proposal, not a restock receipt.** Next Friday is what the agent asked for, not
+- **A plan is a proposal, not a restock receipt.** Next restock is what the agent asked for, not
   what a worker loaded.
 - **Unknown stays unknown.** A selection with no receipt shows `?` and "unknown", never a guess
-  from the plan. A price with no poll shows a dash. Without a plan, Next Friday says "No plan yet".
+  from the plan. A price with no poll shows a dash. Without a plan, Next restock says "No plan yet".
 
 **Money is the ledger's, exact to the cent.** The balance counts a purchase only once it is
 fulfilled, so the panel adds what pending requests could still cost, read from their own bodies.
@@ -339,9 +343,9 @@ the charts instead.
 ## The run record
 
 Before the slot lock, `/state.json` puts the first-fill plan in `plan` and the machine's
-Friday preview in `weekly_plan`. At the lock, `plan` holds the Friday plan.
+next-restock preview in `weekly_plan`. At the lock, `plan` holds the plan for the next restock.
 
-The Friday plan, update and notes come from `agent_runs` (`db/migrations/009_agent_runs.sql`). Nothing
+The plan for the next restock, its update and notes come from `agent_runs` (`db/migrations/009_agent_runs.sql`). Nothing
 writes it yet: the agent loop (#39) should call `vending.agent_runs` at the start and end of each
 run, and the agent replay can do the same with `mode="replay"`:
 

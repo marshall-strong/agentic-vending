@@ -175,7 +175,12 @@ def test_without_our_slot_assignment_the_panel_says_so_and_the_page_still_render
     assert any(a["level"] == "warn" and "can't give a balance" in a["text"] for a in snap["attention"])
     page = dashboard.render(snap)
     assert "No balance:" in page and 'id="vm"' in page
-    assert "Spent so far" in page and "Spent before the opening" not in page    # the period is unknown
+    # The ledger has opened, so the live spend counts from it; only the balance is unknown.
+    assert "Spent since the opening: drinks" in page and "Spent before the opening" not in page
+    # The ledger is open; it just can't give a balance. The Spendable cell says that, not "not open".
+    cell = dashboard._status_bar(snap).split('<span class="label">Spendable</span>')[1].split("</a>")[0]
+    assert '<span class="sv"><span class="dim">Balance unavailable</span></span>' in cell
+    assert "Ledger not open" not in page
 
 
 def test_once_the_ledger_is_open_the_spent_tile_reads_it(conn, page_conn):
@@ -285,8 +290,8 @@ def test_the_spent_tile_rounds_the_exact_total_once(conn, page_conn):
     fulfilled(conn, "pr-s", "15", "RB", units_loaded=1, paid="0.0049", at=OPENED + timedelta(days=1))
     ledger.record_tokens(conn, "0.0049", "claude-opus-5-5", 1, 1, "msg_s", at=OPENED + timedelta(days=2))
     snap = dashboard.snapshot(page_conn, NOW)
-    tile = dashboard._tiles(snap).split("Spent since the opening")[1]
-    assert '<span class="big">$0.01</span>' in tile
+    cell = dashboard._status_bar(snap).split("Spent since the opening")[1]
+    assert cell.startswith(" <b>$0.01</b>")
     assert snap["money"]["data"]["spent"] == "0.01"
 
 

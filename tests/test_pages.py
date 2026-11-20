@@ -310,13 +310,13 @@ def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
 
 def test_the_served_dashboard_names_the_workers_failing_syncs_without_their_error_text(site):
     # The worker keeps its rounds in memory; the dashboard it serves gets them as /health has them.
-    assert not any("sync round" in a["text"] for a in json.loads(_get(site, "/dashboard/state.json")[2])["attention"])
+    assert not any("hourly sync" in a["text"] for a in json.loads(_get(site, "/dashboard/state.json")[2])["attention"])
     state = site.RequestHandlerClass.state
     state.results = worker.run_round([("sync_history", lambda: 2), ("sync_requests", lambda: 0),
                                       ("sync_catalog", lambda: 1 / 0)], log=lambda line: None)
     state.rounds, state.last_round_at = 1, state.started_at
     status, _, body = _get(site, "/dashboard/state.json")
-    found = [a for a in json.loads(body)["attention"] if "sync round" in a["text"]]
+    found = [a for a in json.loads(body)["attention"] if "hourly sync" in a["text"]]
     assert status == 200 and [a["level"] for a in found] == ["bad"]
     assert "`sync_history` exit 2, `sync_catalog` crashed" in found[0]["text"]
     assert "python -m vending.db migrate" in found[0]["text"]
@@ -1506,3 +1506,12 @@ def test_the_live_money_chart_carries_no_demo_copy(site, conn):
     texts = re.findall(r">([^<>]+)<", markup) + re.findall(r'"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`', script)
     assert [t for t in texts if re.search(r"mock|made.up|seeded", t, re.I)] == ['"mockTag"']
     assert [line for line in script.split("\n") if re.search(r"//.*(mock|seeded|made.up)", line, re.I)] == []
+
+
+def test_the_public_dashboard_keeps_a_pick_of_ours_through_its_no_script_reload(site):
+    # The pick links ask for ?sel=NN#sel-NN; the reload keeps a selection of ours, and nothing else.
+    kept = _get(site, "/dashboard?sel=15")[2]
+    assert 'content="30; url=?refresh=1&amp;sel=15#sel-15"' in kept
+    for other in ("12", "15%22%3E%3Cscript%3E", ""):     # not ours, not a selection, empty
+        page = _get(site, f"/dashboard?sel={other}")[2]
+        assert 'content="30; url=?refresh=1"' in page and "sel=12" not in page.split("<noscript>")[1][:120], other

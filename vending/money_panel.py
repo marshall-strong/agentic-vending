@@ -38,7 +38,7 @@ from vending.slots import SlotsNotRecorded
 
 # Proposed in #113 ("Opening capital plan"), not yet agreed: how the $600 is split.
 PROPOSED_SPLIT: tuple[tuple[str, int], ...] = (
-    ("Day-one fill (most-we-pay)", 36_600),
+    ("First fill (most-we-pay)", 36_600),
     ("Midweek visits (2 x $25)", 5_000),
     ("Model spend (9 weeks x $1)", 900),
     ("Product-switch reserve", 6_800),
@@ -322,7 +322,7 @@ def html(panel: dict, pnl_href: str | None = None) -> str:
                 'the $600.</p>' + pend + plan)
     if not d["opened"]:
         return ('<p class="empty">No opening entry in the ledger yet, so there is no balance. Record the '
-                '$600 before the day-one fill (#107): <code>python -m vending.ledger open --amount 600.00 '
+                '$600 before the first fill (#107): <code>python -m vending.ledger open --amount 600.00 '
                 '--by NAME</code>. Spend before the opening is development, not from the $600.</p>' + pend + plan)
     p = d["pnl"]
     tiles = (

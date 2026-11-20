@@ -30,6 +30,11 @@ def plan(*slots, reason="restock what sold"):
     return {"visit": "scheduled", "reason": reason, "slots": list(slots)}
 
 
+def status_cells(snap) -> list[str]:
+    """The status bar's six cells, in order, each from its opening tag."""
+    return dashboard._status_bar(snap).split('<a class="sc')[1:]
+
+
 def read_only(url, schema):
     return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
                            options=f"{dashboard.READ_ONLY} -c search_path={schema}")
@@ -155,7 +160,8 @@ def test_status_and_activity(conn, page_conn, open_ledger):
     assert snap["attention"][0]["level"] == "bad" and "probably died" in snap["attention"][0]["text"]
     assert any("1 refused" in a["text"] for a in snap["attention"])
     page = dashboard.render(snap)
-    assert 'class="write refused problem"' in page and "Probably died" in page and "writes allowed" in page
+    assert 'class="write refused problem"' in page and "writes allowed" in page
+    assert "probably died" in status_cells(snap)[0]       # the Agent cell says so
 
 
 def test_text_from_the_database_is_escaped(conn, page_conn, open_ledger):
@@ -534,7 +540,7 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn, open
     page = dashboard.render(snap)
     assert "3 on hand of COKE-20OZ &middot; the slot sold 5 in the 3 d 23 h to the last poll, whatever it held" in page
     # The tile says how fresh the poll is, never a lone window-start date that reads like an update time (#172).
-    assert "last poll &middot; our slots sold 5 units in the 3 d 23 h to it" in page
+    assert "5 sold in the last 3 d 23 h" in status_cells(snap)[1]
     assert "since the last poll" not in page
     assert "sold since" not in page
     assert "<s>$2.50</s> <b>$2.75</b>" in page             # the tag now, and what the plan sets it to
@@ -627,15 +633,15 @@ def test_the_refresh_keeps_the_tab_title_current():
 
 @pytest.mark.parametrize("halted, at, by, words, absent", [
     (False, None, None, "writes allowed", "by "),
-    (False, MONDAY - timedelta(hours=3), None, "turned off <time", " by"),
-    (False, None, "kevin", "turned off by kevin", "&mdash;"),
-    (True, None, None, "no halt row: counts as halted", "turned on"),
+    (False, MONDAY - timedelta(hours=3), None, "halt switched off <time", " by"),
+    (False, None, "kevin", "halt switched off by kevin", "&mdash;"),
+    (True, None, None, "no halt row: counts as halted", "switched on"),
 ])
-def test_the_halt_tile_reads_cleanly_without_who_or_when(page_conn, halted, at, by, words, absent):
+def test_the_halt_switch_reads_cleanly_without_who_or_when(page_conn, halted, at, by, words, absent):
     snap = dashboard.snapshot(page_conn, MONDAY)
     snap["status"].update(halted=halted, halt_changed_at=at, halt_changed_by=by)
-    tile = dashboard._tiles(snap).split('<div class="tile">')[1]
-    assert words in tile and absent not in tile
+    cell = status_cells(snap)[0]      # the Agent cell
+    assert words in cell and absent not in cell
 
 
 def test_snapshot_is_repeatable_read_even_across_optional_readers(conn, page_conn, monkeypatch):
@@ -689,7 +695,7 @@ def test_the_machine_lights_only_our_slots_from_slots(page_conn, even_columns):
     assert drawn(page) == list(EVEN) and page.count('class="ma-lane ma-notours"') == 20
     assert '<article class="ma-lane ma-notours" id="lane-15" aria-label="Selection 15: not ours">' in page
     assert "No plan yet" in page and '<p class="empty v-next">No plan yet' in page
-    assert page.count("<b>?</b> no record yet") == 40       # no receipts: never a made-up count (Now and Friday)
+    assert page.count("<b>?</b> no record yet") == 40       # no receipts: never a made-up count (Now and Next restock)
     assert 'class="seg" role="group" aria-label="Show" hidden' in page   # the toggle needs JS
 
 
@@ -718,7 +724,7 @@ def test_now_and_next_friday(conn, page_conn, even_columns, open_ledger):
     assert view["16"]["next"]["pulled"] is True
     assert view["18"]["next"]["in_plan"] is False and view["18"]["change"] is None
     page = dashboard.render(snap)
-    assert '<s>$2.50</s> &rarr; <b>$2.75</b> from Friday' in page   # the tag next Friday, old price struck
+    assert '<s>$2.50</s> &rarr; <b>$2.75</b> from the next restock' in page   # the tag after it, old price struck
     assert '<p class="ma-nm">No record yet</p>' in page
     assert "&lt;i&gt;sells out&lt;/i&gt;" in page and "<i>sells out</i>" not in page
     assert '<span class="ma-chip bad">pulled</span>' in page
@@ -953,7 +959,7 @@ def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json
         assert not shows(page, figure) and not shows(state, figure), figure
     card = lane_html(page, "12")
     assert 'class="ma-lane ma-notours"' in page and "Not ours" in card and "<svg" not in card
-    assert "+2 back Friday" in lane_html(page, "15")        # ours is drawn: fill 7 less 5 on hand
+    assert "+2 at restock" in lane_html(page, "15")        # ours is drawn: fill 7 less 5 on hand
 
 
 def test_a_selection_reassigned_away_stops_being_drawn(conn, page_conn, open_ledger):
@@ -983,15 +989,15 @@ def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn, open_l
         {"slot": "25", "product": "CAN-12", "fill_to": 8}))
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
     coke, shake, can, out, unknown = (lane_html(page, s) for s in ("15", "16", "17", "18", "25"))
-    assert "<b>5</b> of 7" in coke and "+2 back Friday" in coke and "+2 added" in coke
+    assert "<b>5</b> of 7" in coke and "+2 at restock" in coke and "+2 added" in coke
     assert coke.count('class="ma-ghost ma-go"') == 2 and coke.count('class="ma-fill"') == 2
     # No capacity: no empty slots beyond what the plan fills, and it says so.
-    assert "capacity not counted yet" in shake and "+3 back Friday" in shake
+    assert "capacity not counted yet" in shake and "+3 at restock" in shake
     assert shake.count("ma-ghost") == 3 and "<b>2</b> on hand" in shake
     assert "plan 4, nothing to add" in can and "+" not in can.split("ma-chips")[1].split("</p>")[0]
     assert "not in plan" in out
     # 25 holds no record: a product the plan puts in, never a made-up count before it.
-    assert "<b>?</b> no record yet" in unknown and "new product Friday" in unknown
+    assert "<b>?</b> no record yet" in unknown and "new product at restock" in unknown
     # A lane with a product but no count says ? and +? (photo count of a product with no units).
     view = {"15": {"now": {"product": "COKE-20OZ", "units": None, "price": "2.50", "source": "receipt",
                            "counted_at": None},
@@ -1000,7 +1006,7 @@ def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn, open_l
     products = {"catalog": {"COKE-20OZ": {"name": "Coke", "line": "Coca-Cola", "flavor": None,
                                           "size": "20 oz bottle"}}, "overrides": {}}
     html = dashboard.machine_art.closeup_html(view, products, True)
-    assert "<b>?</b> of 7" in html and "+? back Friday" in html and "filled to 7" in html
+    assert "<b>?</b> of 7" in html and "+? at restock" in html and "filled to 7" in html
     assert "ma-unk" in html and "units unknown" in html
 
 
@@ -1058,16 +1064,16 @@ def test_a_swap_and_a_price_change_on_friday(conn, page_conn, open_ledger):
         {"slot": "17", "fill_to": 0, "reason": "slow"}))
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
     swap, price, pulled = lane_html(page, "15"), lane_html(page, "16"), lane_html(page, "17")
-    # The swap draws the new package and look on Friday, chips "swap", and gives the reason on one line.
+    # The swap draws the new package and look at the next restock, chips "swap", and gives the reason on one line.
     assert '<g class="v-now">' in swap and '<g class="v-next ma-swapin">' in swap
     assert "#ma-p-bottle-20" in swap and "#ma-p-bottle-16-glass" in swap
-    assert '<span class="ma-chip info">swap</span>' in swap and "swap Friday" in swap
+    assert '<span class="ma-chip info">swap</span>' in swap and "swap at restock" in swap
     assert '<p class="ma-nm v-next">Topo Chico' in swap
     why = swap.split('<p class="ma-why"')[1].split("</p>")[0]
     assert "&lt;b&gt;2 old&lt;/b&gt;" in why and "<b>2 old</b>" not in why and "\n" not in why.split(">", 1)[1]
     assert why.endswith("…") and len(why.split(">", 1)[1]) < 200
-    # The price change: Friday's tag strikes the old price, and the reason sits under it.
-    assert "<s>$1.00</s> &rarr; <b>$1.25</b> from Friday" in price and ">sold out 3 Fridays running</p>" in price
+    # The price change: the tag after the restock strikes the old price, and the reason sits under it.
+    assert "<s>$1.00</s> &rarr; <b>$1.25</b> from the next restock" in price and ">sold out 3 Fridays running</p>" in price
     assert 'stroke="#d6232a"' in price and ">$1.25</text>" in price
     assert '<span class="ma-chip bad">pulled</span>' in pulled and "<b>0</b> pulled" in pulled
 
@@ -1164,9 +1170,9 @@ def test_a_lane_with_no_known_size_draws_no_full_looking_gauge():
     products = {"catalog": {"MILK-CARTON": {"name": "Milk", "line": None, "flavor": None, "size": "11 oz carton"}},
                 "overrides": {}}
     lanes = {"55": machine_art.Lane("55", view["55"], products)}
-    front = machine_art._front(lanes, {"55"})
+    front = machine_art.front_html(lanes, {"55"})
     assert lanes["55"].cap is None
-    assert 'fill="#e3e9f0"' not in front and 'stroke-dasharray="2 2"' in front
+    assert '<i class="v-now"' not in front and 'class="fc-g open"' in front
 
 
 @pytest.mark.parametrize("value, shown", [
@@ -1187,10 +1193,10 @@ def test_a_shelf_with_nothing_planned_says_so_rather_than_plus_zero():
                                                         "fill_to": 3},
                    "change": None, "fill_to": 3}}
     html = machine_art.closeup_html(view, {"catalog": {}, "overrides": {}}, True)
-    shelf4 = html[html.index('href="#shelf-4"'):html.index("</a>", html.index('href="#shelf-4"'))]
-    shelf5 = html[html.index('href="#shelf-5"'):html.index("</a>", html.index('href="#shelf-5"'))]
-    assert "? on hand &middot; no Friday plan" in shelf4 and "+0" not in shelf4
-    assert '<span class="ma-fr">+0</span> Friday' in shelf5      # planned, and already full
+    shelf4 = html[html.index('id="rail-4"'):html.index("</a>", html.index('id="rail-4"'))]
+    shelf5 = html[html.index('id="rail-5"'):html.index("</a>", html.index('id="rail-5"'))]
+    assert "? on hand &middot; no restock plan" in shelf4 and "+0" not in shelf4
+    assert '<span class="ma-fr">+0</span> at restock' in shelf5      # planned, and already full
 
 
 @pytest.mark.parametrize("size, key", [
@@ -1309,7 +1315,7 @@ def test_failing_syncs_name_each_job_and_what_its_exit_code_means(page_conn):
                     ("sync_catalog", None, "timed out"))
     snap = dashboard.snapshot(page_conn, MONDAY, syncs=failing)
     bad = [a["text"] for a in snap["attention"] if a["level"] == "bad"]
-    assert bad == ["The worker's latest sync round (12 min ago) failed: `sync_history` exit 2, "
+    assert bad == ["The worker's latest hourly sync (12 min ago) failed: `sync_history` exit 2, "
                    "`sync_catalog` timed out. Exit 2: the database is missing migrations; run "
                    "`python -m vending.db migrate`. See `/health`."]
     assert dashboard.verdict(snap["attention"]) == "problem"
@@ -1333,7 +1339,7 @@ def test_a_sync_that_finished_with_problems_is_a_problem_too(page_conn):
 ])
 def test_no_sync_item_unless_the_latest_round_failed(page_conn, given):
     snap = dashboard.snapshot(page_conn, MONDAY, syncs=given)
-    assert not any("sync round" in a["text"] for a in snap["attention"])
+    assert not any("hourly sync" in a["text"] for a in snap["attention"])
     assert snap["syncs"] == given
 
 
@@ -1349,3 +1355,449 @@ def test_the_sales_window_says_how_long_it_really_is():
     assert words(timedelta(days=10)) == "the 10 d"                           # a gap in the polls: not "the 7 days"
     assert words(timedelta(seconds=30)) == "under a minute"
 
+
+# --- The ops layout: the status bar, the front beside Needs attention, and the close-up --------------
+
+def section(page: str, start: str, end: str) -> str:
+    i = page.index(start)
+    return page[i:page.index(end, i)]
+
+
+def front_of(page: str) -> str:
+    return section(page, '<nav class="fm"', "</nav>")
+
+
+def test_the_status_bar_has_six_cells_and_visitors_only_in_the_footer(conn, page_conn):
+    from vending import visits
+    visits.write(conn, [("view", "/dashboard", "0123456789abcdef")])
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    labels = [re.search(r'<span class="label">([^<]+)</span>', c).group(1) for c in status_cells(snap)]
+    assert labels == ["Agent", "Machine poll", "Order cutoff", "Spendable", "Catalog approvals", "Plan"]
+    page = dashboard.render(snap)
+    top, footer = page.split("<footer>")
+    assert "Visitors" not in top and 'class="tile"' not in top
+    assert footer.count('<p class="visitors">') == 1 and '<p class="visitors">Visitors: 1 browser, 1 visit' in footer
+    # The verdict sits in the Agent cell, not the title row; the tab still has it.
+    assert 'class="verdict ' in status_cells(snap)[0] and 'class="verdict ' not in page.split("</header>")[0]
+    assert page.count('<a class="sc') == 6 and "<title>" in page
+
+
+def test_the_machine_poll_cell_says_when_the_poll_was_taken_never_a_lone_window_date(conn, page_conn, monkeypatch):
+    monkeypatch.delenv("SYNC_AT_MINUTE", raising=False)
+    # The polls 7 days apart: a full window (a wider gap says its own length, see `_window_words`).
+    store_poll(conn, "w1", (MONDAY - timedelta(days=7, minutes=34)).isoformat(), {"15": (250, 10)})
+    store_poll(conn, "w2", (MONDAY - timedelta(minutes=34)).isoformat(), {"15": (250, 14)})
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    cell = status_cells(snap)[1]
+    assert "Polled <time" in cell and 'data-f="ago"' in cell and 'data-f="et"' in cell
+    assert "next sync ~<time" in cell and 'data-f="etclock"' in cell and "4 sold in the last 7 days" in cell
+    start = snap["sales"]["data"]["window_start"]
+    assert start is not None and start.isoformat() not in cell and "since" not in cell
+
+
+@pytest.mark.parametrize("now, at", [
+    (datetime(2026, 11, 19, 19, 34, tzinfo=timezone.utc), datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)),
+    (datetime(2026, 11, 19, 19, 3, tzinfo=timezone.utc), datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)),
+    (datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc), datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)),
+])
+def test_the_next_sync_is_the_workers_next_round(now, at, monkeypatch):
+    monkeypatch.delenv("SYNC_AT_MINUTE", raising=False)
+    assert dashboard.next_sync(now) == at
+    # The worker's own word wins when it serves the page; with no schedule there is no time to give.
+    assert dashboard.next_sync(now, {"next_round_at": "2026-11-19T21:05:00+00:00"}) == at.replace(hour=21)
+    monkeypatch.setenv("SYNC_AT_MINUTE", "off")
+    assert dashboard.next_sync(now) is None
+
+
+def test_the_catalog_cell_counts_approvals_places_and_the_deadline(conn, page_conn):
+    for i, status in enumerate(["approved"] * 3 + ["pending"] * 2 + ["rejected"]):
+        conn.execute("insert into product_requests (name, size, words, status) values (%s, '12 oz can', '{x}', %s)",
+                     (f"Drink {i}", status))
+    cell = status_cells(dashboard.snapshot(page_conn, MONDAY))[4]
+    assert "3 approved" in cell and "2 pending" in cell and "1 rejected" in cell and "23 places left" in cell
+    assert "due Wed 25 Nov" in cell
+    after = status_cells(dashboard.snapshot(page_conn, dashboard.APPROVALS_DUE + timedelta(minutes=1)))[4]
+    assert "due" not in after and "3 approved" in after
+
+
+def _first_fill_plan(conn, tmp_path):
+    from tests.test_plan_rounds import day_one, projection, write
+    from vending import plan_store
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, projection())
+    plan_id = plan_store.load(conn, tmp_path, "3", "Test Loader")
+    plan_store.pick(conn, plan_id, "Test Picker")
+
+
+def test_the_plan_cell_says_first_fill_before_the_lock_and_next_restock_after(conn, page_conn, tmp_path, monkeypatch):
+    _first_fill_plan(conn, tmp_path)
+    first = _live_run(conn)
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 6}, {"slot": "16", "fill_to": 4}))
+    second = _live_run(conn)
+    agent_runs.finish(conn, second, "submitted", plan=plan({"slot": "15", "fill_to": 7}, {"slot": "16", "fill_to": 0}))
+    for run, back in ((first, 2), (second, 1)):        # made on Mon 9 Nov, whatever day the tests run
+        conn.execute("update agent_runs set started_at = %s where id = %s", (MONDAY - timedelta(hours=back), run))
+    after = dashboard.snapshot(page_conn, MONDAY)                  # the autouse fixture puts the lock behind us
+    cell = status_cells(after)[5]
+    assert ">For the next restock<" in cell and "2 changes" in cell and f"run #{second} submitted" in cell
+    # The plan was made on Mon 9 Nov: the restock it is for is the Friday visit after Thursday's cutoff.
+    assert '"sub">Fri 13 Nov &middot; 2 changes' in cell
+    assert '<span class="vm-when">Next restock &middot; Fri 13 Nov</span>' in dashboard.render(after)
+    assert "first fill" not in cell.lower()
+    monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
+    before = dashboard.snapshot(page_conn, MONDAY)
+    p = before["plan"]["data"]
+    cell = status_cells(before)[5]
+    assert ">For the first fill<" in cell and "Friday" not in cell
+    assert f"20 slots &middot; {dashboard._cents(p['fill_most_cents'])} of $366" in cell and "not picked" not in cell
+    # Neither "day-one" nor "round" is anywhere on the page, before or after the lock.
+    for snap in (before, after):
+        text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", dashboard.render(snap), flags=re.S)
+        text = re.sub(r"<[^>]+>", " ", text).lower()
+        assert not re.search(r"\bday[- ]one\b", text) and not re.search(r"\bround\b", text)
+
+
+@pytest.mark.parametrize("most, cap, shown, tone", [(36_140, 36_600, "$361.40 of $366", ""),
+                                                    (36_600, 36_600, "$366 of $366", ""),
+                                                    (37_000, 36_600, "$370 of $366", "bad")])
+def test_the_first_fill_cost_reads_against_the_cap(page_conn, monkeypatch, most, cap, shown, tone):
+    monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    snap["plan"] = {"ok": True, "data": {"id": 1, "picked": True, "slots": [{"slot": "15"}] * 20,
+                                         "fill_most_cents": most, "fill_cap_cents": cap}}
+    cell = status_cells(snap)[5]
+    assert shown in cell and cell.startswith(f' {tone}"' if tone else '" href')
+
+
+def test_nothing_is_picked_until_a_viewer_picks_and_the_side_shows_attention_and_changes(conn, page_conn, even_columns, open_ledger):
+    first = _live_run(conn)
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "12", "fill_to": 6}, {"slot": "14", "fill_to": 4}))
+    second = _live_run(conn)
+    agent_runs.finish(conn, second, "submitted", plan=plan(
+        {"slot": "12", "fill_to": 7, "sale_price": "2.75", "reason": "sells out"}, {"slot": "14", "fill_to": 4}))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    assert '<section id="vm" class="vm" data-view="now">' in page              # no pick in the HTML
+    side = section(page, '<div class="ops-side">', '<aside class="vm-panel"')
+    assert side.index('id="attention"') < side.index('id="plan-changes"')
+    # Picking from a plan-change row: the whole row is the link.
+    row = section(side, '<a class="chg" id="chg-12" href="?sel=12#sel-12"', "</a>")
+    assert 'data-sel="12"' in row and "fill 6 to 7" in row and "sells out" in row
+    assert '#sel-14"' not in side                                        # 14 didn't change
+    # Picking from the front: each of ours is a link to its facts, with its whole aria label.
+    front = front_of(page)
+    cells = re.findall(r'<a class="fc[^"]*" id="fc-\w+" href="\?sel=\w+#sel-(\w+)" data-sel="(\w+)" aria-label="([^"]+)"', front)
+    assert [a for a, b, _ in cells if a == b] == list(EVEN)
+    assert all(label.startswith(f"Selection {s}. ") and label.endswith("Opens its close-up.") for s, _, label in cells)
+    for slot in EVEN:
+        assert f'<div class="sd" id="sel-{slot}" data-sel="{slot}" tabindex="-1">' in page
+        assert f'.vm[data-sel="{slot}"] #sel-{slot}' in page and f'.vm[data-sel="{slot}"] #lane-{slot}' in page
+        assert f'.vm:not([data-js]):has(#sel-{slot}:target) #lane-{slot}' in page
+
+
+def test_picking_from_a_plan_section_row(conn, page_conn, tmp_path, monkeypatch, open_ledger):
+    run = _live_run(conn)
+    agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "15", "fill_to": 6}))
+    weekly = section(dashboard.render(dashboard.snapshot(page_conn, MONDAY)), '<section id="plan">', "</section>")
+    assert ('<a class="num" id="num-15" href="?sel=15#sel-15" data-sel="15" aria-label="Selection 15: show it in the machine">15</a>'
+            in weekly)
+    _first_fill_plan(conn, tmp_path)
+    monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    first = section(page, '<section id="plan">', "</section>")
+    assert first.count('<a class="num" id="num-') == 20 and 'data-sel="58"' in first
+    # Before the lock the side lists the first fill, each row picking its selection, and its facts say it.
+    side = section(page, '<div class="ops-side">', '<aside class="vm-panel"')
+    assert "First fill" in side and side.count('<a class="chg" id="chg-') == 20
+    facts = section(page, '<div class="sd" id="sel-15"', '<div class="sd" id="sel-16"')
+    assert "<dt>First fill</dt><dd>Red Bull Original · $3.50 · 11 units</dd>" in facts
+    assert "Why, for the first fill</span>reason 15" in facts
+    # The script picks from any of them, and brings the machine into view when the pick came from below.
+    script = dashboard.SCRIPT
+    assert "t.closest('a[data-sel]')" in script and "from && !from.closest('.vm')" in script
+
+
+def test_the_close_up_has_a_close_button_and_the_pick_survives_a_refresh(page_conn):
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    panel = section(page, '<aside class="vm-panel"', "</aside>")
+    assert '<a class="vm-x" id="vm-close" href="?#vm" data-close aria-label="Close the close-up">' in panel
+    assert '<a class="vm-scrim" href="?#vm" data-close tabindex="-1" aria-hidden="true"></a>' in page
+    script, style = dashboard.SCRIPT, dashboard.STYLE
+    # Close, Escape or a tap outside return the side to Needs attention and the plan's changes.
+    assert "if (close) { e.preventDefault(); shut(); }" in script and "e.key === 'Escape'" in script
+    assert "sel = ''; sheet = false;" in script
+    assert ".vm[data-sel] .ops-home" in style and ".vm[data-sel] .vm-panel" in style
+    # The pick lives in the script, not the page: the in-place refresh swaps <main> and puts it back.
+    assert "main.innerHTML = fresh.innerHTML;" in script and "if (sel) v.setAttribute('data-sel', sel)" in script
+    assert script.index("main.innerHTML = fresh.innerHTML;") < script.index("failed = false; lastOk = Date.now(); filter();")
+    # Without scripts the link's #target picks, and on a phone opens the sheet.
+    assert ".vm:not([data-js]) .sd:target { display:block }" in dashboard.machine_art.STYLE
+    assert ".vm:not([data-js]):has(.sd:target) .vm-panel" in style
+    assert "@media (prefers-reduced-motion:reduce) { .vm-panel { transition:none !important } }" in style
+
+
+def test_not_ours_is_half_as_wide_on_the_front_and_in_the_close_up():
+    style = dashboard.machine_art.STYLE
+    assert re.search(r"\.fc \{[^}]*flex:2 1 0", style) and re.search(r"\.fc-no \{[^}]*flex:1 1 0", style)
+    assert re.search(r"\.ma-lane \{[^}]*flex:1 1 0", style) and re.search(r"\.ma-notours \{[^}]*flex:\.5 1 0", style)
+    view = {"11": {"now": {"product": None, "units": None, "price": None, "source": None, "counted_at": None},
+                   "next": None, "change": None, "fill_to": None}}
+    front, panels = dashboard.machine_art.split_html(view, None, False)
+    assert front.count('<a class="fc"') == 1 and front.count('<span class="fc fc-no">') == 39
+    assert panels.count('<article class="ma-lane" id="lane-11"') == 1 and panels.count('class="ma-lane ma-notours"') == 7
+
+
+def test_the_front_and_close_up_carry_nothing_about_a_selection_that_is_not_ours(conn, page_conn, even_columns, open_ledger):
+    catalog(conn, ("ZZ-RIVAL-SKU", "Zebra Fizz Rival", "Zebra Fizz", "Mango", "16 oz glass bottle"),
+            ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
+    fulfilled(conn, "pr-15", "15", "ZZ-RIVAL-SKU", units_loaded=6, paid="5.55", at=MONDAY - timedelta(days=3))
+    fulfilled(conn, "pr-12", "12", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
+    store_poll(conn, "p1", (MONDAY - timedelta(days=3)).isoformat(), {"15": (987, 4000), "12": (250, 10)})
+    store_poll(conn, "p2", (MONDAY - timedelta(hours=2)).isoformat(), {"15": (987, 4321), "12": (250, 12)})
+    first = _live_run(conn)
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 2}, {"slot": "12", "fill_to": 5}))
+    second = _live_run(conn)
+    agent_runs.finish(conn, second, "submitted", plan=plan(
+        {"slot": "15", "product": "ZZ-RIVAL-SKU", "fill_to": 9, "sale_price": "8.76", "reason": "Quokka reason"},
+        {"slot": "12", "fill_to": 6, "reason": "ours"}))
+    for public in (True, False):
+        snap = dashboard.snapshot(page_conn, MONDAY, public=public)
+        page, state = dashboard.render(snap), dashboard.to_json(snap)
+        for leak in ("ZZ-RIVAL", "Zebra", "Mango", "Quokka", "$9.87", "$8.76"):
+            assert leak not in page, (public, leak)
+        for leak in ("ZZ-RIVAL", "Zebra", "Quokka", '"9.87"', '"8.76"'):
+            assert leak not in state or not public, leak
+        for anchor in ('data-sel="15"', 'id="sel-15"', '#sel-15', 'id="lane-15" role="group"', '.vm[data-sel="15"]'):
+            assert anchor not in page, anchor
+        # Every not-ours cell on the front is its number and "Not ours", and nothing else.
+        cells = re.findall(r'<span class="fc fc-no">(.*?)</span></span>', front_of(page))
+        assert len(cells) == 20 and all(
+            re.fullmatch(r'<span class="fc-n">\d\d</span><span class="fc-t">Not ours', c) for c in cells)
+        assert '<article class="ma-lane ma-notours" id="lane-15" aria-label="Selection 15: not ours">' in page
+        assert "at restock" in lane_html(page, "12")
+
+
+def test_the_facts_say_where_each_number_comes_from(conn, page_conn, open_ledger):
+    catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
+    fulfilled(conn, "pr-15", "15", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    ours = section(page, '<div class="sd" id="sel-15"', '<div class="sd" id="sel-16"')
+    assert "5 of 7 &middot; from receipts and polls" in ours and "unknown: no price from the polls" in ours
+    assert "unknown: no sales from the polls" in ours and "No plan yet." in ours
+    blank = section(page, '<div class="sd" id="sel-16"', '<div class="sd" id="sel-17"')
+    assert "unknown: no receipt or count yet" in blank and "<b>No record yet</b>" in blank
+
+
+def test_without_an_assignment_attention_still_shows_beside_an_empty_machine(conn, page_conn):
+    conn.execute("delete from slot_assignment")
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    vm = section(page, '<section id="vm"', "</section>")
+    assert 'id="attention"' in vm and "Which selections are ours isn&#x27;t known" in vm
+    assert '<nav class="fm"' not in vm and 'class="vm-panel"' not in vm
+
+
+@pytest.mark.parametrize("visit, started, shown", [
+    ("scheduled", datetime(2026, 12, 7, 15, tzinfo=timezone.utc), "Fri 11 Dec"),       # Monday: that week's Friday
+    ("scheduled", datetime(2026, 12, 11, 3, tzinfo=timezone.utc), "Fri 11 Dec"),       # Thu 22:00 Eastern: before the cutoff
+    ("scheduled", datetime(2026, 12, 11, 6, tzinfo=timezone.utc), "Fri 18 Dec"),       # Fri 01:00 Eastern: past it
+    ("midweek", datetime(2026, 12, 7, 15, tzinfo=timezone.utc), "midweek visit"),     # the plan records no day
+])
+def test_the_next_restock_is_the_friday_after_the_cutoff_or_a_midweek_visit(visit, started, shown):
+    if dashboard.next_cutoff(started) is None:
+        pytest.skip("no IANA time-zone data to place the cutoff")
+    assert dashboard._restock({"visit": visit, "run": {"started_at": started}}) == shown
+    assert dashboard._restock(None) is None
+
+
+def test_the_page_says_next_restock_for_what_the_plan_does_and_friday_only_for_the_day(conn, page_conn, even_columns, open_ledger):
+    fulfilled(conn, "pr-1", "12", "COKE-20OZ", units_loaded=4, paid="4.80", at=MONDAY - timedelta(days=3))
+    first = _live_run(conn)
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "12", "fill_to": 6}, {"slot": "14", "fill_to": 4}))
+    second = _live_run(conn)
+    agent_runs.finish(conn, second, "submitted", plan={**plan(
+        {"slot": "12", "fill_to": 7, "sale_price": "2.75"}, {"slot": "14", "fill_to": 0}), "visit": "midweek"})
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    page = dashboard.render(snap)
+    assert '<button type="button" data-view="next" aria-pressed="false">Next restock</button>' in page
+    assert '<span class="vm-when">Next restock &middot; midweek visit</span>' in page
+    assert "midweek visit &middot; 2 changes" in status_cells(snap)[5]
+    assert "+3 at restock" in lane_html(page, "12") and "pulled at restock" in lane_html(page, "14")
+    assert "<dt>Next restock</dt>" in page and "pulled at the next restock" in page
+    # "Friday" is left only where it is the day: the cutoff and the order deadline, and the requests' visit type.
+    machine = page[page.index('<section id="vm"'):page.index('<section id="money"')]
+    assert "Friday" not in re.sub(r"<[^>]+>", " ", machine).replace("free Friday visit", "")
+    assert "Friday" not in dashboard._status_bar(snap)
+
+
+def _set_wildcard(conn, slot: str) -> None:
+    from psycopg.types.json import Jsonb
+    conn.execute("insert into config (key, value, updated_by) values ('wildcard_slot', %s, 'test')"
+                 " on conflict (key) do update set value = excluded.value", (Jsonb(slot),))
+
+
+def test_the_wildcard_slot_is_marked_on_the_front_the_close_up_and_the_plan(conn, page_conn, open_ledger):
+    _set_wildcard(conn, "37")
+    first = _live_run(conn)
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "37", "fill_to": 4}, {"slot": "15", "fill_to": 4}))
+    second = _live_run(conn)
+    agent_runs.finish(conn, second, "submitted", plan=plan({"slot": "37", "fill_to": 6, "sale_price": "7.50"},
+                                                           {"slot": "15", "fill_to": 4}))
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    assert snap["wildcard"] == "37" and '"wildcard": "37"' in dashboard.to_json(snap)
+    page = dashboard.render(snap)
+    cell = section(front_of(page), 'href="?sel=37#sel-37"', "</a>")
+    assert "fc-wild" in page.split('href="?sel=37#sel-37"')[0][-60:] and '>W</span>' in cell
+    assert "Selection 37, the wildcard." in page
+    assert '<p class="ma-wl"' in lane_html(page, "37") and 'class="ma-lane ma-changed ma-wild"' in page
+    facts = section(page, '<div class="sd" id="sel-37"', '<div class="sd" id="sel-38"')
+    assert "<dt>Wildcard</dt>" in facts and ">wildcard</span>" in facts
+    changes = section(page, '<a class="chg" id="chg-37" href="?sel=37#sel-37"', "</a>")
+    assert ">wildcard</span>" in changes
+    rows = section(page, '<section id="plan">', "</section>")
+    # In the row's text, not beside the number, so the row's columns stay in line.
+    row = rows.split('id="slot-37"', 1)[1].split("</summary>", 1)[0]
+    assert re.search(r'data-sel="37"[^>]*>37</a><span class="now">', row)
+    assert '<span class="what"><span class="pill wild"' in row
+    # Only the one slot: no other selection carries the mark.
+    assert page.count('class="fc fc-wild"') + page.count('fc-chg fc-wild"') == 1 and page.count("<dt>Wildcard</dt>") == 1
+
+
+def test_a_wildcard_that_is_not_ours_is_never_marked(conn, page_conn, even_columns):
+    _set_wildcard(conn, "37")                    # 37 isn't in the stored assignment here
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    page = dashboard.render(snap)
+    assert snap["wildcard"] is None and ' fc-wild"' not in page and 'class="ma-wl"' not in page
+    assert "<dt>Wildcard</dt>" not in page and ">wildcard</span>" not in page
+    assert 'data-sel="37"' not in page
+
+
+# Thursdays either side of both 2026 clock changes (8 Mar, 1 Nov), in Eastern.
+_DST_THURSDAYS = ((2026, 3, 5), (2026, 3, 12), (2026, 10, 29), (2026, 11, 5))
+
+
+@pytest.mark.parametrize("thursday", _DST_THURSDAYS)
+@pytest.mark.parametrize("clock, same_week", [((23, 58, 59), True), ((23, 59, 0), True), ((23, 59, 59), True),
+                                              (None, False)])        # None: Friday 00:00:00
+def test_the_restock_date_follows_the_planners_cutoff_minute(thursday, clock, same_week):
+    """The planner still accepts this Friday's purchases through 23:59:59 Thursday (`planner._past_cutoff`
+    is past only after the cutoff minute), so the page names this Friday until midnight."""
+    zoneinfo = pytest.importorskip("zoneinfo")
+    try:
+        eastern = zoneinfo.ZoneInfo("America/New_York")
+    except zoneinfo.ZoneInfoNotFoundError:
+        pytest.skip("no IANA time-zone data")
+    thu = datetime(*thursday, tzinfo=eastern)
+    local = (thu.replace(hour=clock[0], minute=clock[1], second=clock[2]) if clock
+             else thu + timedelta(days=1))
+    friday = thu + timedelta(days=1 if same_week else 8)
+    shown = dashboard._restock({"visit": "scheduled", "run": {"started_at": local.astimezone(timezone.utc)}})
+    assert shown == f"{friday:%a} {friday.day} {friday:%b}", (local, shown)
+
+
+def _reload(page: str) -> str:
+    return re.search(r'<noscript><meta http-equiv="refresh" content="30; url=([^"]*)"></noscript>', page).group(1)
+
+
+def test_without_scripts_the_reload_keeps_a_pick_only_when_it_is_ours(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert _reload(dashboard.render(snap)) == "?refresh=1"
+    assert _reload(dashboard.render(snap, picked="15")) == "?refresh=1&amp;sel=15#sel-15"
+    # Not ours (12), not on the face, or not a selection at all: the reload carries nothing.
+    for bad in ("12", "99", "15#x", '15"><script>', "", None):
+        assert _reload(dashboard.render(snap, picked=bad)) == "?refresh=1", bad
+    # The pick links carry it in the query, so a click without scripts asks the server for it.
+    page = dashboard.render(snap)
+    assert 'id="fc-15" href="?sel=15#sel-15" data-sel="15"' in page and 'href="#sel-' not in page
+
+
+def test_without_scripts_a_shelf_link_opens_its_first_selection_of_ours(page_conn, even_columns):
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
+    rails = re.findall(r'<a class="fm-sh" id="rail-(\d)" href="([^"]*)" data-shelf="\d"', page)
+    # Each shelf's link targets a selection of ours (so a phone's sheet opens), the first on that shelf.
+    assert rails == [(str(r), f"?sel={r}2#sel-{r}2") for r in range(1, 6)]
+    assert 'href="#shelf-' not in page
+
+
+
+def test_without_scripts_closing_the_close_up_stays_closed_through_the_reload(page_conn):
+    from urllib.parse import parse_qs, urljoin, urlsplit
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    here = "http://127.0.0.1:8765/?refresh=1&sel=15#sel-15"          # a pick kept by the timed reload
+    page = dashboard.render(snap, picked="15")
+    for link in ("vm-x", "vm-scrim"):
+        href = re.search(rf'<a class="{link}"[^>]* href="([^"]*)"', page).group(1)
+        followed = urljoin(here, href.replace("&amp;", "&"))
+        assert "sel" not in parse_qs(urlsplit(followed).query), (link, followed)   # a real load, without the pick
+        # The page that link loads reloads itself without a pick too, so the sheet stays closed.
+        picked = parse_qs(urlsplit(followed).query).get("sel", [None])[0]
+        assert _reload(dashboard.render(snap, picked=picked)) == "?refresh=1", link
+
+
+def test_the_status_bar_and_facts_say_how_long_the_sales_window_really_is():
+    # The same bounds as `_window` (main): 7 days give or take an hour; a gap in the polls says its length.
+    end = datetime(2026, 12, 9, 15, tzinfo=timezone.utc)
+
+    def words(span):
+        return dashboard._window_words({"window_start": end - span, "as_of": end})
+    assert words(timedelta(days=7)) == "in the last 7 days"
+    assert words(timedelta(days=7, minutes=40)) == "in the last 7 days"
+    assert words(timedelta(days=3, hours=23)) == "in the last 3 d 23 h"
+    assert words(timedelta(days=10)) == "in the last 10 d"                     # a gap: not "the last 7 days"
+    assert words(timedelta(seconds=30)) == "in under a minute"
+
+
+# --- Main's panels inside the layout (#191 pricing, #193 leaderboards, #194 fill checks, #196 charts, #192) --
+
+def test_the_under_fill_flag_shows_in_the_side_card_and_the_facts_too(conn, page_conn, open_ledger):
+    under = TEST_SLOTS[0]
+    catalog(conn, ("BOTTLE-20", "Test bottle", "Plain", None, "20 oz bottle"))
+    set_value(conn, "capacity_overrides", {"BOTTLE-20": 8}, "test")
+    first = _live_run(conn)
+    agent_runs.finish(conn, first, "submitted", plan=plan({"slot": under, "product": "BOTTLE-20", "fill_to": 4}))
+    second = _live_run(conn)
+    agent_runs.finish(conn, second, "submitted", plan=plan(
+        {"slot": under, "product": "BOTTLE-20", "fill_to": 6, "reason": "Budget < limit"}))
+    page = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
+    row = section(page, f'<a class="chg" id="chg-{under}"', "</a>")
+    assert '<span class="pill warn">fills 6 of 8: 2 spaces empty</span>' in row and "Budget &lt; limit" in row
+    facts = section(page, f'<div class="sd" id="sel-{under}"', "</dl>")
+    assert '<dt>Fill check</dt><dd><span class="sd-fr unk">fills 6 of 8: 2 spaces empty</span></dd>' in facts
+    plan_row = page.split(f'id="slot-{under}"', 1)[1].split("</summary>", 1)[0]      # main's flag on The plan
+    assert "fills 6 of 8: 2 spaces empty" in plan_row
+
+
+def test_before_the_opening_the_spendable_cell_shows_no_test_figures_only_its_chart(conn, page_conn):
+    # A test purchase and a test run before any opening: development spend, which the live page doesn't count.
+    fulfilled(conn, "pr-test", "15", "COKE-20OZ", units_loaded=5, paid="6.25", at=MONDAY - timedelta(days=3))
+    run = _live_run(conn)
+    agent_runs.finish(conn, run, "submitted", cost_usd=Decimal("0.77"))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    cell = dashboard._status_bar(snap, charts={"spend": "/dashboard/spend"}).split("Spendable", 1)[1].split("</div>")[0]
+    assert "Before the opening" in cell and "development spend, not from the $600" in cell
+    assert "$6.25" not in cell and "$0.77" not in cell and "drinks" not in cell
+    assert '<a href="/dashboard/spend">Development spend by week</a>' in cell
+    # A link can't hold a link: the cell is a box, and its label alone links to the money panel.
+    assert '<a class="label" href="#money">Spendable</a>' in dashboard._status_bar(snap, charts={"spend": "/x"})
+    assert "Development spend by week" not in dashboard._status_bar(snap)       # run on its own: no chart
+
+
+def test_after_the_opening_the_spendable_cell_reads_the_ledger_and_links_its_chart(conn, page_conn, open_ledger):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    bar = dashboard._status_bar(snap, charts={"spend": "/dashboard/spend"})
+    cell = bar.split("Spendable", 1)[1].split("</div>")[0]
+    assert "$600.00" in cell and "Spent since the opening" in cell
+    assert '<a href="/dashboard/spend">Development spend by week</a>' in cell
+
+
+def test_the_pricing_leaderboards_and_charts_sit_inside_the_layout(conn, page_conn, open_ledger):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    page = dashboard.render(snap, charts={"money": "/dashboard/money", "pnl": "/dashboard/pnl",
+                                          "spend": "/dashboard/spend"})
+    # Status bar, the machine, then Pricing right after it, then Money; leaderboards after Back stock.
+    order = [page.index(anchor) for anchor in ('<nav class="strip"', '<section id="vm"', '<section id="pricing"',
+                                               '<section id="money"', '<section id="plan"', '<section id="closet"',
+                                               '<section id="leaderboards"', "<footer>")]
+    assert order == sorted(order)
+    head = page.split("</header>")[0]
+    assert '<a class="chartlink" href="/dashboard/money">Money chart</a>' in head
+    assert ('<p class="charts">Charts: <a href="/dashboard/money">Money by day</a> &middot; '
+            '<a href="/dashboard/pnl">Weekly P&amp;L</a></p>') in page
+    assert '<a href="/dashboard/spend">Development spend by week</a>' in page.split('<section id="vm"')[0]
