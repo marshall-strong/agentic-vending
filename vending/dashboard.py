@@ -1600,6 +1600,12 @@ def _tiles(snap: dict, charts: dict[str, str] | None = None) -> str:
                       f'{period}drinks, {_plural(dr["fulfilled"], "fulfilled request")}{visits}<br>'
                       f'model {_money(m["total"])} over {_plural(m["runs"], "run")} '
                       f'({_money(m["last_7_days"])} this week){unpriced}{spend_link}'))
+    elif spend["ok"] and "spend" in charts:
+        # Before the opening the live page shows no test purchases (`dashboard_live_only`), but the
+        # development spend on our keys is real: point to its chart, without the test figures.
+        tiles.append(("Before the opening", '<span class="big dim">Development</span>',
+                      "model calls and test purchases before the ledger opens are not from the $600"
+                      f"{spend_link}"))
     seen = snap.get("visits")
     if seen and not seen["ok"]:
         tiles.append(("Visitors", '<span class="big dim">Unavailable</span>',

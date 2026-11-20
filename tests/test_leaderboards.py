@@ -311,5 +311,8 @@ def test_public_state_matches_the_panel_and_isolates_missing_data(conn, page_con
     if missing == "assignment":
         assert panels["leaderboards"]["data"] == {"opened": True, "assignment_missing": True}
     else:
-        assert not panels["leaderboards"]["ok"] and "migrate" in panels["leaderboards"]["why"]
+        # The public page names no table: the reason is a fixed sentence (`dashboard_live_only`).
+        assert not panels["leaderboards"]["ok"] and panels["leaderboards"]["why"] == dashboard.PUBLIC_PANEL_ERROR
+        local = real_snapshot(page_conn, NOW)["leaderboards"]
+        assert not local["ok"] and "migrate" in local["why"]
     assert panels["stock"]["ok"]
