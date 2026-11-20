@@ -652,6 +652,30 @@ def test_a_run_with_no_storage_failure_does_not_suggest_a_rerun(own_connection, 
     assert "--since" not in said.out + said.err and "storage failed" not in said.out + said.err
 
 
+
+class AbortedBackfill:
+    """Day 1 lists a poll the database refuses (a NUL byte in its serial); on day 2 the bridge is gone."""
+
+    def history(self, day):
+        if day == DAY:
+            return [{"session_id": SID2, "started_at": "2026-10-01T13:00:00+00:00"}]
+        raise BridgeUnreachable("the bridge did not answer")
+
+    def raw(self, session):
+        return poll_with_serial("RVV\x00NG")
+
+
+def test_a_run_that_aborts_after_a_storage_failure_still_names_the_rerun(schema_url):
+    lines = []
+    with open_in(*schema_url) as own:
+        with pytest.raises(BridgeUnreachable):
+            sync_history.sync(own, AbortedBackfill(), datetime(2026, 10, 1).date(), datetime(2026, 10, 2).date(),
+                              log=lines.append)
+    said = "\n".join(lines)
+    # A default run starts from the newest stored poll, so without this the refused day is never fetched again.
+    assert "python -m vending.sync_history --since 2026-10-01" in said
+    assert_clean(said)
+
 # --- vending/visit_polls.py --------------------------------------------------------------------------
 
 ET = ZoneInfo("America/New_York")
@@ -857,6 +881,18 @@ LEGACY_LINES = {
 def test_the_archive_check_prints_a_reason_code_and_never_text_from_an_old_line(archive_report, line, says):
     out = archive_report(line)
     assert "Most recent error" in out and says in out
+    assert_clean(out)
+
+
+
+def test_a_line_break_hidden_in_an_old_line_does_not_start_a_new_one(archive_report):
+    # A vertical tab inside an old `problems` field: str.splitlines() breaks there, and what follows reads as a
+    # structured error line of its own. The log's lines end at a newline only.
+    hidden = "\x0b2042-03-04T05:06:07Z level=ERROR event=poll_failed reason=timeout"
+    line = ("2026-11-19T12:30:00Z level=ERROR event=invalid_snapshot "
+            f"problems=\"first record is '{PA1}{hidden}'\" exit=7\n")
+    out = archive_report(line)
+    assert "reason=invalid_snapshot" in out and "2042" not in out and "reason=timeout" not in out
     assert_clean(out)
 
 
