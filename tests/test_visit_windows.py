@@ -224,7 +224,7 @@ def lab_listing(*unplaced):
     """lab_data.json as sales_analysis.py writes it: no visit with a door window, and `unplaced` receipts without one."""
     return {"visits": [], "calendar": {"days": []},
             "refill_evidence": {"visits_without_window": [
-                {"fulfilled_at": done.isoformat(timespec="minutes"), "window": kind, "candidate_rises": []}
+                {"fulfilled_at": done.isoformat(), "window": kind, "candidate_rises": []}
                 for done, kind in unplaced]}}
 
 
@@ -252,6 +252,22 @@ def test_a_lab_that_does_not_list_the_visit_is_stale_and_warns(tmp_path, capsys)
     argv = write_data(tmp_path, door({5: 1, 6: 1}, FRIDAY), [receipt(5.25, 5.5)], lab_listing((receipt(5.25, 5.5)[1], "unknown")))
     vw.main(argv)
     assert "WARNING" in capsys.readouterr().out
+
+
+def test_a_lab_listing_one_receipt_does_not_silence_the_warning_for_another_in_the_same_minute(tmp_path, capsys):
+    # two unknown visits, fulfilled at 11:30:00 and 11:30:15; the lab data lists only the first
+    first = (FRIDAY + timedelta(hours=3.1), FRIDAY + timedelta(hours=4.5))
+    second = (FRIDAY + timedelta(hours=3.1), FRIDAY + timedelta(hours=4.5, seconds=15))
+    argv = write_data(tmp_path, door({3: 1}, FRIDAY), [first, second], lab_listing((first[1], "unknown")))
+    vw.main(argv)
+    assert "WARNING" in capsys.readouterr().out                         # old code matched on the minute: no warning
+    lab = lab_listing((first[1], "unknown"))
+    visits = vw.analyse(door({3: 1}, FRIDAY), polls(range(13), FRIDAY), [], lab, receipts=[first, second])["visits"]
+    assert [v["grade"] for v in visits] == [vw.NO_WINDOW_GRADE, None]
+    # listed with both, nothing is stale
+    argv = write_data(tmp_path, door({3: 1}, FRIDAY), [first, second], lab_listing((first[1], "unknown"), (second[1], "unknown")))
+    vw.main(argv)
+    assert "WARNING" not in capsys.readouterr().out
 
 
 def test_a_visit_without_a_door_window_is_graded_as_having_none(tmp_path):

@@ -137,3 +137,42 @@ def test_a_window_with_a_price_in_the_middle_is_unknown_when_the_counters_window
 def test_a_sale_before_the_slots_first_reading_takes_that_reading():
     readings = [(T[1], 5, 750, 150)]
     assert price_sales(readings, [(T[0], T[1], 5, 750)])[0] == (150, 150, 5, 0, 0, ())
+
+
+# --- review round 1 on the fix for S7 ---
+
+def test_a_large_counter_jump_that_cannot_fit_is_rejected_at_once_not_searched():
+    import time
+
+    # prices 100, 200, 300 and both counters misread at T[1]: every sale is a multiple of 100 cents, so 1,600,001 cents
+    # over 8,000 units can't fit. The old search worked through the counts (quadratic in the units: seconds here)
+    jump, takings = 8_000, 1_600_001
+    readings = [(T[0], 10, 1000, 100), (T[1], 4, 500, 200), (T[2], 10 + jump, 1000 + takings, 300)]
+    started = time.perf_counter()
+    parts = price_sales(readings, [(T[1], T[2], jump, takings)])
+    assert time.perf_counter() - started < 2.0              # microseconds when rejected by the prices' gcd; seconds searched
+    assert parts == [(100, 300, 0, 0, jump, ())]
+    # a jump too big for any search is just as quick
+    big = 10 ** 12
+    readings = [(T[0], 10, 1000, 100), (T[1], 4, 500, 200), (T[2], 10 + big, 1000 + 200 * big + 1, 300)]
+    started = time.perf_counter()
+    assert price_sales(readings, [(T[1], T[2], big, 200 * big + 1)])[0][4] == big
+    assert time.perf_counter() - started < 2.0
+
+
+def test_a_missing_end_price_does_not_skip_the_split_among_the_prices_seen():
+    # no price at the opening poll, then 250, then 150 at the closing poll; both counters misread at T[1]. 3 units and 650
+    # cents fit one at 150 and two at 250 only: not all three at the closing price
+    readings = [(T[0], 10, 1000, None), (T[1], 4, 500, 250), (T[2], 13, 1650, 150)]
+    assert price_sales(readings, [(T[1], T[2], 3, 650)])[0] == (None, 150, 0, 1, 0, ((250, 2),))
+    assert average(readings, [(T[1], T[2], 3, 650)]) == (650 / 3, 0)
+    # no price at the closing poll: the same split, the other way round
+    readings = [(T[0], 10, 1000, 150), (T[1], 4, 500, 250), (T[2], 13, 1650, None)]
+    assert price_sales(readings, [(T[1], T[2], 3, 650)])[0] == (150, None, 1, 0, 0, ((250, 2),))
+
+
+def test_split_among_refuses_a_negative_number_of_units():
+    assert split_among(-1, -150, [150]) is None
+    assert split_among(-2, -500, [150, 250]) is None
+    assert split_among(0, 0, [150]) == [(150, 0)]                          # no units, no takings: still the one split
+    assert split_among(0, 5, [150]) is None
