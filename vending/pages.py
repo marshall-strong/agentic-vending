@@ -123,6 +123,8 @@ def only(slots: tuple[str, ...]) -> dict[str, db_explorer.Only]:
                                                 sql.Identifier(table.schema, "polls"), sql.Literal(DEVICE_ID))),
         "slot_counts": db_explorer.Only(("device_id", "selection"), lambda table: _ours("selection", slots)
                                         + sql.SQL(" and t.device_id = {}").format(sql.Literal(DEVICE_ID))),
+        # Raw plans can reference local files and selections from an earlier assignment.
+        "first_fill_plans": db_explorer.Only((), lambda table: sql.SQL("false")),
     }
 
 

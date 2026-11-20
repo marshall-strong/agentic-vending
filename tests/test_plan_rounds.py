@@ -64,10 +64,39 @@ def test_rounds_pair_by_suffix_in_round_order_and_ignore_other_files(tmp_path):
     write(tmp_path, "round10", "10", {"day_one": day_one()})
     write(tmp_path, "round1", "1", {"day_one": day_one()}, projection())
     (tmp_path / "round1" / "plan1_sku.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "round2" / "r2a.plan.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "round2" / "r2a.answer.json").write_text("{}", encoding="utf-8")
+    write(tmp_path, "round4", "4", {"day_one": day_one()}, projection())
+    folder = tmp_path / "round4"
+    (folder / "plan4.json").rename(folder / "r4.plan.json")
     found = pr.discover(tmp_path)
-    assert [rid for rid, _, _ in found] == ["1", "2a", "2b", "10"]
+    assert [rid for rid, _, _ in found] == ["1", "2a", "2b", "4", "10"]
     assert found[1][2] is None and found[2][2].name == "projection2b.json"
+    assert found[3] == ("4", folder / "r4.plan.json", folder / "projection4.json")
+
+
+def test_a_checked_plan_wins_over_the_raw_answer_beside_it(tmp_path):
+    # Rounds 2 and 3 on the laptop keep both: planN.json (checked) and rN.plan.json (the model's answer).
+    write(tmp_path, "round2", "2a", {"day_one": day_one()}, projection())
+    (tmp_path / "round2" / "r2a.plan.json").write_text("{}", encoding="utf-8")
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, projection())
+    (tmp_path / "round3" / "r3.plan.json").write_text("{}", encoding="utf-8")
+    found = {rid: plan.name for rid, plan, _ in pr.discover(tmp_path)}
+    assert found == {"2a": "plan2a.json", "3": "plan3.json"}
+
+
+@pytest.mark.parametrize("first, second", [
+    ("plan3.json", "r3.plan.json"),
+    ("r3.plan.json", "plan3.json"),
+], ids=["checked-first", "raw-first"])
+def test_discover_refuses_the_same_round_in_different_folders(tmp_path, first, second):
+    for folder, filename in (("round2", first), ("round3", second)):
+        directory = tmp_path / folder
+        directory.mkdir()
+        (directory / filename).write_text("{}", encoding="utf-8")
+
+    with pytest.raises(pr.RoundError, match="round 3 has two plan files") as error:
+        pr.discover(tmp_path)
+    assert f"round2/{first}" in str(error.value) and f"round3/{second}" in str(error.value)
 
 
 def test_floor_and_fill_cost_are_recomputed_from_the_pack_list(tmp_path):

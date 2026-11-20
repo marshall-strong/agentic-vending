@@ -14,10 +14,16 @@ from http.server import ThreadingHTTPServer
 import psycopg
 import pytest
 
-from tests.conftest import CONNECT_TIMEOUT, store_poll
+from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, store_poll
 from vending import agent_runs, dashboard
 from vending.config import set_halted
 from vending.write_gate import log
+
+
+@pytest.fixture(autouse=True)
+def _show_weekly_plan(monkeypatch):
+    """Exercise the weekly dashboard. test_plan_store covers the actual lock and first fill."""
+    monkeypatch.setattr(dashboard, "lock_at", lambda: TEST_NOW - timedelta(days=30))
 
 
 def plan(*slots, reason="restock what sold"):

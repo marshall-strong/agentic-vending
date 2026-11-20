@@ -5,14 +5,18 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
+from datetime import timedelta
 
 import psycopg
 import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from psycopg.types.json import Jsonb
 
-from tests.conftest import CONNECT_TIMEOUT, open_in
-from vending import agent_runs, dashboard, db_explorer, pages, settings, worker
+from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, open_in
+from tests.test_plan_rounds import day_one, projection, write
+from tests.test_plan_store import unassigned_slot
+from vending import agent_runs, dashboard, db, db_explorer, pages, plan_store, settings, slots, worker
 from vending.write_gate import log
 
 SECRET = 'connection to server at "db.example.net", port 5432 failed: password authentication failed for user "g2_admin"'
@@ -335,6 +339,9 @@ def test_the_keepalive_settings_are_ones_libpq_accepts():
 
 def test_grant_lets_a_role_read_every_table_now_and_later(schema_url, conn, capsys):
     url, schema = schema_url
+    # Grant at schema 018, then apply the actual first-fill migration as the same owner.
+    conn.execute("drop table first_fill_plans")
+    conn.execute("delete from schema_migrations where version = '020_first_fill_plans.sql'")
     with psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) as admin:
         name = _role(admin)
         try:
@@ -350,10 +357,10 @@ def test_grant_lets_a_role_read_every_table_now_and_later(schema_url, conn, caps
             assert conn.execute("select tool, outcome, detail from action_log order by id desc limit 1").fetchone() == (
                 "pages.grant", "done", done)
             # A table a later migration adds is readable too, and still not writable.
-            conn.execute("create table later_table (id int)")
+            assert db.migrate(conn) == ["020_first_fill_plans.sql"]
             with _as(url, schema, name) as looking:
                 assert pages.unreadable(looking) == [] and pages.writable(looking) == []
-                assert looking.execute("select count(*) from later_table").fetchone() == (0,)
+                assert looking.execute("select count(*) from first_fill_plans").fetchone() == (0,)
         finally:
             _drop(admin, name)
     with pytest.raises(LookupError, match="no role"):
@@ -521,7 +528,8 @@ def test_after_a_reassignment_the_public_json_drops_the_old_slots_stock(site, sc
         assert not any("slot 15" in w for w in stock["warnings"])
 
 
-def test_after_a_reassignment_plans_list_only_our_slots(site, schema_url, conn):
+def test_after_a_reassignment_plans_list_only_our_slots(site, schema_url, conn, monkeypatch):
+    monkeypatch.setattr(dashboard, "lock_at", lambda: TEST_NOW - timedelta(days=30))
     newest = _stocked_then_reassigned(conn)
     for snap in (json.loads(_get(site, "/dashboard/state.json")[2]),):
         rows = snap["plan"]["data"]["slots"]
@@ -536,7 +544,8 @@ def test_after_a_reassignment_plans_list_only_our_slots(site, schema_url, conn):
     assert "9.99" not in page and "15 $2.50" not in page and "1 of 20 slots changed" in page
 
 
-def test_with_no_assignment_the_public_json_has_no_slot_stock_or_plan_rows(site, conn):
+def test_with_no_assignment_the_public_json_has_no_slot_stock_or_plan_rows(site, conn, monkeypatch):
+    monkeypatch.setattr(dashboard, "lock_at", lambda: TEST_NOW - timedelta(days=30))
     _stocked_then_reassigned(conn)
     conn.execute("delete from slot_assignment")
     body = _get(site, "/dashboard/state.json")[2]
@@ -545,6 +554,69 @@ def test_with_no_assignment_the_public_json_has_no_slot_stock_or_plan_rows(site,
     assert not any("slot " in w for w in snap["stock"]["data"]["warnings"])
     assert snap["plan"]["data"]["slots"] == [] and all(r["changes"] == [] for r in snap["runs"]["data"])
     assert OLD_SLOT not in body and "9.99" not in body
+
+
+def test_bad_slot_lock_setting_leaves_the_weekly_dashboard_available(site, conn, monkeypatch):
+    run = agent_runs.start(conn, mode="dry-run")
+    agent_runs.finish(conn, run, "skipped", plan={"slots": []}, update="Weekly dashboard test update.")
+    monkeypatch.setenv("SLOTS_LOCK_AT", "2026-12-03")
+
+    status, _, html = _get(site, "/dashboard")
+    assert status == 200
+    assert "<h2>The plan " in html and "Weekly dashboard test update." in html
+    assert "SLOTS_LOCK_AT" in html
+
+    status, _, body = _get(site, "/dashboard/state.json")
+    assert status == 200
+    snap = json.loads(body)
+    assert snap["plan"]["data"]["run"]["id"] == run
+    assert snap["plan"]["data"]["slots"] == []
+    assert not snap["ours"]["ok"] and "SLOTS_LOCK_AT" in snap["ours"]["why"]
+
+
+def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, conn, tmp_path, monkeypatch):
+    path = r"C:\Users\Made Up\private\first-fill.json"
+    rows = day_one(**{"15": {"product": "Sample Cherry Soda", "why": "Made-up fixture reason."},
+                      "16": {"why": f"See {path}"}, "17": {"price_cents": 25}})
+    source = {"day_one": rows, "note": path}
+    write(tmp_path, "round3", "3", source, projection())
+    plan_id = plan_store.load(conn, tmp_path, "3", "Test Loader")
+    monkeypatch.setattr(dashboard, "lock_at", lambda: dashboard.datetime.now(dashboard.timezone.utc)
+                        + timedelta(days=1))
+    status, _, html = _get(site, "/dashboard")
+    assert status == 200
+    plan_html = html.split('<section id="plan">')[1].split("</section>")[0]
+    status, _, body = _get(site, "/dashboard/state.json")
+    assert status == 200
+    plan = json.loads(body)["plan"]["data"]
+    assert plan["id"] == plan_id and plan["picked"] is False
+    slot15 = plan["slots"][0]
+    assert (slot15["slot"], slot15["product"], slot15["price_cents"], slot15["units"], slot15["reason"]) == (
+        "15", "Sample Cherry Soda", 350, 11, "Made-up fixture reason.")
+    assert 'id="slot-15"' in plan_html
+    assert "Sample Cherry Soda &middot; $3.50 &middot; 11 units" in plan_html
+    assert '<div class="why">Made-up fixture reason.</div>' in plan_html
+    assert slot15["checks"]["legal_price"] is True
+    assert plan["slots"][2]["checks"]["legal_price"] is False and "price refused" in plan_html
+    assert plan["fill_cap_cents"] == 36600 and "against the proposed $366.00 cap" in plan_html
+    assert "Code checks" in plan_html and "Floor $1.85" in plan_html and "Fill cost share" in plan_html
+    assert "private" not in plan_html and "first-fill.json" not in body
+    assert "Interloper" not in plan_html and "projection" not in plan
+    _, schema = schema_url
+    status, _, explorer = _get(site, f"/db?schema={schema}&table=first_fill_plans")
+    assert status == 200 and "first-fill.json" not in explorer and "Sample Cherry Soda" not in explorer
+
+    # Bypass the loader and try to publish a row for an unassigned selection.
+    rows[0].update(slot=unassigned_slot(), product="Outside slot test marker")
+    conn.execute("update first_fill_plans set plan = %s where id = %s", (Jsonb(source), plan_id))
+    for url in ("/dashboard", "/dashboard/state.json"):
+        status, _, body = _get(site, url)
+        assert status == 200 and "Outside slot test marker" not in body
+    assert json.loads(body)["plan"]["ok"] is False
+
+    conn.execute("drop table first_fill_plans")
+    status, _, html = _get(site, "/dashboard")
+    assert status == 200 and "Plan for the first fill" in html and "python -m vending.db migrate" in html
 
 
 def test_a_table_without_the_columns_a_row_filter_reads_shows_no_rows(schema_url, conn):
