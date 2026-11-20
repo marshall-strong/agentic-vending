@@ -138,8 +138,10 @@ def price_sales(readings, sales, capped: list | None = None) -> list[tuple[int |
     changed back, say 150, 250, 150. Every price seen in the window is a price the units may have sold at, so the units
     and cents are split among all of them, when exactly one whole split fits (`split_among`); `other` is `(price,
     units)` for the units at a price that is neither the opening nor the closing one (none in the common case, with
-    two prices at most). A window with one price takes `split_boundary`'s rule. An end with no price reading doesn't
-    stop the split: the prices that were seen are split among, and the units at the missing end's price are none.
+    two prices at most). A window with one price puts all the units at it: the opening's, the closing's, or, when both ends
+    have no price reading and it is an inside reading's, `other`. A window with no price at all leaves the units unknown:
+    nothing is credited to a missing price. An end with no price reading doesn't stop the split: the prices that were
+    seen are split among, and the units at the missing end's price are none.
 
     The units and cents of a poll can be measured from different polls (vending.counters.windows: a misread in one
     counter and not the other). Then the cents do not cover the same units, so a sale whose prices differ is not
@@ -162,8 +164,14 @@ def price_sales(readings, sales, capped: list | None = None) -> list[tuple[int |
         same = unit_from.get(at) is not None and unit_from.get(at) == cents_from.get(at)
         cents = int(cents) if same else None
         seen = sorted({r[3] for r in readings[first:bisect_right(times, at)] if r[3] is not None})
-        if len(seen) < 2:                       # one price all through the window (or none seen): nothing to split
-            out.append((opening, closing, *split_boundary(int(units), cents, opening, closing), ()))
+        if len(seen) < 2:                       # at most one price in the window: nothing to split
+            n = int(units)
+            if not seen:                        # no price was listed in it: nothing to credit the units to
+                out.append((opening, closing, 0, 0, n, ()))
+            else:                               # all at the one price: the opening's, the closing's, or an inside reading's
+                price = seen[0]
+                out.append((opening, closing, n if opening == price else 0, n if opening != price and closing == price else 0,
+                            0, ((price, n),) if price not in (opening, closing) else ()))
             continue
         hit: list = []
         split = split_among(int(units), cents, seen, hit)     # a missing end price doesn't hide the prices that were seen

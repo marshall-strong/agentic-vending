@@ -245,12 +245,22 @@ def price_slot_sales(sales, rd):
     return sales
 
 
+def capped_counts(su, sc) -> dict:
+    """A slot's capped sale windows: all of its sales `su`, and those among the sales `sc` the average price uses (the
+    regular-era class days). A Saturday sale is capped too, but doesn't change the average."""
+    return {"price_capped_windows": int(su.price_capped.sum()), "price_capped_in_average": int(sc.price_capped.sum())}
+
+
 def capped_note(slot_rows) -> str | None:
-    """The report's sentence on sales whose split search hit its cap (`price_capped_windows` of the slot rows), or None."""
+    """The report's sentence on sales whose split search hit its cap, from the slot rows' `capped_counts`, or None."""
     n = sum(r.get("price_capped_windows", 0) for r in slot_rows)
+    if not n:
+        return None
+    m = sum(r.get("price_capped_in_average", 0) for r in slot_rows)
+    where = (f"{m} of them {'is' if m == 1 else 'are'} in the regular-era class-day sales the average price uses"
+             if m else "none of them is in the regular-era class-day sales the average price uses, so no average price changes")
     return (f"Price split cap: {n} sale window{'s' if n != 1 else ''} had too many price combinations to search "
-            f"(boundary_units.MAX_NODES), so {'their' if n != 1 else 'its'} units are counted as unknown and left out of the "
-            "average price, though a split may exist.") if n else None
+            f"(boundary_units.MAX_NODES), so the units are counted as unknown, though a split may exist; {where}.")
 
 
 def find_visits(doors, receipts, dates, t0, t1):
@@ -1371,7 +1381,7 @@ def main():
             instock_class_days=rate_rows[s]["instock_days_all"], class_days=len(reg_class),
             rate=rate_rows[s]["rate_all"], rate_recent=rate_rows[s]["rate_recent"],
             avg_price=avg_p / 100, avg_price_rule=avg_rule, price_unknown_units=int(unknown),
-            price_capped_windows=int(sc.price_capped.sum()),
+            **capped_counts(su, sc),
             current_price=int(rd[rd.slot == s].price_cents.iloc[-1]),
             fri_share=float(fri_units / wd_tot) if wd_tot else 0.0,
             zero_week_share=float((wk_units == 0).mean()) if len(wk_units) else None,
@@ -2592,8 +2602,9 @@ def write_report(path, L):
           "at 12:00 noon ET (last reading before noon, else the day's first reading); a slot with no sale at a known price takes that "
           "noon price as its average.")
         w("")
-    if capped_note(L["slot_rows"]):
-        w(capped_note(L["slot_rows"]))
+    note = capped_note(L["slot_rows"])
+    if note:
+        w(note)
         w("")
     w("## Slow-seller rule: what to change in the agent's guideline")
     w("")

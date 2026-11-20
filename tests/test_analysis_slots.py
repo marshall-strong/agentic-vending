@@ -579,15 +579,20 @@ def test_the_exports_stop_at_the_fall_cut(conn, schema_url, tmp_path, monkeypatc
     assert units == [0, 1, 1, 2]           # slot 15's rises only
 
 
+def _need_analysis():
+    """Skip, as the file's other analysis tests do, unless the analysis's own dependencies are installed. Call it before
+    importing pandas or sales_analysis: with statsmodels missing, the import of sales_analysis errors instead of skipping."""
+    for name in ("pandas", "statsmodels", "sklearn"):
+        pytest.importorskip(name)
+
+
 def _load_csvs(tmp_path, sales, readings):
     """sales_analysis.load on CSVs written from `sales` rows (slot, at, units, cents) and `readings` rows (slot, at, lifetime
     units, lifetime cents, price or "" for a blank). A normal run, the stored assignment REDRAWN."""
     import argparse
     import csv
 
-    pytest.importorskip("pandas")
-    pytest.importorskip("statsmodels")
-    pytest.importorskip("sklearn")
+    _need_analysis()
     import sales_analysis
 
     def write(name, header, rows):
@@ -613,6 +618,7 @@ BLANK_PRICE_READINGS = [("11", POLLS[0], 10, 1000, 150), ("11", POLLS[1], 4, 500
 def test_a_blank_price_in_one_slot_does_not_stop_another_slots_price_split(tmp_path):
     # slot 11 listed 150 then 250 and sold 2 units for 400 cents over a window a misread widened (both counters read low at
     # 10:00); slot 24's price is blank at 10:00. One blank makes pandas read the whole price column as floats.
+    _need_analysis()
     from boundary_units import price_sales, priced_average
     sales, reads, *_ = _load_csvs(tmp_path, [("11", POLLS[2], 2, 400)], BLANK_PRICE_READINGS)
     assert reads.price_cents.dtype.kind == "f"                         # the premise: floats, with a NaN in them
@@ -661,12 +667,6 @@ def test_the_cap_report_counts_every_capped_window_and_says_how_many_are_in_the_
     assert "2 sale windows had too many" in note and "1 of them is in the regular-era class-day sales" in note
     only_saturday = sales_analysis.capped_note([{"price_capped_windows": 1, "price_capped_in_average": 0}])     # old code: no note
     assert "1 sale window had too many" in only_saturday and "none of them is in the regular-era class-day sales" in only_saturday
-
-
-def _need_analysis():
-    """Skip, as the file's other analysis tests do, unless the analysis's own dependencies are installed."""
-    for name in ("pandas", "statsmodels", "sklearn"):
-        pytest.importorskip(name)
 
 
 def _fulfilled(conn, request_id, at):
