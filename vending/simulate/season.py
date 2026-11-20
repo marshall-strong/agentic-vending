@@ -37,8 +37,10 @@ BY = "simulation"
 
 
 # Columns the database stamps with its own clock (`default now()`). Our code fills them in while the
-# season runs, so they hold wall time from before the season starts; `restamp` moves each new one to the
-# simulated moment it belongs to, so the database reads as it would have at any simulated time.
+# season runs, so they hold wall time; `restamp` moves each one a step wrote to the simulated moment it
+# belongs to, so the database reads as it would have at any simulated time. A step's rows are the ones
+# stamped between the wall clock before it (`wall_clock`) and after it. "Before the season starts" can't
+# pick them out: from 30 Nov 2026 the wall clock is past SIM_START, and simulated times overlap it.
 WALL_STAMPED = (("polls", "synced_at"), ("config", "updated_at"), ("action_log", "at"),
                 ("product_requests", "requested_at"), ("ledger_entries", "recorded_at"),
                 ("purchase_submissions", "at"), ("purchase_submissions", "resolved_at"),
@@ -47,9 +49,22 @@ WALL_STAMPED = (("polls", "synced_at"), ("config", "updated_at"), ("action_log",
                 ("agent_steps", "at"), ("sourcing_options", "updated_at"))
 
 
-def restamp(conn: psycopg.Connection, at: datetime) -> None:
+def wall_clock(conn: psycopg.Connection) -> datetime:
+    """The database's own clock, unpatched: what `default now()` stamps. Take it before a step."""
+    return conn.execute("select clock_timestamp()").fetchone()[0]
+
+
+def restamp(conn: psycopg.Connection, at: datetime, since: datetime) -> None:
+    """Move every wall-clock stamp written since `since` (a `wall_clock` reading) to the simulated `at`."""
+    until = wall_clock(conn)
     for table, column in WALL_STAMPED:
-        conn.execute(f"update {table} set {column} = %s where {column} < %s", (at, world.SIM_START))
+        conn.execute(f"update {table} set {column} = %s where {column} between %s and %s", (at, since, until))
+
+
+def restamp_all(conn: psycopg.Connection, at: datetime) -> None:
+    """Move every wall-clock stamp to `at`. Only at setup, on a fresh database, where nothing is simulated yet."""
+    for table, column in WALL_STAMPED:
+        conn.execute(f"update {table} set {column} = %s where {column} is not null", (at,))
 
 
 def check_scratch(url: str) -> None:
@@ -154,7 +169,7 @@ def setup(conn: psycopg.Connection, st: State, budget_usd: Decimal, run_cap_usd:
                 sourcing.set_option(conn, o, now)
     config.set_value(conn, "model_test_daily_cap_cents", int(budget_usd * 100), BY)
     config.set_value(conn, "model_run_cap_cents", int(run_cap_usd * 100), BY)
-    restamp(conn, now)
+    restamp_all(conn, now)
 
 
 # --- the hours -----------------------------------------------------------------------------------------
@@ -269,6 +284,7 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
         st.runs.append(record)
         return record
     cap = min(run_cap, left) if st.decider == "model" else run_cap
+    since = wall_clock(conn)
     config.set_value(conn, "model_run_cap_cents", int(cap * 100), BY)
     server.bridge = lambda: st.bridge
     server.connect = db.connect
@@ -289,7 +305,7 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     finally:
         agent.Harness = saved
     at = st.clock.now()
-    restamp(conn, at)
+    restamp(conn, at, since)
     conn.execute("update agent_runs set finished_at = %s where id = %s", (at + timedelta(minutes=3), run_id))
     record.update(run_id=run_id, status=out.status, detail=out.detail, request_id=out.request_id,
                   tool_calls=out.tool_calls, turns=out.turn + 1, answer=out.answer,
@@ -376,8 +392,9 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
                 a = ev.at
                 st.clock.set(ev.at)
                 st.events.remove(ev)
+                since = wall_clock(conn)
                 handle(conn, st, ev, opts)
-                restamp(conn, ev.at)
+                restamp(conn, ev.at, since)
                 if len(st.runs) > runs_before:
                     r = st.runs[-1]
                     say(f"{ev.at.astimezone(EASTERN):%a %d %b %H:%M} {r.get('kind')}: {r.get('status')}, "
@@ -387,12 +404,13 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
                     st.poll_at = t
             sell(st, cal, demand, a, nxt)
             st.clock.set(nxt)
+            since = wall_clock(conn)
             poll(conn, st, nxt)
             sync_requests.sync(conn, st.bridge, now=nxt, log=lambda *_: None)
             # The worker confirms the assignment every round (`vending.slots.check`); the first check from
             # the start confirms it for the competition, as live, so the tools go on reading our slots.
             slot_assignment.check(conn, st.bridge.slots(), now=nxt, by=BY)
-            restamp(conn, nxt)
+            restamp(conn, nxt, since)
             st.poll_at = t = nxt
         st.done = True
         save(st, checkpoint)

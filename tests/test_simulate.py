@@ -227,6 +227,7 @@ def test_first_week_end_to_end(schema_url, monkeypatch, tmp_path):
         sold = sum(r["sold"] for r in st.days.values())
         assert ledger.units_sold(conn, world.LEDGER_OPENS, stop) == sold > 0
         assert conn.execute("select count(*) from action_log where at < %s", (world.SIM_START,)).fetchone()[0] == 0
+        assert conn.execute("select count(*) from agent_runs where finished_at < started_at").fetchone()[0] == 0
         # The assignment came from the season, through the simulated server, and was confirmed from the start.
         stored = slot_assignment.stored(conn)
         assert stored.slots == EXAMPLE and stored.last_checked_at >= world.COMPETITION_START
@@ -263,3 +264,26 @@ def test_the_wide_rule_stocks_one_sourced_drink_per_slot():
     assert sorted(slots) == sorted(EXAMPLE)
     assert len(set(slots.values())) >= 10
     assert all(any(s == sku for s, _ in world.STORE_UNIT_PRICE) for sku in slots.values())
+
+
+def test_restamp_moves_only_the_rows_a_step_wrote_even_after_the_season_starts(schema_url, monkeypatch):
+    """Review fix: on or after 30 Nov 2026 real time is past SIM_START, so "older than the start" can't
+    pick out wall-clock rows. Restamping takes the rows stamped during the step, by the database clock."""
+    from tests.conftest import open_in
+    from vending.simulate import season
+
+    url, schema = schema_url
+    # Real time is past the season's start, as it will be from 30 Nov 2026.
+    monkeypatch.setattr(world, "SIM_START", datetime(2020, 1, 1, tzinfo=EASTERN))
+    simulated = datetime(2026, 12, 9, 19, 0, tzinfo=EASTERN)
+    earlier = datetime(2026, 12, 3, 8, 0, tzinfo=EASTERN)
+    with open_in(url, schema) as conn:
+        conn.execute("insert into action_log (kind, tool, arguments, outcome, detail, at)"
+                     " values ('write', 'old', '{}', 'done', 'already simulated', %s)", (earlier,))
+        since = season.wall_clock(conn)
+        conn.execute("insert into action_log (kind, tool, arguments, outcome, detail)"
+                     " values ('write', 'new', '{}', 'done', 'written by this step')")
+        season.restamp(conn, simulated, since)
+        got = dict(conn.execute("select tool, at from action_log where tool in ('old', 'new')").fetchall())
+    assert got["new"] == simulated                  # the step's row is at the simulated moment
+    assert got["old"] == earlier                    # a row from an earlier step keeps its simulated time
