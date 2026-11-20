@@ -1942,7 +1942,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     money = (f'<section id="money"><h2>Money <span class="hint">from the ledger &middot; exact to the cent'
              " &middot; the competition counts from the ledger's opening; spend before it is development"
              f'</span></h2>' + (f'<p class="charts">Charts: {chart_links}</p>' if chart_links else "")
-             + f'{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
+             + f'{money_panel.html(snap["money"], charts.get("pnl"))}</section>' if "money" in snap else "")
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
     boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
               if "leaderboards" in snap else "")

@@ -1126,6 +1126,17 @@ def test_the_live_money_chart_carries_no_mock_generator(site, conn):
     assert "function mockDays()" in live and "const MOCK = false;" in live   # a stub, never called
 
 
+def test_the_money_panel_links_the_served_pnl_only_where_it_is_served(site, schema_url, conn):
+    from tests.test_ledger import open_ledger
+    open_ledger(conn)
+    served = _get(site, "/dashboard")[2]
+    assert '<a href="/dashboard/pnl">the weekly P&amp;L</a>' in served
+    with open_in(*schema_url) as local:
+        alone = dashboard.render(dashboard.snapshot(local))
+    assert "Profit and loss since the opening" in alone
+    assert "/dashboard/pnl" not in alone and "Weekly detail: <code>python -m vending.pnl_report</code>" in alone
+
+
 def test_a_kept_money_chart_skips_its_replay_only_for_the_same_assignment(monkeypatch):
     monkeypatch.setenv(pages.READER, "set")
     monkeypatch.setattr(pages, "connect", _Quiet)
