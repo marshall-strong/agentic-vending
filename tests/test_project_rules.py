@@ -146,3 +146,13 @@ def test_the_docs_quote_the_spendable_floor_the_planner_enforces():
     assert "only spending limit" not in money and "below_spendable_floor" in money
     policy = (RULES_DIR.parent / "restock-policy.md").read_text(encoding="utf-8")
     assert floor in policy and "SPENDABLE_FLOOR_CENTS" in policy
+
+
+def test_the_prompt_says_the_amazon_cutoff_wins_over_a_thursday_promotion():
+    """Review finding 3: #166's promotion needs Thursday-evening evidence, Amazon orders are due Wednesday 23:59, and
+    only one request may be open. The Amazon order goes in on time; the promotion waits or goes in-store."""
+    from vending.agent import SYSTEM
+
+    assert "Never hold an Amazon order past Wednesday for a promotion" in SYSTEM
+    assert "waits a week" in SYSTEM and "buys nothing from Amazon" in SYSTEM and "by Thursday 23:59" in SYSTEM
+    assert "The wildcard topic's evidence rules still decide whether a promotion qualifies" in SYSTEM

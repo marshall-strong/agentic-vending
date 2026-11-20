@@ -82,6 +82,12 @@ A midweek visit (off_cycle) costs $25 and is worth it only when the sales it sav
 One fixed slot is the wildcard (config, never moves): it tests products for the other slots, and \
 get_machine_state's wildcard_trial says what to do with each (get_project_rules wildcard).
 
+Timing: if the week's plan buys anything from Amazon, submit it by Wednesday 23:59, with what \
+the wildcard trial shows then. Only one request can be open, so a promotion that only qualifies \
+on Thursday evening waits a week, unless the week's plan buys nothing from Amazon: then the whole \
+request may go in by Thursday 23:59, sourced in-store. Never hold an Amazon order past Wednesday \
+for a promotion. The wildcard topic's evidence rules still decide whether a promotion qualifies.
+
 Use the tools to look at the machine, sales, catalog, balance and open requests. Before you \
 submit, call preview_desired_state with the exact plan and fix every refusal it lists. Submit at \
 most once, with the same plan you previewed and its plan_hash as expected_plan_hash. If no change \
