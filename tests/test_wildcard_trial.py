@@ -610,3 +610,49 @@ def test_a_recovered_misread_doesnt_hide_an_unsplit_swap_sale(conn):
     assert [(x.product, x.units) for x in counted.sales if x.slot == "15" and x.unattributed] == [(None, 1)]
     t = get_machine_state(conn, now=FRESH).wildcard_trial
     assert t.verdict == UNKNOWN and "1 units sold in the poll window over slot 15's switch to AAA" in t.reason, t
+
+
+def test_a_poll_at_the_swaps_moment_with_door_times_is_settled_by_them(conn):
+    """The same polls as the round-1 tie case, but the receipt says the door was open from 19:40 to 20:00: the
+    replay settles the window that starts at 20:00 by the door, all of it the new drink's, so the trial trusts it.
+    Without door times (the test above) the same window stays unknown."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("p1", SINCE.isoformat(), (250, 100, 25000)),
+        ("p2", "2026-10-16T21:00:00+00:00", (300, 101, 25300))])
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
+                 (SINCE - timedelta(minutes=20), SINCE))
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == PASS, t
+
+
+def test_door_times_the_replay_cant_use_dont_settle_a_tie(conn):
+    """Two requests' visits to slot 15 that share a minute: the replay times both by `resolved_at`, as without door
+    times, so a window starting at the swap isn't settled by the door."""
+    _swap_with_polls_then_a_week(conn, [
+        ("p0", "2026-10-16T18:00:00+00:00", (250, 100, 25000)),
+        ("p1", SINCE.isoformat(), (250, 100, 25000)),
+        ("p2", "2026-10-16T21:00:00+00:00", (300, 101, 25300))])
+    fulfilled(conn, "r9", datetime(2026, 10, 12, 20, tzinfo=timezone.utc), ("15", "ZZZ", "primary", "10.00", 1, 0, 0))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
+                 (SINCE - timedelta(minutes=20), SINCE))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r9'",
+                 (SINCE - timedelta(minutes=20), SINCE))   # the same minutes: which visit came first can't be told
+    t = get_machine_state(conn, now=FRESH).wildcard_trial
+    assert t.verdict == UNKNOWN, t
+
+
+def test_a_sale_with_no_recorded_window_is_placed_by_the_counter_history():
+    """Swap at 20:00, readings at 18:00, a misread at 21:00 and 22:00: a sale booked at 22:00 with no `since`
+    has its window from 18:00 (`counters.windows`), so it spans the swap, though the first poll after the swap is
+    21:00. One whose window the history can't place is returned too."""
+    from vending.wildcard_trial import _unsplit_over
+
+    t = lambda h, m=0: datetime(2026, 10, 16, h, m, tzinfo=timezone.utc)
+    readings = [(t(18), 100, 25000, 250), (t(21), 40, 10000, 250), (t(22), 101, 25250, 250)]
+    sale = stock.SaleCost(t(22), "15", None, 1, 1, None)
+    assert _unsplit_over("15", t(20), readings, (sale,), True) == [sale]
+    unplaced = stock.SaleCost(t(23), "15", "AAA", 1, 1, None)   # no reading at 23:00: no window to place it by
+    assert _unsplit_over("15", t(20), readings, (unplaced,), True) == [unplaced]
+    before = stock.SaleCost(t(18), "15", None, 1, 1, None)      # booked at the last poll before the swap
+    assert _unsplit_over("15", t(20), readings, (before,), True) == []
