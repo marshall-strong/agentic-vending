@@ -565,3 +565,31 @@ def test_unattributed_sales_can_empty_the_slot_so_its_days_arent_counted_in_stoc
         conn, "r3", datetime(2026, 11, 6, 19, 30, tzinfo=timezone.utc), ("15", "PEPSI20", "primary", "5.00", 5, 0, 0)))
     assert (s.product, s.stock_on_hand) == ("PEPSI20", 5)
     assert (s.class_days_in_stock, s.rate_basis.startswith("fall prior")) == (1, True)
+
+
+def test_a_later_unplaced_window_drops_only_the_days_it_covers(conn):
+    # Review round 1, item 2. Pepsi went in on 30 Oct and sold Mon to Fri. At the 6 Nov visit to swap it
+    # for Red Bull (door open 19:00 to 19:40 UTC), two polls inside the open door show 1 unit sold: a sale
+    # the receipt contradicts, left unattributed. Read at 19:30, before the door closes, the slot still
+    # holds Pepsi. Only Fri 6 Nov is in that window, so Pepsi keeps Mon 2 to Thu 5 Nov: 4 days, not 0.
+    def red_bull(conn):
+        fulfilled(conn, "r3", datetime(2026, 11, 6, 19, 25, tzinfo=timezone.utc),
+                  ("15", "REDBULL", "primary", "20.00", 20, 0, 0))
+        conn.execute("update purchase_lines set units_pulled = 11, pulled_sku = 'PEPSI20', slot_reassigned = true"
+                     " where request_id = 'r3'")
+        conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r3'",
+                     (datetime(2026, 11, 6, 19, tzinfo=timezone.utc), datetime(2026, 11, 6, 19, 40, tzinfo=timezone.utc)))
+
+    s = swap(conn, "PEPSI20", [
+        ("2026-10-30T22:00:00+00:00", (200, 106, 21200)),
+        ("2026-11-02T22:00:00+00:00", (200, 108, 21600)),
+        ("2026-11-03T22:00:00+00:00", (200, 110, 22000)),
+        ("2026-11-04T22:00:00+00:00", (200, 112, 22400)),
+        ("2026-11-05T22:00:00+00:00", (200, 114, 22800)),
+        ("2026-11-06T14:00:00+00:00", (200, 115, 23000)),
+        ("2026-11-06T19:10:00+00:00", (200, 115, 23000)),
+        ("2026-11-06T19:20:00+00:00", (200, 116, 23200)),
+    ], now=datetime(2026, 11, 6, 19, 30, tzinfo=timezone.utc), then=red_bull)
+    assert s.product == "PEPSI20"
+    assert (s.class_days_in_stock, s.units_per_class_day is not None) == (4, True)
+    assert "4 in-stock class days of our own so far" in s.rate_basis
