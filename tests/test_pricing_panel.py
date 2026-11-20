@@ -11,6 +11,13 @@ from tests.test_dashboard import MONDAY, catalog, fulfilled, page_conn, plan  # 
 from vending import agent_runs, dashboard
 
 
+@pytest.fixture(autouse=True)
+def after_the_lock(monkeypatch):
+    """These tests run after the slot lock, where Pricing follows the agent's weekly plan, unless a test moves
+    the lock later. Before it, #185 puts the first-fill plan in `snap["plan"]`."""
+    monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY - timedelta(days=30))
+
+
 def source(conn, sku, rank="primary", *, pack, expected, most, store="Walmart"):
     """A sourcing row as `python -m vending.sourcing set` stores it. Cents."""
     conn.execute("insert into sourcing_options (sku, rank, store, units_per_pack, expected_cents, max_cents,"
@@ -338,3 +345,92 @@ def test_a_wildcard_setting_left_outside_a_new_assignment_blanks_nothing(conn, p
         assert 'id="price-15"' not in panel and "7.75" not in panel and "7.75" not in state
         assert any(a["level"] == "warn" and a["text"].startswith("The wildcard setting names a selection that isn't ours")
                    for a in snap["attention"])
+
+
+# --- Which plan the next price follows (#185) ----------------------------------------------------
+
+def first_fill(conn, tmp_path, **over):
+    """A first-fill plan loaded as `python -m vending.plan_store load` does: Red Bull ($3.50) in the first 10
+    selections of the test assignment, Coke ($2.00) in the rest, made-up figures from tests/test_plan_rounds."""
+    from tests.test_plan_rounds import day_one, projection, write
+    from vending import plan_store
+    write(tmp_path, "round3", "3", {"day_one": day_one(**over)}, projection())
+    return plan_store.load(conn, tmp_path, "3", "test")
+
+
+def test_before_the_lock_the_next_price_is_the_first_fill_plans(conn, page_conn, tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=30))
+    # 17's $0.25 is under the plan's own Red Bull floor ($40.50 / 24 x 1.08, up to $1.85). Coke has a
+    # sourcing row whose most-we-pay is $24.00 / 12: floor $2.20, so 37's $2.00 fails on it.
+    catalog(conn, ("SIM-COKE", "Made-up Coke", "Made-up", None, "12 oz can"))
+    source(conn, "SIM-COKE", pack=12, expected=2200, most=2400)
+    first_fill(conn, tmp_path, **{"17": {"price_cents": 25}})
+    run = agent_runs.start(conn, mode="dry-run")       # the agent's plan stays out of Pricing before the lock
+    agent_runs.finish(conn, run, "skipped", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "4.00"}))
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(),
+               {"15": (300, 1), "16": (350, 1), "17": (300, 1), "37": (250, 1)})
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert "weekly_plan" in snap
+    found = rows(snap)
+    assert (found["15"]["next"]["price"], found["15"]["next"]["source"], found["15"]["next"]["legal"]) == (
+        "3.50", "first fill", True)
+    assert found["16"]["next"] is None                  # the shelf already says $3.50 for the same product
+    low = found["17"]["next"]
+    assert (low["price"], low["legal"], low["floor"]) == ("0.25", False, "1.85")
+    assert low["problems"][0].startswith("$0.25 is below the floor of $1.85")
+    coke = found["37"]["next"]
+    assert (coke["price"], coke["product"], coke["floor"], coke["legal"]) == ("2.00", "SIM-COKE", "2.20", False)
+    texts = [a["text"] for a in snap["attention"]]
+    assert any(t.startswith("Selection 17: the plan's price $0.25 isn't legal.") for t in texts)
+    panel = section(dashboard.render(snap))
+    assert "first fill" in panel and "&rarr; $4.00" not in panel and "&rarr; $3.50" in panel
+
+
+def test_from_the_lock_the_next_price_is_the_weekly_plans(conn, page_conn, tmp_path):
+    first_fill(conn, tmp_path)                          # loaded, but the lock has passed
+    run = agent_runs.start(conn, mode="dry-run")
+    agent_runs.finish(conn, run, "skipped", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "4.00",
+                                                       "reason": "made-up weekly reason"}))
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (300, 1), "37": (250, 1)})
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert "weekly_plan" not in snap
+    found = rows(snap)
+    assert (found["15"]["next"]["price"], found["15"]["next"]["source"]) == ("4.00", "weekly plan")
+    assert found["15"]["next"]["reason"] == "made-up weekly reason"
+    assert found["37"]["next"] is None                  # the first fill's $2.00 isn't followed any more
+
+
+@pytest.mark.parametrize("key, data", [
+    ("plan", ["not", "a", "dict"]),
+    ("plan", {"slots": {"15": "a dict, not a list"}}),
+    ("plan", {"slots": ["text", 15, None, {"slot": "15", "now": "junk"}, {"slot": {"x": 1}, "now": {}},
+                        {"slot": "16", "now": {"sale_price": {"x": 1}, "product": ["list"], "keep": "yes"}},
+                        {"slot": "17", "now": {"sale_price": True}}]}),
+    ("weekly_plan", {"slots": [{"slot": "15", "price_cents": "350", "checks": "junk"},
+                               {"slot": "16", "price_cents": 350.5, "sku": 7, "checks": {"floor_cents": "x"}},
+                               {"slot": "17", "price_cents": True}]}),
+])
+def test_a_plan_of_an_unexpected_shape_gives_no_next_price_and_breaks_nothing(key, data):
+    from vending import pricing_panel
+    snap = {"plan": {"ok": True, "data": data}, "sales": {"ok": True, "data": {"slots": {"15": {"price": "2.50"}}}}}
+    if key == "weekly_plan":                            # before the lock: `plan` holds the first fill's shape
+        snap["weekly_plan"] = {"ok": True, "data": None}
+    raw = {"slots": ("15", "16", "17"), "ceiling_cents": 650, "tax_percent": 8, "ceilings": {}, "wildcard": None,
+           "wildcard_stale": False, "wildcard_ceiling_cents": None, "options": {}, "since": MONDAY, "history": []}
+    built = pricing_panel.build(snap, raw, MONDAY)
+    assert [r["next"] for r in built["rows"]] == [None, None, None]
+    assert built["rows"][0]["price"] == "2.50"
+
+
+def test_a_failing_pricing_build_leaves_the_rest_of_the_page(conn, page_conn, monkeypatch, capsys):
+    from vending import pricing_panel
+
+    def broken(*args):
+        raise KeyError("now")
+    monkeypatch.setattr(pricing_panel, "build", broken)
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (250, 3)})
+    snap = dashboard.snapshot(page_conn, MONDAY, public=True)
+    assert snap["pricing"] == {"ok": False, "why": dashboard.PRICING_FAILED} and snap["sales"]["ok"]
+    page = dashboard.render(snap)
+    assert 'id="lane-15"' in page and '<section id="plan">' in page and "Not available" in section(page)
+    assert "KeyError" in capsys.readouterr().err

@@ -20,8 +20,10 @@ Where each figure comes from:
   (`config.tax_percent`, default 8%), less the unit cost.
 - **Sold**: units in the last 7 days and per class day, from `get_machine_state` (the per class day
   rate is the slot's own once it has 5 in-stock class days, else the fall prior for its price).
-- **Next**: the latest plan's price for the slot when it differs from the shelf, with the agent's
-  reason, checked the same way against the floor of the product the plan puts in.
+- **Next**: the price the plan "The plan" shows sets for the slot, when it differs from the shelf, with
+  its reason: before the slot lock the first-fill plan (#185), from the lock the agent's weekly plan, each
+  read through its own adapter (`plan_entries`). Checked the same way against the floor of the product
+  the plan puts in: its sourcing rows, else the first-fill plan's own floor.
 - **Sparkline**: the shelf price at every good poll over the last `HISTORY_DAYS` days
   (`machine_state.price_history`). A change shows at the poll that first saw it.
 
@@ -36,10 +38,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
+import json
 from html import escape
 from typing import Any
 
 import psycopg
+from psycopg.types.json import set_json_loads
 
 from vending.planner import AGREED_CEILING_CENTS
 from vending.slots import SlotsNotRecorded, our_slots
@@ -101,8 +105,36 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
 
 
 def _our_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
-    """Every product our receipts put in `slots` (ours, from `read`), and every product the latest plan
-    names for them. Filtered in the query: no other selection's product is returned."""
+    """Every product our receipts put in `slots` (ours, from `read`), every product the latest agent plan
+    names for them, and every product the first-fill plan puts in them. Filtered to `slots`: no other
+    selection's product is returned."""
+    return sorted(set(_receipt_and_plan_products(conn, slots)) | set(_first_fill_products(conn, slots)))
+
+
+def _first_fill_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
+    """The SKUs the first-fill plan (#185: the picked one, else the latest loaded) puts in `slots`, read
+    through `plan_rounds` as the dashboard's plan panel reads it. Empty when there is none, it was planned
+    for another assignment, it doesn't parse, or its table isn't there yet: then its prices are checked
+    against the plan's own floors only."""
+    from vending import plan_rounds
+
+    try:
+        with conn.transaction(), conn.cursor() as cur:
+            set_json_loads(json.loads, context=cur)   # the plan loader's decoder, as `dashboard._first_fill` uses
+            row = cur.execute("select label, plan, projection, slots, loaded_at from first_fill_plans"
+                              " order by picked desc, loaded_at desc, id desc limit 1").fetchone()
+    except psycopg.errors.UndefinedTable:
+        return []
+    if row is None or set(row[3]) != set(slots):
+        return []
+    try:
+        checked = plan_rounds.parse_round(row[0], row[1], row[2], slots, saved_at=row[4])
+    except Exception:   # noqa: BLE001 - a plan that doesn't parse only costs its sourcing floors
+        return []
+    return [s.sku for s in checked.slots.values() if s.slot in slots and isinstance(s.sku, str)]
+
+
+def _receipt_and_plan_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
     return [sku for (sku,) in conn.execute(
         "select sku from purchase_lines where slot = any(%(slots)s) and sku is not null"
         " union"
@@ -119,7 +151,7 @@ def build(snap: dict, raw: dict, now: datetime) -> dict:
     slots = raw["slots"]
     held = _data(snap, "stock", {}).get("slots", {})
     sales = _data(snap, "sales", {}).get("slots", {})
-    planned = _planned(snap)
+    source, planned = plan_entries(snap)
     tax, options = raw["tax_percent"], raw["options"]
     history: dict[str, list[tuple[datetime, int]]] = {}
     for at, slot, cents in raw["history"]:
@@ -128,10 +160,10 @@ def build(snap: dict, raw: dict, now: datetime) -> dict:
     for slot in slots:
         h, sale = held.get(slot) or {}, sales.get(slot) or {}
         ceiling = raw["ceilings"].get(slot, raw["ceiling_cents"])
-        entry = planned.get(slot) if isinstance(planned.get(slot), dict) else None
-        keep = bool(entry and entry.get("keep"))
+        entry = planned.get(slot)
+        keep = bool(entry and entry["keep"])
         product, product_from = h.get("product"), "receipt" if h.get("product") else None
-        if product is None and entry and not keep and isinstance(entry.get("product"), str):
+        if product is None and entry and not keep and entry["product"] is not None:
             product, product_from = entry["product"], "plan"
         price = _cents(sale.get("price"))
         receipt = Fraction(h["unit_cost_cents"]) if h.get("unit_cost_cents") else None
@@ -155,7 +187,7 @@ def build(snap: dict, raw: dict, now: datetime) -> dict:
             "margin": None if price is None or cost is None else _dollars(Fraction(price * 100, 100 + tax) - cost),
             "sold_7d": sale.get("sold"), "per_class_day": sale.get("per_class_day"),
             "rate_basis": _rate_basis(sale.get("rate_basis")),
-            "next": _next(entry, keep, price, product, receipt, options, tax, ceiling),
+            "next": _next(entry, source, price, product, receipt, options, tax, ceiling),
             "history": _history(history.get(slot, [])),
         })
     return {"ceiling": _dollars(raw["ceiling_cents"]), "tax_percent": tax, "history_days": HISTORY_DAYS,
@@ -169,10 +201,71 @@ def _data(snap: dict, key: str, default: Any) -> Any:
     return panel["data"] if panel.get("ok") and panel.get("data") is not None else default
 
 
-def _planned(snap: dict) -> dict[str, Any]:
-    """The latest plan's entry for each of our slots (the plan panel keeps only ours)."""
-    plan = _data(snap, "plan", None)
-    return {s["slot"]: s.get("now") for s in plan["slots"]} if plan else {}
+# What the next-price column says it follows: the same plan "The plan" shows.
+FIRST_FILL, WEEKLY = "first fill", "weekly plan"
+
+
+def plan_entries(snap: dict) -> tuple[str, dict[str, dict]]:
+    """The plan "The plan" shows, and its ask for each selection in one shape. Reads nothing.
+
+    Before the slot lock (#185) the snapshot's `plan` is the first-fill plan and the agent's plan is under
+    `weekly_plan`; from the lock, `plan` is the agent's weekly plan. Each is read by its own adapter, and an
+    entry of any unexpected shape is left out, so that selection simply has no next price.
+
+    One entry: `product` (a SKU, or None), `name` (for showing), `sale_price` (dollars text, or None),
+    `keep`, `reason`, `same_product` (the plan leaves the product as it is when it names none) and
+    `own_floor_cents` (the plan's own checked floor: the first fill's, from its pack list; else None)."""
+    if "weekly_plan" in snap:
+        return FIRST_FILL, _first_fill_entries(_data(snap, "plan", None))
+    return WEEKLY, _weekly_entries(_data(snap, "plan", None))
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _whole(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _weekly_entries(plan: Any) -> dict[str, dict]:
+    """The agent's plan as `dashboard._plan` gives it: `slots`, each `{"slot", "now": the plan's entry}`."""
+    out: dict[str, dict] = {}
+    rows = plan.get("slots") if isinstance(plan, dict) else None
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not isinstance(row.get("slot"), str) or not isinstance(row.get("now"), dict):
+            continue
+        e = row["now"]
+        price = e.get("sale_price")
+        if price is not None and (isinstance(price, bool) or not isinstance(price, (str, int, Decimal))):
+            continue
+        if e.get("product") is not None and _text(e.get("product")) is None:
+            continue
+        if not isinstance(e.get("keep", False), bool):
+            continue
+        out[row["slot"]] = {"product": _text(e.get("product")), "name": _text(e.get("product")),
+                            "sale_price": None if price is None else str(price), "keep": e.get("keep", False),
+                            "reason": _text(e.get("reason")), "same_product": True, "own_floor_cents": None}
+    return out
+
+
+def _first_fill_entries(plan: Any) -> dict[str, dict]:
+    """The first-fill plan as `dashboard._first_fill` gives it: `slots`, each with `slot`, `sku`, `product`
+    (a name), `price_cents`, `reason` and `checks.floor_cents`."""
+    out: dict[str, dict] = {}
+    rows = plan.get("slots") if isinstance(plan, dict) else None
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not isinstance(row.get("slot"), str) or _whole(row.get("price_cents")) is None:
+            continue
+        if row.get("sku") is not None and _text(row.get("sku")) is None:
+            continue
+        checks = row.get("checks") if isinstance(row.get("checks"), dict) else {}
+        out[row["slot"]] = {"product": _text(row.get("sku")),
+                            "name": _text(row.get("product")) or _text(row.get("sku")),
+                            "sale_price": _dollars(row["price_cents"]), "keep": False,
+                            "reason": _text(row.get("reason")), "same_product": False,
+                            "own_floor_cents": _whole(checks.get("floor_cents"))}
+    return out
 
 
 def _cents(text: Any) -> int | None:
@@ -217,23 +310,28 @@ def _check(price: int | None, floor: int | None, ceiling: int) -> tuple[bool | N
     return (True if floor is not None else None), []
 
 
-def _next(entry: dict | None, keep: bool, price: int | None, product: str | None, receipt: Fraction | None,
+def _next(entry: dict | None, source: str, price: int | None, product: str | None, receipt: Fraction | None,
           options: dict, tax: int, ceiling: int) -> dict | None:
-    """The plan's price for the slot when it differs from the shelf, or when it keeps the shelf's price for a
-    new product that price isn't legal for; else None. (Same product, same price: the shelf check covers it.)"""
-    if entry is None or keep or entry.get("sale_price") is None:
+    """The plan's price for the slot (an entry from `plan_entries`) when it differs from the shelf, or when it
+    keeps the shelf's price for a new product that price isn't legal for; else None. (Same product, same
+    price: the shelf check covers it.) Checked against the floor of the product the plan puts in: its
+    sourcing rows, else the plan's own checked floor."""
+    if entry is None or entry["keep"] or entry["sale_price"] is None:
         return None
     new = _cents(entry["sale_price"])
-    goes_in = entry.get("product") if isinstance(entry.get("product"), str) else product
+    goes_in = entry["product"] if entry["product"] is not None or not entry["same_product"] else product
     if new is not None and new == price and goes_in == product:
         return None
     # The units already in the slot count only while the plan keeps the same product.
     floor, _ = _floor(receipt if goes_in == product else None, options.get(goes_in), tax)
+    if floor is None:
+        floor = entry["own_floor_cents"]
     legal, problems = _check(new, floor, ceiling) if new is not None else (False, ["not a whole-cent price"])
     if new is not None and new == price and legal is not False:
         return None   # a swap at the same price that the new product's floor allows: nothing to show
-    return {"price": _dollars(new) if new is not None else str(entry["sale_price"]), "product": goes_in,
-            "floor": _dollars(floor), "legal": legal, "problems": problems, "reason": entry.get("reason")}
+    return {"price": _dollars(new) if new is not None else entry["sale_price"], "product": goes_in,
+            "name": entry["name"], "source": source, "floor": _dollars(floor), "legal": legal,
+            "problems": problems, "reason": entry["reason"]}
 
 
 def _rate_basis(text: str | None) -> str | None:
@@ -333,6 +431,7 @@ def _row(r: dict, since: datetime, until: datetime) -> str:
     else:
         flag = "" if n["legal"] is not False else ' <span class="pill bad">not legal</span>'
         nxt = (f'<b>&rarr; ${_e(n["price"])}</b>{flag}'
+               + (f' <span class="pill muted">{_e(n["source"])}</span>' if n.get("source") == FIRST_FILL else "")
                + (f' <span class="pr-reason" title="{_e(n["reason"])}">{_e(n["reason"])}</span>' if n["reason"] else ""))
     hist = r["history"]
     moved = (f'{hist["changes"]} change{"" if hist["changes"] == 1 else "s"}' if hist["changes"]

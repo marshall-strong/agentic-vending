@@ -304,7 +304,7 @@ def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
     checked = plan_rounds.parse_round(row["label"], row["plan"], row["projection"], ours, saved_at=row["loaded_at"])
     return {**current, "fill_expected_cents": checked.fill_expected_cents,
             "fill_most_cents": checked.fill_most_cents, "fill_cap_cents": plan_rounds.FILL_CAP_CENTS,
-            "slots": [{"slot": s.slot, "product": _plan_text(s.product), "price_cents": s.price_cents,
+            "slots": [{"slot": s.slot, "sku": s.sku, "product": _plan_text(s.product), "price_cents": s.price_cents,
                        "units": s.units, "reason": _plan_text(s.why),
                        "checks": {"floor_cents": s.floor_cents, "legal_price": s.legal_price,
                                   "capacity": s.capacity, "capacity_assumed": s.capacity_assumed,
@@ -625,9 +625,9 @@ def _pricing(conn: psycopg.Connection, now: datetime, snap: dict) -> dict:
     panels above. The reader finds our selections itself, in this same snapshot."""
     try:
         return {"ok": True, "data": pricing_panel.build(snap, _isolated(conn, lambda: pricing_panel.read(conn, now)), now)}
-    except (Missing, Unavailable) as error:
+    except Exception as error:  # noqa: BLE001 - nothing in the pricing panel may take the page down
         # The database's text names tables (and can name the host), so it goes to the log, not the page or JSON.
-        cause = error.__cause__ or error
+        cause = error.__cause__ if isinstance(error, (Missing, Unavailable)) and error.__cause__ else error
         first = (str(cause).strip().splitlines() or [""])[0]
         print(f"dashboard: the pricing panel couldn't be read: {type(cause).__name__}: {first}",
               file=sys.stderr, flush=True)
