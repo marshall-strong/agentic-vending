@@ -736,7 +736,11 @@ def _window(sales: dict) -> str:
     if not start or not end:
         return "the window"
     span = end - start
-    return "the 7 days" if span >= timedelta(days=7) - timedelta(hours=1) else f"the {_span(span)}"
+    if abs(span - timedelta(days=7)) <= timedelta(hours=1):
+        return "the 7 days"
+    # A gap in the polls can put the window's start more than 7 days back: then say how long it is.
+    return "under a minute" if span < timedelta(minutes=1) else f"the {_span(span)}"
+
 
 def _time(value: datetime | None, form: str = "abs", now: datetime | None = None) -> str:
     """A <time> the page's script keeps current in the viewer's zone. Server text until it runs.
@@ -1132,7 +1136,7 @@ def _tiles(snap: dict) -> str:
         sold = (f"our slots sold {_plural(total, 'unit')} in {_window(sales)} to it" if d["window_start"]
                 else "one poll only, so no sales yet")
         tiles.append(("Machine data", f'<span class="big{tone}">{_time(d["as_of"], "ago", now)}</span>',
-                      f"since the last poll &middot; {sold}"))
+                      f"last poll &middot; {sold}"))
 
     spend, money = snap["spend"], snap.get("money")
     ledgered = money["data"] if money and money["ok"] and money["data"].get("opened") else None
