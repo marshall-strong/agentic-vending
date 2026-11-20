@@ -417,7 +417,7 @@ def swap_receipts(conn, paid="15.00"):
     record_request(conn, "r2", OPENED + timedelta(days=6), False, BODY)
     store(conn, "r2", fulfilled("r2", receipt(
         sku="REDBULL", units_per_pack=10, units_bought=10, total_paid=paid,
-        unit_cost_paid=None if paid is None else "1.50",
+        unit_cost_paid=None if paid is None else f"{Decimal(paid) / 10:.2f}",
         units_loaded=10, units_lost=0, loss_note=None, units_to_back_stock=0, units_pulled=7, pulled_sku="COKE20",
         slot_reassigned=True, resolved_at="2026-11-08T12:00:00Z"), fulfilled_at="2026-11-08T12:30:00Z"), NOW)
 

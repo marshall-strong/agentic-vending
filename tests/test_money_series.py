@@ -249,6 +249,34 @@ def test_the_provisional_flag_does_not_need_the_debits_cost(conn):
         assert any("provisional" in n for n in row.notes), row.notes
 
 
+def test_a_poll_exactly_at_the_swap_still_marks_the_unsplit_debit_provisional(conn):
+    # Review round 3: without door times the swap is the instant resolved_at (12:00), and the replay
+    # counts a window ending at a poll exactly then as touching it. So the 1 Coke written off there
+    # may be one of the 2 sales, and the $3.00 taken from the Red Bull is provisional.
+    swap_receipts(conn)
+    store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "b", "2026-11-08T12:00:00+00:00", {"15": (400, 102, 25700)})
+    p = ledger.pnl(conn, OPENED, NOW)
+    [d] = [d for d in daily(conn, date(2026, 11, 8), date(2026, 11, 8), now=AFTER)]
+    for row in (p, d):
+        assert (row.units_estimated, row.unattributed_stock_cents, row.unattributed_stock_provisional) == (
+            2, 300, True), row
+
+
+def test_a_known_zero_debit_is_not_called_unknown(conn):
+    # Review round 3: the Red Bull came free ($0.00 paid), so the debit is a known $0.00. The note
+    # says the write-off is provisional without calling the debit's cost unknown.
+    swap_receipts(conn, paid="0.00")
+    store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
+    store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25700)})
+    p = ledger.pnl(conn, OPENED, NOW)
+    [d] = daily(conn, date(2026, 11, 8), date(2026, 11, 8), now=AFTER)
+    for row in (p, d):
+        assert (row.unattributed_stock_cents, row.unattributed_stock_provisional) == (0, True), row
+        assert any("provisional" in n for n in row.notes), row.notes
+        assert not any("unknown cost" in n for n in row.notes), row.notes
+
+
 def test_a_misread_just_before_the_opening_is_not_the_baseline_in_the_balance_or_the_chart(conn):
     # Review round 2: cents 25000 -> 24000 | opening | 25250. The whole history shows 24000 was a
     # misread, so the opening baseline is 25000: 250 cents taken, not 1250. One named rule
