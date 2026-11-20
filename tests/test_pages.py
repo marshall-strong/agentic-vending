@@ -940,6 +940,7 @@ class _Quiet:
 def test_a_chart_loader_or_renderer_that_fails_never_shows_its_error(monkeypatch, capsys):
     monkeypatch.setenv(pages.READER, "set")
     monkeypatch.setattr(pages, "connect", _Quiet)
+    monkeypatch.setattr(pages, "stored_slots", lambda conn: ("15",))   # the fake connection holds none
     monkeypatch.setattr(pages, "writable", lambda conn: [])
 
     def failing(*args):
@@ -1023,6 +1024,7 @@ def test_a_cached_chart_is_served_without_a_connection_for_a_minute(monkeypatch)
 def test_each_pnl_range_is_kept_apart_and_errors_are_never_kept(monkeypatch):
     monkeypatch.setenv(pages.READER, "set")
     monkeypatch.setattr(pages, "connect", _Quiet)
+    monkeypatch.setattr(pages, "stored_slots", lambda conn: ("15",))   # the fake connection holds none
     monkeypatch.setattr(pages, "writable", lambda conn: [])
     asked = []
     monkeypatch.setattr(pages, "pnl_data", lambda conn, query: asked.append(query) or query)
@@ -1085,3 +1087,45 @@ def test_a_demo_that_fails_never_shows_its_error(monkeypatch, capsys):
     reply = pages.respond(pages.DEMO_MONEY)
     assert reply.status == 500 and "db.example.net" not in reply.body and "hit an error" in reply.body
     assert "db.example.net" in capsys.readouterr().err
+
+
+# --- Review fixes (Sol, 19 Nov) ----------------------------------------------------------------------
+
+def _units(page: str) -> str | None:
+    import re
+    found = re.search(r'Units sold</div><div class="tile-value">(\d+)<', page)
+    return found and found.group(1)
+
+
+def test_a_kept_chart_follows_a_changed_or_removed_assignment(site, conn):
+    """Within the minute a chart is kept, a new or removed slot assignment still changes what it shows."""
+    from vending.money_series import NOT_OURS_LINE
+    _competition(conn)
+    money, pnl = _get(site, pages.MONEY_CHART)[2], _get(site, pages.PNL)[2]
+    assert "slot 15: " in money and _units(pnl) == "5"
+
+    conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
+    status, _, money = _get(site, pages.MONEY_CHART)
+    assert status == 200 and "slot 15: " not in money and NOT_OURS_LINE in money.replace("&#x27;", "'")
+    status, _, pnl = _get(site, pages.PNL)
+    assert status == 200 and _units(pnl) == "0"          # slot 15's sales aren't ours any more
+
+    conn.execute("delete from slot_assignment")
+    status, _, money = _get(site, pages.MONEY_CHART)
+    assert status == 503 and "slot assignment isn't recorded" in money.replace("&#x27;", "'")
+    status, _, pnl = _get(site, pages.PNL)
+    assert _units(pnl) is None and "slot 15" not in pnl
+
+
+def test_a_kept_money_chart_skips_its_replay_only_for_the_same_assignment(monkeypatch):
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "connect", _Quiet)
+    monkeypatch.setattr(pages, "writable", lambda conn: [])
+    slots, loads = [("15", "16")], []
+    monkeypatch.setattr(pages, "stored_slots", lambda conn: slots[0])
+    monkeypatch.setattr(pages, "money_data", lambda conn: loads.append(slots[0]) or {"daily": [{}]})
+    monkeypatch.setattr(pages, "money_page", lambda payload: f"<html><body><script>{len(loads)}</script></body></html>")
+    first = pages.respond(pages.MONEY_CHART)
+    assert pages.respond(pages.MONEY_CHART) is first and loads == [("15", "16")]
+    slots[0] = ("12", "14")
+    assert pages.respond(pages.MONEY_CHART) is not first and loads == [("15", "16"), ("12", "14")]

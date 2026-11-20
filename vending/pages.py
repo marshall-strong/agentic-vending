@@ -43,7 +43,8 @@ the same error handling as the dashboard. Each has a loader (`money_data`, `pnl_
 `spend_page`), so made-up data can be rendered the same way elsewhere. Before the ledger's opening
 entry, or before an opening dated ahead, the money chart and the P&L say there is no competition
 data yet (`NotYet`); the P&L never counts from before the opening, whatever dates the URL asks for.
-A rendered chart is served again for `CACHE_SECONDS` without touching the database.
+A rendered chart is served again for `CACHE_SECONDS` without its replay: dev spend without the
+database, the money chart and the P&L only while the stored slot assignment is the same.
 
 What the pages leave out: the selections that aren't ours by the stored assignment and the
 machine-wide poll totals (`explorer_rules`, which `python -m vending.db_explorer` uses too, and
@@ -93,8 +94,9 @@ OPTIONS = f"-c default_transaction_read_only=on -c statement_timeout={STATEMENT_
 # within seconds instead of holding one of the page connections for 15 minutes or more.
 KEEPALIVES = {"keepalives": 1, "keepalives_idle": 5, "keepalives_interval": 2, "keepalives_count": 3,
               "tcp_user_timeout": STATEMENT_TIMEOUT_MS + 5_000}
-# Seconds a rendered chart page is served again without the database. A chart replays the whole run,
-# so two viewers reloading one shouldn't hold both page connections and leave /dashboard busy.
+# Seconds a rendered chart page is served again without its replay. A chart replays the whole run,
+# so two viewers reloading one shouldn't hold both page connections and leave /dashboard busy. The
+# money chart and the P&L still read the stored assignment first, and keep a copy per assignment.
 CACHE_SECONDS = 60
 # Rendered chart pages kept at once: one each for the money chart and dev spend, the rest for P&L ranges.
 CACHE_ENTRIES = 32
@@ -221,7 +223,7 @@ def _connect() -> psycopg.Connection:
 connect: Callable[[], psycopg.Connection] = _connect
 
 _slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
-# (path, P&L query) -> (monotonic time it expires, reply), for the chart pages (`CACHE_SECONDS`).
+# (path, P&L query[, our slots]) -> (monotonic time it expires, reply), for the chart pages (`CACHE_SECONDS`).
 _cache: dict[tuple, tuple[float, "Reply"]] = {}
 _cache_lock = threading.Lock()
 _read_only_until = 0.0
@@ -547,8 +549,10 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
             return Reply(400, HTML, pnl_report.bad_request_page(error, PNL, _chart_nav(PNL)), CSP_PNL)
     if not configured():
         return _problem(path, 503, NOT_SET_UP)
+    # Dev spend reads no slot, so a kept copy needs no connection. The money chart and the P&L count our
+    # selections only, so theirs is kept per stored assignment, read below on every request.
     key = (path, query)
-    if path in (MONEY_CHART, PNL, SPEND) and (hit := _cached(key)) is not None:
+    if path == SPEND and (hit := _cached(key)) is not None:
         return hit
     try:
         with _connection() as conn:
@@ -557,6 +561,10 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
                 status, body = db_explorer.render(
                     conn, request, hide, (("Home", "/"), ("Agent dashboard", DASHBOARD)), rows)
                 return Reply(status, HTML, body)
+            if path in (MONEY_CHART, PNL):
+                key = (path, query, stored_slots(conn))
+                if (hit := _cached(key)) is not None:
+                    return hit
             if path == MONEY_CHART:
                 found = money_data(conn)
             elif path == SPEND:
