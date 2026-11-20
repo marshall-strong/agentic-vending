@@ -736,7 +736,11 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
             not_silent.append(NotSilent(slot, f"{days} of {SILENT_DAYS} in-stock class days seen since the window "
                                               "began; not silent yet"))
             continue
-        last_sale = max((s.at for s in sales if s.slot == slot), default=None)
+        # Only sales of its current product since it went in, at the moment they left the count: the old
+        # product's share of a window split at the swap is booked at the poll after it (`taken_at`). An
+        # unattributed sale (no product) may have been this one's, so it counts.
+        last_sale = max((s.taken_at or s.at for s in sales if s.slot == slot and s.product in (c.product, None)
+                         and (s.taken_at or s.at) > c.since), default=None)
         last_load = max((at for at, _ in loads.get(slot, [])), default=None)
         quiet = max(at for at in (last_sale, last_load, c.since) if at is not None)
         price = next((p for _, _, _, p in reversed(mine) if p is not None), None)
