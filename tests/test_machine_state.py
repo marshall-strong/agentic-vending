@@ -593,3 +593,29 @@ def test_a_later_unplaced_window_drops_only_the_days_it_covers(conn):
     assert s.product == "PEPSI20"
     assert (s.class_days_in_stock, s.units_per_class_day is not None) == (4, True)
     assert "4 in-stock class days of our own so far" in s.rate_basis
+
+
+def test_a_product_that_comes_back_at_the_same_moment_counts_only_its_last_load(conn):
+    # Review round 1, item 3. Three receipts share the 30 Oct visit's door times and replay in the order
+    # they were submitted: 5 Coke, then 3 Pepsi (pulling the Coke), then 2 Coke (pulling the Pepsi).
+    # The 2 Coke sell out on Monday and 4 go in on Thursday. The first 5 Coke aren't this run's, so
+    # the slot held stock on Mon 2 and Fri 6 Nov only: 2 class days, not 5.
+    utc = timezone.utc
+    store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100)})
+    for n, (rid, sku, units, pulled) in enumerate((("ra", "COKE20", 5, None), ("rb", "PEPSI20", 3, "COKE20"),
+                                                   ("rc", "COKE20", 2, "PEPSI20"))):
+        fulfilled(conn, rid, datetime(2026, 10, 30, 19, 30, tzinfo=utc), ("15", sku, "primary", "5.00", units, 0, 0))
+        conn.execute("update purchase_requests set submitted_at = %s, door_opened_at = %s, door_closed_at = %s"
+                     " where request_id = %s", (datetime(2026, 10, 29, 12, n, tzinfo=utc),
+                                                datetime(2026, 10, 30, 19, tzinfo=utc),
+                                                datetime(2026, 10, 30, 19, 20, tzinfo=utc), rid))
+        if pulled:
+            conn.execute("update purchase_lines set units_pulled = %s, pulled_sku = %s, slot_reassigned = true"
+                         " where request_id = %s", (5 if pulled == "COKE20" else 3, pulled, rid))
+    store_poll(conn, "p1", "2026-10-30T22:00:00+00:00", {"15": (250, 100)})
+    store_poll(conn, "p2", "2026-11-02T22:00:00+00:00", {"15": (250, 102)})
+    fulfilled(conn, "rd", datetime(2026, 11, 5, 19, tzinfo=utc), ("15", "COKE20", "primary", "5.00", 4, 0, 0))
+    store_poll(conn, "p3", "2026-11-06T14:00:00+00:00", {"15": (250, 102)})
+    s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 6, 22, tzinfo=utc)).data)["15"]
+    assert (s.product, s.stock_on_hand) == ("COKE20", 4)
+    assert s.class_days_in_stock == 2
