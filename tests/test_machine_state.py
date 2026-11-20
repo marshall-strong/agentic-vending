@@ -635,3 +635,86 @@ def test_the_slow_seller_clock_counts_in_stock_class_days_since_the_last_sale(co
     s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 9, 23, tzinfo=utc)).data)["15"]
     assert (s.stock_on_hand, s.class_days_in_stock, s.units_sold_since_load) == (20, 6, 0)
     assert s.class_days_since_sale == 2
+
+
+# --- Review round 2 ------------------------------------------------------------------
+
+def test_a_sale_polled_at_the_swaps_own_moment_can_still_empty_the_slot(conn):
+    # Round 2, item 1. As round 1's item 1, but the poll after the swap is taken at the swap's own moment
+    # (19:30): the replay takes its 1 unattributed unit from the 1 Pepsi, so only Mon 9 Nov is sure.
+    s = swap(conn, "PEPSI20", [
+        ("2026-10-30T19:30:00+00:00", (200, 107, 21400)),
+        ("2026-11-02T14:00:00+00:00", (200, 107, 21400)),
+        ("2026-11-04T14:00:00+00:00", (200, 107, 21400)),
+        ("2026-11-06T14:00:00+00:00", (200, 107, 21400)),
+        ("2026-11-09T14:00:00+00:00", (200, 107, 21400)),
+    ], now=datetime(2026, 11, 9, 22, tzinfo=timezone.utc), units=1, then=lambda conn: fulfilled(
+        conn, "r3", datetime(2026, 11, 6, 19, 30, tzinfo=timezone.utc), ("15", "PEPSI20", "primary", "5.00", 5, 0, 0)))
+    assert (s.product, s.stock_on_hand, s.class_days_in_stock) == ("PEPSI20", 5, 1)
+
+
+def five_coke(conn, days=(2, 3, 4, 5, 6), late=()):
+    """Slot 15: 5 Coke in on Fri 30 Oct (3:30 PM Eastern), and a poll at 5 PM Eastern on each November day in
+    `days` and at each UTC time in `late`, none showing a sale."""
+    utc = timezone.utc
+    store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100)})
+    fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    store_poll(conn, "p1", "2026-10-30T22:00:00+00:00", {"15": (250, 100)})
+    for day in days:
+        store_poll(conn, f"d{day}", f"2026-11-{day:02d}T22:00:00+00:00", {"15": (250, 100)})
+    for n, at in enumerate(late):
+        store_poll(conn, f"l{n}", at, {"15": (250, 100)})
+
+
+def lose_all_five_on_monday(conn):
+    conn.execute("insert into purchase_line_losses (request_id, line_no, position, location, sku, units, recorded_at)"
+                 " values ('r1', 0, 0, 'coil', 'COKE20', 5, %s)", (datetime(2026, 11, 2, 15, tzinfo=timezone.utc),))
+
+
+def test_the_slow_seller_clock_stops_when_a_loss_empties_the_slot(conn):
+    # Round 2, item 2. The 5 Coke are recorded lost on Monday: no sale, but nothing left to sell.
+    five_coke(conn)
+    lose_all_five_on_monday(conn)
+    s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 6, 23, tzinfo=timezone.utc)).data)["15"]
+    assert (s.stock_on_hand, s.class_days_in_stock, s.class_days_since_sale) == (0, 1, 0)
+
+
+def test_the_slow_seller_clock_starts_again_at_the_refill_after_a_loss(conn):
+    # Round 2, item 2. 5 more go in on Thursday: the clock runs from then, Fri 6 and Mon 9 Nov, read just
+    # after midnight on Tuesday, which hasn't been watched to its end (round 2, item 3).
+    five_coke(conn, days=(2, 3, 4, 5, 6, 9), late=("2026-11-10T06:00:00+00:00",))
+    lose_all_five_on_monday(conn)
+    fulfilled(conn, "r2", datetime(2026, 11, 5, 19, tzinfo=timezone.utc), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 10, 6, 30, tzinfo=timezone.utc)).data)["15"]
+    assert (s.stock_on_hand, s.class_days_since_sale) == (5, 2)
+
+
+def test_a_newer_count_of_zero_stops_the_slow_seller_clock(conn):
+    # Round 2, item 2. A person counts slot 15 empty on Tuesday, after the receipts' last movement.
+    five_coke(conn)
+    conn.execute("insert into slot_counts (count_id, counted_at, counted_by, source, device_id, selection, product,"
+                 " units, exact) values ('c1', %s, 'kevin', 'door', 'vmc1', '15', 'COKE20', 0, true)",
+                 (datetime(2026, 11, 3, 15, tzinfo=timezone.utc),))
+    s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 6, 23, tzinfo=timezone.utc)).data)["15"]
+    assert (s.counted_on_hand, s.class_days_since_sale) == (0, 0)
+
+
+def test_a_slot_the_polls_stopped_reading_is_not_silent(conn):
+    # Round 2, item 3. After the load, every poll leaves slot 15 out: the machine isn't stale, but nothing
+    # says slot 15 sold nothing, so its clock doesn't run.
+    utc = timezone.utc
+    store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100), "16": (300, 50)})
+    fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    for day in (2, 3, 4, 5, 6):
+        store_poll(conn, f"d{day}", f"2026-11-{day:02d}T22:00:00+00:00", {"16": (300, 50)})
+    reply = get_machine_state(conn, now=datetime(2026, 11, 6, 23, tzinfo=utc))
+    assert not reply.stale
+    assert by_slot(reply.data)["15"].class_days_since_sale == 0
+
+
+def test_a_class_day_is_silent_only_once_a_reading_after_its_end_shows_no_sale(conn):
+    # Round 2, item 3. Read at 12:30 AM Eastern on Tuesday, after a poll at 12:10 AM: Tuesday held stock as it
+    # began (7 in-stock class days for the rate), but nothing has watched it yet, so the clock is 6.
+    five_coke(conn, days=(2, 3, 4, 5, 6, 9), late=("2026-11-10T05:10:00+00:00",))
+    s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 10, 5, 30, tzinfo=timezone.utc)).data)["15"]
+    assert (s.class_days_in_stock, s.class_days_since_sale) == (7, 6)

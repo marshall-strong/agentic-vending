@@ -715,3 +715,31 @@ def test_the_planner_reads_loads_from_the_receipts_its_replay_used(conn, monkeyp
     gathered = planning.gather(conn, [], FRESH)
     assert late == ["r0"]
     assert gathered.current.wildcard_verdict == UNKNOWN
+
+
+def test_a_trial_counts_only_its_own_runs_loads_when_the_product_comes_back_at_one_visit(conn):
+    # Review round 2, item 5. At the 30 Oct visit three receipts share the door times: 5 AAA, then 3 BBB
+    # (pulling them), then 2 AAA (pulling those). The 2 AAA sell out on Monday; 4 go in on Thursday. The
+    # first 5 AAA aren't this run's, so by Friday evening the trial has seen Mon 2 and Fri 6 Nov in stock:
+    # too early, not dropped after 5 days.
+    utc = timezone.utc
+    set_wildcard(conn, "15")
+    stock_the_rest(conn, at=datetime(2026, 10, 30, 12, tzinfo=utc))
+    fulfilled(conn, "r16", datetime(2026, 10, 30, 12, tzinfo=utc), ("16", "X16", "primary", "5.00", 5, 0, 0))
+    after = polls(conn, [("p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100), "16": (200, 50)})])
+    for n, (rid, sku, units, pulled) in enumerate((("ra", "AAA", 5, None), ("rb", "BBB", 3, ("AAA", 5)),
+                                                   ("rc", "AAA", 2, ("BBB", 3)))):
+        fulfilled(conn, rid, datetime(2026, 10, 30, 19, 30, tzinfo=utc), ("15", sku, "primary", "5.00", units, 0, 0))
+        conn.execute("update purchase_requests set submitted_at = %s, door_opened_at = %s, door_closed_at = %s"
+                     " where request_id = %s", (datetime(2026, 10, 29, 12, n, tzinfo=utc),
+                                                datetime(2026, 10, 30, 19, tzinfo=utc),
+                                                datetime(2026, 10, 30, 19, 20, tzinfo=utc), rid))
+        if pulled:
+            conn.execute("update purchase_lines set units_pulled = %s, pulled_sku = %s, slot_reassigned = true"
+                         " where request_id = %s", (pulled[1], pulled[0], rid))
+    fulfilled(conn, "rd", datetime(2026, 11, 5, 19, tzinfo=utc), ("15", "AAA", "primary", "5.00", 4, 0, 0))
+    polls(conn, [("p1", "2026-10-30T22:00:00+00:00", {"15": (250, 100), "16": (200, 50)}),
+                 ("p2", "2026-11-02T22:00:00+00:00", {"15": (250, 102), "16": (200, 50)}),
+                 ("p3", "2026-11-06T22:00:00+00:00", {"15": (250, 102), "16": (200, 50)})], after=after)
+    t = get_machine_state(conn, now=datetime(2026, 11, 6, 23, tzinfo=utc)).wildcard_trial
+    assert (t.product, t.class_days_in_stock, t.verdict) == ("AAA", 2, TOO_EARLY)
