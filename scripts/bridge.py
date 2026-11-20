@@ -58,12 +58,20 @@ from the fall cut on:
 - `latest --summary` reads the stored assignment first, and skips every
   selection that isn't ours before reading any of its fields.
 
-`raw` isn't told when its poll was taken, so it places the poll at now: from
-the fall cut on, every poll counts as one from the cut. A poll from before the
-cut prints whole, as before. A `FALL_CUTOFF` that isn't a time with its offset
-stops the command before any poll is read. An error from a poll route
-(`history`, `raw`, `poll`) shows the status and a short reason, never the
-bridge's reply.
+When a poll was taken comes from the bridge, never from this computer's clock:
+`latest` reads the listing's `started_at`, `raw` the time our `polls` table
+holds for the session (copied from the bridge's listing by the history sync),
+and `poll --live` the bridge's `Date` header, less `X-Poll-Age-Seconds` when
+the read was another caller's. A poll prints whole only when that time is
+before the cut; an unknown time counts as one from the cut. The cut is settled
+before the bridge is asked anything, so a `FALL_CUTOFF` that isn't a time with
+its offset stops the command with no request sent.
+
+Nothing the bridge sends is printed unchecked. `history` prints each entry's
+`session_id`, `started_at` and `bytes`, checked, and `truncated`; nothing else.
+`latest` prints the session and time it checked. An error from any route shows
+the status and its standard phrase, never the bridge's reply: a reply could
+carry a poll's records.
 
 Standard library only, except reading the stored assignment, so it runs
 anywhere Python 3.11 does with nothing to install.
@@ -81,6 +89,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from http import HTTPStatus
 from pathlib import Path
 
@@ -128,7 +137,7 @@ def repo_root() -> Path:
 # on how a value is quoted or commented. Standard library too.
 sys.path.insert(0, str(repo_root()))
 from vending import settings as env  # noqa: E402
-from vending.start import fall_cut, on_or_after_fall_cut  # noqa: E402
+from vending.start import fall_cut  # noqa: E402
 
 
 def settings() -> tuple[str, str]:
@@ -173,18 +182,9 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read(), dict(response.headers.items())
     except urllib.error.HTTPError as error:
-        if path.startswith(POLL_ROUTES):
-            # A poll carries every selection's data, so a poll route's reply is never
-            # echoed, not even an error's: the status and its standard phrase only.
-            detail = status_phrase(error.code)
-        else:
-            body = error.read().decode("utf-8", errors="replace")
-            detail = body
-            try:
-                parsed = json.loads(body)
-                detail = parsed.get("error") or parsed.get("detail") or body
-            except (json.JSONDecodeError, AttributeError):
-                pass
+        # Any route's error reply could carry a poll's records, so none is echoed: the status
+        # and its standard phrase only, and the hints below, written here.
+        detail = status_phrase(error.code)
         if error.code in (401, 403):
             raise BridgeError(
                 f"{error.code}: the bridge rejected our key ({detail}). "
@@ -211,7 +211,10 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
 
 def get_json(path: str, **kwargs) -> object:
     body, _ = call("GET", path, **kwargs)
-    return json.loads(body)
+    try:
+        return json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        raise BridgeError(f"the reply from {path} isn't JSON; it isn't printed", EXIT_BRIDGE) from None
 
 
 def print_json(value: object) -> None:
@@ -358,22 +361,33 @@ def our_selections() -> tuple[tuple[str, ...], str | None]:
         return (), f"{type(error).__name__}: {str(error)[:200]}"
 
 
-def show_poll(body: bytes, out: str | None, taken: datetime) -> None:
-    """Print a poll, or save it byte for byte. One from the fall cut on prints only as `rebuild`
-    writes it, and saves only to a regular file (`save`). One from before the cut is as it always was."""
-    try:   # a malformed FALL_CUTOFF prints no poll
-        cut, after = fall_cut(), on_or_after_fall_cut(taken)
+def settled_cut() -> datetime:
+    """The fall cut (`vending.start.fall_cut`), settled before the bridge is asked for anything. A
+    malformed FALL_CUTOFF stops the command here, with no request sent."""
+    try:
+        return fall_cut()
     except ValueError as error:
         raise BridgeError(str(error), EXIT_CONFIG) from None
+
+
+def show_poll(body: bytes, out: str | None, taken: datetime | None, cut: datetime,
+              unknown: str | None = None) -> None:
+    """Print a poll, or save it byte for byte. Only one `taken`, by the bridge's account, before
+    `cut` is as it always was. One from the cut on, or taken at an unknown time (`unknown` says
+    why), prints only as `rebuild` writes it, and saves only to a regular file (`save`)."""
+    whole = taken is not None and taken < cut
     if out:
-        if after:
-            save(body, out)
-        else:
+        if whole:
             write_text(body, out)
+        else:
+            save(body, out)
         return
-    if not after:
+    if whole:
         write_text(body, None)
         return
+    if taken is None:
+        print(f"note: when the poll was taken is unknown ({unknown}), so it counts as one from the "
+              "fall cut", file=sys.stderr)
     ours, why = our_selections()
     if why:
         print(f"note: our slot assignment can't be read ({why}), so no selection is printed",
@@ -386,10 +400,76 @@ def show_poll(body: bytes, out: str | None, taken: datetime) -> None:
     sys.stdout.write(text)
 
 
-def taken_at(started_at: str) -> datetime:
-    """A listing's `started_at` as an aware time. One with no zone is taken as UTC, like the bridge's."""
-    moment = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    return moment if moment.utcoffset() is not None else moment.replace(tzinfo=timezone.utc)
+def stored_poll_time(session_id: str) -> tuple[datetime | None, str | None]:
+    """(when the poll was taken, None) from our `polls` table, or (None, why it isn't known).
+
+    The table's `started_at` is the bridge's listing, copied by the history sync. Imported here,
+    like `our_selections`, because only this and that need psycopg and `DATABASE_URL`.
+    """
+    try:
+        from vending import db
+
+        with db.connect() as conn:
+            row = conn.execute("select started_at from polls where session_id = %s", (session_id,)).fetchone()
+    except Exception as error:  # noqa: BLE001 -- whatever went wrong, the time is unknown
+        return None, f"{type(error).__name__}: {str(error)[:200]}"
+    if row is None:
+        return None, "not in the polls table; `python -m vending.sync_history` copies the bridge's listing"
+    taken = row[0]
+    if not callable(getattr(taken, "utcoffset", None)) or taken.utcoffset() is None:
+        return None, "the polls table's time has no time zone"
+    return taken, None
+
+
+def live_poll_time(headers: dict[str, str]) -> tuple[datetime | None, str | None]:
+    """(the latest the live read can have been taken, None) by the bridge's clock, or (None, why not).
+
+    The bridge's `Date` header is written after the read, so the read can't be later. When the
+    read was another caller's (`X-Poll-Cached: true`), it is `X-Poll-Age-Seconds` older still; an
+    age that isn't a number of seconds is ignored, which leaves the later time.
+    """
+    found = {k.lower(): v for k, v in headers.items()}
+    try:
+        date = parsedate_to_datetime(found.get("date") or "")
+    except (TypeError, ValueError, IndexError):
+        date = None
+    if date is None or date.utcoffset() is None:
+        return None, "the bridge's reply has no readable Date header"
+    if (found.get("x-poll-cached") or "").strip().lower() == "true":
+        try:
+            age = float(found.get("x-poll-age-seconds") or "")
+        except ValueError:
+            age = None
+        if age is not None and 0 <= age < 3600:   # also refuses nan and inf
+            date -= timedelta(seconds=age)
+    return date, None
+
+
+# A session ID as the bridge gives them: letters, digits, `-` and `_`. Anything else is never printed.
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def checked_session(value: object) -> str | None:
+    return value if isinstance(value, str) and SESSION_ID.fullmatch(value) else None
+
+
+def checked_time(value: object) -> datetime | None:
+    """A listing's `started_at` as an aware time, or None. One with no offset is unknown, not a guess."""
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.utcoffset() is not None else None
+
+
+def listed_polls(listing: object) -> list[dict]:
+    """The listing's `polls`, each a dict, or a BridgeError: a reply of any other shape isn't printed."""
+    polls = listing.get("polls") if isinstance(listing, dict) else None
+    if not isinstance(polls, list) or not all(isinstance(entry, dict) for entry in polls):
+        raise BridgeError("the bridge's listing isn't a list of polls, so nothing of it is printed", EXIT_BRIDGE)
+    return polls
 
 
 # --------------------------------------------------------------------------
@@ -417,17 +497,32 @@ def cmd_history(args: argparse.Namespace) -> None:
     # at 8 pm the evening before in Rochester (EDT).
     start = args.start or utc_today()
     end = args.end or start
-    print_json(get_json("/api/v1/history",
-                        params={"start": start, "end": end, "limit": str(args.limit)}))
+    listing = get_json("/api/v1/history", params={"start": start, "end": end, "limit": str(args.limit)})
+    rows, left_out = [], 0
+    for entry in listed_polls(listing):
+        session = checked_session(entry.get("session_id"))
+        if session is None:
+            left_out += 1
+            continue
+        taken, size = checked_time(entry.get("started_at")), entry.get("bytes")
+        rows.append({"session_id": session, "started_at": taken.isoformat() if taken else None,
+                     "bytes": size if type(size) is int and size >= 0 else None})
+    if left_out:
+        print(f"note: {left_out} {'entry' if left_out == 1 else 'entries'} left out: a session ID that "
+              "isn't one", file=sys.stderr)
+    print_json({"polls": rows, "truncated": listing.get("truncated") is True})
 
 
 def cmd_raw(args: argparse.Namespace) -> None:
+    cut = settled_cut()
     body, _ = call("GET", f"/api/v1/history/{urllib.parse.quote(args.session_id)}/raw")
-    # The route doesn't say when the poll was taken, so from the fall cut every poll counts as one from it.
-    show_poll(body, args.out, datetime.now(timezone.utc))
+    # The route doesn't say when the poll was taken; our polls table does, from the bridge's listing.
+    taken, unknown = stored_poll_time(args.session_id)
+    show_poll(body, args.out, taken, cut, unknown)
 
 
 def cmd_latest(args: argparse.Namespace) -> None:
+    cut = settled_cut()   # first, even for --summary: a malformed setting sends no request
     ours: tuple[str, ...] = ()
     if args.summary:
         # Ours from the stored assignment, read before any poll; never from a fresh /api/v1/slots.
@@ -443,20 +538,24 @@ def cmd_latest(args: argparse.Namespace) -> None:
     yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
     listing = get_json("/api/v1/history",
                        params={"start": yesterday, "end": today.strftime("%Y-%m-%d"), "limit": "500"})
-    polls = listing.get("polls", [])
+    polls = listed_polls(listing)
     if not polls:
         raise BridgeError("No stored polls in the last two UTC days.", EXIT_BRIDGE)
-    if listing.get("truncated"):
+    if listing.get("truncated") is True:
         print("warning: the listing was truncated, so this may not be the newest poll",
               file=sys.stderr)
-    newest = polls[-1]
-    print(f"session {newest['session_id']}, taken {newest['started_at']}", file=sys.stderr)
+    session = checked_session(polls[-1].get("session_id"))
+    if session is None:
+        raise BridgeError("the newest poll in the listing has no session ID this script accepts, so it "
+                          "isn't fetched", EXIT_BRIDGE)
+    taken = checked_time(polls[-1].get("started_at"))
+    print(f"session {session}, taken {taken.isoformat() if taken else 'at an unknown time'}", file=sys.stderr)
 
-    body, _ = call("GET", f"/api/v1/history/{newest['session_id']}/raw")
+    body, _ = call("GET", f"/api/v1/history/{session}/raw")
     if args.summary:
         print_json(summarize(body.decode("utf-8", errors="replace"), ours))
     else:
-        show_poll(body, args.out, taken_at(newest["started_at"]))
+        show_poll(body, args.out, taken, cut, "the listing's started_at isn't a time with its offset")
 
 
 def cmd_request(args: argparse.Namespace) -> None:
@@ -471,11 +570,13 @@ def cmd_poll(args: argparse.Namespace) -> None:
             "the newest stored poll (at most an hour old) without touching it.",
             EXIT_REFUSED,
         )
+    cut = settled_cut()
     body, headers = call("POST", "/api/v1/poll", timeout=POLL_TIMEOUT_SECONDS)
     cached = {k.lower(): v for k, v in headers.items()}.get("x-poll-cached")
     if cached == "true":
         print("note: someone polled in the last 30 seconds; this is their read", file=sys.stderr)
-    show_poll(body, args.out, datetime.now(timezone.utc))
+    taken, unknown = live_poll_time(headers)
+    show_poll(body, args.out, taken, cut, unknown)
 
 
 def write_text(body: bytes, out: str | None) -> None:

@@ -322,11 +322,7 @@ def test_poll_prints_a_read_from_before_the_cut_whole_by_the_bridges_date(script
     assert capsys.readouterr().out == script.poll.decode()
 
 
-@pytest.mark.parametrize("headers", [
-    {}, {"Date": "yesterday"}, {"Date": http_date(BEFORE), "X-Poll-Cached": "true"},
-    {"Date": http_date(BEFORE), "X-Poll-Cached": "true", "X-Poll-Age-Seconds": "nan"},
-    {"Date": http_date(BEFORE), "X-Poll-Cached": "true", "X-Poll-Age-Seconds": "-5"},
-    {"Date": http_date(BEFORE), "X-Poll-Cached": "maybe"}])
+@pytest.mark.parametrize("headers", [{}, {"Date": "yesterday"}, {"Date": ""}, {"date": "PA1*11*987*"}])
 def test_poll_with_no_trusted_time_counts_as_from_the_cut(script, capsys, headers):
     at(script, BEFORE)
     script.live_headers = headers
@@ -334,6 +330,21 @@ def test_poll_with_no_trusted_time_counts_as_from_the_cut(script, capsys, header
     out, err = capsys.readouterr()
     assert out == rebuilt(script.ours) and not leaked(out, *machine_totals(script))
     assert "unknown" in err
+
+
+@pytest.mark.parametrize("extra", [
+    {"X-Poll-Cached": "true"}, {"X-Poll-Cached": "true", "X-Poll-Age-Seconds": "nan"},
+    {"X-Poll-Cached": "true", "X-Poll-Age-Seconds": "-5"}, {"X-Poll-Cached": "maybe", "X-Poll-Age-Seconds": "30"}])
+def test_a_read_with_no_usable_age_is_placed_by_the_date_alone(script, capsys, extra):
+    """`Date` is written after the read, so it is the latest the read can be: a `Date` just after
+    the cut with no usable age is from the cut, and one before the cut is before it."""
+    script.taken = BEFORE
+    script.live_headers = {"Date": http_date(JUST_AFTER_THE_CUT), **extra}
+    assert script.main(["poll", "--live"]) == 0
+    assert capsys.readouterr().out == rebuilt(script.ours)
+    script.live_headers = {"Date": http_date(JUST_BEFORE_THE_CUT), **extra}
+    assert script.main(["poll", "--live"]) == 0
+    assert capsys.readouterr().out == script.poll.decode()
 
 
 def test_a_cached_read_is_placed_by_its_age(script, capsys):
