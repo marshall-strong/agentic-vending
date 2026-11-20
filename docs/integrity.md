@@ -73,12 +73,13 @@ repo root points here.
   that our own receipts name. A historical receipt does not authorize reads after reassignment.
 - **Count estimates use the same assignment.** Both the count rows and the counter query filter
   selections in SQL. Dashboard response filtering is an additional display check.
-- **The bridge script stops at the fall cut too.** `scripts/bridge.py` (`raw`, `latest`,
-  `poll --live`) prints a poll taken from the cut on rebuilt from our selections and the door
-  counter only: no other selection and no machine-wide total. Only a poll the bridge places before
-  the cut prints whole (the listing's time, our `polls` table's, or the live read's `Date`); one
-  at an unknown time is treated as from the cut. It prints no unchecked field of a reply, and no
-  route's error reply (`vending.start.fall_cut`; `tests/test_post_start.py`).
+- **The bridge script never prints a whole poll.** `scripts/bridge.py` (`raw`, `latest`,
+  `poll --live`) prints every poll rebuilt from our selections and the door counter only, whatever
+  its time: no other selection and no machine-wide total. The bridge's own times (a listing's
+  `started_at`, a reply's `Date`) can be wrong, so the script doesn't judge from them that a poll
+  is pre-cut. `--out` only archives the raw poll to a regular file. Pre-cut fall data for all 40
+  comes from `analysis/export_sales.py --fall-all`. The script prints no unchecked field of any
+  reply and no route's error reply (`tests/test_post_start.py`).
 - **The fall analysis stops at the fall cut.** `analysis/export_sales.py --fall-all` writes
   per-selection rows for all 40 selections, but only from polls before the cut
   (`analysis/slots_config.py`, `fall_end`: `FALL_CUTOFF`, never later than 3 Dec 2026 00:00
