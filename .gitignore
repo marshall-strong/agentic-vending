@@ -22,6 +22,8 @@ secrets/
 # ---------------------------------------------------------------------------
 data/
 snapshots/
+# The full detail of simulated seasons (docs/simulations.md); only their summaries are committed.
+sim-out/
 *.dex
 *.sqlite
 *.sqlite3

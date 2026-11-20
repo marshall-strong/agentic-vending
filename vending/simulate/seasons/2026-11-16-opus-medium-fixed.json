@@ -1,0 +1,192 @@
+{
+ "version": 1, "id": "2026-11-16-opus-medium-fixed", "simulated": true, "name": "Opus 5.5 medium, after the fixes",
+ "strategy": "The agent after PR #151's fixes (rules card: starts empty, season end, A5; prompt: store cutoffs), Wednesday 19:00 runs, Monday check-ins",
+ "built": "2026-11-16T06:50-05:00",
+ "source": "PR #151 (branch add_full_competition_simulation, 0ae468f): docs/simulations/data/2026-11-16-opus-medium-fixed/", "decider": "model",
+ "model": "claude-opus-5-5", "effort": "medium", "seed": 20261203, "run_day": "Wed",
+ "assumptions": {"budget": "4.50", "run_cap": "2.00", "min_run": "0.30", "elasticity": 0.46, "facing_exponent": 0.5},
+ "assignment": ["15", "16", "17", "18", "25", "26", "27", "28", "35", "36", "37", "38", "45", "46", "47", "48", "55", "56", "57", "58"],
+ "totals": {
+  "profit_after_model": 385.97, "units_sold": 302, "units_lost": 33.3, "revenue_ex_tax": 941.63, "gross_profit": 389.21, "model_spend": 3.2418622,
+  "balance_end": 952.18, "inventory_at_cost_end": 112.35, "runs": 10, "submitted": 7, "failed": 0, "qualifying_units_directed": 370
+ },
+ "weeks": [
+  {
+   "week": 1, "saturday": "2026-11-28", "class_days": 2, "units_sold": 15, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 48.52,
+   "gross_profit": 23.31, "model_spend": 0.493672, "profit": 22.82, "cumulative_profit": 22.82, "balance": 290.59, "spendable": 286.71,
+   "inventory_at_cost": 336.6,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 15 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 48% on $48.52 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $286.71 at week end (floor $53); model $0.49 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: below_floor, empty_slot, price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 2, "saturday": "2026-12-05", "class_days": 5, "units_sold": 34, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 107.41,
+   "gross_profit": 45.88, "model_spend": 0.3684552, "profit": 45.52, "cumulative_profit": 68.33, "balance": 406.59, "spendable": 394.12,
+   "inventory_at_cost": 275.08,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 34 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "2 stocked slots with no sale for 5 class days: 26 (CELSIUS-SPARKLING_ORANGE-12CAN), 35 (CELSIUS-SPARKLING_ORANGE-12CAN)"},
+    "margin": {"grade": "good", "why": "gross margin 43% on $107.41 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $394.12 at week end (floor $53); model $0.37 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: nothing_to_load, price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 3, "saturday": "2026-12-12", "class_days": 5, "units_sold": 40, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 124.81,
+   "gross_profit": 51.39, "model_spend": 0.2234274, "profit": 51.16, "cumulative_profit": 119.5, "balance": 541.39, "spendable": 518.93,
+   "inventory_at_cost": 201.65,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 40 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "2 stocked slots with no sale for 5 class days: 18 (REDBULL-ORIGINAL-8_4CAN), 36 (COCA-ORIGINAL-20BOT)"},
+    "margin": {"grade": "good", "why": "gross margin 41% on $124.81 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $518.93 at week end (floor $53); model $0.22 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 4, "saturday": "2026-12-19", "class_days": 1, "units_sold": 9, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 27.41,
+   "gross_profit": 10.42, "model_spend": 0.0850934, "profit": 10.33, "cumulative_profit": 129.83, "balance": 570.99, "spendable": 546.34,
+   "inventory_at_cost": 184.66,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 9 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "1 stocked slots with no sale for 5 class days: 17 (REDBULL-ORIGINAL-8_4CAN)"},
+    "margin": {"grade": "watch", "why": "gross margin 38% on $27.41 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $546.34 at week end (floor $53); model $0.09 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 5, "saturday": "2026-12-26", "class_days": 0, "units_sold": 0, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 0.0,
+   "gross_profit": 0.0, "model_spend": 0.4744812, "profit": -0.47, "cumulative_profit": 129.35, "balance": 570.99, "spendable": 546.34,
+   "inventory_at_cost": 184.66,
+   "report_card": {
+    "spend_vs_plan": {"grade": "good", "why": "spendable $546.34 at week end (floor $53); model $0.47 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: below_floor"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 6, "saturday": "2027-01-02", "class_days": 5, "units_sold": 50, "units_lost": 0.5, "stock_out_slots": 0, "revenue_ex_tax": 150.65,
+   "gross_profit": 56.09, "model_spend": 0.2908396, "profit": 55.8, "cumulative_profit": 185.15, "balance": 608.44, "spendable": 571.74,
+   "inventory_at_cost": 215.35,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 50 units of demand lost to empty slots (1%); 15 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "1 stocked slots with no sale for 5 class days: 47 (CELSIUS-SPARKLING_ORANGE-12CAN)"},
+    "margin": {"grade": "watch", "why": "gross margin 37% on $150.65 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $571.74 at week end (floor $53); model $0.29 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 7, "saturday": "2027-01-09", "class_days": 5, "units_sold": 43, "units_lost": 14.1, "stock_out_slots": 7, "revenue_ex_tax": 135.93,
+   "gross_profit": 57.01, "model_spend": 0.5336448, "profit": 56.47, "cumulative_profit": 241.63, "balance": 665.62, "spendable": 618.05,
+   "inventory_at_cost": 226.05,
+   "report_card": {
+    "stock_outs": {"grade": "bad", "why": "14 of 57 units of demand lost to empty slots (25%); 315 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "2 stocked slots with no sale for 5 class days: 16 (REDBULL-ORIGINAL-8_4CAN), 17 (REDBULL-ORIGINAL-8_4CAN)"},
+    "margin": {"grade": "good", "why": "gross margin 42% on $135.93 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $618.05 at week end (floor $53); model $0.53 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 8, "saturday": "2027-01-16", "class_days": 5, "units_sold": 44, "units_lost": 11.1, "stock_out_slots": 8, "revenue_ex_tax": 137.41,
+   "gross_profit": 57.78, "model_spend": 0.3534852, "profit": 57.43, "cumulative_profit": 299.06, "balance": 725.93, "spendable": 667.37,
+   "inventory_at_cost": 234.51,
+   "report_card": {
+    "stock_outs": {"grade": "bad", "why": "11 of 55 units of demand lost to empty slots (20%); 364 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 42% on $137.41 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $667.37 at week end (floor $53); model $0.35 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 9, "saturday": "2027-01-23", "class_days": 5, "units_sold": 37, "units_lost": 6.0, "stock_out_slots": 5, "revenue_ex_tax": 115.28,
+   "gross_profit": 47.16, "model_spend": 0.3452714, "profit": 46.81, "cumulative_profit": 345.87, "balance": 850.43, "spendable": 782.65,
+   "inventory_at_cost": 166.38,
+   "report_card": {
+    "stock_outs": {"grade": "watch", "why": "6 of 43 units of demand lost to empty slots (14%); 291 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "1 stocked slots with no sale for 5 class days: 46 (COCA-DIET-20BOT)"},
+    "margin": {"grade": "good", "why": "gross margin 41% on $115.28 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $782.65 at week end (floor $53); model $0.35 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 10, "saturday": "2027-01-30", "class_days": 3, "units_sold": 30, "units_lost": 1.6, "stock_out_slots": 2, "revenue_ex_tax": 94.21,
+   "gross_profit": 40.18, "model_spend": 0.073492, "profit": 40.1, "cumulative_profit": 385.97, "balance": 952.18, "spendable": 876.86,
+   "inventory_at_cost": 112.35,
+   "report_card": {
+    "stock_outs": {"grade": "watch", "why": "2 of 32 units of demand lost to empty slots (5%); 95 slot-hours empty while customers came"},
+    "slow_sellers": {
+     "grade": "bad",
+     "why": "3 stocked slots with no sale for 5 class days: 27 (CELSIUS-SPARKLING_ORANGE-12CAN), 38 (MOUNTAIN-ORIGINAL-20BOT), 48 (REDBULL-ORIGINAL-8_4CAN)"
+    },
+    "margin": {"grade": "good", "why": "gross margin 43% on $94.21 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $876.86 at week end (floor $53); model $0.07 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  }
+ ],
+ "decisions": [
+  {
+   "at": "2026-11-30T10:00:00-05:00", "kind": "day-one", "status": "submitted", "decision": "submit", "cost_usd": 0.49,
+   "reason": "The machine opens empty on Thu 3 Dec, so I submitted a first order (pr_sim_001, expected $368, at most $426, $174+ left) that fills 11 slots with the drinks we have prices for, mostly high-margin energy drinks, and keeps cash in reserve."
+  },
+  {
+   "at": "2026-12-09T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.37,
+   "reason": "Friday's visit costs nothing: it tops up the 11 stocked slots and fills 6 of the 9 empty ones, all from back stock we already own, and keeps the $347.91 we have free to spend."
+  },
+  {
+   "at": "2026-12-16T19:00:00-05:00", "kind": "weekly", "status": "skipped", "decision": "skip", "cost_usd": 0.22,
+   "reason": "Every stocked slot has more than a week of stock (slot 35 is the lowest, with 4 units, about 7 days at current sales), and the winter break starts Tue 22 Dec, so buying stock or testing a price now would cost money and tell us nothing."
+  },
+  {
+   "at": "2026-12-23T19:00:00-05:00", "kind": "weekly", "status": "skipped", "decision": "skip", "cost_usd": 0.09,
+   "reason": "We're on winter break until 1 Jan and sales have slowed to about 2 units a day, so every rail has enough stock to last until the 1 Jan visit and anything bought now would just sit."
+  },
+  {
+   "at": "2026-12-30T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.47,
+   "reason": "Classes start again about 4 Jan, so the 1 Jan visit should move all closet stock onto the rails, add one Celsius 12-pack (max $25.50) and start the Red Bull $4.25 test while the visit is free."
+  },
+  {
+   "at": "2027-01-06T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.29,
+   "reason": "Coke and Diet Coke are about to run low in the first full class week, so I submitted pr_sim_004 to buy one 24-pack of each and move the 6 Celsius in the closet onto the shelf, with no price changes."
+  },
+  {
+   "at": "2027-01-13T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.53,
+   "reason": "Seven of our slots were empty, so I submitted pr_sim_005 (at most $103.50, expected $89.62) to refill them for Friday's visit: mostly from the closet, plus 2 Celsius 12-packs and 1 Mountain Dew 24-pack."
+  },
+  {
+   "at": "2027-01-20T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.35,
+   "reason": "Three Red Bull slots and two Celsius slots were empty, so I bought stock for the Friday 22 Jan visit and topped up the soda slots from the closet."
+  },
+  {
+   "at": "2027-01-27T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.35,
+   "reason": "For the last visit, this plan loads everything in the closet (44 units) into the machine at no purchase cost, so stock sells instead of being counted at cost at season end."
+  },
+  {
+   "at": "2027-02-03T19:00:00-05:00", "kind": "weekly", "status": "skipped", "decision": "skip", "cost_usd": 0.07,
+   "reason": "The season ends today (Wed 3 Feb) and there are no more visits, so anything we bought now would never be loaded or sold and would only cost money."
+  }
+ ],
+ "notes": [
+  "One seed (20261203) and made-up customers: compare seasons with each other, not with real sales.",
+  "Run on 16 Nov on PR #151's branch. Its agent prompt and rules card had changes main doesn't have, so this is that agent, not main's.",
+  "Round 2, on slide 13 of the final deck: the agent after the first fixes (the machine starts empty, the season's end, store cutoffs). It filled on day one but let slots go empty in mid-January. Same five drinks and Wednesday runs as the rule it is compared with."
+ ]
+}

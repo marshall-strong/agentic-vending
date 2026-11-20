@@ -1,0 +1,198 @@
+{
+ "version": 1, "id": "2026-11-16-opus-medium", "simulated": true, "name": "Opus 5.5 medium, as first built",
+ "strategy": "The live agent as built: claude-opus-5-5 at medium effort, Thursday runs, Monday check-ins", "built": "2026-11-16T01:31-05:00",
+ "source": "PR #151 (branch add_full_competition_simulation, 0ae468f): docs/simulations/data/2026-11-16-opus-medium/", "decider": "model",
+ "model": "claude-opus-5-5", "effort": "medium", "seed": 20261203, "run_day": "Thu",
+ "assumptions": {},
+ "assignment": ["15", "16", "17", "18", "25", "26", "27", "28", "35", "36", "37", "38", "45", "46", "47", "48", "55", "56", "57", "58"],
+ "totals": {
+  "profit_after_model": 317.12, "units_sold": 170, "units_lost": 10.9, "revenue_ex_tax": 591.21, "gross_profit": 319.96, "model_spend": 2.8362908,
+  "balance_end": 952.61, "inventory_at_cost_end": 14.64, "runs": 11, "submitted": 7, "failed": 0, "qualifying_units_directed": 190
+ },
+ "weeks": [
+  {
+   "week": 1, "saturday": "2026-11-28", "class_days": 2, "units_sold": 0, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 0.0,
+   "gross_profit": 0.0, "model_spend": 0.6512472, "profit": -0.65, "cumulative_profit": -0.65, "balance": 600.0, "spendable": 600.0,
+   "inventory_at_cost": null,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 0 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "watch", "why": "no revenue"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $600.00 at week end (floor $53); model $0.65 over 2 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: below_floor, insufficient_balance, product_unknown"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 2, "saturday": "2026-12-05", "class_days": 5, "units_sold": 21, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 72.69,
+   "gross_profit": 39.18, "model_spend": 0.3563746, "profit": 38.83, "cumulative_profit": 38.17, "balance": 457.14, "spendable": 451.33,
+   "inventory_at_cost": 187.85,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 21 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 54% on $72.69 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $451.33 at week end (floor $53); model $0.36 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: empty_slot, price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 3, "saturday": "2026-12-12", "class_days": 5, "units_sold": 24, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 81.48,
+   "gross_profit": 42.13, "model_spend": 0.2802224, "profit": 41.85, "cumulative_profit": 80.03, "balance": 545.14, "spendable": 532.81,
+   "inventory_at_cost": 148.5,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 24 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {
+     "grade": "bad",
+     "why": "3 stocked slots with no sale for 5 class days: 18 (REDBULL-ORIGINAL-8_4CAN), 36 (REDBULL-ORIGINAL-8_4CAN), 38 (REDBULL-ORIGINAL-8_4CAN)"
+    },
+    "margin": {"grade": "good", "why": "gross margin 52% on $81.48 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $532.81 at week end (floor $53); model $0.28 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 4, "saturday": "2026-12-19", "class_days": 1, "units_sold": 4, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 12.96,
+   "gross_profit": 5.94, "model_spend": 0.249411, "profit": 5.69, "cumulative_profit": 85.72, "balance": 515.32, "spendable": 501.95,
+   "inventory_at_cost": 185.31,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 4 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "1 stocked slots with no sale for 5 class days: 17 (REDBULL-ORIGINAL-8_4CAN)"},
+    "margin": {"grade": "good", "why": "gross margin 46% on $12.96 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $501.95 at week end (floor $53); model $0.25 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 5, "saturday": "2026-12-26", "class_days": 0, "units_sold": 0, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 0.0,
+   "gross_profit": 0.0, "model_spend": 0.0903446, "profit": -0.09, "cumulative_profit": 85.63, "balance": 515.32, "spendable": 501.95,
+   "inventory_at_cost": 185.31,
+   "report_card": {
+    "spend_vs_plan": {"grade": "good", "why": "spendable $501.95 at week end (floor $53); model $0.09 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 6, "saturday": "2027-01-02", "class_days": 5, "units_sold": 35, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 124.07,
+   "gross_profit": 69.6, "model_spend": 0.2652016, "profit": 69.33, "cumulative_profit": 154.96, "balance": 649.32, "spendable": 626.02,
+   "inventory_at_cost": 130.83,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 35 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 56% on $124.07 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $626.02 at week end (floor $53); model $0.27 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 7, "saturday": "2027-01-09", "class_days": 5, "units_sold": 24, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 83.8,
+   "gross_profit": 45.45, "model_spend": 0.370014, "profit": 45.08, "cumulative_profit": 200.04, "balance": 739.82, "spendable": 709.82,
+   "inventory_at_cost": 92.49,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 24 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {
+     "grade": "bad",
+     "why": "3 stocked slots with no sale for 5 class days: 16 (CELSIUS-SPARKLING_ORANGE-12CAN), 17 (REDBULL-ORIGINAL-8_4CAN), 38 (REDBULL-ORIGINAL-8_4CAN)"
+    },
+    "margin": {"grade": "good", "why": "gross margin 54% on $83.80 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $709.82 at week end (floor $53); model $0.37 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 8, "saturday": "2027-01-16", "class_days": 5, "units_sold": 29, "units_lost": 1.4, "stock_out_slots": 2, "revenue_ex_tax": 100.93,
+   "gross_profit": 54.42, "model_spend": 0.282618, "profit": 54.14, "cumulative_profit": 254.18, "balance": 828.11, "spendable": 790.04,
+   "inventory_at_cost": 66.69,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "1 of 30 units of demand lost to empty slots (5%); 60 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "2 stocked slots with no sale for 5 class days: 15 (REDBULL-ORIGINAL-8_4CAN), 28 (CELSIUS-SPARKLING_ORANGE-12CAN)"},
+    "margin": {"grade": "good", "why": "gross margin 54% on $100.93 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $790.04 at week end (floor $53); model $0.28 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 9, "saturday": "2027-01-23", "class_days": 5, "units_sold": 21, "units_lost": 3.1, "stock_out_slots": 2, "revenue_ex_tax": 73.15,
+   "gross_profit": 39.91, "model_spend": 0.203759, "profit": 39.71, "cumulative_profit": 293.89, "balance": 907.11, "spendable": 863.19,
+   "inventory_at_cost": 33.45,
+   "report_card": {
+    "stock_outs": {"grade": "watch", "why": "3 of 24 units of demand lost to empty slots (13%); 149 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "1 stocked slots with no sale for 5 class days: 38 (REDBULL-ORIGINAL-8_4CAN)"},
+    "margin": {"grade": "good", "why": "gross margin 55% on $73.15 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $863.19 at week end (floor $53); model $0.20 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 10, "saturday": "2027-01-30", "class_days": 3, "units_sold": 12, "units_lost": 6.4, "stock_out_slots": 6, "revenue_ex_tax": 42.13,
+   "gross_profit": 23.32, "model_spend": 0.0870984, "profit": 23.23, "cumulative_profit": 317.12, "balance": 952.61, "spendable": 905.32,
+   "inventory_at_cost": 14.64,
+   "report_card": {
+    "stock_outs": {"grade": "bad", "why": "6 of 18 units of demand lost to empty slots (35%); 364 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "1 stocked slots with no sale for 5 class days: 37 (REDBULL-ORIGINAL-8_4CAN)"},
+    "margin": {"grade": "good", "why": "gross margin 55% on $42.13 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $905.32 at week end (floor $53); model $0.09 over 1 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  }
+ ],
+ "decisions": [
+  {
+   "at": "2026-11-30T10:00:00-05:00", "kind": "day-one", "status": "skipped", "decision": "skip", "cost_usd": 0.36,
+   "reason": "It's Monday and Friday's restock can still be ordered at Thursday's main run, so I'm waiting: by then we'll have Monday–Thursday sales that show which slots still hold stock, and the gaps in the sourcing table can be fixed (a paid $25 midweek visit doesn't clearly pay for itself)"
+  },
+  {
+   "at": "2026-12-03T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.29,
+   "reason": "Our slots have sold nothing since we opened on 30 Nov and we have no stock records for them, so I ordered energy drinks for 8 slots (about $218 expected, $252 at most) instead of waiting another week."
+  },
+  {
+   "at": "2026-12-10T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.36,
+   "reason": "I submitted pr_sim_002 at $0. It loads all the Celsius and some Red Bull from the closet into the machine for Friday, and buying new drinks wasn't worth it: the sodas would earn only $0.07 to $0.47 a bottle and Amazon is past its cutoff."
+  },
+  {
+   "at": "2026-12-17T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.28,
+   "reason": "Celsius sold about 2.4 cans a day across its 5 slots and will start running out in about 5 days, so I ordered two 12-packs ($49 max) and topped up slot 15 with Red Bull from the closet at no cost."
+  },
+  {
+   "at": "2026-12-24T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.25,
+   "reason": "Sales dropped to 7 units over the holiday week, so buying stock isn't worth it, but a free Friday top-up from the closet fills seven slots at no cost and counts toward qualifying."
+  },
+  {
+   "at": "2026-12-31T19:00:00-05:00", "kind": "weekly", "status": "skipped", "decision": "skip", "cost_usd": 0.09,
+   "reason": "Over the holiday week nobody bought anything from any of our 20 slots, every slot we have records for is full, and buying or changing anything now would only tie up cash before demand comes back."
+  },
+  {
+   "at": "2027-01-07T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.27,
+   "reason": "Sales are back with term (24 units this week), so I submitted a free Friday request that moves our last 2 closet units into the 2 fastest-selling slots and buys nothing."
+  },
+  {
+   "at": "2027-01-14T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.37,
+   "reason": "Slot 17 sold nothing for 5 class days while it held 10 Red Bull, so the slow-seller rule says swap it. I submitted a $24.50 maximum switch to Celsius, which sells steadily; the rest of the stock should last close to the week 9 finish (about 31 Jan)."
+  },
+  {
+   "at": "2027-01-21T19:00:00-05:00", "kind": "weekly", "status": "submitted", "decision": "submit", "cost_usd": 0.28,
+   "reason": "Slots 25 and 26 are empty and 18 and 37 are nearly empty, so I'm refilling them from all 14 closet units at no cost; buying more stock now would likely leave unsold leftovers when run week 9 ends."
+  },
+  {
+   "at": "2027-01-28T19:00:00-05:00", "kind": "weekly", "status": "skipped", "decision": "skip", "cost_usd": 0.2,
+   "reason": "The back-stock closet is empty and the quarter ends around 31 Jan, so anything bought now for Friday's visit would only have 2–3 days to sell and would cost more than it brings in."
+  },
+  {
+   "at": "2027-02-01T07:30:00-05:00", "kind": "check-in", "status": "skipped", "decision": "skip", "cost_usd": 0.09,
+   "reason": "The run ended with week 9 (it opened 30 Nov 2026), so any stock bought now would only be a cost and add nothing to the score."
+  }
+ ],
+ "notes": [
+  "One seed (20261203) and made-up customers: compare seasons with each other, not with real sales.",
+  "Run on 16 Nov on PR #151's branch. Its agent prompt and rules card had changes main doesn't have, so this is that agent, not main's.",
+  "The worst season: the agent as first built. It skipped the day-one fill, missed the Amazon cutoff with Thursday runs and used 12 of 20 slots. The simple rule made $464.62 on the same days (2026-11-16-baseline)."
+ ]
+}
