@@ -58,8 +58,12 @@ class Gathered:
     sourcing_rows: tuple[sourcing.Option, ...] = ()   # the table rows the planner was given
 
 
-def planner_config(conn: psycopg.Connection) -> planner.Config:
-    """The planner's settings from `config`, each with its default when unset. Our slots must be recorded."""
+def planner_config(conn: psycopg.Connection, *, stale_wildcard_unset: bool = False) -> planner.Config:
+    """The planner's settings from `config`, each with its default when unset. Our slots must be recorded.
+
+    A wildcard setting that names a selection not in our assignment raises `NotReady`, as any other bad
+    setting does. Only a reader that must still show our other selections (the dashboard's pricing panel)
+    passes `stale_wildcard_unset`: that selection is then no wildcard and not ours, never planned for."""
     overrides = config.get_value(conn, "capacity_overrides", {})
     problem = config.KNOWN["capacity_overrides"].check(overrides)
     if problem:
@@ -72,7 +76,7 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
         raise NotReady(str(error)) from None
     ceiling = _limit(conn, "price_ceiling_cents", planner.AGREED_CEILING_CENTS)
     return planner.Config(
-        wildcard_slot=wildcard_slot(conn, slots),
+        wildcard_slot=wildcard_slot(conn, slots, stale_unset=stale_wildcard_unset),
         capacity_overrides=overrides,
         slots=slots,
         price_ceiling_cents=ceiling,
@@ -86,12 +90,15 @@ def planner_config(conn: psycopg.Connection) -> planner.Config:
     )
 
 
-def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...]) -> str | None:
-    """The configured wildcard slot (None: none yet). Raises `NotReady` unless it is one of `slots`, ours."""
+def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...], *, stale_unset: bool = False) -> str | None:
+    """The configured wildcard slot (None: none yet). Raises `NotReady` unless it is one of `slots`, ours.
+    With `stale_unset`, a well-formed setting that names a selection outside `slots` reads as None instead."""
     value = config.get_value(conn, "wildcard_slot")
     if value is None:
         return None
     problem = config.KNOWN["wildcard_slot"].check(value)
+    if problem is None and value not in slots and stale_unset:
+        return None
     if problem is None and value not in slots:
         problem = f"is {value}, which isn't one of ours in the stored slot assignment"
     if problem:

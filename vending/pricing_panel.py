@@ -52,6 +52,11 @@ HISTORY_DAYS = 28
 # The ceiling shown when no assignment is stored, so nothing is checked: the planner's default.
 DEFAULT_CEILING_CENTS = AGREED_CEILING_CENTS
 RANKS = ("primary", "alternate")
+# Said, in the panel and in Needs attention, when the wildcard setting names a selection outside our assignment.
+# It never names that selection: it isn't ours.
+WILDCARD_STALE = ("The wildcard setting names a selection that isn't ours in the stored assignment, so every "
+                  "selection here is held to the regular ceiling and the planner won't plan until a person "
+                  "sets the wildcard again.")
 # The runs whose plan the panel follows: the dashboard's `WATCHED_MODES` (a test keeps them equal).
 PLAN_MODES = ("live", "dry-run")
 # The sparkline's drawing box, in px.
@@ -70,24 +75,27 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
     plan's entries for them, and the database returns only those products' sourcing rows. With no
     assignment stored, nothing is ours and nothing else is read."""
     # Here, not at the top: `vending.sourcing` needs time-zone data, and the page starts without it.
-    from vending import planning, sourcing
+    from vending import config, planning, sourcing
 
     since = now - timedelta(days=HISTORY_DAYS)
     try:
         our_slots(conn)
     except SlotsNotRecorded:
         return {"slots": (), "ceiling_cents": DEFAULT_CEILING_CENTS, "tax_percent": DEFAULT_TAX_PERCENT,
-                "ceilings": {}, "wildcard": None, "wildcard_ceiling_cents": None, "options": {},
-                "since": since, "history": []}
+                "ceilings": {}, "wildcard": None, "wildcard_stale": False, "wildcard_ceiling_cents": None,
+                "options": {}, "since": since, "history": []}
     # The planner's own settings (ours among them), so each selection is checked against its ceiling there.
-    settings = planning.planner_config(conn)
+    # A wildcard setting left outside a new assignment stops the planner, but here it only means no
+    # selection of ours is the wildcard: the others still show, at the regular ceiling.
+    settings = planning.planner_config(conn, stale_wildcard_unset=True)
     slots, wildcard = settings.slots, settings.wildcard_slot
+    stale = wildcard is None and config.get_value(conn, "wildcard_slot") is not None
     options: dict[str, dict[str, Any]] = {}
     for o in sourcing.options_for(conn, _our_products(conn, slots)):
         options.setdefault(o.sku, {})[o.rank] = o
     ceilings = {slot: settings.ceiling_for(slot) for slot in slots}
     return {"slots": slots, "ceiling_cents": settings.price_ceiling_cents, "tax_percent": settings.tax_percent,
-            "ceilings": ceilings, "wildcard": wildcard,
+            "ceilings": ceilings, "wildcard": wildcard, "wildcard_stale": stale,
             "wildcard_ceiling_cents": ceilings.get(wildcard) if wildcard else None,
             "options": options, "since": since, "history": machine_state.price_history(conn, now, since)}
 
@@ -152,6 +160,7 @@ def build(snap: dict, raw: dict, now: datetime) -> dict:
         })
     return {"ceiling": _dollars(raw["ceiling_cents"]), "tax_percent": tax, "history_days": HISTORY_DAYS,
             "wildcard": raw["wildcard"], "wildcard_ceiling": _dollars(raw["wildcard_ceiling_cents"]),
+            "wildcard_stale": raw["wildcard_stale"],
             "since": raw["since"], "until": now, "rows": rows}
 
 
@@ -371,6 +380,7 @@ def html(panel: dict, ours: dict) -> str:
             f'margin is what one sale keeps after it, less the unit cost. <b>Expected</b> costs are from sourcing '
             f'(no receipt yet). The line is the shelf price at each poll over the last {_e(d["history_days"])} days.'
             + (f' <b class="bad-text">{"; ".join(flags)}.</b>' if flags else "")
+            + (f' <b class="warn-text">{WILDCARD_STALE}</b>' if d.get("wildcard_stale") else "")
             + "</p>")
     header = ('<div class="pr-head" aria-hidden="true"><div>Slot</div><div>Product</div><div>Now</div>'
               '<div>Unit cost</div><div>Floor</div><div>Margin</div><div>Sold</div><div>Plan</div>'

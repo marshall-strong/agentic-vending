@@ -732,6 +732,8 @@ def attention(snap: dict) -> list[dict]:
                     + (" (and more in /state.json)" if n > 1 else ""))
 
     pricing = snap.get("pricing")
+    if pricing and pricing["ok"] and pricing["data"].get("wildcard_stale"):
+        add("warn", pricing_panel.WILDCARD_STALE)
     if pricing and pricing["ok"]:
         for r in pricing["data"]["rows"]:
             if r["legal"] is False:

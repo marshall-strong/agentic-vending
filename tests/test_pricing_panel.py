@@ -310,3 +310,31 @@ def test_the_pricing_reader_finds_our_selections_and_their_products_itself(conn,
     assert raw["slots"] == TEST_SLOTS
     assert sorted(raw["options"]) == ["FAKE-COLA-20", "FAKE-FIZZ-12"]
     assert spy.rows and not any("NOTOURS" in repr(row) for row in spy.rows)
+
+
+def test_a_wildcard_setting_left_outside_a_new_assignment_blanks_nothing(conn, page_conn):
+    # After a reassignment the stored wildcard can name a selection that isn't ours. The planner still
+    # refuses to plan (unchanged); the panel shows our selections at the regular ceiling, never treats
+    # the old wildcard as ours, and says the setting needs a person, without naming the selection.
+    from tests.conftest import TEST_SLOTS
+    from vending import config, planning
+    catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"))
+    for slot in ("15", "16"):
+        fulfilled(conn, f"pr-{slot}", slot, "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
+    config.set_value(conn, "wildcard_slot", "15", "test")
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (775, 1), "16": (600, 1)})
+    conn.execute("update slot_assignment set slots = %s", ([("11" if s == "15" else s) for s in TEST_SLOTS],))
+    with pytest.raises(planning.NotReady, match="wildcard_slot"):
+        planning.planner_config(conn)
+    for public in (False, True):
+        snap = dashboard.snapshot(page_conn, MONDAY, public=public)
+        found = rows(snap)
+        data = snap["pricing"]["data"]
+        assert "15" not in found and (data["wildcard"], data["wildcard_stale"]) == (None, True)
+        assert (found["16"]["price"], found["16"]["ceiling"], found["16"]["legal"]) == ("6.00", "6.50", True)
+        assert {r["ceiling"] for r in data["rows"]} == {"6.50"}
+        panel, state = section(dashboard.render(snap)), dashboard.to_json(snap["pricing"])
+        assert "The wildcard setting names a selection that isn't ours" in panel
+        assert 'id="price-15"' not in panel and "7.75" not in panel and "7.75" not in state
+        assert any(a["level"] == "warn" and a["text"].startswith("The wildcard setting names a selection that isn't ours")
+                   for a in snap["attention"])
