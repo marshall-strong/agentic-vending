@@ -214,3 +214,14 @@ def test_escape_falls_back_to_the_front_cell_then_the_heading_when_the_opener_is
       assert(document.activeElement.id === "vm-title", "focus falls back to the heading: " + document.activeElement.id);
     ''', width=width)
 
+
+@pytest.mark.parametrize("width, lands", [(900, "vm-panel"), (820, "vm-panel"), (1280, "vm")])
+def test_a_direct_pick_link_lands_on_the_close_up_at_tablet_width(tmp_path, width, lands):
+    # Opened as /dashboard?sel=46#sel-46: in the one-column tablet layout the page must end on the
+    # close-up, not be scrolled back to the machine's top by the start-up timer. Wide, the close-up is
+    # beside the front, so the top of the machine is the right place to land.
+    run_script(tmp_path, f'''
+      assert(document.querySelector(".vm").getAttribute("data-sel") === "46", "the link picked 46");
+      await new Promise(r => setTimeout(r, 150));      // past the start-up timer
+      assert(scrolled[scrolled.length - 1] === "{lands}", "landed on: " + JSON.stringify(scrolled));
+    ''', width=width, hash="#sel-46")

@@ -2556,8 +2556,9 @@ SCRIPT = """(function () {
   }
   filter(); times();
   // The browser scrolls to a #target after this runs: on a wide screen show the machine from its top
-  // instead of wherever the facts happen to sit.
-  if (location.hash && fromHash() && !sheet) {
+  // instead of wherever the facts happen to sit. Not in the one-column tablet layout: there the pick
+  // has just scrolled the close-up into view, and that is where a direct link should land.
+  if (location.hash && fromHash() && !sheet && !stacked()) {
     setTimeout(function () { var vm = document.getElementById('vm'); if (vm) vm.scrollIntoView(); }, 60);
   }
   if (!FROZEN) {
