@@ -212,8 +212,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
 - **Outputs**: `revenue` (tax included), `tax_set_aside`, `revenue_ex_tax`, `units_sold`,
   `units_costed`, `cost_of_sales` (first-in, first-out cost from receipts) and
   `cost_of_sales_complete`, `units_estimated` and `estimated_cost_of_sales` (an estimate for
-  units sold across a swap the counters can't split, in no profit figure), `gross_margin`,
-  `shrinkage` and `shrinkage_units` (units lost without
+  units sold across a swap the counters can't split, in no profit figure), `unattributed_stock`
+  and `unattributed_stock_provisional` (the stock those sales took, a reconciliation line in no
+  profit figure), `gross_margin`, `shrinkage` and `shrinkage_units` (units lost without
   a sale), `visit_fees`, `visits`, `token_spend`, `adjustments`, `net`; also `purchases`,
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
   (`inventory_machine`, `inventory_closet`, `inventory`, `inventory_complete`); per-week revenue
@@ -232,6 +233,13 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
     `estimated_cost_of_sales` give an estimate apart, the midpoint of the two products' unit costs
     when both are known, with a note. It is never in `cost_of_sales`, `gross_margin` or `net`, and
     the money series counts them the same way (#172 item 5).
+  - Any cost missing (`cost_of_sales_complete` or `shrinkage_complete` false): `gross_margin` and
+    `net` are over the known costs only, not the profit. The `message` then says "net at known
+    costs ... (incomplete: ...)" with what is missing and any estimate, never plain "net".
+  - Stock taken by sales of unknown product: `unattributed_stock`, a reconciliation line in no
+    cost, estimate or profit, so opening cash and stock + net + capital + tax set aside - tax
+    remitted - `unattributed_stock` = closing cash + stock at cost. `unattributed_stock_provisional`
+    is true when units written off at the same swap may be some of those sales.
   - Stock whose cost is unknown: `inventory_complete: false` and a note.
 - **Owner**: Marshall Strong (issue #23, PR #35).
 

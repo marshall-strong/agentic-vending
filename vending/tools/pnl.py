@@ -7,6 +7,12 @@ have loaded; `units_sold` counts every sale from our 20 slots and the reply
 says how many of them could not be costed. Shrinkage is the cost of units
 lost without a sale. Visit fees, token spend and adjustments come from the
 ledger; capital and tax remittances are shown but are not profit or loss.
+While any cost is missing (`cost_of_sales_complete` or `shrinkage_complete`
+false), `gross_margin` and `net` are over the known costs only, and the
+summary says "net at known costs (incomplete...)", never plain "net". Units
+sold across a swap the counters can't split have an estimate apart
+(`estimated_cost_of_sales`), in no profit figure; the stock they took is
+`unattributed_stock`, a reconciliation line, also in no profit figure.
 Inventory is every unit on hand, in the machine and the closet, at the cost
 we paid. See `vending.ledger`.
 
@@ -40,6 +46,8 @@ class Pnl(Reply):
     cost_of_sales_complete: bool | None = None
     units_estimated: int | None = None              # sold across a swap the counters can't split
     estimated_cost_of_sales: str | None = None      # their estimate: not in cost_of_sales, margin or net
+    unattributed_stock: str | None = None           # stock those sales took: a reconciliation line, not in net
+    unattributed_stock_provisional: bool | None = None   # a write-off at the swap may be one of those sales
     gross_margin: str | None = None
     shrinkage: str | None = None
     shrinkage_units: int | None = None
@@ -78,11 +86,20 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
     except SlotsNotRecorded as error:
         return Pnl(success=False, message=str(error))
     net = ledger.money(p.net_cents)
-    caveat = "" if p.cost_of_sales_complete else f" ({p.units_sold - p.units_costed} of {p.units_sold} units sold not costed)"
+    # A net over known costs only is never headlined as net (#172 review).
+    missing = []
+    if not p.cost_of_sales_complete:
+        missing.append(f"{p.units_sold - p.units_costed} of {p.units_sold} units sold not costed exactly")
+    if not p.shrinkage_complete:
+        missing.append("some units lost have no known cost")
+    if p.units_estimated:
+        missing.append(f"estimated cost of {p.units_estimated} units {ledger.money(p.estimated_cost_of_sales_cents)}, "
+                       "an estimate not in net")
+    headline = f"net at known costs {net} (incomplete: {'; '.join(missing)})" if missing else f"net {net}"
     return Pnl(
         success=True,
         message=(f"{first.astimezone(EASTERN):%Y-%m-%d} to {last_day} (Eastern days): revenue "
-                 f"{ledger.money(p.revenue_ex_tax_cents)} ex tax, net {net}{caveat}, "
+                 f"{ledger.money(p.revenue_ex_tax_cents)} ex tax, {headline}, "
                  f"inventory at cost {ledger.money(p.inventory_cents) or 'unknown'}."),
         count=len(p.takings.by_week),
         start=first.astimezone(timezone.utc),
@@ -96,6 +113,8 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         cost_of_sales_complete=p.cost_of_sales_complete,
         units_estimated=p.units_estimated,
         estimated_cost_of_sales=ledger.money(p.estimated_cost_of_sales_cents),
+        unattributed_stock=ledger.money(p.unattributed_stock_cents),
+        unattributed_stock_provisional=p.unattributed_stock_provisional,
         gross_margin=ledger.money(p.gross_margin_cents),
         shrinkage=ledger.money(p.shrinkage_cents),
         shrinkage_units=p.shrinkage_units,

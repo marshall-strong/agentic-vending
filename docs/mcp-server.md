@@ -242,8 +242,11 @@ the slot, or past what we loaded). Units sold across a product change that the c
 (#112) may be either product, so they have no exact cost: they are left out of `units_costed` and
 cost of sales, `cost_of_sales_complete` is false, and `units_estimated` and
 `estimated_cost_of_sales` report an estimate apart (the midpoint of the two products' unit costs,
-when both are known). The estimate is in no profit figure (#172 item 5). Cost of sales is never
-"unknown" as a whole: a quiet week with a $25 visit and 40 cents of tokens nets -25.40. **Shrinkage** is the cost of units lost without a sale: later
+when both are known). The estimate is in no profit figure (#172 item 5). The stock they took is
+`unattributed_stock`, a reconciliation line, also in no profit figure, so the books still balance.
+While a cost is missing, `gross_margin` and `net` are over known costs only, and the summary says
+"net at known costs (incomplete...)". Cost of sales is never "unknown" as a whole: a quiet week with
+a $25 visit and 40 cents of tokens nets -25.40. **Shrinkage** is the cost of units lost without a sale: later
 losses, units still counted in a slot when its product changed, and a purchase line that lost
 every unit. It is its own line, taken out of net, so a lost unit's cost never silently disappears.
 

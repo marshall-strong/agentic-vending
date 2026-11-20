@@ -53,7 +53,9 @@ complete costs. In the weekly view a week with an unknown cost gets a dashed "?"
 "incomplete" and no profit dot. Units sold across a product swap the counters can't split have no
 exact cost, so their day's gross profit and net are unknown too. The series carries an estimate
 for them apart (`units_estimated`, `estimated_cost_of_sales`), and the day's note in the tooltip
-states it as an estimate. It is never drawn into a cost or profit line (#172 item 5).
+states it as an estimate. It is never drawn into a cost or profit line (#172 item 5). The stock
+those sales took is `unattributed_stock`, a reconciliation line in no cost or profit, which the
+day's note also states, so each day's cash and stock at cost still add up.
 
 **Exact money.** The page sums exact cents before it rounds values for display, and every value
 label keeps its cents; only axis ticks are rounded.

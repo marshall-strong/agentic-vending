@@ -806,9 +806,9 @@ def test_a_poll_in_the_open_minute_after_an_earlier_price_change_is_not_read_as_
     stock = book(lines, counters=counters)
     [sale] = [s for s in stock.sales if s.units]
     assert (sale.product, sale.units) == (None, 2)
-    # Main read it as all Coke and costed it at 80 cents in cost_cents; that cost stays, so the money
-    # series still counts it as the ledger does (#172 fix 5 reports such estimates apart).
-    assert (sale.cost_cents, sale.unattributed_cost_cents) == (160, None)
+    # Main read it as all Coke at 80 cents. Its product is unknown, so that 160c is a stock debit,
+    # not an exact cost, and the estimate is the midpoint of an Arizona (50c) and a Coke (#172 item 5).
+    assert (sale.cost_cents, sale.unattributed_cost_cents, sale.estimated_cost_cents) == (None, 160, 130)
     [slot] = stock.slots
     assert (slot.product, slot.sold, slot.unattributed) == ("COKE20", 0, 2)
     # Without r0 the price change at 17:30:10 can only be r2's, so the door was open: all Coke, as before.

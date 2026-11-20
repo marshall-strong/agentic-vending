@@ -42,7 +42,18 @@ Cost of sales is exact: only sales whose cost the receipts know
 split may be either product, so their cost is not exact. They are left out of
 cost of sales, which is then incomplete, and reported apart as an estimate
 (`units_estimated`, `estimated_cost_of_sales_cents`) that no profit figure
-includes (#172 item 5). The money series counts them the same way.
+includes (#172 item 5). The stock those sales took out of the count, at the
+cost it was taken (`unattributed_stock_cents`), is in no cost, estimate or
+profit either. It is its own reconciliation line, so the books still balance:
+opening cash and stock + net at known costs + capital + tax set aside - tax
+remitted - unattributed stock = closing cash + stock at cost. Where a
+write-off at the same swap may be one of those sales, the line is provisional
+(`unattributed_stock_provisional`). The money series counts all of this the
+same way.
+
+Counters are read from their whole history first, as the stock replay reads
+them, and only then cut to the window (`rises_between`), so a misread or
+restart just before a window reads the same from any window.
 
 Money is exact (`Fraction` cents, `numeric` in the database) until it is shown.
 `money()` rounds half up to the cent only then.
@@ -173,11 +184,13 @@ class Pnl:
     notes: tuple[str, ...]
     units_estimated: int = 0                # sold across a product change the counters can't split; not costed
     estimated_cost_of_sales_cents: Fraction = Fraction(0)   # their estimate: in no profit figure (#172)
+    unattributed_stock_cents: Fraction = Fraction(0)        # stock those sales took: a reconciliation line
+    unattributed_stock_provisional: bool = False            # a write-off at the swap may be one of them
 
     @property
     def cost_of_sales_complete(self) -> bool:
         """Every unit sold has an exact cost. False while any is estimated or has no cost at all."""
-        return self.units_costed == self.units_sold
+        return self.units_costed == self.units_sold and not self.units_estimated
 
     @property
     def revenue_ex_tax_cents(self) -> int:
@@ -221,10 +234,12 @@ class WeekPnl:
     adjustments_cents: Fraction
     units_estimated: int = 0
     estimated_cost_of_sales_cents: Fraction = Fraction(0)   # in no profit figure, as in `Pnl`
+    unattributed_stock_cents: Fraction = Fraction(0)        # a reconciliation line, as in `Pnl`
+    unattributed_stock_provisional: bool = False
 
     @property
     def cost_of_sales_complete(self) -> bool:
-        return self.units_costed == self.units_sold
+        return self.units_costed == self.units_sold and not self.units_estimated
 
     @property
     def revenue_ex_tax_cents(self) -> int:
@@ -363,6 +378,11 @@ def rises_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, un
     The baseline is the last poll at or before `since` (or the first one after,
     with a note), so the rises counted are those at polls after `since` and at
     or before `until`. Returns (baseline poll, last poll counted, rises, note).
+
+    The counters are walked over every row first, and only then cut to the
+    window, as the stock replay walks them: a reading just before `since` that
+    the history shows is a misread or a restart reads the same from any window,
+    so the units counted here are the units the replay costs (#172).
     """
     by_poll: dict[datetime, dict[str, int]] = defaultdict(dict)
     for at, selection, value in rows:
@@ -379,12 +399,11 @@ def rises_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, un
         note = f"no poll at or before {since.isoformat()}, so takings start at the first poll after it"
     series: dict[str, list[tuple[datetime, int]]] = defaultdict(list)
     for t in times:
-        if t >= baseline:
-            for selection, value in by_poll[t].items():
-                series[selection].append((t, value))
+        for selection, value in by_poll[t].items():
+            series[selection].append((t, value))
     out = [Rise(at, selection, amount)
            for selection, readings in series.items()
-           for at, amount in counters.rises(readings)]
+           for at, amount in counters.rises(readings) if at > baseline]
     out.sort(key=lambda r: (r.at, r.selection))
     return baseline, times[-1], out, note
 
@@ -486,6 +505,8 @@ class SalesCost:
     cost_of_sales_cents: Fraction
     units_estimated: int
     estimated_cost_of_sales_cents: Fraction
+    unattributed_stock_cents: Fraction = Fraction(0)
+    unattributed_stock_provisional: bool = False
 
 
 def summarize_sales(sales: Iterable[stock.SaleCost]) -> SalesCost:
@@ -494,13 +515,19 @@ def summarize_sales(sales: Iterable[stock.SaleCost]) -> SalesCost:
     Exact: the sales with a `cost_cents`, their `costed_units` and cost. Estimated:
     the sales with no exact cost but an `estimated_cost_cents` (an unsplit product
     change, #172 item 5), all their units. Those are never in the exact figures, so
-    cost of sales is incomplete while there are any.
+    cost of sales is incomplete while there are any. Unattributed stock: what
+    sales of unknown product took out of the count (`unattributed_cost_cents`),
+    the reconciliation line that keeps the books whole; provisional if a write-off
+    at the same change may be one of those sales.
     """
     sales = list(sales)
     exact = [s for s in sales if s.cost_cents is not None]
     guessed = [s for s in sales if s.cost_cents is None and s.estimated_cost_cents is not None]
+    taken = [s for s in sales if s.cost_cents is None and s.unattributed_cost_cents is not None]
     return SalesCost(sum(s.costed_units for s in exact), sum((s.cost_cents for s in exact), Fraction(0)),
-                     sum(s.units for s in guessed), sum((s.estimated_cost_cents for s in guessed), Fraction(0)))
+                     sum(s.units for s in guessed), sum((s.estimated_cost_cents for s in guessed), Fraction(0)),
+                     sum((s.unattributed_cost_cents for s in taken), Fraction(0)),
+                     any(s.may_be_written_off for s in taken))
 
 
 def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
@@ -516,6 +543,11 @@ def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
         notes.append(f"{unknown} of {units_sold} units sold have no known cost (sold from a slot before we first "
                      "loaded it, past what we loaded, or across a product change with no estimate), "
                      f"so {what} leave their cost out")
+    if cost.unattributed_stock_cents:
+        notes.append(f"{money(cost.unattributed_stock_cents)} of stock at cost left the count with sales of unknown "
+                     "product: a reconciliation line, in no cost, estimate or profit, by which net worth falls"
+                     + ("; provisional, since units written off at the same swap may be some of those sales"
+                        if cost.unattributed_stock_provisional else ""))
     return notes
 
 
@@ -548,8 +580,7 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     cost = summarize_sales(sales)
     if not units:
         notes.append("no sales in the window")
-    else:
-        notes += sales_cost_notes(units, cost, "cost of sales and margin")
+    notes += sales_cost_notes(units, cost, "cost of sales and margin")
     if sold.cents and not counted.slots:
         notes.append("the machine sold units but no receipts are stored, so nothing can be costed yet")
     lost = [s for s in counted.shrinkage if start < s.at <= end]
@@ -564,7 +595,8 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
                shrinkage, shrinkage_complete, receipts, fees, visits, -_sum(recorded, "tokens"),
                _sum(recorded, "adjustment"), _sum(recorded, "capital"), -_sum(recorded, "tax_remitted"),
                machine, closet, inventory_complete, tuple(notes),
-               cost.units_estimated, cost.estimated_cost_of_sales_cents)
+               cost.units_estimated, cost.estimated_cost_of_sales_cents,
+               cost.unattributed_stock_cents, cost.unattributed_stock_provisional)
 
 
 def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> list[WeekPnl]:
@@ -621,7 +653,8 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
         out.append(WeekPnl(day, w.takings_cents if w else 0, w.tax_cents if w else 0, units[day], cost.units_costed,
                            cost.cost_of_sales_cents, lost_units[day], lost_cost[day], day not in lost_unknown,
                            fees[day], visits[day], tokens[day], adjustments[day],
-                           cost.units_estimated, cost.estimated_cost_of_sales_cents))
+                           cost.units_estimated, cost.estimated_cost_of_sales_cents,
+                           cost.unattributed_stock_cents, cost.unattributed_stock_provisional))
         day += timedelta(days=7)
     return out
 
