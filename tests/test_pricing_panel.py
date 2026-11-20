@@ -209,3 +209,28 @@ def test_the_wildcard_is_held_to_its_own_ceiling(conn, page_conn):
     assert (regular["legal"], regular["problems"], regular["ceiling"]) == (False, ["$7.50 is above the ceiling of $6.50"], "6.50")
     assert regular["next"]["problems"] == ["$7.25 is above the ceiling of $6.50"]
     assert "the wildcard, 15, may go to $8.00" in section(dashboard.render(snap))
+
+
+def test_a_swap_that_keeps_the_price_is_checked_against_the_new_products_floor(conn, page_conn):
+    catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"),
+            ("FAKE-PRICY-16", "Made-up Pricy", "Made-up", None, "16 oz can"))
+    fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
+    fulfilled(conn, "pr-16", "16", "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
+    # The replacement costs up to $24.00 for 12: $2.00 a unit, floor 2.00 x 1.08 = 2.16, up to $2.20.
+    source(conn, "FAKE-PRICY-16", pack=12, expected=2200, most=2400)
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (125, 1), "16": (250, 1)})
+    run = agent_runs.start(conn, mode="dry-run")
+    agent_runs.finish(conn, run, "skipped", plan=plan(
+        {"slot": "15", "product": "FAKE-PRICY-16", "fill_to": 6, "sale_price": "1.25", "reason": "made-up swap"},
+        {"slot": "16", "product": "FAKE-PRICY-16", "fill_to": 6, "sale_price": "2.50", "reason": "made-up swap"}))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    found = rows(snap)
+    swap = found["15"]
+    assert swap["legal"] is True                       # $1.25 covers the cola on the rail now
+    assert (swap["next"]["price"], swap["next"]["product"], swap["next"]["legal"]) == ("1.25", "FAKE-PRICY-16", False)
+    assert swap["next"]["problems"][0].startswith("$1.25 is below the floor of $2.20")
+    assert found["16"]["next"] is None                 # a legal swap at the same price changes nothing to show
+    texts = [a["text"] for a in snap["attention"]]
+    assert any(t.startswith("Selection 15: the plan's price $1.25 isn't legal. $1.25 is below the floor of $2.20")
+               for t in texts)
+    assert "Plan: $1.25 is below the floor of $2.20" in section(dashboard.render(snap))

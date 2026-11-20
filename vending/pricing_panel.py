@@ -194,16 +194,19 @@ def _check(price: int | None, floor: int | None, ceiling: int) -> tuple[bool | N
 
 def _next(entry: dict | None, keep: bool, price: int | None, product: str | None, receipt: Fraction | None,
           options: dict, tax: int, ceiling: int) -> dict | None:
-    """The plan's new price for the slot, when it sets one that differs from the shelf; else None."""
+    """The plan's price for the slot when it differs from the shelf, or when it keeps the shelf's price for a
+    new product that price isn't legal for; else None. (Same product, same price: the shelf check covers it.)"""
     if entry is None or keep or entry.get("sale_price") is None:
         return None
     new = _cents(entry["sale_price"])
-    if new is not None and new == price:
-        return None
     goes_in = entry.get("product") if isinstance(entry.get("product"), str) else product
+    if new is not None and new == price and goes_in == product:
+        return None
     # The units already in the slot count only while the plan keeps the same product.
     floor, _ = _floor(receipt if goes_in == product else None, options.get(goes_in), tax)
     legal, problems = _check(new, floor, ceiling) if new is not None else (False, ["not a whole-cent price"])
+    if new is not None and new == price and legal is not False:
+        return None   # a swap at the same price that the new product's floor allows: nothing to show
     return {"price": _dollars(new) if new is not None else str(entry["sale_price"]), "product": goes_in,
             "floor": _dollars(floor), "legal": legal, "problems": problems, "reason": entry.get("reason")}
 
