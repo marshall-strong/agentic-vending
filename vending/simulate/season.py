@@ -34,6 +34,13 @@ from vending.simulate.world import EASTERN, Calendar, Demand, Machine
 SEED_SOURCING = tuple(sorted((world.REPO / "db" / "sourcing").glob("*.csv")))
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 BY = "simulation"
+# Who decides each run. Only "model" calls the model; anything else is refused, never sent to it.
+DECIDERS = ("scripted", "scripted-wide", "model")
+
+
+def check_decider(decider: str) -> None:
+    if decider not in DECIDERS:
+        raise ValueError(f"unknown decider {decider!r}: use one of {', '.join(DECIDERS)}")
 
 
 # Columns the database stamps with its own clock (`default now()`). Our code fills them in while the
@@ -170,6 +177,7 @@ def new_state(seed: int, decider: str, model: str, effort: str, check_ins: bool,
               assignment: tuple[str, ...] | list[str] = ()) -> State:
     """A season that hasn't started. `assignment` is our slots for it, from the server's answer, never a
     list written in the code (`read_assignment`)."""
+    check_decider(decider)
     clock = Clock(world.SIM_START)
     machine = Machine.empty(tuple(assignment))
     bridge = SimBridge(machine, clock.now)
@@ -313,6 +321,7 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     from vending import server
     from vending.simulate.scripted import Scripted
 
+    check_decider(st.decider)
     spent = _spent(conn)
     left = budget - spent
     record = {"kind": kind, "at": st.clock.now().isoformat(), "spent_before": str(spent)}
@@ -323,7 +332,7 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     cap = min(run_cap, left) if st.decider == "model" else run_cap
     since = wall_clock(conn)
     config.set_value(conn, "model_run_cap_cents", int(cap * 100), BY)
-    client = Scripted(wide=st.decider == "scripted-wide") if st.decider.startswith("scripted") else None
+    client = None if st.decider == "model" else Scripted(wide=st.decider == "scripted-wide")
     requests_before = set(st.bridge.requests)
 
     class TestHarness(Harness):

@@ -362,3 +362,19 @@ def test_run_agent_puts_the_servers_globals_back(monkeypatch):
         assert server.bridge is original_bridge and server.connect is original_connect
         assert server._conn is None and opened[-1].closed
     assert seen == [states[0].bridge, states[1].bridge] and stale.closed
+
+
+def test_an_unknown_decider_is_refused_never_sent_to_the_model(monkeypatch):
+    """Review fix: anything but the three deciders used to fall through to live model calls."""
+    from vending import agent
+    from vending.simulate import season
+
+    monkeypatch.setattr(agent, "run", lambda **_k: pytest.fail("an unknown decider reached the agent"))
+    for bad in ("scripted-x", "Model", "", "rule"):
+        with pytest.raises(ValueError):
+            season.new_state(1, bad, "m", "medium", False, 3, EXAMPLE)
+    st = season.new_state(1, "scripted", "m", "medium", False, 3, EXAMPLE)
+    st.decider = "scripted-typo"                  # a tampered or old checkpoint
+    with pytest.raises(ValueError):
+        season.run_agent(_FakeConn(), st, "weekly", Decimal(1), Decimal(1), Decimal(0))
+    assert season.DECIDERS == ("scripted", "scripted-wide", "model")
