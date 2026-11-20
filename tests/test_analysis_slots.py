@@ -579,6 +579,74 @@ def test_the_exports_stop_at_the_fall_cut(conn, schema_url, tmp_path, monkeypatc
     assert units == [0, 1, 1, 2]           # slot 15's rises only
 
 
+def _fulfilled(conn, request_id, at):
+    """A fulfilled purchase request of ours, fulfilled at `at` (UTC text), with no lines: the receipt export needs nothing else."""
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status, fulfilled_at)"
+                 " values (%s, %s, false, '{}', 'fulfilled', %s)", (request_id, at, at))
+
+
+def test_the_fall_export_writes_only_receipts_before_the_fall_cut(conn, schema_url, tmp_path, monkeypatch):
+    import csv
+
+    monkeypatch.delenv(slots_config.FALL_CUTOFF_SETTING)                 # the default cut: 18 Nov, 00:00 Eastern
+    _store(conn, "p1", "2026-11-15T15:00:00Z", {"11": 5, "15": 7})
+    _fulfilled(conn, "before", "2026-11-17T15:00:00Z")
+    _fulfilled(conn, "just-before", "2026-11-18T04:59:59Z")             # 23:59:59 Eastern on 17 Nov
+    _fulfilled(conn, "at-the-cut", "2026-11-18T05:00:00Z")              # midnight Eastern: the cut
+    _fulfilled(conn, "day-one-fill", "2026-12-01T15:00:00Z")            # between the cut and the start
+    _fulfilled(conn, "after-start", "2026-12-10T15:00:00Z")
+
+    def receipts(out):
+        with open(out / "receipts.csv", newline="") as f:
+            return [r["fulfilled_at_eastern"] for r in csv.DictReader(f)]
+    _export(schema_url, tmp_path / "fall", "--fall-all")
+    assert receipts(tmp_path / "fall") == ["2026-11-17T10:00:00-05:00", "2026-11-17T23:59:59-05:00"]
+    # a normal export keeps every receipt of ours
+    _export(schema_url, tmp_path / "ours")
+    assert len(receipts(tmp_path / "ours")) == 5
+
+
+# --- sales_analysis.find_visits: with door data, and without it ---
+
+def _visit_run():
+    """The days of a run from 20 Nov to 11 Dec, polled from 21 Nov to 10 Dec: Fridays 20 Nov, 27 Nov, 4 Dec and 11 Dec."""
+    pytest.importorskip("pandas")
+    pytest.importorskip("statsmodels")
+    pytest.importorskip("sklearn")
+    import pandas as pd
+
+    import sales_analysis
+    dates = [dt.date(2026, 11, 20) + dt.timedelta(days=i) for i in range(22)]
+    return pd, sales_analysis, dates, pd.Timestamp("2026-11-21T00:00:00-05:00"), pd.Timestamp("2026-12-10T23:00:00-05:00")
+
+
+def test_without_door_data_visits_are_assumed_fridays_before_the_start_and_never_after_it():
+    pd, sales_analysis, dates, t0, t1 = _visit_run()
+    friday = dt.datetime(2026, 12, 4, 9, 40, tzinfo=EASTERN)
+    receipts = [(friday - dt.timedelta(minutes=30), friday)]
+    vis, unplaced = sales_analysis.find_visits(None, receipts, dates, t0, t1)
+    # 27 Nov only: 20 Nov is before the first poll, and 4 and 11 Dec are from the start on, where a receipt is the visit
+    assert [v["start"] for v in vis] == [pd.Timestamp("2026-11-27T08:00:00-05:00")]
+    (v,) = vis
+    assert v["openings"] is None and v["rise_polls"] == [v["start"]] and "no door data" in v["source"]
+    assert unplaced == [(friday, "unknown", ())]             # our receipt: a visit with no door window, not an assumed Friday
+    # with no receipts either, nothing is ours from the start on
+    assert sales_analysis.find_visits(None, [], dates, t0, t1) == (vis, [])
+
+
+def test_with_door_data_a_receipt_claims_its_window_and_a_door_only_rise_is_not_ours():
+    pd, sales_analysis, dates, t0, t1 = _visit_run()
+    friday = dt.datetime(2026, 12, 4, 7, tzinfo=EASTERN)
+    hours = [friday + dt.timedelta(hours=h) for h in range(13)]
+    life = [1000 + (h >= 3) + (h >= 6) for h in range(13)]                   # openings seen at 10:00 and 13:00
+    doors = pd.DataFrame({"t": [pd.Timestamp(h) for h in hours], "door_open_lifetime": life})
+    receipts = [(friday + dt.timedelta(hours=5, minutes=15), friday + dt.timedelta(hours=5, minutes=30))]
+    vis, unplaced = sales_analysis.find_visits(doors, receipts, dates, t0, t1)
+    (v,) = vis
+    assert unplaced == [] and v["source"] == "door counter" and v["openings"] == 1
+    assert (v["start"], v["end"]) == (pd.Timestamp(hours[5]), pd.Timestamp(hours[6]))
+
+
 def test_the_fall_section_shows_groups_never_one_selection_outside_ours():
     """The committed report is public: the fall section gives bands, shelves and halves, not one selection's rates."""
     pytest.importorskip("pandas")

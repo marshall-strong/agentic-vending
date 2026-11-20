@@ -227,6 +227,32 @@ def local_at(d, hour=0):
     return pd.Timestamp(dt.datetime.combine(d, dt.time(hour))).tz_localize(TZ)
 
 
+def find_visits(doors, receipts, dates, t0, t1):
+    """`(visits, unplaced)`: our restock visits and our receipts with no door window (door_events.our_visits).
+
+    With door data (`doors`: a frame with `t` and `door_open_lifetime`), the visits are the door-counter windows that
+    our receipts claim, merged within VISIT_MERGE_H hours. Without it, one assumed visit each Friday at VISIT_HOUR, only for
+    the history before the start (3 Dec): from it, our receipts are our visits and have no door window, so none is
+    assumed. `dates` are the days of the run, `t0` and `t1` its first and last poll."""
+    vis = []
+    if doors is not None:
+        found, unplaced = our_visits(list(zip(doors.t, doors.door_open_lifetime.astype(int))), receipts)
+        for prev, at, rise in found:
+            if vis and (at - vis[-1]["end"]).total_seconds() / 3600 <= VISIT_MERGE_H:
+                v = vis[-1]
+                v["end"] = at
+                v["openings"] += rise
+                v["rise_polls"].append(at)
+            else:
+                vis.append(dict(start=prev, first_rise=at, end=at, openings=rise, rise_polls=[at], source="door counter"))
+    else:
+        unplaced = our_visits([], receipts)[1]
+        fr = sorted({d for d in dates if d.weekday() == 4})
+        vis = [dict(start=f, first_rise=f, end=f, openings=None, rise_polls=[f], source=f"assumed Friday {VISIT_HOUR:02d}:00 (no door data)")
+               for f in (local_at(d, VISIT_HOUR) for d in fr) if t0 < f <= t1 and f < START]
+    return vis, unplaced
+
+
 def week_of(d):
     """The Saturday that starts the week holding date d (vending/ledger.py week_of, WEEK_STARTS = 5)."""
     return d - dt.timedelta(days=(d.weekday() - WEEK_STARTS) % 7)
@@ -546,23 +572,7 @@ def main():
     # ours.  A receipt with several candidate rises, or none, is still our visit but has no door window: it is listed in
     # visits_without_window and takes no part in the window-based evidence below.  Before the start every rise counts.
     # Without door data: one assumed visit every Friday 08:00.
-    vis, unplaced = [], []
-    if doors is not None:
-        found, unplaced = our_visits(list(zip(doors.t, doors.door_open_lifetime.astype(int))), read_receipts(args.receipts))
-        for prev, at, rise in found:
-            if vis and (at - vis[-1]["end"]).total_seconds() / 3600 <= VISIT_MERGE_H:
-                v = vis[-1]
-                v["end"] = at
-                v["openings"] += rise
-                v["rise_polls"].append(at)
-            else:
-                vis.append(dict(start=prev, first_rise=at, end=at, openings=rise, rise_polls=[at], source="door counter"))
-    else:
-        # assumed Fridays only for the history before the start; from it, our receipts are our visits (no door window)
-        unplaced = our_visits([], read_receipts(args.receipts))[1]
-        fr = sorted({d for d in dates if d.weekday() == 4})
-        vis = [dict(start=f, first_rise=f, end=f, openings=None, rise_polls=[f], source=f"assumed Friday {VISIT_HOUR:02d}:00 (no door data)")
-               for f in (local_at(d, VISIT_HOUR) for d in fr) if T0 < f <= T1 and f < START]
+    vis, unplaced = find_visits(doors, read_receipts(args.receipts), dates, T0, T1)
     for i, v in enumerate(vis):
         v["id"] = i + 1
         v["window_h"] = (v["end"] - v["start"]).total_seconds() / 3600
