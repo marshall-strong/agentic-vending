@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 
 from tests.conftest import store_poll
-from tests.test_dashboard import MONDAY, catalog, fulfilled, page_conn, plan  # noqa: F401 - page_conn is a fixture
+from tests.test_dashboard import MONDAY, _live_run, catalog, fulfilled, open_ledger, page_conn, plan  # noqa: F401
 from vending import agent_runs, dashboard
 
 
@@ -35,7 +35,7 @@ def section(page):
     return page[start:page.index("</section>", start)]
 
 
-def test_only_our_selections_and_nothing_about_the_others(conn, page_conn):
+def test_only_our_selections_and_nothing_about_the_others(conn, page_conn, open_ledger):
     # 12 isn't ours (the test assignment): a poll, a receipt, sourcing and a plan entry all name it.
     catalog(conn, ("ZZ-OTHER-SKU", "Zebra Fizz", "Zebra", None, "16 oz bottle"),
             ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"))
@@ -44,7 +44,7 @@ def test_only_our_selections_and_nothing_about_the_others(conn, page_conn):
     fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="6.00", at=MONDAY - timedelta(days=3))
     store_poll(conn, "p1", (MONDAY - timedelta(days=2)).isoformat(), {"12": (876, 4321), "15": (250, 10)})
     store_poll(conn, "p2", (MONDAY - timedelta(hours=1)).isoformat(), {"12": (865, 4325), "15": (250, 12)})
-    run = agent_runs.start(conn, mode="live")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan(
         {"slot": "12", "sale_price": "9.15", "fill_to": 6, "reason": "secret other reason"},
         {"slot": "15", "sale_price": "2.75", "fill_to": 6, "reason": "sells out"}))
@@ -58,7 +58,7 @@ def test_only_our_selections_and_nothing_about_the_others(conn, page_conn):
         assert 'id="price-15"' in panel and "sells out" in panel
 
 
-def test_a_receipt_cost_gives_an_exact_floor_margin_and_legal_price(conn, page_conn):
+def test_a_receipt_cost_gives_an_exact_floor_margin_and_legal_price(conn, page_conn, open_ledger):
     catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"))
     # $11.10 for 12 units is 92.5 cents a unit: floor 0.925 x 1.08 = 0.999, up to $1.00. A cost
     # rounded to 93 cents first would give $1.05.
@@ -74,7 +74,7 @@ def test_a_missing_cost_leaves_the_floor_unknown_and_an_expected_cost_is_labelle
     catalog(conn, ("FAKE-FIZZ-12", "Made-up Fizz", "Made-up", None, "12 oz can"))
     source(conn, "FAKE-FIZZ-12", pack=24, expected=1200, most=1450)
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (250, 3), "16": (200, 9)})
-    run = agent_runs.start(conn, mode="dry-run")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "skipped", plan=plan(
         {"slot": "16", "product": "FAKE-FIZZ-12", "fill_to": 8, "sale_price": "2.00", "reason": "start it"}))
     snap = dashboard.snapshot(page_conn, MONDAY)
@@ -93,12 +93,12 @@ def test_a_missing_cost_leaves_the_floor_unknown_and_an_expected_cost_is_labelle
     assert '<span class="pill warn">expected</span>' in panel
 
 
-def test_an_illegal_price_is_flagged_now_and_in_the_plan(conn, page_conn):
+def test_an_illegal_price_is_flagged_now_and_in_the_plan(conn, page_conn, open_ledger):
     catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"))
     fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
     fulfilled(conn, "pr-16", "16", "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (85, 1), "16": (252, 1)})
-    run = agent_runs.start(conn, mode="dry-run")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "skipped", plan=plan(
         {"slot": "15", "fill_to": 6, "sale_price": "7.00", "reason": "made-up reason"}))
     snap = dashboard.snapshot(page_conn, MONDAY)
@@ -121,7 +121,7 @@ def test_an_illegal_price_is_flagged_now_and_in_the_plan(conn, page_conn):
     assert any(t.startswith("Selection 16: the shelf price $2.52 isn't legal.") for t in texts)
 
 
-def test_a_price_that_fails_only_on_the_next_pack_says_so(conn, page_conn):
+def test_a_price_that_fails_only_on_the_next_pack_says_so(conn, page_conn, open_ledger):
     catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"))
     # The rail's units cost 80 cents (floor $0.90); the next pack could cost $1.50 a unit (floor $1.65).
     fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
@@ -178,11 +178,12 @@ def test_a_missing_sourcing_table_blanks_only_this_panel_with_a_fixed_message(co
     conn.execute("drop table sourcing_options")
     for public in (False, True):
         snap = dashboard.snapshot(page_conn, MONDAY, public=public)
-        assert snap["pricing"] == {"ok": False, "why": dashboard.PRICING_FAILED}
+        why = dashboard.PUBLIC_PANEL_ERROR if public else dashboard.PRICING_FAILED
+        assert snap["pricing"] == {"ok": False, "why": why}
         page, state = dashboard.render(snap), dashboard.to_json(snap)
         for leak in ("sourcing_options", "does not exist", "UndefinedTable"):
             assert leak not in page and leak not in state, leak
-        assert snap["sales"]["ok"] and f"Not available: {dashboard.PRICING_FAILED}" in section(page).replace("&#x27;", "'")
+        assert snap["sales"]["ok"] and f"Not available: {why}" in section(page).replace("&#x27;", "'")
     assert 'relation "sourcing_options" does not exist' in capsys.readouterr().err
 
 
@@ -204,7 +205,7 @@ def test_price_history_reads_our_slots_itself(conn):
         machine_state.price_history(conn, MONDAY)
 
 
-def test_the_wildcard_is_held_to_its_own_ceiling(conn, page_conn):
+def test_the_wildcard_is_held_to_its_own_ceiling(conn, page_conn, open_ledger):
     # #166: the one wildcard may sell up to $8.00; every other selection stops at $6.50. Both the shelf
     # price and the plan's price use the planner's ceiling for that selection.
     from vending import config
@@ -213,7 +214,7 @@ def test_the_wildcard_is_held_to_its_own_ceiling(conn, page_conn):
         fulfilled(conn, f"pr-{slot}", slot, "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
     config.set_value(conn, "wildcard_slot", "15", "test")
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (750, 1), "16": (750, 1)})
-    run = agent_runs.start(conn, mode="dry-run")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "skipped", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "7.95"},
                                                       {"slot": "16", "fill_to": 6, "sale_price": "7.25"}))
     snap = dashboard.snapshot(page_conn, MONDAY)
@@ -226,7 +227,7 @@ def test_the_wildcard_is_held_to_its_own_ceiling(conn, page_conn):
     assert "the wildcard, 15, may go to $8.00" in section(dashboard.render(snap))
 
 
-def test_a_swap_that_keeps_the_price_is_checked_against_the_new_products_floor(conn, page_conn):
+def test_a_swap_that_keeps_the_price_is_checked_against_the_new_products_floor(conn, page_conn, open_ledger):
     catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"),
             ("FAKE-PRICY-16", "Made-up Pricy", "Made-up", None, "16 oz can"))
     fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))
@@ -234,7 +235,7 @@ def test_a_swap_that_keeps_the_price_is_checked_against_the_new_products_floor(c
     # The replacement costs up to $24.00 for 12: $2.00 a unit, floor 2.00 x 1.08 = 2.16, up to $2.20.
     source(conn, "FAKE-PRICY-16", pack=12, expected=2200, most=2400)
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (125, 1), "16": (250, 1)})
-    run = agent_runs.start(conn, mode="dry-run")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "skipped", plan=plan(
         {"slot": "15", "product": "FAKE-PRICY-16", "fill_to": 6, "sale_price": "1.25", "reason": "made-up swap"},
         {"slot": "16", "product": "FAKE-PRICY-16", "fill_to": 6, "sale_price": "2.50", "reason": "made-up swap"}))
@@ -298,7 +299,6 @@ def test_the_pricing_reader_finds_our_selections_and_their_products_itself(conn,
     from tests.conftest import TEST_SLOTS
     from vending import pricing_panel, sourcing
     assert list(inspect.signature(pricing_panel.read).parameters) == ["conn", "now"]
-    assert pricing_panel.PLAN_MODES == dashboard.WATCHED_MODES
     catalog(conn, ("NOTOURS-HELD", "Zebra Fizz", "Zebra", None, "16 oz bottle"),
             ("NOTOURS-PLANNED", "Zebra Plan", "Zebra", None, "16 oz bottle"),
             ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"),
@@ -307,19 +307,25 @@ def test_the_pricing_reader_finds_our_selections_and_their_products_itself(conn,
         source(conn, sku, pack=12, expected=1200, most=1400)
     fulfilled(conn, "pr-12", "12", "NOTOURS-HELD", units_loaded=6, paid="5.55", at=MONDAY - timedelta(days=3))
     fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="6.00", at=MONDAY - timedelta(days=3))
-    run = agent_runs.start(conn, mode="dry-run")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "skipped", plan=plan(
         {"slot": "12", "product": "NOTOURS-PLANNED", "fill_to": 6, "sale_price": "9.15"},
         {"slot": "16", "product": "FAKE-FIZZ-12", "fill_to": 6, "sale_price": "2.00"}))
+    hidden_plan = plan({"slot": "16", "product": "SIMULATED-SKU", "fill_to": 6, "sale_price": "3.00"})
+    for mode, at in (("dry-run", MONDAY), ("live", MONDAY + timedelta(minutes=1))):
+        run = agent_runs.start(conn, mode=mode)
+        agent_runs.finish(conn, run, "skipped", plan=hidden_plan)
+        conn.execute("update agent_runs set started_at = %s where id = %s", (at, run))
     monkeypatch.setattr(sourcing, "options", lambda conn: pytest.fail("the reader read every sourcing row"))
     spy = _Spy(conn)
     raw = pricing_panel.read(spy, MONDAY)
     assert raw["slots"] == TEST_SLOTS
     assert sorted(raw["options"]) == ["FAKE-COLA-20", "FAKE-FIZZ-12"]
     assert spy.rows and not any("NOTOURS" in repr(row) for row in spy.rows)
+    assert not any("SIMULATED-SKU" in repr(row) for row in spy.rows)
 
 
-def test_a_wildcard_setting_left_outside_a_new_assignment_blanks_nothing(conn, page_conn):
+def test_a_wildcard_setting_left_outside_a_new_assignment_blanks_nothing(conn, page_conn, open_ledger):
     # After a reassignment the stored wildcard can name a selection that isn't ours. The planner still
     # refuses to plan (unchanged); the panel shows our selections at the regular ceiling, never treats
     # the old wildcard as ours, and says the setting needs a person, without naming the selection.
@@ -365,7 +371,7 @@ def test_before_the_lock_the_next_price_is_the_first_fill_plans(conn, page_conn,
     catalog(conn, ("SIM-COKE", "Made-up Coke", "Made-up", None, "12 oz can"))
     source(conn, "SIM-COKE", pack=12, expected=2200, most=2400)
     first_fill(conn, tmp_path, **{"17": {"price_cents": 25}})
-    run = agent_runs.start(conn, mode="dry-run")       # the agent's plan stays out of Pricing before the lock
+    run = _live_run(conn)                              # the agent's plan stays out of Pricing before the lock
     agent_runs.finish(conn, run, "skipped", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "4.00"}))
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(),
                {"15": (300, 1), "16": (350, 1), "17": (300, 1), "37": (250, 1)})
@@ -386,9 +392,9 @@ def test_before_the_lock_the_next_price_is_the_first_fill_plans(conn, page_conn,
     assert "first fill" in panel and "&rarr; $4.00" not in panel and "&rarr; $3.50" in panel
 
 
-def test_from_the_lock_the_next_price_is_the_weekly_plans(conn, page_conn, tmp_path):
+def test_from_the_lock_the_next_price_is_the_weekly_plans(conn, page_conn, open_ledger, tmp_path):
     first_fill(conn, tmp_path)                          # loaded, but the lock has passed
-    run = agent_runs.start(conn, mode="dry-run")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "skipped", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "4.00",
                                                        "reason": "made-up weekly reason"}))
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (300, 1), "37": (250, 1)})
@@ -430,7 +436,7 @@ def test_a_failing_pricing_build_leaves_the_rest_of_the_page(conn, page_conn, mo
     monkeypatch.setattr(pricing_panel, "build", broken)
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (250, 3)})
     snap = dashboard.snapshot(page_conn, MONDAY, public=True)
-    assert snap["pricing"] == {"ok": False, "why": dashboard.PRICING_FAILED} and snap["sales"]["ok"]
+    assert snap["pricing"] == {"ok": False, "why": dashboard.PUBLIC_PANEL_ERROR} and snap["sales"]["ok"]
     page = dashboard.render(snap)
     assert 'id="lane-15"' in page and '<section id="plan">' in page and "Not available" in section(page)
     assert "KeyError" in capsys.readouterr().err
