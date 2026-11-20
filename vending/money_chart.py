@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -67,39 +68,54 @@ def data(conn: psycopg.Connection, start: date | None = None, end: date | None =
     }
 
 
-def page(payload: dict | None) -> str:
-    """The page with `payload` inlined; with None, the page keeps its MOCK data."""
+def page(payload: dict | None, template: str | None = None) -> str:
+    """The page with `payload` inlined; with None, the page keeps its MOCK data. `template` is the page's
+    HTML when the caller changed it first (`live_page`); by default, `PAGE` as it is."""
+    html = PAGE.read_text(encoding="utf-8") if template is None else template
     if payload is None:
-        return PAGE.read_text(encoding="utf-8")
+        return html
     # Inside <script>, "</script" ends the element and "<!--" changes how the rest parses, so no "<",
     # ">" or "&" goes in as itself. U+2028 and U+2029 end lines in older JavaScript. Each becomes its
     # \u escape, which JSON reads back as the same character.
     text = json.dumps(payload, separators=(",", ":")).translate(_SCRIPT_SAFE)
-    html = PAGE.read_text(encoding="utf-8")
     if "/*DATA*/null" not in html:
         raise RuntimeError(f"{PAGE.name} has lost its /*DATA*/null placeholder")
     return html.replace("/*DATA*/null", text, 1)
 
 
-# What `live_page` changes in the page, each found exactly once: the mock switch is turned off for good,
-# and the MOCK banner and tag start hidden, so they can't show even before the script runs. The MOCK
-# generator itself is cut out too (`_MOCK_START` to the next line that is only "}"), so no made-up figure
-# or event is in a live page at all; a stub that throws stands in for it.
-_MOCK_SWITCH = "const MOCK = !(REAL && REAL.daily && REAL.daily.length);"
+# What `live_page` takes out of the page, so a live page carries nothing of the demo: no MOCK generator, no
+# made-up figure or event, and no demo-only words. Each is checked to be in the page, so a change to the
+# page that moves one fails loudly instead of letting it through.
+#
+# - Plain swaps, each found exactly once: the mock switch turned off for good, the MOCK tag emptied and
+#   hidden, the prototype title, and the comment about the seeded data.
 _LIVE = (
-    (_MOCK_SWITCH, "const MOCK = false;"),
-    ('<div class="banner" id="banner">', '<div class="banner" id="banner" hidden>'),
-    ('<span class="mock" id="mockTag">', '<span class="mock" id="mockTag" hidden>'),
+    ("const MOCK = !(REAL && REAL.daily && REAL.daily.length);", "const MOCK = false;"),
+    ('<span class="mock" id="mockTag">MOCK</span>', '<span class="mock" id="mockTag" hidden></span>'),
     ("<title>Money Chart Prototype v2</title>", "<title>Money chart</title>"),
+    ("// With no data (REAL stays null) the page shows seeded MOCK data, so its shapes can be seen before the "
+     "competition.\n", ""),
 )
-
-
+# - The banner, whatever it says: emptied and hidden (the script hides it by id, so it stays).
+_BANNER = re.compile(r'<div class="banner" id="banner">.*?</div>', re.S)
+# - Every `MOCK ? "demo words" : "live words"` between two plain strings: the live words.
+_WORDS = re.compile(r'MOCK \? ("(?:[^"\\\n]|\\.)*") : ("(?:[^"\\\n]|\\.)*")')
+# - The generator, from its first line to the next line that is only "}": a stub that throws.
 _MOCK_START = "function mockDays() {\n"
-_MOCK_STUB = 'function mockDays() { throw new Error("a live page has no MOCK data"); }\n'
+_MOCK_STUB = 'function mockDays() { throw new Error("this page draws the ledger only"); }\n'
 
 
-def _without_mock(html: str) -> str:
-    """`html` with the MOCK generator's body replaced by `_MOCK_STUB`."""
+def _live_template() -> str:
+    """The page's HTML for a live route, before its data goes in."""
+    html = PAGE.read_text(encoding="utf-8")
+    for old, new in _LIVE:
+        if html.count(old) != 1:
+            raise RuntimeError(f"{PAGE.name} has changed: {old!r} isn't there once")
+        html = html.replace(old, new)
+    html, banners = _BANNER.subn('<div class="banner" id="banner" hidden></div>', html)
+    html, words = _WORDS.subn(lambda m: m.group(2), html)
+    if banners != 1 or not words:
+        raise RuntimeError(f"{PAGE.name} has changed: its MOCK banner or words aren't where live_page looks")
     if html.count(_MOCK_START) != 1:
         raise RuntimeError(f"{PAGE.name} has changed: its MOCK generator isn't there once")
     start = html.index(_MOCK_START)
@@ -113,15 +129,11 @@ class NoData(ValueError):
 
 def live_page(payload: dict) -> str:
     """The page for a served route: `payload` inlined (as `data` returns it, or made-up data of the same
-    shape from a demo), and never the MOCK data. Raises `NoData` for a payload with no days."""
+    shape from a demo), with nothing of the MOCK demo in it (`_live_template`). Raises `NoData` for a
+    payload with no days."""
     if not payload or not payload.get("daily"):
         raise NoData("no days to chart")
-    html = page(payload)
-    for old, new in _LIVE:
-        if html.count(old) != 1:
-            raise RuntimeError(f"{PAGE.name} has changed: {old!r} isn't there once")
-        html = html.replace(old, new)
-    return _without_mock(html)
+    return page(payload, _live_template())
 
 
 def main(argv: list[str] | None = None) -> int:

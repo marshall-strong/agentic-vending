@@ -1187,3 +1187,20 @@ def test_a_kept_chart_is_the_one_its_assignment_counted_even_if_it_changes_mid_r
         assert counted_a(page) and counted_a(next(iter(kept.values())).body), path
         pages._cache.clear()
 
+
+def test_the_live_money_chart_carries_no_demo_copy(site, conn):
+    import re
+    from tests.test_ledger import open_ledger
+    open_ledger(conn)
+    live, demo = _get(site, pages.MONEY_CHART)[2], _get(site, pages.DEMO_MONEY)[2]
+    for copy in ("MOCK DATA:", "(seeded random data)", "Mock data, seeded.", "Mock data.",
+                 "AI planning runs are on Thursdays in this mock", '"Weekly plans"', '"AI plan"',
+                 '"Competition starts"', 'id="mockTag">MOCK<', "Money Chart Prototype", "seeded MOCK data"):
+        assert copy not in live and copy in demo, copy
+    # No visible text and no string in the script mentions mock, seeded or made-up data. The one name
+    # allowed is the id of the (emptied, hidden) tag the script looks up.
+    markup = re.sub(r"<(style|script)>.*?</\1>", "", live, flags=re.S)
+    script = "".join(re.findall(r"<script>(.*?)</script>", live, re.S))
+    texts = re.findall(r">([^<>]+)<", markup) + re.findall(r'"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`', script)
+    assert [t for t in texts if re.search(r"mock|made.up|seeded", t, re.I)] == ['"mockTag"']
+    assert [line for line in script.split("\n") if re.search(r"//.*(mock|seeded|made.up)", line, re.I)] == []
