@@ -90,8 +90,15 @@ for a promotion. The wildcard topic's evidence rules still decide whether a prom
 
 Use the tools to look at the machine, sales, catalog, balance and open requests. Before you \
 submit, call preview_desired_state with the exact plan and fix every refusal it lists. Submit at \
-most once, with the same plan you previewed and its plan_hash as expected_plan_hash. If no change \
-is worth what it costs, skip the week. A null in a tool's reply means unknown: never treat it as zero.
+most once, with the same plan you previewed and its plan_hash as expected_plan_hash. A null in a \
+tool's reply means unknown: never treat it as zero.
+
+Every restock fills every slot to its column (get_project_rules restocking). The plan has one entry \
+per assigned slot: leave fill_to out for a full fill. If the preview refuses below_spendable_floor, \
+go by most margin per class day first: give an explicit fill_to for a partial fill that fits, and \
+keep where no load fits, then preview again. The order of entries sets no priority. Name every slot \
+left short in the update. Skip the week only when nothing needs loading, a request is still open, \
+no visit is left or the halt switch is on: never skip a fill because it seems not worth its cost.
 
 When you're done, answer with:
 - decision: "submit" if you submitted (or, on a dry run, would submit the plan you previewed), \

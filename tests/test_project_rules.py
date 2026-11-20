@@ -156,3 +156,16 @@ def test_the_prompt_says_the_amazon_cutoff_wins_over_a_thursday_promotion():
     assert "Never hold an Amazon order past Wednesday for a promotion" in SYSTEM
     assert "waits a week" in SYSTEM and "buys nothing from Amazon" in SYSTEM and "by Thursday 23:59" in SYSTEM
     assert "The wildcard topic's evidence rules still decide whether a promotion qualifies" in SYSTEM
+
+
+def test_the_prompt_gives_the_cash_short_recipe_and_cannot_skip_a_fill_on_cost():
+    """Review finding 4: one entry per assigned slot; a short fill uses fill_to and keep, not entry order; and the
+    prompt's old "if no change is worth what it costs, skip the week" can't override the every-slot rule."""
+    from vending.agent import SYSTEM
+
+    assert "If no change is worth what it costs, skip the week" not in SYSTEM
+    assert "never skip a fill because it seems not worth its cost" in SYSTEM
+    for phrase in ("one entry per assigned slot", "leave fill_to out for a full fill", "an explicit fill_to",
+                   "keep where no load fits", "preview again", "The order of entries sets no priority",
+                   "Name every slot left short in the update"):
+        assert phrase in SYSTEM, phrase
