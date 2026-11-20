@@ -19,11 +19,11 @@ One free restock every Friday; an extra dispatch costs $25 per request (not per 
 
 - A flagged slow seller gets a swap.
 - The wildcard follows `wildcard`: at most $82.00 a purchase, and no more of its product while another slot holds it.
-- If the balance can't fill every column, fill the fastest sellers first and name the slots left short.
+- Keep spendable at least $53.00 after the request: if short, fill the fastest sellers first and name the slots left short.
 
 Fill before the break and at the end: end stock counts at cost (A5, confirmed), so unsold units cost no profit.
 
-**Slow sellers** (team decision, 12 Nov). Flag a slot when it has sold nothing for **5 class days in a row while our records say it held stock** (a receipt or a person's count shows units in it). Days in a break don't count, and a slot that may be empty is not slow, because an empty slot can't sell. At the next restock (normally Friday), act on a flagged slot: swap the product (the planner refuses a price-only change for now). Pulled units go to the closet at what we paid, so a pull is not a write-off. Don't flag a slot for selling slowly but steadily; there is no rule for that until we have sales of our own drinks.
+**Slow sellers** (team decision, 12 Nov). Flag a slot when it has sold nothing for **5 class days in a row while our records say it held stock** (a receipt or a person's count shows units in it). Days in a break don't count, and a slot that may be empty is not slow, because an empty slot can't sell. At the next restock (normally Friday), act on a flagged slot: swap the product (the planner refuses a price-only change for now). Pulled units go to the closet at cost, not a write-off. Don't flag a slot for selling slowly but steadily; there is no rule for that until we have sales of our own drinks.
 
 **Class days** (the Institute's calendar): Monday to Friday, except **Tue 22 Dec to Fri 1 Jan** (Winter Holiday Break) and **Mon 15 Feb** (Presidents Day). Winter Quarter classes end Fri 19 Feb.
 

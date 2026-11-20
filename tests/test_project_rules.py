@@ -122,6 +122,7 @@ def test_every_restock_fills_every_slot_to_its_column():
     assert "each of our slots, not as `keep`, without `fill_to`" in rule and "Friday's: $25 is a lot" in rule
     assert "closet" in rule and "slow seller gets a swap" in rule and "`wildcard`" in rule and "$82.00" in rule
     assert "fastest sellers first" in rule and "end stock counts at cost" in rule
+    assert "spendable at least $53.00 after the request" in rule
     assert "class_days_of_stock_left" not in rule, "the threshold rule is gone"
     assert "no limit on units or lines (Kevin, 19 Nov)" in restocking
     assert "next Friday" not in restocking
