@@ -1774,6 +1774,8 @@
    "pnl": {
     "units_sold": 105,
     "units_costed": 105,
+    "units_estimated": 0,
+    "estimated_cost_of_sales": null,
     "revenue_ex_tax": "256.02",
     "cost_of_sales": "151.46",
     "gross_margin": "104.56",
