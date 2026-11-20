@@ -170,6 +170,10 @@ def test_the_prompt_gives_the_cash_short_recipe_and_cannot_skip_a_fill_on_cost()
                    "keep where no load fits", "preview again", "The order of entries sets no priority",
                    "Name every slot left short in the update"):
         assert phrase in SYSTEM, phrase
+    # Sol, round 2: the same recipe for both cash refusals, and none of it may leave a first-fill slot out.
+    assert "If the preview refuses insufficient_balance or below_spendable_floor" in SYSTEM
+    assert ("On the first fill every assigned slot needs a line, so never keep one or leave it out: use a cheaper "
+            "product or pack, or a smaller fill_to") in SYSTEM
 
 
 def test_a_visit_can_change_any_of_our_slots_within_the_api_and_wildcard_rules():

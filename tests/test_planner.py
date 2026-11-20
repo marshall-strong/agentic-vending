@@ -326,6 +326,30 @@ class Costs(unittest.TestCase):
         self.assertTrue(plan(restock_15(), sourcing=[penny], balance=5301).ok)
         self.assertEqual(codes(plan(restock_15(), sourcing=[penny], balance=5300)), ["below_spendable_floor"])
 
+    def test_both_cash_refusals_give_the_same_recipe(self):
+        """Sol, round 2: insufficient_balance gets the cash-short recipe too, not just below_spendable_floor."""
+        short = plan(restock_15(), balance=1199)
+        self.assertEqual(codes(short), ["insufficient_balance"])
+        floor = plan(restock_15(), balance=1200)
+        self.assertEqual(codes(floor), ["below_spendable_floor"])
+        self.assertIn("cut at least $0.01", short.refusals[0].message)
+        for p in (short, floor):
+            message = p.refusals[0].message
+            self.assertIn("most margin per class day first", message)
+            self.assertIn("give a slot a smaller explicit fill_to, or keep it if nothing fits", message)
+            self.assertIn("slot 15 $12.00", message)
+            self.assertIn("then preview again", message)
+
+    def test_a_cash_short_first_fill_never_offers_keep(self):
+        """On the first fill every slot has no receipts and needs a line, so the recipe is cheaper products or packs,
+        or a smaller fill_to, never keep."""
+        unknown = {"15": SlotState("15", None, None, 0, None, contents_known=False)}
+        p = plan(restock_15(), slots=unknown, balance=1199)
+        self.assertEqual(codes(p), ["insufficient_balance"])
+        message = p.refusals[0].message
+        self.assertIn("slot 15 has no receipts yet (a first fill): give it a cheaper product or pack, or a smaller "
+                      "fill_to, but never keep it or leave it out", message)
+
     def test_the_floor_is_a_setting(self):
         self.assertTrue(plan(restock_15(), balance=1200, config=replace(CONFIG, spendable_floor_cents=0)).ok)
 

@@ -94,10 +94,12 @@ most once, with the same plan you previewed and its plan_hash as expected_plan_h
 tool's reply means unknown: never treat it as zero.
 
 Every restock fills every slot to its column (get_project_rules restocking). The plan has one entry \
-per assigned slot: leave fill_to out for a full fill. If the preview refuses below_spendable_floor, \
-go by most margin per class day first: give an explicit fill_to for a partial fill that fits, and \
-keep where no load fits, then preview again. The order of entries sets no priority. Name every slot \
-left short in the update. Skip the week only when nothing needs loading, a request is still open, \
+per assigned slot: leave fill_to out for a full fill. If the preview refuses insufficient_balance or \
+below_spendable_floor, go by most margin per class day first: give an explicit fill_to for a partial \
+fill that fits, and keep where no load fits, or choose a cheaper product or pack; then preview \
+again. On the first fill every assigned slot needs a line, so never keep one or leave it out: use \
+a cheaper product or pack, or a smaller fill_to. The order of entries sets no priority. Name every \
+slot left short in the update. Skip the week only when nothing needs loading, a request is still open, \
 no visit is left or the halt switch is on: never skip a fill because it seems not worth its cost.
 
 When you're done, answer with:

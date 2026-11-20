@@ -662,10 +662,10 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         refusals.append(Refusal("insufficient_balance", (
             f"max cost {_dollars(cost.max_cents)} (visit fee {_dollars(cost.visit_fee_cents)} "
             f"included) exceeds the spendable balance of {_dollars(current.balance_cents)}; "
-            f"buy less or cheaper")))
+            + _cash_short(slots, cost, cost.max_cents - current.balance_cents))))
     # The floor limits what a plan spends: one that spends nothing (a closet-only load) never lowers spendable.
     elif cost.max_cents > 0 and cost.balance_left_at_max_cents < config.spendable_floor_cents:
-        refusals.append(Refusal("below_spendable_floor", _below_floor(cost, config.spendable_floor_cents)))
+        refusals.append(Refusal("below_spendable_floor", _below_floor(slots, cost, config.spendable_floor_cents)))
 
     floors: list[SlotFloor] = []
     # A slot whose own line was refused is held as it is; that refusal already says what to fix.
@@ -1135,16 +1135,31 @@ def _cost_plan(slots: list[_Slot], off_cycle: bool, config: Config, balance: int
     return Cost(tuple(lines), fee, expected, worst, balance, balance - worst)
 
 
-def _below_floor(cost: Cost, floor_cents: int) -> str:
-    """Why a plan that would leave spendable under the floor is refused, and which slots to cut."""
-    buying = sorted((c for c in cost.lines if c.max_cents), key=lambda c: (-c.max_cents, c.slot))
-    listed = ", ".join(f"slot {c.slot} {_dollars(c.max_cents)}" for c in buying) or "none"
+def _below_floor(slots: list[_Slot], cost: Cost, floor_cents: int) -> str:
+    """Why a plan that would leave spendable under the floor is refused, and how to cut it."""
     return (f"max cost {_dollars(cost.max_cents)} (visit fee {_dollars(cost.visit_fee_cents)} included) would leave "
             f"{_dollars(cost.balance_left_at_max_cents)} of the spendable {_dollars(cost.balance_cents)}, under the "
-            f"{_dollars(floor_cents)} spendable floor (a midweek fee plus a week of model spend); cut at least "
-            f"{_dollars(floor_cents - cost.balance_left_at_max_cents)}. Cut slow-seller purchases first, then the "
-            f"slots with the least margin per class day: give each a lower fill_to, or keep it. "
-            f"Slots that buy, at their max cost: {listed}")
+            f"{_dollars(floor_cents)} spendable floor (a midweek fee plus a week of model spend); "
+            + _cash_short(slots, cost, floor_cents - cost.balance_left_at_max_cents))
+
+
+def _cash_short(slots: list[_Slot], cost: Cost, short_cents: int) -> str:
+    """The cash-short recipe, the same for `insufficient_balance` and `below_spendable_floor`: how much to cut,
+    in what order, and how. A slot with no receipts (the first fill) needs a line, so it is never offered keep."""
+    buying = sorted((c for c in cost.lines if c.max_cents), key=lambda c: (-c.max_cents, c.slot))
+    listed = ", ".join(f"slot {c.slot} {_dollars(c.max_cents)}" for c in buying) or "none"
+    first = sorted(s.slot for s in slots if s.state.unsure and any(c.slot == s.slot for c in buying))
+    text = (f"cut at least {_dollars(short_cents)}. Cut slow-seller purchases first, then keep the slots with the "
+            f"most margin per class day first: give a slot a smaller explicit fill_to, or keep it if nothing fits, "
+            f"or buy a cheaper product or pack; then preview again. The order of the plan's entries sets no "
+            f"priority. Slots that buy, at their max cost: {listed}")
+    if first:
+        names = ", ".join(first)
+        text += (f". slot{'s' if len(first) > 1 else ''} {names} {'have' if len(first) > 1 else 'has'} no receipts "
+                 f"yet (a first fill): give {'them' if len(first) > 1 else 'it'} a cheaper product or pack, or a "
+                 f"smaller fill_to, but never keep {'them' if len(first) > 1 else 'it'} or leave "
+                 f"{'them' if len(first) > 1 else 'it'} out")
+    return text
 
 
 # --- Step 7 helpers ----------------------------------------------------------
