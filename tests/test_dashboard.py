@@ -1384,7 +1384,8 @@ def test_the_status_bar_has_six_cells_and_visitors_only_in_the_footer(conn, page
 
 def test_the_machine_poll_cell_says_when_the_poll_was_taken_never_a_lone_window_date(conn, page_conn, monkeypatch):
     monkeypatch.delenv("SYNC_AT_MINUTE", raising=False)
-    store_poll(conn, "w1", (MONDAY - timedelta(days=8)).isoformat(), {"15": (250, 10)})
+    # The polls 7 days apart: a full window (a wider gap says its own length, see `_window_words`).
+    store_poll(conn, "w1", (MONDAY - timedelta(days=7, minutes=34)).isoformat(), {"15": (250, 10)})
     store_poll(conn, "w2", (MONDAY - timedelta(minutes=34)).isoformat(), {"15": (250, 14)})
     snap = dashboard.snapshot(page_conn, MONDAY)
     cell = status_cells(snap)[1]
@@ -1725,3 +1726,16 @@ def test_without_scripts_closing_the_close_up_stays_closed_through_the_reload(pa
         # The page that link loads reloads itself without a pick too, so the sheet stays closed.
         picked = parse_qs(urlsplit(followed).query).get("sel", [None])[0]
         assert _reload(dashboard.render(snap, picked=picked)) == "?refresh=1", link
+
+
+def test_the_status_bar_and_facts_say_how_long_the_sales_window_really_is():
+    # The same bounds as `_window` (main): 7 days give or take an hour; a gap in the polls says its length.
+    end = datetime(2026, 12, 9, 15, tzinfo=timezone.utc)
+
+    def words(span):
+        return dashboard._window_words({"window_start": end - span, "as_of": end})
+    assert words(timedelta(days=7)) == "in the last 7 days"
+    assert words(timedelta(days=7, minutes=40)) == "in the last 7 days"
+    assert words(timedelta(days=3, hours=23)) == "in the last 3 d 23 h"
+    assert words(timedelta(days=10)) == "in the last 10 d"                     # a gap: not "the last 7 days"
+    assert words(timedelta(seconds=30)) == "in under a minute"

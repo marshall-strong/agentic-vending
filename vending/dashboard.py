@@ -1683,13 +1683,16 @@ def next_sync(now: datetime, syncs: dict | None = None) -> datetime | None:
 
 
 def _window_words(sales: dict) -> str:
-    """What the polls' sales cover: 'in the last 7 days', or less when the polls began more recently."""
+    """What the polls' sales cover: 'in the last 7 days', or how long it really is. The bounds are
+    `_window`'s: the full window give or take an hour; a gap in the polls can put the start more than
+    7 days back, and polls that began recently less, and then the words say its length."""
     start, end = sales.get("window_start"), sales.get("as_of")
     if start is None or end is None:
         return "since the first poll"
-    if end - start >= machine_state.WINDOW - timedelta(hours=1):
+    span = end - start
+    if abs(span - machine_state.WINDOW) <= timedelta(hours=1):
         return f"in the last {machine_state.WINDOW.days} days"
-    return f"in the last {_span(end - start)}"
+    return "in under a minute" if span < timedelta(minutes=1) else f"in the last {_span(span)}"
 
 
 def _cell(label: str, value: str, sub: str, href: str, tone: str = "", link: str = "") -> str:
