@@ -317,3 +317,48 @@ def test_setup_checks_where_the_connection_really_went():
         conn = SimpleNamespace(info=info, execute=lambda *_a, **_k: pytest.fail("setup touched the database"))
         with pytest.raises(SystemExit):
             season.setup(conn, st, Decimal(1), Decimal(1))
+
+
+class _FakeConn:
+    """Enough of a connection for run_agent's own reads and writes; the agent run itself is faked."""
+    closed = False
+
+    def execute(self, *_a, **_k):
+        return self
+
+    def fetchone(self):
+        return (datetime(2026, 11, 19, tzinfo=timezone.utc),)
+
+    def close(self):
+        self.closed = True
+
+
+def test_run_agent_puts_the_servers_globals_back(monkeypatch):
+    """Review fix: two seasons in one process. Each run sees its own bridge, and afterwards the MCP
+    server's bridge, connector and cached connection are what they were, the connection closed."""
+    from types import SimpleNamespace
+
+    from vending import agent, config, server
+    from vending.simulate import season
+
+    monkeypatch.setattr(config, "set_value", lambda *_a, **_k: None)
+    monkeypatch.setattr(season, "_spent", lambda conn: Decimal(0))
+    original_bridge, original_connect = server.bridge, server.connect
+    stale = _FakeConn()
+    monkeypatch.setattr(server, "_conn", stale)
+    seen, opened = [], []
+
+    async def fake_run(**_k):
+        seen.append(server.bridge())
+        assert server._conn is None                      # nothing cached from before this run
+        server._conn = _FakeConn()                       # what the tools would cache
+        opened.append(server._conn)
+        return 1, SimpleNamespace(status="skipped", detail="", request_id=None, tool_calls=0, turn=0, answer={})
+
+    monkeypatch.setattr(agent, "run", fake_run)
+    states = [season.new_state(n, "scripted", "m", "medium", False, 3, EXAMPLE) for n in (1, 2)]
+    for st in states:
+        season.run_agent(_FakeConn(), st, "weekly", Decimal(1), Decimal(1), Decimal(0))
+        assert server.bridge is original_bridge and server.connect is original_connect
+        assert server._conn is None and opened[-1].closed
+    assert seen == [states[0].bridge, states[1].bridge] and stale.closed

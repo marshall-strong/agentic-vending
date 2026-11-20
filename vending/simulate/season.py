@@ -300,6 +300,14 @@ def _open_tools():
     return opened()
 
 
+def _drop_cached_connection(server) -> None:
+    """Close and forget the connection the MCP server's tools cache (`server._conn`)."""
+    cached, server._conn = server._conn, None
+    if cached is not None and not cached.closed:
+        with contextlib.suppress(Exception):
+            cached.close()
+
+
 def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, run_cap: Decimal,
               min_run: Decimal) -> dict:
     from vending import server
@@ -315,8 +323,6 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     cap = min(run_cap, left) if st.decider == "model" else run_cap
     since = wall_clock(conn)
     config.set_value(conn, "model_run_cap_cents", int(cap * 100), BY)
-    server.bridge = lambda: st.bridge
-    server.connect = db.connect
     client = Scripted(wide=st.decider == "scripted-wide") if st.decider.startswith("scripted") else None
     requests_before = set(st.bridge.requests)
 
@@ -325,14 +331,19 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
         def __init__(self, client, connect, *, purpose, **kw):
             super().__init__(client, connect, purpose="test", **kw)
 
-    saved = agent.Harness
-    agent.Harness = TestHarness
+    # The MCP server's tools read these module globals. Point them at this season for the run only, and
+    # put them back after, so a second season in the same process (or anything after it) never gets
+    # this season's bridge or a connection cached in its schema.
+    saved = agent.Harness, server.bridge, server.connect
+    _drop_cached_connection(server)
+    agent.Harness, server.bridge, server.connect = TestHarness, (lambda: st.bridge), db.connect
     try:
         run_id, out = anyio.run(lambda: agent.run(live=True, model=st.model, effort=st.effort, client=client,
                                                   now=st.clock.now, open_tools=_open_tools,
                                                   connect=db.connect))
     finally:
-        agent.Harness = saved
+        agent.Harness, server.bridge, server.connect = saved
+        _drop_cached_connection(server)
     at = st.clock.now()
     restamp(conn, at, since)
     conn.execute("update agent_runs set finished_at = %s where id = %s", (at + timedelta(minutes=3), run_id))
