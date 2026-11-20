@@ -1117,6 +1117,15 @@ def test_a_kept_chart_follows_a_changed_or_removed_assignment(site, conn):
     assert _units(pnl) is None and "slot 15" not in pnl
 
 
+def test_the_live_money_chart_carries_no_mock_generator(site, conn):
+    from tests.test_ledger import open_ledger
+    open_ledger(conn)
+    live, demo = _get(site, pages.MONEY_CHART)[2], _get(site, pages.DEMO_MONEY)[2]
+    for synthetic in ("Day-one fill: $165.60 of drinks", "let seed = 7", "Raised the five best sellers"):
+        assert synthetic not in live and synthetic in demo, synthetic
+    assert "function mockDays()" in live and "const MOCK = false;" in live   # a stub, never called
+
+
 def test_a_kept_money_chart_skips_its_replay_only_for_the_same_assignment(monkeypatch):
     monkeypatch.setenv(pages.READER, "set")
     monkeypatch.setattr(pages, "connect", _Quiet)

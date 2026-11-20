@@ -82,7 +82,9 @@ def page(payload: dict | None) -> str:
 
 
 # What `live_page` changes in the page, each found exactly once: the mock switch is turned off for good,
-# and the MOCK banner and tag start hidden, so they can't show even before the script runs.
+# and the MOCK banner and tag start hidden, so they can't show even before the script runs. The MOCK
+# generator itself is cut out too (`_MOCK_START` to the next line that is only "}"), so no made-up figure
+# or event is in a live page at all; a stub that throws stands in for it.
 _MOCK_SWITCH = "const MOCK = !(REAL && REAL.daily && REAL.daily.length);"
 _LIVE = (
     (_MOCK_SWITCH, "const MOCK = false;"),
@@ -90,6 +92,19 @@ _LIVE = (
     ('<span class="mock" id="mockTag">', '<span class="mock" id="mockTag" hidden>'),
     ("<title>Money Chart Prototype v2</title>", "<title>Money chart</title>"),
 )
+
+
+_MOCK_START = "function mockDays() {\n"
+_MOCK_STUB = 'function mockDays() { throw new Error("a live page has no MOCK data"); }\n'
+
+
+def _without_mock(html: str) -> str:
+    """`html` with the MOCK generator's body replaced by `_MOCK_STUB`."""
+    if html.count(_MOCK_START) != 1:
+        raise RuntimeError(f"{PAGE.name} has changed: its MOCK generator isn't there once")
+    start = html.index(_MOCK_START)
+    end = html.index("\n}\n", start) + 3
+    return html[:start] + _MOCK_STUB + html[end:]
 
 
 class NoData(ValueError):
@@ -106,7 +121,7 @@ def live_page(payload: dict) -> str:
         if html.count(old) != 1:
             raise RuntimeError(f"{PAGE.name} has changed: {old!r} isn't there once")
         html = html.replace(old, new)
-    return html
+    return _without_mock(html)
 
 
 def main(argv: list[str] | None = None) -> int:
