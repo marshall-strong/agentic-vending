@@ -126,3 +126,16 @@ def test_every_restock_fills_every_slot_to_its_column():
     assert "class_days_of_stock_left" not in rule, "the threshold rule is gone"
     assert "no limit on units or lines (Kevin, 19 Nov)" in restocking
     assert "next Friday" not in restocking
+
+
+def test_the_docs_quote_the_spendable_floor_the_planner_enforces():
+    """One figure: `planner.SPENDABLE_FLOOR_CENTS`. The money topic no longer calls the balance the only limit."""
+    from vending.planner import SPENDABLE_FLOOR_CENTS
+
+    floor = f"${SPENDABLE_FLOOR_CENTS / 100:.2f}"
+    for topic in ("money", "restocking"):
+        assert floor in (RULES_DIR / f"{topic}.md").read_text(encoding="utf-8"), topic
+    money = (RULES_DIR / "money.md").read_text(encoding="utf-8")
+    assert "only spending limit" not in money and "below_spendable_floor" in money
+    policy = (RULES_DIR.parent / "restock-policy.md").read_text(encoding="utf-8")
+    assert floor in policy and "SPENDABLE_FLOOR_CENTS" in policy

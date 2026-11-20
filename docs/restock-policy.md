@@ -151,7 +151,7 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 ## 4. How the balance limits orders
 
-**Rule.** After an order, at its most-we-pay cost, the spendable balance must still hold the **spendable floor, $53** (Proposed in #90, which owns it). If it would not, cut in this order (Proposed):
+**Rule.** After an order, at its most-we-pay cost, the spendable balance must still hold the **spendable floor, $53.00** (Kevin, 19 Nov; first proposed in #90). The planner enforces it at preview and again at submit, on the balance at that moment (`vending/planner.py`, `SPENDABLE_FLOOR_CENTS`; config `spendable_floor_cents`), and refuses a plan under it with `below_spendable_floor`. If it would not, cut in this order (Proposed):
 
 1. Purchases for slow sellers and flagged slots.
 2. Nothing for a slot the closet can fill without buying: it costs no cash, so it is always filled.
@@ -190,7 +190,7 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 - **Safety factor 2 and the 95% target.** Proposed here; now used only to judge whether a column lasts a gap (rule 1).
 - **When a rate counts** (5 class days of in-stock sales). Proposed here; #93 uses the same rule.
 - **Prior for a slot with no rate:** the fall segment rate for the product's price band (R3). Proposed here; #93 uses it for the buy rule.
-- **The $53 spendable floor.** Proposed in #90, which owns it.
+- **The $53 spendable floor.** Kept by Kevin, 19 Nov (first proposed in #90); the planner enforces it (rule 4).
 - **Midweek trigger** (4 or more premium-priced slots empty by Monday; 8 by Tuesday; none after). Proposed here. #90 holds back 2 visits ($50).
 - **Order of cuts when the floor binds** (rule 4). Proposed here.
 - **Fill every slot to its column at each restock, closet first, subject to the $53 floor** (rules 1 and 4). Decided by Kevin, 19 Nov; it replaces slot plus closet against 2 weeks of sales.

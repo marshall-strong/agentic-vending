@@ -75,6 +75,10 @@ MAX_SALE_PRICE_CENTS = 1000
 AGREED_CEILING_CENTS = 650
 AGREED_WILDCARD_CEILING_CENTS = 800
 AGREED_WILDCARD_CAP_CENTS = 8200
+# What spendable must still hold after any request's worst case (Kevin, 19 Nov; #90): one midweek fee ($25.00) plus
+# a week of model spend at the daily cap (7 x $4.00), so the agent can always pay for a visit and its own calls.
+# Config `spendable_floor_cents` may change it; the agent's `money` and `restocking` topics quote it (a test checks).
+SPENDABLE_FLOOR_CENTS = 5300
 MAX_PACK_DESCRIPTION = 100
 
 # David's cases, one per slot.
@@ -292,6 +296,7 @@ class Config:
     wildcard_ceiling_cents: int = 800
     wildcard_purchase_cap_cents: int = 8200
     wildcard_slot: str | None = None
+    spendable_floor_cents: int = SPENDABLE_FLOOR_CENTS
 
     def __post_init__(self):
         for name, cents in (("price ceiling", self.price_ceiling_cents),
@@ -658,6 +663,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             f"max cost {_dollars(cost.max_cents)} (visit fee {_dollars(cost.visit_fee_cents)} "
             f"included) exceeds the spendable balance of {_dollars(current.balance_cents)}; "
             f"buy less or cheaper")))
+    elif cost.balance_left_at_max_cents < config.spendable_floor_cents:
+        refusals.append(Refusal("below_spendable_floor", _below_floor(cost, config.spendable_floor_cents)))
 
     floors: list[SlotFloor] = []
     # A slot whose own line was refused is held as it is; that refusal already says what to fix.
@@ -716,7 +723,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     week = _week_of(now.astimezone(_tz(config.timezone)), config.week_starts)
     # What it could cost goes in too: a new visit fee leaves the request body as it was.
     body = json.dumps({"week": week.isoformat(), "request": plan.request(),
-                       "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents}, sort_keys=True)
+                       "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents,
+                       "spendable_floor_cents": config.spendable_floor_cents}, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
                 hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle)
 
@@ -1124,6 +1132,18 @@ def _cost_plan(slots: list[_Slot], off_cycle: bool, config: Config, balance: int
     expected = sum(c.expected_cents for c in lines) + fee
     worst = sum(c.max_cents for c in lines) + fee
     return Cost(tuple(lines), fee, expected, worst, balance, balance - worst)
+
+
+def _below_floor(cost: Cost, floor_cents: int) -> str:
+    """Why a plan that would leave spendable under the floor is refused, and which slots to cut."""
+    buying = sorted((c for c in cost.lines if c.max_cents), key=lambda c: (-c.max_cents, c.slot))
+    listed = ", ".join(f"slot {c.slot} {_dollars(c.max_cents)}" for c in buying) or "none"
+    return (f"max cost {_dollars(cost.max_cents)} (visit fee {_dollars(cost.visit_fee_cents)} included) would leave "
+            f"{_dollars(cost.balance_left_at_max_cents)} of the spendable {_dollars(cost.balance_cents)}, under the "
+            f"{_dollars(floor_cents)} spendable floor (a midweek fee plus a week of model spend); cut at least "
+            f"{_dollars(floor_cents - cost.balance_left_at_max_cents)}. Cut slow-seller purchases first, then the "
+            f"slots with the least margin per class day: give each a lower fill_to, or keep it. "
+            f"Slots that buy, at their max cost: {listed}")
 
 
 # --- Step 7 helpers ----------------------------------------------------------
