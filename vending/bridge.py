@@ -14,21 +14,33 @@ failed: an error status, a response cut off or unreadable, or a connection that
 keeps failing on one poll while `/health` still answers. A 5xx that outlasts
 the retries is checked against `/health` the same way, because Tailscale's
 proxy can answer `502` to every request until the node has joined the tailnet.
+
+**No poll bytes in a message.** What the bridge sends back can hold the machine's whole document, and the
+worker's logs and `/health` are read by people (`docs/integrity.md`, "Logs carry no poll bytes"). So no
+error here quotes a body, a snippet, a bad status line or a header. A message holds the status, sizes and
+a reason this module wrote ("short read: 1234 of 2000 bytes"). The one exception is `post`, whose answer to
+our own purchase or catalog request is the reason the write tool shows the agent.
 """
 
 from __future__ import annotations
 
 import http.client
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http import HTTPStatus
 from typing import Any, NamedTuple
 
 from vending import settings
 
 TIMEOUT_SECONDS = 20
+# What a session id and a poll's start time may look like before a log line or a URL names them. The bridge's
+# ids are 32 hex digits; the wider shape lets a test's "s1" through but not a record (`PA1*11*987*`) or a line break.
+_SESSION_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+_START_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}(:?\d{2})?)?")
 # A live read takes about 8.5 s, and may wait its turn for the serial line first.
 POLL_TIMEOUT_SECONDS = 30
 # The header a live read names its session in (docs/snapshot-archive.md).
@@ -46,6 +58,39 @@ class LiveRead(NamedTuple):
     session_id: str | None
     cached: bool | None = None
     age_seconds: float | None = None
+
+
+def valid_session_id(value: object) -> bool:
+    """Whether `value` is a session id that is safe to log and to put in a URL."""
+    return isinstance(value, str) and _SESSION_ID.fullmatch(value) is not None
+
+
+def valid_start_time(value: object) -> bool:
+    """Whether `value` is a time of the shape the bridge lists polls at, safe to log."""
+    return isinstance(value, str) and len(value) <= 40 and _START_TIME.fullmatch(value) is not None
+
+
+def usable(meta: object) -> bool:
+    """Whether a listed poll has a session id and start time that can be logged, fetched and stored."""
+    return (isinstance(meta, dict) and valid_session_id(meta.get("session_id"))
+            and valid_start_time(meta.get("started_at")))
+
+
+def status_phrase(status: int) -> str:
+    """The standard name of an HTTP status ("Bad Gateway"), written here and not taken from the reply."""
+    try:
+        return HTTPStatus(status).phrase
+    except ValueError:
+        return ""
+
+
+def _why_it_broke(error: http.client.HTTPException) -> str:
+    """A reason of our own for a reply that was cut off or was not HTTP. Never the bytes that came."""
+    if isinstance(error, http.client.IncompleteRead):
+        got = len(error.partial)
+        return f"short read: {got} of {got + error.expected} bytes" if isinstance(error.expected, int) \
+            else f"short read: {got} bytes, then the connection ended"
+    return f"the reply wasn't a whole HTTP answer ({type(error).__name__})"
 
 
 class BridgeError(RuntimeError):
@@ -107,7 +152,7 @@ class Bridge:
         `BridgeAnswered` for an HTTP error status, and `BridgeNoAnswer` if it
         was sent but no usable answer came back (it may or may not have run).
         """
-        return json.loads(self._once("POST", path, body))
+        return json.loads(self._once("POST", path, body, keep_body=True))
 
     def poll(self) -> LiveRead:
         """Read the machine now (`POST /api/v1/poll`, about 8.5 s): the document, and the session id
@@ -130,10 +175,16 @@ class Bridge:
             age = None
         if age is not None and age != age:      # nan
             age = None
-        return LiveRead(document, headers.get(SESSION_HEADER.lower()) or None, cached, age)
+        session_id = headers.get(SESSION_HEADER.lower())
+        # A header that isn't an id (it is read by people in the log) counts as no id.
+        return LiveRead(document, session_id if valid_session_id(session_id) else None, cached, age)
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
-              timeout: float | None = None, headers_out: dict[str, str] | None = None) -> bytes:
+              timeout: float | None = None, headers_out: dict[str, str] | None = None,
+              keep_body: bool = False) -> bytes:
+        """One try. `keep_body` puts the start of an error answer in `BridgeAnswered.detail`: only for
+        `post`, whose answer concerns our own request. Any other answer can hold a poll, so only its status
+        is kept."""
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -148,19 +199,25 @@ class Bridge:
                     headers_out.update({k.lower(): v for k, v in response.headers.items()})
         except urllib.error.HTTPError as error:
             # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
-            raise BridgeAnswered(error.code, _start_of_body(error, 300).decode(errors="replace")) from None
+            detail = _start_of_body(error, 300).decode(errors="replace") if keep_body else status_phrase(error.code)
+            raise BridgeAnswered(error.code, detail) from None
         except urllib.error.URLError as error:
             # urllib raises URLError only while connecting or sending.
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
-        except (OSError, http.client.HTTPException) as error:
-            # A timeout waiting for the answer, or an answer cut off part way
-            # (`IncompleteRead`): either way it was sent and may have run.
+        except http.client.HTTPException as error:
+            # An answer cut off part way (`IncompleteRead`) or not HTTP at all (`BadStatusLine`, which names
+            # the line it got). `RemoteDisconnected` is an `OSError` too and is handled below.
+            if not isinstance(error, OSError):
+                raise BridgeNoAnswer(_why_it_broke(error)) from None
+            raise BridgeNoAnswer(f"{type(error).__name__}: the connection ended with no answer") from None
+        except OSError as error:
+            # A timeout waiting for the answer: it was sent and may have run.
             raise BridgeNoAnswer(f"{type(error).__name__}: {error}") from None
         if expect_json:
             try:
                 json.loads(data)
-            except ValueError as error:
-                raise BridgeNoAnswer(f"the answer wasn't JSON ({error})") from None
+            except ValueError:      # its message can name a byte of the answer
+                raise BridgeNoAnswer(f"the answer wasn't JSON ({len(data)} bytes)") from None
         return data
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> bytes:
@@ -182,7 +239,8 @@ class Bridge:
                     raise BridgeRateLimited(f"429 from {path}: still rate limited after {RETRIES} retries") from None
                 if error.code in (401, 403):
                     raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
-                detail = f"{error.code} from {path}: {_start_of_body(error)!r}"
+                # The status and our own name for it; the body can hold a poll.
+                detail = f"{error.code} {status_phrase(error.code)} from {path}".replace("  ", " ")
                 # A 5xx from everything, `/health` included, is an outage (or
                 # the Tailscale proxy before the node joins), not this request.
                 if error.code >= 500 and path != "/health" and not self._is_up():
@@ -198,7 +256,7 @@ class Bridge:
                 # `HTTPException` as well as an `OSError`, and it is a lost
                 # connection, so check `OSError`.
                 if not isinstance(error, OSError):
-                    raise BridgeError(f"broken response from {path}: {error!r}") from None
+                    raise BridgeError(f"broken response from {path}: {_why_it_broke(error)}") from None
                 raise ConnectionFailed(
                     f"Could not reach {self.base_url} ({getattr(error, 'reason', error)}). "
                     "Is Tailscale connected?"
@@ -220,7 +278,7 @@ class Bridge:
         try:
             return json.loads(payload)
         except ValueError:  # Not `JSONDecodeError`: bytes that aren't text raise `UnicodeDecodeError`.
-            raise BridgeError(f"/api/v1/slots was not JSON: {payload[:200]!r}") from None
+            raise BridgeError(f"/api/v1/slots was not JSON ({len(payload)} bytes)") from None
 
     def history(self, day: str) -> list[dict]:
         """Stored polls for one UTC day (YYYY-MM-DD), oldest first.
@@ -232,9 +290,9 @@ class Bridge:
         try:
             body = json.loads(payload)
         except ValueError:  # Not `JSONDecodeError`: bytes that aren't text raise `UnicodeDecodeError`.
-            raise BridgeError(f"history for {day} was not JSON: {payload[:200]!r}") from None
+            raise BridgeError(f"history for {day} was not JSON ({len(payload)} bytes)") from None
         if not _is_listing(body):
-            raise BridgeError(f"history for {day} was not a listing of polls: {payload[:200]!r}")
+            raise BridgeError(f"history for {day} was not a listing of polls ({len(payload)} bytes)")
         if body.get("truncated"):
             raise BridgeError(f"history for {day} was truncated at {body.get('limit')} polls")
         return [dict(p, device_id=body.get("device_id")) for p in body["polls"]]
@@ -279,7 +337,7 @@ class Bridge:
         try:
             return json.loads(body)
         except (ValueError, UnicodeDecodeError):
-            raise BridgeError(f"answer from {path} isn't JSON: {body[:200]!r}") from None
+            raise BridgeError(f"answer from {path} isn't JSON ({len(body)} bytes)") from None
 
 
 def _is_listing(body: object) -> bool:

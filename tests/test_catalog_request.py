@@ -178,7 +178,7 @@ def test_a_cut_off_answer_is_stored_as_unknown_and_blocks_a_resend(db, fake):  #
     # request may exist: the same rules as a timeout, not a crash.
     fake.cut_off = True
     reply = ask()
-    assert not reply["success"] and reply["status"] == "unknown" and "IncompleteRead" in reply["message"]
+    assert not reply["success"] and reply["status"] == "unknown" and "short read:" in reply["message"]
     assert db.execute("select bridge_id, status from product_requests").fetchall() == [(None, "unknown")]
     assert db.execute("select outcome from action_log where tool = 'request_catalog_product'").fetchall() == [
         ("failed",)]

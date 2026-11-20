@@ -88,6 +88,14 @@ repo root points here.
   stop at the cut too; from it, they cover our assignment only. Normal runs may keep rows from the fall cut on only for our assignment as stored from the
   inventory server (recorded in each export as `assigned_slots`; the code has no fixed list),
   and a time without a UTC offset is refused. `tests/test_analysis_slots.py` checks all of it.
+- **Logs carry no poll bytes.** The worker's logs, its job output and `/health` are read by people, and a
+  poll can hold selections that aren't ours. So nothing turns what the bridge sent back (an error body, a
+  malformed document, a status line, a header) into a log line, an exception message or output.
+  `vending/bridge.py`, `vending/sync_history.py`, `vending/visit_polls.py` and `scripts/poll_snapshot.py`
+  log the status, sizes, a session id that passes `vending.bridge.valid_session_id`, and a reason the code
+  wrote itself ("502 Bad Gateway", "short read: 1234 of 2000 bytes"). The archive and the database still
+  keep whole polls. `tests/test_logs_no_poll_bytes.py` answers each of these places with `PA1*`, `PA2*` and
+  `VA1*` records and checks every line logged, raised or printed.
 
 The fall rule applies to the poll timestamps, not the date an analysis runs. Historical fall
 data remains usable after the start. Our own historical purchase receipts and action logs also

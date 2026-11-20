@@ -13,7 +13,11 @@ re-checked, because polls can land on them after the previous run.
 A day the bridge can't list, or a poll it can't return, is logged and counted
 and the run carries on, so one bad poll can't block everything after it. That
 includes a poll whose connection keeps dropping, as long as `/health` still
-answers. Re-run with `--since` to retry them; that pass also fetches again any
+answers. A listed poll whose session id or start time isn't usable is counted
+the same way. The log says what happened in words of our own (a status, a
+size, a session id that passes `vending.bridge.valid_session_id`) and never
+quotes what the bridge sent: the log is read by people, and a poll can hold
+selections that aren't ours (`docs/integrity.md`). Re-run with `--since` to retry them; that pass also fetches again any
 poll stored as unparseable, in case the bridge sent a cut-off document. Only an
 unreachable bridge or a rejected key stops the run.
 
@@ -32,7 +36,7 @@ from datetime import date, datetime, timedelta, timezone
 import psycopg
 
 from vending import db
-from vending.bridge import Bridge, BridgeError, BridgeUnreachable
+from vending.bridge import Bridge, BridgeError, BridgeUnreachable, usable
 from vending.evadts import ParseError, parse
 
 # The bridge's history starts here.
@@ -125,6 +129,12 @@ def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log
             continue
         report.listed += len(listing)
         for meta in listing:
+            if not usable(meta):
+                # The listing is the bridge's words, and the log is read by people: a session id or start time
+                # that isn't one is neither logged, fetched nor stored.
+                report.failed_polls += 1
+                log("  skipped a listed poll whose session id or start time isn't usable")
+                continue
             if meta["session_id"] in known:
                 continue
             try:

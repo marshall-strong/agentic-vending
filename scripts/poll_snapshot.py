@@ -36,14 +36,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from http import HTTPStatus
 from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -75,6 +78,16 @@ MIN_LINES = 50
 # dozen runs a day, this takes years to reach; it exists so the file cannot
 # grow without limit if something starts logging in a tight loop.
 MAX_LOG_BYTES = 5 * 1024 * 1024
+
+# What a session id may look like before the log names it (the same shape as `vending.bridge`'s; this
+# script imports nothing from the repo).
+SESSION_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+AGE_SECONDS = re.compile(r"\d{1,6}(\.\d{1,6})?")
+
+# The log carries no poll bytes: it is read by people, and a poll can hold selections that aren't ours
+# (docs/integrity.md). So no line quotes a response body, a record of the document, a status line's
+# reason or a header the bridge sent. A line holds the status, sizes, and reasons written here. The
+# archive, which keeps the whole document, is the one place the bytes go.
 
 
 class PollError(Exception):
@@ -239,7 +252,12 @@ def http_request(
 
     Error statuses are returned like any other response rather than raised, so
     the caller can decide what a 409 or a 502 means. Only a genuine transport
-    failure -- no route, refused connection, timeout -- raises.
+    failure -- no route, refused connection, timeout, a reply that is cut off or
+    isn't HTTP -- raises.
+
+    The reason is the standard name of the status, written here: the reply's own
+    reason phrase and an error answer's body are never read into a message (the
+    body of a 200 is the document, which the caller archives).
     """
     data = b"" if method == "POST" else None
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -247,19 +265,36 @@ def http_request(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return (
                 response.status,
-                response.reason,
+                status_phrase(response.status),
                 list(response.headers.items()),
                 response.read(),
             )
     except urllib.error.HTTPError as error:
-        # An HTTPError is still a response: it has a status, headers and a body.
-        return error.code, error.reason, list(error.headers.items()), error.read()
+        # An HTTPError is still a response: it has a status and headers. Its body can hold a poll and
+        # nothing here uses it, so it isn't read.
+        return error.code, status_phrase(error.code), list(error.headers.items()), b""
     except urllib.error.URLError as error:
         raise PollError("unreachable", f"{url} could not be reached: {error.reason}", EXIT_UNREACHABLE)
     except TimeoutError:
         raise PollError("timeout", f"{url} did not respond within {timeout:.0f}s", EXIT_UNREACHABLE)
     except OSError as error:
         raise PollError("unreachable", f"{url} could not be reached: {error}", EXIT_UNREACHABLE)
+    except http.client.IncompleteRead as error:
+        got = len(error.partial)
+        size = f"{got} of {got + error.expected} bytes" if isinstance(error.expected, int) else f"{got} bytes"
+        raise PollError("bridge_error", f"{url} sent a short read: {size}", EXIT_BRIDGE)
+    except http.client.HTTPException as error:
+        # `BadStatusLine` names the line it got, so only the kind of failure is kept.
+        raise PollError("bridge_error", f"{url} sent a reply that wasn't whole HTTP ({type(error).__name__})",
+                        EXIT_BRIDGE)
+
+
+def status_phrase(status: int) -> str:
+    """The standard name of an HTTP status ("Bad Gateway"), written here and not taken from the reply."""
+    try:
+        return HTTPStatus(status).phrase
+    except ValueError:
+        return ""
 
 
 def get_health(base_url: str, timeout: float) -> dict:
@@ -302,25 +337,25 @@ def poll_machine(
     if status == 200:
         return sent_at, elapsed, response_headers, body
 
-    # Anything else: say what happened in terms the next person can act on.
-    snippet = body.decode("utf-8", errors="replace").strip()[:200]
+    # Anything else: say what happened in terms the next person can act on. The reply's body stays out
+    # of the message (see the note on the log at the top).
     if status in (401, 403):
         raise PollError(
             "auth_rejected",
             f"POST /api/v1/poll returned {status} {reason}. /health answered, so the "
-            f"service is up and DEX_API_KEY is the problem. Response: {snippet}",
+            f"service is up and DEX_API_KEY is the problem.",
             EXIT_AUTH,
         )
     if status == 409:
         raise PollError(
             "bridge_busy",
             f"POST /api/v1/poll returned 409 {reason} -- another caller holds the serial "
-            f"line. Skipping this slot; the next scheduled run will pick it up. Response: {snippet}",
+            f"line. Skipping this slot; the next scheduled run will pick it up.",
             EXIT_BRIDGE,
         )
     raise PollError(
         "bridge_error",
-        f"POST /api/v1/poll returned {status} {reason}. Response: {snippet}",
+        f"POST /api/v1/poll returned {status} {reason}.",
         EXIT_BRIDGE,
     )
 
@@ -351,10 +386,11 @@ def validate_document(body: bytes, response_headers: dict[str, str]) -> list[str
 
     if not lines:
         return ["response body contained no records"]
+    # The reasons are ours: a record of the document is never quoted (see the note on the log at the top).
     if not lines[0].startswith("DXS"):
-        problems.append(f"first record is {lines[0][:24]!r}, expected it to start with DXS")
+        problems.append("first record doesn't start with DXS")
     if not lines[-1].startswith("DXE"):
-        problems.append(f"last record is {lines[-1][:24]!r}, expected it to start with DXE")
+        problems.append("last record doesn't start with DXE")
     if len(lines) < MIN_LINES:
         problems.append(f"only {len(lines)} records, expected at least {MIN_LINES}")
 
@@ -523,9 +559,13 @@ def run(args: argparse.Namespace) -> int:
         sent_at, elapsed, response_headers, body = poll_machine(base_url, api_key, args.timeout)
 
     header_map = {name.lower(): value for name, value in response_headers}
-    cached = header_map.get("x-poll-cached", "?")
-    age = header_map.get("x-poll-age-seconds", "?")
+    # Headers come from the bridge too: each is logged only if it is what it should be, else "?".
+    cached = header_map.get("x-poll-cached", "?").strip().lower()
+    cached = cached if cached in ("true", "false") else "?"
     session = header_map.get("x-poll-session-id", "?")
+    session = session if SESSION_ID.fullmatch(session) else "?"
+    age = header_map.get("x-poll-age-seconds", "?").strip()
+    age = age if AGE_SECONDS.fullmatch(age) else "?"
     digest = hashlib.sha256(body).hexdigest()[:16]
     line_count = len(body.decode("utf-8", errors="replace").splitlines())
 
