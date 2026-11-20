@@ -444,13 +444,14 @@ def test_the_recorded_plan_carries_the_visit_and_each_slots_reason():
 
 
 def test_the_dashboard_shows_the_recorded_reasons(connect, conn):
-    from vending import dashboard
-    from vending.slots import our_slots
+    from vending import dashboard, ledger
 
     said = [{"slot": "15", "reason": "Sold out by Tuesday."}]
-    tools = Tools(replies={"preview_desired_state": PREVIEWED})
-    go(connect, Script(preview(), answer("submit", reason="restock 15", slot_reasons=said)), tools)
-    shown = dashboard._plan(conn, our_slots(conn))     # rows are our stored selections
+    tools = Tools(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED, "submit_desired_state": SENT})
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=NOW)
+    go(connect, Script(preview(), tool_turn(submit()), answer("submit", reason="restock 15", slot_reasons=said)),
+       tools, live=True)
+    shown = dashboard.snapshot(conn)["plan"]["data"]
     assert (shown["visit"], shown["reason"]) == ("scheduled", "restock 15")
     assert {s["slot"]: s["now"] for s in shown["slots"]}["15"]["reason"] == "Sold out by Tuesday."
 
@@ -584,10 +585,11 @@ def test_a_step_is_checked_and_a_long_one_is_cut(conn):
 
 
 def test_the_dashboard_shows_how_each_run_decided(connect, conn):
-    from vending import dashboard
+    from vending import dashboard, ledger
 
     first = tool_turn(thought("Look at <the> machine & sales."), use("get_machine_state"))
-    go(connect, Script(first, answer()), Tools())
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=NOW)
+    go(connect, Script(first, answer()), Tools(LIVE_TOOLS), live=True)
     snap = dashboard.snapshot(conn)
     run = snap["runs"]["data"][0]
     assert [s["kind"] for s in run["steps"]] == ["tool_result", "thinking", "tool_call", "tool_result", "text"]
@@ -597,9 +599,10 @@ def test_the_dashboard_shows_how_each_run_decided(connect, conn):
 
 
 def test_the_dashboard_works_before_the_steps_table_exists(connect, conn):
-    from vending import dashboard
+    from vending import dashboard, ledger
 
-    go(connect, Script(answer()), Tools())
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=NOW)
+    go(connect, Script(answer()), Tools(LIVE_TOOLS), live=True)
     conn.execute("drop table agent_steps")
     snap = dashboard.snapshot(conn)
     assert snap["runs"]["ok"] and snap["runs"]["data"][0]["steps"] == []

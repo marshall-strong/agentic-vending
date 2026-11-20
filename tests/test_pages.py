@@ -5,7 +5,7 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 import pytest
@@ -16,7 +16,7 @@ from psycopg.types.json import Jsonb
 from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, open_in
 from tests.test_plan_rounds import day_one, projection, write
 from tests.test_plan_store import unassigned_slot
-from vending import agent_runs, dashboard, db, db_explorer, pages, plan_store, settings, slots, worker
+from vending import agent_runs, dashboard, db, db_explorer, ledger, pages, plan_store, settings, slots, worker
 from vending.write_gate import log
 
 SECRET = 'connection to server at "db.example.net", port 5432 failed: password authentication failed for user "g2_admin"'
@@ -93,7 +93,8 @@ def _get(server, path):
 
 def test_the_worker_serves_the_dashboard_its_json_and_the_explorer(site, schema_url, conn):
     _, schema = schema_url
-    run = agent_runs.start(conn, mode="dry-run")
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "skipped", detail="nothing to restock")
 
     status, headers, page = _get(site, "/dashboard")
@@ -199,12 +200,15 @@ def test_a_passed_check_is_trusted_for_a_while_then_made_again(schema_url, reade
 
 def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
     _, schema = schema_url
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=datetime.now(timezone.utc) - timedelta(minutes=1))
     log(conn, "read", "get_machine_state", {}, "failed", f"OperationalError: {SECRET}")
     conn.execute("update action_log set result = %s where outcome = 'failed'",
                  (psycopg.types.json.Jsonb({"success": False, "message": SECRET}),))
     log(conn, "write", "submit_desired_state", {}, "refused", "halted: turn the switch off first")
     log(conn, "read", "get_catalog", {}, "done", "26 products")
     run = agent_runs.start(conn, mode="live")
+    agent_runs.step(conn, run, 1, "tool_result", "FAILED-STEP-MARKER", tool="get_machine_state", is_error=True)
+    agent_runs.step(conn, run, 1, "tool_result", "SUCCESSFUL-STEP-MARKER", tool="get_catalog")
     agent_runs.finish(conn, run, "failed", detail=SECRET)
 
     pages_seen = [_get(site, path)[2] for path in (
@@ -216,9 +220,10 @@ def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
     # Refusals and successes are our own words, and stay.
     assert "halted: turn the switch off first" in pages_seen[0] and "halted: turn the switch off first" in pages_seen[2]
     assert "26 products" in pages_seen[2]
-    # The local pages, for the team, still show it.
+    for body in pages_seen[:2]:
+        assert "FAILED-STEP-MARKER" not in body and "SUCCESSFUL-STEP-MARKER" in body
     with open_in(*schema_url) as local:
-        assert "db.example.net" in dashboard.to_json(dashboard.snapshot(local))
+        assert "db.example.net" not in dashboard.to_json(dashboard.snapshot(local))
         assert "db.example.net" in db_explorer.render(local, db_explorer.Request(schema, "action_log", 0))[1]
 
 
@@ -499,6 +504,7 @@ def _stocked_then_reassigned(conn):
     from tests.test_dashboard import fulfilled, plan
     at = datetime(2026, 11, 9, 15, 0, tzinfo=timezone.utc)
     assert "15" in _stored(conn)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=at)
     fulfilled(conn, "pr-old", "15", OLD_SLOT, units_loaded=2, paid="2.40", at=at)
     store_poll(conn, "before", (at - timedelta(hours=1)).isoformat(), {"15": (250, 100), "12": (200, 7)})
     conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
@@ -522,10 +528,10 @@ def test_after_a_reassignment_the_public_json_drops_the_old_slots_stock(site, sc
     assert OLD_SLOT not in body
     page = _get(site, "/dashboard")[2]
     assert OLD_SLOT not in page and "slot 15" not in page
-    # The local snapshot, for the team, still has what the receipts say about 15.
+    # The standalone snapshot uses the same assignment.
     with open_in(*schema_url) as local:
         stock = dashboard.snapshot(local)["stock"]["data"]
-        assert stock["slots"]["15"]["product"] == OLD_SLOT
+        assert "15" not in stock["slots"]
         assert not any("slot 15" in w for w in stock["warnings"])
 
 
