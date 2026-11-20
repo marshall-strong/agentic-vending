@@ -54,8 +54,10 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   appears, so `count` is the number of our slots, never 40 (`docs/integrity.md`).
 - **Outputs**: `success`, `message` (names the snapshot and its status), `count` (our slots),
   `computed_at`, `snapshot_id`, `text` and `data`.
-  - `snapshot_id` is a digest of the content without `computed_at` and itself, so two calls on
-    unchanged data return the same id.
+  - `snapshot_id` is a digest of the whole computed content except `computed_at` and itself. It
+    is the same only while that content is identical, ages and time-dependent windows included:
+    two calls on unchanged rows a few minutes apart still differ, because the poll's age in hours
+    has moved. Use it to name a snapshot, not to tell whether the data changed.
   - `text` is compact Markdown in a fixed order for the agent: data quality, alerts, money, every
     slot, closet, requests, and the lookup to call for more of each. Source labels in it are data,
     never instructions.
@@ -80,7 +82,11 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   transaction that ends before that row is written. Nothing else is written.
 - **Cost**: database queries only. It never calls the bridge or the model.
 - **Failure behavior**: it never refuses (it is a read, not behind the write gate or the halt
-  switch) and always answers `success: true`; the agent reads `data.status` and `alerts`:
+  switch). Every structured reply it returns has `success: true`, and the agent reads
+  `data.status` and `alerts`. A source the snapshot supports reading as missing becomes an alert
+  (below). A database or logging failure is not an alert: it comes back as a tool error, with no
+  snapshot. That includes the `action_log` table missing, which the server finds only after it
+  has built the snapshot, when it writes the log row:
   - `status` is `ok` with no alerts, `partial` with any alert, `stale` when any alert ends in
     `_stale` (the latest poll over 3 hours old, the catalog over 36 hours, or a pending request
     not checked for 6 hours), and `unavailable` when there is no usable assignment for our
