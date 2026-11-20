@@ -329,6 +329,59 @@ def test_every_lane_is_filled_to_its_column():
     assert "swap" in make.NEXT_CHANGES["44"][3]
 
 
+def _seen(sim: dict, slot: str, at: datetime) -> tuple[int, int]:
+    """(units sold, units on hand) at the last poll before `at`: what the agent could see then."""
+    poll = max(p for p in make.poll_times() if p <= at)
+    sold = sim["sold"].get(poll.replace(minute=0), {}).get(slot, 0)
+    fill = next(f for s, _, f, *_ in make.DAY_ONE if s == slot)
+    topped = fill - sim["at_visit"][slot] if slot in make.TOPPED_UP and poll >= make.VISIT else 0
+    return sold, fill - sold + topped
+
+
+def test_the_runs_reasons_match_the_made_up_sales():
+    """Each reason says only what the polls before its run showed: 'ran out on Saturday morning' means it did."""
+    from vending.demo.make import _utc
+
+    sim = make.simulate()
+    visit_run, saturday_10_30, monday_run = _utc(5, 14), _utc(5, 15, 31), _utc(7, 14)
+    # Saturday 9:00 ET: Coca-Cola and Red Bull down to 1 each, so a $25 visit at noon.
+    assert _seen(sim, "11", visit_run)[1] == _seen(sim, "37", visit_run)[1] == 1
+    # Both had run out by the 10:30 poll, before the noon top-up.
+    assert _seen(sim, "11", saturday_10_30)[1] == _seen(sim, "37", saturday_10_30)[1] == 0
+    # Monday 9:00 ET: Red Bull and Pepsi empty, Coca-Cola down to 1 again.
+    assert [_seen(sim, s, monday_run)[1] for s in ("37", "31", "11")] == [0, 0, 1]
+    assert _seen(sim, "31", _utc(7, 3, 31))[1] == 0 and _seen(sim, "31", _utc(6, 21, 31))[1] > 0  # out on Sunday night
+    # The slow lanes: 1 sold each since Thursday; Strawberry sold three times Paradise Paloma.
+    assert [_seen(sim, s, monday_run)[0] for s in ("24", "28", "44", "22")] == [1, 1, 1, 3]
+    texts = [why for *_, why in make.NEXT_CHANGES.values()]
+    assert not any(day in why for why in texts for day in ("Tuesday", "Wednesday", "Thursday's", "6 days"))
+
+
+def test_fridays_order_and_the_closet_fill_every_lane():
+    """What the closet can't fill to the column by Friday is in the pending order, so Friday under-stocks nothing."""
+    from vending.demo.make import _utc
+
+    sim, friday = make.simulate(), _utc(11, 15)
+    closet: dict[str, int] = {}
+    for slot, sku, fill, *_ in make.DAY_ONE:
+        if slot not in make.NOT_BOUGHT:
+            closet[sku] = closet.get(sku, 0) + 12 - fill - (slot == "22")       # one can of 22 was lost
+    for slot in make.TOPPED_UP:
+        sku, fill = next((k, f) for s, k, f, *_ in make.DAY_ONE if s == slot)
+        closet[sku] += 12 - (fill - sim["at_visit"][slot])
+    rate = {s: r for s, _, _, _, r, _ in make.DAY_ONE}
+    old = {s: k for s, k, *_ in make.DAY_ONE}
+    days = (friday - make.LAST_POLL).total_seconds() / 86400
+    need: dict[str, int] = {}
+    for e in make.plan_next()["slots"]:
+        if e["fill_to"] and e["slot"] not in make.NOT_BOUGHT and e["product"] == old[e["slot"]]:
+            left = max(0, sim["end"][e["slot"]] - int(rate[e["slot"]] * days))
+            need[e["product"]] = need.get(e["product"], 0) + e["fill_to"] - left
+    bought = {sku for sku, *_ in make.FRIDAY_ORDER.values()}
+    short = {sku for sku, units in need.items() if closet[sku] < units}
+    assert short and short <= bought, short - bought
+
+
 def test_the_committed_snapshot_is_what_the_generator_makes(schema_url):
     """The file can't drift from the page's own snapshot: change the snapshot's shape or the seed, and this
     fails until `python -m vending.demo.make` is run again."""

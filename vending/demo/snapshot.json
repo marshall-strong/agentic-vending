@@ -75,14 +75,14 @@
    "previous_run": 3,
    "visit": "scheduled",
    "reason": "Raise three prices on sell-outs, lower one, swap the slowest lane, and pull one for a swap to come.",
-   "update": "Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. Selections 55 and 58 get another try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
-   "notes": "Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater, and pick the product for 44.",
+   "update": "Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. Selections 55 and 58 get another try at a seller. Coca-Cola and Mountain Dew refill from the closet; Red Bull, Diet Coke, bubly Strawberry and the protein shake are bought, since the closet can't fill them.",
+   "notes": "Pepsi sold out on Sunday: if it sells out again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater, and pick the product for 44.",
    "slots": [
     {
      "slot": "11",
      "now": {
       "slot": "11",
-      "reason": "Coca-Cola ran out on Saturday morning. One more quarter should still sell it through.",
+      "reason": "Coca-Cola ran out on Saturday morning before the top-up, and is down to 1 again. One more quarter should still sell it through.",
       "fill_to": 7,
       "product": "COCA-ORIGINAL-20BOT",
       "sale_price": "2.75"
@@ -172,7 +172,7 @@
      "slot": "24",
      "now": {
       "slot": "24",
-      "reason": "bubly Paradise Paloma sold 1 by Monday, a third of what Strawberry sold at the same price. A quarter off, to see if it moves.",
+      "reason": "bubly Paradise Paloma sold 1 since Thursday, a third of what Strawberry sold at the same price. A quarter off, to see if it moves.",
       "fill_to": 8,
       "product": "BUBLY-PARADISE-12CAN",
       "sale_price": "1.50"
@@ -208,7 +208,7 @@
      "slot": "28",
      "now": {
       "slot": "28",
-      "reason": "vitaminwater sold 2 in 6 days, the slowest lane. GORGIE's request was approved, so swap it in.",
+      "reason": "vitaminwater sold 1 since Thursday, one of the slowest lanes. GORGIE's request was approved, so swap it in.",
       "fill_to": 7,
       "product": "GORGIE-ORIGINAL-20BOT",
       "sale_price": "2.50"
@@ -226,7 +226,7 @@
      "slot": "31",
      "now": {
       "slot": "31",
-      "reason": "Pepsi sold out on Tuesday with a day to go. Raising the price a quarter.",
+      "reason": "Pepsi sold out on Sunday night, three and a half days after the fill. Raising the price a quarter.",
       "fill_to": 7,
       "product": "PEPSI-ORIGINAL-20BOT",
       "sale_price": "2.75"
@@ -280,7 +280,7 @@
      "slot": "37",
      "now": {
       "slot": "37",
-      "reason": "Red Bull sold out twice in a week at $3.00. $3.25 is still under the ceiling.",
+      "reason": "Red Bull sold out on Saturday morning and again early on Monday at $3.00. $3.25 is still under the ceiling.",
       "fill_to": 11,
       "product": "REDBULL-ORIGINAL-8_4CAN",
       "sale_price": "3.25"
@@ -316,7 +316,7 @@
      "slot": "44",
      "now": {
       "slot": "44",
-      "reason": "Snapple sold 1 in 6 days. Pull it to the closet now, so the lane is free for a better seller: the next plan swaps one in and fills it to its column.",
+      "reason": "Snapple sold 1 since Thursday. Pull it to the closet now, so the lane is free for a better seller: the next plan swaps one in and fills it to its column.",
       "fill_to": 0,
       "product": "SNAPPLE-ORIGINAL-16BOT",
       "sale_price": "2.50"
@@ -477,7 +477,7 @@
       "turn": 1,
       "kind": "tool_result",
       "tool": "get_machine_state",
-      "content": "20 lanes; last poll 1 h 30 min ago",
+      "content": "20 lanes; last poll 1 h 21 min ago",
       "is_error": false
      },
      {
@@ -516,8 +516,8 @@
      "$decimal": "0.58"
     },
     "request_id": "pr-002",
-    "team_update": "Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. Selections 55 and 58 get another try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
-    "notes": "Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater, and pick the product for 44.",
+    "team_update": "Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. Selections 55 and 58 get another try at a seller. Coca-Cola and Mountain Dew refill from the closet; Red Bull, Diet Coke, bubly Strawberry and the protein shake are bought, since the closet can't fill them.",
+    "notes": "Pepsi sold out on Sunday: if it sells out again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater, and pick the product for 44.",
     "steps": [
      {
       "turn": 1,
@@ -537,7 +537,7 @@
       "turn": 1,
       "kind": "tool_result",
       "tool": "get_machine_state",
-      "content": "20 lanes; 31 sold out; 11, 33, 37 topped up on Saturday",
+      "content": "20 lanes; 31 and 37 empty, 11 down to 1; 11, 33 and 37 topped up on Saturday",
       "is_error": false
      },
      {
@@ -558,7 +558,7 @@
       "turn": 2,
       "kind": "thinking",
       "tool": null,
-      "content": "Pepsi, Coca-Cola and Red Bull empty before Friday. Their price is too low for the demand, and a quarter more should still clear them.",
+      "content": "Coca-Cola and Red Bull ran out before Saturday's top-up and are empty or nearly again, and Pepsi ran out on Sunday. Their price is too low for the demand, and a quarter more should still clear them.",
       "is_error": false
      },
      {
@@ -572,14 +572,14 @@
       "turn": 2,
       "kind": "tool_result",
       "tool": "get_sales_history",
-      "content": "9 sold in 6 days, empty from Tuesday",
+      "content": "7 sold by Sunday night, empty since",
       "is_error": false
      },
      {
       "turn": 3,
       "kind": "thinking",
       "tool": null,
-      "content": "vitaminwater sold 2 in 6 days. GORGIE was approved last week; try it there. Snapple sold 1, so pull it and swap a new product in next week.",
+      "content": "vitaminwater sold 1 since Thursday. GORGIE was approved in November; try it there. Snapple sold 1, so pull it and swap a new product in next week.",
       "is_error": false
      },
      {
@@ -593,7 +593,7 @@
       "turn": 3,
       "kind": "tool_result",
       "tool": "preview_desired_state",
-      "content": "most we pay $90.90, 0 refusals",
+      "content": "most we pay $173.40, 0 refusals",
       "is_error": false
      },
      {
@@ -693,8 +693,8 @@
      "$decimal": "0.37"
     },
     "request_id": "pr-003",
-    "team_update": "Midweek visit: Coca-Cola, Mountain Dew and Red Bull topped up to full.",
-    "notes": "The visit paid for itself within two days. Watch for it in the profit.",
+    "team_update": "Midweek visit requested: Coca-Cola, Mountain Dew and Red Bull to be topped up to full.",
+    "notes": "Check on Monday whether the three lanes sold enough to pay for the visit.",
     "steps": [],
     "has_plan": true,
     "compared": true,
@@ -1218,8 +1218,8 @@
    "slots": {
     "11": {
      "price": "2.50",
-     "sold": 8,
-     "per_day": "0.99"
+     "sold": 14,
+     "per_day": "1.74"
     },
     "13": {
      "price": "2.50",
@@ -1263,8 +1263,8 @@
     },
     "33": {
      "price": "2.50",
-     "sold": 7,
-     "per_day": "0.87"
+     "sold": 10,
+     "per_day": "1.24"
     },
     "36": {
      "price": "2.50",
@@ -1273,8 +1273,8 @@
     },
     "37": {
      "price": "3.00",
-     "sold": 8,
-     "per_day": "0.99"
+     "sold": 22,
+     "per_day": "2.73"
     },
     "41": {
      "price": "3.25",
@@ -1325,9 +1325,9 @@
    "slots": {
     "11": {
      "product": "COCA-ORIGINAL-20BOT",
-     "on_hand": 1,
-     "loaded": 9,
-     "sold": 8,
+     "on_hand": 0,
+     "loaded": 14,
+     "sold": 14,
      "lost": 0,
      "since": {
       "$datetime": "2026-12-03T15:00:00+00:00"
@@ -1335,7 +1335,7 @@
      "last_moved": {
       "$datetime": "2026-12-05T17:00:00+00:00"
      },
-     "unit_cost": "1.45"
+     "unit_cost": null
     },
     "13": {
      "product": "COCA-DIET-20BOT",
@@ -1451,9 +1451,9 @@
     },
     "33": {
      "product": "MOUNTAIN-ORIGINAL-20BOT",
-     "on_hand": 2,
-     "loaded": 9,
-     "sold": 7,
+     "on_hand": 0,
+     "loaded": 10,
+     "sold": 10,
      "lost": 0,
      "since": {
       "$datetime": "2026-12-03T15:00:00+00:00"
@@ -1461,7 +1461,7 @@
      "last_moved": {
       "$datetime": "2026-12-05T17:00:00+00:00"
      },
-     "unit_cost": "1.35"
+     "unit_cost": null
     },
     "36": {
      "product": "DRPEPPER-ORIGINAL-20BOT",
@@ -1479,9 +1479,9 @@
     },
     "37": {
      "product": "REDBULL-ORIGINAL-8_4CAN",
-     "on_hand": 6,
-     "loaded": 14,
-     "sold": 8,
+     "on_hand": 0,
+     "loaded": 22,
+     "sold": 22,
      "lost": 0,
      "since": {
       "$datetime": "2026-12-03T15:00:00+00:00"
@@ -1489,7 +1489,7 @@
      "last_moved": {
       "$datetime": "2026-12-05T17:00:00+00:00"
      },
-     "unit_cost": "1.70"
+     "unit_cost": null
     },
     "41": {
      "product": "MONSTER-ORIGINAL-16CAN",
@@ -1594,7 +1594,7 @@
     },
     {
      "product": "COCA-ORIGINAL-20BOT",
-     "units": 20,
+     "units": 15,
      "unit_cost": "1.45"
     },
     {
@@ -1619,7 +1619,7 @@
     },
     {
      "product": "MOUNTAIN-ORIGINAL-20BOT",
-     "units": 15,
+     "units": 14,
      "unit_cost": "1.35"
     },
     {
@@ -1639,7 +1639,7 @@
     },
     {
      "product": "REDBULL-ORIGINAL-8_4CAN",
-     "units": 10,
+     "units": 2,
      "unit_cost": "1.70"
     },
     {
@@ -1748,8 +1748,8 @@
    },
    "opening": "600.00",
    "capital": "0.00",
-   "takings": "212.00",
-   "tax_set_aside": "15.70",
+   "takings": "276.50",
+   "tax_set_aside": "20.48",
    "receipts": "349.20",
    "receipt_lines": 23,
    "visit_fees": "25.00",
@@ -1758,31 +1758,31 @@
    "tax_remitted": "0.00",
    "spent": "375.82",
    "adjustments": "0.00",
-   "balance": "436.18",
-   "tax_owed": "15.70",
-   "spendable": "420.48",
-   "spendable_after_pending": "329.58",
+   "balance": "500.68",
+   "tax_owed": "20.48",
+   "spendable": "480.20",
+   "spendable_after_pending": "306.80",
    "notes": [
     "3 model-call entries totalling 1.04 are from before the opening on 2026-12-02: development spend, not in the balance"
    ],
    "committed": {
     "requests": 1,
     "unsettled": 0,
-    "max": "90.90",
+    "max": "173.40",
     "unpriced_lines": 0
    },
    "pnl": {
-    "units_sold": 82,
-    "units_costed": 82,
-    "revenue_ex_tax": "196.30",
-    "cost_of_sales": "114.91",
-    "gross_margin": "81.39",
+    "units_sold": 105,
+    "units_costed": 105,
+    "revenue_ex_tax": "256.02",
+    "cost_of_sales": "151.46",
+    "gross_margin": "104.56",
     "shrinkage": "0.00",
     "shrinkage_complete": true,
     "visit_fees": "25.00",
     "tokens": "1.62",
-    "net": "54.77",
-    "inventory": "234.29",
+    "net": "77.94",
+    "inventory": "197.74",
     "inventory_complete": true
    }
   }
@@ -1816,7 +1816,7 @@
     },
     "decision_note": "Midweek visit done",
     "lines": 3,
-    "units_loaded": 7,
+    "units_loaded": 21,
     "unavailable": 0,
     "alternates": 0
    },

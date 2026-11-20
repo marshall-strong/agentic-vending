@@ -38,7 +38,7 @@ AS_OF = datetime(2026, 12, 9, 15, 0, tzinfo=UTC)
 # Opening capital: Wed 2 Dec, 10:00 Eastern. The first fill is loaded the day the competition starts.
 OPENED = datetime(2026, 12, 2, 15, 0, tzinfo=UTC)
 LOAD = datetime(2026, 12, 3, 15, 0, tzinfo=UTC)
-# A midweek visit that tops up the three fastest sellers.
+# A midweek visit (Saturday noon) that tops up the three fastest sellers.
 VISIT = datetime(2026, 12, 5, 17, 0, tzinfo=UTC)
 LAST_POLL = datetime(2026, 12, 9, 13, 30, tzinfo=UTC)
 
@@ -72,7 +72,7 @@ PRODUCTS: dict[str, tuple[str, str, str | None, str, int, str]] = {
 
 # Day one: (slot, sku, fill to, tag price, units a day, the agent's reason). `slot` is one of SELECTIONS.
 DAY_ONE = (
-    ("11", "COCA-ORIGINAL-20BOT", 7, "2.50", 1.4, "Coca-Cola is the safest seller in the fall figures. Fill the lane."),
+    ("11", "COCA-ORIGINAL-20BOT", 7, "2.50", 3.7, "Coca-Cola is the safest seller in the fall figures. Fill the lane."),
     ("13", "COCA-DIET-20BOT", 7, "2.50", 1.1, "Diet Coke followed Coca-Cola in the fall figures."),
     ("16", "COCA-ZERO_SUG-20BOT", 7, "2.50", 0.8, "Coke Zero sold steadily in the fall."),
     ("17", "SPRITE-ORIGINAL-20BOT", 7, "2.50", 0.7, "A lemon-lime to sit beside the colas."),
@@ -80,10 +80,10 @@ DAY_ONE = (
     ("24", "BUBLY-PARADISE-12CAN", 8, "1.75", 0.5, "A second bubly flavour, to see which one wins."),
     ("25", "TOPOCHICO-ORIGINAL-16BOT", 7, "2.75", 0.6, "Glass sparkling water, priced up for the bottle."),
     ("28", "VITAMINWATER-DARK-20BOT", 7, "2.50", 0.4, "A non-fizzy choice."),
-    ("31", "PEPSI-ORIGINAL-20BOT", 7, "2.50", 1.6, "Pepsi sold well in the fall figures."),
-    ("33", "MOUNTAIN-ORIGINAL-20BOT", 7, "2.50", 1.2, "Mountain Dew is the strongest of the greens."),
+    ("31", "PEPSI-ORIGINAL-20BOT", 7, "2.50", 2.0, "Pepsi sold well in the fall figures."),
+    ("33", "MOUNTAIN-ORIGINAL-20BOT", 7, "2.50", 1.8, "Mountain Dew is the strongest of the greens."),
     ("36", "DRPEPPER-ORIGINAL-20BOT", 7, "2.50", 0.7, "Dr Pepper, for people who want neither cola."),
-    ("37", "REDBULL-ORIGINAL-8_4CAN", 11, "3.00", 1.5, "The energy drink with the best margin, and the small can fits 11."),
+    ("37", "REDBULL-ORIGINAL-8_4CAN", 11, "3.00", 5.9, "The energy drink with the best margin, and the small can fits 11."),
     ("41", "MONSTER-ORIGINAL-16CAN", 8, "3.25", 1.3, "A second energy drink, in the bigger can."),
     ("44", "SNAPPLE-ORIGINAL-16BOT", 7, "2.50", 0.3, "Tea, to cover a different taste."),
     ("46", "PREMIER-CHOCOLAT-11CAR", 9, "4.00", 0.5, "A protein shake for the gym crowd, at a price that pays for the carton."),
@@ -99,14 +99,27 @@ NOT_BOUGHT = {"55", "58"}
 TOPPED_UP = ("11", "33", "37")
 # Where the agent's next plan differs from the one before it: slot -> (sku, fill to, price, reason).
 NEXT_CHANGES = {
-    "11": (None, None, "2.75", "Coca-Cola ran out on Saturday morning. One more quarter should still sell it through."),
-    "31": (None, None, "2.75", "Pepsi sold out on Tuesday with a day to go. Raising the price a quarter."),
-    "37": (None, None, "3.25", "Red Bull sold out twice in a week at $3.00. $3.25 is still under the ceiling."),
-    "24": (None, None, "1.50", "bubly Paradise Paloma sold 1 by Monday, a third of what Strawberry sold at the same "
+    "11": (None, None, "2.75", "Coca-Cola ran out on Saturday morning before the top-up, and is down to 1 again. "
+                               "One more quarter should still sell it through."),
+    "31": (None, None, "2.75", "Pepsi sold out on Sunday night, three and a half days after the fill. "
+                               "Raising the price a quarter."),
+    "37": (None, None, "3.25", "Red Bull sold out on Saturday morning and again early on Monday at $3.00. "
+                               "$3.25 is still under the ceiling."),
+    "24": (None, None, "1.50", "bubly Paradise Paloma sold 1 since Thursday, a third of what Strawberry sold at the same "
                                "price. A quarter off, to see if it moves."),
-    "28": ("GORGIE-ORIGINAL-20BOT", None, None, "vitaminwater sold 2 in 6 days, the slowest lane. GORGIE's request was approved, so swap it in."),
-    "44": (None, 0, None, "Snapple sold 1 in 6 days. Pull it to the closet now, so the lane is free for a better "
+    "28": ("GORGIE-ORIGINAL-20BOT", None, None, "vitaminwater sold 1 since Thursday, one of the slowest lanes. GORGIE's request "
+                                                "was approved, so swap it in."),
+    "44": (None, 0, None, "Snapple sold 1 since Thursday. Pull it to the closet now, so the lane is free for a better "
                           "seller: the next plan swaps one in and fills it to its column."),
+}
+# Next Friday's order (pending): slot -> (sku, fill to, price, a new product for the slot). The swap, the two
+# lanes that found no seller, and the lanes the closet can't fill to their column by Friday.
+FRIDAY_ORDER = {
+    "31": ("PEPSI-ORIGINAL-20BOT", 7, "2.75", False), "41": ("MONSTER-ORIGINAL-16CAN", 8, "3.25", False),
+    "28": ("GORGIE-ORIGINAL-20BOT", 7, "2.50", True), "55": ("TOPOCHICO-ORIGINAL-16BOT", 7, "2.75", True),
+    "58": ("MOUNTAIN-BAJA_BLA-20BOT", 7, "2.50", True), "37": ("REDBULL-ORIGINAL-8_4CAN", 11, "3.25", False),
+    "13": ("COCA-DIET-20BOT", 7, "2.50", False), "22": ("BUBLY-STRAWBER-12CAN", 8, "1.75", False),
+    "46": ("PREMIER-CHOCOLAT-11CAR", 9, "4.00", False),
 }
 # Reworded reasons on slots the plan leaves as they were: not a change.
 STILL = "Unchanged from last week: the numbers don't argue for a move."
@@ -274,14 +287,10 @@ def seed_purchases(conn, sim: dict) -> dict:
         " %s, %s, 2500)",
         (_utc(4, 21), Jsonb({"off_cycle": True, "lines": visit_body}), paid_visit, VISIT))
 
-    # Next Friday: what the 7 Dec plan asks to buy. Pending, so it shows as committed in Money. Lanes the
-    # closet can refill (Coca-Cola, Mountain Dew, Red Bull) aren't bought again.
+    # Next Friday: what the 7 Dec plan asks to buy. Pending, so it shows as committed in Money. A lane the
+    # closet can fill to its column by Friday (Coca-Cola, Mountain Dew and most others) isn't bought again.
     pending = []
-    for slot, (sku, fill, price, retry) in {
-        "31": ("PEPSI-ORIGINAL-20BOT", 7, "2.75", False), "41": ("MONSTER-ORIGINAL-16CAN", 8, "3.25", False),
-        "28": ("GORGIE-ORIGINAL-20BOT", 7, "2.50", True), "55": ("TOPOCHICO-ORIGINAL-16BOT", 7, "2.75", True),
-        "58": ("MOUNTAIN-BAJA_BLA-20BOT", 7, "2.50", True),
-    }.items():
+    for slot, (sku, fill, price, retry) in FRIDAY_ORDER.items():
         line = {"slot": slot, "source": "purchase",
                 "primary": _ask(sku, 1, sale=price, store="Amazon", change=retry)}
         if retry:
@@ -349,19 +358,21 @@ def seed_runs(conn) -> dict[str, int]:
         detail="The model call timed out after 120 s")
     midweek = plan_one()
     midweek["visit"] = "off_cycle"
-    midweek["reason"] = "Three lanes have emptied. A visit costs $25 and the lost sales cost more."
+    midweek["reason"] = ("Coca-Cola and Red Bull are down to 1 each, with the weekend ahead. A visit costs $25 "
+                         "and the lost sales cost more; Mountain Dew is topped up on the same trip.")
     run("visit", "live", _utc(5, 14), _utc(5, 14, 9), "submitted", plan=midweek, cost_usd=Decimal("0.37"),
         request_id="pr-003",
-        update="Midweek visit: Coca-Cola, Mountain Dew and Red Bull topped up to full.",
-        notes="The visit paid for itself within two days. Watch for it in the profit.")
+        update="Midweek visit requested: Coca-Cola, Mountain Dew and Red Bull to be topped up to full.",
+        notes="Check on Monday whether the three lanes sold enough to pay for the visit.")
     run("replay", "replay", _utc(6, 12), _utc(6, 12, 2), "skipped", cost_usd=Decimal("0.00"),
         detail="Replay of the week of 23 Nov with the same rules; nothing to submit")
     run("friday", "live", _utc(7, 14), _utc(7, 14, 12), "submitted", plan=plan_next(), cost_usd=Decimal("0.58"),
         request_id="pr-002",
         update="Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. "
                "Selections 55 and 58 get another "
-               "try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
-        notes="Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. "
+               "try at a seller. Coca-Cola and Mountain Dew refill from the closet; Red Bull, Diet Coke, "
+               "bubly Strawberry and the protein shake are bought, since the closet can't fill them.",
+        notes="Pepsi sold out on Sunday: if it sells out again at $2.75, price it at $3.00. "
               "Check whether GORGIE outsells vitaminwater, and pick the product for 44.")
     run("now", "live", _utc(9, 14, 50), None, "running")
     return ids
@@ -390,24 +401,26 @@ def seed_steps(conn, ids: dict[str, int]) -> None:
             (1, _utc(7, 14, 0), "thinking", None, "Monday. Last week's plan is the baseline. I want sales per lane, "
              "what sold out, and what the ledger says I can spend.", False),
             (1, _utc(7, 14, 1), "tool_call", "get_machine_state", "{}", False),
-            (1, _utc(7, 14, 1), "tool_result", "get_machine_state", "20 lanes; 31 sold out; 11, 33, 37 topped up on Saturday", False),
+            (1, _utc(7, 14, 1), "tool_result", "get_machine_state", "20 lanes; 31 and 37 empty, 11 down to 1; 11, 33 and 37 "
+             "topped up on Saturday", False),
             (1, _utc(7, 14, 2), "tool_call", "get_account_balance", "{}", False),
             (1, _utc(7, 14, 2), "tool_result", "get_account_balance", "balance and spendable both well above the $53 floor", False),
-            (2, _utc(7, 14, 4), "thinking", None, "Pepsi, Coca-Cola and Red Bull empty before Friday. Their price is "
-             "too low for the demand, and a quarter more should still clear them.", False),
+            (2, _utc(7, 14, 4), "thinking", None, "Coca-Cola and Red Bull ran out before Saturday's top-up and are "
+             "empty or nearly again, and Pepsi ran out on Sunday. Their price is too low for the demand, and a "
+             "quarter more should still clear them.", False),
             (2, _utc(7, 14, 5), "tool_call", "get_sales_history", '{"slot": "31"}', False),
-            (2, _utc(7, 14, 5), "tool_result", "get_sales_history", "9 sold in 6 days, empty from Tuesday", False),
-            (3, _utc(7, 14, 7), "thinking", None, "vitaminwater sold 2 in 6 days. GORGIE was approved last week; "
-             "try it there. Snapple sold 1, so pull it and swap a new product in next week.", False),
+            (2, _utc(7, 14, 5), "tool_result", "get_sales_history", "7 sold by Sunday night, empty since", False),
+            (3, _utc(7, 14, 7), "thinking", None, "vitaminwater sold 1 since Thursday. GORGIE was approved in "
+             "November; try it there. Snapple sold 1, so pull it and swap a new product in next week.", False),
             (3, _utc(7, 14, 8), "tool_call", "preview_desired_state", '{"slots": 20}', False),
-            (3, _utc(7, 14, 8), "tool_result", "preview_desired_state", "most we pay $90.90, 0 refusals", False),
+            (3, _utc(7, 14, 8), "tool_result", "preview_desired_state", "most we pay $173.40, 0 refusals", False),
             (4, _utc(7, 14, 10), "tool_call", "submit_desired_state", '{"slots": 20}', False),
             (4, _utc(7, 14, 12), "text", None, "Submitted request pr-002.", False),
         ],
         "now": [
             (1, _utc(9, 14, 50), "thinking", None, "Wednesday check: is anything wrong before Thursday's cutoff?", False),
             (1, _utc(9, 14, 51), "tool_call", "get_machine_state", "{}", False),
-            (1, _utc(9, 14, 51), "tool_result", "get_machine_state", "20 lanes; last poll 1 h 30 min ago", False),
+            (1, _utc(9, 14, 51), "tool_result", "get_machine_state", "20 lanes; last poll 1 h 21 min ago", False),
             (2, _utc(9, 14, 53), "tool_call", "submit_desired_state", '{"slots": 20}', False),
             (2, _utc(9, 14, 53), "tool_result", "submit_desired_state", "refused: a request for Friday is already pending (pr-002)", True),
         ],
