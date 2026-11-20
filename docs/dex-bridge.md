@@ -118,9 +118,13 @@ From the start the raw poll carries all 40 selections, the other team's 20 too. 
 
 **The rebuilt view** is written anew from checked fields. No line is copied from the poll:
 
-- `ID4*<decimal places>`, so a price can be read;
-- for each of our selections, `PA1*<selection>*<price>` and `PA2*<counts>`;
-- the door counter, `EA2*DO*<counts>`.
+- `ID4*<decimal places>`, so a price can be read, when they are 0 to 2;
+- for each of our selections, `PA1*<selection>*<price>` and `PA2*<lifetime units>*<lifetime value>`;
+- the door counter, `EA2*DO*<since reset>*<lifetime>`.
+
+Only those fields are kept. A `PA2` belongs to a selection by the same block rules the history
+sync uses (`vending.evadts.records`): across `PA3`-`PA5`, `PA7` and `PA8` only. A selection listed
+twice prints none of its figures, and stderr says so. `latest --summary` reads the same way.
 
 A field counts only if it is a plain number. The first field that isn't ends its record.
 Everything else is left out: the other team's selections, the machine-wide totals (`VA1`, the
@@ -132,6 +136,10 @@ wouldn't match). With no readable assignment, the view has no `PA` records and s
 storage: it keeps the raw bytes in a regular file, because storing the poll is fine. It is not a
 way to read them. Reading a saved poll taken from the cut on follows the same rule as printing it:
 only our selections, and no machine-wide total.
+
+**What this guards against.** The script keeps poll content off the screen. It doesn't verify
+catalog or status text against a server that deliberately disguises it: a product's name prints if
+it is one short line with no `*`, and `health` prints only a known status.
 
 **Errors.** From every route, an error shows only the status and its standard phrase, for example
 `404: Not Found`, never the bridge's reply: an error reply could carry a poll's records. A reply
