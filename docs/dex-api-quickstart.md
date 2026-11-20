@@ -108,8 +108,10 @@ Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/history?start=2026-10-21&end
 | `ID4` | `ID4*2*1840*5` | The first field is the number of decimal places in every money figure: 2, so `450` is $4.50 |
 | `PA1` | `PA1*15*450*` | Selection 15 is priced at $4.50 |
 | `PA2` | `PA2*240*...` | The line after a `PA1`: that selection's lifetime units sold, then lifetime sales |
-| `VA1` | `VA1*...` | Machine-wide lifetime totals; all the `PA2` lines add up to it exactly |
+| `VA1` | `VA1*...` | Machine-wide lifetime totals; all the `PA2` lines add up to it exactly. Usable only from polls taken before the fall cut (`FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern when unset, never later than the 3 Dec start; `docs/integrity.md`). From the cut on, the total minus ours is theirs |
 | `G85` | `G85*5CDB` | A checksum of the document |
+
+For a poll taken from the fall cut on, use `PA1` and `PA2` only for our selections, and not `VA1` (`docs/integrity.md`, "Fall data"). `scripts/bridge.py` prints such a poll rebuilt from our selections and the door counter only.
 
 Two things the machine doesn't tell us:
 

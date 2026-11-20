@@ -34,7 +34,7 @@ the tailnet is down, not the bridge.
 | `slots` | `GET /api/v1/slots` | The selections the server currently assigns us on `vmc1`; it may change before 3 Dec |
 | `products` | `GET /api/v1/products` | What we can order, as single items: `sku`, `name`, `line`, `flavor`, `size`. No prices and no pack sizes. Three products on 29 Oct, one of them a test entry |
 | `history [--start D] [--end D]` | `GET /api/v1/history` | Stored polls, oldest first: `session_id`, `started_at`, `bytes`. **At most 500 per request**: a longer range comes back with `truncated: true`, so ask a day or a week at a time |
-| `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text (from the start, only our selections; see [below](#from-the-start-what-each-command-prints)) |
+| `raw SESSION_ID [--out FILE]` | `GET /api/v1/history/{id}/raw` | One stored poll, as raw EVA-DTS text (from the fall cut on, only our selections; see [below](#from-the-fall-cut-what-each-command-prints)) |
 | `latest [--summary] [--out FILE]` | history + raw | The newest stored poll. `--summary` prints price and lifetime sales for our slots, from the stored assignment |
 | `request REQUEST_ID` | `GET /api/v1/purchase-requests/{id}` | `pending`, `rejected` with a `decision_note`, or the full receipts |
 | `poll --live [--out FILE]` | `POST /api/v1/poll` | Reads the machine right now. Refuses without `--live` |
@@ -92,17 +92,21 @@ What the machine does **not** tell us:
 `latest --summary` is a quick look only: it does not check the `G85` checksum. The real
 parser belongs in the history sync.
 
-## From the start: what each command prints
+## From the fall cut: what each command prints
 
-From the start (3 Dec 2026 00:00 Eastern, `vending/start.py`), a poll carries all 40
-selections, the other team's 20 too. Nothing we run may show their per-selection data, or any
-machine-wide total, to a person, the agent or a page (`docs/integrity.md`). Storing the raw poll
-is fine. "Ours" means the stored assignment (`vending.slots.our_slots`, so the script needs
-`DATABASE_URL`), never a fresh `slots` answer. A poll is "from the start" when its `started_at`
-is at or after the start. `raw` isn't told when its poll was taken, so on or after 3 Dec it
-treats every poll as one from the start.
+All 40 selections' per-selection data, and the machine-wide totals, may be used only from polls
+taken before the fall cut: the setting `FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern when unset, and
+never later than the 3 Dec 2026 00:00 Eastern start (`vending.start.fall_cut`,
+`docs/integrity.md`, "Fall data"). From the cut on, nothing we run may show per-selection data
+outside our assignment, or any machine-wide total, to a person, the agent or a page. From the start
+the raw poll carries all 40 selections, the other team's 20 too. Storing the raw poll is fine.
+"Ours" means the stored assignment (`vending.slots.our_slots`, so the script needs
+`DATABASE_URL`), never a fresh `slots` answer. A poll is "from the cut" when its `started_at` is
+at or after the cut. `raw` isn't told when its poll was taken, so it places the poll at now: from
+the cut on, it treats every poll as one from the cut. A `FALL_CUTOFF` that isn't a time with its
+offset stops the command (exit 2) before any poll is read.
 
-| Command | Poll from before the start | Poll from the start |
+| Command | Poll from before the fall cut | Poll from the fall cut on |
 |---|---|---|
 | `raw SESSION_ID` | The whole poll, as stored | A rebuilt view (below) on stdout, and a note on stderr saying how many lines were left out |
 | `latest` | The whole poll | The rebuilt view, and the note |
@@ -122,7 +126,7 @@ cash and card records), `ID1`, the other `PA` records, the envelope and `G85` (i
 wouldn't match). With no readable assignment, the view has no `PA` records and stderr says
 "no selection is printed".
 
-**Nothing prints the whole of a poll from the start.** The `--unredacted` flag is gone. To look
+**Nothing prints the whole of a poll from the fall cut on.** The `--unredacted` flag is gone. To look
 at the raw bytes for archiving, save them with `--out`.
 
 **Errors.** From `history`, `raw`, `latest` and `poll`, an error shows only the status and its
