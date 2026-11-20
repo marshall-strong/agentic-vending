@@ -2,6 +2,7 @@
 
     /dashboard               the agent dashboard (`vending.dashboard`)
     /dashboard/state.json    the same data as JSON
+    /dashboard/demo          a copy of the dashboard drawn from made-up data (`vending.demo`); no database
     /db                      the DB explorer (`vending.db_explorer`)
 
     python -m vending.pages check                            # is the pages' login really read-only?
@@ -55,7 +56,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from vending import dashboard, db, db_explorer, settings
+from vending import dashboard, db, db_explorer, demo, settings
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 
 READER = "READONLY_DATABASE_URL"
@@ -296,6 +297,10 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
     """
     parts = urlsplit(target)
     path = parts.path.rstrip("/")
+    if path in (demo.DEMO, demo.DEMO_STATE):
+        # The made-up copy: read from a file, never from the database, so it comes before every
+        # database check and nothing below it can run for it.
+        return _demo(path)
     if path not in (DASHBOARD, STATE, EXPLORER):
         return None
     request = None
@@ -329,8 +334,22 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
         return _problem(path, 500, BROKEN)
     if path == STATE:
         return Reply(200, JSON, dashboard.to_json(snap))
-    page = dashboard.render(snap, json_href=STATE, nav=(("Home", "/"), ("Database", EXPLORER)))
+    page = dashboard.render(snap, json_href=STATE,
+                            nav=(("Home", "/"), ("Database", EXPLORER), ("Demo copy", demo.DEMO)))
     return Reply(200, HTML, page, CSP_DASHBOARD)
+
+
+def _demo(path: str) -> Reply:
+    """The demo page or its JSON. Opens no connection. Never raises, and puts no error text in a reply."""
+    try:
+        if path == demo.DEMO_STATE:
+            return Reply(200, JSON, demo.state_json())
+        return Reply(200, HTML, demo.page(), CSP_DASHBOARD)
+    except Exception as error:  # noqa: BLE001 - a page answers, whatever happened
+        _log(type(error).__name__, f"{path}: {type(error).__name__}: {error}")
+        if path == demo.DEMO_STATE:
+            return Reply(500, JSON, dashboard.to_json({"demo": True, "error": BROKEN}))
+        return Reply(500, HTML, _notice("Demo copy", BROKEN))
 
 
 # --- Commands -----------------------------------------------------------------------------------

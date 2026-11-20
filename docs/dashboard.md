@@ -118,6 +118,58 @@ changed-only switch, and the verdict in the tab title. Without JavaScript the ma
 (the shelf links still work), the plan shows every slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
 page and says how old it is. Without JavaScript it reloads the whole page instead.
 
+## The demo copy
+
+`/dashboard/demo` (with `/dashboard/demo/state.json`) is the same page drawn from made-up data, so
+you can see every panel full without putting test data on the live page. It sits behind the same
+password. It has a yellow banner at the top, "DEMO: made-up data, not our machine. The live page is
+/dashboard", "DEMO ·" in the tab title, and `"demo": true` first in the JSON. The live header links
+to it as "Demo copy"; the demo links back as "Live dashboard".
+
+- **It never opens a database connection.** The data is a committed file,
+  `vending/demo/snapshot.json`, read from disk. Nothing on the route calls `vending.slots` or any
+  database reader, and it answers even where `READONLY_DATABASE_URL` isn't set.
+- **It runs the live page's code.** `vending.demo` loads the file and hands it to
+  `dashboard.render(..., demo=True)`. A new panel on the live page shows on the demo once the file
+  is made again.
+- **Its 20 selections are its own.** They are in the snapshot (`ours`), scattered over the machine,
+  and are not the team's assignment. The team's stored assignment is never read.
+- **It is a fixed moment.** Wed 9 Dec 2026, 10:00 Eastern, a week into the competition: $600 opened,
+  a day-one fill, a midweek visit, six runs with steps, tool calls (one refused, one failed), purchase
+  and catalog requests, a count, the closet. It doesn't refresh, and its times don't follow your
+  clock (the live page's script does that; the demo turns it off).
+- **Views of it aren't visits.** The visit counter lists `/dashboard` and `/db` only
+  (`vending.visits.PAGES`), so a view of the demo is not counted at all, not even separately, and it
+  hands out no browser cookie. The live page's counts stay people reading the real page. A separate
+  count would need a new `page` value in `page_visits`, whose check allows `/login`, `/dashboard`
+  and `/db` only (migration 016), so it is a migration; this change adds none. The counter never
+  tries to write a demo view.
+- **Its toggles are its own.** The page keeps the Now / Next Friday choice, the shelf and the
+  filters in `localStorage`, which both pages share by address. The demo uses keys that start
+  `demo-dash-`, the live page `dash-`, so a switch flipped on the demo doesn't move the live page's.
+- **Signed out**, the demo's JSON answers 401 like the live JSON, and its page redirects to the
+  password page. A POST to either is refused with 405. The demo can't set off anything that reads
+  the live verdict: the JSON has no verdict of its own and says `demo`.
+- **Failed calls and runs show no error text**, as on the live public page: the snapshot is made
+  with `public=True`.
+
+To make the file again (it must match the dashboard's snapshot, and a test checks that it does):
+
+```
+docker run -d --rm --label agentic-vending.scratch=true -p 127.0.0.1::5432 -e POSTGRES_PASSWORD=x postgres:17
+DATABASE_URL=postgresql://postgres:x@127.0.0.1:PORT/postgres python -m vending.demo.make
+```
+
+The generator refuses a host that isn't this machine. It builds a throwaway schema, fills it with
+made-up data (`vending/demo/make.py`), runs `snapshot()` on it, writes the file and drops the schema.
+`--check` says whether the committed file is current. Stop the container afterwards.
+
+![The demo copy, light](dashboard/demo-1280-light.png)
+
+| Dark | Phone |
+|---|---|
+| ![The demo copy, dark](dashboard/demo-1280-dark.png) | ![The demo copy on a phone](dashboard/demo-390-light.png) |
+
 ## Catalog requests
 
 The instructors must approve every day-one product by Wed 25 Nov 2026, so the panel lists all of
