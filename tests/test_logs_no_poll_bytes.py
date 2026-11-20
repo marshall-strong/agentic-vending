@@ -18,6 +18,7 @@ import json
 import re
 import threading
 import time
+import traceback
 import urllib.error
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
@@ -73,9 +74,12 @@ def test_the_check_sees_what_it_looks_for():
 
 KEY = "made-up-key"
 DAY = "2026-10-01"
-HISTORY, RAW, SLOTS, PRODUCTS = "/api/v1/history", "/api/v1/history/s1/raw", "/api/v1/slots", "/api/v1/products"
+# The bridge's session ids are 32 hex digits (docs/snapshot-archive.md).
+SID, SID2, SID3, LIVE = (f"{n:x}" * 32 for n in (1, 2, 3, 4))
+HISTORY, SLOTS, PRODUCTS = "/api/v1/history", "/api/v1/slots", "/api/v1/products"
+RAW = f"{HISTORY}/{SID}/raw"
 POLL_PATH, HEALTH = "/api/v1/poll", "/health"
-POLL = {"session_id": "s1", "started_at": "2026-10-01T12:00:00+00:00"}
+POLL = {"session_id": SID, "started_at": "2026-10-01T12:00:00+00:00"}
 
 
 @dataclass
@@ -155,7 +159,7 @@ def client(serve):
 # --- vending/bridge.py -----------------------------------------------------------------------------
 
 READS = {
-    "raw": (lambda c: c.raw("s1"), RAW),
+    "raw": (lambda c: c.raw(SID), RAW),
     "history": (lambda c: c.history(DAY), HISTORY),
     "slots": (lambda c: c.slots(), SLOTS),
     "purchase_request": (lambda c: c.purchase_request("pr1"), "/api/v1/purchase-requests/pr1"),
@@ -267,6 +271,76 @@ def test_a_session_id_that_does_not_validate_is_not_passed_on(client):
     assert client({POLL_PATH: Answer(body=build(SAMPLE), headers=named)}).poll().session_id == named["X-Poll-Session-Id"]
 
 
+@pytest.mark.parametrize("value", ["7919", "987", "156386060", "s1", "live1", SID[:-1], SID + "0", "g" * 32, "", PA1])
+def test_a_session_id_is_32_hex_digits_and_a_counter_is_not_one(client, value):
+    assert not bridge_module.valid_session_id(value)
+    read = client({POLL_PATH: Answer(body=build(SAMPLE), headers={"X-Poll-Session-Id": value})}).poll()
+    assert read.session_id is None
+
+
+@pytest.mark.parametrize("value", [SID, "fcf24e12ad214de1b637e195f79468f2", "0" * 32])
+def test_a_documented_session_id_is_valid(value):
+    assert bridge_module.valid_session_id(value)
+    assert not bridge_module.valid_session_id(None) and not bridge_module.valid_session_id(7919)
+
+
+def test_a_truncated_day_says_so_without_the_listings_own_figures(client):
+    body = json.dumps({"device_id": "vmc1", "polls": [POLL], "truncated": True, "limit": 7919})
+    with pytest.raises(BridgeError) as raised:
+        client({HISTORY: Answer(body=body.encode())}).history(DAY)
+    assert "listing truncated" in str(raised.value)
+    assert_clean(raised.value)
+
+
+def test_history_checks_the_listing_and_leaves_each_row_to_the_sync(client):
+    # One bad row must not turn the day into an error: the sync counts and skips it.
+    rows = client({HISTORY: listing(POLL, {"started_at": "2026-10-01T12:00:00+00:00"}, PA1, None)}).history(DAY)
+    assert len(rows) == 4 and rows[0] == dict(POLL, device_id="vmc1")
+
+
+# --- Tracebacks: a response's text must not come back through an exception's cause or context --------------
+
+def traceback_of(error: BaseException) -> str:
+    return "".join(traceback.format_exception(error))
+
+
+NOT_HTTP = Answer(wire=PA1.encode() + b"\r\n\r\n")
+CUT_SHORT = Answer(body=POISON, content_length=2000)
+
+
+@pytest.mark.parametrize("name", ["raw", "history"])
+@pytest.mark.parametrize("answer", [NOT_HTTP, CUT_SHORT, Answer(status=404, body=POISON, reason=PA1)],
+                         ids=["not HTTP", "cut short", "404"])
+def test_a_formatted_traceback_of_a_bridge_read_holds_none_of_the_reply(client, name, answer):
+    call, path = READS[name]
+    with pytest.raises(BridgeError) as raised:
+        call(client({path: answer, **HEALTHY}))
+    assert_clean(traceback_of(raised.value))
+
+
+@pytest.mark.parametrize("name", ["history", "slots", "purchase_request", "product_request"])
+def test_a_formatted_traceback_of_an_answer_that_is_not_json_holds_none_of_it(client, name):
+    call, path = READS[name]
+    with pytest.raises(BridgeError) as raised:
+        call(client({path: Answer(body=b"\x80\x81" + POISON)}))
+    assert_clean(traceback_of(raised.value))
+
+
+@pytest.mark.parametrize("failure", [
+    http.client.BadStatusLine(PA1),
+    http.client.IncompleteRead(POISON, 2000 - len(POISON)),
+    urllib.error.HTTPError("u", 409, "Conflict", {}, io.BytesIO(POISON)),
+], ids=["bad status line", "short read", "refused"])
+def test_a_formatted_traceback_of_a_live_read_holds_none_of_the_reply(monkeypatch, failure):
+    def urlopen(request, timeout):
+        raise failure
+
+    monkeypatch.setattr(bridge_module.urllib.request, "urlopen", urlopen)
+    with pytest.raises(BridgeError) as raised:
+        Bridge("http://bridge.test", KEY).poll()
+    assert_clean(traceback_of(raised.value))
+
+
 def test_a_write_still_carries_the_servers_reason(client):
     # Not a poll: the answer to our own purchase request, which the agent needs to read.
     answer = Answer(status=422, body=b'{"error": "invalid_lines"}')
@@ -298,12 +372,18 @@ def own_connection(schema_url, monkeypatch):
     monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
 
 
-def synced(conn, routes, serve, **kwargs):
+def synced_by(conn, routes, serve, **kwargs):
+    """The sync of 1 Oct against a fake bridge: its report, everything it logged and the bridge (`.requests`)."""
     server = serve(routes)
     lines = []
     report = sync_history.sync(conn, Bridge(base_url=server.url, api_key=KEY), datetime(2026, 10, 1).date(),
                                datetime(2026, 10, 1).date(), log=lines.append, **kwargs)
-    return report, "\n".join(lines)
+    return report, "\n".join(lines), server
+
+
+def synced(conn, routes, serve, **kwargs):
+    report, log, _ = synced_by(conn, routes, serve, **kwargs)
+    return report, log
 
 
 @pytest.mark.parametrize("routes, field_, says", [
@@ -320,19 +400,105 @@ def test_a_day_or_poll_the_sync_cannot_read_is_logged_with_a_reason_of_our_own(c
     assert_clean(log)
 
 
-@pytest.mark.parametrize("meta", [
-    {"session_id": PA1, "started_at": VA1},                                 # nothing usable
-    {"session_id": "ok1", "started_at": PA2},                               # a start that isn't a time
-    {"session_id": "ok1\r\n" + VA1, "started_at": "2026-10-01T12:00:00+00:00"},
-])
-def test_a_listed_poll_with_an_unusable_id_or_time_is_skipped_and_never_logged(conn, serve, meta):
-    from urllib.parse import quote
+GOOD_TIME = "2026-10-01T12:00:00+00:00"
+# One row of a day's listing that can't be fetched and stored, each with a value that must never be logged.
+BAD_ROWS = {
+    "id is a record": {"session_id": PA1, "started_at": GOOD_TIME},
+    "id is a counter": {"session_id": "7919", "started_at": GOOD_TIME},       # not 32 hex digits
+    "id has a line break": {"session_id": SID2[:-2] + "\r\n" + VA1, "started_at": GOOD_TIME},
+    "no id": {"started_at": GOOD_TIME, "bytes": PA2},
+    "id is not a string": {"session_id": 7919, "started_at": GOOD_TIME},
+    "no start": {"session_id": SID2, "note": VA1},
+    "start is a record": {"session_id": SID2, "started_at": VA1},
+    "start is not a string": {"session_id": SID2, "started_at": {"x": PA1}},
+    "start is a number": {"session_id": SID2, "started_at": 156386060},
+    "start is impossible": {"session_id": SID2, "started_at": "2026-02-30T12:00:00+00:00"},
+    "start has no offset": {"session_id": SID2, "started_at": "2026-10-01T12:00:00"},
+    "start has a month 13": {"session_id": SID2, "started_at": "2026-13-01T12:00:00+00:00"},
+    "row is a string": PA2,
+    "row is a list": [SID2, VA1],
+    "row is null": None,
+}
 
-    routes = {HISTORY: listing(meta), f"{HISTORY}/{quote(meta['session_id'])}/raw": Answer(body=POISON),
-              f"{HISTORY}/ok1/raw": Answer(body=build(SAMPLE))}
-    report, log = synced(conn, routes, serve)
-    assert report.failed_polls == 1 and report.new == 0
+
+@pytest.mark.parametrize("meta", BAD_ROWS.values(), ids=BAD_ROWS)
+def test_a_listed_poll_with_an_unusable_id_or_time_is_skipped_and_never_logged(conn, serve, meta):
+    routes = {HISTORY: listing(meta), f"{HISTORY}/{SID2}/raw": Answer(body=build(SAMPLE))}
+    report, log, server = synced_by(conn, routes, serve)
+    assert (report.failed_days, report.failed_polls, report.new) == (0, 1, 0)
     assert conn.execute("select count(*) from polls").fetchone()[0] == 0
+    assert all("/raw" not in path for _, path in server.requests)         # parsed before anything is fetched
+    assert_clean(log)
+    for value in ("2026-02-30", "2026-13-01", "7919", "156386060", SID2):
+        assert value not in log, f"{value!r} is in the log"
+
+
+def test_one_bad_row_does_not_stop_the_good_polls_of_its_day(conn, serve):
+    good, later = build(SAMPLE), build(SAMPLE, corrupt=True)
+    rows = [
+        POLL,                                                                        # good
+        {"started_at": GOOD_TIME},                                                   # no id
+        {"session_id": SID2, "started_at": 12345},                                   # a start that isn't a string
+        {"session_id": SID2, "started_at": "2026-02-30T12:00:00+00:00"},             # an impossible date
+        PA1,                                                                         # not an object
+        {"session_id": SID3, "started_at": "2026-10-01T13:00:00+00:00"},             # good, after the bad ones
+    ]
+    routes = {HISTORY: listing(*rows), RAW: Answer(body=good), f"{HISTORY}/{SID3}/raw": Answer(body=later),
+              f"{HISTORY}/{SID2}/raw": Answer(body=POISON)}
+    report, log, server = synced_by(conn, routes, serve)
+    assert (report.failed_days, report.failed_polls, report.new, report.crc_failed) == (0, 4, 2, 1)
+    stored = {r[0]: bytes(r[1]) for r in conn.execute("select session_id, raw from polls")}
+    assert stored == {SID: good, SID3: later}                                        # byte for byte
+    assert [p for _, p in server.requests if p.endswith("/raw")] == [RAW, f"{HISTORY}/{SID3}/raw"]
+    assert "skipped" in log
+    assert_clean(log)
+    for bad in ("2026-02-30", "12345", str(SID2)):
+        assert bad not in log
+
+
+def test_the_sync_command_with_a_mixed_listing_stores_the_good_poll_and_prints_no_bad_value(
+        conn, own_connection, serve, monkeypatch, capsys):
+    good = build(SAMPLE)
+    rows = [{"session_id": SID2, "started_at": "2026-02-30T12:00:00+00:00"}, POLL, {"started_at": VA1}, PA1]
+    monkeypatch.setenv("DEX_BASE_URL", serve({HISTORY: listing(*rows), RAW: Answer(body=good)}).url)
+    monkeypatch.setenv("DEX_API_KEY", KEY)
+    assert sync_history.main(["--since", DAY, "--until", DAY]) == 1                  # the bad rows are counted
+    said = capsys.readouterr()
+    assert [(r[0], bytes(r[1])) for r in conn.execute("select session_id, raw from polls")] == [(SID, good)]
+    assert "1 new" in said.out and "3 polls the bridge couldn't return" in said.out
+    assert_clean(said.out, said.err)
+    assert "2026-02-30" not in said.out + said.err
+
+
+def poll_with_serial(serial: str) -> bytes:
+    return build(["ID1*>*" + serial + "*0000**EVS3.0*", *SAMPLE[1:]])
+
+
+def test_a_poll_that_cannot_be_stored_does_not_stop_the_polls_after_it(conn, serve):
+    # A serial with a NUL byte is a good document the database refuses: that used to end the whole run.
+    first, last = build(SAMPLE), build(SAMPLE, corrupt=True)
+    rows = [POLL, {"session_id": SID2, "started_at": "2026-10-01T13:00:00+00:00"},
+            {"session_id": SID3, "started_at": "2026-10-01T14:00:00+00:00"}]
+    routes = {HISTORY: listing(*rows), RAW: Answer(body=first),
+              f"{HISTORY}/{SID2}/raw": Answer(body=poll_with_serial("RVV\x00NG")),
+              f"{HISTORY}/{SID3}/raw": Answer(body=last)}
+    report, log, _ = synced_by(conn, routes, serve)
+    assert (report.failed_polls, report.new) == (1, 2)
+    assert {r[0] for r in conn.execute("select session_id from polls")} == {SID, SID3}
+    # A reason of ours, the error's class and its SQLSTATE: never the database's text.
+    assert f"could not store {SID2}" in log and "DataError" in log and "NUL" not in log
+    assert_clean(log)
+
+
+def test_a_storage_error_is_logged_as_its_class_and_sqlstate_only(conn, serve, monkeypatch):
+    import psycopg
+
+    def refuse(conn, meta, raw):
+        raise psycopg.errors.CheckViolation(f'new row violates check constraint\nDETAIL:  Failing row contains ({PA1}, {VA1})')
+
+    monkeypatch.setattr(sync_history, "store", refuse)
+    report, log, _ = synced_by(conn, {HISTORY: listing(POLL), RAW: Answer(body=build(SAMPLE))}, serve)
+    assert report.failed_polls == 1 and "CheckViolation" in log and "23514" in log
     assert_clean(log)
 
 
@@ -407,7 +573,7 @@ def visit(conn, serve, monkeypatch, routes):
     return "\n".join(said)
 
 
-POLLED = Answer(body=build(SAMPLE), headers={"X-Poll-Session-Id": "live1", "X-Poll-Cached": "false"})
+POLLED = Answer(body=build(SAMPLE), headers={"X-Poll-Session-Id": LIVE, "X-Poll-Cached": "false"})
 
 
 @pytest.mark.parametrize("routes, says", [
@@ -421,12 +587,21 @@ POLLED = Answer(body=build(SAMPLE), headers={"X-Poll-Session-Id": "live1", "X-Po
       HISTORY: listing()}, "visit reads: read"),
     ({REQUEST: PENDING, POLL_PATH: POLLED, HISTORY: Answer(body=POISON)}, "could not list"),
     ({REQUEST: PENDING, POLL_PATH: POLLED, HISTORY: listing({"session_id": VA1, "started_at": PA2}),
-      f"{HISTORY}/live1/raw": Answer(body=POISON)}, "visit reads: read live1"),
+      f"{HISTORY}/{LIVE}/raw": Answer(body=POISON)}, f"visit reads: read {LIVE}"),
 ], ids=["busy", "502", "short read", "not HTTP", "receipt not JSON", "session header", "history not JSON",
         "listing with odd ids"])
 def test_a_visit_read_logs_no_poll_bytes(conn, serve, monkeypatch, routes, says):
     log = visit(conn, serve, monkeypatch, routes)
     assert says in log
+    assert_clean(log)
+
+
+def test_a_read_stored_under_another_device_says_so_without_naming_it(conn, serve, monkeypatch):
+    listing_of_another = {"device_id": PA1, "polls": [{"session_id": LIVE, "started_at": "2026-12-04T20:25:30+00:00"}]}
+    log = visit(conn, serve, monkeypatch, {
+        REQUEST: PENDING, POLL_PATH: POLLED, HISTORY: Answer(body=json.dumps(listing_of_another).encode()),
+        f"{HISTORY}/{LIVE}/raw": Answer(body=build(SAMPLE))})
+    assert f"storage not confirmed for read {LIVE}: device mismatch" in log
     assert_clean(log)
 
 
@@ -486,3 +661,66 @@ def test_a_reply_that_is_not_http_logs_no_part_of_it(snapshot):
     code, text = snapshot({POLL_PATH: Answer(wire=PA1.encode() + b"\r\n\r\n")})
     assert code != 0 and "poll_failed" in text
     assert_clean(text)
+
+
+@pytest.mark.parametrize("answer", [NOT_HTTP, CUT_SHORT], ids=["not HTTP", "cut short"])
+def test_the_snapshot_script_does_not_chain_a_reply_into_its_error(snapshot, serve, answer):
+    # `raise PollError(...)` inside an `except` chains the cause, and a formatted traceback prints it.
+    server = serve({POLL_PATH: answer})
+    with pytest.raises(snapshot.script.PollError) as raised:
+        snapshot.script.http_request("POST", server.url + POLL_PATH, {}, 5)
+    assert_clean(traceback_of(raised.value))
+
+
+@pytest.mark.parametrize("body", [
+    b"\x80\x81" + POISON,                    # not UTF-8
+    POISON,                                  # not JSON
+    json.dumps([PA1]).encode(),              # JSON, but not an object
+    json.dumps(PA1).encode(),
+], ids=["not UTF-8", "not JSON", "a list", "a string"])
+def test_a_health_reply_that_is_not_a_json_object_is_a_named_failure(snapshot, body):
+    code, text = snapshot({HEALTH: Answer(body=body)})
+    assert code == snapshot.script.EXIT_UNREACHABLE and "reason=health_not_ok" in text
+    assert "unexpected" not in text
+    assert_clean(text)
+
+
+def test_the_health_error_does_not_chain_the_reply(snapshot, serve):
+    server = serve({HEALTH: Answer(body=b"\x80\x81" + POISON)})
+    with pytest.raises(snapshot.script.PollError) as raised:
+        snapshot.script.get_health(server.url, 5)
+    assert_clean(traceback_of(raised.value))
+
+
+def test_the_dry_run_logs_only_plain_values_of_the_health_fields(snapshot):
+    health = {"status": PA1, "version": {"x": VA1}, "uptime": PA2, "transmit_enabled": True, "extra": PA1}
+    code, text = snapshot({HEALTH: Answer(body=json.dumps(health).encode())}, "--dry-run")
+    assert code == 0 and "event=dry_run" in text
+    assert_clean(text)
+
+
+def test_the_dry_run_still_logs_plain_health_values(snapshot):
+    health = {"status": "ok", "version": "1.4.2", "uptime": "3d 2h", "transmit_enabled": True}
+    code, text = snapshot({HEALTH: Answer(body=json.dumps(health).encode())}, "--dry-run")
+    assert code == 0 and "health=ok" in text and "version=1.4.2" in text and "uptime=" in text
+    assert "transmit_enabled=True" in text
+
+
+# --- scripts/check_archive.py ----------------------------------------------------------------------------
+
+def test_the_archive_check_prints_the_reason_code_and_never_an_old_detail(tmp_path, monkeypatch, capsys):
+    # Logs written before the fix can hold a snippet of the reply in `detail`.
+    spec = importlib.util.spec_from_file_location("check_archive_under_test", ROOT / "scripts" / "check_archive.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    (tmp_path / "data" / "snapshots").mkdir(parents=True)
+    (tmp_path / "data" / "snapshots" / "20261119T120000Z.dex").write_bytes(b"x")
+    (tmp_path / "data" / "logs").mkdir(parents=True)
+    (tmp_path / "data" / "logs" / "poll.log").write_text(
+        '2026-11-19T12:30:00Z level=ERROR event=poll_failed reason=bridge_error '
+        f'detail="POST /api/v1/poll returned 502 Bad Gateway. Response: {PA1} {PA2} {VA1}" exit=6\n', encoding="utf-8")
+    monkeypatch.setattr(script, "repo_root", lambda: tmp_path)
+    script.main(["--log-lines", "5"])
+    out = capsys.readouterr().out
+    assert "Most recent error" in out and "reason=bridge_error" in out
+    assert_clean(out)
