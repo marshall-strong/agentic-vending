@@ -67,7 +67,7 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import config, counters, demand, slot_counts, stock, wildcard_trial
-from vending.class_days import eastern_date
+from vending.class_days import class_days_after, eastern_date
 from vending.planner import AGREED_CEILING_CENTS
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import Reply
@@ -210,7 +210,9 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold
             units_per_class_day=None if rate.units_per_class_day is None else str(rate.units_per_class_day),
             rate_basis=rate.basis,
             class_days_in_stock=rate.class_days_in_stock if count else None,
-            class_days_since_sale=rate.class_days_since_sale if count else None,
+            # A newer count that found it empty stops the clock: an empty slot can't sell.
+            class_days_since_sale=(0 if looked and looked["on_hand"] == 0 else rate.class_days_since_sale)
+            if count else None,
             class_days_of_stock_left=demand.class_days_left(on_hand, rate.units_per_class_day),
             counted_product=looked["product"] if looked else None,
             counted_on_hand=looked["on_hand"] if looked else None,
@@ -297,7 +299,8 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     sold_since_load = _sold_since_load(counted.sales, last_loaded)
     seen = _seen(conn, now)
     latest_counters = _counters(conn, latest[0], slots)
-    demands = _demands(counts, loads, counted.sales, latest_counters, now)
+    demands = _demands(counts, loads, counted.sales, latest_counters, now,
+                       wildcard_trial.coil_losses(conn), wildcard_trial.pulls(conn))
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     wildcard = config.get_value(conn, "wildcard_slot")
@@ -461,7 +464,9 @@ def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime
 
 
 def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[datetime, int, str]]],
-             sales: tuple[stock.SaleCost, ...], latest: Counters, now: datetime) -> dict[str, demand.Demand]:
+             sales: tuple[stock.SaleCost, ...], latest: Counters, now: datetime,
+             losses: dict[str, list[tuple[datetime, str, int]]] | None = None,
+             pulls: dict[str, list[tuple[datetime, int]]] | None = None) -> dict[str, demand.Demand]:
     """Each receipted slot's in-stock rate (or prior) for its current product, since it went in,
     and its slow-seller clock. Pure.
 
@@ -479,9 +484,13 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
     replay's count: the slot held stock only if they weren't this product's, so it may have stood
     empty after them.
 
-    The slow-seller clock (`Demand.class_days_since_sale`) is those in-stock class days after the
-    run's last sale, or after it went in. An unattributed sale may have been this product's, so it
-    restarts the clock too.
+    Recorded coil losses (`wildcard_trial.coil_losses`) and pulls (`wildcard_trial.pulls`) of the run
+    leave the spans too, so a slot they emptied isn't counted in stock until a load refills it.
+
+    The slow-seller clock (`Demand.class_days_since_sale`) is those in-stock class days in the slot's
+    current stretch of stock, after the run's last sale, or after the stretch began. An unattributed
+    sale may have been this product's, so it restarts the clock too. A slot that may be empty now has
+    0.
     """
     demands = {}
     for slot, count in counts.items():
@@ -492,13 +501,19 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
                                                                   if s.product == count.product and not s.unattributed])
         unknown = demand.run_events(count.since, count.unattributed, [(s.at, s.units) for s in mine if s.unattributed])
         since = [s for s in mine if s.at > count.since]
-        spans = demand.in_stock_spans(slot_loads, slot_sales + unknown, now, count.units)
+        lost = demand.run_events(count.since, count.lost,
+                                 [(at, units) for at, sku, units in (losses or {}).get(slot, []) if sku == count.product])
+        pulled = [(at, units) for at, units in (pulls or {}).get(slot, []) if at > count.since]
+        spans = demand.in_stock_spans(slot_loads, slot_sales + unknown + lost + pulled, now, count.units)
         unplaced = {day for s in since if s.unattributed for day in _dates(s.since or count.since, s.at)}
         in_stock = set(demand.class_days_in_stock(spans)) - unplaced
-        last_sale = eastern_date(max([count.since] + [at for at, _ in slot_sales + unknown]))
+        quiet = 0
+        if spans and spans[-1][1] == now:   # in stock now: count from the stretch's start or the last sale
+            begin = max([spans[-1][0]] + [at for at, _ in slot_sales + unknown])
+            quiet = sum(day in in_stock for day in class_days_after(begin, now))
         estimate = demand.estimate(sum(units for _, units in slot_sales), len(in_stock),
                                    latest.get(slot, (None, None))[0])
-        demands[slot] = replace(estimate, class_days_since_sale=sum(day > last_sale for day in in_stock))
+        demands[slot] = replace(estimate, class_days_since_sale=quiet)
     return demands
 
 
