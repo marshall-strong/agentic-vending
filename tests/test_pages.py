@@ -1,11 +1,13 @@
 """The public pages (#53): served by the worker, on a login that can only read, with no error text."""
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from html import unescape
 
 import psycopg
 import pytest
@@ -13,10 +15,11 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
-from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, open_in
+from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, open_in, store_poll
+from tests.test_dashboard import fulfilled, get, served, shows  # noqa: F401 (the standalone server fixture)
 from tests.test_plan_rounds import day_one, projection, write
 from tests.test_plan_store import unassigned_slot
-from vending import agent_runs, dashboard, db, db_explorer, pages, plan_store, settings, slots, worker
+from vending import agent_runs, dashboard, db, db_explorer, ledger, pages, plan_store, settings, slots, worker
 from vending.write_gate import log
 
 SECRET = 'connection to server at "db.example.net", port 5432 failed: password authentication failed for user "g2_admin"'
@@ -93,7 +96,8 @@ def _get(server, path):
 
 def test_the_worker_serves_the_dashboard_its_json_and_the_explorer(site, schema_url, conn):
     _, schema = schema_url
-    run = agent_runs.start(conn, mode="dry-run")
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "skipped", detail="nothing to restock")
 
     status, headers, page = _get(site, "/dashboard")
@@ -197,14 +201,95 @@ def test_a_passed_check_is_trusted_for_a_while_then_made_again(schema_url, reade
 
 # --- No error text ------------------------------------------------------------------------------
 
+def test_public_dashboard_panel_errors_go_to_stderr(site, conn, capsys):
+    conn.execute("drop table product_requests cascade")
+    fixed = "This part of the page can't be read right now."
+    for path in ("/dashboard", "/dashboard/state.json"):
+        status, _, body = _get(site, path)
+        assert status == 200
+        assert fixed in body.replace("&#x27;", "'")
+        for marker in ("product_requests", "does not exist", "LINE 1:", "select id, requested_at"):
+            assert marker not in body
+    state = json.loads(body)
+    assert state["catalog_requests"] == state["catalog_counts"] == {"ok": False, "why": fixed}
+    assert 'relation "product_requests" does not exist' in capsys.readouterr().err
+    local = dashboard.snapshot(conn)
+    assert 'relation "product_requests" does not exist' in local["catalog_requests"]["why"]
+    assert "python -m vending.db migrate" in dashboard.render(local)
+
+
+@pytest.mark.parametrize("source", ["old_write", "scoped_step"])
+def test_public_dashboard_omits_retired_selection_text(site, conn, source):
+    now = conn.execute("select now()").fetchone()[0]
+    before, reassigned = now - timedelta(minutes=10), now - timedelta(minutes=5)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=before)
+    conn.execute("update slot_assignment set slots = array_remove(slots, '15') || array['11'], "
+                 "first_read_at = %s, last_checked_at = %s", (reassigned, reassigned))
+    store_poll(conn, "assignment-control", now.isoformat(), {"15": (8193, 1), "16": (256, 1)})
+    if source == "old_write":
+        log(conn, "write", "config.set", {"key": "wildcard_slot", "value": "15"}, "done", "RETIRED-CONFIG slot 15")
+        conn.execute("update action_log set at = %s where tool = 'config.set'", (before,))
+        owned = {"key": "wildcard_slot", "value": "16"}
+        log(conn, "write", "config.set", owned, "done", "OWNED-CONTROL slot 16")
+        markers = ("RETIRED-CONFIG", '"value": "15"', "81.93")
+    else:
+        run = agent_runs.start(conn, mode="live")
+        payload = {"slots": [{"slot": "15", "product": "RETIRED-ROW"}, {"slot": "16", "product": "OWNED-CONTROL"}],
+                   **{key: f"RETIRED-{key} slot 15" for key in ("directive", "decision_note", "notes")}}
+        agent_runs.step(conn, run, 1, "tool_result", json.dumps(payload), tool="get_purchase_requests")
+        markers = ("RETIRED-ROW", "RETIRED-directive", "RETIRED-decision_note", "RETIRED-notes", "81.93")
+    status, _, page = _get(site, "/dashboard")
+    assert status == 200 and "OWNED-CONTROL" in page
+    _, _, body = _get(site, "/dashboard/state.json")
+    assert "OWNED-CONTROL" in body
+    attrs = re.findall(r'(?:aria-label|title)="([^"]*)"', page)
+    assert any("2.56" in attr for attr in attrs)
+    for marker in markers:
+        assert marker not in page and marker not in body
+        assert all(marker not in attr for attr in attrs)
+    if source == "old_write":
+        audit = [row for row in json.loads(body)["activity"]["data"] if row["tool"] == "config.set"]
+        assert [row["arguments"] for row in audit] == [owned, {}]
+
+
+def test_public_dashboard_has_no_spend_error_before_opening(site, capsys):
+    for path in ("/dashboard", "/dashboard/state.json"):
+        status, _, body = _get(site, path)
+        assert status == 200
+        assert dashboard.PUBLIC_PANEL_ERROR not in body.replace("&#x27;", "'")
+        assert "Spent so far" not in body and "Spent before the opening" not in body
+    assert json.loads(body)["spend"] == {"ok": True, "data": None}
+    assert capsys.readouterr().err == ""
+
+
+def test_public_dashboard_keeps_submit_confirmation_without_later_error(site, conn):
+    now = conn.execute("select now()").fetchone()[0]
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=now - timedelta(minutes=1))
+    run = agent_runs.start(conn, mode="live")
+    confirmation = "Submitted purchase request test-123"
+    detail = f"{confirmation}; afterwards: OperationalError: connection to db-private.example.test failed"
+    agent_runs.finish(conn, run, "submitted", detail=detail, request_id="test-123")
+
+    for path in ("/dashboard", "/dashboard/state.json"):
+        status, _, body = _get(site, path)
+        assert status == 200 and confirmation in body
+        assert "db-private.example.test" not in body and "OperationalError" not in body
+    state = json.loads(body)
+    assert state["status"]["latest_run"]["detail"] == state["runs"]["data"][0]["detail"] == confirmation
+    assert dashboard.snapshot(conn)["runs"]["data"][0]["detail"] == detail
+
+
 def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
     _, schema = schema_url
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=datetime.now(timezone.utc) - timedelta(minutes=1))
     log(conn, "read", "get_machine_state", {}, "failed", f"OperationalError: {SECRET}")
     conn.execute("update action_log set result = %s where outcome = 'failed'",
                  (psycopg.types.json.Jsonb({"success": False, "message": SECRET}),))
     log(conn, "write", "submit_desired_state", {}, "refused", "halted: turn the switch off first")
     log(conn, "read", "get_catalog", {}, "done", "26 products")
     run = agent_runs.start(conn, mode="live")
+    agent_runs.step(conn, run, 1, "tool_result", "FAILED-STEP-MARKER", tool="get_machine_state", is_error=True)
+    agent_runs.step(conn, run, 1, "tool_result", "SUCCESSFUL-STEP-MARKER", tool="get_catalog")
     agent_runs.finish(conn, run, "failed", detail=SECRET)
 
     pages_seen = [_get(site, path)[2] for path in (
@@ -216,9 +301,10 @@ def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
     # Refusals and successes are our own words, and stay.
     assert "halted: turn the switch off first" in pages_seen[0] and "halted: turn the switch off first" in pages_seen[2]
     assert "26 products" in pages_seen[2]
-    # The local pages, for the team, still show it.
+    for body in pages_seen[:2]:
+        assert "FAILED-STEP-MARKER" not in body and "SUCCESSFUL-STEP-MARKER" in body
     with open_in(*schema_url) as local:
-        assert "db.example.net" in dashboard.to_json(dashboard.snapshot(local))
+        assert "db.example.net" not in dashboard.to_json(dashboard.snapshot(local))
         assert "db.example.net" in db_explorer.render(local, db_explorer.Request(schema, "action_log", 0))[1]
 
 
@@ -418,10 +504,10 @@ def test_the_public_json_has_only_our_selections_in_its_counts(site, schema_url,
     status, _, body = _get(site, "/dashboard/state.json")
     counts = json.loads(body)["counts"]["data"]
     assert status == 200 and list(counts) == [ours] and counts[ours]["product"] == "Our Chips"
-    assert NOT_OURS not in body and "7.77" not in body
+    assert NOT_OURS not in body and '"7.77"' not in body
     sales, stock = json.loads(body)["sales"]["data"]["slots"], json.loads(body)["stock"]["data"]["slots"]
     assert theirs not in sales and theirs not in stock and set(sales) | set(stock) <= set(_stored(conn))
-    # The local snapshot, for the team, still has the whole count.
+    # The standalone snapshot applies the same assignment filter.
     with open_in(*schema_url) as local:
         assert sorted(dashboard.snapshot(local)["counts"]["data"]) == [ours]
 
@@ -468,18 +554,19 @@ def test_the_public_pages_follow_a_changed_stored_assignment(site, schema_url, c
 
 def test_the_public_pages_degrade_when_no_assignment_is_stored(site, schema_url, conn):
     """Nothing stored: no selection is ours, so the pages light nothing, show no selection rows,
-    and say why, rather than fall back to any list."""
+    and say the assignment is unavailable."""
     _, schema = schema_url
     _not_ours(conn)
     conn.execute("delete from slot_assignment")
     status, _, page = _get(site, "/dashboard")
     assert status == 200 and '<article class="ma-lane' not in page
-    assert "Not available: Our slot assignment hasn" in page and "python -m vending.slots record" in page
+    assert f"Not available: {dashboard.PUBLIC_PANEL_ERROR}" in page.replace("&#x27;", "'")
     assert "Which selections are ours isn" in page and "Our Chips" not in page and NOT_OURS not in page
     assert "our slots aren't recorded" in page and "run the history sync" not in page   # not "no polls"
     status, _, body = _get(site, "/dashboard/state.json")
     snap = json.loads(body)
     assert status == 200 and snap["ours"]["ok"] is False and snap["counts"]["data"] == {}
+    assert snap["ours"]["why"] == dashboard.PUBLIC_PANEL_ERROR
     assert "Our Chips" not in body and NOT_OURS not in body
     for table in ("slot_counts", "poll_selections"):
         status, _, page = _get(site, f"/db?schema={schema}&table={table}")
@@ -499,6 +586,7 @@ def _stocked_then_reassigned(conn):
     from tests.test_dashboard import fulfilled, plan
     at = datetime(2026, 11, 9, 15, 0, tzinfo=timezone.utc)
     assert "15" in _stored(conn)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=at)
     fulfilled(conn, "pr-old", "15", OLD_SLOT, units_loaded=2, paid="2.40", at=at)
     store_poll(conn, "before", (at - timedelta(hours=1)).isoformat(), {"15": (250, 100), "12": (200, 7)})
     conn.execute("update slot_assignment set slots = %s", (list(EVERY_OTHER),))
@@ -522,11 +610,221 @@ def test_after_a_reassignment_the_public_json_drops_the_old_slots_stock(site, sc
     assert OLD_SLOT not in body
     page = _get(site, "/dashboard")[2]
     assert OLD_SLOT not in page and "slot 15" not in page
-    # The local snapshot, for the team, still has what the receipts say about 15.
+    # The standalone snapshot uses the same assignment.
     with open_in(*schema_url) as local:
         stock = dashboard.snapshot(local)["stock"]["data"]
-        assert stock["slots"]["15"]["product"] == OLD_SLOT
+        assert "15" not in stock["slots"]
         assert not any("slot 15" in w for w in stock["warnings"])
+
+
+@pytest.fixture
+def redraw_with_receipts(conn, monkeypatch):
+    now = conn.execute("select now()").fetchone()[0]
+    before, redraw = now - timedelta(minutes=20), now - timedelta(minutes=5)
+    retired, owned, new = "15", "16", unassigned_slot()
+    monkeypatch.setenv("FALL_CUTOFF", (before - timedelta(days=1)).isoformat())
+    monkeypatch.setattr(dashboard, "lock_at", lambda: now + timedelta(days=1))
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=before)
+    fulfilled(conn, "retired-receipt", retired, "RETIRED-RECEIPT-SKU", units_loaded=4, paid="4.00", at=before)
+    fulfilled(conn, "owned-receipt", owned, "OWNED-RECEIPT-SKU", units_loaded=4, paid="4.00", at=before)
+    store_poll(conn, "before-redraw", before.isoformat(), {retired: (9173, 852713), owned: (256, 4)})
+    conn.execute("update slot_assignment set slots = array_remove(slots, %s) || array[%s],"
+                 " first_read_at = %s, last_checked_at = %s", (retired, new, redraw, redraw))
+    return before, retired, owned, new
+
+
+def _dashboard_bodies(site, served):
+    yield tuple(get(served + path)[2] for path in ("/", "/state.json"))
+    yield tuple(_get(site, path)[2] for path in ("/dashboard", "/dashboard/state.json"))
+
+
+def _stale_wildcard_refusal(conn, retired, owned):
+    detail = f"The wildcard is slot {retired}. Refused the change to slot {owned}."
+    log(conn, "write", "set_wildcard_slot", {"slot": owned}, "refused", detail)
+    return detail
+
+
+def _stale_preview_reply(conn, retired, owned):
+    run = agent_runs.start(conn, mode="live")
+    warning = f"Counted stock on slot {retired} needs a check."
+    control = f"Counted stock on slot {owned} is current."
+    content = json.dumps({
+        "slots": [{"slot": owned, "fill_to": 4}],
+        "message": f"The earlier proposal used selection {retired}.",
+        "notes": [warning, control],
+        "counted": {"warnings": [warning, control]},
+    })
+    agent_runs.step(conn, run, 1, "tool_result", content, tool="preview_desired_state")
+    return run, content, control
+
+
+def _stale_purchase_decision(conn, retired):
+    note = f"The worker declined the old selection {retired}."
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status, decision_note)"
+                 " values ('new-rejection', now(), false, '{}', 'rejected', %s)", (note,))
+    return note
+
+
+def _stale_slot_config(conn, retired, owned):
+    for key in ("slot", "selection", "into_slot", "wildcard_slot"):
+        log(conn, "write", "config.set", {"key": key, "value": int(retired)}, "done", "Configuration changed.")
+    control = {"key": "wildcard_slot", "value": owned}
+    log(conn, "write", "config.set", control, "done", f"Configured owned slot {owned}.")
+    return control
+
+
+def test_current_wildcard_refusal_redacts_retired_slot_text(site, served, conn, redraw_with_receipts):
+    _, retired, owned, _ = redraw_with_receipts
+    detail = _stale_wildcard_refusal(conn, retired, owned)
+    for page, body in _dashboard_bodies(site, served):
+        audit = next(r for r in json.loads(body)["activity"]["data"] if r["tool"] == "set_wildcard_slot")
+        assert audit["detail"] == dashboard.OUTSIDE_ASSIGNMENT
+        assert audit["outcome"] == "refused" and audit["arguments"] == {"slot": owned}
+        assert detail not in page and dashboard.OUTSIDE_ASSIGNMENT in page
+    assert conn.execute("select detail from action_log where tool = 'set_wildcard_slot'").fetchone() == (detail,)
+
+
+def test_current_preview_redacts_text_and_keeps_owned_notes(site, served, conn, redraw_with_receipts):
+    _, retired, owned, _ = redraw_with_receipts
+    run, content, control = _stale_preview_reply(conn, retired, owned)
+    for page, body in _dashboard_bodies(site, served):
+        reply = json.loads(json.loads(body)["runs"]["data"][0]["steps"][0]["content"])
+        assert reply["message"] == dashboard.OUTSIDE_ASSIGNMENT
+        assert reply["notes"] == reply["counted"]["warnings"] == [control]
+        assert reply["slots"] == [{"slot": owned, "fill_to": 4}]
+        assert control in page and f"Counted stock on slot {retired}" not in page
+    assert conn.execute("select content from agent_steps where run_id = %s", (run,)).fetchone() == (content,)
+
+
+def test_current_decision_note_is_scoped_before_attention(site, served, conn, redraw_with_receipts):
+    _, retired, _, _ = redraw_with_receipts
+    note = _stale_purchase_decision(conn, retired)
+    for page, body in _dashboard_bodies(site, served):
+        snap = json.loads(body)
+        request = next(r for r in snap["purchase_requests"]["data"] if r["request_id"] == "new-rejection")
+        assert request["decision_note"] == dashboard.OUTSIDE_ASSIGNMENT
+        warn = next(a for a in snap["attention"] if "Purchase request new-rejection was rejected" in a["text"])
+        assert warn["level"] == "warn" and dashboard.OUTSIDE_ASSIGNMENT in warn["text"]
+        assert note not in page and note not in body
+    assert conn.execute("select decision_note from purchase_requests where request_id = 'new-rejection'").fetchone() == (note,)
+
+
+def test_current_audit_slot_key_value_pairs_drop_retired_slots(site, served, conn, redraw_with_receipts):
+    _, retired, owned, _ = redraw_with_receipts
+    control = _stale_slot_config(conn, retired, owned)
+    for page, body in _dashboard_bodies(site, served):
+        args = [r["arguments"] for r in json.loads(body)["activity"]["data"] if r["tool"] == "config.set"]
+        assert len(args) == 5 and args.count({}) == 4 and control in args
+        assert "Configuration changed." not in page and f"Configured owned slot {owned}." in page
+
+
+def test_redraw_sweep_scopes_recorded_text_on_both_routes(site, served, conn, redraw_with_receipts, monkeypatch):
+    _, retired, owned, _ = redraw_with_receipts
+    _stale_wildcard_refusal(conn, retired, owned)
+    run, _, control = _stale_preview_reply(conn, retired, owned)
+    _stale_purchase_decision(conn, retired)
+    _stale_slot_config(conn, retired, owned)
+    monkeypatch.setattr(dashboard, "lock_at", lambda: TEST_NOW - timedelta(days=30))
+    agent_runs.finish(conn, run, "skipped", plan={"slots": [{
+        "slot": owned, "fill_to": 5, "sale_price": "2.75",
+        "reason": f"Carry over the price of selection {retired}.",
+    }]})
+    for page, body in _dashboard_bodies(site, served):
+        # A grey cabinet position only labels the machine geometry. Check every recorded mention,
+        # plus the dynamic title and aria text, independently of that static label.
+        geometry = f"Selection {retired}: not ours"
+        attrs = re.findall(r'(?:aria-label|title)="([^"]*)"', page)
+        texts = (page.replace(geometry, ""), body, *(text for text in attrs if text != geometry))
+        for text in texts:
+            decoded = unescape(text).lower()
+            assert not shows(decoded, f"slot {retired}") and not shows(decoded, f"selection {retired}")
+        for row in json.loads(body)["activity"]["data"]:
+            if row["tool"] == "config.set":
+                assert not shows(json.dumps(row["arguments"]), retired)
+        assert control in page and control in body
+        assert any(shows(unescape(text).lower(), f"selection {owned}") for text in attrs)
+        assert f'class="pr-reason" title="{dashboard.OUTSIDE_ASSIGNMENT}"' in page
+
+
+def test_fill_check_scopes_the_check_and_plan_reason_before_display(site, served, conn, redraw_with_receipts, monkeypatch):
+    _, retired, owned, _ = redraw_with_receipts
+    check = f"Fills 4 of 8. See slot {retired}."
+    reason = f"Based on a count for selection {retired}."
+    monkeypatch.setattr(dashboard, "lock_at", lambda: TEST_NOW - timedelta(days=30))
+    monkeypatch.setattr(dashboard.capacity, "fill_check", lambda fill, limit: check)
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "skipped", plan={"slots": [{"slot": owned, "fill_to": 4, "reason": reason}]})
+    for page, body in _dashboard_bodies(site, served):
+        snap = json.loads(body)
+        row = next(row for row in snap["plan"]["data"]["slots"] if row["slot"] == owned)
+        assert row["fill_check"] == row["now"]["reason"] == dashboard.OUTSIDE_ASSIGNMENT
+        assert any(item["level"] == "warn" and item["text"].startswith(f"Slot {owned} {dashboard.OUTSIDE_ASSIGNMENT}")
+                   for item in snap["attention"])
+        assert all(text not in unescape(page) and text not in body for text in (check, reason))
+
+
+def test_redraw_hides_retired_receipt_stock_in_both_dashboards(site, served, redraw_with_receipts):
+    _, retired, owned, _ = redraw_with_receipts
+    for page, body in _dashboard_bodies(site, served):
+        assert "RETIRED-RECEIPT-SKU" not in page and "RETIRED-RECEIPT-SKU" not in body
+        assert "OWNED-RECEIPT-SKU" in page and "OWNED-RECEIPT-SKU" in body
+        stock = json.loads(body)["stock"]["data"]["slots"]
+        assert retired not in stock and stock[owned]["on_hand"] == 4
+
+
+@pytest.mark.parametrize("reply_time", ["before_redraw", "after_redraw"])
+def test_redraw_scopes_saved_poll_replies_in_both_dashboards(site, served, conn, redraw_with_receipts, reply_time):
+    before, retired, owned, _ = redraw_with_receipts
+    rows = [{"slot": retired, "price": "91.73", "units_sold_in_window": 852713},
+            {"slot": owned, "price": "2.57", "units_sold_in_window": 1, "product": "OWNED-REPLY"}]
+    reply_text = f"Selection {retired} had price 91.73 and 852713 sales"
+    detail = f"Saved audit summary for selection {retired}: 92.74 and 853714 sales"
+    saved = json.dumps({"data": rows, "content": [{"type": "text", "text": reply_text}]})
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.step(conn, run, 1, "tool_result", saved, tool="get_machine_state")
+    log(conn, "read", "get_machine_state", {}, "done", detail)
+    conn.execute("update action_log set result = %s where tool = 'get_machine_state'", (Jsonb({"data": rows}),))
+    if reply_time == "before_redraw":
+        conn.execute("update agent_runs set started_at = %s where id = %s", (before, run))
+        conn.execute("update action_log set at = %s where tool = 'get_machine_state'", (before,))
+
+    for page, body in _dashboard_bodies(site, served):
+        for marker in ("91.73", "852713", "92.74", "853714", "RETIRED-RECEIPT-SKU"):
+            assert marker not in page and marker not in body
+        assert "OWNED-RECEIPT-SKU" in page and "OWNED-RECEIPT-SKU" in body
+        if reply_time == "after_redraw":
+            assert "OWNED-REPLY" in page and "OWNED-REPLY" in body
+    assert conn.execute("select content from agent_steps where run_id = %s", (run,)).fetchone() == (saved,)
+    assert conn.execute("select detail, result from action_log where tool = 'get_machine_state'").fetchone() == (
+        detail, {"data": rows},
+    )
+
+
+def test_prelock_scopes_weekly_plan_and_earlier_first_fill_reasons(site, served, conn, tmp_path, redraw_with_receipts):
+    before, retired, owned, new = redraw_with_receipts
+    run = agent_runs.start(conn, mode="live")
+    agent_runs.finish(conn, run, "skipped", plan={"reason": "RETIRED-WEEKLY-SUMMARY", "slots": [
+        {"slot": retired, "product": "RETIRED-WEEKLY-ENTRY"},
+        {"slot": owned, "product": "OWNED-WEEKLY-ENTRY", "reason": "RETIRED-WEEKLY-REASON"},
+    ]})
+    conn.execute("update agent_runs set started_at = %s where id = %s", (before, run))
+    # The checked slot set still matches. The copy in the store predates this assignment's check.
+    rows = day_one(**{retired: {"slot": new}, owned: {"product": "OWNED-FIRST-FILL", "why": "RETIRED-FILL-REASON"}})
+    write(tmp_path, "round3", "3", {"day_one": rows})
+    saved = plan_store.load(conn, tmp_path, "3", "Test Loader")
+    conn.execute("update first_fill_plans set loaded_at = %s where id = %s", (before, saved))
+
+    for page, body in _dashboard_bodies(site, served):
+        assert "OWNED-FIRST-FILL" in page
+        snap = json.loads(body)
+        assert snap["plan"]["data"]["id"] == saved
+        assert snap["weekly_plan"]["data"]["run"]["id"] == run and "OWNED-WEEKLY-ENTRY" in body
+        for plan in (snap["plan"], snap["weekly_plan"]):
+            assert retired not in {entry["slot"] for entry in plan["data"]["slots"]}
+        for marker in ("RETIRED-FILL-REASON", "RETIRED-WEEKLY-SUMMARY",
+                       "RETIRED-WEEKLY-ENTRY", "RETIRED-WEEKLY-REASON"):
+            assert marker not in page and marker not in body
+        assert "from before the current slot assignment" in page
 
 
 def test_after_a_reassignment_plans_list_only_our_slots(site, schema_url, conn, monkeypatch):
@@ -557,25 +855,27 @@ def test_with_no_assignment_the_public_json_has_no_slot_stock_or_plan_rows(site,
     assert OLD_SLOT not in body and "9.99" not in body
 
 
-def test_bad_slot_lock_setting_leaves_the_weekly_dashboard_available(site, conn, monkeypatch):
-    run = agent_runs.start(conn, mode="dry-run")
+def test_bad_slot_lock_setting_leaves_the_weekly_dashboard_available(site, conn, monkeypatch, capsys):
+    run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "skipped", plan={"slots": []}, update="Weekly dashboard test update.")
     monkeypatch.setenv("SLOTS_LOCK_AT", "2026-12-03")
 
     status, _, html = _get(site, "/dashboard")
     assert status == 200
-    assert "<h2>The plan " in html and "Weekly dashboard test update." in html
-    assert "SLOTS_LOCK_AT" in html
+    assert "<h2>The plan " in html and dashboard.OLD_ASSIGNMENT in html
+    assert "Weekly dashboard test update." not in html
+    assert dashboard.PUBLIC_PANEL_ERROR in html.replace("&#x27;", "'")
 
     status, _, body = _get(site, "/dashboard/state.json")
     assert status == 200
     snap = json.loads(body)
     assert snap["plan"]["data"]["run"]["id"] == run
     assert snap["plan"]["data"]["slots"] == []
-    assert not snap["ours"]["ok"] and "SLOTS_LOCK_AT" in snap["ours"]["why"]
+    assert snap["ours"] == {"ok": False, "why": dashboard.PUBLIC_PANEL_ERROR}
+    assert "SLOTS_LOCK_AT" in capsys.readouterr().err
 
 
-def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, conn, tmp_path, monkeypatch):
+def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, conn, tmp_path, monkeypatch, capsys):
     path = r"C:\Users\Made Up\private\first-fill.json"
     rows = day_one(**{"15": {"product": "Sample Cherry Soda", "why": "Made-up fixture reason."},
                       "16": {"why": f"See {path}"}, "17": {"price_cents": 25}})
@@ -617,7 +917,9 @@ def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, 
 
     conn.execute("drop table first_fill_plans")
     status, _, html = _get(site, "/dashboard")
-    assert status == 200 and "Plan for the first fill" in html and "python -m vending.db migrate" in html
+    assert status == 200 and "Plan for the first fill" in html
+    assert dashboard.PUBLIC_PANEL_ERROR in html.replace("&#x27;", "'")
+    assert "first_fill_plans" not in html and 'relation "first_fill_plans" does not exist' in capsys.readouterr().err
 
 
 def test_a_table_without_the_columns_a_row_filter_reads_shows_no_rows(schema_url, conn):

@@ -61,8 +61,6 @@ RANKS = ("primary", "alternate")
 WILDCARD_STALE = ("The wildcard setting names a selection that isn't ours in the stored assignment, so every "
                   "selection here is held to the regular ceiling and the planner won't plan until a person "
                   "sets the wildcard again.")
-# The runs whose plan the panel follows: the dashboard's `WATCHED_MODES` (a test keeps them equal).
-PLAN_MODES = ("live", "dry-run")
 # The sparkline's drawing box, in px.
 SPARK_W, SPARK_H, SPARK_PAD = 112, 26, 3
 
@@ -95,7 +93,7 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
     slots, wildcard = settings.slots, settings.wildcard_slot
     stale = wildcard is None and config.get_value(conn, "wildcard_slot") is not None
     options: dict[str, dict[str, Any]] = {}
-    for o in sourcing.options_for(conn, _our_products(conn, slots)):
+    for o in sourcing.options_for(conn, _our_products(conn, slots, now)):
         options.setdefault(o.sku, {})[o.rank] = o
     ceilings = {slot: settings.ceiling_for(slot) for slot in slots}
     return {"slots": slots, "ceiling_cents": settings.price_ceiling_cents, "tax_percent": settings.tax_percent,
@@ -104,11 +102,11 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
             "options": options, "since": since, "history": machine_state.price_history(conn, now, since)}
 
 
-def _our_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
-    """Every product our receipts put in `slots` (ours, from `read`), every product the latest agent plan
+def _our_products(conn: psycopg.Connection, slots: tuple[str, ...], now: datetime) -> list[str]:
+    """Every product our receipts put in `slots` (ours, from `read`), every product the latest live plan
     names for them, and every product the first-fill plan puts in them. Filtered to `slots`: no other
     selection's product is returned."""
-    return sorted(set(_receipt_and_plan_products(conn, slots)) | set(_first_fill_products(conn, slots)))
+    return sorted(set(_receipt_and_plan_products(conn, slots, now)) | set(_first_fill_products(conn, slots)))
 
 
 def _first_fill_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
@@ -134,16 +132,17 @@ def _first_fill_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> li
     return [s.sku for s in checked.slots.values() if s.slot in slots and isinstance(s.sku, str)]
 
 
-def _receipt_and_plan_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
+def _receipt_and_plan_products(conn: psycopg.Connection, slots: tuple[str, ...], now: datetime) -> list[str]:
     return [sku for (sku,) in conn.execute(
         "select sku from purchase_lines where slot = any(%(slots)s) and sku is not null"
         " union"
-        " select e->>'product' from (select plan from agent_runs where plan is not null and mode = any(%(modes)s)"
+        " select e->>'product' from (select plan from agent_runs where plan is not null"
+        "   and mode = 'live' and started_at <= %(now)s"
         "   order by started_at desc, id desc limit 1) latest,"
         "   jsonb_array_elements(case when jsonb_typeof(latest.plan->'slots') = 'array'"
         "                             then latest.plan->'slots' else '[]'::jsonb end) e"
         " where jsonb_typeof(e) = 'object' and e->>'slot' = any(%(slots)s) and jsonb_typeof(e->'product') = 'string'"
-        " order by 1", {"slots": list(slots), "modes": list(PLAN_MODES)})]
+        " order by 1", {"slots": list(slots), "now": now})]
 
 
 def build(snap: dict, raw: dict, now: datetime) -> dict:

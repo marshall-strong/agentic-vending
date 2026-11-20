@@ -11,12 +11,12 @@ data as JSON, for a script or another agent.
 Run this way it listens on 127.0.0.1 only, and has no login: open it on the
 machine that runs it. The Container App serves the same page to anyone at
 `/dashboard`, through `vending.pages`, which connects as a login that can only
-read and hides the error text of failures (`snapshot(conn, public=True)`).
+read. Both routes scope the data to the ledger opening and current assignment.
 
 The page, top to bottom:
  - Verdict and tiles: OK / check / problem, the halt switch, the latest run,
    the order cutoff countdown, the machine's last poll, what has been spent
-   (from the ledger once it has opened; before that, development and test spend),
+   (from the ledger once it has opened),
    and who has looked at the pages (`vending.visits`).
  - Needs attention: each thing that is wrong or about to be, in a sentence. On the
    Container App that includes the worker's latest sync round, which the worker passes in
@@ -67,7 +67,7 @@ from vending import capacity, db, leaderboards, machine_art, money_panel, plan_r
 from vending import pricing_panel
 from vending import stock as stock_mod
 from vending.planner import IN_STORE_CUTOFF
-from vending.slots import DEVICE_ID, SlotsNotRecorded, lock_at, our_slots
+from vending.slots import DEVICE_ID, RECORD_HINT, SlotsNotRecorded, lock_at, our_slots
 from vending.tools import machine_state
 from vending.mascot import svg as mascot_svg  # after the rest: other PRs edit the lines above
 
@@ -93,8 +93,6 @@ SYNC_EXITS = {1: "finished with problems; the container's log has them",
 REQUESTS_SHOWN = 5
 # Every transaction on the dashboard's connection is read-only; Postgres refuses any write.
 READ_ONLY = "-c default_transaction_read_only=on"
-# The runs the Status and Plan panels follow. Replays of past weeks show only under Runs.
-WATCHED_MODES = ("live", "dry-run")
 # Host headers the server answers, so another site can't rebind its name to us and read the page.
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 # A run still `running` after this long has almost certainly died.
@@ -213,20 +211,34 @@ def _eastern(value: datetime) -> datetime:
         return value
 
 
-def _status(conn: psycopg.Connection, now: datetime) -> dict:
+# action_log has no run ID. Before opening, keep only real operator and agent writes by name.
+PRE_OPENING_WRITES = (
+    "config.set", "halt",
+    "ledger.adjustment", "ledger.capital", "ledger.opening", "ledger.tax_remitted",
+    "pages.grant",
+    "plan_store.load", "plan_store.pick",  # Operator commands in vending.plan_store.
+    "product_requests.resolve", "request_backlog.add", "request_backlog.drop", "request_backlog.move",
+    "request_catalog_product", "set_wildcard_slot", "slot_counts", "slots.record",
+    "sourcing.remove", "sourcing.set", "submissions.resolve", "submit_desired_state",
+)
+ACTIVITY_VISIBLE = "(at <= %s and (at >= %s or (kind = 'write' and tool = any(%s))))"
+
+
+def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None) -> dict:
     flag = _optional(conn, "select value, updated_at, updated_by from config where key = 'halted'")
     # Fails closed like `vending.config.is_halted`: anything but JSON false is halted.
     halted = flag is None or flag["value"] is not False
     run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail, cost_usd"
-                          " from agent_runs where mode = any(%s) order by started_at desc, id desc limit 1",
-                    (list(WATCHED_MODES),))
+                          " from agent_runs where mode = 'live' and started_at <= %s"
+                          " order by started_at desc, id desc limit 1", (now,))
     if run is None:   # no runs, or an agent_runs older than cost_usd: try without it
         run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail"
-                              " from agent_runs where mode = any(%s) order by started_at desc, id desc limit 1",
-                        (list(WATCHED_MODES),))
+                              " from agent_runs where mode = 'live' and started_at <= %s"
+                              " order by started_at desc, id desc limit 1", (now,))
     if run and run["status"] == "running" and now - run["started_at"] > STALE_RUN:
         run["stale"] = True
-    last = _optional(conn, "select at, kind, tool, outcome from action_log order by at desc, id desc limit 1")
+    last = _optional(conn, f"select at, kind, tool, outcome from action_log where {ACTIVITY_VISIBLE}"
+                           " order by at desc, id desc limit 1", (now, opening, list(PRE_OPENING_WRITES)))
     return {"halted": halted, "halt_changed_at": flag and flag["updated_at"],
             "halt_changed_by": flag and flag["updated_by"], "latest_run": run,
             "last_action": last, "next_cutoff": next_cutoff(now)}
@@ -252,17 +264,18 @@ def our_selections(snap: dict) -> tuple[str, ...]:
     return tuple(ours["data"]) if ours.get("ok") else ()
 
 
-def _plan(conn: psycopg.Connection, ours: tuple[str, ...] = ()) -> dict | None:
+def _plan(conn: psycopg.Connection, ours: tuple[str, ...], now: datetime,
+          assignment_at: datetime | None) -> dict | None:
     columns = "id, started_at, finished_at, mode, model, status, plan, team_update, notes"
-    found = _rows(conn, f"select {columns} from agent_runs where plan is not null and mode = any(%s)"
-                        " order by started_at desc, id desc limit 1", (list(WATCHED_MODES),))
+    found = _rows(conn, f"select {columns} from agent_runs where plan is not null and mode = 'live'"
+                        " and started_at <= %s order by started_at desc, id desc limit 1", (now,))
     if not found:
         return None
     latest = found[0]
-    # Compared only with a plan of the same mode: a dry run against a live plan says nothing.
-    previous = _optional(conn, f"select {columns} from agent_runs where plan is not null and mode = %s"
-                               " and (started_at, id) < (%s, %s) order by started_at desc, id desc limit 1",
-                         (latest["mode"], latest["started_at"], latest["id"]))
+    previous = _optional(conn, f"select {columns} from agent_runs where plan is not null and mode = 'live'"
+                               " and (started_at, id) < (%s, %s)"
+                               " order by started_at desc, id desc limit 1",
+                         (latest["started_at"], latest["id"]))
     now_slots = _by_slot(latest["plan"])
     before = _by_slot(previous["plan"]) if previous else {}
     # One row per selection assigned to us now, in the assignment's order. A stored plan can name
@@ -271,10 +284,18 @@ def _plan(conn: psycopg.Connection, ours: tuple[str, ...] = ()) -> dict | None:
               "changed": previous is not None and _what(now_slots.get(slot)) != _what(before.get(slot))}
              for slot in ours]
     plan = latest["plan"] if isinstance(latest["plan"], dict) else {}
+    reason, update, notes = plan.get("reason"), latest["team_update"], latest["notes"]
+    if _older_assignment(latest["started_at"], assignment_at):
+        reason = OLD_ASSIGNMENT
+        update = notes = None
+    for side, run in (("now", latest), ("before", previous)):
+        if run and _older_assignment(run["started_at"], assignment_at):
+            for row in slots:
+                if row[side] and row[side].get("reason"):
+                    row[side] = {**row[side], "reason": OLD_ASSIGNMENT}
     return {"run": {k: latest[k] for k in ("id", "started_at", "finished_at", "mode", "model", "status")},
             "previous_run": previous and previous["id"],
-            "visit": plan.get("visit"), "reason": plan.get("reason"),
-            "update": latest["team_update"], "notes": latest["notes"], "slots": slots}
+            "visit": plan.get("visit"), "reason": reason, "update": update, "notes": notes, "slots": slots}
 
 
 _FILE_REFERENCE = re.compile(r"(?i)\bfile:|(?<!\w)[a-z]:[\\/]|\\\\|(?<![\w:/])/(?:[^/\s]+/)")
@@ -288,7 +309,7 @@ def _plan_text(value: str | None) -> str | None:
     return "(local file reference omitted)" if _FILE_REFERENCE.search(text) else text
 
 
-def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
+def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...], assignment_at: datetime | None) -> dict | None:
     with conn.cursor(row_factory=dict_row) as cur:
         # Use the same JSON decoder as the laptop-file loader.
         set_json_loads(json.loads, context=cur)
@@ -298,19 +319,21 @@ def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
         return None
     current = {"id": row["id"], "picked": row["picked"], "slots": []}
     if not ours:
-        return {**current, "message": "Our slot assignment is not available."}
+        return {**current, "message": NO_ASSIGNMENT}
     if set(row["slots"]) != set(ours):
-        return {**current, "message": "planned for an earlier slot assignment: load a new plan"}
+        return {**current, "message": PLAN_ASSIGNMENT_CHANGED}
     checked = plan_rounds.parse_round(row["label"], row["plan"], row["projection"], ours, saved_at=row["loaded_at"])
+    older = _older_assignment(row["loaded_at"], assignment_at)
     return {**current, "fill_expected_cents": checked.fill_expected_cents,
             "fill_most_cents": checked.fill_most_cents, "fill_cap_cents": plan_rounds.FILL_CAP_CENTS,
             "slots": [{"slot": s.slot, "sku": s.sku, "product": _plan_text(s.product), "price_cents": s.price_cents,
-                       "units": s.units, "reason": _plan_text(s.why), "fill_check": s.fill_check,
+                       "units": s.units, "reason": OLD_ASSIGNMENT if older and s.why else _plan_text(s.why),
+                       "fill_check": s.fill_check,
                        "checks": {"floor_cents": s.floor_cents, "legal_price": s.legal_price,
                                   "capacity": s.capacity, "capacity_assumed": s.capacity_assumed,
                                   "expected_fill_share": _dollars(s.expected_cents),
                                   "max_fill_share": _dollars(s.most_cents),
-                                  "refusals": [_plan_text(message) for message in s.refusals]}}
+                                  "refusals": [] if older else [_plan_text(message) for message in s.refusals]}}
                       for s in checked.slots.values()]}
 
 
@@ -323,7 +346,7 @@ def _tags(conn: psycopg.Connection, now: datetime) -> dict:
 
 
 def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
-          ours: tuple[str, ...] = ()) -> list[dict]:
+          ours: tuple[str, ...] = (), *, modes: tuple[str, ...] = ("live",)) -> list[dict]:
     """The last runs, newest first, each with the slots its plan changed from the plan before it.
 
     The newest run with a plan compares a "keep" against `tags`, the prices on the tags now, as
@@ -333,9 +356,11 @@ def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
         select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, r.detail, r.cost_usd,
                r.request_id, r.team_update, r.notes, r.plan,
                (select p.plan from agent_runs p
-                 where p.mode = r.mode and p.plan is not null and (p.started_at, p.id) < (r.started_at, r.id)
+                 where p.mode = r.mode and p.plan is not null
+                   and (p.started_at, p.id) < (r.started_at, r.id)
                  order by p.started_at desc, p.id desc limit 1) as previous_plan
-          from agent_runs r order by r.started_at desc, r.id desc limit %s""", (RUN_ROWS,))
+          from agent_runs r where r.mode = any(%s) and r.started_at <= %s
+         order by r.started_at desc, r.id desc limit %s""", (list(modes), now, RUN_ROWS))
     steps = _steps(conn, [r["id"] for r in rows])
     newest = True
     for r in rows:
@@ -413,13 +438,13 @@ def _sales(conn: psycopg.Connection, now: datetime) -> dict:
                       for s in reply.data}}
 
 
-def _stock(conn: psycopg.Connection) -> dict:
+def _stock(conn: psycopg.Connection, now: datetime) -> dict:
     """What each slot and the closet hold, from fulfilled receipts and polls (`vending.stock`).
 
     "sold" still counts units sold across a product change that can't be split
     (`SlotCount.unattributed`) as the slot's, as before #172; labelling them is
     #172 item 4."""
-    found = _guarded(conn, lambda: stock_mod.stock(conn))
+    found = _guarded(conn, lambda: stock_mod.stock(conn, until=now))
     return {"slots": {s.slot: {"product": s.product, "on_hand": s.units, "loaded": s.loaded,
                                "sold": s.sold + s.unattributed,
                                "lost": s.lost, "since": s.since, "last_moved": s.last_moved,
@@ -451,18 +476,52 @@ def _dollars(cents: Fraction | None) -> str | None:
     return str(value.quantize(Decimal("0.01"), ROUND_HALF_UP))
 
 
-def _spend(conn: psycopg.Connection, now: datetime) -> dict:
+def _purchase_rows(conn: psycopg.Connection, opening: datetime | None, now: datetime) -> tuple[list[dict], int]:
+    rows = _rows(conn, """select request_id, submitted_at, off_cycle, status, total_paid, decision_note,
+                                 fulfilled_at, updated_at
+                          from purchase_requests order by submitted_at desc, request_id desc""")
+    receipts: dict[str, list[dict]] = {}
+    if opening is not None and any(r["status"] == "fulfilled" for r in rows):
+        for line in _guarded(conn, lambda: stock_mod.receipt_lines(conn)):
+            receipts.setdefault(line["request_id"], []).append(line)
+    visible, hidden = [], 0
+    for row in rows:
+        status = row["status"]
+        fulfilled_at = row.pop("fulfilled_at")
+        updated_at = row.pop("updated_at")
+        lines = receipts.get(row["request_id"], [])
+        live_lines = [line for line in lines if line["at"] is not None and opening <= line["at"] <= now]
+        if status == "fulfilled":
+            decision_at = min((line["at"] for line in lines if line["at"] is not None),
+                              default=fulfilled_at or row["submitted_at"])
+            show = bool(live_lines) if lines else (
+                opening is not None and fulfilled_at is not None and opening <= fulfilled_at <= now)
+        else:
+            decision_at = updated_at or row["submitted_at"]
+            show = status == "pending" or (opening is not None and opening <= decision_at <= now)
+        if show:
+            if live_lines and len(live_lines) < len(lines):
+                row["total_paid"] = sum((line["total_paid"] or 0 for line in live_lines), Decimal(0))
+            visible.append({**row, "lines": len(live_lines),
+                            "units_loaded": sum(line["units_loaded"] or 0 for line in live_lines),
+                            "unavailable": sum(line["outcome"] == "unavailable" for line in live_lines),
+                            "alternates": sum(line["outcome"] == "alternate" for line in live_lines)})
+        elif decision_at <= now and (opening is None or decision_at < opening):
+            hidden += 1
+    return visible, hidden
+
+
+def _spend(conn: psycopg.Connection, now: datetime, opening: datetime, purchases: list[dict]) -> dict:
     model = _rows(conn, """
         select count(*) as runs, coalesce(sum(cost_usd), 0) as total,
                coalesce(sum(cost_usd) filter (where started_at > %s), 0) as last_7_days,
                count(*) filter (where cost_usd is null and status <> 'running') as unpriced
-          from agent_runs where mode = any(%s)""", (now - timedelta(days=7), list(WATCHED_MODES)))[0]
-    drinks = _rows(conn, """
-        select coalesce(sum(total_paid) filter (where status = 'fulfilled'), 0) as paid,
-               count(*) filter (where status = 'fulfilled') as fulfilled,
-               count(*) filter (where status = 'pending') as pending,
-               count(*) filter (where off_cycle and status <> 'rejected') as midweek
-          from purchase_requests""")[0]
+          from agent_runs where mode = 'live' and started_at between %s and %s""",
+                  (now - timedelta(days=7), opening, now))[0]
+    fulfilled = [r for r in purchases if r["status"] == "fulfilled"]
+    drinks = {"paid": sum((r["total_paid"] or 0 for r in fulfilled), Decimal(0)), "fulfilled": len(fulfilled),
+              "pending": sum(r["status"] == "pending" for r in purchases),
+              "midweek": sum(r["off_cycle"] and r["status"] != "rejected" for r in purchases)}
     return {"model": model, "drinks": drinks}
 
 
@@ -472,15 +531,18 @@ def _money_panel(conn: psycopg.Connection, now: datetime) -> dict:
     costs this panel, not the page. Other panels don't catch it yet: a cancelled read there still
     fails the whole snapshot."""
     try:
-        return _guarded(conn, lambda: money_panel.read(conn, now))
+        data = _guarded(conn, lambda: money_panel.read(conn, now))
+        if "notes" in data:
+            data["notes"] = [note for note in data["notes"] if not note.endswith("development spend, not in the balance")]
+        return data
     except psycopg.errors.QueryCanceled as error:
         raise Unavailable("reading the ledger took too long and was stopped; the rest of the page is "
                           "current, and the next refresh tries again") from error
 
 
-def _recent_calls(conn: psycopg.Connection, now: datetime) -> dict:
-    rows = _rows(conn, "select kind, outcome, count(*) as n from action_log where at > %s group by kind, outcome",
-                 (now - RECENT,))
+def _recent_calls(conn: psycopg.Connection, now: datetime, opening: datetime | None) -> dict:
+    rows = _rows(conn, f"select kind, outcome, count(*) as n from action_log where at > %s and {ACTIVITY_VISIBLE}"
+                       " group by kind, outcome", (now - RECENT, now, opening, list(PRE_OPENING_WRITES)))
     counts = {"calls": 0, "writes": 0, "refused": 0, "failed": 0}
     for r in rows:
         counts["calls"] += r["n"]
@@ -495,56 +557,160 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
     """Everything the page shows, from one consistent moment. Reads only.
 
     JSON numbers come back as Decimal, so a price stored as a number stays exact.
-    `public` is for a page anyone can open: the error text of failures and the selections not
-    assigned to us are left out. `syncs` is the worker's latest sync round, as its `/health` shows
+    The live view has the same filters on every route. On the public page, panel read errors
+    go to stderr. `syncs` is the worker's latest sync round, as its `/health` shows
     it (`vending.worker.State.public`: outcomes and exit codes, never error text). The worker
     keeps that in memory, not in the database, so only a page the worker serves has it; run
     on its own, the dashboard has None and says nothing about the syncs.
     """
-    now = now or datetime.now(timezone.utc)
     set_json_loads(partial(json.loads, parse_float=Decimal), context=conn)
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
-        snap = _snapshot(conn, now)
+        # Event timestamps come from Postgres. Use its clock for the same transaction's cutoff.
+        now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
+        snap, assignment_at = _snapshot(conn, now)
     snap["syncs"] = syncs
-    if public:
-        hide_errors(snap)
-        only_ours(snap)
+    hide_errors(snap, public=public)
+    only_ours(snap, assignment_at)
     snap["attention"] = attention(snap)
     return snap
 
 
 # Shown in place of a failure's text on a public page.
 HIDDEN = "(error text isn't shown on this public page; it is in the database and the container's log)"
+PUBLIC_PANEL_ERROR = "This part of the page can't be read right now."
 
 
-def hide_errors(snap: dict) -> None:
+def hide_errors(snap: dict, *, public: bool = False) -> None:
     """Replace the free text of every failure with `HIDDEN`, in place.
 
-    A failed tool call or run stores the raw error, and a database error names the host and the
-    user. A refusal keeps its text: we wrote it, and it says what to do next. Done on the
-    snapshot, before Needs attention is built, so the page and `/state.json` both get it.
+    A failed tool call or run stores the raw error. A refusal keeps its text. On the public
+    page, a panel's read error goes to stderr. Clean the snapshot before building Needs
+    attention so both the page and `/state.json` get the same text.
     """
-    run = snap["status"].get("latest_run")
-    if run and run.get("status") == "failed" and run.get("detail"):
-        run["detail"] = HIDDEN
-    for panel, column, failed in (("runs", "status", "failed"), ("activity", "outcome", "failed")):
-        if snap[panel]["ok"]:
-            for row in snap[panel]["data"]:
-                if row.get(column) == failed and row.get("detail"):
-                    row["detail"] = HIDDEN
+    runs = snap["runs"]["data"] if snap["runs"]["ok"] else []
+    for run in (snap["status"].get("latest_run"), *runs):
+        if not run or not (detail := run.get("detail")):
+            continue
+        if run["status"] == "failed":
+            run["detail"] = HIDDEN
+        elif public and run["status"] == "submitted" and detail.startswith("Submitted purchase request "):
+            run["detail"] = detail.partition("; afterwards:")[0]
+    if snap["activity"]["ok"]:
+        for row in snap["activity"]["data"]:
+            if row["outcome"] == "failed" and row["detail"]:
+                row["detail"] = HIDDEN
+    for run in runs:
+        for step in run["steps"]:
+            if step["kind"] == "tool_result" and step["is_error"]:
+                step["content"] = HIDDEN
+    if public:
+        for name, panel in snap.items():
+            if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
+                continue
+            why = panel["why"]
+            if why != PUBLIC_PANEL_ERROR:
+                print(f"dashboard: {name}: {why}", file=sys.stderr, flush=True)
+                panel["why"] = PUBLIC_PANEL_ERROR
 
 
-def only_ours(snap: dict) -> None:
-    """Drop every selection not assigned to us (the stored assignment) from the counts and stock, in place.
+OLD_ASSIGNMENT = "Text omitted from before the current slot assignment."
+OUTSIDE_ASSIGNMENT = "Tool payload omitted for a selection outside the current slot assignment."
+POLL_REPLY_OMITTED = "Saved poll reply omitted because its selections could not be scoped."
+NO_ASSIGNMENT = "Our slot assignment is not available."
+PLAN_ASSIGNMENT_CHANGED = "planned for an earlier slot assignment: load a new plan"
+ASSIGNMENT_RECORDED = "Slot assignment recorded. See the current assignment on this page."
+_ASSIGNMENT_NOTICES = frozenset({OLD_ASSIGNMENT, OUTSIDE_ASSIGNMENT, POLL_REPLY_OMITTED, NO_ASSIGNMENT,
+                                PLAN_ASSIGNMENT_CHANGED, ASSIGNMENT_RECORDED, RECORD_HINT})
+_DROP = object()
+_SLOT_KEYS = {"slot", "selection", "into_slot", "wildcard_slot"}
+_SLOT_LISTS = {"slots", "selections", "assigned_slots", "our_slots"}
+_POLL_REPLY_TOOLS = {"get_account_balance", "get_briefing", "get_machine_state", "get_pnl", "get_sales_history"}
+_POLL_ROW_FIELDS = {"slot", "product", "price", "units", "revenue", "revenue_ex_tax",
+                    "lifetime_units", "units_sold_in_window", "units_sold_since_load", "units_per_day",
+                    "stock_on_hand", "effective_stock", "recent_units"}
 
-    `slot_counts.latest` returns every selection counted (a photo count covers the whole
-    machine), and `vending.stock` every slot our fulfilled receipts name, which after a
-    reassignment includes slots that aren't ours any more. The page only draws ours; the JSON
-    would still carry the rest. With no assignment stored, none is ours, so every count, every
-    slot's stock and every warning that names a slot is dropped. The closet isn't a selection,
-    so it stays.
-    """
+
+def _older_assignment(at: datetime, assignment_at: datetime | None) -> bool:
+    return assignment_at is None or at < assignment_at
+
+
+def _scope_payload(value: Any, ours: set[str], key: str = "") -> Any:
+    """Drop structured records naming an unassigned selection, including nested tool arguments and results."""
+    if isinstance(value, list):
+        items = [item for item in value
+                 if key not in _SLOT_LISTS or isinstance(item, (dict, list)) or str(item) in ours]
+        return [item for item in (_scope_payload(item, ours) for item in items) if item is not _DROP]
+    if not isinstance(value, dict):
+        return value
+    setting = value.get("key")
+    if isinstance(setting, str) and setting in _SLOT_KEYS and "value" in value and str(value["value"]) not in ours:
+        return _DROP
+    if any(str(value[k]) not in ours for k in _SLOT_KEYS & value.keys() if value[k] is not None):
+        return _DROP
+    scoped = {}
+    for k, v in value.items():
+        if len(k) == 2 and k[0] in "12345" and k[1] in "12345678" and k not in ours:
+            continue
+        kept = _scope_payload(v, ours, k)
+        if kept is not _DROP:
+            scoped[k] = kept
+    if scoped != value:
+        # A summary can describe a selection dropped from the structured part.
+        for field in ("message", "detail", "reason", "note", "text", "warnings", "directive", "decision_note", "notes"):
+            scoped.pop(field, None)
+    return scoped
+
+
+def _scope_poll_reply(value: Any, ours: set[str]) -> Any:
+    """Keep per-slot figures from structured replies. Saved prose and totals may mix selections."""
+    if not isinstance(value, dict):
+        return _DROP
+    for key in ("structuredContent", "result"):
+        if key in value:
+            value = value[key]
+            if not isinstance(value, dict):
+                return _DROP
+    rows = value.get("data")
+    if isinstance(rows, dict):   # get_briefing wraps its per-slot figures in the briefing
+        rows = rows.get("slots")
+    if not isinstance(rows, list):
+        return _DROP
+    return {"data": [{key: value for key, value in row.items()
+                      if key in _POLL_ROW_FIELDS and not isinstance(value, (dict, list))}
+                     for row in rows if isinstance(row, dict) and str(row.get("slot")) in ours]}
+
+
+def _outside_assignment(text: str, ours: set[str]) -> bool:
+    return text not in _ASSIGNMENT_NOTICES and bool(stock_mod._slots_named(text) - ours)
+
+
+def _scope_text(value: Any, ours: set[str]) -> Any:
+    """Redact free text in the display copy, leaving values such as prices and slot codes typed."""
+    if isinstance(value, str):
+        return OUTSIDE_ASSIGNMENT if _outside_assignment(value, ours) else value
+    if isinstance(value, (list, tuple)):
+        items = (_scope_text(item, ours) for item in value
+                 if not isinstance(item, str) or not _outside_assignment(item, ours))
+        return tuple(items) if isinstance(value, tuple) else list(items)
+    if isinstance(value, dict):
+        scoped = {}
+        for key, item in value.items():
+            # A payload can use prose as a map label. Its value belongs to that label.
+            if isinstance(key, str) and " " in key and _outside_assignment(key, ours):
+                continue
+            # These values name the audit tool and the configuration field, respectively.
+            if (key == "tool" and item == "slots.record") or (
+                    key == "key" and isinstance(item, str) and item in _SLOT_KEYS):
+                scoped[key] = item
+            else:
+                scoped[key] = _scope_text(item, ours)
+        return scoped
+    return value
+
+
+def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
+    """Scope the live dashboard to the current assignment before either response is built."""
     ours = set(our_selections(snap))
     if snap["counts"]["ok"]:
         snap["counts"]["data"] = {s: c for s, c in snap["counts"]["data"].items() if s in ours}
@@ -553,6 +719,69 @@ def only_ours(snap: dict) -> None:
         stock["slots"] = {s: v for s, v in stock["slots"].items() if s in ours}
         # Only warnings about our selections or the closet (`vending.stock.warning_is_ours`).
         stock["warnings"] = [w for w in stock["warnings"] if stock_mod.warning_is_ours(w, ours)]
+    if (sales := snap.get("sales")) and sales["ok"]:
+        slots = sales["data"]["slots"]
+        sales["data"]["slots"] = {s: v for s, v in slots.items() if s in ours}
+    if (runs := snap.get("runs")) and runs["ok"]:
+        for run in runs["data"]:
+            if _older_assignment(run["started_at"], assignment_at):
+                if any(run[k] for k in ("detail", "team_update", "notes", "steps")):
+                    run["detail"] = HIDDEN if run["status"] == "failed" else OLD_ASSIGNMENT
+                run["team_update"] = run["notes"] = None
+                run["steps"] = []
+            run.update(_scope_text({key: value for key, value in run.items() if key != "steps"}, ours))
+            for step in run["steps"]:
+                if step["kind"] not in ("tool_call", "tool_result") or step["is_error"]:
+                    step["content"] = _scope_text(step["content"], ours)
+                    continue
+                poll_reply = step["kind"] == "tool_result" and step["tool"] in _POLL_REPLY_TOOLS
+                try:
+                    value = json.loads(step["content"], parse_float=Decimal)
+                except ValueError:
+                    if poll_reply:
+                        step["content"] = POLL_REPLY_OMITTED
+                    elif step["content"].lstrip().startswith(("{", "[")):
+                        step["content"] = "Incomplete tool payload omitted."
+                    else:
+                        step["content"] = _scope_text(step["content"], ours)
+                    continue
+                scoped = _scope_poll_reply(value, ours) if poll_reply else _scope_payload(value, ours)
+                if scoped is _DROP:
+                    step["content"] = POLL_REPLY_OMITTED if poll_reply else OUTSIDE_ASSIGNMENT
+                else:
+                    scoped = _scope_text(scoped, ours)
+                    if scoped != value:
+                        step["content"] = to_json(scoped)
+    if (activity := snap.get("activity")) and activity["ok"]:
+        for row in activity["data"]:
+            if _older_assignment(row["at"], assignment_at):
+                if row["arguments"] or row["detail"]:
+                    row["arguments"] = {}
+                    row["detail"] = HIDDEN if row["outcome"] == "failed" else OLD_ASSIGNMENT
+            else:
+                args = _scope_payload(row["arguments"], ours)
+                if args != row["arguments"]:
+                    row["arguments"] = {} if args is _DROP else args
+                    row["detail"] = HIDDEN if row["outcome"] == "failed" else OUTSIDE_ASSIGNMENT
+                elif (row["kind"] == "read" and row["tool"] in _POLL_REPLY_TOOLS
+                      and row["detail"] and row["detail"] != HIDDEN):
+                    row["detail"] = POLL_REPLY_OMITTED
+            # The assignment audit writer includes both the old and the new slot lists.
+            if row["tool"] == "slots.record":
+                row["detail"] = HIDDEN if row["outcome"] == "failed" else ASSIGNMENT_RECORDED
+    run = snap.get("status", {}).get("latest_run")
+    if run and run["detail"] and run["detail"] != HIDDEN and _older_assignment(run["started_at"], assignment_at):
+        run["detail"] = OLD_ASSIGNMENT
+    for name, panel in snap.items():
+        if name not in ("runs", "pricing") or not panel["ok"]:
+            snap[name] = _scope_text(panel, ours)
+    if (pricing := snap.get("pricing")) and pricing["ok"]:
+        for row in pricing["data"]["rows"]:
+            for price in (row, row["next"]):
+                if price:
+                    # Price checks are generated from our own figures and fixed messages.
+                    fields = {key: value for key, value in price.items() if key not in ("next", "problems")}
+                    price.update(_scope_text(fields, ours))
 
 
 def _catalog_counts(catalog: dict) -> dict:
@@ -572,38 +801,51 @@ def _catalog_counts(catalog: dict) -> dict:
                                  "unsettled": by_status["sending"] + by_status["unknown"]}}
 
 
-def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
+def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime | None]:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
+    assigned = _optional(conn, "select first_read_at from slot_assignment where id = 1") if slots else None
+    assignment_at = assigned["first_read_at"] if assigned else None
+    try:
+        opening = _guarded(conn, lambda: stock_mod.opening_at(conn))
+    except Missing:
+        opening = None   # A partial migration cannot establish the live boundary.
+    live_since = opening if opening is not None and opening <= now else None
+    purchases = _panel(lambda: _purchase_rows(conn, live_since, now))
+    comparison = "<" if live_since else "<="
+    model_test_count = _optional(conn, f"select count(*) as n from agent_runs where mode in ('dry-run', 'replay')"
+                                       f" and started_at {comparison} %s",
+                                 (live_since or now,))
     catalog = _panel(lambda: _rows(
         conn, "select id, requested_at, name, size, status, sku, decision_note"
               " from product_requests order by requested_at desc, id desc"))
+    if live_since is None:
+        spend = {"ok": True, "data": None}
+    elif purchases["ok"]:
+        spend = _panel(lambda: _spend(conn, now, live_since, purchases["data"][0]))
+    else:
+        spend = {"ok": False, "why": "No live spend available."}
     snap = {
         "as_of": now,
         "ours": ours,
-        "status": _status(conn, now),
-        "plan": _panel(lambda: _plan(conn, slots)),
+        "status": _status(conn, now, live_since),
+        "plan": _panel(lambda: _plan(conn, slots, now, assignment_at)),
         "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots)),
         "activity": _panel(lambda: _rows(
-            conn, "select id, at, kind, tool, outcome, detail, arguments from action_log"
-                  " order by at desc, id desc limit %s", (ACTIVITY_ROWS,))),
-        "recent_calls": _panel(lambda: _recent_calls(conn, now)),
+            conn, f"select id, at, kind, tool, outcome, detail, arguments from action_log where {ACTIVITY_VISIBLE}"
+                  " order by at desc, id desc limit %s", (now, live_since, list(PRE_OPENING_WRITES), ACTIVITY_ROWS))),
+        "recent_calls": _panel(lambda: _recent_calls(conn, now, live_since)),
         "sales": _panel(lambda: _sales(conn, now)),
-        "stock": _panel(lambda: _stock(conn) if ours["ok"] else _closet_only(conn)),
+        "stock": (_panel(lambda: _stock(conn, now) if ours["ok"] else _closet_only(conn)) if live_since
+                  else {"ok": True, "data": {"slots": {}, "closet": [], "warnings": []}}),
         "counts": (_panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))) if ours["ok"] else
                    {"ok": True, "data": {}}),
-        "spend": _panel(lambda: _spend(conn, now)),
+        "spend": spend,
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
         "money": _panel(lambda: _money_panel(conn, now)),
         "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
-        "purchase_requests": _panel(lambda: _rows(conn, """
-            select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,
-                   count(l.line_no) as lines,
-                   coalesce(sum(l.units_loaded), 0) as units_loaded,
-                   count(*) filter (where l.outcome = 'unavailable') as unavailable,
-                   count(*) filter (where l.outcome = 'alternate') as alternates
-              from purchase_requests r left join purchase_lines l using (request_id)
-             group by r.request_id order by r.submitted_at desc, r.request_id desc limit %s""", (REQUEST_ROWS,))),
+        "purchase_requests": ({"ok": True, "data": purchases["data"][0][:REQUEST_ROWS]}
+                              if purchases["ok"] else purchases),
         "catalog_requests": catalog,
         "catalog_counts": _catalog_counts(catalog),
     }
@@ -614,11 +856,15 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         before_lock = False
     if before_lock:
         snap["weekly_plan"] = snap["plan"]
-        snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots)))
+        snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots, assignment_at)))
+    hidden_runs = model_test_count["n"] if model_test_count else 0
+    hidden_purchases = purchases["data"][1] if purchases["ok"] else 0
+    if hidden_runs or hidden_purchases:
+        snap["runs"]["hidden_tests"] = {"runs": hidden_runs, "purchases": hidden_purchases}
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
     _check_plan_fills(snap)
     snap["pricing"] = _pricing(conn, now, snap)
-    return snap
+    return snap, assignment_at
 
 
 def _pricing(conn: psycopg.Connection, now: datetime, snap: dict) -> dict:
@@ -1338,7 +1584,7 @@ def _tiles(snap: dict, charts: dict[str, str] | None = None) -> str:
         tiles.append(("Spent since the opening", f'<span class="big">{_money(Decimal(ledgered["spent"]))}</span>',
                       f'drinks {_money(Decimal(ledgered["receipts"]))}, visits {_money(Decimal(ledgered["visit_fees"]))}, '
                       f'model {_money(Decimal(ledgered["tokens"]))} &middot; from the ledger{spend_link}'))
-    elif spend["ok"]:
+    elif spend["ok"] and spend["data"] is not None:
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
         unpriced = f' &middot; {m["unpriced"]} without a cost' if m["unpriced"] else ""
         visits = f' &middot; {_plural(dr["midweek"], "midweek visit")}' if dr["midweek"] else ""
@@ -1354,6 +1600,12 @@ def _tiles(snap: dict, charts: dict[str, str] | None = None) -> str:
                       f'{period}drinks, {_plural(dr["fulfilled"], "fulfilled request")}{visits}<br>'
                       f'model {_money(m["total"])} over {_plural(m["runs"], "run")} '
                       f'({_money(m["last_7_days"])} this week){unpriced}{spend_link}'))
+    elif spend["ok"] and "spend" in charts:
+        # Before the opening the live page shows no test purchases (`dashboard_live_only`), but the
+        # development spend on our keys is real: point to its chart, without the test figures.
+        tiles.append(("Before the opening", '<span class="big dim">Development</span>',
+                      "model calls and test purchases before the ledger opens are not from the $600"
+                      f"{spend_link}"))
     seen = snap.get("visits")
     if seen and not seen["ok"]:
         tiles.append(("Visitors", '<span class="big dim">Unavailable</span>',
@@ -1400,10 +1652,13 @@ def _words_html(plan: dict) -> str:
 
 
 def _runs_html(panel: dict, now: datetime) -> str:
+    hidden = panel.get("hidden_tests")
+    notice = (f'<p class="dim">{hidden["runs"]} test runs and {hidden["purchases"]} test purchases '
+              'from before the opening are not shown here.</p>' if hidden else "")
     if (missing := _missing(panel)) is not None:
-        return missing
+        return notice + missing
     if not panel["data"]:
-        return ('<p class="empty">No runs recorded yet. The agent loop (#39) calls '
+        return notice + ('<p class="empty">No live runs yet. The agent loop (#39) calls '
                 '<code>agent_runs.start</code> and <code>finish</code>; each run then shows here with '
                 'what it cost and what its plan changed.</p>')
     items = []
@@ -1436,7 +1691,7 @@ def _runs_html(panel: dict, now: datetime) -> str:
         items.append(f'<li class="run{" replay" if r["mode"] == "replay" else ""}">'
                      f'<div class="head"><b>#{r["id"]}</b> {_time(r["started_at"])} {_run_pill(r)}</div>'
                      f'<div class="meta">{" &middot; ".join(meta)}</div>{body}</li>')
-    return f'<ol class="timeline">{"".join(items)}</ol>'
+    return notice + f'<ol class="timeline">{"".join(items)}</ol>'
 
 
 # Characters of a tool call or reply shown before "more"; reasoning is shown whole.

@@ -15,7 +15,7 @@ import psycopg
 import pytest
 
 from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, TEST_SLOTS, store_poll
-from vending import agent_runs, dashboard
+from vending import agent_runs, dashboard, ledger
 from vending.config import set_halted, set_value
 from vending.write_gate import log
 
@@ -40,6 +40,20 @@ def page_conn(schema_url):
     """A connection like the dashboard's own: read-only, in the test schema."""
     with read_only(*schema_url) as conn:
         yield conn
+
+
+@pytest.fixture
+def open_ledger(conn):
+    """An opening and assignment in place before the dated live dashboard fixtures."""
+    at = MONDAY - timedelta(days=7)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=at)
+    conn.execute("update slot_assignment set first_read_at = %s", (at,))
+
+
+def _live_run(conn, *, model=None):
+    run = agent_runs.start(conn, mode="live", model=model)
+    conn.execute("update agent_runs set started_at = %s where id = %s", (MONDAY - timedelta(minutes=1), run))
+    return run
 
 
 # --- agent_runs ---------------------------------------------------------------------------------
@@ -91,12 +105,12 @@ def test_a_fresh_database_shows_halted_and_empty_panels(page_conn):
     assert "No plan yet" in dashboard.render(snap)
 
 
-def test_plan_compares_with_the_run_before(conn, page_conn):
-    first = agent_runs.start(conn, mode="dry-run")
+def test_plan_compares_with_the_run_before(conn, page_conn, open_ledger):
+    first = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, first, "skipped", plan=plan(
         {"slot": "15", "fill_to": 6, "sale_price": "2.50", "reason": "sold 6"},
         {"slot": "16", "keep": True, "reason": "no figures"}))
-    second = agent_runs.start(conn, mode="dry-run", model="claude-sonnet-5-5")
+    second = agent_runs.start(conn, mode="live", model="claude-sonnet-5-5")
     agent_runs.finish(conn, second, "submitted", plan=plan(
         {"slot": "15", "fill_to": 6, "sale_price": "2.50", "reason": "sold 6 again"},
         {"slot": "16", "product": "MTDEW-20OZ", "fill_to": 4, "sale_price": "2.25", "reason": "try it"}),
@@ -116,15 +130,15 @@ def test_plan_compares_with_the_run_before(conn, page_conn):
     assert '<a class="pill info" href="#slot-16">16 swap</a>' in page and 'id="slot-16"' in page
 
 
-def test_a_plan_of_the_wrong_shape_still_renders(conn, page_conn):
-    run = agent_runs.start(conn, mode="dry-run")
+def test_a_plan_of_the_wrong_shape_still_renders(conn, page_conn, open_ledger):
+    run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "failed", plan={"slots": "not a list"}, detail="bad answer")
     snap = dashboard.snapshot(page_conn)
     assert all(s["now"] is None for s in snap["plan"]["data"]["slots"])
     dashboard.render(snap)
 
 
-def test_status_and_activity(conn, page_conn):
+def test_status_and_activity(conn, page_conn, open_ledger):
     set_halted(conn, False, "kevin")
     with conn.transaction():
         log(conn, "write", "set_price", {"slot": "15"}, "refused", "halted", None)
@@ -135,8 +149,8 @@ def test_status_and_activity(conn, page_conn):
     assert (status["halted"], status["halt_changed_by"]) == (False, "kevin")
     assert status["latest_run"]["id"] == run and status["latest_run"]["stale"] is True
     assert status["last_action"]["tool"] == "set_price"
-    assert [r["tool"] for r in snap["activity"]["data"]] == ["set_price", "halt"]
-    assert snap["recent_calls"]["data"] == {"calls": 2, "writes": 2, "refused": 1, "failed": 0}
+    assert [r["tool"] for r in snap["activity"]["data"]] == ["set_price", "halt", "ledger.opening"]
+    assert snap["recent_calls"]["data"] == {"calls": 3, "writes": 3, "refused": 1, "failed": 0}
     assert dashboard.verdict(snap["attention"]) == "problem"
     assert snap["attention"][0]["level"] == "bad" and "probably died" in snap["attention"][0]["text"]
     assert any("1 refused" in a["text"] for a in snap["attention"])
@@ -144,7 +158,7 @@ def test_status_and_activity(conn, page_conn):
     assert 'class="write refused problem"' in page and "Probably died" in page and "writes allowed" in page
 
 
-def test_text_from_the_database_is_escaped(conn, page_conn):
+def test_text_from_the_database_is_escaped(conn, page_conn, open_ledger):
     run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "failed", update="<script>alert(1)</script>",
                       plan=plan({"slot": "15", "keep": True, "reason": "<b>bold</b>"}))
@@ -208,7 +222,7 @@ def get(url):
         return error.code, error.headers["Content-Type"], error.read().decode("utf-8")
 
 
-def test_serves_the_page_and_json(served, conn):
+def test_serves_the_page_and_json(served, conn, open_ledger):
     run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "skipped", cost_usd=Decimal("0.10"))
     code, kind, body = get(served + "/")
@@ -235,7 +249,7 @@ def test_a_database_that_is_down_gives_a_503_page(monkeypatch):
 
 # --- from the review ----------------------------------------------------------------------------
 
-def test_money_stays_exact_both_ways(conn, page_conn):
+def test_money_stays_exact_both_ways(conn, page_conn, open_ledger):
     run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "15", "fill_to": 6, "sale_price": Decimal("2.50")}))
     assert conn.execute("select plan->'slots'->0->>'sale_price' from agent_runs").fetchone()[0] == "2.50"
@@ -247,7 +261,7 @@ def test_money_stays_exact_both_ways(conn, page_conn):
     assert '"sale_price": "2.50"' in dashboard.to_json(snap)
 
 
-def test_replays_dont_take_over_the_live_view(conn, page_conn):
+def test_only_live_runs_after_opening_are_shown(conn, page_conn, open_ledger):
     live = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, live, "submitted", plan=plan({"slot": "15", "keep": True}))
     dry = agent_runs.start(conn, mode="dry-run")
@@ -255,10 +269,10 @@ def test_replays_dont_take_over_the_live_view(conn, page_conn):
     replay = agent_runs.start(conn, mode="replay")
     agent_runs.finish(conn, replay, "skipped", plan=plan({"slot": "15", "fill_to": 9, "sale_price": "1.00"}))
     snap = dashboard.snapshot(page_conn)
-    assert snap["status"]["latest_run"]["id"] == dry
+    assert snap["status"]["latest_run"]["id"] == live
     p = snap["plan"]["data"]
-    assert (p["run"]["id"], p["previous_run"]) == (dry, None)     # never compared with the live plan
-    assert [r["id"] for r in snap["runs"]["data"]] == [replay, dry, live]
+    assert (p["run"]["id"], p["previous_run"]) == (live, None)
+    assert [r["id"] for r in snap["runs"]["data"]] == [live]
 
 
 def test_an_outdated_table_blanks_only_its_panel(conn, page_conn):
@@ -318,13 +332,176 @@ def fulfilled(conn, request_id, slot, sku, *, units_loaded, paid, at, to_back_st
          units_loaded, to_back_stock, at))
 
 
-def test_runs_list_what_each_plan_changed(conn, page_conn):
-    a = agent_runs.start(conn, mode="live")
+@pytest.mark.parametrize("offset", [None, timedelta(hours=1), timedelta(hours=-1)],
+                         ids=["no-opening", "future-opening", "after-opening"])
+def test_live_dashboard_uses_opening_for_calls_purchases_and_stock(conn, page_conn, offset):
+    now = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
+    if offset is not None:
+        ledger.record(conn, "opening", 60000, "opening capital", "operator", at=now + offset)
+    opened = offset is not None and offset < timedelta(0)
+    test_at, live_at = now - timedelta(hours=2), now - timedelta(hours=1)
+    fulfilled(conn, "test-receipt", "15", "TEST-DRINK", units_loaded=2, paid="81.19", at=test_at, to_back_stock=2)
+    if opened:  # a request submitted before opening can still have a live receipt
+        fulfilled(conn, "day-one-receipt", "15", "LIVE-DRINK", units_loaded=3, paid="3.25",
+                  at=live_at, to_back_stock=1)
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status) values"
+                 " ('test-rejection', %s, false, '{}', 'rejected'), ('day-one-pending', %s, false, '{}', 'pending')",
+                 (test_at, test_at - timedelta(minutes=1)))
+    for status in ("sending", "unknown", "refused") if not opened else ():
+        conn.execute("insert into purchase_submissions (at, plan_hash, body, status) values (%s, 'h', '{}', %s)",
+                     (test_at, status))
+    catalog_request(conn, "REAL-CATALOG-APPROVAL", "approved", test_at, "APPROVED-SKU")
+    store_poll(conn, "owned", test_at.isoformat(), {"15": (265, 10)})
+    for tool in ("slots.record", "ledger.adjustment", "plan_store.pick", "config.set", "request_catalog_product"):
+        conn.execute("insert into action_log (at, kind, tool, arguments, outcome) values (%s, 'write', %s, '{}', 'done')",
+                     (test_at, tool))
+    conn.execute("insert into action_log (at, kind, tool, arguments, outcome, detail) "
+                 "values (%s, 'read', 'get_catalog', '{}', 'failed', 'TEST-CALL')", (test_at,))
+    conn.execute("insert into action_log (at, kind, tool, arguments, outcome, detail) "
+                 "values (%s, 'read', 'get_catalog', '{}', 'done', 'LIVE-CALL')", (live_at,))
+    early_live = conn.execute("insert into agent_runs (mode, started_at, finished_at, status) "
+                              "values ('live', %s, %s, 'skipped') returning id", (test_at, test_at)).fetchone()[0]
+    for mode in ("dry-run", "replay"):
+        conn.execute("insert into agent_runs (mode, started_at, finished_at, status) "
+                     "select %s, %s, %s, 'skipped' from generate_series(1, %s)",
+                     (mode, test_at, test_at, dashboard.RUN_ROWS + 1))
+        conn.execute("insert into agent_runs (mode, started_at) values (%s, %s)",
+                     (mode, now - timedelta(minutes=1) if opened else test_at))
+    live = conn.execute("insert into agent_runs (mode, started_at) values ('live', %s) returning id",
+                        (live_at,)).fetchone()[0]
+    agent_runs.step(conn, live, 1, "tool_result", "LIVE-STEP", tool="get_catalog")
+    dry = conn.execute("select max(id) from agent_runs where mode = 'dry-run'").fetchone()[0]
+    agent_runs.step(conn, dry, 1, "thinking", "TEST-STEP")
+    snap = dashboard.snapshot(page_conn, now)
+    page, body = dashboard.render(snap), dashboard.to_json(snap)
+    for marker in ("TEST-DRINK", "81.19", "test-receipt", "test-rejection", "TEST-CALL", "TEST-STEP"):
+        assert marker not in page and marker not in body
+    assert snap["sales"]["data"]["slots"]["15"]["price"] == "2.65"
+    assert snap["catalog_counts"]["data"]["by_status"]["approved"] == 1
+    assert {r["tool"] for r in snap["activity"]["data"]} >= {
+        "slots.record", "ledger.adjustment", "plan_store.pick", "config.set", "request_catalog_product",
+    }
+    assert snap["recent_calls"]["data"]["failed"] == 0
+    assert not any("was rejected" in item["text"] for item in snap["attention"])
+    assert "day-one-pending" in page and "REAL-CATALOG-APPROVAL" in page
+    assert [r["id"] for r in snap["runs"]["data"]] == [live, early_live]
+    assert ("LIVE-CALL" in body) is opened and "LIVE-STEP" in body
+    assert ("LIVE-DRINK" in page) is opened and ("day-one-receipt" in body) is opened
+    assert snap["money"]["data"]["committed"]["unsettled"] == (0 if opened else 2)
+    assert f"{2 * (dashboard.RUN_ROWS + (1 if opened else 2))} test runs and 2 test purchases" in page
+
+
+def test_standalone_routes_scope_reassigned_slots_and_redact_failed_steps(served, conn):
+    now = datetime.now(timezone.utc)
+    before, reassigned, after = (now - timedelta(minutes=n) for n in (10, 5, 2))
+    ledger.record(conn, "opening", 60000, "opening capital", "operator", at=before)
+    fulfilled(conn, "old-slot-receipt", "15", "RETIRED-DRINK", units_loaded=3, paid="3.25", at=before)
+    store_poll(conn, "old-poll", before.isoformat(), {"15": (8191, 2), "16": (255, 2)})
+    conn.execute("update slot_assignment set slots = array_remove(slots, '15') || array['11'], "
+                 "first_read_at = %s, last_checked_at = %s", (reassigned, reassigned))
+    old = conn.execute("insert into agent_runs (mode, started_at) values ('live', %s) returning id",
+                       (before,)).fetchone()[0]
+    agent_runs.finish(conn, old, "submitted", update="RETIRED-UPDATE",
+                      plan=plan({"slot": "15", "product": "RETIRED-PLAN"},
+                                {"slot": "16", "reason": "RETIRED-REASON"}, reason="RETIRED-OVERALL"))
+    agent_runs.step(conn, old, 1, "thinking", "RETIRED-THOUGHT")
+    live = conn.execute("insert into agent_runs (mode, started_at) values ('live', %s) returning id",
+                        (after,)).fetchone()[0]
+    agent_runs.step(conn, live, 1, "tool_call", '{"slot":"15","note":"RETIRED-CALL"}', tool="get_sales_history")
+    agent_runs.step(conn, live, 1, "tool_result", '{"data":[{"slot":"15","product":"RETIRED-RESULT"},'
+                    '{"slot":"16","product":"OWNED-RESULT"}]}', tool="get_machine_state")
+    agent_runs.step(conn, live, 1, "tool_result", '{"slot":"15","result":"RETIRED-TRUNCATED',
+                    tool="get_machine_state")
+    agent_runs.step(conn, live, 1, "tool_result", "SECRET-STEP-TEXT", tool="get_catalog", is_error=True)
+    page, body = (get(served + path)[2] for path in ("/", "/state.json"))
+    for marker in ("RETIRED-", "81.91", "SECRET-STEP-TEXT"):
+        assert marker not in page and marker not in body
+    assert all("OWNED-RESULT" in value and "from before the current slot assignment" in value for value in (page, body))
+    assert "$2.55" in page and "2.55" in body
+    assert dashboard.HIDDEN in body
+    assert not any("RETIRED-" in label or "81.91" in label for label in re.findall(r'(?:aria-label|title)="([^"]*)"', page))
+
+
+def test_rejected_test_request_does_not_change_verdict(conn, page_conn):
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status) "
+                 "values ('test-rejection', %s, false, '{}', 'rejected')", (MONDAY,))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["purchase_requests"]["data"] == []
+    assert dashboard.verdict(snap["attention"]) == "ok"
+
+
+def test_day_one_request_rejected_after_opening_is_visible_and_needs_a_check(conn, page_conn):
+    opening = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=opening)
+    conn.execute("insert into purchase_requests (request_id, submitted_at, updated_at, off_cycle,"
+                 " request_body, status, decision_note) values ('day-one', %s, %s, false, '{}',"
+                 " 'rejected', 'One product needs approval.')",
+                 (opening - timedelta(hours=1), opening + timedelta(minutes=1)))
+    early = dashboard.snapshot(page_conn, opening - timedelta(minutes=1))
+    assert early["purchase_requests"]["data"] == []
+    snap = dashboard.snapshot(page_conn, opening + timedelta(minutes=2))
+    assert [row["request_id"] for row in snap["purchase_requests"]["data"]] == ["day-one"]
+    assert dashboard.verdict(snap["attention"]) == "check"
+    assert "Purchase request day-one was rejected" in dashboard.render(snap)
+    assert "hidden_tests" not in snap["runs"]
+
+
+def test_live_run_and_agent_writes_show_before_opening(conn, page_conn):
+    now = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
+    at = now - timedelta(minutes=10)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=now + timedelta(hours=1))
+    live = conn.execute("insert into agent_runs (mode, started_at) values ('live', %s) returning id", (at,)).fetchone()[0]
+    agent_runs.finish(conn, live, "skipped", plan=plan({"slot": "15", "keep": True}))
+    agent_runs.step(conn, live, 1, "text", "LIVE-PRE-OPENING-STEP")
+    for mode in ("dry-run", "replay"):
+        test = conn.execute("insert into agent_runs (mode, started_at) values (%s, %s) returning id",
+                            (mode, at)).fetchone()[0]
+        agent_runs.step(conn, test, 1, "text", "TEST-PRE-OPENING-STEP")
+    for kind, tool, outcome in (("read", "get_catalog", "failed"), ("write", "submit_desired_state", "refused"),
+                                ("write", "set_wildcard_slot", "failed")):
+        log(conn, kind, tool, {}, outcome, "test detail")
+    conn.execute("update action_log set at = %s where tool <> 'ledger.opening'", (at,))
+
+    snap = dashboard.snapshot(page_conn, now)
+    assert snap["status"]["latest_run"]["id"] == live
+    assert snap["plan"]["data"]["run"]["id"] == live
+    assert [row["id"] for row in snap["runs"]["data"]] == [live]
+    assert snap["runs"]["hidden_tests"] == {"runs": 2, "purchases": 0}
+    assert {row["tool"]: row["outcome"] for row in snap["activity"]["data"] if row["tool"] != "ledger.opening"} == {
+        "submit_desired_state": "refused", "set_wildcard_slot": "failed",
+    }
+    assert snap["recent_calls"]["data"] == {"calls": 2, "writes": 2, "refused": 1, "failed": 1}
+    page = dashboard.render(snap)
+    assert "LIVE-PRE-OPENING-STEP" in page and "TEST-PRE-OPENING-STEP" not in page
+
+
+def test_before_opening_only_exact_write_tools_are_kept(conn, page_conn):
+    now = datetime(2026, 11, 16, 18, tzinfo=timezone.utc)
+    for tool, arguments in (("ledger.new_tool", {}), ("config.debug", {}),
+                            ("ledger.tokens", {"reference": "msg_dev"}), ("plan_store.save", {}),
+                            ("ledger.adjustment", {}), ("config.set", {}),
+                            ("plan_store.load", {}), ("plan_store.pick", {})):
+        log(conn, "write", tool, arguments, "done", tool)
+    log(conn, "read", "config.set", {}, "done", "non-write control")
+    conn.execute("update action_log set at = %s", (now - timedelta(minutes=10),))
+
+    snap = dashboard.snapshot(page_conn, now)
+    assert {row["tool"] for row in snap["activity"]["data"]} == {
+        "ledger.adjustment", "config.set", "plan_store.load", "plan_store.pick",
+    }
+    assert snap["recent_calls"]["data"] == {"calls": 4, "writes": 4, "refused": 0, "failed": 0}
+    assert snap["status"]["last_action"]["kind"] == "write"
+    for marker in ("ledger.new_tool", "config.debug", "ledger.tokens", "msg_dev", "plan_store.save"):
+        assert marker not in dashboard.to_json(snap)
+
+
+def test_runs_list_what_each_plan_changed(conn, page_conn, open_ledger):
+    a = _live_run(conn)
     agent_runs.finish(conn, a, "submitted", plan=plan({"slot": "15", "fill_to": 6, "sale_price": "2.50"},
                                                       {"slot": "28", "fill_to": 6}))
-    b = agent_runs.start(conn, mode="live")
+    b = _live_run(conn)
     agent_runs.finish(conn, b, "halted", detail="halted before submitting")
-    c = agent_runs.start(conn, mode="live", model="m")
+    c = _live_run(conn, model="m")
     agent_runs.finish(conn, c, "submitted", update="raise 15, pull 28", cost_usd=Decimal("0.44"),
                       plan=plan({"slot": "15", "fill_to": 8, "sale_price": "2.75"}, {"slot": "28", "fill_to": 0}))
     runs = {r["id"]: r for r in dashboard.snapshot(page_conn, MONDAY)["runs"]["data"]}
@@ -336,13 +513,13 @@ def test_runs_list_what_each_plan_changed(conn, page_conn):
     assert "28 pull" in page and "halted before submitting" in page and "first plan of this mode" in page
 
 
-def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
+def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn, open_ledger):
     fulfilled(conn, "pr-1", "15", "COKE-20OZ", units_loaded=8, paid="9.60", to_back_stock=4,
               at=MONDAY - timedelta(days=3))
     store_poll(conn, "p1", (MONDAY - timedelta(days=4)).isoformat(), {"15": (250, 100)})
     store_poll(conn, "p2", (MONDAY - timedelta(days=2)).isoformat(), {"15": (250, 103)})
     store_poll(conn, "p3", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (250, 105)})
-    run = agent_runs.start(conn, mode="dry-run")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "skipped", plan=plan({"slot": "15", "fill_to": 8, "sale_price": "2.75"}))
     snap = dashboard.snapshot(page_conn, MONDAY)
     held = snap["stock"]["data"]["slots"]["15"]
@@ -364,7 +541,7 @@ def test_the_machine_shows_stock_and_sales_beside_the_plan(conn, page_conn):
     assert '"paid": "9.60"' in dashboard.to_json(snap)
 
 
-def test_without_an_assignment_the_closet_still_counts_from_the_receipts(conn, page_conn):
+def test_without_an_assignment_the_closet_still_counts_from_the_receipts(conn, page_conn, open_ledger):
     """No slot is ours without an assignment, but the closet isn't a slot: its 4 units are still there."""
     fulfilled(conn, "pr-1", "15", "COKE-20OZ", units_loaded=8, paid="9.60", to_back_stock=4,
               at=MONDAY - timedelta(days=3))
@@ -386,7 +563,7 @@ def test_a_fresh_database_is_ok_but_explains_every_empty_panel(page_conn):
     assert dashboard.verdict(snap["attention"]) == "ok"   # halted, no polls: worth knowing, not wrong
     assert {a["level"] for a in snap["attention"]} == {"info"}
     page = dashboard.render(snap)
-    for words in ("No plan yet", "No runs recorded yet", "No tool calls yet", "No machine polls stored yet",
+    for words in ("No plan yet", "No live runs yet", "No tool calls yet", "No machine polls stored yet",
                   "None submitted yet", "Nothing in back stock"):
         assert words in page, words
     assert len(drawn(page)) == 20
@@ -415,8 +592,8 @@ def test_stale_polls_and_unsettled_catalog_requests_need_checking(conn, page_con
     assert any("Mountain Dew 20 oz" in t and "`unknown`" in t for t in warns)
 
 
-def test_a_missing_poll_table_blanks_only_sales_and_stock(conn, page_conn):
-    run = agent_runs.start(conn, mode="live")
+def test_a_missing_poll_table_blanks_only_sales_and_stock(conn, page_conn, open_ledger):
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "15", "keep": True}))
     conn.execute("drop table poll_selections, polls")
     snap = dashboard.snapshot(page_conn, MONDAY)
@@ -426,7 +603,7 @@ def test_a_missing_poll_table_blanks_only_sales_and_stock(conn, page_conn):
     assert "keep as is" in dashboard.render(snap)
 
 
-def test_attention_text_from_the_database_is_escaped(conn, page_conn):
+def test_attention_text_from_the_database_is_escaped(conn, page_conn, open_ledger):
     conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status,"
                  " decision_note) values ('pr-x', now(), false, '{}', 'rejected', '<img src=x onerror=alert(1)>')")
     snap = dashboard.snapshot(page_conn)
@@ -477,9 +654,10 @@ def test_snapshot_is_repeatable_read_even_across_optional_readers(conn, page_con
 
 @pytest.mark.parametrize("table, column, broken", [
     ("polls", "crc_ok", {"sales"}),
-    ("purchase_lines", "units_loaded", {"stock", "purchase_requests"}),
+    ("purchase_lines", "units_loaded", {"stock", "purchase_requests", "spend"}),
 ])
-def test_optional_readers_roll_back_only_their_panel(conn, page_conn, table, column, broken):
+def test_optional_readers_roll_back_only_their_panel(conn, page_conn, open_ledger, table, column, broken):
+    fulfilled(conn, "pr-1", "15", "COKE-20OZ", units_loaded=1, paid="1.00", at=MONDAY)
     conn.execute(f"alter table {table} drop column {column}")
     snap = dashboard.snapshot(page_conn)
     panels = ("plan", "runs", "activity", "recent_calls", "sales", "stock", "spend",
@@ -515,15 +693,15 @@ def test_the_machine_lights_only_our_slots_from_slots(page_conn, even_columns):
     assert 'class="seg" role="group" aria-label="Show" hidden' in page   # the toggle needs JS
 
 
-def test_now_and_next_friday(conn, page_conn, even_columns):
+def test_now_and_next_friday(conn, page_conn, even_columns, open_ledger):
     fulfilled(conn, "pr-1", "12", "COKE-20OZ", units_loaded=6, paid="7.20", at=MONDAY - timedelta(days=3))
     store_poll(conn, "p1", (MONDAY - timedelta(days=4)).isoformat(), {"12": (250, 10), "14": (200, 5)})
     store_poll(conn, "p2", (MONDAY - timedelta(hours=1)).isoformat(), {"12": (250, 12), "14": (200, 5)})
-    first = agent_runs.start(conn, mode="live")
+    first = _live_run(conn)
     agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "12", "fill_to": 6, "sale_price": "2.50"},
                                                           {"slot": "14", "keep": True},
                                                           {"slot": "16", "fill_to": 4}))
-    second = agent_runs.start(conn, mode="live")
+    second = _live_run(conn)
     agent_runs.finish(conn, second, "submitted", plan=plan(
         {"slot": "12", "fill_to": 7, "sale_price": "2.75", "reason": "<i>sells out</i>"},
         {"slot": "14", "product": "MTDEW-20OZ", "fill_to": 4, "sale_price": "2.25", "reason": "try it"},
@@ -579,7 +757,7 @@ def test_a_photo_count_fills_in_what_receipts_dont_know(conn, page_conn):
     assert "~3" in page and "Premier Protein &lt;shake&gt;" in page and "<shake>" not in page
 
 
-def test_the_plan_agrees_with_the_machine_about_a_counted_slot(conn, page_conn):
+def test_the_plan_agrees_with_the_machine_about_a_counted_slot(conn, page_conn, open_ledger):
     from vending import slot_counts
     slot_counts.record(conn, slot_counts.parse({
         "count_id": "p1", "counted_at": "2026-11-09T11:30:00-05:00", "source": "photo", "device_id": "vmc1",
@@ -632,11 +810,11 @@ def test_the_count_tooltip_gives_the_eastern_date():
     assert f"{dashboard._eastern(late):%d %b}" == "09 Nov"
 
 
-def test_runs_chips_read_a_keep_against_the_tag_like_the_plan_panel(conn, page_conn):
+def test_runs_chips_read_a_keep_against_the_tag_like_the_plan_panel(conn, page_conn, open_ledger):
     store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"28": (250, 10)})
-    a = agent_runs.start(conn, mode="live")
+    a = _live_run(conn)
     agent_runs.finish(conn, a, "submitted", plan=plan({"slot": "28", "keep": True}))
-    b = agent_runs.start(conn, mode="live")
+    b = _live_run(conn)
     agent_runs.finish(conn, b, "submitted", plan=plan({"slot": "28", "fill_to": 6, "sale_price": "3.00"}))
     runs = {r["id"]: r for r in dashboard.snapshot(page_conn, MONDAY)["runs"]["data"]}
     # Without the tag this read "set $3.00" here and "$2.50 to $3.00" in the Plan panel.
@@ -750,7 +928,7 @@ def test_a_timestamp_s_seconds_dont_read_as_a_sentinel_figure():
         assert shows(text, figure), text
 
 
-def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json(conn, page_conn):
+def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json(conn, page_conn, open_ledger):
     # 12 isn't ours (ours are columns 5 to 8): a receipt, a catalog row, a count, a poll and a plan entry name it.
     catalog(conn, ("ZZ-RIVAL-SKU", "Zebra Fizz Rival", "Zebra Fizz", "Mango", "16 oz glass bottle"),
             ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
@@ -762,7 +940,7 @@ def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json
         "count_id": "c1", "counted_at": (MONDAY - timedelta(hours=1)).isoformat(), "source": "photo",
         "device_id": "vmc1", "selections": [{"selection": "12", "product": "Quokka Cola Secret", "units": 7,
                                              "price_on_tag": "8.76"}]}), "kevin")
-    run = agent_runs.start(conn, mode="live")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "12", "product": "ZZ-RIVAL-SKU", "fill_to": 9},
                                                         {"slot": "15", "fill_to": 7}))
     snap = dashboard.snapshot(page_conn, MONDAY, public=True)
@@ -778,7 +956,7 @@ def test_nothing_about_a_selection_that_is_not_ours_reaches_the_page_or_its_json
     assert "+2 back Friday" in lane_html(page, "15")        # ours is drawn: fill 7 less 5 on hand
 
 
-def test_a_selection_reassigned_away_stops_being_drawn(conn, page_conn):
+def test_a_selection_reassigned_away_stops_being_drawn(conn, page_conn, open_ledger):
     catalog(conn, ("COKE-20OZ", "Coca-Cola Twenty", "Coca-Cola", None, "20 oz bottle"))
     fulfilled(conn, "pr-15", "15", "COKE-20OZ", units_loaded=5, paid="6.00", at=MONDAY - timedelta(days=3))
     before = dashboard.render(dashboard.snapshot(page_conn, MONDAY, public=True))
@@ -790,7 +968,7 @@ def test_a_selection_reassigned_away_stops_being_drawn(conn, page_conn):
     assert "Coca-Cola Twenty" not in after and "COKE-20OZ" not in state
 
 
-def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn):
+def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn, open_ledger):
     catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"),
             ("SHAKE-11CTN", "Protein shake", "Premier Protein", "Chocolate", "11 oz carton"),
             ("CAN-12", "Plain can", "Plain", None, "12 oz can"))
@@ -799,7 +977,7 @@ def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn):
     fulfilled(conn, "b", "16", "SHAKE-11CTN", units_loaded=2, paid="6", at=week)  # carton: no capacity
     fulfilled(conn, "c", "17", "CAN-12", units_loaded=6, paid="6", at=week)       # fill 4 below 6: nothing to add
     fulfilled(conn, "d", "18", "CAN-12", units_loaded=3, paid="6", at=week)       # not in the plan
-    run = agent_runs.start(conn, mode="live")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan(
         {"slot": "15", "fill_to": 7}, {"slot": "16", "fill_to": 5}, {"slot": "17", "fill_to": 4},
         {"slot": "25", "product": "CAN-12", "fill_to": 8}))
@@ -826,14 +1004,14 @@ def test_units_capacity_and_back_friday_follow_the_rules(conn, page_conn):
     assert "ma-unk" in html and "units unknown" in html
 
 
-def test_the_current_plan_checks_underfills_and_shows_the_reason(conn, page_conn):
+def test_the_current_plan_checks_underfills_and_shows_the_reason(conn, page_conn, open_ledger):
     under, full, unknown, same, pull, keep = TEST_SLOTS[:6]
     catalog(conn, ("CAN-12", "Plain can", "Plain", None, "12 oz can"),
             ("BOTTLE-20", "Test bottle", "Plain", None, "20 oz bottle"),
             ("CARTON-11", "Test shake", "Plain", None, "11 oz carton"))
     set_value(conn, "capacity_overrides", {"BOTTLE-20": 8}, "test")
     fulfilled(conn, "held", same, "CAN-12", units_loaded=2, paid="6", at=MONDAY - timedelta(days=3))
-    run = agent_runs.start(conn, mode="live")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan(
         {"slot": under, "product": "BOTTLE-20", "fill_to": 6, "reason": "Budget < limit"},
         {"slot": full, "product": "CAN-12", "fill_to": 8},
@@ -859,7 +1037,7 @@ def test_the_current_plan_checks_underfills_and_shows_the_reason(conn, page_conn
     assert "capacity not counted" in row
 
 
-def test_a_swap_and_a_price_change_on_friday(conn, page_conn):
+def test_a_swap_and_a_price_change_on_friday(conn, page_conn, open_ledger):
     catalog(conn, ("VW-20", "vitaminwater", "vitaminwater", "dark", "20 oz bottle"),
             ("TOPO-16G", "Topo Chico", "Topo Chico", None, "16 oz glass bottle"),
             ("BUB-12", "bubly", "bubly", "Strawberry", "12 oz can"),
@@ -869,11 +1047,11 @@ def test_a_swap_and_a_price_change_on_friday(conn, page_conn):
     fulfilled(conn, "b", "16", "BUB-12", units_loaded=3, paid="6", at=week)
     fulfilled(conn, "c", "17", "RB-250", units_loaded=6, paid="6", at=week)
     store_poll(conn, "p", (MONDAY - timedelta(hours=1)).isoformat(), {"15": (300, 1), "16": (100, 1), "17": (300, 1)})
-    first = agent_runs.start(conn, mode="live")
+    first = _live_run(conn)
     agent_runs.finish(conn, first, "submitted", plan=plan({"slot": "15", "fill_to": 6}, {"slot": "16", "fill_to": 8},
                                                           {"slot": "17", "fill_to": 6}))
     reason = "Topo Chico sold out twice; <b>2 old</b> units come out\nand 7 go in. " + "x" * 200
-    second = agent_runs.start(conn, mode="live")
+    second = _live_run(conn)
     agent_runs.finish(conn, second, "submitted", plan=plan(
         {"slot": "15", "product": "TOPO-16G", "fill_to": 7, "reason": reason},
         {"slot": "16", "fill_to": 8, "sale_price": "1.25", "reason": "sold out 3 Fridays running"},
@@ -894,18 +1072,18 @@ def test_a_swap_and_a_price_change_on_friday(conn, page_conn):
     assert '<span class="ma-chip bad">pulled</span>' in pulled and "<b>0</b> pulled" in pulled
 
 
-def test_the_close_up_survives_a_failed_products_read(conn, page_conn, monkeypatch):
+def test_the_close_up_survives_a_failed_products_read(conn, page_conn, open_ledger, monkeypatch):
     catalog(conn, ("COKE-20OZ", "Coca-Cola", "Coca-Cola", None, "20 oz bottle"))
     fulfilled(conn, "a", "15", "COKE-20OZ", units_loaded=5, paid="6", at=MONDAY - timedelta(days=3))
     slot = TEST_SLOTS[0]
-    run = agent_runs.start(conn, mode="live")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": slot, "product": "COKE-20OZ", "fill_to": 6}))
 
     def broken(connection, skus):
         connection.execute("select 1 / 0")     # any database error inside the read
     monkeypatch.setattr(dashboard.machine_art, "read_products", broken)
     snap = dashboard.snapshot(page_conn, MONDAY, public=True)
-    assert snap["products"] == {"ok": False, "why": dashboard.PRODUCTS_FAILED}
+    assert snap["products"] == {"ok": False, "why": dashboard.PUBLIC_PANEL_ERROR}
     row = next(row for row in snap["plan"]["data"]["slots"] if row["slot"] == slot)
     assert "fill_check" not in row
     assert not any(item["level"] == "warn" for item in snap["attention"])
@@ -916,17 +1094,17 @@ def test_the_close_up_survives_a_failed_products_read(conn, page_conn, monkeypat
     assert "Packages are approximate" in page and "division" not in page
 
 
-def test_fill_checks_skip_first_fill_rows(conn, page_conn, monkeypatch):
+def test_fill_checks_skip_first_fill_rows(conn, page_conn, open_ledger, monkeypatch):
     weekly, first_fill = TEST_SLOTS[:2]
     catalog(conn, ("CAN-12", "Plain can", "Plain", None, "12 oz can"))
-    run = agent_runs.start(conn, mode="live")
+    run = _live_run(conn)
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": weekly, "product": "CAN-12", "fill_to": 6}))
     weekly_plan = dashboard._plan
     saved_row = {"slot": first_fill, "product": "Plain can", "units": 4,
                  "fill_check": "fills 4 of 8: 4 spaces empty"}
 
-    def combined_plan(connection, ours):
-        result = weekly_plan(connection, ours)
+    def combined_plan(connection, ours, now, assignment_at):
+        result = weekly_plan(connection, ours, now, assignment_at)
         result["slots"] = [dict(saved_row) if row["slot"] == first_fill else row for row in result["slots"]]
         return result
 
@@ -939,7 +1117,7 @@ def test_fill_checks_skip_first_fill_rows(conn, page_conn, monkeypatch):
         f"Slot {weekly} fills 6 of 8: 2 spaces empty."]
 
 
-def test_a_missing_catalog_table_only_makes_the_close_up_approximate(conn, page_conn):
+def test_a_missing_catalog_table_only_makes_the_close_up_approximate(conn, page_conn, open_ledger):
     conn.execute("drop table sourcing_options")
     conn.execute("drop table catalog_products")
     fulfilled(conn, "a", "15", "MYSTERY", units_loaded=5, paid="6", at=MONDAY - timedelta(days=3))
