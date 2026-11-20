@@ -59,7 +59,7 @@ those slots. A count that saw a slot empty gives `counted_on_hand` 0 and
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 
@@ -70,6 +70,7 @@ from vending import config, counters, demand, slot_counts, stock, wildcard_trial
 from vending.class_days import class_days_after, eastern_date
 from vending.planner import AGREED_CEILING_CENTS
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.start import EASTERN
 from vending.tools import Reply
 
 WINDOW = timedelta(days=7)
@@ -300,7 +301,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     seen = _seen(conn, now)
     latest_counters = _counters(conn, latest[0], slots)
     demands = _demands(counts, loads, counted.sales, latest_counters, now,
-                       wildcard_trial.coil_losses(conn), wildcard_trial.pulls(conn))
+                       wildcard_trial.coil_losses(conn), wildcard_trial.pulls(conn), _last_read(conn, slots, now))
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     wildcard = config.get_value(conn, "wildcard_slot")
@@ -466,7 +467,8 @@ def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime
 def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[datetime, int, str]]],
              sales: tuple[stock.SaleCost, ...], latest: Counters, now: datetime,
              losses: dict[str, list[tuple[datetime, str, int]]] | None = None,
-             pulls: dict[str, list[tuple[datetime, int]]] | None = None) -> dict[str, demand.Demand]:
+             pulls: dict[str, list[tuple[datetime, int]]] | None = None,
+             read: dict[str, datetime] | None = None) -> dict[str, demand.Demand]:
     """Each receipted slot's in-stock rate (or prior) for its current product, since it went in,
     and its slow-seller clock. Pure.
 
@@ -490,7 +492,9 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
     The slow-seller clock (`Demand.class_days_since_sale`) is those in-stock class days in the slot's
     current stretch of stock, after the run's last sale, or after the stretch began. An unattributed
     sale may have been this product's, so it restarts the clock too. A slot that may be empty now has
-    0.
+    0. A class day counts only once a reading of the slot's counters at or after its end (`read`, the
+    latest per slot) shows it sold nothing, so a slot the polls stopped reading isn't silent, nor is a
+    day just begun. Without `read` (a pure caller), every day counts.
     """
     demands = {}
     for slot, count in counts.items():
@@ -501,8 +505,8 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
                                                                   if s.product == count.product and not s.unattributed])
         unknown = demand.run_events(count.since, count.unattributed, [(s.at, s.units) for s in mine if s.unattributed])
         since = [s for s in mine if s.at > count.since]
-        lost = demand.run_events(count.since, count.lost,
-                                 [(at, units) for at, sku, units in (losses or {}).get(slot, []) if sku == count.product])
+        gone = [(at, units) for at, sku, units in (losses or {}).get(slot, []) if sku == count.product]
+        lost = demand.run_events(count.since, count.lost, gone)
         pulled = [(at, units) for at, units in (pulls or {}).get(slot, []) if at > count.since]
         spans = demand.in_stock_spans(slot_loads, slot_sales + unknown + lost + pulled, now, count.units)
         unplaced = {day for s in since if s.unattributed for day in _dates(s.since or count.since, s.at)}
@@ -510,11 +514,18 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
         quiet = 0
         if spans and spans[-1][1] == now:   # in stock now: count from the stretch's start or the last sale
             begin = max([spans[-1][0]] + [at for at, _ in slot_sales + unknown])
-            quiet = sum(day in in_stock for day in class_days_after(begin, now))
+            watched = None if read is None else read.get(slot)
+            quiet = sum(day in in_stock and (read is None or (watched is not None and _day_end(day) <= watched))
+                        for day in class_days_after(begin, now))
         estimate = demand.estimate(sum(units for _, units in slot_sales), len(in_stock),
                                    latest.get(slot, (None, None))[0])
         demands[slot] = replace(estimate, class_days_since_sale=quiet)
     return demands
+
+
+def _day_end(day: date) -> datetime:
+    """Midnight Eastern at the end of `day`. Pure."""
+    return datetime.combine(day + timedelta(days=1), time(0), EASTERN)
 
 
 def _dates(start: datetime, end: datetime) -> set[date]:
@@ -590,6 +601,14 @@ def price_history(conn: psycopg.Connection, until: datetime,
         " and p.started_at <= %(until)s and s.price_cents is not null" + lower +
         " order by p.started_at, p.session_id, s.selection",
         {"device": DEVICE_ID, "slots": list(our_slots(conn)), "until": until, "since": since}).fetchall()
+
+
+def _last_read(conn: psycopg.Connection, slots: tuple[str, ...], until: datetime) -> dict[str, datetime]:
+    """Each slot's latest good poll up to `until` that read its units counter."""
+    return dict(conn.execute(
+        "select s.selection, max(p.started_at) from poll_selections s join polls p using (session_id)"
+        " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and s.lifetime_units is not null"
+        " and p.started_at <= %s group by s.selection", (DEVICE_ID, list(slots), until)).fetchall())
 
 
 def _counters(conn: psycopg.Connection, session_id: str, slots: tuple[str, ...]) -> Counters:

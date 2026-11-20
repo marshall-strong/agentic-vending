@@ -623,17 +623,18 @@ def test_a_product_that_comes_back_at_the_same_moment_counts_only_its_last_load(
 
 def test_the_slow_seller_clock_counts_in_stock_class_days_since_the_last_sale(conn):
     # Review round 1, item 4. Coke went in on Fri 30 Oct and sold through Thursday, 4 that day. A top-up
-    # of Coke on Friday keeps the run (6 in-stock class days) and starts units_sold_since_load again (0).
-    # Neither is the slow-seller clock: since its last sale it has been in stock and silent on Fri 6 and
-    # Mon 9 Nov only, so 2 class days.
+    # of Coke on Friday keeps the run (7 in-stock class days, read just after midnight on Tuesday) and starts
+    # units_sold_since_load again (0). Neither is the slow-seller clock: since its last sale it has been in
+    # stock and seen silent on Fri 6 and Mon 9 Nov only, so 2 class days.
     utc = timezone.utc
     store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100)})
     fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
     for n, (day, units) in enumerate(((2, 101), (3, 101), (4, 102), (5, 106), (6, 106), (9, 106))):
         store_poll(conn, f"p{n + 1}", f"2026-11-{day:02d}T22:00:00+00:00", {"15": (250, units)})
+    store_poll(conn, "p7", "2026-11-10T05:30:00+00:00", {"15": (250, 106)})
     fulfilled(conn, "r2", datetime(2026, 11, 6, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "6.00", 6, 0, 0))
-    s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 9, 23, tzinfo=utc)).data)["15"]
-    assert (s.stock_on_hand, s.class_days_in_stock, s.units_sold_since_load) == (20, 6, 0)
+    s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 10, 5, 45, tzinfo=utc)).data)["15"]
+    assert (s.stock_on_hand, s.class_days_in_stock, s.units_sold_since_load) == (20, 7, 0)
     assert s.class_days_since_sale == 2
 
 
