@@ -55,6 +55,7 @@ class Demand:
     basis: str                            # where the rate came from, in words the agent can quote
     class_days_in_stock: int              # since the product went in
     units_sold: int                       # since the product went in
+    class_days_since_sale: int | None = None   # in-stock class days since its last sale; set by the machine state
 
 
 def segment_for(price_cents: int) -> Segment:

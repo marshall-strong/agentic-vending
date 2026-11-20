@@ -31,10 +31,13 @@ Built from our database only; it never reads the machine.
   `class_days_of_stock_left` divides the units on hand (the count's when it is
   newer) by it. Only the current product's sales count: units sold across its
   product change that the replay can't place (unattributed, #172) are left
-  out, with the class days their poll window covers, and
-  out of `units_sold_since_load` too. `units_per_day` stays as before: the
-  last 7 calendar days, empty days and weekends included, so it reads low for
-  a slot that sold out.
+  out, with the class days their poll window covers, and out of
+  `units_sold_since_load` too. `class_days_since_sale` is the slow-seller
+  clock: those in-stock class days since the product last sold (an
+  unattributed sale restarts it), or since it went in; unlike
+  `class_days_in_stock`, it starts again at every sale. `units_per_day` stays
+  as before: the last 7 calendar days, empty days and weekends included, so it
+  reads low for a slot that sold out.
 
 `wildcard_trial` is the product on trial in the wildcard slot
 (`vending.wildcard_trial`): its units over the in-stock class days the polls
@@ -55,6 +58,7 @@ those slots. A count that saw a slot empty gives `counted_on_hand` 0 and
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
@@ -94,6 +98,7 @@ class SlotState(BaseModel):
     units_per_class_day: str | None = None
     rate_basis: str | None = None              # "own: ..." or "fall prior: ..."
     class_days_in_stock: int | None = None     # since the product went in; null without receipts
+    class_days_since_sale: int | None = None   # in stock with no sale since the last one: the slow-seller clock
     class_days_of_stock_left: str | None = None
     # From the latest person's count, when receipts don't cover the slot or the count is newer.
     counted_product: str | None = None   # as seen, free text, not a SKU; null when seen empty
@@ -205,6 +210,7 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold
             units_per_class_day=None if rate.units_per_class_day is None else str(rate.units_per_class_day),
             rate_basis=rate.basis,
             class_days_in_stock=rate.class_days_in_stock if count else None,
+            class_days_since_sale=rate.class_days_since_sale if count else None,
             class_days_of_stock_left=demand.class_days_left(on_hand, rate.units_per_class_day),
             counted_product=looked["product"] if looked else None,
             counted_on_hand=looked["on_hand"] if looked else None,
@@ -456,23 +462,31 @@ def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime
 
 def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[datetime, int, str]]],
              sales: tuple[stock.SaleCost, ...], latest: Counters, now: datetime) -> dict[str, demand.Demand]:
-    """Each receipted slot's in-stock rate (or prior) for its current product, since it went in. Pure.
+    """Each receipted slot's in-stock rate (or prior) for its current product, since it went in,
+    and its slow-seller clock. Pure.
 
     Only the current product's loads and sales count (#172). The old product's share of a window
     split at the change is booked at the poll after it, so it is left out by product, not by time.
     Loads at the moment the product went in may belong to an earlier run of it (A, B, then A again
     at one visit), so what the run had then is the replay's own count (`SlotCount.loaded`, in its
     movement order) less its loads after that moment.
+
     Units the replay left unattributed (`SaleCost.unattributed`) may have been either product's, so
     they are not in the units, and the days their poll window covers (`SaleCost.since` to `at`,
     Eastern) are left out of the in-stock days: a swap polled the same day loses none, since the
     day a product goes in never counts, and a window over a poll gap neither lowers the rate nor
-    counts as days in stock that sold nothing. They still leave the stock spans, as they leave the replay's count: the slot
-    held stock only if they weren't this product's, so it may have stood empty after them.
+    counts as days in stock that sold nothing. They still leave the stock spans, as they leave the
+    replay's count: the slot held stock only if they weren't this product's, so it may have stood
+    empty after them.
+
+    The slow-seller clock (`Demand.class_days_since_sale`) is those in-stock class days after the
+    run's last sale, or after it went in. An unattributed sale may have been this product's, so it
+    restarts the clock too.
     """
     demands = {}
     for slot, count in counts.items():
-        later = [(at, units) for at, units, sku in loads.get(slot, []) if at > count.since and sku == count.product]
+        later = [(at, units) for at, units, sku in loads.get(slot, [])
+                 if at > count.since and sku == count.product]
         first = count.loaded - sum(units for _, units in later)
         slot_loads = ([(count.since, first)] if first > 0 else []) + later
         since = [s for s in sales if s.slot == slot and s.at > count.since]
@@ -480,9 +494,11 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
         unknown = [(s.at, s.units) for s in since if s.unattributed]
         spans = demand.in_stock_spans(slot_loads, slot_sales + unknown, now, count.units)
         unplaced = {day for s in since if s.unattributed for day in _dates(s.since or count.since, s.at)}
-        days = len(set(demand.class_days_in_stock(spans)) - unplaced)
-        demands[slot] = demand.estimate(sum(units for _, units in slot_sales), days,
-                                        latest.get(slot, (None, None))[0])
+        in_stock = set(demand.class_days_in_stock(spans)) - unplaced
+        last_sale = eastern_date(max([count.since] + [at for at, _ in slot_sales + unknown]))
+        estimate = demand.estimate(sum(units for _, units in slot_sales), len(in_stock),
+                                   latest.get(slot, (None, None))[0])
+        demands[slot] = replace(estimate, class_days_since_sale=sum(day > last_sale for day in in_stock))
     return demands
 
 
