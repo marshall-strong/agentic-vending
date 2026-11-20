@@ -489,7 +489,10 @@ def next_round(now: datetime, every_minutes: float, lock: datetime | None,
         due = now + timedelta(minutes=every_minutes)
     else:
         step = timedelta(minutes=every_minutes)
-        due = now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=at_minute)
+        # Under an hour apart, the first round of the hour is the minute modulo the gap: every 15 at
+        # minute 20 is :05, :20, :35 and :50, so a start at :02 runs at :05, not :20.
+        first = at_minute % every_minutes if every_minutes < 60 else at_minute
+        due = now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=first)
         if every_minutes % 60 == 0:      # every few hours: count from midnight, so the hours stay put too
             due = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=at_minute)
         while due <= now:

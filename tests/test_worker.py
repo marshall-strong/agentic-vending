@@ -302,6 +302,9 @@ def test_rounds_keep_to_a_few_minutes_after_the_staff_poll():
     assert worker.next_round(on_time, 60, None, 5) == datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
     assert worker.next_round(started, 15, None, 5) == datetime(2026, 11, 19, 18, 50, tzinfo=timezone.utc)
     assert worker.next_round(started, 120, None, 5) == datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
+    # Under an hour apart with the minute past the gap: every 15 at minute 20 keeps to :05, :20, :35, :50.
+    assert worker.next_round(datetime(2026, 11, 19, 19, 2, tzinfo=timezone.utc), 15, None, 20) ==         datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)
+    assert worker.next_round(datetime(2026, 11, 19, 20, 1, tzinfo=timezone.utc), 15, None, 20) ==         datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
     late = datetime(2026, 11, 19, 23, 58, tzinfo=timezone.utc)                         # across midnight
     assert worker.next_round(late, 60, None, 5) == datetime(2026, 11, 20, 0, 5, tzinfo=timezone.utc)
 

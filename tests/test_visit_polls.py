@@ -54,9 +54,9 @@ def _no_slot_lock(monkeypatch):
     monkeypatch.setattr(worker, "_slot_lock", lambda: None)
 
 
-def run_worker(clock, reader, job=lambda: 0, sleep=None, port=0):
+def run_worker(clock, reader, job=lambda: 0, sleep=None, port=0, at_minute="5"):
     """The worker's real loop on the fake clock, with one trivial job. Returns when the clock reaches its stop."""
-    return worker.main(["--every", "60", "--port", str(port)], jobs=[("a", job)],
+    return worker.main(["--every", "60", "--at-minute", at_minute, "--port", str(port)], jobs=[("a", job)],
                        sleep=sleep or clock.sleep, log=lambda _: None, reads=reader, clock=clock)
 
 
@@ -157,7 +157,8 @@ def test_a_read_that_runs_past_the_hourly_round_does_not_take_the_worker_down():
         clock.sleep(seconds)
 
     # The read that starts at 3:40:00 PM, five seconds before the round is due, ends five seconds after it.
-    run_worker(clock, Reader(SCHEDULE, run, lambda _: None), job=lambda: rounds.append(clock.now) or 0, sleep=sleep)
+    run_worker(clock, Reader(SCHEDULE, run, lambda _: None), job=lambda: rounds.append(clock.now) or 0, sleep=sleep,
+               at_minute="off")     # an hour from the last round, so the 3:40:00 PM read crosses 3:40:05 PM
     assert len(rounds) == 2 and rounds[1] - rounds[0] < timedelta(minutes=61)    # the round ran, right after the read
 
 
@@ -698,8 +699,31 @@ def test_a_read_sent_whose_history_copy_outlives_the_timeout_is_not_a_failure(mo
 def test_the_hourly_rounds_keep_to_five_past_while_the_reads_run():
     # The two schedules share one loop (#177 and SYNC_AT_MINUTE): the reads come every minute in the
     # window, and the rounds still come at 5 past each hour, never shifted by a read that ran long.
-    calls, rounds = [], []
+    calls, rounds, sleeps = [], [], []
     clock = Clock(at(FRI, 14, 50), at(FRI, 17, 10))
     run_worker(clock, reader_of(calls), job=lambda: rounds.append(clock().astimezone(ET)) or 0)
     assert rounds == [at(FRI, 14, 50), at(FRI, 15, 5), at(FRI, 16, 5), at(FRI, 17, 5)]
     assert calls[0] == at(FRI, 14, 50) and len(calls) == 140
+
+
+def test_a_read_that_crosses_five_past_never_sleeps_a_negative_time():
+    # Each read takes 70 s, so the reads run back to back and the one in progress at 3:05 ends after it.
+    # The round runs as soon as that read ends, without a negative sleep; the next keeps to 4:05, give or
+    # take the read in progress then, and never drifts to the minute the last round ran.
+    rounds = []
+    clock = Clock(at(FRI, 15, 3), at(FRI, 16, 6))
+
+    def run(now):
+        clock.now += timedelta(seconds=70)
+        return READ
+
+    def sleep(seconds):
+        if seconds < 0:                                       # as `time.sleep` does
+            raise ValueError("sleep length must be non-negative")
+        clock.sleep(seconds)
+
+    run_worker(clock, Reader(SCHEDULE, run, lambda _: None), job=lambda: rounds.append(clock().astimezone(ET)) or 0,
+               sleep=sleep)
+    read = timedelta(seconds=70)
+    assert at(FRI, 15, 5) < rounds[1] <= at(FRI, 15, 5) + read
+    assert at(FRI, 16, 5) <= rounds[2] <= at(FRI, 16, 5) + read     # late by at most the read in progress
