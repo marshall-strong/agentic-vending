@@ -112,10 +112,16 @@ def test_the_card_says_the_season_opens_empty_and_day_one_fills_it():
 
 
 
-def test_the_card_and_restocking_say_to_top_up_to_the_column():
-    """Simulated seasons (closed PR #151): the agent refilled only after slots had emptied."""
+def test_every_restock_fills_every_slot_to_its_column():
+    """Kevin, 19 Nov: every restock visit (almost always the free Friday one) fills every slot, not only those
+    below a top-up threshold; any visit may change anything in our slots, with no limit on units or lines."""
     card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
-    assert "top up before slots run out" in card and "`restocking`" in card
+    assert "every restock fills every slot to its column (`restocking`)" in card
     restocking = (RULES_DIR / "restocking.md").read_text(encoding="utf-8")
-    assert "**Top-ups**" in restocking and "`class_days_of_stock_left`" in restocking
-    assert "to its column (omit `fill_to`)" in restocking
+    rule = restocking[restocking.index("**Every restock, fill every slot**"):restocking.index("**Slow sellers**")]
+    assert "each of our slots, not as `keep`, without `fill_to`" in rule and "Friday's: $25 is a lot" in rule
+    assert "closet" in rule and "slow seller gets a swap" in rule and "`wildcard`" in rule and "$82.00" in rule
+    assert "fastest sellers first" in rule and "end stock counts at cost" in rule
+    assert "class_days_of_stock_left" not in rule, "the threshold rule is gone"
+    assert "no limit on units or lines (Kevin, 19 Nov)" in restocking
+    assert "next Friday" not in restocking
