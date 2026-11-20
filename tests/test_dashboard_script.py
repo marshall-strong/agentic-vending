@@ -118,7 +118,7 @@ const media = q => [...q.matchAll(/\((min|max)-width:\s*(\d+)px\)/g)].every(([, 
 const window = {addEventListener: on("window"), matchMedia: q => ({matches: media(q)})};
 const matchMedia = window.matchMedia;
 const localStorage = {getItem: () => null, setItem() {}};
-const location = {hash: "", pathname: "/", reload() {}};
+const location = {hash: HASH, pathname: "/", reload() {}};
 const CSS = {escape: s => String(s)};
 const intervals = [];
 const setInterval = (fn, ms) => intervals.push({fn, ms});
@@ -142,12 +142,13 @@ def _main_html() -> str:
     return f"<main>{dashboard._cabinet_html(snap, [])}</main>"
 
 
-def run_script(tmp_path, checks: str, width: int = 1280) -> None:
+def run_script(tmp_path, checks: str, width: int = 1280, hash: str = "") -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed")
     script = dashboard.SCRIPT % (30, 0, dashboard.LIVE_STORAGE, visits.REFRESH_HEADER)    # the live page, not the demo
-    prelude = f"const PAGE = {json.dumps(_main_html())};\nconst WIDTH = {int(width)};\n"
+    prelude = (f"const PAGE = {json.dumps(_main_html())};\nconst WIDTH = {int(width)};\n"
+               f"const HASH = {json.dumps(hash)};\n")
     path = tmp_path / "page.js"
     path.write_text(prelude + _DOM + script + "\n(async () => {\n" + checks + "\n})().catch(e => "
                     "{ console.error(e.stack || e); process.exit(1); });\n", encoding="utf-8")
@@ -186,3 +187,30 @@ def test_between_the_phone_and_desktop_layouts_a_pick_scrolls_the_close_up_into_
       const panel = scrolled.includes("vm-panel");
       assert(panel === {'true' if shown else 'false'}, "close-up scrolled into view: " + JSON.stringify(scrolled));
     ''', width=width)
+
+
+@pytest.mark.parametrize("width", [1280, 390], ids=["wide", "phone"])
+def test_escape_falls_back_to_the_front_cell_then_the_heading_when_the_opener_is_gone(tmp_path, width):
+    run_script(tmp_path, r'''
+      // A plan-change row opens 15. The next refresh no longer has that row, but 15 is still ours.
+      const row = new Node("a", {"class": "chg", id: "chg-15", href: "?sel=15#sel-15", "data-sel": "15"});
+      document.querySelector(".ops-home").appendChild(row);
+      row.focus();
+      fire("click", row);
+      assert(document.querySelector(".vm").getAttribute("data-sel") === "15", "the pick took");
+      await refresh();
+      assert(!document.getElementById("chg-15"), "the row is gone after the refresh");
+      fire("keydown", document.activeElement, {key: "Escape"});
+      assert(!document.querySelector(".vm").hasAttribute("data-sel"), "Escape closed it");
+      assert(document.activeElement.id === "fc-15", "focus falls back to 15 on the front: " + document.activeElement.id);
+
+      // Opened again from the row; this time the front cell is gone too: focus goes to the heading.
+      document.querySelector(".ops-home").appendChild(row);
+      fire("click", row);
+      const cell = document.getElementById("fc-15");
+      cell.parentNode.children.splice(cell.parentNode.children.indexOf(cell), 1); cell.parentNode = null;
+      row.parentNode.children.splice(row.parentNode.children.indexOf(row), 1); row.parentNode = null;
+      fire("keydown", document.body, {key: "Escape"});
+      assert(document.activeElement.id === "vm-title", "focus falls back to the heading: " + document.activeElement.id);
+    ''', width=width)
+

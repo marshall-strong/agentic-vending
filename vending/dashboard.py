@@ -1454,7 +1454,7 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
              f'{panels}</aside>')
     scrim = '<a class="vm-scrim" href="?#vm" data-close tabindex="-1" aria-hidden="true"></a>'
     return (f'<section id="vm" class="vm" data-view="now">{machine_art.selection_css(shown)}'
-            f'<h2>In the machine <span class="hint">our {len(shown)} selections &middot; tap one to see it close up'
+            f'<h2 id="vm-title" tabindex="-1">In the machine <span class="hint">our {len(shown)} selections &middot; tap one to see it close up'
             f'</span>{when}{seg}</h2>{lede}'
             f'<div class="ops"><div class="ops-front">{front}{legend}</div>'
             f'<div class="ops-side">{home}{panel}</div></div>{scrim}</section>')
@@ -2476,7 +2476,10 @@ SCRIPT = """(function () {
   }
   function shut() {
     if (!sel && !sheet) return;
-    var back = opener && document.getElementById(opener);
+    // Back to the opener; if a refresh took it away (a change row that is gone), to the selection's
+    // cell on the front; if that is gone too, to the machine's heading.
+    var back = (opener && document.getElementById(opener)) || document.getElementById('fc-' + sel)
+               || document.getElementById('vm-title');
     sel = ''; sheet = false; opener = null; filter();
     if (back) back.focus({preventScroll: true});
   }
