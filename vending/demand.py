@@ -14,8 +14,8 @@ Stock comes from the stock replay's own history of the product's run
 (`stock.SlotCount.history`, with a person's counts from `stock.run_history`),
 cycle by cycle: the slot holds stock from the movement that takes it above zero
 until the one that takes it back to zero. A class day counts when the slot held
-stock as it began (`class_days.class_days_after`), so a Friday-afternoon load
-starts counting on Monday, and the day a slot sold out counts.
+stock as it began (`class_days_in_stock`), so a Friday-afternoon load starts
+counting on Monday, and the day a slot sold out counts.
 
 Everything here is pure: no database, no clock.
 """
@@ -23,11 +23,11 @@ Everything here is pure: no database, no clock.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
 
-from vending.class_days import class_days_after
+from vending.class_days import EASTERN, eastern_date, is_class_day
 
 if TYPE_CHECKING:
     from vending.stock import Applied
@@ -68,18 +68,32 @@ def segment_for(price_cents: int) -> Segment:
     return min(SEGMENTS, key=lambda s: abs(s.average_price_cents - price_cents))
 
 
+SALES = ("sale", "unattributed", "assumed")   # `stock.Applied` kinds that are units sold from the slot
+
+
 def _stretches(history: tuple[Applied, ...] | list[Applied]) -> list[tuple[datetime, datetime | None]]:
     """`(start, end)` for each stretch the run surely held stock; `end` is None for one still running."""
+    history = list(history)
     spans: list[tuple[datetime, datetime | None]] = []
     on_hand, start = 0, None
-    for applied in history:
+    credit, credited = 0, frozenset()   # units the latest count already saw go, and the sales they may be in
+    for i, applied in enumerate(history):
         before = on_hand
         if applied.kind == "load":
             on_hand += applied.units
         elif applied.kind == "count":
-            on_hand = min(on_hand, applied.units)
+            # A sale whose counters' window holds the count may have sold before it: then the count saw it go.
+            # As many as the sure stock before the count less what it saw, up to those windows' units.
+            credited = frozenset(j for j in range(i + 1, len(history)) if history[j].kind in SALES
+                                 and history[j].since is not None and history[j].since < applied.at < history[j].at)
+            credit = min(max(before - applied.units, 0), sum(history[j].units for j in credited))
+            on_hand = applied.units
         else:
-            on_hand = max(on_hand - applied.units, 0)
+            units = applied.units
+            if i in credited:
+                seen = min(units, credit)
+                credit, units = credit - seen, units - seen
+            on_hand = max(on_hand - units, 0)
         if before == 0 and on_hand > 0:
             start = applied.at
         elif before > 0 and on_hand == 0:
@@ -94,10 +108,13 @@ def in_stock_spans(history: tuple[Applied, ...] | list[Applied], now: datetime) 
     """When the slot surely held its product: from each movement that took it above zero to the one that emptied it.
 
     `history` is the run as the stock replay applied it, in its order (`stock.SlotCount.history`), with any
-    person's counts (`stock.run_history`). The count is a lower bound: a load adds its units; a sale, attributed
-    or not, a pull or a loss takes its units off, never below zero; a count lowers it to what the person saw, so
-    one that found the slot empty ends a span. Without counts it is the replay's own `SlotCount.units` at every
-    step, so a loss or pull is counted once, when and as the replay applied it. A span still open runs to `now`.
+    person's counts (`stock.run_history`). The stock is a lower bound: a load adds its units; a sale of any kind,
+    a pull or a loss takes its units off, never below zero. A count sets it to what was surely there: 0 when the
+    slot was found empty or holding another product (a span ends), what an exact count of the product saw
+    otherwise (a span may start). A sale whose counters' window holds the count may already be in what it saw, so
+    those units aren't taken off twice (`_stretches`). Without counts it is the replay's own `SlotCount.units` at
+    every step, so a loss or pull is counted once, when and as the replay applied it. A span still open runs to
+    `now`. A span's end is the moment it emptied: a day that began then wasn't in stock (`class_days_in_stock`).
     """
     return [(start, now if end is None else end) for start, end in _stretches(history)]
 
@@ -108,9 +125,26 @@ def in_stock_since(history: tuple[Applied, ...] | list[Applied]) -> datetime | N
     return spans[-1][0] if spans and spans[-1][1] is None else None
 
 
+def day_start(day: date) -> datetime:
+    """00:00 Eastern on `day`."""
+    return datetime.combine(day, time(0), EASTERN)
+
+
 def class_days_in_stock(spans: list[tuple[datetime, datetime]]) -> list[date]:
-    """The class days the slot held stock as they began, over all spans, each day once."""
-    return sorted({day for start, end in spans for day in class_days_after(start, end)})
+    """The class days the slot held stock as they began, over all spans, each day once.
+
+    Compared as instants: a day counts when its 00:00 Eastern is at or after a span's start and before its end.
+    So a load at Friday 3 PM counts from Monday, a load at Monday 00:00 counts Monday, and a slot emptied at
+    Monday 00:00 wasn't in stock that Monday; the day a slot sold out after midnight counts.
+    """
+    days = set()
+    for start, end in spans:
+        day = eastern_date(start)
+        while day_start(day) < end:
+            if day_start(day) >= start and is_class_day(day):
+                days.add(day)
+            day += timedelta(days=1)
+    return sorted(days)
 
 
 def estimate(units_sold: int, days_in_stock: int, price_cents: int | None) -> Demand:

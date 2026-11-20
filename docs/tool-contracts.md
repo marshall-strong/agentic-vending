@@ -121,17 +121,31 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   `class_days_in_stock` (null without receipts) and `class_days_of_stock_left` (on hand, the
   count's when it is newer, ÷ the rate). `class_days_since_sale` is the slow-seller clock: class
   days since the product's last sale, each counted only if the slot surely held stock all of it, in
-  its current stretch of stock, and readings of its units counter that show no rise cover it to its
-  end (midnight Eastern). It is 0 when the slot may be empty now (a sale, loss or pull emptied it, or
-  a count found it empty), and null without receipts (a slot known only from a count). A possible
-  sale restarts it: one the counters can't place at a swap (unattributed), or a stretch no such
-  reading covers, such as before the slot's first reading or across a counter restart. A drop the
-  next poll hasn't settled proves nothing yet. So repeated ambiguity can keep a slot below the
-  threshold. Stock for the rate and the clock comes from one history, the stock replay's own, with
-  every person's count in it: a loss or pull counts once, as the replay applied it, and a count that
-  found the slot empty ends a stretch of stock. Units sold across a product change that the counters
-  can't place (unattributed, #172) are in neither `units_sold_since_load` nor the rate, and the
-  class days their poll window covers are not in-stock days. Also the closet (back stock) per product in `closet`, with `units`,
+  its current stretch of stock, and both its units and its takings counters show no rise over it,
+  in readings that run on to a fresh, settled reading of the slot (the latest within 6 hours, and
+  no drop the next poll hasn't settled). A day counts from its own midnight Eastern to the next,
+  compared as instants. It is 0 when the slot may be empty now (a sale, loss or pull emptied it, or
+  a count found it empty or holding another product), when nothing has read the slot lately, and
+  while its latest reading is an unsettled drop; null without receipts (a slot known only from a
+  count). A possible sale restarts it: one the counters can't place (unattributed at a swap, or in
+  the window over a slot's first receipt), takings with no unit counted, or a stretch no such
+  reading covers, such as before the slot's first reading or across a counter restart. So repeated
+  ambiguity can keep a slot below the threshold. Stock for the rate and the clock comes from one
+  history, the stock replay's own, as known at the time asked about (a sale a later poll booked
+  isn't in it), with every person's count in it: a loss or pull counts once, as the replay applied
+  it. A count that found the slot empty, or an exact (door) count that found another product, ends
+  a stretch of stock; an exact count of the product sets the stock to what it saw, so it can start
+  one; a photo's units are an estimate and set nothing. A count at a load's own moment is read as
+  after it. Units sold across a product change that the counters can't place (unattributed, #172),
+  and units in the window over a slot's first receipt that the counters don't place on its product
+  (a sale at the new price alone, with another price before, is placed), are in neither
+  `units_sold_since_load` nor the rate, and the class days their poll window covers are not
+  in-stock days. `units_sold_since_load` counts the product's sales the stock replay applied after
+  its latest load, in its own order, so a sale settled at the load's own moment counts. When the
+  stored slot assignment was first read after the fall cut (`FALL_CUTOFF`: a change recorded then,
+  such as `record --replace`), the rate, the clock and `units_sold_since_load` use only what
+  happened since it, readings included: a slot's polls from before aren't shown to be ours. Before
+  the cut every selection's polls may be used (docs/integrity.md). Also the closet (back stock) per product in `closet`, with `units`,
   `unit_cost` and `value_at_cost`, and its total in `closet_value_at_cost`. Plus `as_of` (the
   poll's time), `window_start`, `stale` and any stock `warnings`. And `wildcard_trial`, null until
   a wildcard slot is set: the trial's product, price, units, in-stock class days, verdict and

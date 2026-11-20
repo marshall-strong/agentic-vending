@@ -82,6 +82,28 @@ def test_overselling_does_not_open_a_span():
     assert spans == [(FRI, day(3))]
 
 
+def test_a_day_is_in_stock_when_its_midnight_falls_in_a_span_end_excluded():
+    # Review round 2, item 7. Midnight Eastern on Monday 7 Dec is 05:00 UTC.
+    monday, wednesday = datetime(2026, 12, 7, 5, tzinfo=UTC), datetime(2026, 12, 9, 5, tzinfo=UTC)
+    assert class_days_in_stock([(monday, wednesday)]) == [datetime(2026, 12, d).date() for d in (7, 8)]
+    assert class_days_in_stock([(FRI, monday)]) == []                       # emptied as Monday began
+    assert class_days_in_stock([(FRI, monday + timedelta(minutes=1))]) == [monday.date()]
+
+
+def test_a_count_inside_a_sale_windows_doesnt_take_its_units_twice():
+    # Review round 2, item 4. 5 in; a window from Friday evening to Monday evening books 3, and an exact count of 2
+    # on Monday afternoon falls inside it: the count already saw them go, so 2 are left after the poll, not 0.
+    # Had the count seen 4, only 1 can have gone before it: 2 more after, so 2 are left. Seeing 0 ends the span.
+    def run(seen):
+        return history([(FRI, 5)], [], Applied(day(3, 22), "sale", 3, since=FRI + timedelta(hours=2)),
+                       Applied(day(3, 18), "count", seen))
+
+    assert in_stock_spans(run(2), now=day(6)) == [(FRI, day(6))]
+    assert in_stock_spans(run(4), now=day(6)) == [(FRI, day(6))]
+    assert in_stock_spans(run(0), now=day(6)) == [(FRI, day(3, 18))]
+    assert in_stock_since(run(2)) == FRI
+
+
 def test_the_prior_is_the_segment_priced_nearest():
     assert segment_for(450).name == "mid seller, premium-priced"
     assert segment_for(250).name == "fast seller"

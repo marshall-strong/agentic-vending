@@ -195,11 +195,15 @@ def test_sold_since_load_follows_the_counter_misread_rule():
     line = dict(request_id="r1", line_no=0, slot="15", outcome="primary", sku="COKE20", total_paid="10.00",
                 units_loaded=20, units_lost=0, units_to_back_stock=0, units_from_back_stock=0,
                 units_pulled=0, pulled_sku=None, slot_reassigned=False, resolved_at=t0 + 2 * h)
+    # Coke was there from a day before, so the load is a top-up: a window over a slot's first receipt has its
+    # own rule (review round 2, item 5), and this test is about the misread rule.
+    earlier = {**line, "request_id": "r0", "resolved_at": t0 - 24 * h}
 
     def sold(*readings):
         polls = [("15", t0 + (n if n < 2 else n + 1) * h, v) for n, v in enumerate(readings)]  # no poll at the load
-        replay = stock.first_in_first_out(stock.movements_from_receipts([line], []) + stock.sales_from_counters(polls))
-        return _sold_since_load(replay.sales, {"15": t0 + 2 * h})["15"]
+        replay = stock.first_in_first_out(stock.movements_from_receipts([earlier, line], [])
+                                          + stock.sales_from_counters(polls))
+        return _sold_since_load({"15": replay.slots[0]}, t0 + 10 * h)["15"]
 
     assert sold(1000, 5, 1010) == 10      # a misread just before the load is not 1005 sold
     assert sold(1000, 1000, 3, 8) == 5    # a board swap after the load still counts
@@ -219,7 +223,7 @@ def test_the_old_products_share_of_a_split_window_is_not_sold_since_the_swap():
                     "pulled_sku": "ARIZONA", "slot_reassigned": True, "resolved_at": t0 + 3 * h}]
     polls = [("15", t0 + h, 100, 20000, 200), ("15", t0 + 5 * h, 102, 20600, 400)]
     replay = stock.first_in_first_out(stock.movements_from_receipts(lines, []) + stock.sales_from_counters(polls))
-    assert _sold_since_load(replay.sales, {"15": t0 + 3 * h})["15"] == 1
+    assert _sold_since_load({"15": replay.slots[0]}, t0 + 6 * h)["15"] == 1
 
 
 def test_a_misread_poll_moves_no_sales(conn):
@@ -230,7 +234,9 @@ def test_a_misread_poll_moves_no_sales(conn):
     store_poll(conn, "p3", "2026-10-29T12:00:00+00:00", {"15": (250, 1014)})
     s = by_slot(get_machine_state(conn, now=NOW).data)["15"]
     assert (s.units_sold_in_window, s.units_per_day) == (14, "2.00")
-    assert (s.stock_on_hand, s.units_sold_since_load) == (6, 14)   # not 1009 sold since the load
+    # Not 1009 sold since the load. The 10 in the window from 22 Oct to 26 Oct were measured over the slot's first
+    # receipt, where nothing places them on Coke (review round 2, item 5), so only the later 4 are since the load.
+    assert (s.stock_on_hand, s.units_sold_since_load) == (6, 4)
     assert s.days_of_stock_left == "3.0"
 
 
@@ -362,16 +368,21 @@ def test_an_emptied_slot_rates_only_the_days_it_held_stock(conn):
     store_poll(conn, "p6", "2026-10-27T22:00:00+00:00", {"15": (250, 113), "16": (300, 50)})
     states = by_slot(get_machine_state(conn, now=datetime(2026, 10, 28, 12, tzinfo=timezone.utc)).data)
     s = states["15"]
-    assert s.class_days_in_stock == 6                               # Mon-Wed, then Mon-Wed: not Thu 22 Oct
-    assert (s.units_per_class_day, s.rate_basis) == ("2.17", "own: 13 sold over 6 in-stock class days")
-    assert (s.stock_on_hand, s.class_days_of_stock_left) == (3, "1.4")
+    # Tue-Wed, then Mon-Wed: not Thu 22 Oct. The 3 the Monday poll measured from Friday morning, over the slot's
+    # first receipt, can't be placed on Coke (review round 2, item 5): not in the units, and Mon 19 Oct, in their
+    # window, not an in-stock day. They were 13 over 6 when the window counted as Coke's.
+    assert s.class_days_in_stock == 5
+    assert (s.units_per_class_day, s.rate_basis) == ("2.00", "own: 10 sold over 5 in-stock class days")
+    assert (s.stock_on_hand, s.class_days_of_stock_left) == (3, "1.5")
     assert states["16"].units_per_class_day == "0.722" and states["16"].class_days_in_stock is None
 
 
 def test_a_load_is_dated_by_door_close_when_the_receipt_has_door_times(conn):
-    # The door closed at 12:30 but the worker filled in the line at 15:00. The 13:00 poll's
-    # 3 sales came after the load, so they are sold since it. Without door times they aren't.
-    # At 13:00 five days on, it is 5 days since the door closed but 4 since resolved_at.
+    # The door closed at 12:30 but the worker filled in the line at 15:00. At 13:00 five days on, it is 5 days
+    # since the door closed but 4 since resolved_at. The 13:00 poll's 3 sales were measured from 10:00, over the
+    # slot's first receipt (the door opened at 12:00), so nothing places them on Coke (review round 2, item 5):
+    # they were counted as sold since the load until then. The 2 measured from 13:00 came after the door closed,
+    # so they are sold since it. Without door times the load is at 15:00, inside that window too: none are.
     now = datetime(2026, 10, 29, 13, tzinfo=timezone.utc)
 
     def state(door):
@@ -388,9 +399,9 @@ def test_a_load_is_dated_by_door_close_when_the_receipt_has_door_times(conn):
         return by_slot(get_machine_state(conn, now=now).data)["15"]
 
     s = state(door=True)
-    assert (s.units_sold_since_load, s.stock_on_hand, s.days_since_loaded) == (5, 15, 5)
+    assert (s.units_sold_since_load, s.stock_on_hand, s.days_since_loaded) == (2, 15, 5)
     s = state(door=False)
-    assert (s.units_sold_since_load, s.stock_on_hand, s.days_since_loaded) == (2, 18, 4)
+    assert (s.units_sold_since_load, s.stock_on_hand, s.days_since_loaded) == (0, 18, 4)
 
 
 def test_a_load_dated_after_now_is_not_the_latest_load_yet(conn):
@@ -404,7 +415,9 @@ def test_a_load_dated_after_now_is_not_the_latest_load_yet(conn):
                  (datetime(2026, 10, 29, 9, 58, tzinfo=timezone.utc), datetime(2026, 10, 29, 10, 5, tzinfo=timezone.utc)))
     store_poll(conn, "p1", "2026-10-29T09:00:00+00:00", {"15": (250, 104)})
     s = by_slot(get_machine_state(conn, now=now).data)["15"]
-    assert (s.stock_on_hand, s.units_sold_since_load, s.days_since_loaded) == (16, 4, 4)
+    # The 4 were measured from before r1, the slot's first receipt, so nothing places them on Coke (review round
+    # 2, item 5): in the stock, not sold since the load (4 when that window counted as Coke's).
+    assert (s.stock_on_hand, s.units_sold_since_load, s.days_since_loaded) == (16, 0, 4)
     later = by_slot(get_machine_state(conn, now=now + timedelta(hours=1)).data)["15"]
     assert (later.stock_on_hand, later.days_since_loaded) == (26, 0)
 
@@ -626,9 +639,10 @@ def test_a_product_that_comes_back_at_the_same_moment_counts_only_its_last_load(
 
 def test_the_slow_seller_clock_counts_in_stock_class_days_since_the_last_sale(conn):
     # Review round 1, item 4. Coke went in on Fri 30 Oct and sold through Thursday, 4 that day. A top-up
-    # of Coke on Friday keeps the run (7 in-stock class days, read just after midnight on Tuesday) and starts
-    # units_sold_since_load again (0). Neither is the slow-seller clock: since its last sale it has been in
-    # stock and seen silent on Fri 6 and Mon 9 Nov only, so 2 class days.
+    # of Coke on Friday keeps the run (6 in-stock class days, read just after midnight on Tuesday: Mon 2 Nov is
+    # out, since the unit Monday's poll measured from before the slot's first receipt can't be placed on Coke,
+    # review round 2, item 5) and starts units_sold_since_load again (0). Neither is the slow-seller clock: since
+    # its last sale it has been in stock and seen silent on Fri 6 and Mon 9 Nov only, so 2 class days.
     utc = timezone.utc
     store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100)})
     fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
@@ -637,7 +651,7 @@ def test_the_slow_seller_clock_counts_in_stock_class_days_since_the_last_sale(co
     store_poll(conn, "p7", "2026-11-10T05:30:00+00:00", {"15": (250, 106)})
     fulfilled(conn, "r2", datetime(2026, 11, 6, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "6.00", 6, 0, 0))
     s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 10, 5, 45, tzinfo=utc)).data)["15"]
-    assert (s.stock_on_hand, s.class_days_in_stock, s.units_sold_since_load) == (20, 7, 0)
+    assert (s.stock_on_hand, s.class_days_in_stock, s.units_sold_since_load) == (20, 6, 0)
     assert s.class_days_since_sale == 2
 
 

@@ -156,18 +156,25 @@ class ClosetCount:
 class Applied:
     """One movement the replay applied to a slot's current product run, in the replay's order (`SlotCount.history`).
 
-    `kind` is `load` (a purchase or a load from the closet), `sale` (booked to the run's product), `unattributed`
-    (sold across a change the counters can't split, still taken from this count), `pull` or `loss`. `run_history`
-    adds a person's counts as `count`. `units` is what it put in or took out, as recorded; units leave the count
-    only down to 0, so replaying them from the run's start gives `SlotCount.units` at every step. A count's
-    `units` is what the person saw, 0 when they found the slot empty. A sale's `since` is its counters' window
-    start: its units sold somewhere in (since, at]. The replay ignores a pull or loss of another product for the
-    slot, so neither is here.
+    `kind` is `load` (a purchase or a load from the closet), `pull`, `loss`, or one of three sales:
+    - `sale`: booked to the run's product, and placed there by the evidence;
+    - `unattributed`: sold across a change the counters can't split, still taken from this count;
+    - `assumed`: booked to the run's product only because the replay knows no other. Its window holds the run's
+      first load, and that load was the slot's first receipt, so nothing splits it from whatever stood there
+      before. Only its counters place it on the new product: units and cents that fit the new price alone, with
+      another price at the window's start (`_solve`). Those are `sale`.
+    `run_history` adds a person's counts as `count`. `units` is what it put in or took out, as recorded; units
+    leave the count only down to 0, so replaying them from the run's start gives `SlotCount.units` at every step.
+    A sale's `since` is its counters' window start: its units sold somewhere in (since, at]. `booked` is when the
+    poll that measured a sale was taken, which is after `at` for the old product's share of a window split at a
+    change; a report as of a moment knows only what was booked by then (`run_history`). None: at `at`. The replay
+    ignores a pull or loss of another product for the slot, so neither is here.
     """
     at: datetime
     kind: str
     units: int
     since: datetime | None = None
+    booked: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -963,7 +970,12 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
             across_change = slot.replaced and m.since is not None and m.since < slot.since
             # The same test as the branches below: a door conflict or an unsplit change leaves it unattributed.
             unplaced = m.kind == "sale" and bool(m.door_conflict or across_change or m.changes)
-            slot.history.append(Applied(m.at, "unattributed" if unplaced else "sale", m.units, m.window_since))
+            # A window over the slot's first receipt the replay books to its product, knowing no other: only the
+            # counters at two prices place it there (see `Applied`).
+            assumed = (not unplaced and slot.replaced is None and m.window_since is not None
+                       and m.window_since < slot.since and not (m.kind == "sale" and _solve(m) == 0))
+            slot.history.append(Applied(m.at, "unattributed" if unplaced else "assumed" if assumed else "sale",
+                                        m.units, m.window_since, m.booked_at))
             if m.kind == "sale" and m.door_conflict:
                 # The receipt says the door was open for the whole window. Taken from
                 # the count the slot has then, but which product sold is unknown.
@@ -1041,17 +1053,40 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
     )
 
 
-def run_history(count: SlotCount, seen: Iterable[tuple[datetime, int]] = ()) -> tuple[Applied, ...]:
+def run_history(count: SlotCount, seen: Iterable[tuple[datetime, str | None, int | None, bool]] = (),
+                until: datetime | None = None) -> tuple[Applied, ...]:
     """A slot's current product run as the replay applied it (`SlotCount.history`), with a person's counts of the
-    slot after the run began. Pure.
+    slot since the run began, as known at `until`. Pure.
 
-    `seen` is `(counted_at, units)` per count, 0 when it found the slot empty. A count goes after every movement
-    at its moment, since it saw what they left. One at the run's first moment is left out: it can't be told from
-    the load that began the run.
+    A movement booked after `until` isn't known then (`Applied.booked`), so it is left out, even when the replay
+    applied it earlier (the old product's share of a window split at a later poll). `seen` is `(counted_at,
+    product, units, exact)` per count (`slot_counts`: product None when seen empty; exact for a door count). A
+    count becomes a `count` that sets the run's sure stock to its `units`:
+    - 0 when it found the slot empty (no product, or 0 units), and when an exact count names another product
+      than the run's: the run's product wasn't surely there;
+    - its units when an exact count names the run's product (its SKU);
+    - nothing otherwise: a photo's units are an estimate, not a cap, and its product is free text.
+    A count goes after every movement at its moment: one at a load's own moment can't be told from it, so it is
+    read as after it, and an empty one leaves that load proving nothing.
     """
-    counts = [Applied(at, "count", units) for at, units in sorted(seen) if at > count.since]
+    def sure(product: str | None, units: int | None, exact: bool) -> int | None:
+        if product is None or units == 0:
+            return 0
+        if not exact:
+            return None
+        if product.strip().casefold() != count.product.casefold():
+            return 0
+        return units
+
+    counts = []
+    for at, product, units, exact in sorted(seen, key=lambda s: s[0]):
+        found = sure(product, units, exact)
+        if at >= count.since and (until is None or at <= until) and found is not None:
+            counts.append(Applied(at, "count", found))
     out: list[Applied] = []
     for applied in count.history:
+        if until is not None and (applied.booked or applied.at) > until:
+            continue
         while counts and counts[0].at < applied.at:
             out.append(counts.pop(0))
         out.append(applied)

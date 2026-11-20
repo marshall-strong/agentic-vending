@@ -362,14 +362,58 @@ def test_a_runs_history_holds_what_the_replay_applied_and_nothing_it_ignored():
 
 
 def test_run_history_puts_a_persons_counts_after_the_movements_at_their_moment():
-    # A count at the run's first moment can't be told from the load that began it, so it is left out.
+    # A count at a load's own moment can't be told from it, so it is read as after it (review round 2, item 3).
     counted = book([line(units_loaded=10, total_paid="5.00"), line(units_loaded=5, total_paid="2.50", at=4,
                                                                     request_id="r2")],
                    counters=[("15", hours(1), 100), ("15", hours(2), 103)])
     [slot] = counted.slots
-    assert [(a.at, a.kind, a.units) for a in run_history(slot, [(hours(3), 0), (hours(0), 9), (hours(2), 6)])] == [
-        (hours(0), "load", 10), (hours(2), "sale", 3), (hours(2), "count", 6), (hours(3), "count", 0),
-        (hours(4), "load", 5)]
+    seen = [(hours(3), None, 0, False), (hours(0), "COKE20", 9, True), (hours(2), "coke20 ", 6, True)]
+    assert [(a.at, a.kind, a.units) for a in run_history(slot, seen)] == [
+        (hours(0), "load", 10), (hours(0), "count", 9), (hours(2), "sale", 3), (hours(2), "count", 6),
+        (hours(3), "count", 0), (hours(4), "load", 5)]
+
+
+def test_run_history_reads_each_count_by_its_product_and_exactness():
+    # An exact count sets the sure stock: what it saw of the run's SKU, 0 when it saw another product. Any count
+    # that found the slot empty is 0. A photo's units are an estimate, so a photo of the product sets nothing, nor
+    # does a door count that couldn't count the units. A count from before the run, or after `until`, isn't in it.
+    counted = book([line(units_loaded=10, total_paid="5.00", at=1)])
+    [slot] = counted.slots
+    seen = [(hours(0), "COKE20", 4, True), (hours(2), "PEPSI20", 3, True), (hours(3), "COKE20", 1, False),
+            (hours(4), "PEPSI20", 2, False), (hours(5), "COKE20", None, True), (hours(6), None, None, False),
+            (hours(7), "COKE20", 0, False), (hours(8), "COKE20", 7, True), (hours(9), "COKE20", 2, True)]
+    assert [(a.at, a.kind, a.units) for a in run_history(slot, seen, until=hours(8))] == [
+        (hours(1), "load", 10), (hours(2), "count", 0), (hours(6), "count", 0), (hours(7), "count", 0),
+        (hours(8), "count", 7)]
+
+
+def test_run_history_leaves_out_what_was_booked_after_the_moment_asked_about():
+    # Review round 2, item 6. With the door open from 2:30 to 3:00, the window from 1:00 to 5:00 splits at the
+    # swap: the Arizona's share left the count at door open, but the 5:00 poll booked it (`Applied.booked`). Asked
+    # about 2:45, with the door open, the run is still Arizona's, and that sale isn't known yet.
+    door = {"door_opened_at": hours(2.5), "door_closed_at": hours(3), "submitted_at": hours(-24)}
+    lines = [swap()[0], {**swap()[1], **door}]
+    counters = [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)]
+    [arizona] = replay(movements_from_receipts(lines, []) + sales_from_counters(counters), until=hours(2.75)).slots
+    assert [(a.at, a.kind, a.units, a.booked) for a in arizona.history] == [
+        (hours(0), "load", 10, None), (hours(2.5), "sale", 1, hours(5)), (hours(2.5), "pull", 9, None)]
+    assert [a.kind for a in run_history(arizona, until=hours(2.75))] == ["load", "pull"]
+    assert [a.kind for a in run_history(arizona, until=hours(5))] == ["load", "sale", "pull"]
+
+
+def test_a_window_over_a_slots_first_receipt_is_assumed_unless_the_counters_place_it():
+    # Review round 2, item 5. Slot 15's first receipt is at hour 3; the window from 1 to 5 holds it. 2 units at
+    # $2.00 then $4.00: the cents fit the new price alone (800), so they are a `sale`; at $2.00 both ends nothing
+    # tells the products apart, so they are `assumed`. A later window is the run's own either way.
+    def first_window(cents, price_before):
+        counters = [("15", hours(1), 100, 20000, price_before), ("15", hours(5), 102, 20000 + cents, 400),
+                    ("15", hours(7), 103, 20400 + cents, 400)]
+        [slot] = book([line(sku="REDBULL", units_loaded=10, total_paid="15.00", at=3)], counters=counters).slots
+        return [(a.kind, a.units) for a in slot.history]
+
+    assert first_window(800, 200) == [("load", 10), ("sale", 2), ("sale", 1)]
+    assert first_window(600, 200) == [("load", 10), ("assumed", 2), ("sale", 1)]
+    assert first_window(800, 400) == [("load", 10), ("assumed", 2), ("sale", 1)]
 
 
 def test_an_unsplit_window_keeps_the_books_whole():

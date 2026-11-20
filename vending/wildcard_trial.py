@@ -519,12 +519,13 @@ def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list
 
     When it held stock comes from the stock replay's own history of the run (`stock.SlotCount.history`,
     `demand.in_stock_spans`), as in the machine state's demand: every load, sale (attributed or not), pull and
-    coil loss the replay applied to it, in its order, and nothing it ignored. So a sale booked at the run's
-    first load empties the slot as it did in the replay, and a loss counts once. `loads` and `losses` are no
-    longer read; the callers still pass them. The intervals still reconcile the sales the replay booked at
-    their polls (`SaleCost.at`), from the run's first moment on."""
+    coil loss the replay applied to it, in its order, and nothing it ignored, as known at `now`
+    (`stock.run_history`: nothing a later poll booked). So a sale booked at the run's first load empties the slot
+    as it did in the replay, and a loss counts once. `loads` and `losses` are no longer read; the callers still
+    pass them. The intervals still reconcile the sales the replay booked at their polls (`SaleCost.at`), from the
+    run's first moment on."""
     mine = [s for s in sales if s.slot == count.slot and s.at >= count.since]
-    spans = demand.in_stock_spans(count.history, now)
+    spans = demand.in_stock_spans(stock.run_history(count, until=now), now)
     return Measured(count.slot, count.product, start,
                     intervals(readings, start, count.product, mine, spans, ceiling_cents))
 

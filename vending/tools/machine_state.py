@@ -10,10 +10,12 @@ Built from our database only; it never reads the machine.
   `vending.stock`, which replays every receipt and every poll. `stock_on_hand`
   counts from when the slot's current product went in (loaded − sold − lost),
   so a top-up of the same product adds to it.
-- `days_since_loaded` and `units_sold_since_load` count from the slot's most
-  recent load: the latest fulfilled receipt line that put units in it, dated
-  on the receipt clock (`stock.receipt_lines`): its request's door close when
-  the stock replay uses the receipt's door times, else the line's `resolved_at`.
+- `days_since_loaded` counts from the slot's most recent load: the latest
+  fulfilled receipt line that put units in it, dated on the receipt clock
+  (`stock.receipt_lines`): its request's door close when the stock replay uses
+  the receipt's door times, else the line's `resolved_at`.
+  `units_sold_since_load` is the product's sales the stock replay applied after
+  its latest load, in the replay's own order (`_sold_since_load`).
 - The closet (back stock) is listed per product, with its value at cost.
 - What a person saw, from the latest count in `slot_counts` (`vending.slot_counts`),
   fills `counted_*` for a slot the receipts don't cover, or whose count is newer
@@ -32,17 +34,24 @@ Built from our database only; it never reads the machine.
   newer) by it. Only the current product's sales count: units sold across its
   product change that the replay can't place (unattributed, #172) are left
   out, with the class days their poll window covers, and out of
-  `units_sold_since_load` too. When the slot held stock comes from one
-  history, the stock replay's own (`stock.SlotCount.history`), with every
-  person's count in it: one that found the slot empty ends a stretch of
-  stock. `class_days_since_sale` is the slow-seller clock: class days
-  since the product last sold (an unattributed sale restarts it), each
-  counted only if the slot surely held stock all of it, in the stretch
-  still running now, and zero-rise readings of its units counter cover it
-  to its end; 0 when the slot may be empty now. A stretch no such reading
-  covers (before the first reading, across a restart) restarts it too, and
-  an unsettled drop proves nothing. Unlike `class_days_in_stock`, it
-  starts again at every sale. `units_per_day` stays
+  `units_sold_since_load` too; so are units in the window over a slot's first
+  receipt that the counters don't place on its product. When the slot held
+  stock comes from one history, the stock replay's own as known at `now`
+  (`stock.run_history`), with every person's count in it: one that found the
+  slot empty, or an exact one that found another product, ends a stretch of
+  stock, and an exact count of the product can start one.
+  `class_days_since_sale` is the slow-seller clock: class days since the
+  product last sold (any sale the replay may have taken from it restarts it),
+  each counted only if the slot surely held stock all of it, in the stretch
+  still running now, and its units and takings counters both show no rise
+  over it, up to a fresh, settled reading of the slot (`_since_sale`); 0 when
+  the slot may be empty now, hasn't been read lately, or its latest reading is
+  a drop the next poll hasn't settled. A stretch no such reading covers
+  (before the first reading, across a restart) restarts it too. Unlike
+  `class_days_in_stock`, it starts again at every sale. When our stored
+  assignment was first read after the fall cut (`vending.slots.ours_since`),
+  the rate, the clock and `units_sold_since_load` use only what happened
+  since then. `units_per_day` stays
   as before: the last 7 calendar days, empty days and weekends included, so it
   reads low for a slot that sold out.
 
@@ -74,9 +83,9 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import config, counters, demand, slot_counts, stock, wildcard_trial
-from vending.class_days import class_days_after, eastern_date
+from vending.class_days import eastern_date, is_class_day
 from vending.planner import AGREED_CEILING_CENTS
-from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots, ours_since
 from vending.start import EASTERN
 from vending.tools import Reply
 
@@ -218,9 +227,8 @@ def build(as_of: datetime, latest: Counters, start: datetime | None, window_sold
             units_per_class_day=None if rate.units_per_class_day is None else str(rate.units_per_class_day),
             rate_basis=rate.basis,
             class_days_in_stock=rate.class_days_in_stock if count else None,
-            # A newer count that found it empty stops the clock: an empty slot can't sell.
-            class_days_since_sale=(0 if looked and looked["on_hand"] == 0 else rate.class_days_since_sale)
-            if count else None,
+            # A count that found it empty, or another product, is in the clock's history (`_demands`).
+            class_days_since_sale=rate.class_days_since_sale if count else None,
             class_days_of_stock_left=demand.class_days_left(on_hand, rate.units_per_class_day),
             counted_product=looked["product"] if looked else None,
             counted_on_hand=looked["on_hand"] if looked else None,
@@ -304,10 +312,12 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     counts = {c.slot: c for c in counted.slots if c.slot in slots}
     loads = _loads(receipts, now)
     last_loaded = _last_loaded(loads)
-    sold_since_load = _sold_since_load(counted.sales, last_loaded)
+    owned = ours_since(conn)                   # what happened in a slot before it was surely ours doesn't count
+    sold_since_load = _sold_since_load(counts, now, owned)
     seen = _seen(conn, now)
     latest_counters = _counters(conn, latest[0], slots)
-    demands = _demands(counts, latest_counters, now, _seen_units(conn, slots, now), _unit_readings(conn, slots, now))
+    demands = _demands(counts, latest_counters, now, _seen_counts(conn, slots, now),
+                       _counter_readings(conn, slots, now), owned)
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     wildcard = config.get_value(conn, "wildcard_slot")
@@ -471,64 +481,101 @@ def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime
 
 
 def _demands(counts: dict[str, stock.SlotCount], latest: Counters, now: datetime,
-             seen: dict[str, list[tuple[datetime, int]]] | None = None,
-             readings: dict[str, list[tuple[datetime, int]]] | None = None) -> dict[str, demand.Demand]:
+             seen: dict[str, list[tuple[datetime, str | None, int | None, bool]]] | None = None,
+             readings: dict[str, list[tuple[datetime, int | None, int | None]]] | None = None,
+             owned: datetime | None = None) -> dict[str, demand.Demand]:
     """Each receipted slot's in-stock rate (or prior) for its current product, since it went in,
     and its slow-seller clock. Pure.
 
-    Both read one stock history: the product's run as the stock replay applied it
-    (`stock.SlotCount.history`, as of `now`), with the person's counts in `seen` (`_seen_units`) added
-    by `stock.run_history`. Nothing here rebuilds the stock from receipts, so a loss or pull counts
-    once, when and as the replay applied it: one recorded after `now`, a pull of another product, or a
-    loss bigger than what was there changes nothing it didn't change in the replay. The in-stock spans
-    are a lower bound (`demand.in_stock_spans`): a count that found the slot empty ends one.
+    Both read one stock history: the product's run as the stock replay applied it, as known at `now`
+    (`stock.run_history`: nothing booked after `now`), with the person's counts in `seen`
+    (`_seen_counts`). Nothing here rebuilds the stock from receipts, so a loss or pull counts once,
+    when and as the replay applied it. The in-stock spans are a lower bound (`demand.in_stock_spans`):
+    a count that found the slot empty or holding another product ends one, and an exact count of its
+    product can start one.
 
-    The units are the run's sales booked to its product (#172). Units the replay left unattributed may
-    have been either product's, so they are not in the units, and the days their poll window covers
-    (`Applied.since` to `at`, Eastern) are left out of the in-stock days: a swap polled the same day
-    loses none, since the day a product goes in never counts. They still leave the stock spans, as they
-    leave the replay's count: the slot may have stood empty after them.
+    The units are the run's sales the evidence places on its product (`stock.Applied`, kind `sale`,
+    #172). Units the replay left unattributed, or booked to it only because it knew no other (`assumed`:
+    the window over the slot's first receipt), may have been another product's: they are not in the
+    units, and the dates their poll window covers (`Applied.since` to `at`, Eastern) are left out of the
+    in-stock days. They still leave the stock spans, as they leave the replay's count.
+
+    With `owned` (`vending.slots.ours_since`), only what happened while the slot was surely ours counts:
+    in-stock days from then, and sales whose counters' window began then or later. The accounting replay
+    doesn't change.
 
     The slow-seller clock (`Demand.class_days_since_sale`) is `_since_sale` of that history and the
-    slot's units counter readings (`readings`). Without readings nothing proves silence: 0.
+    slot's counter readings (`readings`). Without readings nothing proves silence: 0.
     """
     demands = {}
     for slot, count in counts.items():
-        history = stock.run_history(count, (seen or {}).get(slot, ()))
+        history = stock.run_history(count, (seen or {}).get(slot, ()), now)
         spans = demand.in_stock_spans(history, now)
-        unplaced = {day for a in history if a.kind == "unattributed" for day in _dates(a.since or count.since, a.at)}
+        if owned is not None:
+            spans = [(max(start, owned), end) for start, end in spans if end > owned]
+        unplaced = {day for a in history if a.kind in ("unattributed", "assumed")
+                    for day in _dates(a.since or count.since, a.at)}
         in_stock = set(demand.class_days_in_stock(spans)) - unplaced
-        estimate = demand.estimate(sum(a.units for a in history if a.kind == "sale"), len(in_stock),
-                                   latest.get(slot, (None, None))[0])
-        demands[slot] = replace(estimate,
-                                class_days_since_sale=_since_sale(history, (readings or {}).get(slot, ())))
+        estimate = demand.estimate(sum(a.units for a in history if a.kind == "sale" and _owned(a, owned)),
+                                   len(in_stock), latest.get(slot, (None, None))[0])
+        demands[slot] = replace(estimate, class_days_since_sale=_since_sale(
+            history, (readings or {}).get(slot, ()), now, owned))
     return demands
 
 
-def _since_sale(history: tuple[stock.Applied, ...], readings: list[tuple[datetime, int]]) -> int:
+def _owned(sale: stock.Applied, owned: datetime | None) -> bool:
+    """Whether a sale's counters window began while the slot was surely ours (`vending.slots.ours_since`)."""
+    return owned is None or (sale.since or sale.at) >= owned
+
+
+def _since_sale(history: tuple[stock.Applied, ...], readings: list[tuple[datetime, int | None, int | None]],
+                now: datetime, owned: datetime | None = None) -> int:
     """The slow-seller clock: class days of proven silence, surely in stock, since the run last sold. Pure.
 
     A class day counts only if all of these hold:
     - the slot surely held stock all of it, in the stretch still running at the end of `history`
       (`demand.in_stock_since`): a slot that may be empty now has 0;
-    - zero-rise windows of its units counter (`counters.windows`, `readings`) cover it, with no break
-      from there on (`_watched`);
-    - it ended, at midnight Eastern, by the last reading of such a window.
-    A sale, attributed or not, restarts the clock. So does a stretch no zero-rise window covers: a rise,
-    the stretch before the slot's first reading, or one across a counter restart the next poll confirmed
-    (what sold before a restart went with the old count). A sale there can't be ruled out. A lone drop the
-    next poll hasn't settled proves nothing yet, so the cover ends at the reading before it.
+    - its units and its takings counters both show no rise over it, in zero-rise windows that run on with
+      no break to a fresh, settled reading of the slot (`_watched`): the rule the wildcard's silence check
+      uses, both counters;
+    - it began at or after all that, and ended (midnight Eastern) by that reading, compared as instants.
+    A sale of any kind restarts the clock. So does a stretch no zero-rise window covers: a rise of either
+    counter (takings with no unit is a sale the units counter may have missed), the stretch before the
+    slot's first reading, or one across a counter restart (what sold before it went with the old count). A
+    drop the next poll hasn't settled may be a restart, and a slot no poll has read for over
+    `wildcard_trial.MAX_POLL_GAP` may have sold since: either leaves the clock at 0. With `owned`, readings
+    from before it prove nothing, so the clock starts again when the slot comes back to our assignment.
     """
-    stocked, watched = demand.in_stock_since(history), _watched(readings)
+    stocked = demand.in_stock_since(history)
+    watched = _watched([r for r in readings if owned is None or r[0] >= owned], now)
     if stocked is None or watched is None:
         return 0
     first, last = watched
-    begin = max([stocked, first] + [a.at for a in history if a.kind in ("sale", "unattributed")])
-    return sum(_day_end(day) <= last for day in class_days_after(begin, last))
+    begin = max([stocked, first] + [a.at for a in history if a.kind in demand.SALES])
+    return len(_whole_days(begin, last))
 
 
-def _watched(readings: list[tuple[datetime, int]]) -> tuple[datetime, datetime] | None:
-    """The latest stretch a units counter shows sold nothing, end to end: `(first, last)` reading. Pure.
+def _watched(readings: list[tuple[datetime, int | None, int | None]], now: datetime) -> tuple[datetime, datetime] | None:
+    """The latest stretch a slot's units and takings counters both show sold nothing, end to end, as `(first,
+    last)` reading. Pure.
+
+    None unless each counter's stretch runs to that counter's latest reading (a lone drop still waiting for
+    the next poll isn't in one, nor is a rise at the end) and that reading is within
+    `wildcard_trial.MAX_POLL_GAP` of `now`: the slot itself must have been read lately.
+    """
+    stretches = []
+    for column in (1, 2):
+        values = [(reading[0], reading[column]) for reading in readings if reading[column] is not None]
+        stretch = _zero_stretch(values)
+        if stretch is None or stretch[1] != max(at for at, _ in values):
+            return None
+        stretches.append(stretch)
+    first, last = max(s[0] for s in stretches), min(s[1] for s in stretches)
+    return None if now - last > wildcard_trial.MAX_POLL_GAP else (first, last)
+
+
+def _zero_stretch(readings: list[tuple[datetime, int]]) -> tuple[datetime, datetime] | None:
+    """The latest stretch one counter shows no rise, end to end: `(first, last)` reading. Pure.
 
     Built from `counters.windows(..., zeros=True)`, so a misread poll between two that agree doesn't
     break it, and a lone drop still waiting for the next poll isn't in it. A window with a rise ends it,
@@ -545,6 +592,18 @@ def _watched(readings: list[tuple[datetime, int]]) -> tuple[datetime, datetime] 
     return stretch
 
 
+def _whole_days(begin: datetime, end: datetime) -> list[date]:
+    """The class days that began at or after `begin` and ended (midnight Eastern) by `end`. Pure.
+
+    Compared as instants, so a stretch from Monday 00:00 Eastern counts Monday."""
+    days, day = [], eastern_date(begin)
+    while _day_end(day) <= end:
+        if demand.day_start(day) >= begin and is_class_day(day):
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
 def _day_end(day: date) -> datetime:
     """Midnight Eastern at the end of `day`. Pure."""
     return datetime.combine(day + timedelta(days=1), time(0), EASTERN)
@@ -556,21 +615,27 @@ def _dates(start: datetime, end: datetime) -> set[date]:
     return {first + timedelta(days=n) for n in range((last - first).days + 1)}
 
 
-def _sold_since_load(sales: tuple[stock.SaleCost, ...], last_loaded: dict[str, datetime]) -> dict[str, int]:
-    """Units sold in each slot since its last load: the replay's sales after it. Pure.
+def _sold_since_load(counts: dict[str, stock.SlotCount], now: datetime,
+                     owned: datetime | None = None) -> dict[str, int]:
+    """Units sold in each slot since its last load, in the replay's own order: the run's sales after the latest
+    load that put units in (`stock.SlotCount.history`), as known at `now`. Pure.
 
-    The replay reads the counters through `vending.counters`, so a misread
-    poll or a board swap counts the same here as in `stock_on_hand` and the ledger.
-    The old product's share of a window split at a product change left the
-    count at the change (`taken_at`), so it is not sold since that load. Units
-    the replay left unattributed (#172) may have been the old product's, so
-    they aren't counted either.
+    The replay reads the counters through `vending.counters`, so a misread poll or a board swap counts the
+    same here as in `stock_on_hand` and the ledger. A sale settled at a load's own moment that the replay
+    applied after the load sold since it. The old product's share of a window split at a product change
+    left the old run, so it isn't here. Units the replay couldn't place on the product (unattributed or
+    assumed, `stock.Applied`) aren't counted, nor a sale whose counters' window began before the slot was
+    surely ours (`owned`, `vending.slots.ours_since`).
     """
-    sold = dict.fromkeys(last_loaded, 0)
-    for sale in sales:
-        loaded_at = last_loaded.get(sale.slot)
-        if loaded_at is not None and not sale.unattributed and (sale.taken_at or sale.at) > loaded_at:
-            sold[sale.slot] += sale.units
+    sold = {}
+    for slot, count in counts.items():
+        total = 0
+        for applied in stock.run_history(count, until=now):
+            if applied.kind == "load" and applied.units:
+                total = 0
+            elif applied.kind == "sale" and _owned(applied, owned):
+                total += applied.units
+        sold[slot] = total
     return sold
 
 
@@ -625,37 +690,36 @@ def price_history(conn: psycopg.Connection, until: datetime,
         {"device": DEVICE_ID, "slots": list(our_slots(conn)), "until": until, "since": since}).fetchall()
 
 
-def _unit_readings(conn: psycopg.Connection, slots: tuple[str, ...],
-                   until: datetime) -> dict[str, list[tuple[datetime, int]]]:
-    """Every good poll's units counter for `slots` up to `until`, per slot, oldest first: all of them, as the
-    stock replay reads them, so `counters.windows` sees every misread and restart the replay sees."""
-    out: dict[str, list[tuple[datetime, int]]] = {}
-    for selection, at, units in conn.execute(
-            "select s.selection, p.started_at, s.lifetime_units from poll_selections s join polls p using (session_id)"
-            " where p.device_id = %s and p.crc_ok and s.selection = any(%s) and s.lifetime_units is not null"
+def _counter_readings(conn: psycopg.Connection, slots: tuple[str, ...],
+                      until: datetime) -> dict[str, list[tuple[datetime, int | None, int | None]]]:
+    """Every good poll's units and takings counters for `slots` up to `until`, as `(polled_at, units, cents)` per
+    slot, oldest first: all of them, as the stock replay reads them, so `counters.windows` sees every misread and
+    restart the replay sees."""
+    out: dict[str, list[tuple[datetime, int | None, int | None]]] = {}
+    for selection, at, units, cents in conn.execute(
+            "select s.selection, p.started_at, s.lifetime_units, s.lifetime_sales_cents from poll_selections s"
+            " join polls p using (session_id) where p.device_id = %s and p.crc_ok and s.selection = any(%s)"
             " and p.started_at <= %s order by p.started_at", (DEVICE_ID, list(slots), until)):
-        out.setdefault(selection, []).append((at, units))
+        out.setdefault(selection, []).append((at, units, cents))
     return out
 
 
-def _seen_units(conn: psycopg.Connection, slots: tuple[str, ...],
-                until: datetime) -> dict[str, list[tuple[datetime, int]]]:
-    """Every person's count of `slots` up to `until` that says how many units were there, as `(counted_at,
-    units)`: 0 when it found the slot empty (no product), none when the units weren't counted. Nothing when
-    `slot_counts` isn't there yet; a savepoint keeps the caller's transaction usable."""
+def _seen_counts(conn: psycopg.Connection, slots: tuple[str, ...],
+                 until: datetime) -> dict[str, list[tuple[datetime, str | None, int | None, bool]]]:
+    """Every person's count of `slots` up to `until`, as `(counted_at, product, units, exact)` per slot, oldest
+    first, for `stock.run_history`. Nothing when `slot_counts` isn't there yet; a savepoint keeps the caller's
+    transaction usable."""
     try:
         with conn.transaction():
             rows = conn.execute(
-                "select selection, counted_at, product, units from slot_counts where device_id = %s"
-                " and selection = any(%s) and counted_at <= %s order by counted_at",
+                "select selection, counted_at, product, units, exact from slot_counts where device_id = %s"
+                " and selection = any(%s) and counted_at <= %s order by counted_at, recorded_at",
                 (DEVICE_ID, list(slots), until)).fetchall()
     except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         return {}
-    out: dict[str, list[tuple[datetime, int]]] = {}
-    for selection, at, product, units in rows:
-        units = 0 if product is None else units
-        if units is not None:
-            out.setdefault(selection, []).append((at, units))
+    out: dict[str, list[tuple[datetime, str | None, int | None, bool]]] = {}
+    for selection, at, product, units, exact in rows:
+        out.setdefault(selection, []).append((at, product, units, exact))
     return out
 
 

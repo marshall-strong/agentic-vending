@@ -191,6 +191,45 @@ def lock_at() -> datetime:
     return moment
 
 
+FALL_CUT_SETTING = "FALL_CUTOFF"
+# The fall cut (docs/integrity.md): the team sets it to when the first-fill order goes in; until then, this.
+DEFAULT_FALL_CUT = "2026-11-18T00:00:00-05:00"
+
+
+def fall_cut() -> datetime:
+    """The fall cut: `FALL_CUTOFF`, else 18 Nov 2026 00:00 Eastern, and never later than the start.
+
+    Before it no selection was either team's, so any selection's polls from then may be used; from it on, only
+    ours (docs/integrity.md). `analysis/slots_config.fall_end` reads the same setting the same way (the image
+    ships `vending/` without `analysis/`); `tests/test_analysis_slots.py` checks they agree."""
+    from vending import settings
+    from vending.start import START
+
+    value = settings.get(FALL_CUT_SETTING) or DEFAULT_FALL_CUT
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        moment = None
+    if moment is None or moment.utcoffset() is None:
+        raise settings.SettingsError(f"{FALL_CUT_SETTING} is {value!r}; give a time with its offset, like "
+                                     f"{DEFAULT_FALL_CUT}")
+    return min(moment, START)
+
+
+def ours_since(conn: psycopg.Connection) -> datetime | None:
+    """Since when every selection in the stored assignment has surely been ours, for code that may use a
+    selection's polls only while it was ours: None when there is no such limit.
+
+    That is the stored assignment's `first_read_at`, when it was first read, if that is after the fall cut
+    (`fall_cut`). Before the cut no selection was either team's, so an assignment read by then limits nothing.
+    The row keeps no history of earlier assignments, so a change recorded after the cut (`record --replace`)
+    limits every selection, not only those it added: none of them is shown to have been ours before it."""
+    row = conn.execute("select first_read_at from slot_assignment where id = 1").fetchone()
+    if row is None:
+        return None
+    return row[0] if row[0] > fall_cut() else None
+
+
 def clock(conn: psycopg.Connection) -> datetime:
     """Now by the database clock, in UTC, as `vending.ledger.db_now` (which imports this module, so can't be used).
 
