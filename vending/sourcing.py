@@ -151,6 +151,15 @@ def options(conn: psycopg.Connection) -> list[Option]:
     return [Option(*row) for row in rows]
 
 
+def options_for(conn: psycopg.Connection, skus: list[str]) -> list[Option]:
+    """The stored rows for `skus` only, filtered in the query, by product, primary first."""
+    rows = conn.execute(
+        "select sku, rank, store, units_per_pack, expected_cents, max_cents, url, pack_description,"
+        " checked_at, checked_by, note from sourcing_options where sku = any(%s) order by sku, rank desc",
+        (list(skus),)).fetchall()
+    return [Option(*row) for row in rows]
+
+
 def in_catalog(conn: psycopg.Connection, skus: list[str]) -> set[str]:
     """Which of `skus` are in our catalog copy and not delisted."""
     return {sku for (sku,) in conn.execute(

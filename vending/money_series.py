@@ -117,7 +117,8 @@ import psycopg
 
 from vending import db, ledger, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
-from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.slots import SlotsNotRecorded
+from vending.tools.machine_state import price_history
 from vending.tools.sales_history import tax_cents
 
 EASTERN = ZoneInfo(ledger.TIMEZONE)
@@ -475,11 +476,7 @@ class _Book:
         """A price that differs from the slot's last one. Prices are only seen at polls, so the
         event is when it was seen, not when someone changed it."""
         last: dict[str, int] = {}
-        for at, slot, price in conn.execute(
-                "select p.started_at, s.selection, s.price_cents from poll_selections s"
-                " join polls p using (session_id) where p.device_id = %s and p.crc_ok"
-                " and s.selection = any(%s) and p.started_at <= %s and s.price_cents is not null"
-                " order by p.started_at, p.session_id, s.selection", (DEVICE_ID, list(our_slots(conn)), self.until)):
+        for at, slot, price in price_history(conn, self.until):
             if slot in last and last[slot] != price and at >= self.first:
                 self.events[_day(at)].append(Event(
                     at, "price_change", f"slot {slot}: {ledger.money(last[slot])} to {ledger.money(price)} (seen at a poll)"))
