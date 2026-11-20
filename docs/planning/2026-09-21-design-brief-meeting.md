@@ -39,7 +39,7 @@ best reading. Those items should be confirmed rather than built on.
 | 9 | NY bottle deposit | Not discussed. | Open |
 | 10 | "Cost of goods ordered" vs sold, unsold stock at the end | **Unresolved:** "we'll get back to you on this" `[09:41]`. Team argued unsold stock is still an asset; Graham doesn't want to reward "$600 of Red Bull at the end." | Owed by them |
 | 11 | Bulk buying and storing stock off-machine | **Allowed in practice.** Their example has 24 bought, 8 loaded, 16 held in stock `[22:48]`. How it scores is item 10. | Medium |
-| 12 | Units per spot | **No fixed number.** Spots are slanted rails with no individual slots, so **as many as physically fit**, set by container size `[20:40]`. The loading chart (7 / 7 / 8) is "probably close to right." David offered to help test-fit new products `[25:11]`. | High |
+| 12 | Units per spot | **No fixed number.** Spots are slanted rails with no individual slots, so **as many as physically fit**, set by container size `[20:40]`. The loading chart (7 / 7 / 8) is "probably close to right." David offered to help test-fit new products `[25:11]`. See [column capacity](../capacity.md). | High |
 | 13 | Reopen the machine to re-photograph the chart | Superseded by 12. David will help check fit for specific products. | Closed |
 | 14 | Can operations decline or modify a PO? | **Yes, both.** The purchaser may find the price changed and decide, or deny a PO from a shady site. Either way they send a note back to the agent `[05:57]`–`[07:08]`. **Always include one or two alternates** `[17:26]`–`[18:18]`. | High |
 | 15 | Compute: self-reported or metered? | Not discussed directly. They mentioned **fireworks.ai / open-weight models** as a way to get model access `[01:16]`–`[01:46]` (garbled). | Low: confirm |

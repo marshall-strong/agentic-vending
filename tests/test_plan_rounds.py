@@ -159,6 +159,20 @@ def test_illegal_prices_and_overfull_columns_are_flagged(tmp_path):
     assert any("projection used $3.50" in w for w in r.warnings)
 
 
+def test_first_fill_shows_room_and_unknown_capacity_without_refusing(tmp_path):
+    under, full, unknown = TEST_SLOTS[-3:]
+    rows = day_one(**{under: {"units": 6, "why": "Only six available"},
+                      unknown: {"sku": "CARTON", "size": "11 oz carton", "units": 5}})
+    write(tmp_path, "round1", "1", {"day_one": rows}, projection())
+    r = pr.load_all(tmp_path, TEST_SLOTS)[0]
+    assert r.slots[under].fill_check == "fills 6 of 8: 2 spaces empty"
+    assert r.slots[under].why == "Only six available"
+    assert not r.slots[under].refusals
+    assert r.slots[full].fill_check is None
+    assert r.slots[unknown].fill_check == "capacity not counted"
+    assert not r.slots[unknown].refusals
+
+
 def test_changes_name_product_price_and_units(tmp_path):
     write(tmp_path, "round1", "1", {"day_one": day_one()}, projection())
     write(tmp_path, "round2", "2", {"day_one": day_one(**{"15": {"price_cents": 375},

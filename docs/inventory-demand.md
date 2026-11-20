@@ -37,7 +37,7 @@ So, since the last product change, **on hand = loaded − sold − lost**, never
 
 **Counts check the arithmetic** (`get_machine_state`). `counted_on_hand` = units counted − units sold since. A count newer than the slot's last receipt wins. A count older than 7 days (`COUNT_STALE_DAYS`) is weak evidence. A slot with no receipts shows null (unknown), not 0.
 
-**Day one.** Staff empty the machine before 3 Dec. Our day-one order fills all 20 slots to capacity (7 to 11 units per column, `vending/capacity.py`) from the $600 (PR #106, #107; the $600 part is being checked, #106 row 3; whether a slot may take fewer units is asked in #102). Its receipts are every slot's first reset point.
+**Day one.** Staff empty the machine before 3 Dec. Our day-one order fills all 20 slots to [package capacity](capacity.md) from the $600 (PR #106, #107; the $600 part is being checked, #106 row 3; whether a slot may take fewer units is asked in #102). Its receipts are every slot's first reset point.
 
 ## How weekly demand is estimated
 
@@ -53,13 +53,13 @@ So, since the last product change, **on hand = loaded − sold − lost**, never
 
 The fast segment (slots 28, 38, 45, 46) sold 1.701 units per in-stock class day (REPORT.md, "Our slots"):
 
-| Column | Capacity (`vending/capacity.py`) | Class days to empty at 1.701 |
+| Package | [Capacity](capacity.md) | Class days to empty at 1.701 |
 |---|---|---|
 | 20 oz bottle | 7 | 7 ÷ 1.701 = 4.1 |
 | 12 oz can | 8 | 8 ÷ 1.701 = 4.7 |
 | 240/250 ml can | 11 | 11 ÷ 1.701 = 6.5 |
 
-A Friday-afternoon fill faces 5 class days (restock policy R2, #91). So a fast slot in bottles or 12 oz cans sells out before the next visit, and its week's sales are a floor. Packages not on the chart (for example a 16.9 oz bottle or a carton) need a counted `config.capacity_overrides` entry before the fill request (23:59 Sun 29 Nov); the 16 oz can gets 8, estimated from its width (A20).
+A Friday-afternoon fill faces 5 class days (restock policy R2, #91). So a fast slot in bottles or 12 oz cans sells out before the next visit, and its week's sales are a floor. Before the fill request (23:59 Sun 29 Nov), each planned product needs a [capacity figure](capacity.md).
 
 Whole week: 23.3 units per class day (REPORT.md, "Next 4 weeks") × 5 = 116.5, about 117 units. Rough: the REPORT's weekly figures give 26.0 (52 ÷ 2), 22.5 (44.9 ÷ 2) and 21.5 (64.6 ÷ 3) per class day; the REPORT doesn't say why they differ, so read 23.3 as within 21.5 to 26.0. (The REPORT's other "23.3", a machine-wide partial week scaled up, is unrelated.) Our slots hold 20 × 7 = 140 to 20 × 11 = 220 units, so a week's demand is 116.5 ÷ 220 = 53% to 116.5 ÷ 140 = 83% of capacity, spread unevenly.
 

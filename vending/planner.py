@@ -572,6 +572,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 _add_part(s, "on hand", cost, config, warnings, units)
         if not s.need:
             continue
+        if check := capacity.fill_check(s.fill_to, capacities[s.product]):
+            warnings.append(f"slot {s.slot}: {check}")
         lots = closet.get(s.product, [])
         available = sum(lot.units for lot in lots)
         if available < s.need:
@@ -928,7 +930,7 @@ def _intend(slot: str, state: SlotState | None, target: DesiredSlot | None,
                 why = (f"its size, {size!r}, isn't on the loading chart" if size and size.strip()
                        else "the catalog gives no size for it, so the loading chart can't be used")
                 refusals.append(Refusal("unknown_capacity", (
-                    f"nobody knows how many {target.product} fit in a column: {why}; "
+                    f"{capacity.NOT_COUNTED} for {target.product}: {why}; "
                     f"{capacity.OVERRIDE_HINT}"), slot))
         else:
             fill_to = most if fill_to is None else fill_to

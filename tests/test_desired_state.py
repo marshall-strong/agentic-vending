@@ -264,6 +264,28 @@ def test_with_nothing_counted_the_catalog_size_sets_the_capacity(db, fake):  # n
     assert reply.ok and reply.lines[0].fill_to == 7
 
 
+@pytest.mark.parametrize("fill_to", [6, 8, None])
+def test_preview_warns_if_a_load_leaves_room(db, fake, fill_to):  # noqa: F811
+    ready(db, capacity=8)
+    slot = TEST_SLOTS[0]
+    reply = preview_desired_state(
+        db, desired({**restock_15(fill_to=fill_to), "slot": slot}, sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.success
+    checks = [w for w in reply.warnings if "spaces empty" in w]
+    assert checks == ([f"slot {slot}: fills 6 of 8: 2 spaces empty"] if fill_to == 6 else [])
+
+
+def test_preview_describes_unknown_capacity_without_an_underfill_warning(db, fake):  # noqa: F811
+    ready(db)
+    set_value(db, "capacity_overrides", {}, "test")
+    fake.catalog_body = {"products": [{**CATALOG[0], "size": "11 oz carton"}]}
+    reply = preview_desired_state(
+        db, desired(restock_15(fill_to=6), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert codes(reply) == ["unknown_capacity"]
+    assert "capacity not counted" in reply.refusals[0].message
+    assert not any("spaces empty" in w for w in reply.warnings)
+
+
 def test_a_restock_plans_one_purchase_line_priced_against_its_floor(db, fake):  # noqa: F811
     ready(db, capacity=15)
     stocked(db)

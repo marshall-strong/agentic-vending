@@ -52,7 +52,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg.rows import dict_row
 
-from vending import db, settings
+from vending import capacity, db, settings
 from vending import plan_rounds as pr
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools.catalog_request import same_drink, words
@@ -534,6 +534,8 @@ def _slot_table(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str])
             flags.append(_pill("Interloper", "warn", "the Interloper sells this drink"))
         if s.capacity_assumed:
             flags.append(_pill(f"{s.capacity}/column assumed", "muted", "no one has counted a column of this size"))
+        if s.fill_check:
+            flags.append(_pill(s.fill_check, "muted" if s.fill_check == capacity.NOT_COUNTED else "warn"))
         for problem in s.refusals:
             flags.append(_pill("problem", "bad", problem))
         if b and b.sellout_date:

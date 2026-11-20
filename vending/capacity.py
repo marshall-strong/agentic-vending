@@ -1,28 +1,6 @@
-"""How many units of a product fit in one column, from the machine's Package Loading chart.
+"""Units per column by catalog package, with a per-SKU override.
 
-A column holds packages in a row in front of a pusher, so how many fit depends
-on the package, not the slot: David said on 21 Sep there is no fixed capacity,
-"as many as physically fit". The chart on the inside of the door (part
-931,650,021, photographed whole on 9 Nov 2026:
-`docs/images/package-loading-chart-2026-11-09.jpg`) gives the manufacturer's
-numbers, which it calls approximate:
-
-    20oz PET 7, 16oz glass 7, 16oz PET 8, 12oz can 8, 240/250ml can 11, 14oz PET 8
-
-One package is added that the chart doesn't list: **the 16 oz can, 8**. It has
-the same 66 mm body as a 12 oz can, only taller, and how many fit depends on the
-width, not the height. The chart's own figures put a column at about 585 mm
-(eleven 53 mm cans fit, eight 66 mm cans fit), and a 16 oz Ghost can sold from
-selection 18 in October. Worked out from the can's size on 11 Nov 2026, not
-counted in the machine (assumption A20), so a person's count replaces it.
-
-The catalog's `size` ("20 oz bottle", "12 oz can") is matched against that.
-The catalog says only "bottle", never glass or PET, so a 16 oz bottle gets the
-glass figure, 7, which fits either way. Anything not on the chart or added to it (a
-16.9 oz bottle, a 7.5 oz can, a carton) has no capacity until a person counts it and
-records it in `config.capacity_overrides`, which also wins over the chart:
-
-    python -m vending.config set capacity_overrides '{"MONSTER-WHITE-16CAN": 8}' --by NAME
+See docs/capacity.md for the door chart, estimate A20 and the counting procedure.
 """
 
 from __future__ import annotations
@@ -49,6 +27,7 @@ OVERRIDE_HINT = ("count how many fit in one column, then add it to the others in
 
 # A count more than this many times the chart's figure is warned about as a likely typo.
 OVERRIDE_WARN_RATIO = Fraction(3, 2)
+NOT_COUNTED = "capacity not counted"
 
 # "20 oz bottle", "20-oz. bottles", "12 fl oz sleek can", "591 ml plastic bottle": an amount, a unit,
 # at most one word about the package, then the container.
@@ -93,3 +72,13 @@ def from_size(size: str | None) -> int | None:
 def for_product(product: str, size: str | None, overrides: Mapping[str, int]) -> int | None:
     """A person's count for `product` if there is one, else the chart's figure for its size."""
     return overrides.get(product, from_size(size))
+
+
+def fill_check(units: int, limit: int | None) -> str | None:
+    """Describe empty space in a planned fill, or say when capacity is unknown."""
+    if limit is None:
+        return NOT_COUNTED
+    empty = limit - units
+    if empty > 0:
+        return f"fills {units} of {limit}: {empty} {'space' if empty == 1 else 'spaces'} empty"
+    return None
