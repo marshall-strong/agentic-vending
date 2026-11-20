@@ -6,7 +6,7 @@ The opening briefing comes from `get_briefing`, our logged tool. It meets the ru
 
 Money uses the ledger's Saturday–Friday weeks in Eastern time. Each row shows its dates and day count. A week clipped by the opening or the current time is partial. The change is the current total minus the previous total, not a demand trend or a matched-day comparison. Competition totals begin at the ledger opening. API spend counts from that opening onward too.
 
-Known cost totals can be incomplete. Gross and net profit stay unknown until sales, cost of sales and shrinkage are complete. API share uses complete, positive gross profit. Otherwise it is unknown with a reason.
+Known cost totals can be incomplete. Gross and net profit stay unknown until sales, cost of sales and shrinkage are complete. Units sold across a swap the counters can't split show as an `ESTIMATE` line apart. That estimate is not in known cost of sales, gross or net. API share uses complete, positive gross profit. Otherwise it is unknown with a reason.
 
 The slot table includes every assigned slot. A newer count takes precedence over receipt stock, even when its quantity is unknown. Photo counts are estimates. Counts over seven days old are weak evidence. Cover uses that effective stock and the observed sales rate, not a forecast. Stock age is time since the receipt movement or count. Poll age says when the sales evidence stopped.
 

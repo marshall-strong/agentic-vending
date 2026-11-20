@@ -311,3 +311,17 @@ def test_a_ledger_read_over_the_statement_timeout_blanks_only_the_money_panel(co
     assert any(a["text"].startswith("Money isn't available: ") for a in snap["attention"])
     page = dashboard.render(snap)
     assert "Not available: " in page and 'id="vm"' in page
+
+
+def test_an_unsplit_swap_shows_its_estimate_apart_from_profit(conn, page_conn):
+    # #172 item 5: units sold across a swap the counters can't split have no exact cost, so the
+    # panel's cost of sales and profit are unknown, and the estimate is its own labelled line.
+    from tests.test_ledger import SWAP_ESTIMATE, unsplit_swap
+    unsplit_swap(conn)
+    panel = dashboard.snapshot(page_conn, datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc))["money"]
+    p = panel["data"]["pnl"]
+    assert (p["units_sold"], p["units_costed"], p["units_estimated"]) == (2, 0, 2)
+    assert p["estimated_cost_of_sales"] == ledger.money(SWAP_ESTIMATE)
+    assert (p["cost_of_sales"], p["gross_margin"], p["net"]) == (None, None, None)
+    page = money_panel.html(panel)
+    assert f"${ledger.money(SWAP_ESTIMATE)}" in page and "(an estimate, not in profit)" in page

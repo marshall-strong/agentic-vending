@@ -59,6 +59,8 @@ class MoneyWindow(BaseModel):
     visit_fees: str | None = None
     adjustments: str | None = None
     cost_of_sales_complete: bool = False
+    units_estimated: int = 0                      # sold across a swap the counters can't split (#172)
+    estimated_cost_of_sales: str | None = None    # their estimate: not in known_cost_of_sales, gross or net
     shrinkage_complete: bool = False
     sales_complete: bool = False
     gross_profit: str | None = None
@@ -195,6 +197,8 @@ def _window(conn, start: datetime, end: datetime, partial: bool, ours: tuple[str
         known_cost_of_sales=ledger.money(m.cost_of_sales_cents), known_shrinkage=ledger.money(m.shrinkage_cents),
         visit_fees=ledger.money(m.visit_fees_cents), adjustments=ledger.money(m.adjustments_cents),
         cost_of_sales_complete=m.cost_of_sales_complete, shrinkage_complete=m.shrinkage_complete,
+        units_estimated=m.units_estimated,
+        estimated_cost_of_sales=ledger.money(m.estimated_cost_of_sales_cents) if m.units_estimated else None,
         sales_complete=complete, gross_profit=ledger.money(gross),
         net_profit=ledger.money(m.net_cents) if profit_complete else None,
         live_api_spend=ledger.money(m.token_spend_cents), api_share_of_gross_profit=share, api_share_reason=reason)
@@ -451,6 +455,9 @@ def render(b: Briefing) -> str:
         share = w.api_share_of_gross_profit
         lines.append(f"API/gross: {share + '%' if share is not None else '? (' + str(w.api_share_reason) + ')'}; "
                      f"adjustments ${w.adjustments}; costs {'complete' if w.cost_of_sales_complete and w.shrinkage_complete else 'INCOMPLETE'}.")
+        if w.units_estimated:
+            lines.append(f"{name}: ESTIMATE ${w.estimated_cost_of_sales} for {w.units_estimated} units sold across a swap "
+                         "the counters can't split; not in Known COS, Gross or Net.")
     lines.append("Change current minus previous ($; unequal/partial periods are not a trend): " + ", ".join(
         f"{key} {_cell(value)}" for key, value in b.money_change.items()))
     lines.append(f"Spendable snapshot: ${b.spendable or '?'}; call get_account_balance every run.")

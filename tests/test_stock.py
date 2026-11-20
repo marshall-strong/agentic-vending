@@ -330,6 +330,41 @@ def test_an_unsplit_window_keeps_the_books_whole():
     assert sold + lost + on_hand == 2000
 
 
+def test_an_unsplit_window_is_estimated_at_the_midpoint_only_when_both_candidate_costs_are_known():
+    # #172 item 5: the 2 units are an Arizona (the 50c unit written off at the swap) or a
+    # Red Bull (the 150c units they were taken from), so the estimate is the midpoint, 100c each.
+    odd = [("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20500, 400)]
+    [sale] = book(swap(), counters=odd).sales
+    assert (sale.product, sale.cost_cents, sale.estimated_cost_cents) == (None, None, (50 + 150) / 2 * 2)
+    # The new product's cost unknown (no total_paid): no estimate.
+    [sale] = book(swap(total_paid=None), counters=odd).sales
+    assert (sale.cost_cents, sale.estimated_cost_cents) == (None, None)
+    # The old product's cost unknown: no estimate either.
+    old_unknown = [line(sku="ARIZONA", units_loaded=10, total_paid=None), swap()[1]]
+    [sale] = book(old_unknown, counters=odd).sales
+    assert (sale.cost_cents, sale.estimated_cost_cents) == (None, None)
+    # A sale the counters split has an exact cost and no estimate.
+    split = book(swap(), counters=[("15", hours(1), 100, 20000, 200), ("15", hours(5), 102, 20600, 400)])
+    assert [(s.cost_cents, s.estimated_cost_cents) for s in split.sales] == [(50, None), (150, None)]
+
+
+def test_the_old_candidate_cost_is_the_unit_a_sale_before_the_pull_would_have_taken():
+    # #172 review: 1 Arizona at 50c, a top-up of 1 at 300c, then the swap pulls 1. If the unsplit
+    # sale was the Arizona it took the 50c unit first in, first out, and the pull took the 300c one,
+    # so the midpoint with a 150c Red Bull is 100c, not 225c.
+    one_unit = [("15", hours(2), 100, 20000, 200), ("15", hours(5), 101, 20300, 400)]   # 300c: no split
+    swap_line = line(sku="REDBULL", units_loaded=10, total_paid="15.00", units_pulled=1, pulled_sku="ARIZONA",
+                     slot_reassigned=True, at=3, request_id="r2")
+    topped_up = [line(sku="ARIZONA", units_loaded=1, total_paid="0.50"),
+                 line(sku="ARIZONA", units_loaded=1, total_paid="3.00", at=1, request_id="r1b"), swap_line]
+    [sale] = book(topped_up, counters=one_unit).sales
+    assert (sale.product, sale.estimated_cost_cents) == (None, 100)
+    # A pull that empties the slot leaves the candidate it would have sold: still 100c.
+    emptied = [line(sku="ARIZONA", units_loaded=1, total_paid="0.50"), swap_line]
+    [sale] = book(emptied, counters=one_unit).sales
+    assert (sale.product, sale.estimated_cost_cents) == (None, 100)
+
+
 def test_a_poll_during_the_visit_starts_a_window_of_only_the_new_product():
     # Marshall's case: Arizona at $2.50 swapped for Red Bull at $3.50. The price is set during
     # the visit, a poll lands at 2h45m with the new price, and the receipt resolves at 3h.
@@ -771,9 +806,9 @@ def test_a_poll_in_the_open_minute_after_an_earlier_price_change_is_not_read_as_
     stock = book(lines, counters=counters)
     [sale] = [s for s in stock.sales if s.units]
     assert (sale.product, sale.units) == (None, 2)
-    # Main read it as all Coke and costed it at 80 cents in cost_cents; that cost stays, so the money
-    # series still counts it as the ledger does (#172 fix 5 reports such estimates apart).
-    assert (sale.cost_cents, sale.unattributed_cost_cents) == (160, None)
+    # Main read it as all Coke at 80 cents. Its product is unknown, so that 160c is a stock debit,
+    # not an exact cost, and the estimate is the midpoint of an Arizona (50c) and a Coke (#172 item 5).
+    assert (sale.cost_cents, sale.unattributed_cost_cents, sale.estimated_cost_cents) == (None, 160, 130)
     [slot] = stock.slots
     assert (slot.product, slot.sold, slot.unattributed) == ("COKE20", 0, 2)
     # Without r0 the price change at 17:30:10 can only be r2's, so the door was open: all Coke, as before.

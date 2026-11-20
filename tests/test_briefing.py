@@ -389,3 +389,14 @@ def test_off_cycle_request_overdue_past_48_hours_both_ways(conn, hours, overdue)
 def test_regular_request_overdue_once_its_week_ends(conn, sent, overdue):
     purchase_requests.record(conn, "fri", sent, False, BODY)
     assert ("request_overdue" in codes(briefing.build(conn, NOW))) == overdue
+
+
+def test_an_unsplit_swap_is_an_estimate_outside_known_cost_and_profit(conn):
+    # #172 item 5: the briefing reports the estimate apart and labelled; known cost and profit leave it out.
+    from tests.test_ledger import SWAP_ESTIMATE, unsplit_swap
+    unsplit_swap(conn)
+    b = briefing.build(conn, datetime(2026, 11, 9, 12, tzinfo=timezone.utc))
+    w = b.money["competition"]
+    assert (w.units_estimated, w.estimated_cost_of_sales) == (2, ledger.money(SWAP_ESTIMATE))
+    assert (w.known_cost_of_sales, w.cost_of_sales_complete, w.gross_profit, w.net_profit) == ("0.00", False, None, None)
+    assert (f"competition: ESTIMATE ${ledger.money(SWAP_ESTIMATE)} for 2 units" in briefing.render(b))

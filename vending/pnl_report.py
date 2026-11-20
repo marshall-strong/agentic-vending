@@ -253,10 +253,21 @@ def _row(label: str, cells: dict[str, str], view: str, css: str = "") -> str:
     return f'<tr{f" class={chr(34)}{css}{chr(34)}" if css else ""}><th scope="row">{label}</th>{tds}</tr>'
 
 
+def _cost_note(costed: int, sold: int, complete: bool, estimated: int, estimate: str | None) -> str:
+    """Under an unknown cost of sales: how many units have an exact cost, and any estimate beside it."""
+    if complete:
+        return ""
+    note = f"{costed} of {sold} units costed exactly"
+    if estimated and estimate is not None:
+        note += f"; estimate {dollars(estimate)} for {estimated} units, not in profit"
+    return note
+
+
 def week_row(w: ledger.WeekPnl, first: date, last: date, running: tuple[Fraction, bool],
              view: str = "detailed") -> str:
     """One week; a week that lost money says "Loss" next to its dates, not only in colour."""
-    cost_note = f"{w.units_costed} of {w.units_sold} units costed" if not w.cost_of_sales_complete else ""
+    cost_note = _cost_note(w.units_costed, w.units_sold, w.cost_of_sales_complete, w.units_estimated,
+                           ledger.money(w.estimated_cost_of_sales_cents))
     known = _known(w)
     lost = _lost(ledger.money(w.net_cents), known)        # by the figure shown: $0.00 is not a loss
     cells = {
@@ -285,7 +296,7 @@ def _complete(t: Pnl, weeks: list[ledger.WeekPnl]) -> bool:
 def totals_row(t: Pnl, weeks: list[ledger.WeekPnl], view: str = "detailed") -> str:
     complete = bool(t.cost_of_sales_complete)
     shrinkage_complete = all(w.shrinkage_complete for w in weeks)
-    cost_note = "" if complete else f"{t.units_costed} of {t.units_sold} units costed"
+    cost_note = _cost_note(t.units_costed, t.units_sold, complete, t.units_estimated or 0, t.estimated_cost_of_sales)
     cells = {
         "units": _e(t.units_sold),
         "takings": _text_amount(t.revenue),

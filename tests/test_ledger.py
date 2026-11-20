@@ -408,28 +408,64 @@ def test_a_period_that_ends_between_a_swap_and_the_next_poll_books_the_split_wit
         assert getattr(first, name) + getattr(second, name) == getattr(whole, name), name
 
 
-def test_an_unsplit_swap_window_stays_in_cost_of_sales_and_says_why(conn):
-    # #112: as above, but the 17:00 poll shows 2 units and 700 cents, which fits no split of
-    # $2.50 and $4.00. The 2 units' cost (2 Red Bull at 150c) stays in cost of sales, by week too.
+def swap_receipts(conn, paid="15.00"):
+    """The ledger opened, 8 Coke loaded at UNIT_COST on Sat 7 Nov, and a swap to 10 Red Bull at 150c
+    each (`paid` for the 10; None: unknown) at 12:00 on Sun 8 Nov that pulls 7 Coke, so 1 Coke is
+    left to write off at the swap."""
     open_ledger(conn)
     deliver(conn, "r1")
     record_request(conn, "r2", OPENED + timedelta(days=6), False, BODY)
     store(conn, "r2", fulfilled("r2", receipt(
-        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid="15.00", unit_cost_paid="1.50",
+        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid=paid,
+        unit_cost_paid=None if paid is None else f"{Decimal(paid) / 10:.2f}",
         units_loaded=10, units_lost=0, loss_note=None, units_to_back_stock=0, units_pulled=7, pulled_sku="COKE20",
         slot_reassigned=True, resolved_at="2026-11-08T12:00:00Z"), fulfilled_at="2026-11-08T12:30:00Z"), NOW)
+
+
+def unsplit_swap(conn):
+    """#112: Coke at $2.50 until the swap to Red Bull at $4.00 (`swap_receipts`); the 17:00 poll
+    shows 2 units and 700 cents, which fits no split of $2.50 and $4.00. The replay takes the 2
+    units from the Red Bull's count, 300c of stock, though which product sold is unknown."""
+    swap_receipts(conn)
     store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
     store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25700)})
+
+
+# The 2 units of the unsplit swap, at the midpoint of a Coke's and a Red Bull's cost (#172 item 5).
+SWAP_ESTIMATE = (UNIT_COST + 150) / 2 * 2
+
+
+def test_an_unsplit_swap_window_is_estimated_apart_from_exact_cost_of_sales(conn):
+    # #172 item 5: which product sold is unknown, so neither product's cost is exact. The
+    # exact cost of sales leaves them out, the estimate is reported apart, and the P&L says
+    # cost of sales is incomplete, by week too, as the money chart does.
+    unsplit_swap(conn)
     p = ledger.pnl(conn, OPENED, NOW)
-    # Their cost is in cost of sales, so they count as costed: the P&L page and get_pnl show a
-    # known figure instead of "unknown", and the note says the product may be wrong.
-    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 2, 300)
-    assert p.cost_of_sales_complete
-    assert any("can't split" in n and "may be the wrong product's" in n for n in p.notes)
+    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 0, 0)
+    assert (p.units_estimated, p.estimated_cost_of_sales_cents) == (2, SWAP_ESTIMATE)
+    assert not p.cost_of_sales_complete
+    assert any("can't split" in n and "estimate" in n for n in p.notes)
     assert not any("have no known cost" in n for n in p.notes)
     weeks = ledger.pnl_by_week(conn, OPENED, NOW)
-    assert sum(w.cost_of_sales_cents for w in weeks) == 300
-    assert all(w.cost_of_sales_complete for w in weeks)
+    assert sum(w.units_costed for w in weeks) == 0 and sum(w.cost_of_sales_cents for w in weeks) == 0
+    assert sum(w.units_estimated for w in weeks) == 2
+    assert sum(w.estimated_cost_of_sales_cents for w in weeks) == SWAP_ESTIMATE
+    assert not all(w.cost_of_sales_complete for w in weeks)
+    # The agent's get_pnl shows the estimate apart, never inside cost of sales or net.
+    reply = get_pnl(conn, date(2026, 11, 1), date(2026, 11, 9))
+    assert (reply.units_costed, reply.cost_of_sales, reply.cost_of_sales_complete) == (0, "0.00", False)
+    assert (reply.units_estimated, reply.estimated_cost_of_sales) == (2, money(SWAP_ESTIMATE))
+
+
+def test_get_pnl_never_headlines_a_partial_net_as_net(conn):
+    # Review of #172 item 5: with cost of sales incomplete, `net` is net at known costs only. The
+    # summary says so, and names the estimate apart, labelled, outside net.
+    unsplit_swap(conn)
+    message = get_pnl(conn, date(2026, 11, 1), date(2026, 11, 9)).message
+    assert "net at known costs 5.36 (incomplete: 2 of 2 units sold not costed exactly" in message, message
+    assert f"estimated cost of 2 units {money(SWAP_ESTIMATE)}, an estimate not in net" in message, message
+    assert ", net 5.36" not in message
+
 
 
 def test_purchases_and_the_stock_they_bring_go_by_the_same_clock(conn):
@@ -553,6 +589,9 @@ def test_get_pnl_end_to_end(db):  # noqa: F811
     assert (reply["revenue"], reply["revenue_ex_tax"], reply["units_sold"], reply["units_costed"]) == ("12.50", "11.57", 5, 5)
     assert reply["cost_of_sales"] == money(5 * UNIT_COST) == "5.62"
     assert (reply["cost_of_sales_complete"], reply["shrinkage"], reply["net"]) == (True, "0.00", "5.95")
+    # Every cost known: the summary headlines plain net, with no estimate.
+    assert ", net 5.95," in reply["message"] and "known costs" not in reply["message"]
+    assert (reply["units_estimated"], "estimate" in reply["message"]) == (0, False)
     assert reply["inventory"] == money(6 * UNIT_COST) == "6.75"
     assert reply["weeks"] == [{"week": "2026-11-07", "revenue": "12.50", "tax_set_aside": "0.93"}]
     assert call("get_pnl", {"start": "2026-11-09", "end": "2026-11-01"}).structuredContent["success"] is False
