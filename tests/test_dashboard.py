@@ -733,8 +733,9 @@ def lane_html(page: str, slot: str) -> str:
 
 def shows(text: str, figure: str) -> bool:
     """Whether `text` shows `figure` (a sentinel price or count) on its own: not inside a longer number,
-    such as the seconds of a timestamp ("02:54:58.766051" holds "8.76")."""
-    return re.search(rf"(?<![\d.:]){re.escape(figure)}(?![\d])", text) is not None
+    such as the seconds of a timestamp ("02:54:58.766051" holds "8.76"). A colon counts as a
+    boundary only after a digit (a clock), so compact JSON ("sold":4321) is still caught."""
+    return re.search(rf"(?<![\d.])(?<!\d:){re.escape(figure)}(?![\d])", text) is not None
 
 
 def test_a_timestamp_s_seconds_dont_read_as_a_sentinel_figure():
@@ -742,7 +743,7 @@ def test_a_timestamp_s_seconds_dont_read_as_a_sentinel_figure():
     assert not shows('<time datetime="2026-11-20T02:54:58.766051+00:00">', "8.76")
     assert not shows("run 14321 steps", "4321") and not shows("19.875", "9.87")
     # The figure on its own, in a cell, a price, JSON or a sentence, still shows.
-    for text, figure in (("<td>8.76</td>", "8.76"), ("$8.76", "8.76"), ('"price": "8.76"', "8.76"),
+    for text, figure in (("<td>8.76</td>", "8.76"), ("$8.76", "8.76"), ('"price": "8.76"', "8.76"), ('"sold":4321', "4321"),
                          ("8.76", "8.76"), ("tag 4321 units", "4321"), ("(9.87)", "9.87")):
         assert shows(text, figure), text
 
