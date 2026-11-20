@@ -1563,12 +1563,22 @@ SCRIPT = """(function () {
     return h ? d + ' d ' + h + ' h' : d + ' d';
   }
   function times() {
-    // A fixed (demo) page keeps the times the server wrote, as of its own moment, not the viewer's.
-    if (FROZEN) return;
+    // A fixed (demo) page keeps its spans ("2 h ago") as of its own moment, not the viewer's, but
+    // still shows dates and times in Eastern, like the live page, instead of the server's UTC.
     var now = Date.now();
     document.querySelectorAll('time[datetime]').forEach(function (t) {
       var d = new Date(t.getAttribute('datetime')), f = t.getAttribute('data-f');
       if (isNaN(d)) return;
+      if (FROZEN && (f === 'ago' || f === 'until' || f === 'since')) return;
+      if (FROZEN) {
+        var et = {timeZone: 'America/New_York'};
+        if (f === 'clock') t.textContent = d.toLocaleTimeString([], Object.assign({hour: 'numeric', minute: '2-digit'}, et)) + ' ET';
+        else if (f === 'day') t.textContent = d.toLocaleDateString([], Object.assign({weekday: 'short', day: 'numeric', month: 'short'}, et));
+        else t.textContent = d.toLocaleString([], Object.assign({weekday: 'short', month: 'short', day: 'numeric',
+                                                                 hour: 'numeric', minute: '2-digit'}, et)) + ' ET';
+        t.title = d.toLocaleString([], et) + ' ET';
+        return;
+      }
       if (f === 'ago') t.textContent = span(now - d) + ' ago';
       else if (f === 'until') t.textContent = d > now ? span(d - now) : 'passed';
       else if (f === 'since') t.textContent = span(now - d);
@@ -1579,7 +1589,7 @@ SCRIPT = """(function () {
       t.title = d.toLocaleString();
     });
     var live = document.getElementById('live');
-    if (live) {
+    if (live && !FROZEN) {
       live.textContent = failed ? 'refresh failed, showing data from ' + span(now - lastOk) + ' ago'
                                 : 'updated ' + span(now - lastOk) + ' ago';
       live.className = failed ? 'failed' : '';

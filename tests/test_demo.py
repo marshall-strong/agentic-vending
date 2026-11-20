@@ -150,7 +150,10 @@ def test_the_viewers_clock_cannot_move_the_pages_times():
     snap = demo.load()
     fixed = dashboard.render(snap, demo=True)
     live = dashboard.render(snap)
-    assert "FROZEN = 1" in fixed and "FROZEN = 0" in live and "if (FROZEN) return;" in fixed
+    assert "FROZEN = 1" in fixed and "FROZEN = 0" in live
+    # Spans stay as written; absolute dates and times are shown in Eastern, not the server's UTC.
+    assert "if (FROZEN && (f === 'ago' || f === 'until' || f === 'since')) return;" in fixed
+    assert "timeZone: 'America/New_York'" in fixed and "if (live && !FROZEN)" in fixed
     assert "DEMO: made-up" not in live and 'class="demo-banner" role' not in live and 'http-equiv="refresh"' in live
     assert "<title>Check &middot; Agent dashboard</title>" in live
 
