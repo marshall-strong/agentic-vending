@@ -14,8 +14,9 @@ One command per question you might have about the machine or our account:
     python scripts/bridge.py request REQUEST_ID     where a purchase request has got to
     python scripts/bridge.py poll --live            read the machine right now (see below)
 
-From the 3 Dec 2026 start, `raw`, `latest` and `poll` print a view rebuilt from
-our selections and the door counter only (see "From the start" below).
+For a poll taken from the fall cut on (`FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern
+when unset), `raw`, `latest` and `poll` print a view rebuilt from our selections
+and the door counter only (see "From the fall cut" below).
 
 Settings come from `.env` at the repository root (copy `.env.example`), or from
 the environment: `DEX_BASE_URL` and `DEX_API_KEY`. You must be on Tailscale --
@@ -33,12 +34,15 @@ Two things this script deliberately does not do:
   because that is where the balance, price and halt checks live. Reading a
   request's status is fine, so `request` is here.
 
-**From the start (3 Dec 2026, `vending.start`).** From then a poll carries all
-40 selections, the other team's 20 too, and nothing may show their
-per-selection data or a machine-wide total that includes their sales
-(`docs/integrity.md`). Our selections are the stored assignment
-(`vending.slots.our_slots`, which needs `DATABASE_URL`), never a fresh
-`/api/v1/slots` answer. For a poll from the start:
+**From the fall cut (`vending.start.fall_cut`).** All 40 selections' data, and
+the machine-wide totals, may be used only from polls taken before the fall cut:
+the setting `FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern when unset, and never later
+than the 3 Dec 2026 start (`docs/integrity.md`, "Fall data"). From the cut on,
+nothing may show per-selection data outside our assignment or a machine-wide
+total. From the start the raw poll carries all 40 selections, the other team's
+20 too. Our selections are the stored assignment (`vending.slots.our_slots`,
+which needs `DATABASE_URL`), never a fresh `/api/v1/slots` answer. For a poll
+from the fall cut on:
 
 - `raw`, `latest` and `poll --live` print a view rebuilt from checked fields,
   not lines copied from the poll: `ID4` with its decimal places, `PA1` (the
@@ -54,10 +58,12 @@ per-selection data or a machine-wide total that includes their sales
 - `latest --summary` reads the stored assignment first, and skips every
   selection that isn't ours before reading any of its fields.
 
-`raw` isn't told when its poll was taken, so from the start it treats every
-poll as one from the start. A poll from before the start prints whole, as
-before. An error from a poll route (`history`, `raw`, `poll`) shows the status
-and a short reason, never the bridge's reply.
+`raw` isn't told when its poll was taken, so it places the poll at now: from
+the fall cut on, every poll counts as one from the cut. A poll from before the
+cut prints whole, as before. A `FALL_CUTOFF` that isn't a time with its offset
+stops the command before any poll is read. An error from a poll route
+(`history`, `raw`, `poll`) shows the status and a short reason, never the
+bridge's reply.
 
 Standard library only, except reading the stored assignment, so it runs
 anywhere Python 3.11 does with nothing to install.
@@ -122,7 +128,7 @@ def repo_root() -> Path:
 # on how a value is quoted or commented. Standard library too.
 sys.path.insert(0, str(repo_root()))
 from vending import settings as env  # noqa: E402
-from vending.start import START, on_or_after_start  # noqa: E402
+from vending.start import fall_cut, on_or_after_fall_cut  # noqa: E402
 
 
 def settings() -> tuple[str, str]:
@@ -168,7 +174,7 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
             return response.read(), dict(response.headers.items())
     except urllib.error.HTTPError as error:
         if path.startswith(POLL_ROUTES):
-            # From the start a poll carries the other team's data, so a poll route's reply is never
+            # A poll carries every selection's data, so a poll route's reply is never
             # echoed, not even an error's: the status and its standard phrase only.
             detail = status_phrase(error.code)
         else:
@@ -272,7 +278,7 @@ def summarize(dex_text: str, ours: tuple[str, ...] | list[str]) -> list[dict[str
 
 
 # --------------------------------------------------------------------------
-# From the start: only our selections (see the module docstring)
+# From the fall cut: only our selections (see the module docstring)
 # --------------------------------------------------------------------------
 
 def counts(fields: list[str]) -> list[str]:
@@ -286,7 +292,7 @@ def counts(fields: list[str]) -> list[str]:
 
 
 def rebuild(dex_text: str, ours: tuple[str, ...] | list[str]) -> tuple[str, int, int]:
-    """What a poll from the start may show: (text, how many of `ours` it prints, lines left out).
+    """What a poll from the fall cut on may show: (text, how many of `ours` it prints, lines left out).
 
     Nothing is copied from the poll. Each line is written anew from a known tag and fields
     checked to be plain numbers, so a record nobody thought of, or a field that isn't a number,
@@ -353,9 +359,12 @@ def our_selections() -> tuple[tuple[str, ...], str | None]:
 
 
 def show_poll(body: bytes, out: str | None, taken: datetime) -> None:
-    """Print a poll, or save it byte for byte. One from the start prints only as `rebuild` writes
-    it, and saves only to a regular file (`save`). One from before the start is as it always was."""
-    after = on_or_after_start(taken)
+    """Print a poll, or save it byte for byte. One from the fall cut on prints only as `rebuild`
+    writes it, and saves only to a regular file (`save`). One from before the cut is as it always was."""
+    try:   # a malformed FALL_CUTOFF prints no poll
+        cut, after = fall_cut(), on_or_after_fall_cut(taken)
+    except ValueError as error:
+        raise BridgeError(str(error), EXIT_CONFIG) from None
     if out:
         if after:
             save(body, out)
@@ -370,9 +379,10 @@ def show_poll(body: bytes, out: str | None, taken: datetime) -> None:
         print(f"note: our slot assignment can't be read ({why}), so no selection is printed",
               file=sys.stderr)
     text, printed, left_out = rebuild(body.decode("utf-8", errors="replace"), ours)
-    print(f"note: a poll from the start ({START:%d %b %Y}): {printed} of our selections, rebuilt from "
-          f"checked fields; {left_out} lines left out (the other team's selections, the machine-wide "
-          "totals, the envelope and G85). --out FILE saves the whole poll", file=sys.stderr)
+    print(f"note: a poll from the fall cut on ({cut.isoformat(timespec='minutes')}, FALL_CUTOFF): "
+          f"{printed} of our selections, rebuilt from checked fields; {left_out} lines left out (the "
+          "selections that aren't ours, the machine-wide totals, the envelope and G85). --out FILE "
+          "saves the whole poll", file=sys.stderr)
     sys.stdout.write(text)
 
 
@@ -413,7 +423,7 @@ def cmd_history(args: argparse.Namespace) -> None:
 
 def cmd_raw(args: argparse.Namespace) -> None:
     body, _ = call("GET", f"/api/v1/history/{urllib.parse.quote(args.session_id)}/raw")
-    # The route doesn't say when the poll was taken, so from the start every poll counts as one from it.
+    # The route doesn't say when the poll was taken, so from the fall cut every poll counts as one from it.
     show_poll(body, args.out, datetime.now(timezone.utc))
 
 
@@ -469,7 +479,7 @@ def cmd_poll(args: argparse.Namespace) -> None:
 
 
 def write_text(body: bytes, out: str | None) -> None:
-    """Print a raw document, or save it byte for byte so its checksum survives. Before the start only."""
+    """Print a raw document, or save it byte for byte so its checksum survives. Before the fall cut only."""
     if out:
         Path(out).write_bytes(body)
         print(f"wrote {len(body)} bytes to {out}", file=sys.stderr)
@@ -492,7 +502,7 @@ def device_name(out: str) -> bool:
 
 
 def save(body: bytes, out: str) -> None:
-    """Save a poll from the start byte for byte, to a regular file and nowhere else.
+    """Save a poll from the fall cut on byte for byte, to a regular file and nowhere else.
 
     `--out` is for archiving, so it can't be a way round the rebuilt view: `-`, a device
     (`/dev/stdout`, `/dev/tty`, `CON`), a pipe, a socket or a directory is refused, and nothing
@@ -500,7 +510,7 @@ def save(body: bytes, out: str) -> None:
     one swapped in between is refused too.
     """
     def refuse(why: str) -> BridgeError:
-        return BridgeError(f"--out {out!r} {why}. A poll from the start is saved only to a regular "
+        return BridgeError(f"--out {out!r} {why}. A poll from the fall cut on is saved only to a regular "
                            "file, never to the terminal, a device or a pipe.", EXIT_REFUSED)
 
     if out == "-" or device_name(out):

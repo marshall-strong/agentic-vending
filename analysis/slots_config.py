@@ -24,10 +24,8 @@ cover all 40 selections, but only polls before the cut. check_before_start() ref
 a selection outside our assignment, from the cut on; in a fall run it refuses every row from the cut on, ours
 too (exempt_from_start). The export and the analysis both call it.
 """
-import datetime as dt
 import sys
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vending.slots import DEVICE_ID, RECORD_HINT  # noqa: E402  (plain constants; no database needed)
@@ -38,14 +36,8 @@ SOURCE_SERVER = "inventory server (stored)"
 SOURCE_OLD_DEFAULT = "default list in vending/slots.py"
 SOURCE_FALL = "all 40 selections, polls before the fall cut only (fall run)"
 
-# The competition starts Thu 3 Dec 2026 (Winter classes start; golisano_calendar_2026_27.json). From then on the
-# other team's selections are theirs: nothing reads their per-selection sales, prices or stock.
-START = dt.datetime(2026, 12, 3, tzinfo=ZoneInfo("America/New_York"))
-# The fall data ends before the day-one fill goes in (staff "basically turn it off" to load it, David, 12 Nov;
-# loading falls about 30 Nov to 2 Dec). Default: 18 Nov 00:00 Eastern, the first day of the break after Fall
-# Quarter classes (golisano_calendar_2026_27.json), safely before any loading. A setting, so the team can move it.
-FALL_CUTOFF_SETTING = "FALL_CUTOFF"
-DEFAULT_FALL_CUTOFF = "2026-11-18T00:00:00-05:00"
+# The competition's start (Thu 3 Dec 2026) and the fall cut are defined once, in vending/start.py; these are those.
+from vending.start import DEFAULT_FALL_CUTOFF, FALL_CUTOFF_SETTING, START, fall_cut  # noqa: E402
 ALL_SLOTS = tuple(f"{row}{col}" for row in range(1, 6) for col in range(1, 9))
 ASSIGNMENT_SIZE = len(ALL_SLOTS) // 2      # two teams split the machine: 20 selections each
 
@@ -74,17 +66,12 @@ def check_assignment(codes, where):
 def fall_end():
     """The end of the fall data: the earlier of FALL_CUTOFF (default DEFAULT_FALL_CUTOFF) and START.
 
-    No per-selection row outside our assignment may be from this time on. A malformed setting stops the run."""
-    from vending import settings
-
-    value = settings.get(FALL_CUTOFF_SETTING) or DEFAULT_FALL_CUTOFF
+    No per-selection row outside our assignment may be from this time on. A malformed setting stops the run.
+    vending.start.fall_cut, so the analysis, scripts/bridge.py and the rest share one cut."""
     try:
-        cut = dt.datetime.fromisoformat(value)
-    except ValueError:
-        cut = None
-    if cut is None or cut.utcoffset() is None:
-        raise SystemExit(f"{FALL_CUTOFF_SETTING} is {value!r}; give a time with its offset, like {DEFAULT_FALL_CUTOFF}")
-    return min(cut, START)
+        return fall_cut()
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
 
 
 def exempt_from_start(source, assigned):
