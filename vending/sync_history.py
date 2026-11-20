@@ -125,16 +125,40 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
     return "ok" if ok else "crc"
 
 
+def rerun_hint(report: Report) -> str | None:
+    """The line that names the first day a poll couldn't be stored and the command that fetches it again, or
+    None. A default run starts a day before the newest stored poll, so it may never go back that far."""
+    if not report.storage_failed:
+        return None
+    day = report.first_storage_failure
+    return (f"storage failed for {report.storage_failed} of the polls skipped, the first on {day}. Fetch them again "
+            f"with: python -m vending.sync_history --since {day}\n"
+            "(a default run starts a day before the newest poll stored, so it may not go back that far)")
+
+
 def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log=print,
          retry_bad: bool = False) -> Report:
+    """Fetch and store every poll from `since` to `until` that we don't hold (`_sync`)."""
+    report = Report()
+    try:
+        return _sync(conn, bridge, since, until, log, retry_bad, report)
+    except BaseException:
+        # A run that stops early (the bridge gone, the connection lost) still names a day it couldn't store.
+        hint = rerun_hint(report)
+        if hint:
+            log(hint)
+        raise
+
+
+def _sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log, retry_bad: bool,
+          report: Report) -> Report:
     """Fetch and store every poll from `since` to `until` that we don't hold.
 
     With `retry_bad`, polls stored as unparseable (`crc_ok` null) are fetched
     again, in case the bridge returned a cut-off or garbled document last time.
     A poll whose checksum failed (`crc_ok` false) was read whole and is left alone.
     """
-    report = Report()
-    start = datetime.combine(since, datetime.min.time(), timezone.utc)
+    start =datetime.combine(since, datetime.min.time(), timezone.utc)
     known = {row[0] for row in conn.execute(
         "select session_id from polls where started_at >= %s" + (" and crc_ok is not null" if retry_bad else ""),
         (start,))}
@@ -243,11 +267,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"done: {report.days} days, {report.listed} polls listed, {report.new} new, "
           f"{report.crc_failed} failed the checksum, {report.unparseable} unparseable, "
           f"{report.failed_days} days couldn't be listed, {report.failed_polls} polls skipped")
-    if report.storage_failed:
-        day = report.first_storage_failure
-        print(f"storage failed for {report.storage_failed} of the polls skipped, the first on {day}. Fetch them again "
-              f"with: python -m vending.sync_history --since {day}\n"
-              "(a default run starts a day before the newest poll stored, so it may not go back that far)")
+    hint = rerun_hint(report)
+    if hint:
+        print(hint)
     problems = report.crc_failed + report.unparseable + report.failed_days + report.failed_polls
     return 1 if problems else 0
 

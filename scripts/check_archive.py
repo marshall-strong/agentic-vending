@@ -123,7 +123,9 @@ def read_log_tail(log_path: Path, count: int) -> list[str]:
     """The last `count` lines of the poll log, newest last."""
     if not log_path.exists():
         return []
-    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    # Split on newlines only: str.splitlines() also breaks at a vertical tab or a form feed, which an old line's
+    # quoted `problems` can hold, and the text after it would read as a structured line of its own.
+    lines = [line.rstrip("\r") for line in log_path.read_text(encoding="utf-8", errors="replace").split("\n")]
     return [line for line in lines if line.strip()][-count:]
 
 
