@@ -84,6 +84,21 @@ def test_a_checked_plan_wins_over_the_raw_answer_beside_it(tmp_path):
     assert found == {"2a": "plan2a.json", "3": "plan3.json"}
 
 
+@pytest.mark.parametrize("first, second", [
+    ("plan3.json", "r3.plan.json"),
+    ("r3.plan.json", "plan3.json"),
+], ids=["checked-first", "raw-first"])
+def test_discover_refuses_the_same_round_in_different_folders(tmp_path, first, second):
+    for folder, filename in (("round2", first), ("round3", second)):
+        directory = tmp_path / folder
+        directory.mkdir()
+        (directory / filename).write_text("{}", encoding="utf-8")
+
+    with pytest.raises(pr.RoundError, match="round 3 has two plan files") as error:
+        pr.discover(tmp_path)
+    assert f"round2/{first}" in str(error.value) and f"round3/{second}" in str(error.value)
+
+
 def test_floor_and_fill_cost_are_recomputed_from_the_pack_list(tmp_path):
     write(tmp_path, "round1", "1", {"day_one": day_one()}, projection())
     r = pr.load_all(tmp_path, TEST_SLOTS)[0]
