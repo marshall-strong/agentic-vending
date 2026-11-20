@@ -30,11 +30,16 @@ def no_database(monkeypatch):
     def boom(*args, **kwargs):
         raise AssertionError("the demo went to the database")
 
+    def live_filter(*args, **kwargs):
+        raise AssertionError("the demo used a live snapshot filter")
+
     for owner, names in ((psycopg, ("connect",)), (pages, ("connect", "_connect", "_connection", "stored_slots")),
                          (dashboard, ("connect", "_connect", "snapshot", "our_slots")), (db, ("connect",)),
                          (visits, ("connect", "_connect")), (slots, ("our_slots", "stored", "clock"))):
         for name in names:
             monkeypatch.setattr(owner, name, boom)
+    monkeypatch.setattr(dashboard, "only_ours", live_filter)
+    monkeypatch.setattr(dashboard, "hide_errors", live_filter)
     monkeypatch.delenv(pages.READER, raising=False)
     monkeypatch.delitem(settings._FILE, pages.READER, raising=False)
     assert not pages.configured()

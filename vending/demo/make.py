@@ -580,12 +580,21 @@ def sync_round() -> dict:
 def make(writer, reader) -> dict:
     """The demo snapshot from a migrated empty schema: `writer` seeds it, `reader` (read-only, like the
     dashboard's own connection) is snapshotted the way the public page is."""
-    from vending import dashboard, slots
+    from vending import dashboard, money_panel, slots
 
     # Our slots are read as the clock stood at AS_OF, a week after the lock.
     with mock.patch.object(slots, "clock", lambda conn: AS_OF):
         seed(writer)
         snap = dashboard.snapshot(reader, AS_OF, public=True, syncs=sync_round())
+        # Retain the replay, dialogue and development spend notes from the fictional seed.
+        # The served demo reads the finished file and never calls these readers.
+        tags = {slot: row["price"] for slot, row in snap["sales"]["data"]["slots"].items()}
+        snap["runs"]["data"] = dashboard._runs(reader, AS_OF, tags, dashboard.our_selections(snap),
+                                                modes=("live", "dry-run", "replay"))
+        snap["money"]["data"]["notes"] = money_panel.read(reader, AS_OF)["notes"]
+    for run in snap["runs"]["data"]:
+        if run["status"] == "failed" and run["detail"]:
+            run["detail"] = dashboard.HIDDEN
     snap["demo"] = True
     return snap
 

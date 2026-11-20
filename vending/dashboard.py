@@ -346,7 +346,7 @@ def _tags(conn: psycopg.Connection, now: datetime) -> dict:
 
 
 def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
-          ours: tuple[str, ...] = ()) -> list[dict]:
+          ours: tuple[str, ...] = (), *, modes: tuple[str, ...] = ("live",)) -> list[dict]:
     """The last runs, newest first, each with the slots its plan changed from the plan before it.
 
     The newest run with a plan compares a "keep" against `tags`, the prices on the tags now, as
@@ -359,8 +359,8 @@ def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
                  where p.mode = r.mode and p.plan is not null
                    and (p.started_at, p.id) < (r.started_at, r.id)
                  order by p.started_at desc, p.id desc limit 1) as previous_plan
-          from agent_runs r where r.mode = 'live' and r.started_at <= %s
-         order by r.started_at desc, r.id desc limit %s""", (now, RUN_ROWS))
+          from agent_runs r where r.mode = any(%s) and r.started_at <= %s
+         order by r.started_at desc, r.id desc limit %s""", (list(modes), now, RUN_ROWS))
     steps = _steps(conn, [r["id"] for r in rows])
     newest = True
     for r in rows:
