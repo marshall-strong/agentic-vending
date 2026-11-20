@@ -1652,7 +1652,10 @@ def test_the_wildcard_slot_is_marked_on_the_front_the_close_up_and_the_plan(conn
     changes = section(page, '<a class="chg" id="chg-37" href="?sel=37#sel-37"', "</a>")
     assert ">wildcard</span>" in changes
     rows = section(page, '<section id="plan">', "</section>")
-    assert re.search(r'data-sel="37"[^>]*>37</a> <span class="pill wild"', rows)
+    # In the row's text, not beside the number, so the row's columns stay in line.
+    row = rows.split('id="slot-37"', 1)[1].split("</summary>", 1)[0]
+    assert re.search(r'data-sel="37"[^>]*>37</a><span class="now">', row)
+    assert '<span class="what"><span class="pill wild"' in row
     # Only the one slot: no other selection carries the mark.
     assert page.count('class="fc fc-wild"') + page.count('fc-chg fc-wild"') == 1 and page.count("<dt>Wildcard</dt>") == 1
 

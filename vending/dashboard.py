@@ -1477,14 +1477,18 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
             f'<div class="ops-side">{home}{panel}</div></div>{scrim}</section>')
 
 
-def _slot_num(slot: str, wildcard: str | None = None) -> str:
-    """A plan row's slot number. One on the machine's face is a link that picks it in the close-up;
-    the wildcard's says so."""
-    mark = f" {WILD}" if slot == wildcard else ""
+def _slot_num(slot: str) -> str:
+    """A plan row's slot number. One on the machine's face is a link that picks it in the close-up."""
     if re.fullmatch(rf"[1-{SHELVES}][1-{COLUMNS}]", slot):
         return (f'<a class="num" id="num-{_e(slot)}" href="{machine_art.pick_href(slot)}" data-sel="{_e(slot)}" '
-                f'aria-label="Selection {_e(slot)}: show it in the machine">{_e(slot)}</a>{mark}')
-    return f'<b class="num">{_e(slot)}</b>{mark}'
+                f'aria-label="Selection {_e(slot)}: show it in the machine">{_e(slot)}</a>')
+    return f'<b class="num">{_e(slot)}</b>'
+
+
+def _wild_mark(slot: str, wildcard: str | None) -> str:
+    """The wildcard's pill at the start of its plan row's text. Inside the text, not beside the number,
+    so the row's columns stay in line."""
+    return f"{WILD} " if slot == wildcard else ""
 
 
 def _fill_check_html(check: str, reason: str | None) -> str:
@@ -1541,8 +1545,9 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
     if on_hand is not None:
         now_bits.append(f"{on_hand} left")
     return (f'<details class="pc{" changed" if changed else ""}" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary>{_slot_num(slot, wildcard)}<span class="now">{" &middot; ".join(now_bits)}</span>'
-            f'<span class="what">{what}</span><span class="tags">{tags}</span></summary>{"".join(body)}</details>')
+            f'<summary>{_slot_num(slot)}<span class="now">{" &middot; ".join(now_bits)}</span>'
+            f'<span class="what">{_wild_mark(slot, wildcard)}{what}</span><span class="tags">{tags}</span></summary>'
+            f'{"".join(body)}</details>')
 
 
 def _plan_html(snap: dict) -> str:
@@ -1606,7 +1611,7 @@ def _first_fill_cell(row: dict, wildcard: str | None = None) -> str:
                 price, f"Capacity {cap}", f"Fill cost share {cost}"]
     problems = "".join(f'<div class="sub">{_e(reason)}</div>' for reason in checks["refusals"])
     return (f'<details class="pc" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary>{_slot_num(slot, wildcard)}<span class="what">{_e(row["product"])}'
+            f'<summary>{_slot_num(slot)}<span class="what">{_wild_mark(slot, wildcard)}{_e(row["product"])}'
             f' &middot; {plan_rounds.format_cents(row["price_cents"])}'
             f' &middot; {_plural(row["units"], "unit")}{fill_note}</span></summary>{reason_detail}'
             f'<div class="was"><span class="label">Code checks</span>'
