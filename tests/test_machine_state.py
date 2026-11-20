@@ -467,3 +467,82 @@ def test_door_openings_with_no_receipt_of_ours_change_nothing(conn):
     [slot] = counted.slots
     assert (slot.product, slot.loaded, slot.units) == ("PEPSI20", 20, 16)
     assert by_slot(reply.data)["15"].stock_on_hand == 16
+
+
+# --- Demand across a product change (#172 item 3) -----------------------------------
+
+def swap(conn, new_sku, polls, now):
+    """Slot 15: Coke loaded Fri 23 Oct, swapped for `new_sku` at the Friday visit of 30 Oct (3:30 PM Eastern).
+
+    `polls` are (time, (price, units, cents)) after the last pre-swap poll; no door times, so a window
+    across the swap is split by the cents counter, or left unattributed when it can't be."""
+    store_poll(conn, "p0", "2026-10-23T12:00:00+00:00", {"15": (200, 100, 20000)})
+    fulfilled(conn, "r1", datetime(2026, 10, 23, 19, 30, tzinfo=timezone.utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
+    store_poll(conn, "p1", "2026-10-28T12:00:00+00:00", {"15": (200, 104, 20800)})
+    store_poll(conn, "p2", "2026-10-30T18:00:00+00:00", {"15": (200, 106, 21200)})   # 14 Cokes left
+    fulfilled(conn, "r2", datetime(2026, 10, 30, 19, 30, tzinfo=timezone.utc), ("15", new_sku, "primary", "20.00", 20, 0, 0))
+    conn.execute("update purchase_lines set units_pulled = 13, pulled_sku = 'COKE20', slot_reassigned = true"
+                 " where request_id = 'r2'")
+    for n, (at, reading) in enumerate(polls):
+        store_poll(conn, f"q{n}", at, {"15": reading})
+    return by_slot(get_machine_state(conn, now=now).data)["15"]
+
+
+def test_the_old_products_share_of_a_split_window_is_not_the_new_products_demand(conn):
+    # Coke at $2.00 for Red Bull at $4.00. The Monday poll's window holds the swap: 3 units for
+    # $10.00, so 1 Coke before it and 2 Red Bulls after. Red Bull sold 10 over 5 class days.
+    s = swap(conn, "REDBULL", [
+        ("2026-11-02T14:00:00+00:00", (400, 109, 22200)),
+        ("2026-11-04T14:00:00+00:00", (400, 113, 23800)),
+        ("2026-11-06T14:00:00+00:00", (400, 117, 25400)),
+    ], now=datetime(2026, 11, 6, 22, tzinfo=timezone.utc))
+    assert (s.product, s.stock_on_hand, s.units_sold_since_load) == ("REDBULL", 10, 10)
+    assert (s.units_per_class_day, s.rate_basis) == ("2.00", "own: 10 sold over 5 in-stock class days")
+    assert s.class_days_in_stock == 5
+
+
+def test_an_unattributed_swap_window_is_left_out_of_demand_and_sold_since_load(conn):
+    # Same price on both sides, so the window across the swap (1 unit, polled at 6 PM Eastern the same
+    # Friday) can't be split. That unit may have been a Coke: it is neither sold since the load nor in
+    # the rate. The window ends on the swap's own day, so it costs no class day.
+    s = swap(conn, "PEPSI20", [
+        ("2026-10-30T22:00:00+00:00", (200, 107, 21400)),
+        ("2026-11-03T14:00:00+00:00", (200, 111, 22200)),
+        ("2026-11-05T14:00:00+00:00", (200, 114, 22800)),
+        ("2026-11-06T20:00:00+00:00", (200, 117, 23400)),
+    ], now=datetime(2026, 11, 6, 22, tzinfo=timezone.utc))
+    assert (s.product, s.stock_on_hand) == ("PEPSI20", 9)
+    assert (s.units_sold_since_load, s.units_per_class_day, s.class_days_in_stock, s.rate_basis) == (
+        10, "2.00", 5, "own: 10 sold over 5 in-stock class days")
+
+
+def test_a_multi_day_unattributed_window_drops_its_class_days_from_the_in_stock_days(conn):
+    # The polls stop over the weekend and Monday: the first after the swap is Tue 3 Nov, 9 AM Eastern,
+    # 3 units at the same price, unsplit. Mon 2 and Tue 3 Nov sold units nobody can place, so neither
+    # counts as an in-stock day of Pepsi's: 10 sold over the 5 days left (Wed 4 to Tue 10), not 13 over 7.
+    s = swap(conn, "PEPSI20", [
+        ("2026-11-03T14:00:00+00:00", (200, 109, 21800)),
+        ("2026-11-05T14:00:00+00:00", (200, 113, 22600)),
+        ("2026-11-09T14:00:00+00:00", (200, 117, 23400)),
+        ("2026-11-10T14:00:00+00:00", (200, 119, 23800)),
+    ], now=datetime(2026, 11, 10, 22, tzinfo=timezone.utc))
+    assert s.product == "PEPSI20"
+    assert (s.units_sold_since_load, s.units_per_class_day, s.class_days_in_stock, s.rate_basis) == (
+        10, "2.00", 5, "own: 10 sold over 5 in-stock class days")
+
+
+def test_demand_counts_only_the_current_products_loads():
+    # One receipt tops up Coke (5) and swaps to Pepsi (2) at the same moment. Pepsi sells out on Mon 2 Nov
+    # and is refilled Thu 5 Nov. The Coke units never were Pepsi's stock, so they don't keep Pepsi in
+    # stock over Tue 3 and Wed 4 Nov: its in-stock class days are Mon 2 and Fri 6 Nov.
+    from vending.tools.machine_state import _demands, _loads
+    utc = timezone.utc
+    at, now = datetime(2026, 10, 30, 19, 30, tzinfo=utc), datetime(2026, 11, 6, 22, tzinfo=utc)
+    refill = datetime(2026, 11, 5, 19, tzinfo=utc)
+    receipts = [dict(slot="15", sku="COKE20", outcome="loaded", units_loaded=5, at=at),
+                dict(slot="15", sku="PEPSI20", outcome="primary", units_loaded=2, at=at),
+                dict(slot="15", sku="PEPSI20", outcome="primary", units_loaded=2, at=refill)]
+    pepsi = SlotCount("15", "PEPSI20", 2, None, 4, 2, 0, at)
+    sold = machine_state.stock.SaleCost(datetime(2026, 11, 2, 22, tzinfo=utc), "15", "PEPSI20", 2, 2, None)
+    d = _demands({"15": pepsi}, _loads(receipts, now), (sold,), {"15": (250, 0)}, now)
+    assert (d["15"].units_sold, d["15"].class_days_in_stock) == (2, 2)
