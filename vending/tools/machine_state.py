@@ -504,7 +504,8 @@ def _readings(conn: psycopg.Connection, start: datetime, end: datetime,
 def price_history(conn: psycopg.Connection, until: datetime,
                   since: datetime | None = None) -> list[tuple[datetime, str, int]]:
     """`(polled_at, selection, price_cents)` for our selections at every good poll of our machine up to
-    `until`, oldest first. With `since`, from the last poll at or before it, so the price at `since` is known.
+    `until`, oldest first. With `since`, each selection from the last poll at or before it that read that
+    selection's price, so the price at `since` is known even when the poll just before it missed one.
 
     Which selections are ours it reads itself (`our_slots`, which raises `SlotsNotRecorded` with none
     stored): a caller can't hand it another list (docs/integrity.md).
@@ -512,11 +513,16 @@ def price_history(conn: psycopg.Connection, until: datetime,
     Prices are only seen at polls, so a change shows at the poll that first saw it. A poll with no
     price for a selection is left out. The money series and the dashboard's pricing panel read
     prices over time through this, the one place that does."""
-    lower = ("" if since is None else
-             " and p.started_at >= coalesce((select max(started_at) from polls"
-             "   where device_id = %(device)s and crc_ok and started_at <= %(since)s), %(since)s)")
+    # Each selection's own baseline: its last priced reading at or before `since`.
+    base = ("" if since is None else
+            " left join (select b.selection, max(bp.started_at) as at from poll_selections b"
+            "   join polls bp using (session_id) where bp.device_id = %(device)s and bp.crc_ok"
+            "   and b.selection = any(%(slots)s) and b.price_cents is not null and bp.started_at <= %(since)s"
+            "   group by b.selection) base on base.selection = s.selection")
+    lower = "" if since is None else " and p.started_at >= coalesce(base.at, %(since)s)"
     return conn.execute(
         "select p.started_at, s.selection, s.price_cents from poll_selections s join polls p using (session_id)"
+        + base +
         " where p.device_id = %(device)s and p.crc_ok and s.selection = any(%(slots)s)"
         " and p.started_at <= %(until)s and s.price_cents is not null" + lower +
         " order by p.started_at, p.session_id, s.selection",

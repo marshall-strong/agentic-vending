@@ -4,6 +4,8 @@ import json
 import re
 from datetime import timedelta
 
+import pytest
+
 from tests.conftest import store_poll
 from tests.test_dashboard import MONDAY, catalog, fulfilled, page_conn, plan  # noqa: F401 - page_conn is a fixture
 from vending import agent_runs, dashboard
@@ -234,3 +236,17 @@ def test_a_swap_that_keeps_the_price_is_checked_against_the_new_products_floor(c
     assert any(t.startswith("Selection 15: the plan's price $1.25 isn't legal. $1.25 is below the floor of $2.20")
                for t in texts)
     assert "Plan: $1.25 is below the floor of $2.20" in section(dashboard.render(snap))
+
+
+@pytest.mark.parametrize("unread", [{"15": (None, 1)}, {}], ids=["null price", "not in the poll"])
+def test_a_selection_the_poll_before_the_window_did_not_read_keeps_its_earlier_price(conn, unread):
+    # The window opens 28 days back. The last poll before it (30 days back) read 16 but not 15's price,
+    # so 15's price at the window's start is the one from 40 days back.
+    from vending.tools import machine_state
+    store_poll(conn, "p0", (MONDAY - timedelta(days=40)).isoformat(), {"15": (200, 1), "16": (300, 1)})
+    store_poll(conn, "p1", (MONDAY - timedelta(days=30)).isoformat(), {**unread, "16": (325, 2)})
+    store_poll(conn, "p2", (MONDAY - timedelta(days=10)).isoformat(), {"15": (250, 2), "16": (325, 3)})
+    seen = machine_state.price_history(conn, MONDAY, MONDAY - timedelta(days=28))
+    assert [(at, cents) for at, slot, cents in seen if slot == "15"] == [
+        (MONDAY - timedelta(days=40), 200), (MONDAY - timedelta(days=10), 250)]
+    assert [cents for _, slot, cents in seen if slot == "16"] == [325, 325]   # 16's own baseline is 30 days back
