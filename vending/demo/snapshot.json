@@ -1219,102 +1219,142 @@
     "11": {
      "price": "2.50",
      "sold": 14,
-     "per_day": "1.74"
+     "per_day": "1.74",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 2 in-stock class days of our own so far, own rate after 5"
     },
     "13": {
      "price": "2.50",
      "sold": 6,
-     "per_day": "0.74"
+     "per_day": "0.74",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "16": {
      "price": "2.50",
      "sold": 4,
-     "per_day": "0.50"
+     "per_day": "0.50",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "17": {
      "price": "2.50",
      "sold": 4,
-     "per_day": "0.50"
+     "per_day": "0.50",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "22": {
      "price": "1.75",
      "sold": 5,
-     "per_day": "0.62"
+     "per_day": "0.62",
+     "per_class_day": "0.767",
+     "rate_basis": "fall prior: slow seller, low-priced (average $2.17); 4 in-stock class days of our own so far, own rate after 5"
     },
     "24": {
      "price": "1.75",
      "sold": 2,
-     "per_day": "0.25"
+     "per_day": "0.25",
+     "per_class_day": "0.767",
+     "rate_basis": "fall prior: slow seller, low-priced (average $2.17); 4 in-stock class days of our own so far, own rate after 5"
     },
     "25": {
      "price": "2.75",
      "sold": 3,
-     "per_day": "0.37"
+     "per_day": "0.37",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "28": {
      "price": "2.50",
      "sold": 2,
-     "per_day": "0.25"
+     "per_day": "0.25",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "31": {
      "price": "2.50",
      "sold": 7,
-     "per_day": "0.87"
+     "per_day": "0.87",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 1 in-stock class day of our own so far, own rate after 5"
     },
     "33": {
      "price": "2.50",
      "sold": 10,
-     "per_day": "1.24"
+     "per_day": "1.24",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "36": {
      "price": "2.50",
      "sold": 4,
-     "per_day": "0.50"
+     "per_day": "0.50",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "37": {
      "price": "3.00",
      "sold": 22,
-     "per_day": "2.73"
+     "per_day": "2.73",
+     "per_class_day": "0.722",
+     "rate_basis": "fall prior: slow seller, erratic (average $3.01); 2 in-stock class days of our own so far, own rate after 5"
     },
     "41": {
      "price": "3.25",
      "sold": 7,
-     "per_day": "0.87"
+     "per_day": "0.87",
+     "per_class_day": "0.722",
+     "rate_basis": "fall prior: slow seller, erratic (average $3.01); 4 in-stock class days of our own so far, own rate after 5"
     },
     "44": {
      "price": "2.50",
      "sold": 1,
-     "per_day": "0.12"
+     "per_day": "0.12",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "46": {
      "price": "4.00",
      "sold": 2,
-     "per_day": "0.25"
+     "per_day": "0.25",
+     "per_class_day": "1.354",
+     "rate_basis": "fall prior: mid seller, premium-priced (average $4.33); 4 in-stock class days of our own so far, own rate after 5"
     },
     "47": {
      "price": "2.25",
      "sold": 3,
-     "per_day": "0.37"
+     "per_day": "0.37",
+     "per_class_day": "0.767",
+     "rate_basis": "fall prior: slow seller, low-priced (average $2.17); 4 in-stock class days of our own so far, own rate after 5"
     },
     "52": {
      "price": "2.50",
      "sold": 5,
-     "per_day": "0.62"
+     "per_day": "0.62",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "54": {
      "price": "2.50",
      "sold": 4,
-     "per_day": "0.50"
+     "per_day": "0.50",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 4 in-stock class days of our own so far, own rate after 5"
     },
     "55": {
      "price": "2.75",
      "sold": 0,
-     "per_day": "0.00"
+     "per_day": "0.00",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 0 in-stock class days of our own so far, own rate after 5"
     },
     "58": {
      "price": "2.50",
      "sold": 0,
-     "per_day": "0.00"
+     "per_day": "0.00",
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior: fast seller (average $2.63); 0 in-stock class days of our own so far, own rate after 5"
     }
    }
   }
@@ -1335,7 +1375,8 @@
      "last_moved": {
       "$datetime": "2026-12-05T17:00:00+00:00"
      },
-     "unit_cost": null
+     "unit_cost": null,
+     "unit_cost_cents": null
     },
     "13": {
      "product": "COCA-DIET-20BOT",
@@ -1349,7 +1390,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.45"
+     "unit_cost": "1.45",
+     "unit_cost_cents": "145"
     },
     "16": {
      "product": "COCA-ZERO_SUG-20BOT",
@@ -1363,7 +1405,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.45"
+     "unit_cost": "1.45",
+     "unit_cost_cents": "145"
     },
     "17": {
      "product": "SPRITE-ORIGINAL-20BOT",
@@ -1377,7 +1420,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.40"
+     "unit_cost": "1.40",
+     "unit_cost_cents": "140"
     },
     "22": {
      "product": "BUBLY-STRAWBER-12CAN",
@@ -1391,7 +1435,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "0.68"
+     "unit_cost": "0.68",
+     "unit_cost_cents": "750/11"
     },
     "24": {
      "product": "BUBLY-PARADISE-12CAN",
@@ -1405,7 +1450,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "0.63"
+     "unit_cost": "0.63",
+     "unit_cost_cents": "125/2"
     },
     "25": {
      "product": "TOPOCHICO-ORIGINAL-16BOT",
@@ -1419,7 +1465,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.20"
+     "unit_cost": "1.20",
+     "unit_cost_cents": "120"
     },
     "28": {
      "product": "VITAMINWATER-DARK-20BOT",
@@ -1433,7 +1480,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.30"
+     "unit_cost": "1.30",
+     "unit_cost_cents": "130"
     },
     "31": {
      "product": "PEPSI-ORIGINAL-20BOT",
@@ -1447,7 +1495,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": null
+     "unit_cost": null,
+     "unit_cost_cents": null
     },
     "33": {
      "product": "MOUNTAIN-ORIGINAL-20BOT",
@@ -1461,7 +1510,8 @@
      "last_moved": {
       "$datetime": "2026-12-05T17:00:00+00:00"
      },
-     "unit_cost": null
+     "unit_cost": null,
+     "unit_cost_cents": null
     },
     "36": {
      "product": "DRPEPPER-ORIGINAL-20BOT",
@@ -1475,7 +1525,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.40"
+     "unit_cost": "1.40",
+     "unit_cost_cents": "140"
     },
     "37": {
      "product": "REDBULL-ORIGINAL-8_4CAN",
@@ -1489,7 +1540,8 @@
      "last_moved": {
       "$datetime": "2026-12-05T17:00:00+00:00"
      },
-     "unit_cost": null
+     "unit_cost": null,
+     "unit_cost_cents": null
     },
     "41": {
      "product": "MONSTER-ORIGINAL-16CAN",
@@ -1503,7 +1555,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.75"
+     "unit_cost": "1.75",
+     "unit_cost_cents": "175"
     },
     "44": {
      "product": "SNAPPLE-ORIGINAL-16BOT",
@@ -1517,7 +1570,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.15"
+     "unit_cost": "1.15",
+     "unit_cost_cents": "115"
     },
     "46": {
      "product": "PREMIER-CHOCOLAT-11CAR",
@@ -1531,7 +1585,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "2.60"
+     "unit_cost": "2.60",
+     "unit_cost_cents": "260"
     },
     "47": {
      "product": "RECESS-LIME-12CAN",
@@ -1545,7 +1600,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "0.95"
+     "unit_cost": "0.95",
+     "unit_cost_cents": "95"
     },
     "52": {
      "product": "MOUNTAIN-BAJA_BLA-20BOT",
@@ -1559,7 +1615,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.40"
+     "unit_cost": "1.40",
+     "unit_cost_cents": "140"
     },
     "54": {
      "product": "COCA-ORIGINAL-20BOT",
@@ -1573,7 +1630,8 @@
      "last_moved": {
       "$datetime": "2026-12-03T15:00:00+00:00"
      },
-     "unit_cost": "1.45"
+     "unit_cost": "1.45",
+     "unit_cost_cents": "145"
     }
    },
    "closet": [
@@ -2088,6 +2146,749 @@
    "overrides": {
     "PREMIER-CHOCOLAT-11CAR": 9
    }
+  }
+ },
+ "pricing": {
+  "ok": true,
+  "data": {
+   "ceiling": "6.50",
+   "tax_percent": 8,
+   "history_days": 28,
+   "wildcard": null,
+   "wildcard_ceiling": null,
+   "wildcard_stale": false,
+   "since": {
+    "$datetime": "2026-11-11T15:00:00+00:00"
+   },
+   "until": {
+    "$datetime": "2026-12-09T15:00:00+00:00"
+   },
+   "rows": [
+    {
+     "slot": "11",
+     "product": "COCA-ORIGINAL-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": null,
+     "cost_basis": null,
+     "ceiling": "6.50",
+     "floor": null,
+     "floor_from": [],
+     "legal": null,
+     "problems": [],
+     "margin": null,
+     "sold_7d": 14,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": {
+      "price": "2.75",
+      "product": "COCA-ORIGINAL-20BOT",
+      "name": "COCA-ORIGINAL-20BOT",
+      "source": "weekly plan",
+      "floor": null,
+      "legal": null,
+      "problems": [],
+      "reason": "Coca-Cola ran out on Saturday morning before the top-up, and is down to 1 again. One more quarter should still sell it through."
+     },
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "13",
+     "product": "COCA-DIET-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": "1.45",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.60",
+     "floor_from": [
+      "receipt cost 1.45: floor 1.60"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "0.86",
+     "sold_7d": 6,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "16",
+     "product": "COCA-ZERO_SUG-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": "1.45",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.60",
+     "floor_from": [
+      "receipt cost 1.45: floor 1.60"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "0.86",
+     "sold_7d": 4,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "17",
+     "product": "SPRITE-ORIGINAL-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": "1.40",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.55",
+     "floor_from": [
+      "receipt cost 1.40: floor 1.55"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "0.91",
+     "sold_7d": 4,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "22",
+     "product": "BUBLY-STRAWBER-12CAN",
+     "product_from": "receipt",
+     "price": "1.75",
+     "unit_cost": "0.68",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "0.75",
+     "floor_from": [
+      "receipt cost 0.68: floor 0.75"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "0.94",
+     "sold_7d": 5,
+     "per_class_day": "0.767",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 175,
+        "price": "1.75"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "24",
+     "product": "BUBLY-PARADISE-12CAN",
+     "product_from": "receipt",
+     "price": "1.75",
+     "unit_cost": "0.63",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "0.70",
+     "floor_from": [
+      "receipt cost 0.63: floor 0.70"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "1.00",
+     "sold_7d": 2,
+     "per_class_day": "0.767",
+     "rate_basis": "fall prior",
+     "next": {
+      "price": "1.50",
+      "product": "BUBLY-PARADISE-12CAN",
+      "name": "BUBLY-PARADISE-12CAN",
+      "source": "weekly plan",
+      "floor": "0.70",
+      "legal": true,
+      "problems": [],
+      "reason": "bubly Paradise Paloma sold 1 since Thursday, a third of what Strawberry sold at the same price. A quarter off, to see if it moves."
+     },
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 175,
+        "price": "1.75"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "25",
+     "product": "TOPOCHICO-ORIGINAL-16BOT",
+     "product_from": "receipt",
+     "price": "2.75",
+     "unit_cost": "1.20",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.30",
+     "floor_from": [
+      "receipt cost 1.20: floor 1.30"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "1.35",
+     "sold_7d": 3,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 275,
+        "price": "2.75"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "28",
+     "product": "VITAMINWATER-DARK-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": "1.30",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.45",
+     "floor_from": [
+      "receipt cost 1.30: floor 1.45"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "1.01",
+     "sold_7d": 2,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "31",
+     "product": "PEPSI-ORIGINAL-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": null,
+     "cost_basis": null,
+     "ceiling": "6.50",
+     "floor": null,
+     "floor_from": [],
+     "legal": null,
+     "problems": [],
+     "margin": null,
+     "sold_7d": 7,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": {
+      "price": "2.75",
+      "product": "PEPSI-ORIGINAL-20BOT",
+      "name": "PEPSI-ORIGINAL-20BOT",
+      "source": "weekly plan",
+      "floor": null,
+      "legal": null,
+      "problems": [],
+      "reason": "Pepsi sold out on Sunday night, three and a half days after the fill. Raising the price a quarter."
+     },
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "33",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": null,
+     "cost_basis": null,
+     "ceiling": "6.50",
+     "floor": null,
+     "floor_from": [],
+     "legal": null,
+     "problems": [],
+     "margin": null,
+     "sold_7d": 10,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "36",
+     "product": "DRPEPPER-ORIGINAL-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": "1.40",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.55",
+     "floor_from": [
+      "receipt cost 1.40: floor 1.55"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "0.91",
+     "sold_7d": 4,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "37",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "product_from": "receipt",
+     "price": "3.00",
+     "unit_cost": null,
+     "cost_basis": null,
+     "ceiling": "6.50",
+     "floor": null,
+     "floor_from": [],
+     "legal": null,
+     "problems": [],
+     "margin": null,
+     "sold_7d": 22,
+     "per_class_day": "0.722",
+     "rate_basis": "fall prior",
+     "next": {
+      "price": "3.25",
+      "product": "REDBULL-ORIGINAL-8_4CAN",
+      "name": "REDBULL-ORIGINAL-8_4CAN",
+      "source": "weekly plan",
+      "floor": null,
+      "legal": null,
+      "problems": [],
+      "reason": "Red Bull sold out on Saturday morning and again early on Monday at $3.00. $3.25 is still under the ceiling."
+     },
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 300,
+        "price": "3.00"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "41",
+     "product": "MONSTER-ORIGINAL-16CAN",
+     "product_from": "receipt",
+     "price": "3.25",
+     "unit_cost": "1.75",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.90",
+     "floor_from": [
+      "receipt cost 1.75: floor 1.90"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "1.26",
+     "sold_7d": 7,
+     "per_class_day": "0.722",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 325,
+        "price": "3.25"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "44",
+     "product": "SNAPPLE-ORIGINAL-16BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": "1.15",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.25",
+     "floor_from": [
+      "receipt cost 1.15: floor 1.25"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "1.16",
+     "sold_7d": 1,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "46",
+     "product": "PREMIER-CHOCOLAT-11CAR",
+     "product_from": "receipt",
+     "price": "4.00",
+     "unit_cost": "2.60",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "2.85",
+     "floor_from": [
+      "receipt cost 2.60: floor 2.85"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "1.10",
+     "sold_7d": 2,
+     "per_class_day": "1.354",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 400,
+        "price": "4.00"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "47",
+     "product": "RECESS-LIME-12CAN",
+     "product_from": "receipt",
+     "price": "2.25",
+     "unit_cost": "0.95",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.05",
+     "floor_from": [
+      "receipt cost 0.95: floor 1.05"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "1.13",
+     "sold_7d": 3,
+     "per_class_day": "0.767",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 225,
+        "price": "2.25"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "52",
+     "product": "MOUNTAIN-BAJA_BLA-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": "1.40",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.55",
+     "floor_from": [
+      "receipt cost 1.40: floor 1.55"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "0.91",
+     "sold_7d": 5,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "54",
+     "product": "COCA-ORIGINAL-20BOT",
+     "product_from": "receipt",
+     "price": "2.50",
+     "unit_cost": "1.45",
+     "cost_basis": "receipt",
+     "ceiling": "6.50",
+     "floor": "1.60",
+     "floor_from": [
+      "receipt cost 1.45: floor 1.60"
+     ],
+     "legal": true,
+     "problems": [],
+     "margin": "0.86",
+     "sold_7d": 4,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "55",
+     "product": "TOPOCHICO-ORIGINAL-16BOT",
+     "product_from": "plan",
+     "price": "2.75",
+     "unit_cost": null,
+     "cost_basis": null,
+     "ceiling": "6.50",
+     "floor": null,
+     "floor_from": [],
+     "legal": null,
+     "problems": [],
+     "margin": null,
+     "sold_7d": 0,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 275,
+        "price": "2.75"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    },
+    {
+     "slot": "58",
+     "product": "MOUNTAIN-BAJA_BLA-20BOT",
+     "product_from": "plan",
+     "price": "2.50",
+     "unit_cost": null,
+     "cost_basis": null,
+     "ceiling": "6.50",
+     "floor": null,
+     "floor_from": [],
+     "legal": null,
+     "problems": [],
+     "margin": null,
+     "sold_7d": 0,
+     "per_class_day": "1.701",
+     "rate_basis": "fall prior",
+     "next": null,
+     "history": {
+      "points": [
+       {
+        "at": {
+         "$datetime": "2026-12-01T12:00:00+00:00"
+        },
+        "cents": 250,
+        "price": "2.50"
+       }
+      ],
+      "changes": 0,
+      "last_at": {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     }
+    }
+   ]
   }
  },
  "syncs": {
