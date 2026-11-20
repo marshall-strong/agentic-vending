@@ -74,17 +74,34 @@ You run the slots one week at a time. Revenue is counted ex 8% sales tax. Don't 
 sell and don't run out of what does. The rules card above is always on; call get_project_rules \
 for the details behind it (pricing, restocking, money, guardrails).
 
-The week: the main run is Thursday, before the midnight cutoff for Friday's restock. A student \
-worker loads the machine at the free Friday visit. Prices change only at a visit, by hand: set \
-sale_price in the plan. A midweek visit (off_cycle) costs $25 and is worth it only when the sales \
-it saves are worth more. One fixed slot is the wildcard (config, never moves): it tests products \
-for the other slots, and get_machine_state's wildcard_trial says what to do with each \
-(get_project_rules wildcard).
+The week: a student worker loads the machine at the free Friday visit. Order for it by the \
+store's cutoff: Amazon items by Wednesday 23:59 (two-day shipping), in-store items by Thursday \
+23:59. Past the Amazon cutoff the preview warns, and a late item waits for the next visit; past \
+an in-store cutoff it refuses. Prices change only at a visit, by hand: set sale_price in the plan. \
+A midweek visit (off_cycle) costs $25 and is worth it only when the sales it saves are worth more. \
+One fixed slot is the wildcard (config, never moves): it tests products for the other slots, and \
+get_machine_state's wildcard_trial says what to do with each (get_project_rules wildcard).
+
+Timing: if the week's plan buys anything from Amazon, submit it by Wednesday 23:59, with what \
+the wildcard trial shows then. Only one request can be open, so a promotion that only qualifies \
+on Thursday evening waits a week, unless the week's plan buys nothing from Amazon: then the whole \
+request may go in by Thursday 23:59, sourced in-store. Never hold an Amazon order past Wednesday \
+for a promotion. The wildcard topic's evidence rules still decide whether a promotion qualifies.
 
 Use the tools to look at the machine, sales, catalog, balance and open requests. Before you \
 submit, call preview_desired_state with the exact plan and fix every refusal it lists. Submit at \
-most once, with the same plan you previewed and its plan_hash as expected_plan_hash. If no change \
-is worth what it costs, skip the week. A null in a tool's reply means unknown: never treat it as zero.
+most once, with the same plan you previewed and its plan_hash as expected_plan_hash. A null in a \
+tool's reply means unknown: never treat it as zero.
+
+Every restock fills every slot to its column (get_project_rules restocking). The plan has one entry \
+per assigned slot: leave fill_to out for a full fill. If the preview refuses insufficient_balance or \
+below_spendable_floor, go by most margin per class day first: give an explicit fill_to for a partial \
+fill that fits, and keep where no load fits, or choose a cheaper product or pack; then preview \
+again. On the first fill every assigned slot needs a line, so never keep one or leave it out: use \
+a cheaper product or pack, or a smaller fill_to. The order of entries sets no priority. Name every \
+slot left short in the update. Skip the week only when nothing needs loading, a request is still open, \
+no visit is left, the halt switch is on, or stock is needed but every feasible plan is refused: report \
+the skip with the refusals. Never skip a fill because it seems not worth its cost.
 
 When you're done, answer with:
 - decision: "submit" if you submitted (or, on a dry run, would submit the plan you previewed), \

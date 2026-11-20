@@ -436,3 +436,16 @@ def test_submit_returns_the_same_warnings_and_notes_as_preview(db, fake):  # noq
     assert reply["success"]
     assert (reply["warnings"], reply["notes"]) == (previewed["warnings"], previewed["notes"])
     assert reply["warnings"] or reply["notes"], "the case should have something to show"
+
+
+def test_a_balance_that_drops_under_the_floor_after_the_preview_refuses_the_submit(db, fake):  # noqa: F811
+    """Submit plans again on live data, so the $53.00 spendable floor is checked against the balance at
+    submit time, not the one the preview saw (Kevin, 19 Nov)."""
+    prepared(db)
+    previewed = preview()
+    assert previewed["success"] and previewed["cost"]["spendable_left_at_max"] == "574.63"
+    # 530.00 of model spend lands between preview and submit: 587.63 - 530.00 - 13.00 leaves 44.63.
+    ledger.record_tokens(db, "530.00", "m", 1, 1, "live")
+    reply = submit(expected_plan_hash=previewed["plan_hash"])
+    assert codes(reply) == ["below_spendable_floor"] and fake.posts == []
+    assert "$53.00 spendable floor" in reply["refusals"][0]["message"]
