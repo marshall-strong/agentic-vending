@@ -304,7 +304,6 @@ def test_the_standalone_explorer_with_no_assignment_shows_no_selection(machine, 
 def test_the_bridge_script_with_the_stored_assignment(machine, assignment, script, capsys, monkeypatch, argv):
     script.poll = bytes(machine.execute("select raw from polls where session_id = 'after'").fetchone()[0])
     monkeypatch.setattr(script, "our_selections", script.stored_selections)
-    monkeypatch.setattr(script, "stored_poll_time", script.real_stored_poll_time)   # `raw` reads the polls table
     assert script.main(argv) == 0
     out, err = capsys.readouterr()
     clean(out)
@@ -327,22 +326,6 @@ def test_the_bridge_summary_with_the_stored_assignment(machine, assignment, scri
     assert [r["slot"] for r in rows] == list(assignment)
     assert {(r["price"], r["lifetime_units"], r["lifetime_sales"]) for r in rows} == {("$2.50", OURS_AFTER, "$32.50")}
     assert "/api/v1/slots" not in script.calls
-
-
-@pytest.mark.parametrize("session", ["before", "after", "not-stored"])
-def test_the_bridge_script_places_raw_by_the_polls_table(machine, assignment, script, capsys, monkeypatch, session):
-    """Both stored polls are from the fall cut on (2 and 4 Dec), and one not stored has no known time:
-    each prints only ours, though the client's clock says 1 Nov."""
-    script.poll = bytes(machine.execute("select raw from polls where session_id = 'after'").fetchone()[0])
-    script.now = datetime(2026, 11, 1, tzinfo=timezone.utc)
-    monkeypatch.setattr(script, "our_selections", script.stored_selections)
-    monkeypatch.setattr(script, "stored_poll_time", script.real_stored_poll_time)
-    assert script.main(["raw", session]) == 0
-    out, err = capsys.readouterr()
-    clean(out)
-    clean(err)
-    assert not any(line.startswith("VA1") for line in out.splitlines())
-    assert ("unknown" in err) == (session == "not-stored")
 
 
 # --- Fixed by #146 --------------------------------------------------------------------------------
