@@ -234,3 +234,47 @@ def test_a_summary_is_built_from_a_seasons_full_detail(tmp_path):
     assert len(reason) <= summary.REASON_CHARS and reason.endswith("one.")
     summary.write(built, tmp_path / "test-season.json")
     assert summary.load(tmp_path / "test-season.json").data == built
+
+
+# --- review fixes -------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("breaks", [
+    lambda d: d["weeks"][0].update(saturday="not-a-date"),
+    lambda d: d["weeks"][0].update(saturday="2026-13-01"),
+    lambda d: d["weeks"][0].update(saturday=None),
+    lambda d: d["decisions"][0].update(at="yesterday"),
+])
+def test_the_loader_refuses_dates_a_page_cannot_show(tmp_path, breaks):
+    data = _good()
+    breaks(data)
+    path = tmp_path / f"{data['id']}.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(summary.BadSummary):
+        summary.load(path)
+
+
+def test_a_season_that_made_nothing_still_draws(tmp_path, monkeypatch):
+    data = _good()
+    for w in data["weeks"]:
+        w.update(profit=0, cumulative_profit=0)
+    data["totals"]["profit_after_model"] = 0
+    summary.write(data, tmp_path / f"{data['id']}.json")
+    monkeypatch.setattr(summary, "SEASONS", tmp_path)
+    for path in (ROOT, f"{ROOT}/{data['id']}"):
+        status, _, body, _ = demo.respond(path)
+        assert status == 200 and "<svg" in body, path
+    low, high, _ = demo._scale([0.0, 0.0])
+    assert high > low
+
+
+def test_any_other_failure_is_a_plain_500_with_no_error_text(monkeypatch, capsys):
+    def boom(*_a, **_k):
+        raise RuntimeError("secret detail: postgresql://user:hunter2@somewhere")
+
+    monkeypatch.setattr(demo, "index", boom)
+    monkeypatch.setattr(demo, "season_page", boom)
+    for path in (ROOT, f"{ROOT}/2026-11-16-opus-medium"):
+        status, kind, body, csp = demo.respond(path)
+        assert status == 500 and kind == demo.HTML and csp == demo.CSP, path
+        assert demo.BANNER in body and "hunter2" not in body and "secret" not in body
+    assert "hunter2" not in capsys.readouterr().err          # the log names the kind of error, not its text

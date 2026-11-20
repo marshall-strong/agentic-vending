@@ -58,6 +58,10 @@ def respond(target: str) -> tuple[int, str, str, str] | None:
         print(f"simulations: {error}", file=sys.stderr, flush=True)
         return 500, HTML, _page("Simulations", "<h1>Simulations</h1><p>A season summary can't be read, so "
                                 "these pages are off until it is fixed. The detail is in the container's log.</p>"), CSP
+    except Exception as error:  # noqa: BLE001 - a page answers, whatever happened, and never with the error's text
+        print(f"simulations: {target!r}: {type(error).__name__}", file=sys.stderr, flush=True)
+        return 500, HTML, _page("Simulations", "<h1>Simulations</h1><p>This page hit an error it doesn't handle "
+                                "yet. The container's log says which kind.</p>"), CSP
 
 
 # --- formatting ---------------------------------------------------------------------------------
@@ -179,6 +183,8 @@ def _scale(values: list[float]) -> tuple[float, float, float]:
     step = next(s * 10 ** e for e in range(-1, 6) for s in (1, 2, 2.5, 5) if s * 10 ** e >= raw)
     low = (low // step) * step
     high = -((-high) // step) * step
+    if high <= low:             # every value the same (a season that made nothing): give the axis one step
+        high = low + step
     return low, high, step
 
 

@@ -22,6 +22,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -177,6 +178,22 @@ class Season:
         return self.data["weeks"]
 
 
+def _is_date(value: Any) -> bool:
+    try:
+        date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _is_time(value: Any) -> bool:
+    try:
+        moment = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    return moment.utcoffset() is not None
+
+
 def check(summary: Any) -> None:
     """Raise `BadSummary` unless `summary` has what every summary must: marked simulated, a known shape,
     numbers where numbers go, and a slot assignment that `vending.slots` would accept (or none)."""
@@ -211,12 +228,14 @@ def check(summary: Any) -> None:
         for key in NUMBERS:
             if not isinstance(w.get(key), (int, float)):
                 raise bad(f"week {w['week']}: {key} must be a number")
+        if not _is_date(w.get("saturday")):
+            raise bad(f"week {w['week']}: saturday must be a date like 2026-11-28")
         for rule, card in (w.get("report_card") or {}).items():
             if rule not in RULES or not isinstance(card, dict) or card.get("grade") not in GRADES:
                 raise bad(f"week {w['week']}: a report card line is malformed ({rule})")
     for d in decisions:
-        if not isinstance(d, dict) or not isinstance(d.get("at"), str):
-            raise bad("every decision needs its time")
+        if not isinstance(d, dict) or not _is_time(d.get("at")):
+            raise bad("every decision needs its time, like 2026-11-30T10:00:00-05:00")
     sweep = summary.get("sweep")
     if sweep is not None:
         rows = sweep.get("rows") if isinstance(sweep, dict) else None
