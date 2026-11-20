@@ -1478,12 +1478,12 @@ def test_nothing_is_picked_until_a_viewer_picks_and_the_side_shows_attention_and
     side = section(page, '<div class="ops-side">', '<aside class="vm-panel"')
     assert side.index('id="attention"') < side.index('id="plan-changes"')
     # Picking from a plan-change row: the whole row is the link.
-    row = section(side, '<a class="chg" href="#sel-12"', "</a>")
+    row = section(side, '<a class="chg" id="chg-12" href="#sel-12"', "</a>")
     assert 'data-sel="12"' in row and "fill 6 to 7" in row and "sells out" in row
     assert 'href="#sel-14"' not in side                                        # 14 didn't change
     # Picking from the front: each of ours is a link to its facts, with its whole aria label.
     front = front_of(page)
-    cells = re.findall(r'<a class="fc[^"]*" href="#sel-(\w+)" data-sel="(\w+)" aria-label="([^"]+)"', front)
+    cells = re.findall(r'<a class="fc[^"]*" id="fc-\w+" href="#sel-(\w+)" data-sel="(\w+)" aria-label="([^"]+)"', front)
     assert [a for a, b, _ in cells if a == b] == list(EVEN)
     assert all(label.startswith(f"Selection {s}. ") and label.endswith("Opens its close-up.") for s, _, label in cells)
     for slot in EVEN:
@@ -1496,16 +1496,16 @@ def test_picking_from_a_plan_section_row(conn, page_conn, tmp_path, monkeypatch)
     run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "submitted", plan=plan({"slot": "15", "fill_to": 6}))
     weekly = section(dashboard.render(dashboard.snapshot(page_conn, MONDAY)), '<section id="plan">', "</section>")
-    assert ('<a class="num" href="#sel-15" data-sel="15" aria-label="Selection 15: show it in the machine">15</a>'
+    assert ('<a class="num" id="num-15" href="#sel-15" data-sel="15" aria-label="Selection 15: show it in the machine">15</a>'
             in weekly)
     _first_fill_plan(conn, tmp_path)
     monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
     first = section(page, '<section id="plan">', "</section>")
-    assert first.count('<a class="num" href="#sel-') == 20 and 'data-sel="58"' in first
+    assert first.count('<a class="num" id="num-') == 20 and 'data-sel="58"' in first
     # Before the lock the side lists the first fill, each row picking its selection, and its facts say it.
     side = section(page, '<div class="ops-side">', '<aside class="vm-panel"')
-    assert "First fill" in side and side.count('<a class="chg" href="#sel-') == 20
+    assert "First fill" in side and side.count('<a class="chg" id="chg-') == 20
     facts = section(page, '<div class="sd" id="sel-15"', '<div class="sd" id="sel-16"')
     assert "<dt>First fill</dt><dd>Red Bull Original · $3.50 · 11 units</dd>" in facts
     assert "Why, for the first fill</span>reason 15" in facts
@@ -1517,7 +1517,7 @@ def test_picking_from_a_plan_section_row(conn, page_conn, tmp_path, monkeypatch)
 def test_the_close_up_has_a_close_button_and_the_pick_survives_a_refresh(page_conn):
     page = dashboard.render(dashboard.snapshot(page_conn, MONDAY))
     panel = section(page, '<aside class="vm-panel"', "</aside>")
-    assert '<a class="vm-x" href="#vm" data-close aria-label="Close the close-up">' in panel
+    assert '<a class="vm-x" id="vm-close" href="#vm" data-close aria-label="Close the close-up">' in panel
     assert '<a class="vm-scrim" href="#vm" data-close tabindex="-1" aria-hidden="true"></a>' in page
     script, style = dashboard.SCRIPT, dashboard.STYLE
     # Close, Escape or a tap outside return the side to Needs attention and the plan's changes.
@@ -1648,7 +1648,7 @@ def test_the_wildcard_slot_is_marked_on_the_front_the_close_up_and_the_plan(conn
     assert '<p class="ma-wl"' in lane_html(page, "37") and 'class="ma-lane ma-changed ma-wild"' in page
     facts = section(page, '<div class="sd" id="sel-37"', '<div class="sd" id="sel-38"')
     assert "<dt>Wildcard</dt>" in facts and ">wildcard</span>" in facts
-    changes = section(page, '<a class="chg" href="#sel-37"', "</a>")
+    changes = section(page, '<a class="chg" id="chg-37" href="#sel-37"', "</a>")
     assert ">wildcard</span>" in changes
     rows = section(page, '<section id="plan">', "</section>")
     assert re.search(r'data-sel="37"[^>]*>37</a> <span class="pill wild"', rows)

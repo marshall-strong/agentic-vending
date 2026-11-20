@@ -1322,7 +1322,7 @@ def _attention_card(items: list[dict]) -> str:
 def _pick(slot: str, inner: str, view: dict) -> str:
     """A row that picks one of our selections on the machine, or, for one not drawn there, opens its plan row."""
     if slot in view:
-        return f'<a class="chg" href="#sel-{_e(slot)}" data-sel="{_e(slot)}">{inner}</a>'
+        return f'<a class="chg" id="chg-{_e(slot)}" href="#sel-{_e(slot)}" data-sel="{_e(slot)}">{inner}</a>'
     return f'<a class="chg" href="#slot-{_e(slot)}">{inner}</a>'
 
 
@@ -1446,7 +1446,7 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
     when = f'<span class="vm-when">Next restock &middot; {_e(when)}</span>' if when else ""
     panel = ('<aside class="vm-panel" aria-label="Close-up of the picked selection">'
              '<div class="vm-ph"><span class="vm-grab" aria-hidden="true"></span><span class="label">Close-up</span>'
-             '<a class="vm-x" href="#vm" data-close aria-label="Close the close-up">'
+             '<a class="vm-x" id="vm-close" href="#vm" data-close aria-label="Close the close-up">'
              '<span aria-hidden="true">&times;</span> Close</a></div>'
              f'{panels}</aside>')
     scrim = '<a class="vm-scrim" href="#vm" data-close tabindex="-1" aria-hidden="true"></a>'
@@ -1462,7 +1462,7 @@ def _slot_num(slot: str, wildcard: str | None = None) -> str:
     the wildcard's says so."""
     mark = f" {WILD}" if slot == wildcard else ""
     if re.fullmatch(rf"[1-{SHELVES}][1-{COLUMNS}]", slot):
-        return (f'<a class="num" href="#sel-{_e(slot)}" data-sel="{_e(slot)}" '
+        return (f'<a class="num" id="num-{_e(slot)}" href="#sel-{_e(slot)}" data-sel="{_e(slot)}" '
                 f'aria-label="Selection {_e(slot)}: show it in the machine">{_e(slot)}</a>{mark}')
     return f'<b class="num">{_e(slot)}</b>{mark}'
 
@@ -2347,6 +2347,8 @@ SCRIPT = """(function () {
   // sel: the selection the close-up shows ('' shows Needs attention and the plan's changes instead);
   // sheet: whether it is open as a sheet (phones). Kept in memory, so a refresh keeps them and a new visit
   // starts with Needs attention.
+  // opener: the id of what opened the close-up, so focus can go back to it even after a refresh
+  // has replaced every element in <main>.
   var sel = '', sheet = false, opener = null;
   try {
     show = localStorage.getItem(PFX + 'show') || 'all';
@@ -2446,7 +2448,7 @@ SCRIPT = """(function () {
   // Picking one of ours shows its shelf and facts beside the front; on a phone they slide up as a sheet.
   function choose(s, from) {
     if (!cellFor(s)) return false;
-    sel = s; sheet = narrow(); opener = from || null;
+    sel = s; sheet = narrow(); opener = from && from.id ? from.id : opener;
     filter();
     var panel = document.querySelector('.vm-panel'), card = document.getElementById('sel-' + sel);
     if (sheet) {
@@ -2461,9 +2463,9 @@ SCRIPT = """(function () {
   }
   function shut() {
     if (!sel && !sheet) return;
-    var back = opener;
+    var back = opener && document.getElementById(opener);
     sel = ''; sheet = false; opener = null; filter();
-    if (back && document.contains(back)) back.focus({preventScroll: true});
+    if (back) back.focus({preventScroll: true});
   }
   function openSlot(id) {
     var d = document.getElementById(id);
@@ -2484,7 +2486,7 @@ SCRIPT = """(function () {
       var first = document.querySelector('.vm .fm-shelf[data-n="' + shelf.getAttribute('data-shelf') + '"] .fc[data-sel]');
       if (first && choose(first.getAttribute('data-sel'), shelf)) e.preventDefault();
     }
-    if (lane) choose(lane.id.slice(5), opener);
+    if (lane) choose(lane.id.slice(5), null);
     if (close) { e.preventDefault(); shut(); }
     if (t.closest('a[href="#attention"]')) shut();
   });
@@ -2521,6 +2523,8 @@ SCRIPT = """(function () {
                                           function (d) { return d.getAttribute('data-key'); });
       var panel = document.querySelector('.vm-panel'), side = document.querySelector('.ops-side');
       var scrolled = [panel ? panel.scrollTop : 0, side ? side.scrollTop : 0];
+      // Keyboard focus, by the focused element's id: the swap replaces it with an equal new one.
+      var focused = main.contains(document.activeElement) ? document.activeElement.id : '';
       main.innerHTML = fresh.innerHTML;
       open.forEach(function (k) {
         var d = main.querySelector('details[data-key="' + CSS.escape(k) + '"]');
@@ -2530,6 +2534,8 @@ SCRIPT = """(function () {
       panel = document.querySelector('.vm-panel'); side = document.querySelector('.ops-side');
       if (panel) panel.scrollTop = scrolled[0];
       if (side) side.scrollTop = scrolled[1];
+      var again = focused && document.getElementById(focused);
+      if (again) again.focus({preventScroll: true});
     }).catch(function () { failed = true; times(); });
   }
   filter(); times();

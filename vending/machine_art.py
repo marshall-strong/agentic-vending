@@ -953,7 +953,7 @@ def front_cell(lane: Lane) -> str:
     classes = ("fc" + (" fc-chg" if lane.change else "") + (" fc-zero" if lane.units == 0 else "")
                + (" fc-wild" if lane.wildcard else ""))
     wild = f'<span class="fc-w" title="{WILD_TITLE}">W</span>' if lane.wildcard else ""
-    return (f'<a class="{classes}" href="#sel-{_e(lane.slot)}" data-sel="{_e(lane.slot)}" '
+    return (f'<a class="{classes}" id="fc-{_e(lane.slot)}" href="#sel-{_e(lane.slot)}" data-sel="{_e(lane.slot)}" '
             f'aria-label="{_e(lane.aria())} Opens its close-up.">'
             f'<span class="fc-top"><span class="fc-n">{_e(lane.slot)}</span>{wild}{_front_marks(lane)}</span>'
             f'<span class="fc-mid">{_front_art(lane, after_item, after_units)}<span class="fc-st">{counts}{price}'
@@ -985,7 +985,7 @@ def front_html(lanes: dict[str, Lane], ours: set[str]) -> str:
     for r in range(1, SHELVES + 1):
         mine = [f"{r}{c}" for c in range(1, COLUMNS + 1) if f"{r}{c}" in ours]
         if mine:
-            rail = (f'<a class="fm-sh" href="#shelf-{r}" data-shelf="{r}" aria-label="Shelf {r}: {len(mine)} of '
+            rail = (f'<a class="fm-sh" id="rail-{r}" href="#shelf-{r}" data-shelf="{r}" aria-label="Shelf {r}: {len(mine)} of '
                     f'{COLUMNS} selections ours"><b>Shelf {r}</b><small>{_shelf_line(lanes, mine)}</small></a>')
         else:
             rail = f'<span class="fm-sh fm-none"><b>Shelf {r}</b><small>none ours</small></span>'
