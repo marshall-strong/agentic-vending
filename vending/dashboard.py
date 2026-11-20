@@ -615,16 +615,15 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
         snap["weekly_plan"] = snap["plan"]
         snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots)))
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
-    snap["pricing"] = _pricing(conn, now, snap, slots)
+    snap["pricing"] = _pricing(conn, now, snap)
     return snap
 
 
-def _pricing(conn: psycopg.Connection, now: datetime, snap: dict, slots: tuple[str, ...]) -> dict:
-    """The pricing panel (`vending.pricing_panel`): its own reads (sourcing, the ceiling, the price history)
-    isolated like an optional panel, then built from the sales, stock and plan panels above. Only `slots`."""
-    return _panel(lambda: pricing_panel.build(
-        snap, slots, _isolated(conn, lambda: pricing_panel.read(conn, now, slots, pricing_panel.products(snap, slots))),
-        now))
+def _pricing(conn: psycopg.Connection, now: datetime, snap: dict) -> dict:
+    """The pricing panel (`vending.pricing_panel`): its own reads (our selections, their sourcing, the
+    ceilings, the price history) isolated like an optional panel, then built from the sales, stock and plan
+    panels above. The reader finds our selections itself, in this same snapshot."""
+    return _panel(lambda: pricing_panel.build(snap, _isolated(conn, lambda: pricing_panel.read(conn, now)), now))
 
 
 # Shown when the products read fails, in place of the error's text.

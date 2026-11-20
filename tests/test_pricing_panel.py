@@ -250,3 +250,57 @@ def test_a_selection_the_poll_before_the_window_did_not_read_keeps_its_earlier_p
     assert [(at, cents) for at, slot, cents in seen if slot == "15"] == [
         (MONDAY - timedelta(days=40), 200), (MONDAY - timedelta(days=10), 250)]
     assert [cents for _, slot, cents in seen if slot == "16"] == [325, 325]   # 16's own baseline is 30 days back
+
+
+class _Spy:
+    """A connection that keeps every row its `execute` returns, so a test can see what a reader fetched."""
+
+    def __init__(self, conn):
+        self.conn, self.rows = conn, []
+
+    def execute(self, *args, **kwargs):
+        cursor = self.conn.execute(*args, **kwargs)
+        rows = cursor.fetchall() if cursor.description else []
+        self.rows += rows
+        return _Rows(rows)
+
+    def __getattr__(self, name):
+        return getattr(self.conn, name)
+
+
+class _Rows(list):
+    def fetchall(self):
+        return list(self)
+
+    def fetchone(self):
+        return self[0] if self else None
+
+
+def test_the_pricing_reader_finds_our_selections_and_their_products_itself(conn, monkeypatch):
+    # Kevin, 19 Nov: no reader may take a caller's list of selections. The reader resolves ours from the
+    # stored assignment, finds their products itself, and asks the database only for those products'
+    # sourcing rows: another selection's product never reaches it (docs/integrity.md).
+    import inspect
+
+    from tests.conftest import TEST_SLOTS
+    from vending import pricing_panel, sourcing
+    assert list(inspect.signature(pricing_panel.read).parameters) == ["conn", "now"]
+    assert pricing_panel.PLAN_MODES == dashboard.WATCHED_MODES
+    catalog(conn, ("NOTOURS-HELD", "Zebra Fizz", "Zebra", None, "16 oz bottle"),
+            ("NOTOURS-PLANNED", "Zebra Plan", "Zebra", None, "16 oz bottle"),
+            ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"),
+            ("FAKE-FIZZ-12", "Made-up Fizz", "Made-up", None, "12 oz can"))
+    for sku in ("NOTOURS-HELD", "NOTOURS-PLANNED", "FAKE-COLA-20", "FAKE-FIZZ-12"):
+        source(conn, sku, pack=12, expected=1200, most=1400)
+    fulfilled(conn, "pr-12", "12", "NOTOURS-HELD", units_loaded=6, paid="5.55", at=MONDAY - timedelta(days=3))
+    fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="6.00", at=MONDAY - timedelta(days=3))
+    run = agent_runs.start(conn, mode="dry-run")
+    agent_runs.finish(conn, run, "skipped", plan=plan(
+        {"slot": "12", "product": "NOTOURS-PLANNED", "fill_to": 6, "sale_price": "9.15"},
+        {"slot": "16", "product": "FAKE-FIZZ-12", "fill_to": 6, "sale_price": "2.00"}))
+    monkeypatch.setattr(sourcing, "options", lambda conn: pytest.fail("the reader read every sourcing row"))
+    spy = _Spy(conn)
+    raw = pricing_panel.read(spy, MONDAY)
+    assert raw["slots"] == TEST_SLOTS
+    assert sorted(raw["options"]) == ["FAKE-COLA-20", "FAKE-FIZZ-12"]
+    assert spy.rows and not any("NOTOURS" in repr(row) for row in spy.rows)

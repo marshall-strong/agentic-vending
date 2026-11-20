@@ -42,6 +42,7 @@ from typing import Any
 import psycopg
 
 from vending.planner import AGREED_CEILING_CENTS
+from vending.slots import SlotsNotRecorded, our_slots
 from vending.pricing import (DEFAULT_TAX_PERCENT, check_price, floor_cents, pack_floor_cents,
                              slot_floor_cents, to_cents)
 from vending.tools import machine_state
@@ -51,48 +52,63 @@ HISTORY_DAYS = 28
 # The ceiling shown when no assignment is stored, so nothing is checked: the planner's default.
 DEFAULT_CEILING_CENTS = AGREED_CEILING_CENTS
 RANKS = ("primary", "alternate")
+# The runs whose plan the panel follows: the dashboard's `WATCHED_MODES` (a test keeps them equal).
+PLAN_MODES = ("live", "dry-run")
 # The sparkline's drawing box, in px.
 SPARK_W, SPARK_H, SPARK_PAD = 112, 26, 3
 
 
 # --- Data ---------------------------------------------------------------------------------------
 
-def products(snap: dict, slots: tuple[str, ...]) -> list[str]:
-    """The products our selections hold (receipts) or the latest plan puts in them: the sourcing rows to read."""
-    held = _data(snap, "stock", {}).get("slots", {})
-    planned = _planned(snap)
-    found = {held[s]["product"] for s in slots if (held.get(s) or {}).get("product")}
-    found |= {e["product"] for s in slots if isinstance(e := planned.get(s), dict) and isinstance(e.get("product"), str)}
-    return sorted(found)
+def read(conn: psycopg.Connection, now: datetime) -> dict:
+    """The panel's own reads, for our selections only: which they are, the planner's ceiling for each and
+    the tax rate, the sourcing rows for their products, and their shelf price at every good poll since
+    `HISTORY_DAYS` ago.
 
-
-def read(conn: psycopg.Connection, now: datetime, slots: tuple[str, ...], skus: list[str]) -> dict:
-    """The panel's own reads: the ceiling and tax rate, the sourcing rows for `skus`, and the shelf price
-    of `slots` at every good poll since `HISTORY_DAYS` ago."""
+    It takes no list of selections or products from its caller (Kevin, 19 Nov; docs/integrity.md): ours
+    come from the stored assignment (`our_slots`), their products from our receipts and the latest
+    plan's entries for them, and the database returns only those products' sourcing rows. With no
+    assignment stored, nothing is ours and nothing else is read."""
     # Here, not at the top: `vending.sourcing` needs time-zone data, and the page starts without it.
-    from vending import sourcing
+    from vending import planning, sourcing
 
-    wanted = set(skus)
-    options: dict[str, dict[str, Any]] = {}
-    for o in sourcing.options(conn):
-        if o.sku in wanted:
-            options.setdefault(o.sku, {})[o.rank] = o
     since = now - timedelta(days=HISTORY_DAYS)
-    ceiling, tax, wildcard, ceilings = DEFAULT_CEILING_CENTS, DEFAULT_TAX_PERCENT, None, {}
-    if slots:
-        # The planner's own settings, so each selection is checked against the ceiling the planner uses for it.
-        from vending import planning
-        settings = planning.planner_config(conn)
-        ceiling, tax, wildcard = settings.price_ceiling_cents, settings.tax_percent, settings.wildcard_slot
-        ceilings = {slot: settings.ceiling_for(slot) for slot in settings.slots}
-    return {"ceiling_cents": ceiling, "tax_percent": tax, "ceilings": ceilings,
-            "wildcard": wildcard, "wildcard_ceiling_cents": ceilings.get(wildcard) if wildcard else None,
-            "options": options, "since": since,
-            "history": machine_state.price_history(conn, now, since) if slots else []}
+    try:
+        our_slots(conn)
+    except SlotsNotRecorded:
+        return {"slots": (), "ceiling_cents": DEFAULT_CEILING_CENTS, "tax_percent": DEFAULT_TAX_PERCENT,
+                "ceilings": {}, "wildcard": None, "wildcard_ceiling_cents": None, "options": {},
+                "since": since, "history": []}
+    # The planner's own settings (ours among them), so each selection is checked against its ceiling there.
+    settings = planning.planner_config(conn)
+    slots, wildcard = settings.slots, settings.wildcard_slot
+    options: dict[str, dict[str, Any]] = {}
+    for o in sourcing.options_for(conn, _our_products(conn, slots)):
+        options.setdefault(o.sku, {})[o.rank] = o
+    ceilings = {slot: settings.ceiling_for(slot) for slot in slots}
+    return {"slots": slots, "ceiling_cents": settings.price_ceiling_cents, "tax_percent": settings.tax_percent,
+            "ceilings": ceilings, "wildcard": wildcard,
+            "wildcard_ceiling_cents": ceilings.get(wildcard) if wildcard else None,
+            "options": options, "since": since, "history": machine_state.price_history(conn, now, since)}
 
 
-def build(snap: dict, slots: tuple[str, ...], raw: dict, now: datetime) -> dict:
-    """The panel's rows, one per selection in `slots`, from the snapshot's panels and `read`'s rows. Pure."""
+def _our_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
+    """Every product our receipts put in `slots` (ours, from `read`), and every product the latest plan
+    names for them. Filtered in the query: no other selection's product is returned."""
+    return [sku for (sku,) in conn.execute(
+        "select sku from purchase_lines where slot = any(%(slots)s) and sku is not null"
+        " union"
+        " select e->>'product' from (select plan from agent_runs where plan is not null and mode = any(%(modes)s)"
+        "   order by started_at desc, id desc limit 1) latest,"
+        "   jsonb_array_elements(case when jsonb_typeof(latest.plan->'slots') = 'array'"
+        "                             then latest.plan->'slots' else '[]'::jsonb end) e"
+        " where jsonb_typeof(e) = 'object' and e->>'slot' = any(%(slots)s) and jsonb_typeof(e->'product') = 'string'"
+        " order by 1", {"slots": list(slots), "modes": list(PLAN_MODES)})]
+
+
+def build(snap: dict, raw: dict, now: datetime) -> dict:
+    """The panel's rows, one per selection `read` found ours, from the snapshot's panels and `read`'s rows. Pure."""
+    slots = raw["slots"]
     held = _data(snap, "stock", {}).get("slots", {})
     sales = _data(snap, "sales", {}).get("slots", {})
     planned = _planned(snap)
