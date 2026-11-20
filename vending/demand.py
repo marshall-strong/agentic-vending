@@ -90,6 +90,16 @@ def in_stock_spans(loads: list[tuple[datetime, int]], sales: list[tuple[datetime
     return spans
 
 
+def run_events(since: datetime, total: int, events: list[tuple[datetime, int]]) -> list[tuple[datetime, int]]:
+    """One product run's loads, or its decreases, as `(at, units)`: those after `since`, when the run began, and
+    at `since` itself what is left of `total`, the stock replay's own count of them for the run
+    (`stock.SlotCount`), kept in its movement order. A timestamp can't say whether something at `since` itself
+    was this run's or the one before (A, B, then A again at one visit; a poll at the swap's own moment)."""
+    later = [(at, units) for at, units in events if at > since]
+    first = total - sum(units for _, units in later)
+    return ([(since, first)] if first > 0 else []) + later
+
+
 def class_days_in_stock(spans: list[tuple[datetime, datetime]]) -> list[date]:
     """The class days the slot held stock as they began, over all spans, each day once."""
     return sorted({day for start, end in spans for day in class_days_after(start, end)})

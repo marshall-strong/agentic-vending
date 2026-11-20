@@ -467,9 +467,9 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
 
     Only the current product's loads and sales count (#172). The old product's share of a window
     split at the change is booked at the poll after it, so it is left out by product, not by time.
-    Loads at the moment the product went in may belong to an earlier run of it (A, B, then A again
-    at one visit), so what the run had then is the replay's own count (`SlotCount.loaded`, in its
-    movement order) less its loads after that moment.
+    What happened at the very moment the product went in may belong to the run before (A, B, then A
+    again at one visit; a poll at the swap's own moment), so the run's loads and sales there are the
+    replay's own counts (`SlotCount`, in its movement order) less those after it (`demand.run_events`).
 
     Units the replay left unattributed (`SaleCost.unattributed`) may have been either product's, so
     they are not in the units, and the days their poll window covers (`SaleCost.since` to `at`,
@@ -485,13 +485,13 @@ def _demands(counts: dict[str, stock.SlotCount], loads: dict[str, list[tuple[dat
     """
     demands = {}
     for slot, count in counts.items():
-        later = [(at, units) for at, units, sku in loads.get(slot, [])
-                 if at > count.since and sku == count.product]
-        first = count.loaded - sum(units for _, units in later)
-        slot_loads = ([(count.since, first)] if first > 0 else []) + later
-        since = [s for s in sales if s.slot == slot and s.at > count.since]
-        slot_sales = [(s.at, s.units) for s in since if s.product == count.product and not s.unattributed]
-        unknown = [(s.at, s.units) for s in since if s.unattributed]
+        slot_loads = demand.run_events(count.since, count.loaded,
+                                       [(at, units) for at, units, sku in loads.get(slot, []) if sku == count.product])
+        mine = [s for s in sales if s.slot == slot]
+        slot_sales = demand.run_events(count.since, count.sold, [(s.taken_at or s.at, s.units) for s in mine
+                                                                  if s.product == count.product and not s.unattributed])
+        unknown = demand.run_events(count.since, count.unattributed, [(s.at, s.units) for s in mine if s.unattributed])
+        since = [s for s in mine if s.at > count.since]
         spans = demand.in_stock_spans(slot_loads, slot_sales + unknown, now, count.units)
         unplaced = {day for s in since if s.unattributed for day in _dates(s.since or count.since, s.at)}
         in_stock = set(demand.class_days_in_stock(spans)) - unplaced
