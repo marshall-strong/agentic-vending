@@ -74,9 +74,9 @@
    },
    "previous_run": 3,
    "visit": "scheduled",
-   "reason": "Raise three prices on sell-outs, swap the slowest lane, pull one.",
-   "update": "Next Friday's order: three prices up, one swap, one lane pulled. Selections 55 and 58 get another try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
-   "notes": "Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater.",
+   "reason": "Raise three prices on sell-outs, lower one, swap the slowest lane, and pull one for a swap to come.",
+   "update": "Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. Selections 55 and 58 get another try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
+   "notes": "Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater, and pick the product for 44.",
    "slots": [
     {
      "slot": "11",
@@ -84,14 +84,14 @@
       "slot": "11",
       "reason": "Coca-Cola ran out on Saturday morning. One more quarter should still sell it through.",
       "fill_to": 7,
-      "product": "DEMO-COKE-20",
+      "product": "COCA-ORIGINAL-20BOT",
       "sale_price": "2.75"
      },
      "before": {
       "slot": "11",
       "reason": "Coca-Cola is the safest seller in the fall figures. Fill the lane.",
       "fill_to": 7,
-      "product": "DEMO-COKE-20",
+      "product": "COCA-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "changed": true
@@ -102,14 +102,14 @@
       "slot": "13",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 7,
-      "product": "DEMO-DIETCOKE-20",
+      "product": "COCA-DIET-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "13",
       "reason": "Diet Coke followed Coca-Cola in the fall figures.",
       "fill_to": 7,
-      "product": "DEMO-DIETCOKE-20",
+      "product": "COCA-DIET-20BOT",
       "sale_price": "2.50"
      },
      "changed": false
@@ -118,34 +118,34 @@
      "slot": "16",
      "now": {
       "slot": "16",
-      "reason": "Coke Zero sold 5 of 6 by Monday. One more unit on the rail.",
+      "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 7,
-      "product": "DEMO-ZERO-20",
+      "product": "COCA-ZERO_SUG-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "16",
-      "reason": "Coke Zero sold steadily in the fall. A little under full to start.",
-      "fill_to": 6,
-      "product": "DEMO-ZERO-20",
+      "reason": "Coke Zero sold steadily in the fall.",
+      "fill_to": 7,
+      "product": "COCA-ZERO_SUG-20BOT",
       "sale_price": "2.50"
      },
-     "changed": true
+     "changed": false
     },
     {
      "slot": "17",
      "now": {
       "slot": "17",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
-      "fill_to": 6,
-      "product": "DEMO-SPRITE-20",
+      "fill_to": 7,
+      "product": "SPRITE-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "17",
       "reason": "A lemon-lime to sit beside the colas.",
-      "fill_to": 6,
-      "product": "DEMO-SPRITE-20",
+      "fill_to": 7,
+      "product": "SPRITE-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "changed": false
@@ -156,14 +156,14 @@
       "slot": "22",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 8,
-      "product": "DEMO-BUBLY-STRAW-12",
+      "product": "BUBLY-STRAWBER-12CAN",
       "sale_price": "1.75"
      },
      "before": {
       "slot": "22",
       "reason": "Cans are cheap to buy, so a lower price should keep them moving.",
       "fill_to": 8,
-      "product": "DEMO-BUBLY-STRAW-12",
+      "product": "BUBLY-STRAWBER-12CAN",
       "sale_price": "1.75"
      },
      "changed": false
@@ -172,19 +172,19 @@
      "slot": "24",
      "now": {
       "slot": "24",
-      "reason": "Unchanged from last week: the numbers don't argue for a move.",
+      "reason": "bubly Paradise Paloma sold 1 by Monday, a third of what Strawberry sold at the same price. A quarter off, to see if it moves.",
       "fill_to": 8,
-      "product": "DEMO-BUBLY-PALOMA-12",
-      "sale_price": "1.75"
+      "product": "BUBLY-PARADISE-12CAN",
+      "sale_price": "1.50"
      },
      "before": {
       "slot": "24",
       "reason": "A second bubly flavour, to see which one wins.",
       "fill_to": 8,
-      "product": "DEMO-BUBLY-PALOMA-12",
+      "product": "BUBLY-PARADISE-12CAN",
       "sale_price": "1.75"
      },
-     "changed": false
+     "changed": true
     },
     {
      "slot": "25",
@@ -192,14 +192,14 @@
       "slot": "25",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 7,
-      "product": "DEMO-TOPO-16G",
+      "product": "TOPOCHICO-ORIGINAL-16BOT",
       "sale_price": "2.75"
      },
      "before": {
       "slot": "25",
       "reason": "Glass sparkling water, priced up for the bottle.",
       "fill_to": 7,
-      "product": "DEMO-TOPO-16G",
+      "product": "TOPOCHICO-ORIGINAL-16BOT",
       "sale_price": "2.75"
      },
      "changed": false
@@ -209,15 +209,15 @@
      "now": {
       "slot": "28",
       "reason": "vitaminwater sold 2 in 6 days, the slowest lane. GORGIE's request was approved, so swap it in.",
-      "fill_to": 6,
-      "product": "DEMO-GORGIE-20",
+      "fill_to": 7,
+      "product": "GORGIE-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "28",
       "reason": "A non-fizzy choice.",
-      "fill_to": 6,
-      "product": "DEMO-VW-20",
+      "fill_to": 7,
+      "product": "VITAMINWATER-DARK-20BOT",
       "sale_price": "2.50"
      },
      "changed": true
@@ -228,14 +228,14 @@
       "slot": "31",
       "reason": "Pepsi sold out on Tuesday with a day to go. Raising the price a quarter.",
       "fill_to": 7,
-      "product": "DEMO-PEPSI-20",
+      "product": "PEPSI-ORIGINAL-20BOT",
       "sale_price": "2.75"
      },
      "before": {
       "slot": "31",
       "reason": "Pepsi sold well in the fall figures.",
       "fill_to": 7,
-      "product": "DEMO-PEPSI-20",
+      "product": "PEPSI-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "changed": true
@@ -246,14 +246,14 @@
       "slot": "33",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 7,
-      "product": "DEMO-DEW-20",
+      "product": "MOUNTAIN-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "33",
       "reason": "Mountain Dew is the strongest of the greens.",
       "fill_to": 7,
-      "product": "DEMO-DEW-20",
+      "product": "MOUNTAIN-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "changed": false
@@ -263,15 +263,15 @@
      "now": {
       "slot": "36",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
-      "fill_to": 6,
-      "product": "DEMO-DRPEPPER-20",
+      "fill_to": 7,
+      "product": "DRPEPPER-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "36",
       "reason": "Dr Pepper, for people who want neither cola.",
-      "fill_to": 6,
-      "product": "DEMO-DRPEPPER-20",
+      "fill_to": 7,
+      "product": "DRPEPPER-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "changed": false
@@ -281,15 +281,15 @@
      "now": {
       "slot": "37",
       "reason": "Red Bull sold out twice in a week at $3.00. $3.25 is still under the ceiling.",
-      "fill_to": 10,
-      "product": "DEMO-RB-250",
+      "fill_to": 11,
+      "product": "REDBULL-ORIGINAL-8_4CAN",
       "sale_price": "3.25"
      },
      "before": {
       "slot": "37",
-      "reason": "The energy drink with the best margin; the small can fits 11.",
-      "fill_to": 10,
-      "product": "DEMO-RB-250",
+      "reason": "The energy drink with the best margin, and the small can fits 11.",
+      "fill_to": 11,
+      "product": "REDBULL-ORIGINAL-8_4CAN",
       "sale_price": "3.00"
      },
      "changed": true
@@ -300,14 +300,14 @@
       "slot": "41",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 8,
-      "product": "DEMO-MONSTER-16",
+      "product": "MONSTER-ORIGINAL-16CAN",
       "sale_price": "3.25"
      },
      "before": {
       "slot": "41",
       "reason": "A second energy drink, in the bigger can.",
       "fill_to": 8,
-      "product": "DEMO-MONSTER-16",
+      "product": "MONSTER-ORIGINAL-16CAN",
       "sale_price": "3.25"
      },
      "changed": false
@@ -316,16 +316,16 @@
      "slot": "44",
      "now": {
       "slot": "44",
-      "reason": "Snapple sold 1 in 6 days and 5 are still here. Pull it and keep the units in the closet.",
+      "reason": "Snapple sold 1 in 6 days. Pull it to the closet now, so the lane is free for a better seller: the next plan swaps one in and fills it to its column.",
       "fill_to": 0,
-      "product": "DEMO-SNAPPLE-16",
+      "product": "SNAPPLE-ORIGINAL-16BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "44",
       "reason": "Tea, to cover a different taste.",
-      "fill_to": 6,
-      "product": "DEMO-SNAPPLE-16",
+      "fill_to": 7,
+      "product": "SNAPPLE-ORIGINAL-16BOT",
       "sale_price": "2.50"
      },
      "changed": true
@@ -335,15 +335,15 @@
      "now": {
       "slot": "46",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
-      "fill_to": 6,
-      "product": "DEMO-PROTEIN-11",
+      "fill_to": 9,
+      "product": "PREMIER-CHOCOLAT-11CAR",
       "sale_price": "4.00"
      },
      "before": {
       "slot": "46",
       "reason": "A protein shake for the gym crowd, at a price that pays for the carton.",
-      "fill_to": 6,
-      "product": "DEMO-PROTEIN-11",
+      "fill_to": 9,
+      "product": "PREMIER-CHOCOLAT-11CAR",
       "sale_price": "4.00"
      },
      "changed": false
@@ -354,14 +354,14 @@
       "slot": "47",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 8,
-      "product": "DEMO-RECESS-12",
+      "product": "RECESS-LIME-12CAN",
       "sale_price": "2.25"
      },
      "before": {
       "slot": "47",
       "reason": "A new-wave drink that has a following.",
       "fill_to": 8,
-      "product": "DEMO-RECESS-12",
+      "product": "RECESS-LIME-12CAN",
       "sale_price": "2.25"
      },
      "changed": false
@@ -372,14 +372,14 @@
       "slot": "52",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 7,
-      "product": "DEMO-BAJA-20",
+      "product": "MOUNTAIN-BAJA_BLA-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "52",
       "reason": "A colourful flavour for variety.",
       "fill_to": 7,
-      "product": "DEMO-BAJA-20",
+      "product": "MOUNTAIN-BAJA_BLA-20BOT",
       "sale_price": "2.50"
      },
      "changed": false
@@ -389,15 +389,15 @@
      "now": {
       "slot": "54",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
-      "fill_to": 6,
-      "product": "DEMO-COKE-20",
+      "fill_to": 7,
+      "product": "COCA-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "54",
       "reason": "A second Coca-Cola lane, since it sells best.",
-      "fill_to": 6,
-      "product": "DEMO-COKE-20",
+      "fill_to": 7,
+      "product": "COCA-ORIGINAL-20BOT",
       "sale_price": "2.50"
      },
      "changed": false
@@ -408,14 +408,14 @@
       "slot": "55",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 7,
-      "product": "DEMO-TOPO-16G",
+      "product": "TOPOCHICO-ORIGINAL-16BOT",
       "sale_price": "2.75"
      },
      "before": {
       "slot": "55",
       "reason": "More sparkling water, if it can be bought.",
       "fill_to": 7,
-      "product": "DEMO-TOPO-16G",
+      "product": "TOPOCHICO-ORIGINAL-16BOT",
       "sale_price": "2.75"
      },
      "changed": false
@@ -426,14 +426,14 @@
       "slot": "58",
       "reason": "Unchanged from last week: the numbers don't argue for a move.",
       "fill_to": 7,
-      "product": "DEMO-BAJA-20",
+      "product": "MOUNTAIN-BAJA_BLA-20BOT",
       "sale_price": "2.50"
      },
      "before": {
       "slot": "58",
       "reason": "A second Baja Blast lane, if it can be bought.",
       "fill_to": 7,
-      "product": "DEMO-BAJA-20",
+      "product": "MOUNTAIN-BAJA_BLA-20BOT",
       "sale_price": "2.50"
      },
      "changed": false
@@ -516,8 +516,8 @@
      "$decimal": "0.58"
     },
     "request_id": "pr-002",
-    "team_update": "Next Friday's order: three prices up, one swap, one lane pulled. Selections 55 and 58 get another try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
-    "notes": "Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater.",
+    "team_update": "Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. Selections 55 and 58 get another try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
+    "notes": "Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater, and pick the product for 44.",
     "steps": [
      {
       "turn": 1,
@@ -579,7 +579,7 @@
       "turn": 3,
       "kind": "thinking",
       "tool": null,
-      "content": "vitaminwater sold 2 in 6 days. GORGIE was approved last week; try it there. Snapple sold 1, so pull it.",
+      "content": "vitaminwater sold 2 in 6 days. GORGIE was approved last week; try it there. Snapple sold 1, so pull it and swap a new product in next week.",
       "is_error": false
      },
      {
@@ -621,9 +621,9 @@
       ]
      },
      {
-      "slot": "16",
+      "slot": "24",
       "labels": [
-       "fill 6 to 7"
+       "$1.75 to $1.50"
       ]
      },
      {
@@ -834,7 +834,7 @@
   "ok": true,
   "data": [
    {
-    "id": 39,
+    "id": 41,
     "at": {
      "$datetime": "2026-12-09T14:53:00+00:00"
     },
@@ -847,7 +847,7 @@
     }
    },
    {
-    "id": 38,
+    "id": 40,
     "at": {
      "$datetime": "2026-12-09T14:52:00+00:00"
     },
@@ -858,7 +858,7 @@
     "arguments": {}
    },
    {
-    "id": 37,
+    "id": 39,
     "at": {
      "$datetime": "2026-12-09T14:51:00+00:00"
     },
@@ -869,7 +869,7 @@
     "arguments": {}
    },
    {
-    "id": 36,
+    "id": 38,
     "at": {
      "$datetime": "2026-12-08T16:00:00+00:00"
     },
@@ -880,7 +880,7 @@
     "arguments": {}
    },
    {
-    "id": 35,
+    "id": 37,
     "at": {
      "$datetime": "2026-12-07T14:11:00+00:00"
     },
@@ -893,7 +893,7 @@
     }
    },
    {
-    "id": 34,
+    "id": 36,
     "at": {
      "$datetime": "2026-12-07T14:09:00+00:00"
     },
@@ -906,7 +906,7 @@
     }
    },
    {
-    "id": 33,
+    "id": 35,
     "at": {
      "$datetime": "2026-12-07T14:08:00+00:00"
     },
@@ -919,7 +919,7 @@
     }
    },
    {
-    "id": 32,
+    "id": 34,
     "at": {
      "$datetime": "2026-12-07T14:07:00+00:00"
     },
@@ -930,7 +930,7 @@
     "arguments": {}
    },
    {
-    "id": 31,
+    "id": 33,
     "at": {
      "$datetime": "2026-12-07T14:06:00+00:00"
     },
@@ -943,7 +943,7 @@
     }
    },
    {
-    "id": 30,
+    "id": 32,
     "at": {
      "$datetime": "2026-12-07T14:05:00+00:00"
     },
@@ -956,7 +956,7 @@
     }
    },
    {
-    "id": 29,
+    "id": 31,
     "at": {
      "$datetime": "2026-12-07T14:03:00+00:00"
     },
@@ -967,7 +967,7 @@
     "arguments": {}
    },
    {
-    "id": 28,
+    "id": 30,
     "at": {
      "$datetime": "2026-12-07T14:02:00+00:00"
     },
@@ -978,7 +978,7 @@
     "arguments": {}
    },
    {
-    "id": 27,
+    "id": 29,
     "at": {
      "$datetime": "2026-12-07T14:01:00+00:00"
     },
@@ -989,7 +989,7 @@
     "arguments": {}
    },
    {
-    "id": 26,
+    "id": 28,
     "at": {
      "$datetime": "2026-12-05T14:09:00+00:00"
     },
@@ -1003,7 +1003,7 @@
     }
    },
    {
-    "id": 25,
+    "id": 27,
     "at": {
      "$datetime": "2026-12-05T14:07:00+00:00"
     },
@@ -1017,7 +1017,7 @@
     }
    },
    {
-    "id": 24,
+    "id": 26,
     "at": {
      "$datetime": "2026-12-05T14:05:00+00:00"
     },
@@ -1030,7 +1030,7 @@
     }
    },
    {
-    "id": 23,
+    "id": 25,
     "at": {
      "$datetime": "2026-12-05T14:04:00+00:00"
     },
@@ -1043,7 +1043,7 @@
     }
    },
    {
-    "id": 22,
+    "id": 24,
     "at": {
      "$datetime": "2026-12-05T14:03:00+00:00"
     },
@@ -1056,7 +1056,7 @@
     }
    },
    {
-    "id": 21,
+    "id": 23,
     "at": {
      "$datetime": "2026-12-05T14:01:00+00:00"
     },
@@ -1067,7 +1067,7 @@
     "arguments": {}
    },
    {
-    "id": 20,
+    "id": 22,
     "at": {
      "$datetime": "2026-12-04T14:01:00+00:00"
     },
@@ -1078,7 +1078,7 @@
     "arguments": {}
    },
    {
-    "id": 19,
+    "id": 21,
     "at": {
      "$datetime": "2026-12-02T19:05:00+00:00"
     },
@@ -1091,7 +1091,7 @@
     }
    },
    {
-    "id": 18,
+    "id": 20,
     "at": {
      "$datetime": "2026-12-02T19:04:00+00:00"
     },
@@ -1104,7 +1104,7 @@
     }
    },
    {
-    "id": 17,
+    "id": 19,
     "at": {
      "$datetime": "2026-12-02T19:02:00+00:00"
     },
@@ -1115,7 +1115,7 @@
     "arguments": {}
    },
    {
-    "id": 16,
+    "id": 18,
     "at": {
      "$datetime": "2026-12-02T19:01:00+00:00"
     },
@@ -1126,7 +1126,7 @@
     "arguments": {}
    },
    {
-    "id": 15,
+    "id": 17,
     "at": {
      "$datetime": "2026-12-02T19:00:00+00:00"
     },
@@ -1139,7 +1139,7 @@
     }
    },
    {
-    "id": 14,
+    "id": 16,
     "at": {
      "$datetime": "2026-12-02T15:00:00+00:00"
     },
@@ -1152,7 +1152,23 @@
     }
    },
    {
-    "id": 13,
+    "id": 15,
+    "at": {
+     "$datetime": "2026-12-02T14:30:00+00:00"
+    },
+    "kind": "write",
+    "tool": "config.set",
+    "outcome": "done",
+    "detail": "config capacity_overrides set to {\"PREMIER-CHOCOLAT-11CAR\": 9} by kevin",
+    "arguments": {
+     "key": "capacity_overrides",
+     "value": {
+      "PREMIER-CHOCOLAT-11CAR": 9
+     }
+    }
+   },
+   {
+    "id": 14,
     "at": {
      "$datetime": "2026-12-02T14:00:00+00:00"
     },
@@ -1166,7 +1182,7 @@
     }
    },
    {
-    "id": 12,
+    "id": 13,
     "at": {
      "$datetime": "2026-12-02T13:40:00+00:00"
     },
@@ -1308,7 +1324,7 @@
   "data": {
    "slots": {
     "11": {
-     "product": "DEMO-COKE-20",
+     "product": "COCA-ORIGINAL-20BOT",
      "on_hand": 1,
      "loaded": 9,
      "sold": 8,
@@ -1322,7 +1338,7 @@
      "unit_cost": "1.45"
     },
     "13": {
-     "product": "DEMO-DIETCOKE-20",
+     "product": "COCA-DIET-20BOT",
      "on_hand": 1,
      "loaded": 7,
      "sold": 6,
@@ -1336,9 +1352,9 @@
      "unit_cost": "1.45"
     },
     "16": {
-     "product": "DEMO-ZERO-20",
-     "on_hand": 2,
-     "loaded": 6,
+     "product": "COCA-ZERO_SUG-20BOT",
+     "on_hand": 3,
+     "loaded": 7,
      "sold": 4,
      "lost": 0,
      "since": {
@@ -1350,9 +1366,9 @@
      "unit_cost": "1.45"
     },
     "17": {
-     "product": "DEMO-SPRITE-20",
-     "on_hand": 2,
-     "loaded": 6,
+     "product": "SPRITE-ORIGINAL-20BOT",
+     "on_hand": 3,
+     "loaded": 7,
      "sold": 4,
      "lost": 0,
      "since": {
@@ -1364,7 +1380,7 @@
      "unit_cost": "1.40"
     },
     "22": {
-     "product": "DEMO-BUBLY-STRAW-12",
+     "product": "BUBLY-STRAWBER-12CAN",
      "on_hand": 3,
      "loaded": 8,
      "sold": 5,
@@ -1378,7 +1394,7 @@
      "unit_cost": "0.68"
     },
     "24": {
-     "product": "DEMO-BUBLY-PALOMA-12",
+     "product": "BUBLY-PARADISE-12CAN",
      "on_hand": 6,
      "loaded": 8,
      "sold": 2,
@@ -1392,7 +1408,7 @@
      "unit_cost": "0.63"
     },
     "25": {
-     "product": "DEMO-TOPO-16G",
+     "product": "TOPOCHICO-ORIGINAL-16BOT",
      "on_hand": 4,
      "loaded": 7,
      "sold": 3,
@@ -1406,9 +1422,9 @@
      "unit_cost": "1.20"
     },
     "28": {
-     "product": "DEMO-VW-20",
-     "on_hand": 4,
-     "loaded": 6,
+     "product": "VITAMINWATER-DARK-20BOT",
+     "on_hand": 5,
+     "loaded": 7,
      "sold": 2,
      "lost": 0,
      "since": {
@@ -1420,7 +1436,7 @@
      "unit_cost": "1.30"
     },
     "31": {
-     "product": "DEMO-PEPSI-20",
+     "product": "PEPSI-ORIGINAL-20BOT",
      "on_hand": 0,
      "loaded": 7,
      "sold": 7,
@@ -1434,7 +1450,7 @@
      "unit_cost": null
     },
     "33": {
-     "product": "DEMO-DEW-20",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
      "on_hand": 2,
      "loaded": 9,
      "sold": 7,
@@ -1448,9 +1464,9 @@
      "unit_cost": "1.35"
     },
     "36": {
-     "product": "DEMO-DRPEPPER-20",
-     "on_hand": 2,
-     "loaded": 6,
+     "product": "DRPEPPER-ORIGINAL-20BOT",
+     "on_hand": 3,
+     "loaded": 7,
      "sold": 4,
      "lost": 0,
      "since": {
@@ -1462,9 +1478,9 @@
      "unit_cost": "1.40"
     },
     "37": {
-     "product": "DEMO-RB-250",
-     "on_hand": 5,
-     "loaded": 13,
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "on_hand": 6,
+     "loaded": 14,
      "sold": 8,
      "lost": 0,
      "since": {
@@ -1476,7 +1492,7 @@
      "unit_cost": "1.70"
     },
     "41": {
-     "product": "DEMO-MONSTER-16",
+     "product": "MONSTER-ORIGINAL-16CAN",
      "on_hand": 1,
      "loaded": 8,
      "sold": 7,
@@ -1490,9 +1506,9 @@
      "unit_cost": "1.75"
     },
     "44": {
-     "product": "DEMO-SNAPPLE-16",
-     "on_hand": 5,
-     "loaded": 6,
+     "product": "SNAPPLE-ORIGINAL-16BOT",
+     "on_hand": 6,
+     "loaded": 7,
      "sold": 1,
      "lost": 0,
      "since": {
@@ -1504,9 +1520,9 @@
      "unit_cost": "1.15"
     },
     "46": {
-     "product": "DEMO-PROTEIN-11",
-     "on_hand": 4,
-     "loaded": 6,
+     "product": "PREMIER-CHOCOLAT-11CAR",
+     "on_hand": 7,
+     "loaded": 9,
      "sold": 2,
      "lost": 0,
      "since": {
@@ -1518,7 +1534,7 @@
      "unit_cost": "2.60"
     },
     "47": {
-     "product": "DEMO-RECESS-12",
+     "product": "RECESS-LIME-12CAN",
      "on_hand": 5,
      "loaded": 8,
      "sold": 3,
@@ -1532,7 +1548,7 @@
      "unit_cost": "0.95"
     },
     "52": {
-     "product": "DEMO-BAJA-20",
+     "product": "MOUNTAIN-BAJA_BLA-20BOT",
      "on_hand": 2,
      "loaded": 7,
      "sold": 5,
@@ -1546,9 +1562,9 @@
      "unit_cost": "1.40"
     },
     "54": {
-     "product": "DEMO-COKE-20",
-     "on_hand": 2,
-     "loaded": 6,
+     "product": "COCA-ORIGINAL-20BOT",
+     "on_hand": 3,
+     "loaded": 7,
      "sold": 4,
      "lost": 0,
      "since": {
@@ -1562,89 +1578,89 @@
    },
    "closet": [
     {
-     "product": "DEMO-BAJA-20",
-     "units": 5,
-     "unit_cost": "1.40"
-    },
-    {
-     "product": "DEMO-BUBLY-PALOMA-12",
+     "product": "BUBLY-PARADISE-12CAN",
      "units": 4,
      "unit_cost": "0.63"
     },
     {
-     "product": "DEMO-BUBLY-STRAW-12",
+     "product": "BUBLY-STRAWBER-12CAN",
      "units": 3,
      "unit_cost": "0.68"
     },
     {
-     "product": "DEMO-COKE-20",
-     "units": 21,
-     "unit_cost": "1.45"
-    },
-    {
-     "product": "DEMO-DEW-20",
-     "units": 15,
-     "unit_cost": "1.35"
-    },
-    {
-     "product": "DEMO-DIETCOKE-20",
+     "product": "COCA-DIET-20BOT",
      "units": 5,
      "unit_cost": "1.45"
     },
     {
-     "product": "DEMO-DRPEPPER-20",
-     "units": 6,
+     "product": "COCA-ORIGINAL-20BOT",
+     "units": 20,
+     "unit_cost": "1.45"
+    },
+    {
+     "product": "COCA-ZERO_SUG-20BOT",
+     "units": 5,
+     "unit_cost": "1.45"
+    },
+    {
+     "product": "DRPEPPER-ORIGINAL-20BOT",
+     "units": 5,
      "unit_cost": "1.40"
     },
     {
-     "product": "DEMO-MONSTER-16",
+     "product": "MONSTER-ORIGINAL-16CAN",
      "units": 4,
      "unit_cost": "1.75"
     },
     {
-     "product": "DEMO-PEPSI-20",
+     "product": "MOUNTAIN-BAJA_BLA-20BOT",
+     "units": 5,
+     "unit_cost": "1.40"
+    },
+    {
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "units": 15,
+     "unit_cost": "1.35"
+    },
+    {
+     "product": "PEPSI-ORIGINAL-20BOT",
      "units": 5,
      "unit_cost": "1.35"
     },
     {
-     "product": "DEMO-PROTEIN-11",
-     "units": 6,
+     "product": "PREMIER-CHOCOLAT-11CAR",
+     "units": 3,
      "unit_cost": "2.60"
     },
     {
-     "product": "DEMO-RB-250",
-     "units": 11,
-     "unit_cost": "1.70"
-    },
-    {
-     "product": "DEMO-RECESS-12",
+     "product": "RECESS-LIME-12CAN",
      "units": 4,
      "unit_cost": "0.95"
     },
     {
-     "product": "DEMO-SNAPPLE-16",
-     "units": 6,
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "units": 10,
+     "unit_cost": "1.70"
+    },
+    {
+     "product": "SNAPPLE-ORIGINAL-16BOT",
+     "units": 5,
      "unit_cost": "1.15"
     },
     {
-     "product": "DEMO-SPRITE-20",
-     "units": 6,
+     "product": "SPRITE-ORIGINAL-20BOT",
+     "units": 5,
      "unit_cost": "1.40"
     },
     {
-     "product": "DEMO-TOPO-16G",
+     "product": "TOPOCHICO-ORIGINAL-16BOT",
      "units": 5,
      "unit_cost": "1.20"
     },
     {
-     "product": "DEMO-VW-20",
-     "units": 6,
+     "product": "VITAMINWATER-DARK-20BOT",
+     "units": 5,
      "unit_cost": "1.30"
-    },
-    {
-     "product": "DEMO-ZERO-20",
-     "units": 6,
-     "unit_cost": "1.45"
     }
    ],
    "warnings": []
@@ -1660,14 +1676,14 @@
     },
     "source": "photo",
     "product": "Snapple 16 oz",
-    "units_counted": 5,
+    "units_counted": 6,
     "exact": false,
     "price_on_tag": {
      "$decimal": "2.50"
     },
     "note": null,
     "sold_since": 0,
-    "on_hand": 5
+    "on_hand": 6
    },
    "55": {
     "count_id": "demo-photo-1",
@@ -1816,7 +1832,7 @@
     },
     "decision_note": "Filled; 2 of 20 selections had no seller",
     "lines": 20,
-    "units_loaded": 126,
+    "units_loaded": 136,
     "unavailable": 2,
     "alternates": 1
    }
@@ -1877,7 +1893,7 @@
     "name": "Recess Lime",
     "size": "12 oz can",
     "status": "approved",
-    "sku": "DEMO-RECESS-12",
+    "sku": "RECESS-LIME-12CAN",
     "decision_note": "Approved."
    },
    {
@@ -1888,7 +1904,7 @@
     "name": "Mountain Dew Baja Blast",
     "size": "20 oz bottle",
     "status": "approved",
-    "sku": "DEMO-BAJA-20",
+    "sku": "MOUNTAIN-BAJA_BLA-20BOT",
     "decision_note": "Approved."
    },
    {
@@ -1899,7 +1915,7 @@
     "name": "Red Bull",
     "size": "250 ml can",
     "status": "approved",
-    "sku": "DEMO-RB-250",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
     "decision_note": "Approved."
    },
    {
@@ -1910,7 +1926,7 @@
     "name": "Premier Protein Chocolate",
     "size": "11 oz carton",
     "status": "approved",
-    "sku": "DEMO-PROTEIN-11",
+    "sku": "PREMIER-CHOCOLAT-11CAR",
     "decision_note": "Approved."
    },
    {
@@ -1921,7 +1937,7 @@
     "name": "Topo Chico Sparkling Water",
     "size": "16 oz glass bottle",
     "status": "approved",
-    "sku": "DEMO-TOPO-16G",
+    "sku": "TOPOCHICO-ORIGINAL-16BOT",
     "decision_note": "Approved."
    },
    {
@@ -1932,7 +1948,7 @@
     "name": "GORGIE Electrolyte Water",
     "size": "20 oz bottle",
     "status": "approved",
-    "sku": "DEMO-GORGIE-20",
+    "sku": "GORGIE-ORIGINAL-20BOT",
     "decision_note": "Approved."
    }
   ]
@@ -1958,116 +1974,118 @@
   "ok": true,
   "data": {
    "catalog": {
-    "DEMO-COKE-20": {
+    "COCA-ORIGINAL-20BOT": {
      "name": "Coca-Cola 20 oz",
      "line": "Coca-Cola",
      "flavor": null,
      "size": "20 oz bottle"
     },
-    "DEMO-DIETCOKE-20": {
+    "COCA-DIET-20BOT": {
      "name": "Diet Coke 20 oz",
      "line": "Diet Coke",
      "flavor": null,
      "size": "20 oz bottle"
     },
-    "DEMO-ZERO-20": {
+    "COCA-ZERO_SUG-20BOT": {
      "name": "Coke Zero 20 oz",
      "line": "Coke Zero",
      "flavor": null,
      "size": "20 oz bottle"
     },
-    "DEMO-SPRITE-20": {
+    "SPRITE-ORIGINAL-20BOT": {
      "name": "Sprite 20 oz",
      "line": "Sprite",
      "flavor": null,
      "size": "20 oz bottle"
     },
-    "DEMO-PEPSI-20": {
+    "PEPSI-ORIGINAL-20BOT": {
      "name": "Pepsi 20 oz",
      "line": "Pepsi",
      "flavor": null,
      "size": "20 oz bottle"
     },
-    "DEMO-DEW-20": {
+    "MOUNTAIN-ORIGINAL-20BOT": {
      "name": "Mountain Dew 20 oz",
      "line": "Mountain Dew",
      "flavor": null,
      "size": "20 oz bottle"
     },
-    "DEMO-DRPEPPER-20": {
+    "DRPEPPER-ORIGINAL-20BOT": {
      "name": "Dr Pepper 20 oz",
      "line": "Dr Pepper",
      "flavor": null,
      "size": "20 oz bottle"
     },
-    "DEMO-BAJA-20": {
+    "MOUNTAIN-BAJA_BLA-20BOT": {
      "name": "Mountain Dew Baja Blast 20 oz",
      "line": "Mountain Dew",
      "flavor": "Baja Blast",
      "size": "20 oz bottle"
     },
-    "DEMO-BUBLY-STRAW-12": {
+    "BUBLY-STRAWBER-12CAN": {
      "name": "bubly Strawberry 12 oz",
      "line": "bubly",
      "flavor": "Strawberry",
      "size": "12 oz can"
     },
-    "DEMO-BUBLY-PALOMA-12": {
+    "BUBLY-PARADISE-12CAN": {
      "name": "bubly Paradise Paloma 12 oz",
      "line": "bubly",
      "flavor": "Paradise Paloma",
      "size": "12 oz can"
     },
-    "DEMO-RECESS-12": {
+    "RECESS-LIME-12CAN": {
      "name": "Recess Lime 12 oz",
      "line": "Recess",
      "flavor": "Lime",
      "size": "12 oz can"
     },
-    "DEMO-TOPO-16G": {
+    "TOPOCHICO-ORIGINAL-16BOT": {
      "name": "Topo Chico 16 oz glass",
      "line": "Topo Chico",
      "flavor": null,
      "size": "16 oz glass bottle"
     },
-    "DEMO-VW-20": {
+    "VITAMINWATER-DARK-20BOT": {
      "name": "vitaminwater dark 20 oz",
      "line": "vitaminwater",
      "flavor": "dark",
      "size": "20 oz bottle"
     },
-    "DEMO-RB-250": {
+    "REDBULL-ORIGINAL-8_4CAN": {
      "name": "Red Bull 250 ml",
      "line": "Red Bull",
      "flavor": null,
      "size": "250 ml can"
     },
-    "DEMO-MONSTER-16": {
+    "MONSTER-ORIGINAL-16CAN": {
      "name": "Monster 16 oz",
      "line": "Monster",
      "flavor": null,
      "size": "16 oz can"
     },
-    "DEMO-SNAPPLE-16": {
+    "SNAPPLE-ORIGINAL-16BOT": {
      "name": "Snapple 16 oz",
      "line": "Snapple",
      "flavor": null,
      "size": "16 oz bottle"
     },
-    "DEMO-PROTEIN-11": {
+    "PREMIER-CHOCOLAT-11CAR": {
      "name": "Premier Protein Chocolate 11 oz",
      "line": "Premier Protein",
      "flavor": "Chocolate",
      "size": "11 oz carton"
     },
-    "DEMO-GORGIE-20": {
+    "GORGIE-ORIGINAL-20BOT": {
      "name": "GORGIE Electrolyte Water 20 oz",
      "line": "GORGIE",
      "flavor": null,
      "size": "20 oz bottle"
     }
    },
-   "overrides": {}
+   "overrides": {
+    "PREMIER-CHOCOLAT-11CAR": 9
+   }
   }
  },
  "syncs": {

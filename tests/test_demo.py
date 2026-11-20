@@ -140,7 +140,7 @@ def test_the_page_draws_every_panel_from_the_snapshots_own_selections(no_databas
         assert anchor in page, anchor
     assert "Opening" in page or "opening" in page
     assert "How it decided" in page and "pr-001" in page and "pr-002" in page and "GORGIE Electrolyte Water" in page
-    assert "DEMO-COKE-20" in page and "from Friday" in page and "6 of 20 slots changed" in page
+    assert "COCA-ORIGINAL-20BOT" in page and "from Friday" in page and "6 of 20 slots changed" in page
     assert "Our slots" not in page and "vmc1" not in page
 
 
@@ -299,6 +299,34 @@ def test_the_week_is_made_up_from_a_fixed_moment():
     assert sim["end"]["31"] == 0 and set(sim["at_visit"]) == set(make.TOPPED_UP)
     assert len(make.SELECTIONS) == 20 and set(make.NOT_BOUGHT) <= set(make.SELECTIONS)
     assert make.poll_times()[-1] == make.LAST_POLL and make.poll_times() == sorted(make.poll_times())
+
+
+def test_the_made_up_codes_follow_the_catalogs_sku_form():
+    """LINE-FLAVOR-SIZEPKG in capitals, as the real catalog writes them (MONSTER-WHITE-16CAN, PURELEAF-LEMON-16_9BOT):
+    the flavor cut to 8 characters, "_" for a decimal point. The banner, not the code, says the data is made up."""
+    form = re.compile(r"^[A-Z]+-[A-Z_]{1,8}-\d+(?:_\d+)?(?:BOT|CAN|CAR)$")
+    skus = set(make.PRODUCTS) | {sku for _, sku, *_ in make.DAY_ONE} | set(make.CAPACITY_OVERRIDES)
+    assert skus == set(make.PRODUCTS) and all(form.match(sku) for sku in skus), sorted(skus)
+    assert not any("DEMO" in sku for sku in skus)
+
+
+def test_every_lane_is_filled_to_its_column():
+    """Kevin's rule (19 Nov): every restock fills every slot it stocks to the column's capacity. A pulled lane
+    (fill 0) is the only exception, and the plan says what replaces it."""
+    from vending import capacity
+
+    def column(sku: str) -> int:
+        units = capacity.for_product(sku, make.PRODUCTS[sku][3], make.CAPACITY_OVERRIDES)
+        assert units, f"{sku} has no capacity: add a count to CAPACITY_OVERRIDES"
+        return units
+
+    for plan in (make.plan_one(), make.plan_next()):
+        for entry in plan["slots"]:
+            assert entry["fill_to"] in (0, column(entry["product"])), entry
+            assert "under full" not in entry["reason"]
+    assert make.CAPACITY_OVERRIDES == {"PREMIER-CHOCOLAT-11CAR": 9}
+    assert [s["slot"] for s in make.plan_next()["slots"] if s["fill_to"] == 0] == ["44"]
+    assert "swap" in make.NEXT_CHANGES["44"][3]
 
 
 def test_the_committed_snapshot_is_what_the_generator_makes(schema_url):

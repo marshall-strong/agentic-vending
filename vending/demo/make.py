@@ -50,48 +50,48 @@ MODEL = "claude-sonnet-5-5"
 
 # sku: (name, line, flavor, size, units per pack, price per pack in dollars). Made-up SKUs.
 PRODUCTS: dict[str, tuple[str, str, str | None, str, int, str]] = {
-    "DEMO-COKE-20": ("Coca-Cola 20 oz", "Coca-Cola", None, "20 oz bottle", 12, "17.40"),
-    "DEMO-DIETCOKE-20": ("Diet Coke 20 oz", "Diet Coke", None, "20 oz bottle", 12, "17.40"),
-    "DEMO-ZERO-20": ("Coke Zero 20 oz", "Coke Zero", None, "20 oz bottle", 12, "17.40"),
-    "DEMO-SPRITE-20": ("Sprite 20 oz", "Sprite", None, "20 oz bottle", 12, "16.80"),
-    "DEMO-PEPSI-20": ("Pepsi 20 oz", "Pepsi", None, "20 oz bottle", 12, "16.20"),
-    "DEMO-DEW-20": ("Mountain Dew 20 oz", "Mountain Dew", None, "20 oz bottle", 12, "16.20"),
-    "DEMO-DRPEPPER-20": ("Dr Pepper 20 oz", "Dr Pepper", None, "20 oz bottle", 12, "16.80"),
-    "DEMO-BAJA-20": ("Mountain Dew Baja Blast 20 oz", "Mountain Dew", "Baja Blast", "20 oz bottle", 12, "16.80"),
-    "DEMO-BUBLY-STRAW-12": ("bubly Strawberry 12 oz", "bubly", "Strawberry", "12 oz can", 12, "7.50"),
-    "DEMO-BUBLY-PALOMA-12": ("bubly Paradise Paloma 12 oz", "bubly", "Paradise Paloma", "12 oz can", 12, "7.50"),
-    "DEMO-RECESS-12": ("Recess Lime 12 oz", "Recess", "Lime", "12 oz can", 12, "11.40"),
-    "DEMO-TOPO-16G": ("Topo Chico 16 oz glass", "Topo Chico", None, "16 oz glass bottle", 12, "14.40"),
-    "DEMO-VW-20": ("vitaminwater dark 20 oz", "vitaminwater", "dark", "20 oz bottle", 12, "15.60"),
-    "DEMO-RB-250": ("Red Bull 250 ml", "Red Bull", None, "250 ml can", 12, "20.40"),
-    "DEMO-MONSTER-16": ("Monster 16 oz", "Monster", None, "16 oz can", 12, "21.00"),
-    "DEMO-SNAPPLE-16": ("Snapple 16 oz", "Snapple", None, "16 oz bottle", 12, "13.80"),
-    "DEMO-PROTEIN-11": ("Premier Protein Chocolate 11 oz", "Premier Protein", "Chocolate", "11 oz carton", 12, "31.20"),
-    "DEMO-GORGIE-20": ("GORGIE Electrolyte Water 20 oz", "GORGIE", None, "20 oz bottle", 12, "15.00"),
+    "COCA-ORIGINAL-20BOT": ("Coca-Cola 20 oz", "Coca-Cola", None, "20 oz bottle", 12, "17.40"),
+    "COCA-DIET-20BOT": ("Diet Coke 20 oz", "Diet Coke", None, "20 oz bottle", 12, "17.40"),
+    "COCA-ZERO_SUG-20BOT": ("Coke Zero 20 oz", "Coke Zero", None, "20 oz bottle", 12, "17.40"),
+    "SPRITE-ORIGINAL-20BOT": ("Sprite 20 oz", "Sprite", None, "20 oz bottle", 12, "16.80"),
+    "PEPSI-ORIGINAL-20BOT": ("Pepsi 20 oz", "Pepsi", None, "20 oz bottle", 12, "16.20"),
+    "MOUNTAIN-ORIGINAL-20BOT": ("Mountain Dew 20 oz", "Mountain Dew", None, "20 oz bottle", 12, "16.20"),
+    "DRPEPPER-ORIGINAL-20BOT": ("Dr Pepper 20 oz", "Dr Pepper", None, "20 oz bottle", 12, "16.80"),
+    "MOUNTAIN-BAJA_BLA-20BOT": ("Mountain Dew Baja Blast 20 oz", "Mountain Dew", "Baja Blast", "20 oz bottle", 12, "16.80"),
+    "BUBLY-STRAWBER-12CAN": ("bubly Strawberry 12 oz", "bubly", "Strawberry", "12 oz can", 12, "7.50"),
+    "BUBLY-PARADISE-12CAN": ("bubly Paradise Paloma 12 oz", "bubly", "Paradise Paloma", "12 oz can", 12, "7.50"),
+    "RECESS-LIME-12CAN": ("Recess Lime 12 oz", "Recess", "Lime", "12 oz can", 12, "11.40"),
+    "TOPOCHICO-ORIGINAL-16BOT": ("Topo Chico 16 oz glass", "Topo Chico", None, "16 oz glass bottle", 12, "14.40"),
+    "VITAMINWATER-DARK-20BOT": ("vitaminwater dark 20 oz", "vitaminwater", "dark", "20 oz bottle", 12, "15.60"),
+    "REDBULL-ORIGINAL-8_4CAN": ("Red Bull 250 ml", "Red Bull", None, "250 ml can", 12, "20.40"),
+    "MONSTER-ORIGINAL-16CAN": ("Monster 16 oz", "Monster", None, "16 oz can", 12, "21.00"),
+    "SNAPPLE-ORIGINAL-16BOT": ("Snapple 16 oz", "Snapple", None, "16 oz bottle", 12, "13.80"),
+    "PREMIER-CHOCOLAT-11CAR": ("Premier Protein Chocolate 11 oz", "Premier Protein", "Chocolate", "11 oz carton", 12, "31.20"),
+    "GORGIE-ORIGINAL-20BOT": ("GORGIE Electrolyte Water 20 oz", "GORGIE", None, "20 oz bottle", 12, "15.00"),
 }
 
 # Day one: (slot, sku, fill to, tag price, units a day, the agent's reason). `slot` is one of SELECTIONS.
 DAY_ONE = (
-    ("11", "DEMO-COKE-20", 7, "2.50", 1.4, "Coca-Cola is the safest seller in the fall figures. Fill the lane."),
-    ("13", "DEMO-DIETCOKE-20", 7, "2.50", 1.1, "Diet Coke followed Coca-Cola in the fall figures."),
-    ("16", "DEMO-ZERO-20", 6, "2.50", 0.8, "Coke Zero sold steadily in the fall. A little under full to start."),
-    ("17", "DEMO-SPRITE-20", 6, "2.50", 0.7, "A lemon-lime to sit beside the colas."),
-    ("22", "DEMO-BUBLY-STRAW-12", 8, "1.75", 0.9, "Cans are cheap to buy, so a lower price should keep them moving."),
-    ("24", "DEMO-BUBLY-PALOMA-12", 8, "1.75", 0.5, "A second bubly flavour, to see which one wins."),
-    ("25", "DEMO-TOPO-16G", 7, "2.75", 0.6, "Glass sparkling water, priced up for the bottle."),
-    ("28", "DEMO-VW-20", 6, "2.50", 0.4, "A non-fizzy choice."),
-    ("31", "DEMO-PEPSI-20", 7, "2.50", 1.6, "Pepsi sold well in the fall figures."),
-    ("33", "DEMO-DEW-20", 7, "2.50", 1.2, "Mountain Dew is the strongest of the greens."),
-    ("36", "DEMO-DRPEPPER-20", 6, "2.50", 0.7, "Dr Pepper, for people who want neither cola."),
-    ("37", "DEMO-RB-250", 10, "3.00", 1.5, "The energy drink with the best margin; the small can fits 11."),
-    ("41", "DEMO-MONSTER-16", 8, "3.25", 1.3, "A second energy drink, in the bigger can."),
-    ("44", "DEMO-SNAPPLE-16", 6, "2.50", 0.3, "Tea, to cover a different taste."),
-    ("46", "DEMO-PROTEIN-11", 6, "4.00", 0.5, "A protein shake for the gym crowd, at a price that pays for the carton."),
-    ("47", "DEMO-RECESS-12", 8, "2.25", 0.6, "A new-wave drink that has a following."),
-    ("52", "DEMO-BAJA-20", 7, "2.50", 0.9, "A colourful flavour for variety."),
-    ("54", "DEMO-COKE-20", 6, "2.50", 0.8, "A second Coca-Cola lane, since it sells best."),
-    ("55", "DEMO-TOPO-16G", 7, "2.75", 0.0, "More sparkling water, if it can be bought."),
-    ("58", "DEMO-BAJA-20", 7, "2.50", 0.0, "A second Baja Blast lane, if it can be bought."),
+    ("11", "COCA-ORIGINAL-20BOT", 7, "2.50", 1.4, "Coca-Cola is the safest seller in the fall figures. Fill the lane."),
+    ("13", "COCA-DIET-20BOT", 7, "2.50", 1.1, "Diet Coke followed Coca-Cola in the fall figures."),
+    ("16", "COCA-ZERO_SUG-20BOT", 7, "2.50", 0.8, "Coke Zero sold steadily in the fall."),
+    ("17", "SPRITE-ORIGINAL-20BOT", 7, "2.50", 0.7, "A lemon-lime to sit beside the colas."),
+    ("22", "BUBLY-STRAWBER-12CAN", 8, "1.75", 0.9, "Cans are cheap to buy, so a lower price should keep them moving."),
+    ("24", "BUBLY-PARADISE-12CAN", 8, "1.75", 0.5, "A second bubly flavour, to see which one wins."),
+    ("25", "TOPOCHICO-ORIGINAL-16BOT", 7, "2.75", 0.6, "Glass sparkling water, priced up for the bottle."),
+    ("28", "VITAMINWATER-DARK-20BOT", 7, "2.50", 0.4, "A non-fizzy choice."),
+    ("31", "PEPSI-ORIGINAL-20BOT", 7, "2.50", 1.6, "Pepsi sold well in the fall figures."),
+    ("33", "MOUNTAIN-ORIGINAL-20BOT", 7, "2.50", 1.2, "Mountain Dew is the strongest of the greens."),
+    ("36", "DRPEPPER-ORIGINAL-20BOT", 7, "2.50", 0.7, "Dr Pepper, for people who want neither cola."),
+    ("37", "REDBULL-ORIGINAL-8_4CAN", 11, "3.00", 1.5, "The energy drink with the best margin, and the small can fits 11."),
+    ("41", "MONSTER-ORIGINAL-16CAN", 8, "3.25", 1.3, "A second energy drink, in the bigger can."),
+    ("44", "SNAPPLE-ORIGINAL-16BOT", 7, "2.50", 0.3, "Tea, to cover a different taste."),
+    ("46", "PREMIER-CHOCOLAT-11CAR", 9, "4.00", 0.5, "A protein shake for the gym crowd, at a price that pays for the carton."),
+    ("47", "RECESS-LIME-12CAN", 8, "2.25", 0.6, "A new-wave drink that has a following."),
+    ("52", "MOUNTAIN-BAJA_BLA-20BOT", 7, "2.50", 0.9, "A colourful flavour for variety."),
+    ("54", "COCA-ORIGINAL-20BOT", 7, "2.50", 0.8, "A second Coca-Cola lane, since it sells best."),
+    ("55", "TOPOCHICO-ORIGINAL-16BOT", 7, "2.75", 0.0, "More sparkling water, if it can be bought."),
+    ("58", "MOUNTAIN-BAJA_BLA-20BOT", 7, "2.50", 0.0, "A second Baja Blast lane, if it can be bought."),
 )
 # Not on the shelves on day one: the day-one order found no seller for them.
 NOT_BOUGHT = {"55", "58"}
@@ -102,12 +102,18 @@ NEXT_CHANGES = {
     "11": (None, None, "2.75", "Coca-Cola ran out on Saturday morning. One more quarter should still sell it through."),
     "31": (None, None, "2.75", "Pepsi sold out on Tuesday with a day to go. Raising the price a quarter."),
     "37": (None, None, "3.25", "Red Bull sold out twice in a week at $3.00. $3.25 is still under the ceiling."),
-    "16": (None, 7, None, "Coke Zero sold 5 of 6 by Monday. One more unit on the rail."),
-    "28": ("DEMO-GORGIE-20", None, None, "vitaminwater sold 2 in 6 days, the slowest lane. GORGIE's request was approved, so swap it in."),
-    "44": (None, 0, None, "Snapple sold 1 in 6 days and 5 are still here. Pull it and keep the units in the closet."),
+    "24": (None, None, "1.50", "bubly Paradise Paloma sold 1 by Monday, a third of what Strawberry sold at the same "
+                               "price. A quarter off, to see if it moves."),
+    "28": ("GORGIE-ORIGINAL-20BOT", None, None, "vitaminwater sold 2 in 6 days, the slowest lane. GORGIE's request was approved, so swap it in."),
+    "44": (None, 0, None, "Snapple sold 1 in 6 days. Pull it to the closet now, so the lane is free for a better "
+                          "seller: the next plan swaps one in and fills it to its column."),
 }
 # Reworded reasons on slots the plan leaves as they were: not a change.
 STILL = "Unchanged from last week: the numbers don't argue for a move."
+
+# Units per column for the packages the loading chart doesn't cover: a made-up count, as a person would
+# record it. Every lane is filled to its column at every restock.
+CAPACITY_OVERRIDES = {"PREMIER-CHOCOLAT-11CAR": 9}
 
 # Visitors tile: made-up counts, with browsers named by made-up ids.
 BROWSERS = tuple(f"00000000000000{n:02x}" for n in range(1, 6))
@@ -272,9 +278,9 @@ def seed_purchases(conn, sim: dict) -> dict:
     # closet can refill (Coca-Cola, Mountain Dew, Red Bull) aren't bought again.
     pending = []
     for slot, (sku, fill, price, retry) in {
-        "31": ("DEMO-PEPSI-20", 7, "2.75", False), "41": ("DEMO-MONSTER-16", 8, "3.25", False),
-        "28": ("DEMO-GORGIE-20", 6, "2.50", True), "55": ("DEMO-TOPO-16G", 7, "2.75", True),
-        "58": ("DEMO-BAJA-20", 7, "2.50", True),
+        "31": ("PEPSI-ORIGINAL-20BOT", 7, "2.75", False), "41": ("MONSTER-ORIGINAL-16CAN", 8, "3.25", False),
+        "28": ("GORGIE-ORIGINAL-20BOT", 7, "2.50", True), "55": ("TOPOCHICO-ORIGINAL-16BOT", 7, "2.75", True),
+        "58": ("MOUNTAIN-BAJA_BLA-20BOT", 7, "2.50", True),
     }.items():
         line = {"slot": slot, "source": "purchase",
                 "primary": _ask(sku, 1, sale=price, store="Amazon", change=retry)}
@@ -317,7 +323,8 @@ def plan_next() -> dict:
             slots.append(_entry(s, new_sku or sku, fill if new_fill is None else new_fill, new_price or price, reason))
         else:
             slots.append(_entry(s, sku, fill, price, STILL))
-    return {"visit": "scheduled", "reason": "Raise three prices on sell-outs, swap the slowest lane, pull one.",
+    return {"visit": "scheduled", "reason": "Raise three prices on sell-outs, lower one, swap the slowest lane, "
+                                            "and pull one for a swap to come.",
             "slots": slots}
 
 
@@ -351,10 +358,11 @@ def seed_runs(conn) -> dict[str, int]:
         detail="Replay of the week of 23 Nov with the same rules; nothing to submit")
     run("friday", "live", _utc(7, 14), _utc(7, 14, 12), "submitted", plan=plan_next(), cost_usd=Decimal("0.58"),
         request_id="pr-002",
-        update="Next Friday's order: three prices up, one swap, one lane pulled. Selections 55 and 58 get another "
+        update="Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. "
+               "Selections 55 and 58 get another "
                "try at a seller. Coca-Cola, Mountain Dew and Red Bull refill from the closet.",
         notes="Pepsi sold out with a day to go: if it does again at $2.75, price it at $3.00. "
-              "Check whether GORGIE outsells vitaminwater.")
+              "Check whether GORGIE outsells vitaminwater, and pick the product for 44.")
     run("now", "live", _utc(9, 14, 50), None, "running")
     return ids
 
@@ -390,7 +398,7 @@ def seed_steps(conn, ids: dict[str, int]) -> None:
             (2, _utc(7, 14, 5), "tool_call", "get_sales_history", '{"slot": "31"}', False),
             (2, _utc(7, 14, 5), "tool_result", "get_sales_history", "9 sold in 6 days, empty from Tuesday", False),
             (3, _utc(7, 14, 7), "thinking", None, "vitaminwater sold 2 in 6 days. GORGIE was approved last week; "
-             "try it there. Snapple sold 1, so pull it.", False),
+             "try it there. Snapple sold 1, so pull it and swap a new product in next week.", False),
             (3, _utc(7, 14, 8), "tool_call", "preview_desired_state", '{"slots": 20}', False),
             (3, _utc(7, 14, 8), "tool_result", "preview_desired_state", "most we pay $90.90, 0 refusals", False),
             (4, _utc(7, 14, 10), "tool_call", "submit_desired_state", '{"slots": 20}', False),
@@ -420,6 +428,8 @@ def seed_actions(conn) -> None:
     rows = [
         (_utc(2, 13, 40), "write", "submit_desired_state", {"slots": 20}, refused, "The agent is halted, so no write tool can run."),
         (_utc(2, 14, 0), "write", "halt", {"state": "off", "by": "kevin"}, done, "halt switch turned off by kevin"),
+        (_utc(2, 14, 30), "write", "config.set", {"key": "capacity_overrides", "value": CAPACITY_OVERRIDES}, done,
+         f"config capacity_overrides set to {json.dumps(CAPACITY_OVERRIDES)} by kevin"),
         (_utc(2, 15, 0), "write", "ledger.opening", {"amount": "600.00"}, done, "opening 600.00 recorded by kevin: opening capital"),
         (_utc(2, 19, 0), "read", "get_project_rules", {"topic": "pricing"}, done, None),
         (_utc(2, 19, 1), "read", "get_catalog", {}, done, None),
@@ -463,12 +473,12 @@ def seed_catalog_and_requests(conn) -> None:
             "insert into catalog_products (sku, name, line, flavor, size, last_response) values (%s, %s, %s, %s, %s, '{}')",
             [(sku, name, line, flavor, size) for sku, (name, line, flavor, size, _, _) in PRODUCTS.items()])
         requests = [
-            (_utc(18, 14, month=11), "GORGIE Electrolyte Water", "20 oz bottle", "GORGIE", None, "approved", "DEMO-GORGIE-20", "Approved."),
-            (_utc(19, 15, month=11), "Topo Chico Sparkling Water", "16 oz glass bottle", "Topo Chico", None, "approved", "DEMO-TOPO-16G", "Approved."),
-            (_utc(19, 15, month=11), "Premier Protein Chocolate", "11 oz carton", "Premier Protein", "Chocolate", "approved", "DEMO-PROTEIN-11", "Approved."),
-            (_utc(20, 13, month=11), "Red Bull", "250 ml can", "Red Bull", None, "approved", "DEMO-RB-250", "Approved."),
-            (_utc(21, 16, month=11), "Mountain Dew Baja Blast", "20 oz bottle", "Mountain Dew", "Baja Blast", "approved", "DEMO-BAJA-20", "Approved."),
-            (_utc(22, 17, month=11), "Recess Lime", "12 oz can", "Recess", "Lime", "approved", "DEMO-RECESS-12", "Approved."),
+            (_utc(18, 14, month=11), "GORGIE Electrolyte Water", "20 oz bottle", "GORGIE", None, "approved", "GORGIE-ORIGINAL-20BOT", "Approved."),
+            (_utc(19, 15, month=11), "Topo Chico Sparkling Water", "16 oz glass bottle", "Topo Chico", None, "approved", "TOPOCHICO-ORIGINAL-16BOT", "Approved."),
+            (_utc(19, 15, month=11), "Premier Protein Chocolate", "11 oz carton", "Premier Protein", "Chocolate", "approved", "PREMIER-CHOCOLAT-11CAR", "Approved."),
+            (_utc(20, 13, month=11), "Red Bull", "250 ml can", "Red Bull", None, "approved", "REDBULL-ORIGINAL-8_4CAN", "Approved."),
+            (_utc(21, 16, month=11), "Mountain Dew Baja Blast", "20 oz bottle", "Mountain Dew", "Baja Blast", "approved", "MOUNTAIN-BAJA_BLA-20BOT", "Approved."),
+            (_utc(22, 17, month=11), "Recess Lime", "12 oz can", "Recess", "Lime", "approved", "RECESS-LIME-12CAN", "Approved."),
             (_utc(23, 12, month=11), "Vita Coco Coconut Water", "11.1 oz carton", "Vita Coco", None, "rejected", None, "Not available from the distributor."),
             (_utc(1, 15), "Iced Energy Peach", "12 oz can", "Iced Energy", "Peach", "pending", None, None),
             (_utc(3, 16), "Monster Ultra White", "16 oz can", "Monster", "Ultra White", "pending", None, None),
@@ -490,7 +500,7 @@ def seed_counts(conn) -> None:
         "count_id": "demo-photo-1", "counted_at": _utc(8, 15).isoformat(), "source": "photo", "device_id": DEVICE_ID,
         "selections": [
             {"selection": "55", "product": "Sparkling water 16 oz (brand not readable)", "units": 4, "price_on_tag": "2.00"},
-            {"selection": "44", "product": "Snapple 16 oz", "units": 5, "price_on_tag": "2.50"},
+            {"selection": "44", "product": "Snapple 16 oz", "units": 6, "price_on_tag": "2.50"},
             {"selection": "12", "product": "Not one of the demo's twenty", "units": 3, "price_on_tag": "2.00"}]}),
         "demo")
 
@@ -527,6 +537,7 @@ def seed(conn) -> None:
                  " values (%s, %s, %s, %s, %s, '{}')",
                  (slots.DEFAULT_TEAM, slots.DEVICE_ID, list(SELECTIONS), _utc(1, 15, month=11), _utc(3, 10)))
     seed_catalog_and_requests(conn)
+    config.set_value(conn, "capacity_overrides", CAPACITY_OVERRIDES, "kevin")
     sim = simulate()
     seed_ledger(conn)
     seed_polls(conn, sim)
