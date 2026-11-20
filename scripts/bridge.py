@@ -8,8 +8,8 @@ One command per question you might have about the machine or our account:
     python scripts/bridge.py products               what we can order (the catalog)
     python scripts/bridge.py history                stored polls for today (UTC)
     python scripts/bridge.py history --start 2026-10-01 --end 2026-10-07
-    python scripts/bridge.py raw SESSION_ID         one stored poll, as raw EVA-DTS text
-    python scripts/bridge.py latest                 the newest stored poll, raw
+    python scripts/bridge.py raw SESSION_ID         one stored poll, rebuilt from our selections
+    python scripts/bridge.py latest                 the newest stored poll, rebuilt likewise
     python scripts/bridge.py latest --summary       price and lifetime sales for our slots
     python scripts/bridge.py request REQUEST_ID     where a purchase request has got to
     python scripts/bridge.py poll --live            read the machine right now (see below)
@@ -46,9 +46,11 @@ stored assignment (`vending.slots.our_slots`, which needs `DATABASE_URL`),
 never a fresh `/api/v1/slots` answer.
 
 - `raw`, `latest` and `poll --live` print a view rebuilt from checked fields,
-  not lines copied from the poll: `ID4` with its decimal places, `PA1` (the
-  selection and its price) and `PA2` (its counters) for each of our selections,
-  and the door counter `EA2*DO` with its counts. Nothing else: no envelope, no
+  not lines copied from the poll: `ID4` with its decimal places (0-2), `PA1`
+  (the selection and its price) and `PA2` (its lifetime units and value) for
+  each of our selections, and the door counter `EA2*DO` with its two counts.
+  A `PA2` belongs to a selection by `vending.evadts`'s block rules, and a
+  selection listed twice prints none of its figures. Nothing else: no envelope, no
   `ID1`, no `G85` checksum, no other selection and no machine-wide total
   (`VA1`, the cash and card records, the rest). A note on stderr says how many
   lines were left out. When the assignment can't be read, no selection is
@@ -87,6 +89,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
+from collections import Counter
 from pathlib import Path
 
 # Exit codes, so a wrapper script can tell failures apart.
@@ -133,6 +136,7 @@ def repo_root() -> Path:
 # on how a value is quoted or commented. Standard library too.
 sys.path.insert(0, str(repo_root()))
 from vending import settings as env  # noqa: E402
+from vending.evadts import records  # noqa: E402  (stdlib only: the sync's own selection-block rules)
 
 
 def settings() -> tuple[str, str]:
@@ -195,6 +199,11 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
         if error.code == 429:
             raise BridgeError(f"429: too many requests ({detail}). Slow down.", EXIT_BRIDGE) from None
         raise BridgeError(f"{error.code}: {detail}", EXIT_BRIDGE) from None
+    except http.client.RemoteDisconnected:
+        # Closed before any status line: no answer at all, like a refused connection.
+        raise BridgeError(f"Could not reach {base_url}: it closed the connection without answering. "
+                          "Is Tailscale connected? Run `tailscale status` and look for aihub-pi.",
+                          EXIT_UNREACHABLE) from None
     except http.client.HTTPException as error:
         # A malformed status line, an over-long header, a body cut short: the exception holds what
         # the bridge sent, so only its kind is printed.
@@ -206,6 +215,10 @@ def call(method: str, path: str, *, params: dict[str, str] | None = None,
             "Run `tailscale status` and look for aihub-pi.",
             EXIT_UNREACHABLE,
         ) from None
+    except Exception as error:  # noqa: BLE001 -- a redirect to a malformed Location raises ValueError, say
+        # Its text or arguments can quote the reply, so only its kind is printed.
+        raise BridgeError(f"the request to the bridge failed ({type(error).__name__}); none of its text is "
+                          "printed", EXIT_BRIDGE) from None
 
 
 def plain_reason(error: BaseException) -> str:
@@ -238,52 +251,68 @@ def number(field: str) -> int | None:
     return int(field) if re.fullmatch(r"[0-9]{1,12}", field) else None
 
 
+def id4_scale(fields: list[str]) -> int | None:
+    """`ID4`'s decimal places when `vending.evadts` can convert them (0 to 2), else None."""
+    places = number(fields[1]) if len(fields) > 1 else None
+    return places if places is not None and places <= 2 else None
+
+
+def listed_twice(dex_text: str, ours: tuple[str, ...] | list[str]) -> list[str]:
+    """Those of `ours` with more than one `PA1` in the poll. Which block is theirs is ambiguous, so
+    none of their figures is shown."""
+    wanted = set(ours)
+    seen = Counter(sel for fields, sel in records(dex_text.splitlines()) if fields[0] == "PA1" and sel in wanted)
+    return sorted(sel for sel, n in seen.items() if n > 1)
+
+
+def note_listed_twice(dex_text: str, ours: tuple[str, ...] | list[str]) -> None:
+    twice = listed_twice(dex_text, ours)
+    if twice:
+        print(f"note: {', '.join(twice)} appear more than once in the poll, so none of their figures is "
+              "printed", file=sys.stderr)
+
+
 def summarize(dex_text: str, ours: tuple[str, ...] | list[str]) -> list[dict[str, object]]:
     """Price and lifetime units sold for each of `ours`, our selections from the stored assignment.
 
-    Records are `*`-separated, one per line. `PA1*<selection>*<price>` opens a
-    selection, and the `PA2*<units>*<value>*...` line after it holds that
-    selection's lifetime counters. Currency is an integer; `ID4-01` (the first
-    field after the tag, `ID4*2*...`) says how many decimal places it carries.
+    Records are `*`-separated, one per line, read by `vending.evadts`'s selection-block rules
+    (`records`): `PA1*<selection>*<price>` opens a selection, and the `PA2*<units>*<value>*...` that
+    belongs to it holds its lifetime counters. Currency is an integer; `ID4-01` (the first field
+    after the tag, `ID4*2*...`) says how many decimal places it carries: 2 when absent, and no money
+    is shown when it isn't 0 to 2.
 
     A selection that isn't one of `ours` is skipped at its `PA1`: only its name is compared, and
-    no other field of it, or of its `PA2`, is read. A field that isn't a plain number is None.
+    no other field of it, or of its `PA2`, is read. A field that isn't a plain number is None. A
+    selection listed twice (`listed_twice`) shows nothing.
 
     This does not validate the `G85` checksum, so treat it as a quick look, not
     as data to build on. The real parser belongs in the history sync.
     """
     wanted = set(ours)
-    decimals = 2
+    decimals: int | None = 2
     rows: dict[str, dict[str, int | None]] = {}
-    current: str | None = None
-    for line in dex_text.splitlines():
-        fields = line.strip().split("*")
+    for fields, sel in records(dex_text.splitlines()):
         tag = fields[0]
-        if not tag.startswith("PA"):
-            current = None
-        if tag == "ID4" and len(fields) > 1:
-            places = number(fields[1])
-            if places is not None and places <= 6:
-                decimals = places
-        elif tag == "PA1":
-            current = fields[1] if len(fields) > 1 and fields[1] in wanted else None
-            if current is not None:
-                rows[current] = {"price_cents": number(fields[2]) if len(fields) > 2 else None}
-        elif tag == "PA2" and current is not None:
-            rows[current]["lifetime_units"] = number(fields[1]) if len(fields) > 1 else None
-            rows[current]["lifetime_value_cents"] = number(fields[2]) if len(fields) > 2 else None
-            current = None
+        if tag == "ID4" and len(fields) > 1 and fields[1].strip():
+            decimals = id4_scale(fields)
+        elif tag == "PA1" and sel in wanted:
+            rows[sel] = {"price_cents": number(fields[2]) if len(fields) > 2 else None}
+        elif tag == "PA2" and sel in wanted:
+            rows[sel]["lifetime_units"] = number(fields[1]) if len(fields) > 1 else None
+            rows[sel]["lifetime_value_cents"] = number(fields[2]) if len(fields) > 2 else None
+    for sel in listed_twice(dex_text, ours):
+        rows[sel] = {}
 
-    scale = 10 ** decimals
+    scale = None if decimals is None else 10 ** decimals
     result = []
     for slot in ours:
         row = rows.get(slot, {})
         price, value = row.get("price_cents"), row.get("lifetime_value_cents")
         result.append({
             "slot": slot,
-            "price": f"${price / scale:.2f}" if price is not None else None,
+            "price": f"${price / scale:.2f}" if price is not None and scale else None,
             "lifetime_units": row.get("lifetime_units"),
-            "lifetime_sales": f"${value / scale:,.2f}" if value is not None else None,
+            "lifetime_sales": f"${value / scale:,.2f}" if value is not None and scale else None,
         })
     return result
 
@@ -307,46 +336,40 @@ def rebuild(dex_text: str, ours: tuple[str, ...] | list[str]) -> tuple[str, int,
 
     Nothing is copied from the poll. Each line is written anew from a known tag and fields
     checked to be plain numbers, so a record nobody thought of, or a field that isn't a number,
-    can't come through:
+    can't come through. Only fields with a defined meaning are kept:
 
-    - `ID4*<decimal places>`, so a price can be read;
-    - for each `PA1` that names one of `ours`: `PA1*<selection>*<price>`, then `PA2*<counts>`
-      from a `PA2` that follows it in the same `PA` block;
-    - `EA2*DO*<counts>`, the door counter.
+    - `ID4*<decimal places>`, when they are 0 to 2 (what `vending.evadts` converts);
+    - for each `PA1` that names one of `ours`: `PA1*<selection>*<price>`, then `PA2*<units>*<value>`
+      from the `PA2` that belongs to it by `vending.evadts`'s block rules (`records`);
+    - `EA2*DO*<since reset>*<lifetime>`, the door counter.
 
     Every other line is left out, the envelope and `G85` too (its checksum would be wrong). A
-    selection that isn't ours is dropped at its `PA1`, before any other field of it is read. A
-    field that isn't a number ends its record there. Lines end as the poll's do.
+    selection that isn't ours is dropped at its `PA1`, before any other field of it is read. One
+    of ours listed twice (`listed_twice`) is dropped whole. A field that isn't a number ends its
+    record there. Lines end as the poll's do.
     """
-    wanted = set(ours)
+    wanted = set(ours) - set(listed_twice(dex_text, ours))
     newline = "\r\n" if "\r\n" in dex_text else "\n"
     out: list[str] = []
     printed = left_out = 0
-    current: str | None = None   # one of ours, whose PA2 may come next
-    for line in dex_text.splitlines():
-        if not line.strip():
-            continue
-        fields = line.strip().split("*")
+    for fields, sel in records(dex_text.splitlines()):
+        if not "*".join(fields).strip():
+            continue   # a blank line: no record, though it ends a block
         tag = fields[0]
         record = None
-        if not tag.startswith("PA"):
-            current = None
         if tag == "ID4":
-            places = counts(fields[1:2])
-            if places and places[0]:
-                record = f"ID4*{places[0]}"
-        elif tag == "PA1":
-            current = fields[1] if len(fields) > 1 and fields[1] in wanted else None
-            if current is not None:
-                record = "*".join(["PA1", current, *counts(fields[2:3])])
-                printed += 1
-        elif tag == "PA2" and current is not None:
-            found = counts(fields[1:])
+            scale = id4_scale(fields)
+            if scale is not None:
+                record = f"ID4*{scale}"
+        elif tag == "PA1" and sel in wanted:
+            record = "*".join(["PA1", sel, *counts(fields[2:3])])
+            printed += 1
+        elif tag == "PA2" and sel in wanted:
+            found = counts(fields[1:3])
             if found:
                 record = "*".join(["PA2", *found])
-            current = None
         elif tag == "EA2" and len(fields) > 1 and fields[1] == "DO":
-            record = "*".join(["EA2", "DO", *counts(fields[2:])])
+            record = "*".join(["EA2", "DO", *counts(fields[2:4])])
         if record is None:
             left_out += 1
         else:
@@ -380,7 +403,9 @@ def show_poll(body: bytes, out: str | None) -> None:
     if why:
         print(f"note: our slot assignment can't be read ({why}), so no selection is printed",
               file=sys.stderr)
-    text, printed, left_out = rebuild(body.decode("utf-8", errors="replace"), ours)
+    dex_text = body.decode("utf-8", errors="replace")
+    note_listed_twice(dex_text, ours)
+    text, printed, left_out = rebuild(dex_text, ours)
     print(f"note: {printed} of our selections and the door counter, rebuilt from checked fields; "
           f"{left_out} lines left out (the selections that aren't ours, the machine-wide totals, the "
           "envelope and G85). This script never prints a whole poll: pre-cut fall data for all 40 "
@@ -410,7 +435,10 @@ def checked_time(value: object) -> datetime | None:
 
 # Text a metadata reply may print: one short line with no `*`, the EVA-DTS field separator, so no
 # poll record can ride along in it. Anything else prints as null.
-PLAIN = re.compile(r"[^\x00-\x1f\x7f*]{1,80}")
+# Line breaks of every kind are out too: C0 and C1 controls (`\r`, `\x85`), U+2028 and U+2029.
+PLAIN = re.compile(r"[^\x00-\x1f\x7f-\x9f\u2028\u2029*]{1,80}")
+# What `/health` is documented to answer (docs/dex-bridge.md). Anything else prints as "unexpected status".
+HEALTH_STATUSES = ("ok",)
 MONEY = re.compile(r"-?[0-9]{1,9}(\.[0-9]{1,4})?")
 
 
@@ -458,14 +486,18 @@ PRODUCT_FIELDS = ("sku", "name", "line", "flavor", "size")
 REQUEST_FIELDS = {"id": plain, "status": plain, "device_id": plain, "created_at": when, "updated_at": when,
                   "fulfilled_at": when, "off_cycle": flag, "total_paid": money, "door_opened_at": when,
                   "door_closed_at": when, "note": omitted, "decision_note": omitted}
+# A request, its lines and its receipts are our own: accounting and audit records we keep after a
+# reassignment (docs/integrity.md). So their selections aren't checked against the assignment.
 LINE_FIELDS = {"line": whole_number, "slot": plain, "source": plain}
+LOSS_FIELDS = {"location": plain, "sku": plain, "units": whole_number, "recorded_at": when, "note": omitted}
 RECEIPT_FIELDS = {
     "outcome": plain, "sku": plain, "store": plain, "packs_bought": whole_number, "units_per_pack": whole_number,
     "units_bought": whole_number, "total_paid": money, "unit_cost_paid": money, "units_loaded": whole_number,
     "units_lost": whole_number, "loss_note": omitted, "units_to_back_stock": whole_number,
     "units_from_back_stock": whole_number, "units_pulled": whole_number, "pulled_sku": plain,
     "slot_reassigned": lambda v: flag(v) if isinstance(v, bool) else plain(v), "resolved_at": when,
-    "later_losses": lambda v: len(v) if isinstance(v, list) else None,
+    "later_losses": lambda v: [projected(loss, LOSS_FIELDS) for loss in v if isinstance(loss, dict)]
+    if isinstance(v, list) else None,
 }
 
 
@@ -494,7 +526,8 @@ def utc_today() -> str:
 
 def cmd_health(args: argparse.Namespace) -> None:
     reply = a_dict(get_json("/health", needs_key=False), "/health")
-    print_json({"status": plain(reply.get("status"))})
+    status = reply.get("status")
+    print_json({"status": status if isinstance(status, str) and status in HEALTH_STATUSES else "unexpected status"})
 
 
 def cmd_slots(args: argparse.Namespace) -> None:
@@ -575,7 +608,9 @@ def cmd_latest(args: argparse.Namespace) -> None:
 
     body, _ = call("GET", f"/api/v1/history/{session}/raw")
     if args.summary:
-        print_json(summarize(body.decode("utf-8", errors="replace"), ours))
+        dex_text = body.decode("utf-8", errors="replace")
+        note_listed_twice(dex_text, ours)
+        print_json(summarize(dex_text, ours))
     else:
         show_poll(body, args.out)
 
@@ -691,12 +726,12 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--limit", type=int, default=500)
     history.set_defaults(run=cmd_history)
 
-    raw = commands.add_parser("raw", help="one stored poll as raw EVA-DTS text")
+    raw = commands.add_parser("raw", help="one stored poll, rebuilt from our selections and the door counter")
     raw.add_argument("session_id")
     raw.add_argument("--out", help="archive the raw poll to this regular file instead of printing")
     raw.set_defaults(run=cmd_raw)
 
-    latest = commands.add_parser("latest", help="the newest stored poll")
+    latest = commands.add_parser("latest", help="the newest stored poll, rebuilt from our selections likewise")
     latest.add_argument("--summary", action="store_true",
                         help="print price and lifetime sales for our slots instead of raw text")
     latest.add_argument("--out", help="archive the raw poll to this regular file")
