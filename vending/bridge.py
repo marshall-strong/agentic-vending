@@ -130,6 +130,16 @@ class BridgeNoAnswer(BridgeError):
     """Sent, but no usable answer came back: a timeout, a dropped connection, or not JSON."""
 
 
+class BridgeNotJson(BridgeNoAnswer):
+    """A success status whose body isn't JSON. `status` is the status (None if the reply gave none);
+    `body` is the start of the body, kept only for `post` and `check_books` (else empty). Neither is in
+    the message, which says only the size."""
+
+    def __init__(self, status: int | None, size: int, body: bytes = b""):
+        super().__init__(f"the answer wasn't JSON ({size} bytes)")
+        self.status, self.body = status, body
+
+
 class BridgeUnreachable(BridgeError):
     """No network or a rejected key: every later call would fail the same way."""
 
@@ -181,7 +191,8 @@ class Bridge:
 
         `vending.tracking` builds the body and stores the answer. Raises as `post` does; an error
         answer is the bridge's JSON about our own books (`{error, error_type, detail, items}`), kept
-        whole enough to parse in `BridgeAnswered.detail`.
+        whole enough to parse in `BridgeAnswered.detail`. A success status whose body isn't JSON raises
+        `BridgeNotJson`, with the status and the start of the body.
         """
         return json.loads(self._once("POST", TRACKING_PATH, body, keep_body=True,
                                      kept_bytes=TRACKING_ERROR_BYTES))
@@ -226,6 +237,7 @@ class Bridge:
                                          data=None if body is None else json.dumps(body).encode())
         try:
             with urllib.request.urlopen(request, timeout=timeout or TIMEOUT_SECONDS) as response:
+                status = getattr(response, "status", None)
                 data = response.read()
                 if headers_out is not None:    # names lower-cased: HTTP header names have no case
                     headers_out.update({k.lower(): v for k, v in response.headers.items()})
@@ -250,7 +262,7 @@ class Bridge:
             try:
                 json.loads(data)
             except ValueError:      # its message can name a byte of the answer
-                raise BridgeNoAnswer(f"the answer wasn't JSON ({len(data)} bytes)") from None
+                raise BridgeNotJson(status, len(data), data[:kept_bytes] if keep_body else b"") from None
         return data
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> bytes:

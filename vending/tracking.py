@@ -47,8 +47,10 @@ a valid answer or a refusal the spec says didn't use the check ends that.
 (every field present, about the poll we sent, each verdict `within` or `outside`), else a message
 picked by the `error_type` codes the spec names (any other code prints as "unknown error type") or by
 the status. The bridge's `error`, `detail` and `items` are stored with the check, never printed. A 200
-of another shape isn't a success: it is stored as `malformed_answer`, may have used the day's check,
-and the command exits 3.
+of another shape isn't a success: it is stored as `malformed_answer` with its status, may have used the
+day's check, and the command exits 3. So is a 200 that isn't JSON (its start stored as `unparsed`) or
+whose JSON holds a NUL. A jsonb column can't hold a NUL, so every stored answer has it replaced by
+U+FFFD (`_db_safe`). If recording still fails, only the error's class is printed, never its message.
 
 The bridge's tolerance (David, 20 Nov): within $1 for money, within 2 units for counts.
 
@@ -59,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -70,7 +73,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from vending import db, ledger, settings, stock
-from vending.bridge import TRACKING_PATH, Bridge, BridgeAnswered, BridgeError, BridgeUnreachable
+from vending.bridge import TRACKING_PATH, Bridge, BridgeAnswered, BridgeError, BridgeNotJson, BridgeUnreachable
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.start import EASTERN
 
@@ -112,7 +115,7 @@ ERROR_TYPES = {
     # Ours, not the bridge's.
     "unreachable": "it never reached the bridge",
     "no_answer": "sent, but no usable answer came back (a timeout or a dropped connection)",
-    "malformed_answer": "the bridge answered 200, but not the shape the spec gives, so the verdicts can't be read",
+    "malformed_answer": "the bridge answered, but not the shape the spec gives, so the verdicts can't be read",
 }
 UNKNOWN_ERROR_TYPE = "unknown error type"
 
@@ -351,6 +354,9 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
             answer = json.loads(error.detail)
         except (TypeError, ValueError):
             answer = {"unparsed": str(error.detail)[:300]}
+    except BridgeNotJson as error:         # it answered, but not JSON: it may have run
+        text = error.body.decode(errors="replace")[:300]
+        return _answered(conn, stamp, row_id, error.status, {"unparsed": text}, "malformed_answer", None)
     except BridgeUnreachable as error:     # certainly never arrived
         return _answered(conn, stamp, row_id, None, {"no_answer": str(error)[:300]}, "unreachable", False)
     except BridgeError as error:           # sent, but no usable answer: it may have run
@@ -360,8 +366,10 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
         error_type = None
     elif len(error_type) > 100:
         error_type = error_type[:100]      # kept as sent, but never printed unless it is one we know
-    if status == 200 and _results(answer, found.as_of) is None:
-        # The bridge answered, so it may well have used the check, but the verdicts can't be read.
+    safe = _db_safe(answer)
+    if status == 200 and (safe != answer or _results(answer, found.as_of) is None):
+        # The bridge answered, so it may well have used the check, but the verdicts can't be read. A NUL
+        # or the like (`_db_safe`) counts too: the bridge never sends one in a good answer.
         return _answered(conn, stamp, row_id, status, answer, "malformed_answer", None, found.as_of)
     if status == 200:
         used: bool | None = True
@@ -392,6 +400,7 @@ def _results(answer: Any, as_of: str) -> dict[str, str] | None:
 
 def _answered(conn: psycopg.Connection, stamp: Callable[[], datetime], row_id: int, status: int | None,
               answer: Any, error_type: str | None, used: bool | None, as_of: str = "") -> Outcome:
+    answer = _db_safe(answer)
     results = _results(answer, as_of) if status == 200 and used else None
     next_from = _time(answer.get("next_check_from")) if isinstance(answer, dict) else None
     conn.execute(
@@ -400,6 +409,21 @@ def _answered(conn: psycopg.Connection, stamp: Callable[[], datetime], row_id: i
         (stamp(), status, None if answer is None else Jsonb(answer), error_type, used,
          None if results is None else Jsonb(results), next_from, row_id))
     return Outcome(row_id, status, answer, error_type, used, results, next_from)
+
+
+def _db_safe(value: Any) -> Any:
+    """`value` with what a jsonb column refuses replaced, so storing an answer can't fail on the reply's
+    text: a NUL becomes U+FFFD, a lone surrogate `?`, and NaN or infinity its name as a string. Lossy
+    by design: the stored answer is for people to read, and a 200 that needed it is malformed anyway."""
+    if isinstance(value, str):
+        return value.replace("\x00", "\ufffd").encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, list):
+        return [_db_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {_db_safe(k): _db_safe(v) for k, v in value.items()}
+    return value
 
 
 def _time(value: Any) -> datetime | None:
@@ -514,11 +538,16 @@ def main(argv: list[str] | None = None, bridge: Callable[[], Any] = Bridge) -> i
         except (AlreadyChecked, settings.SettingsError) as error:
             print(error, file=sys.stderr)
             return 1
+        except psycopg.Error as error:
+            # Its message can quote what the bridge sent, so only its class is printed.
+            print(f"Recording the check failed ({type(error).__name__}), so it may have been sent and may "
+                  "have used today's check. See: python -m vending.tracking show", file=sys.stderr)
+            return 3
         _print_outcome(outcome)
         if outcome.results is not None:
             return 0
         # No verdicts we can read: 3 when the check may have been used without them, else 1.
-        return 3 if outcome.status is None or outcome.status == 200 else 1
+        return 3 if outcome.status is None or outcome.error_type == "malformed_answer" else 1
 
 
 if __name__ == "__main__":

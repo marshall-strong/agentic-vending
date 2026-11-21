@@ -865,6 +865,86 @@ def test_the_terminal_shows_only_our_own_words_never_the_reply(schema_url, monke
         assert "EVIL" not in text and "" not in text and "owned" not in text
 
 
+class Answer200(FakeResponse):
+    status = 200
+
+
+NUL_WITHIN = json.dumps({**WITHIN, "note": EVIL + "\x00"}).encode()                 # the shape, plus a NUL
+NUL_VERDICT = json.dumps({**WITHIN, "results": {**WITHIN["results"], "coil": "within\x00" + EVIL}}).encode()
+
+
+@pytest.mark.parametrize("reply", [
+    Answer200(b"<html>" + EVIL.encode() + b"\x00</html>"),
+    Answer200(b"\xff\xfe" + EVIL.encode()),
+    Answer200(NUL_WITHIN),
+    Answer200(NUL_VERDICT),
+], ids=["html", "not-utf8", "nul-extra-field", "nul-verdict"])
+def test_a_200_that_is_not_json_or_holds_a_nul_is_malformed_through_the_real_client(
+        schema_url, monkeypatch, capsys, reply):
+    """Through `Bridge.check_books`: a 200 that isn't JSON, or whose JSON holds a NUL (which jsonb
+    can't store), is stored as `malformed_answer` with its status, may have used the check, exits 3,
+    and prints only our words."""
+    from tests.conftest import open_in
+    from vending import bridge as bridge_module
+    from vending import db, tracking
+
+    with open_in(*schema_url) as conn:
+        books(conn)
+    monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(bridge_module.urllib.request, "urlopen", lambda request, timeout: reply)
+    assert tracking.main(["check", "--as-of", "p1", "--send", "--by", "kevin"],
+                         bridge=lambda: Bridge("http://bridge.test", "key")) == 3
+    out = capsys.readouterr()
+    assert "200" in out.out and "not the shape the spec gives" in out.out and "may have used" in out.out
+    assert tracking.main(["show"]) == 0
+    shown = capsys.readouterr()
+    for text in (out.out, out.err, shown.out, shown.err):
+        assert "EVIL" not in text and "\x1b" not in text and "owned" not in text and "\x00" not in text
+    with open_in(*schema_url) as conn:
+        assert rows(conn)[0][:4] == (200, "malformed_answer", None, None)
+        [answer] = conn.execute("select answer from tracking_checks").fetchone()
+        assert answer is not None and "\x00" not in json.dumps(answer, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("answer", [
+    BridgeAnswered(409, json.dumps({"error": "x\x00", "error_type": "not_reconciled_yet", "detail": "\x00",
+                                    "items": ["\x00"]})),
+    BridgeAnswered(502, "Bad\x00Gateway"),
+], ids=["json-error", "unparsed-error"])
+def test_an_error_answer_holding_a_nul_is_stored(conn, answer):
+    """jsonb can't hold a NUL: the stored answer has it replaced, and the status and verdict are kept."""
+    from vending import tracking
+
+    books(conn)
+    f = tracking.figures(conn, "p1")
+    out = tracking.send(conn, FakeBridge(answer), f, "kevin", now=DURING)
+    stored = conn.execute("select status, answer from tracking_checks").fetchone()
+    assert stored[0] == out.status == answer.status and "\x00" not in json.dumps(stored[1], ensure_ascii=False)
+    assert out.used_check is (False if answer.status == 409 else None)
+
+
+def test_a_database_error_storing_the_answer_prints_only_our_words(schema_url, monkeypatch, capsys):
+    """Should storing the answer fail anyway, the error's text (which can quote the reply) isn't printed."""
+    import psycopg
+
+    from tests.conftest import open_in
+    from vending import db, tracking
+
+    with open_in(*schema_url) as conn:
+        books(conn)
+    monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+
+    def broken(*args, **kwargs):
+        raise psycopg.errors.UntranslatableCharacter(f"unsupported Unicode escape sequence near {EVIL}")
+
+    monkeypatch.setattr(tracking, "_answered", broken)
+    assert tracking.main(["check", "--as-of", "p1", "--send", "--by", "kevin"],
+                         bridge=lambda: FakeBridge(WITHIN)) == 3
+    out = capsys.readouterr()
+    assert "may have used" in out.out + out.err
+    assert "EVIL" not in out.out + out.err and "\x1b" not in out.out + out.err
+
+
 def test_check_refuses_when_a_figure_cannot_be_worked_out(schema_url, monkeypatch, capsys):
     from tests.conftest import open_in
     from vending import db, tracking
