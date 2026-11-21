@@ -594,6 +594,9 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
             reply = _chart_reply(path, found)
             _keep(key, reply)
             return reply
+        if path == PRODUCTS:
+            # Drawn after the connection is back, and inside this handler so a failure answers BROKEN.
+            return Reply(200, HTML, products_page.html(products, nav=PRODUCTS_NAV), CSP_PRODUCTS)
     except SlotsNotRecorded:
         return _problem(path, 503, NO_SLOTS)
     except Busy:
@@ -609,8 +612,6 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
     except Exception as error:  # noqa: BLE001 - a public page answers, whatever happened
         _log(type(error).__name__, f"{path}: {type(error).__name__}: {error}")
         return _problem(path, 500, BROKEN)
-    if path == PRODUCTS:
-        return Reply(200, HTML, products_page.html(products, nav=PRODUCTS_NAV), CSP_PRODUCTS)
     if path == STATE:
         return Reply(200, JSON, dashboard.to_json(snap))
     picked = parse_qs(urlsplit(target).query).get("sel", [None])[0]    # checked against our slots by render

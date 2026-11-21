@@ -181,6 +181,34 @@ def test_the_demo_route_draws_made_up_data_with_no_database(monkeypatch):
     assert f'href="{products_page.DEMO_ROUTE}"' in demo.page()
 
 
+def test_a_live_render_failure_answers_the_generic_500_after_the_connection_closes(monkeypatch, capsys):
+    from contextlib import contextmanager
+
+    held = []
+
+    @contextmanager
+    def connection():
+        held.append(True)
+        try:
+            yield object()
+        finally:
+            held.pop()
+
+    def broken(*args, **kwargs):
+        assert not held, "the page was drawn while it still held a connection"
+        raise RuntimeError("db.internal.example user=reader")
+
+    monkeypatch.setattr(pages, "configured", lambda: True)
+    monkeypatch.setattr(pages, "_connection", connection)
+    monkeypatch.setattr(pages, "_logged", {})
+    monkeypatch.setattr(products_page, "read", lambda conn, public: _data())
+    monkeypatch.setattr(products_page, "html", broken)
+    reply = pages.respond(products_page.ROUTE)
+    assert reply.status == 500 and pages.BROKEN in unescape(reply.body)
+    assert "db.internal.example" not in reply.body and "RuntimeError" not in reply.body
+    assert "RuntimeError" in capsys.readouterr().err
+
+
 def test_a_broken_demo_file_never_shows_its_error(monkeypatch, capsys):
     monkeypatch.setattr(products_page, "DEMO_FILE", products_page.DEMO_FILE.with_name("missing.json"))
     monkeypatch.setattr(products_page.demo_data, "__defaults__", (products_page.DEMO_FILE,))
