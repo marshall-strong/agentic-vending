@@ -25,7 +25,7 @@ Other settings (environment, or `.env`):
   placeholder until #129 decides.
 - `AGENT_SCHEDULE_FROM`: the first Eastern day with runs. Unset: 2026-12-02 (Wed 2 Dec).
 
-Each time in the schedule gets one row in `agent_schedule` (`db/migrations/022_agent_schedule.sql`),
+Each time in the schedule gets one row in `agent_schedule` (`db/migrations/024_agent_schedule.sql`),
 keyed by the time, so it runs at most once whatever restarts or replicas there are:
 
 - The worker inserts the row before it starts the agent, and records the agent's ending
