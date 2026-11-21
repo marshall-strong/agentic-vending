@@ -80,10 +80,15 @@ no web access is needed, and the price is never older than our last purchase of 
   `action_log` keeps the values it replaced, as for `set`.
 - **A newer price wins.** A row checked after the receipt keeps its price. Reading the same
   receipt again changes nothing. A corrected receipt replaces the price it set.
-- **Skipped, and the reason logged once:** a line loaded from the closet or not bought, a
+- **Skipped, and the reason logged:** a line loaded from the closet or not bought, a
   substitution (the receipt's SKU isn't the one we asked for), a missing amount or pack size,
   zero packs, units that don't add up, a pack price above the row's max (a person raises the max),
-  and a drink bought at a store or pack size the table has no row for.
+  and a drink bought at a store or pack size the table has no row for. The sync logs the reasons
+  when it first finds the request fulfilled, and again when a corrected receipt changes its lines.
+  A re-read that changes nothing logs nothing.
+- **An amount that can't be real** (a billion dollars or more, or not a finite number) is stored
+  as unknown, with a warning in the sync log. The rest of the receipt is kept, so the fill still
+  counts for stock. That line gives no price.
 - `python -m vending.receipt_prices` applies every receipt already stored (add `--dry-run` to
   see what would change). The sync runs it for each fulfilled request on its own.
 

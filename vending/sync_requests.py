@@ -91,6 +91,7 @@ def sync(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
             log(f"{request_id}: could not read ({error}); skipped")
             continue
         was = conn.execute("select status from purchase_requests where request_id = %s", (request_id,)).fetchone()
+        before = receipt_prices.priced_lines(conn, request_id) if was is not None and was[0] == "fulfilled" else None
         try:
             stored = store(conn, request_id, response, now)
         except ValueError as error:
@@ -105,8 +106,10 @@ def sync(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
         if stored.new_losses:
             log(f"{request_id}: {stored.new_losses} new later losses")
         if stored.status == "fulfilled":
-            # Skipped lines are named once, on the read that finds the request fulfilled, not on every re-read.
-            _refresh_prices(conn, request_id, now, report, log, quiet=was is not None and was[0] == "fulfilled")
+            # Skipped lines are named on the read that finds the request fulfilled, and again on a read that
+            # changes its receipt (a correction can bring a new reason), not on every re-read.
+            quiet = before is not None and receipt_prices.priced_lines(conn, request_id) == before
+            _refresh_prices(conn, request_id, now, report, log, quiet=quiet)
     return report
 
 

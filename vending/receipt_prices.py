@@ -132,13 +132,20 @@ def _prefix(request_id: str) -> str:
     return f"receipt {request_id}:"
 
 
-def _paid_groups(conn: psycopg.Connection, request_id: str, result: Applied) -> dict[tuple, _Paid]:
-    groups: dict[tuple, _Paid] = {}
-    rows = conn.execute(
+def priced_lines(conn: psycopg.Connection, request_id: str) -> list[tuple]:
+    """The stored receipt lines of a request, as far as prices go: every field `apply` reads.
+
+    The same list before and after a read means the read can't have changed what `apply` decides."""
+    return conn.execute(
         "select line_no, source, asked, outcome, sku, store, packs_bought, units_per_pack, units_bought,"
         " total_paid, resolved_at from purchase_lines where request_id = %s order by line_no",
         (request_id,)).fetchall()
-    for line_no, source, asked, outcome, sku, store, packs, units_per_pack, units, total, at in rows:
+
+
+def _paid_groups(conn: psycopg.Connection, request_id: str, result: Applied) -> dict[tuple, _Paid]:
+    groups: dict[tuple, _Paid] = {}
+    for line in priced_lines(conn, request_id):
+        line_no, source, asked, outcome, sku, store, packs, units_per_pack, units, total, at = line
         if source != "purchase" or outcome not in BOUGHT:
             continue   # loaded from the closet, or not bought: nothing was paid
         why = _unusable(asked, outcome, sku, store, packs, units_per_pack, units, total)

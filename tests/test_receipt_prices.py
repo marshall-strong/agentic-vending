@@ -302,11 +302,10 @@ def test_a_withdrawn_receipt_with_no_earlier_price_on_record_leaves_the_price_un
     assert not o.note.startswith("receipt r1:")
 
 
-@pytest.mark.parametrize("amount", [
-    pytest.param("1e30", marks=pytest.mark.xfail(strict=True, reason="Sol finding 4, not fixed yet")),
-    "0.001"], ids=["too large", "rounds to nothing"])
+@pytest.mark.parametrize("amount", ["1e30", "0.001"], ids=["too large", "rounds to nothing"])
 def test_an_amount_that_cannot_be_a_pack_price_is_skipped_and_the_sync_goes_on(coke, amount):
-    """Review finding 4: a finite but absurd total_paid must not stop the sync before later requests."""
+    """Review finding 4: a finite but absurd total_paid must not stop the sync before later requests, and the
+    fill still counts: only the amount is unknown."""
     table_row(coke, NOW - timedelta(days=9))
     submit(coke, "r1", days_ago=3)
     submit(coke, "r2", days_ago=2)
@@ -320,7 +319,6 @@ def test_an_amount_that_cannot_be_a_pack_price_is_skipped_and_the_sync_goes_on(c
     assert any(line.startswith("r1 line 0: no price taken") for line in said), said
 
 
-@pytest.mark.xfail(strict=True, reason="Sol finding 5, not fixed yet")
 def test_a_correction_that_brings_a_new_problem_is_logged_once(coke):
     """Review finding 5: the request was already fulfilled, and its corrected receipt puts the pack above the max."""
     table_row(coke, NOW - timedelta(days=9))

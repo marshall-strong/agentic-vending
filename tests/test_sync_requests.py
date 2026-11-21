@@ -266,15 +266,29 @@ def test_a_float_amount_is_refused(conn):
         store(conn, "r1", fulfilled("r1", receipt(total_paid=12.37)), NOW)
 
 
-def test_an_amount_too_large_to_store_is_refused_and_the_sync_goes_on(conn):
-    """Postgres can't hold 1e999999 as numeric. That must be a bad answer, not an error that stops the sync."""
+@pytest.mark.parametrize("amount", ["1e999999", "1e30", "-1e9", "NaN", "Infinity"])
+def test_an_amount_that_cant_be_real_is_stored_as_unknown_and_the_sync_goes_on(conn, amount):
+    """Postgres can't hold 1e999999 as numeric, and the money readers can't round 1e30 to the cent. Neither
+    may stop the sync, and the fill still counts: its lines are kept, with that amount unknown."""
     submit(conn, "r1", days_ago=3)
     submit(conn, "r2")
     said = []
-    report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(total_paid="1e999999")),
+    report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(unit_cost_paid=amount), total_paid=amount),
                                     "r2": fulfilled("r2", receipt())}), NOW, log=said.append)
-    assert (report.failed, report.fulfilled) == (1, 1)
-    assert any(line.startswith("r1: ") and "not an amount" in line for line in said), said
+    assert (report.failed, report.fulfilled) == (0, 2)
+    assert conn.execute("select total_paid from purchase_requests where request_id = 'r1'").fetchone() == (None,)
+    assert conn.execute("select total_paid, unit_cost_paid, units_loaded from purchase_lines"
+                        " where request_id = 'r1'").fetchone() == (Decimal("12.37"), None, 8)
+    for what in ("r1: total_paid", "r1 line 0: unit_cost_paid"):
+        assert any(line.startswith(what) and "can't be a real amount" in line for line in said), said
+    assert conn.execute("select last_response->>'total_paid' from purchase_requests where request_id = 'r1'"
+                        ).fetchone() == (amount,)
+
+
+def test_an_amount_that_isnt_a_number_still_refuses_the_answer(conn):
+    submit(conn, "r1")
+    with pytest.raises(ValueError, match="not an amount"):
+        store(conn, "r1", fulfilled("r1", receipt(total_paid="twelve")), NOW)
 
 
 def test_main_refuses_a_schema_missing_migrations(database_url, monkeypatch, capsys):

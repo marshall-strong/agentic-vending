@@ -27,7 +27,13 @@ RECEIPT_COLUMNS = (
     "slot_reassigned", "resolved_at",
 )
 _MONEY = {"total_paid", "unit_cost_paid"}
+# No receipt comes near a billion dollars. Postgres `numeric` can't hold some finite Decimals (1e999999),
+# and the money readers round to the cent, which raises for an amount past Decimal's 28 digits.
 _TOO_MUCH = Decimal(10) ** 9
+
+
+class _NotReal(ValueError):
+    """A well-formed amount that can't be a real one: infinite, NaN, or a billion dollars or more."""
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,10 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     An answer whose `updated_at` is older than the stored one is ignored too, with a warning: a slow read
     can arrive after the bridge corrected the receipt, and it must not put the old receipt back. The check
     is part of the same UPDATE, so two reads that race can't both win.
+
+    An amount that can't be real (1e30 dollars) is stored as unknown, with a warning, and the rest of the
+    receipt is kept: the fill happened, and the stock count needs its lines. `last_response` keeps the
+    answer as the bridge gave it.
     """
     if response.get("id") not in (None, request_id):
         raise ValueError(f"asked for {request_id}, the bridge answered about {response.get('id')}")
@@ -77,14 +87,15 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     # full listing the bridge only gives once every line is done.
     if "lines" in response:
         status = "fulfilled"
-        lines, losses = _line_rows(request_id, response["lines"])
+        lines, losses, unreal = _line_rows(request_id, response["lines"])
     elif response.get("status") in ("pending", "rejected"):
-        status, lines, losses = response["status"], [], []
+        status, lines, losses, unreal = response["status"], [], [], []
     else:
         raise ValueError(f"unexpected answer for {request_id}: status {response.get('status')!r} and no lines")
     opened, closed = door_times(request_id, response)
-    warnings = () if opened is not None else tuple(_door_time_warnings(request_id, response))
-    total_paid, changed_at = _money(response.get("total_paid")), _when(response.get("updated_at"))
+    total_paid = _kept_money(response.get("total_paid"), f"{request_id}: total_paid", unreal)
+    warnings = tuple(unreal) + (() if opened is not None else tuple(_door_time_warnings(request_id, response)))
+    changed_at = _when(response.get("updated_at"))
 
     with conn.transaction():
         updated = conn.execute(
@@ -182,14 +193,15 @@ def _door_time_warnings(request_id: str, response: dict) -> list[str]:
             "so its visit is dated by resolved_at"]
 
 
-def _line_rows(request_id: str, lines: list[dict]) -> tuple[list[tuple], list[tuple]]:
-    """Rows for `purchase_lines` and `purchase_line_losses`, or `ValueError`.
+def _line_rows(request_id: str, lines: list[dict]) -> tuple[list[tuple], list[tuple], list[str]]:
+    """Rows for `purchase_lines` and `purchase_line_losses`, and warnings for amounts kept as unknown;
+    or `ValueError`.
 
     A fulfilled request has a receipt on every line. If one is missing we
     store none of them: a half-stored request would make the stock count wrong
     without saying so.
     """
-    line_rows, loss_rows = [], []
+    line_rows, loss_rows, unreal = [], [], []
     for line in lines:
         receipt = line.get("receipt")
         if receipt is None:
@@ -197,7 +209,8 @@ def _line_rows(request_id: str, lines: list[dict]) -> tuple[list[tuple], list[tu
         try:
             asked = {k: line.get(k) for k in ("primary", "alternate", "load") if line.get(k) is not None}
             values = [
-                _money(receipt[c]) if c in _MONEY else _when(receipt[c]) if c == "resolved_at" else receipt[c]
+                _kept_money(receipt[c], f"{request_id} line {line.get('line')}: {c}", unreal) if c in _MONEY
+                else _when(receipt[c]) if c == "resolved_at" else receipt[c]
                 for c in RECEIPT_COLUMNS
             ]
             line_rows.append((request_id, line["line"], line["slot"], line["source"], Jsonb(asked), *values))
@@ -206,7 +219,16 @@ def _line_rows(request_id: str, lines: list[dict]) -> tuple[list[tuple], list[tu
                                   loss["units"], loss.get("note"), _when(loss["recorded_at"])))
         except KeyError as missing:
             raise ValueError(f"{request_id} line {line.get('line')}: receipt has no {missing}") from None
-    return line_rows, loss_rows
+    return line_rows, loss_rows, unreal
+
+
+def _kept_money(value: str | int | None, what: str, unreal: list[str]) -> Decimal | None:
+    """`_money`, but an amount that can't be real is kept as unknown (None) and named in `unreal`."""
+    try:
+        return _money(value)
+    except _NotReal:
+        unreal.append(f"{what} is {value!r}, which can't be a real amount; stored as unknown")
+        return None
 
 
 def _money(value: str | int | None) -> Decimal | None:
@@ -219,10 +241,8 @@ def _money(value: str | int | None) -> Decimal | None:
         amount = Decimal(str(value))
     except InvalidOperation:
         raise ValueError(f"not an amount: {value!r}") from None
-    # Postgres `numeric` can't hold some finite Decimals (1e999999), and the error would stop the sync.
-    # No receipt comes near a billion dollars, so anything that large is a bad answer.
     if not amount.is_finite() or abs(amount) >= _TOO_MUCH:
-        raise ValueError(f"not an amount: {value!r}")
+        raise _NotReal(f"not an amount: {value!r}")
     return amount
 
 
