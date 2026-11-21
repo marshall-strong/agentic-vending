@@ -528,6 +528,23 @@ def test_incident_notes_from_before_the_assignment_are_omitted(conn, page_conn, 
     assert row["note"] == dashboard.OLD_ASSIGNMENT
 
 
+def test_the_incident_total_is_counted_and_duplicates_go_before_the_limit(conn, page_conn, opened):
+    for n in range(60):
+        conn.execute("insert into action_log (at, kind, tool, arguments, outcome, detail)"
+                     " values (%s, 'write', 'submit_desired_state', '{}', 'refused', 'no')",
+                     (OPEN + timedelta(minutes=n),))
+    failed = live_run(conn, NOW - timedelta(hours=5), status="failed", detail=SECRET)
+    stepped = live_run(conn, NOW - timedelta(hours=4), status="skipped")
+    for run in (failed, stepped):
+        agent_runs.step(conn, run, 1, "tool_result", SECRET, tool="get_pnl", is_error=True)
+    data = dashboard.snapshot(page_conn, NOW)["incidents"]["data"]
+    # 60 refusals, the failed run and the other run's tool errors; the failed run's errors are one incident.
+    assert data["total"] == 62 and len(data["rows"]) == report_card.INCIDENTS_SHOWN
+    assert [r["kind"] for r in data["rows"][:2]] == ["tool_errors", "run_failed"]
+    assert sum(r["what"] == f"Run {failed}" for r in data["rows"]) == 1
+    assert "Latest 50 of 62." in dashboard.render(dashboard.snapshot(page_conn, NOW))
+
+
 def test_no_incidents_says_so(conn, page_conn, opened):
     snap = dashboard.snapshot(page_conn, NOW)
     assert snap["incidents"]["data"] == {"opened": True, "total": 0, "rows": []}

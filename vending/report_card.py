@@ -58,6 +58,9 @@ EASTERN = ZoneInfo(ledger.TIMEZONE)
 WEEK = timedelta(days=7)
 WEEKS_SHOWN = 8
 INCIDENTS_SHOWN = 50
+# How long before the oldest week shown a run's plan can still be the one that week loaded: a plan is
+# made in the week before, and a request can wait a week for its visit.
+PLAN_LOOKBACK = timedelta(days=14)
 NOTE_CHARS = 160
 # A live run still `running` this long after it started is taken as dead (the dashboard's STALE_RUN).
 STALE_RUN = timedelta(hours=2)
@@ -94,7 +97,7 @@ def report_cards(conn: psycopg.Connection, now: datetime) -> dict:
     first = ledger.week_of(opened.at.astimezone(EASTERN))
     current = ledger.week_of(now.astimezone(EASTERN))
     starts = [current - WEEK * n for n in range(WEEKS_SHOWN) if current - WEEK * n >= first]
-    reader = _Reader(conn, ours, now, opened.at)
+    reader = _Reader(conn, ours, now, opened.at, since=_start(starts[-1]) - PLAN_LOOKBACK)
     weeks = [_isolated_card(reader, week, opening_week=week == first, final=week < current) for week in starts]
     return {"opened": True, "weeks": weeks}
 
@@ -159,7 +162,8 @@ class _Reader:
     """What every week's card reads once: the runs with plans and their requests, the stock
     movements, the catalog, the capacities and the ceilings."""
 
-    def __init__(self, conn: psycopg.Connection, ours: tuple[str, ...], now: datetime, opened: datetime):
+    def __init__(self, conn: psycopg.Connection, ours: tuple[str, ...], now: datetime, opened: datetime,
+                 since: datetime):
         self.conn, self.ours, self.now, self.opened = conn, ours, now, opened
         # Receipts in by `now`: a later one is a visit the page can't have seen yet.
         lines = [line for line in stock.receipt_lines(conn) if line["at"] is not None and line["at"] <= now]
@@ -169,8 +173,8 @@ class _Reader:
         for run_id, started, plan, request_id, status, off_cycle in conn.execute(
                 "select r.id, r.started_at, r.plan, r.request_id, q.status, q.off_cycle from agent_runs r"
                 " left join purchase_requests q on q.request_id = r.request_id where r.mode = 'live'"
-                " and r.status = 'submitted' and r.plan is not null and r.started_at <= %s"
-                " order by r.started_at, r.id", (now,)):
+                " and r.status = 'submitted' and r.plan is not null and r.started_at >= %s and r.started_at <= %s"
+                " order by r.started_at, r.id", (since, now)):
             if request_id in visits:
                 at, loads = visits[request_id]
                 self.matches.append(_Match(run_id, started, plan, "fulfilled",
@@ -184,6 +188,7 @@ class _Reader:
         self.overrides = config.get_value(conn, "capacity_overrides", {}) or {}
         self.ceilings, self.notes = self._ceilings()
         self._weeks: dict[date, WeekState | None] = {}
+        self._slots: dict[datetime, dict[str, stock.SlotCount]] = {}
 
     def _ceilings(self) -> tuple[tuple[tuple[str, int], ...], list[str]]:
         from vending.planning import NotReady, planner_config
@@ -216,7 +221,10 @@ class _Reader:
         return None
 
     def slots_at(self, moment: datetime) -> dict[str, stock.SlotCount]:
-        return {s.slot: s for s in stock.replay(self.moves, moment, inclusive=False).slots}
+        """The slots just before `moment`, replayed once per moment."""
+        if moment not in self._slots:
+            self._slots[moment] = {s.slot: s for s in stock.replay(self.moves, moment, inclusive=False).slots}
+        return self._slots[moment]
 
     def catalog_at(self, moment: datetime) -> frozenset[str] | None:
         listed = frozenset(sku for sku, _size, seen, gone in self.catalog
@@ -517,11 +525,18 @@ def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None
         return {"opened": False}
     since = opened.at
     rows: list[dict] = []
+    # Each source reads only its newest INCIDENTS_SHOWN rows, which is all the merge can show; the
+    # total is counted in SQL. A run that failed, halted or stuck is one incident, so its tool
+    # errors are left out in SQL too, before the limit.
+    calls = ("from action_log where at >= %s and at <= %s and (outcome in ('refused', 'failed') or"
+             " (tool = 'halt' and outcome = 'done'))")
+    runs = ("from agent_runs where mode = 'live' and started_at >= %s and started_at <= %s"
+            " and (status in ('failed', 'halted') or (status = 'running' and started_at < %s))")
+    total = conn.execute(f"select count(*) {calls}", (since, now)).fetchone()[0]
+    total += conn.execute(f"select count(*) {runs}", (since, now, now - STALE_RUN)).fetchone()[0]
     for _id, at, tool, outcome, detail, args in conn.execute(
             "select id, at, tool, outcome, case when outcome = 'failed' then null else detail end, arguments"
-            " from action_log where at >= %s and at <= %s and (outcome in ('refused', 'failed') or"
-            " (tool = 'halt' and outcome = 'done')) order by at desc, id desc limit %s",
-            (since, now, INCIDENTS_SHOWN)):
+            f" {calls} order by at desc, id desc limit %s", (since, now, INCIDENTS_SHOWN)):
         if tool == "halt" and outcome == "done":
             on = _halt_on(args, detail)
             kind = "halt_on" if on else "halt_off" if on is False else "halt"
@@ -529,13 +544,9 @@ def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None
         else:
             rows.append(_row(at, outcome, tool, None if outcome == "failed" else _line(detail) or "Refused.",
                              error=outcome == "failed"))
-    failing: set[int] = set()
     for id_, started, status, detail in conn.execute(
-            "select id, started_at, status, case when status = 'failed' then null else detail end"
-            " from agent_runs where mode = 'live' and started_at >= %s and started_at <= %s"
-            " and (status in ('failed', 'halted') or (status = 'running' and started_at < %s))"
+            f"select id, started_at, status, case when status = 'failed' then null else detail end {runs}"
             " order by started_at desc, id desc limit %s", (since, now, now - STALE_RUN, INCIDENTS_SHOWN)):
-        failing.add(id_)
         if status == "failed":
             rows.append(_row(started, "run_failed", f"Run {id_}", None, error=True))
         elif status == "halted":
@@ -543,9 +554,9 @@ def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None
         else:
             rows.append(_row(started, "run_stuck", f"Run {id_}",
                              "Still says running over 2 hours after it started: the process may have died."))
-    for id_, started, n in _error_steps(conn, since, now):
-        if id_ in failing:
-            continue
+    stepped, errors = _error_steps(conn, since, now)
+    total += stepped
+    for id_, started, n in errors:
         rows.append(_row(started, "tool_errors", f"Run {id_}",
                          f"The model was told {n} tool call{'s' if n != 1 else ''} failed. See How it decided under Runs."))
     for card in (weeks or {}).get("weeks", []):
@@ -555,20 +566,27 @@ def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None
         at = card["planned_at"] or _start(date.fromisoformat(card["week"]))
         rows.append(_row(at, "week_failed", f"Week of {_day(card['week'])}",
                          f"Failed the {', '.join(failed)} check{'s' if len(failed) != 1 else ''}; graded as failing."))
+        total += 1
     rows.sort(key=lambda r: r["at"], reverse=True)
-    return {"opened": True, "total": len(rows), "rows": rows[:INCIDENTS_SHOWN]}
+    return {"opened": True, "total": total, "rows": rows[:INCIDENTS_SHOWN]}
 
 
-def _error_steps(conn: psycopg.Connection, since: datetime, now: datetime) -> list[tuple]:
+def _error_steps(conn: psycopg.Connection, since: datetime, now: datetime) -> tuple[int, list[tuple]]:
+    """How many live runs that didn't fail, halt or stick were told a tool call failed, and the newest
+    `INCIDENTS_SHOWN` of them as (id, started_at, errors)."""
     import psycopg
+    where = ("from agent_steps s join agent_runs r on r.id = s.run_id where r.mode = 'live'"
+             " and r.started_at >= %s and r.started_at <= %s and s.is_error"
+             " and not (r.status in ('failed', 'halted') or (r.status = 'running' and r.started_at < %s))")
+    args = (since, now, now - STALE_RUN)
     try:
         with conn.transaction():
-            return conn.execute(
-                "select r.id, r.started_at, count(*) from agent_steps s join agent_runs r on r.id = s.run_id"
-                " where r.mode = 'live' and r.started_at >= %s and r.started_at <= %s and s.is_error"
-                " group by r.id, r.started_at", (since, now)).fetchall()
+            count = conn.execute(f"select count(distinct r.id) {where}", args).fetchone()[0]
+            rows = conn.execute(f"select r.id, r.started_at, count(*) {where} group by r.id, r.started_at"
+                                " order by r.started_at desc, r.id desc limit %s", (*args, INCIDENTS_SHOWN)).fetchall()
+            return count, rows
     except psycopg.errors.UndefinedTable:     # before migration 014
-        return []
+        return 0, []
 
 
 def _row(at: datetime, kind: str, what: str, note: str | None, *, error: bool = False) -> dict:
