@@ -102,7 +102,11 @@ def test_the_snapshot_covers_every_panel():
     snap = demo.load()
     assert all(snap[k]["ok"] for k in ("plan", "runs", "activity", "recent_calls", "sales", "stock", "counts", "spend",
                                         "visits", "money", "purchase_requests", "catalog_requests", "catalog_counts",
-                                        "products"))
+                                        "products", "key_dates"))
+    # A week into the competition, the key dates are the next restock request and the next tax Saturday.
+    dates = snap["key_dates"]["data"]
+    assert dates["after_start"] and [r["key"] for r in dates["rows"]] == ["next_restock_request", "next_tax"]
+    assert 'id="dates"' in dashboard.render(snap, demo=True)
     money = snap["money"]["data"]
     assert money["opened"] and money["committed"]["requests"] == 1 and money["visit_fees"] == "25.00"
     assert [r["status"] for r in snap["runs"]["data"]] == ["running", "submitted", "skipped", "submitted", "failed", "submitted"]
