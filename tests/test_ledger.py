@@ -731,6 +731,39 @@ def test_get_pnl_end_to_end(db):  # noqa: F811
     assert call("get_pnl", {"start": "2026-11-09", "end": "2026-11-01"}).structuredContent["success"] is False
 
 
+def test_get_pnl_counts_a_poll_at_sunday_midnight_in_that_tax_week(db):  # noqa: F811
+    opened = et(2026, 11, 30, 13, 0)                            # stocked Monday 30 Nov
+    open_ledger(db, at=opened)
+    store_poll(db, "open", opened.isoformat(), {"15": (135, 0)})
+    store_poll(db, "sat", et(2026, 12, 5, 22, 0).isoformat(), {"15": (135, 2)})     # $2.70 in the week from 29 Nov
+    store_poll(db, "sun", et(2026, 12, 6, 0, 0).isoformat(), {"15": (135, 22)})     # Sunday 00:00 sharp: $27.00
+    store_poll(db, "mon", et(2026, 12, 7, 12, 0).isoformat(), {"15": (135, 23)})    # $1.35
+    # The full tax week from Sunday 6 Dec, as the balance counts it: $28.35, holding exactly $2.10.
+    full = {w.week: w for w in ledger.balance(db, et(2026, 12, 12, 23, 0)).takings.by_tax_week}[date(2026, 12, 6)]
+    assert (full.takings_cents, full.tax_cents) == (2835, 210)
+    # A P&L over that tax week's days agrees: the poll at Sunday midnight is in it, not dropped as the baseline.
+    reply = call("get_pnl", {"start": "2026-12-06", "end": "2026-12-12"}).structuredContent
+    assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("28.35", "2.10", 21)
+    assert reply["start"].startswith("2026-12-06T05:00:00")      # still reported as Sunday's midnight
+    assert reply["tax_weeks"] == [{"week": "2026-12-06", "ends": "2026-12-12T23:59:59.999999-05:00",
+                                   "revenue": "28.35", "tax": "2.10"}]
+    # The day before ends at Saturday 23:59:59.999999, so it doesn't take the midnight poll too.
+    saturday = call("get_pnl", {"start": "2026-12-05", "end": "2026-12-05"}).structuredContent
+    assert (saturday["revenue"], saturday["units_sold"]) == ("2.70", 2)
+
+
+def test_get_pnl_from_an_opening_at_midnight_keeps_the_opening_poll_as_the_baseline(db):  # noqa: F811
+    opened = et(2026, 12, 6, 0, 0)                              # opened at Sunday midnight sharp
+    open_ledger(db, at=opened)
+    store_poll(db, "sat", et(2026, 12, 5, 22, 0).isoformat(), {"15": (135, 5)})
+    store_poll(db, "open", opened.isoformat(), {"15": (135, 25)})   # 20 sold before the opening: not ours to count
+    store_poll(db, "mon", et(2026, 12, 7, 12, 0).isoformat(), {"15": (135, 26)})
+    assert ledger.balance(db, et(2026, 12, 8, 0, 0)).takings.cents == 135
+    reply = call("get_pnl", {"start": "2026-12-06", "end": "2026-12-12"}).structuredContent
+    assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("1.35", "0.10", 1)
+    assert [(w["week"], w["revenue"]) for w in reply["tax_weeks"]] == [("2026-12-06", "1.35")]
+
+
 def test_get_pnl_days_are_eastern_days(db):  # noqa: F811
     open_ledger(db)
     deliver(db, "r1")
