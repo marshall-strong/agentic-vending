@@ -172,3 +172,73 @@ def test_cli_runbook_end_to_end(schema_url, monkeypatch, capsys):
     assert ledger.main(["show"]) == 0
     out = capsys.readouterr().out
     assert "Opening capital" in out and "2026-11-29" in out and "development spend" in out
+
+
+# --- Review findings (Sol, 21 Nov) ------------------------------------------------------------
+
+@pytest.mark.xfail(strict=True, reason="Sol finding 1 (blocker), not fixed yet")
+def test_a_real_opening_after_a_reset_is_never_archived_whatever_its_detail(conn):
+    """Finding 1: the real opening's detail may say "test". Only the known test opening can move."""
+    seed(conn)
+    ledger.reset_test_opening(conn, "kevin", RESET_AT)
+    real = ledger.record(conn, "opening", 60000, "Real opening after test reset", "kevin",
+                         datetime(2026, 11, 28, 17, 0, tzinfo=timezone.utc))
+    for now in (RESET_AT, datetime(2026, 11, 28, 18, 0, tzinfo=timezone.utc)):
+        with pytest.raises(LedgerError):
+            ledger.reset_test_opening(conn, "kevin", now)
+        with pytest.raises(LedgerError):
+            ledger.plan_reset(conn, now)
+    assert ledger.opening(conn).id == real.id and len(ledger.archived(conn)) == 1
+
+
+@pytest.mark.xfail(strict=True, reason="Sol finding 1 (blocker), not fixed yet")
+def test_only_the_known_test_opening_matches(conn):
+    """Finding 1: id 1, dated 11 Nov, with the exact detail. Anything else refuses, under the row lock."""
+    assert (ledger.TEST_OPENING_ID, ledger.TEST_OPENING_DATE, ledger.TEST_OPENING_DETAIL) == (
+        1, date(2026, 11, 11), TEST_DETAIL)
+    ledger.record(conn, "opening", 60000, "opening capital (a test, 11 Nov)", "marshall", TEST_OPENED)
+    with pytest.raises(LedgerError, match="isn't the 11 Nov test opening"):
+        ledger.reset_test_opening(conn, "kevin", RESET_AT)
+    assert ledger.opening(conn) is not None and ledger.archived(conn) == []
+
+
+@pytest.mark.xfail(strict=True, reason="Sol finding 1 (blocker), not fixed yet")
+def test_a_second_reset_refuses_even_if_the_test_opening_is_back(conn):
+    """Finding 1: once the archive records a reset, nothing else is moved, even a row just like the test one."""
+    seed(conn)
+    ledger.reset_test_opening(conn, "kevin", RESET_AT)
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (1, %s, 'opening', 60000, %s, 'marshall')", (TEST_OPENED, TEST_DETAIL))
+    with pytest.raises(LedgerError, match="already reset"):
+        ledger.reset_test_opening(conn, "kevin", RESET_AT)
+    assert ledger.opening(conn).id == 1 and len(ledger.archived(conn)) == 1
+
+
+@pytest.mark.xfail(strict=True, reason="Sol finding 2, not fixed yet")
+def test_the_reset_window_closes_at_midnight_eastern_on_30_nov(conn):
+    """Finding 2: a reset on Mon 30 Nov would let the opening land after the fill's receipt."""
+    closes = ledger.RESET_CLOSES
+    assert closes.tzinfo is not None and str(closes.tzinfo) == "America/New_York"
+    assert closes == datetime(2026, 11, 30, 5, 0, tzinfo=timezone.utc)          # 00:00 EST
+    seed(conn)
+    with pytest.raises(LedgerError, match="window closed"):
+        ledger.reset_test_opening(conn, "kevin", closes)
+    with pytest.raises(LedgerError, match="window closed"):
+        ledger.plan_reset(conn, closes + timedelta(hours=12))
+    assert ledger.opening(conn).detail == TEST_DETAIL and ledger.archived(conn) == []
+    assert ledger.reset_test_opening(conn, "kevin", closes - timedelta(seconds=1)).id == 1
+
+
+@pytest.mark.xfail(strict=True, reason="Sol finding 5, not fixed yet")
+def test_show_dates_the_opening_in_eastern(schema_url, monkeypatch, capsys):
+    """Finding 5: an opening at 20:00 Eastern on 29 Nov is 01:00 UTC on 30 Nov. `show` says 29 Nov."""
+    from vending import db as db_module
+
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(ledger, "db_now", lambda conn: AFTER)
+    evening = datetime(2026, 11, 30, 1, 0, tzinfo=timezone.utc)
+    with open_in(*schema_url) as conn:
+        ledger.record(conn, "opening", 60000, "opening capital", "kevin", evening)
+    assert ledger.main(["show"]) == 0
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("Opening capital"))
+    assert "2026-11-29" in line and "2026-11-30" not in line and "Eastern" in line

@@ -3,7 +3,7 @@ Anthropic API, the bridge or a real server process. Runs and spend land in a thr
 
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -395,6 +395,28 @@ def test_notes_from_before_the_current_slot_assignment_are_left_out(connect, con
     assert "written before our current slot assignment was recorded" in opening
     client = Script(answer())
     go(connect, client, Tools())                                    # notes written since then carry on
+    assert "New notes." in client.sent[0]["messages"][0]["content"]
+
+
+@pytest.mark.xfail(strict=True, reason="Sol finding 3, not fixed yet")
+def test_notes_from_a_run_while_slots_record_waits_on_the_server_are_left_out(connect, conn):
+    """`slots record` asks the server, a run starts and ends on the old slots, then the answer is stored.
+
+    The run started after the request, but it never saw the new assignment, so its notes are stale (#216)."""
+    from tests.test_slots import MOVED
+    from vending import slots
+
+    asked_at = slots.clock(conn)                                      # `slots record` sends its request
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())  # a run on the old slots, meanwhile
+    far_lock = asked_at + timedelta(days=365)
+    assert slots.record(conn, MOVED, now=asked_at, lock=far_lock) == "changed"   # then the answer is stored
+    client = Script(answer(notes="New notes."))
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening
+    assert "written before our current slot assignment was recorded" in opening
+    client = Script(answer())
+    go(connect, client, Tools())                                      # a run on the new slots carries on
     assert "New notes." in client.sent[0]["messages"][0]["content"]
 
 
