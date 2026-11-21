@@ -50,6 +50,7 @@ planner, hash and submit, so the request is recorded the same way as the agent's
 ```
 python -m vending.fill                                    # preview only; sends nothing
 python -m vending.fill --submit --hash HASH --by NAME     # send it
+python -m vending.fill --submit --hash HASH --late --by NAME   # send it after the deadline anyway
 ```
 
 1. Run the preview. It shows each line (slot, product, units, store, packs, unit cost, sale price),
@@ -59,7 +60,17 @@ python -m vending.fill --submit --hash HASH --by NAME     # send it
    cutoff is Sun 29 Nov 23:59.
 3. Send it with the hash from step 1. If anything changed since the preview (plan, price, pack or
    balance), the hash no longer matches, and the command refuses with `plan_changed`. Run the
-   preview again.
+   preview again. The hash also covers the picked plan's ID and our slots (the server's assignment),
+   so a hash from another plan or assignment never sends this one.
+
+While the send runs, it holds the pick and the slot assignment. A `plan_store pick` or a new slot
+assignment waits until the send is over. Right before the POST, the command reads the pick and our
+slots again and refuses with `pick_changed` if either changed.
+
+The deadline is checked right before the POST too. It comes from the Key dates panel
+(`vending.key_dates.FILL_REQUEST`). From 00:00 ET Mon 30 Nov the command refuses with `fill_deadline`,
+unless you add `--late`. A late request may be denied, but it may not be, so a person can still choose
+to send it. The preview warns once the deadline has passed, and `action_log` records `late`.
 
 The request buys what the plan buys. The plan adds up each product's units across its slots and rounds
 that total up to whole packs: ten slots of 7 Coca-Cola is six 12-packs, not ten. So the request has:
@@ -79,6 +90,9 @@ It refuses, with every reason and nothing sent, when:
 - the plan was picked for another slot assignment than our slots (the server's assignment) now
   (`plan_assignment`);
 - a product has no sourcing row, store or checked price (`no_checked_price`, #202);
+- a product's alternate has no checked price (`no_checked_price`). The request sends the alternate
+  too, so the command refuses rather than drop it. Check its price or remove it
+  (`python -m vending.sourcing remove SKU --alternate --by NAME`);
 - the ledger has no opening, an opening dated after now, or only the test opening from before the fall
   cut (`test_opening`, #215);
 - a request was sent since the opening, or by this command at any time, and was not rejected

@@ -76,10 +76,12 @@ class AnswerNotStored(RuntimeError):
 def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
                          connect: Callable[[], psycopg.Connection], now: datetime | None = None,
                          expected_plan_hash: str | None = None, *, pool: bool = False,
+                         before_send: Callable[[psycopg.Connection, planner.Plan], list[Refusal]] | None = None,
                          ) -> Callable[[psycopg.Connection], SubmitReply]:
     """The write action for the gate. `connect` opens the one side connection that records the
     attempt; it must reach the same database as the gate's. `pool` is the fill's (`vending.fill`), never
-    the agent's: see "Pooled purchases" in the planner."""
+    the agent's: see "Pooled purchases" in the planner. `before_send`, also the fill's, runs last before
+    anything is recorded or sent, in the gate's transaction, and any refusal it returns stops the send."""
 
     def action(conn: psycopg.Connection) -> SubmitReply:
         client = bridge()
@@ -93,6 +95,8 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
             refusals.append(Refusal("plan_changed", (
                 f"the plan now hashes to {plan.plan_hash}, not {expected_plan_hash} as previewed: the lines, their "
                 "worst-case cost or the visit fee changed since. Preview again and submit what it shows.")))
+        if before_send is not None:
+            refusals.extend(before_send(conn, plan))
         if unresolved := submissions.unresolved(conn):
             refusals.append(unresolved)
         if refusals:

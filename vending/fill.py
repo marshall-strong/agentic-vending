@@ -2,6 +2,7 @@
 
     python -m vending.fill                                     # preview: lines, cost, hash; sends nothing
     python -m vending.fill --submit --hash HASH --by NAME      # send it, if it still hashes to HASH
+    python -m vending.fill --submit --hash HASH --late --by NAME   # send it after the deadline anyway
 
 The team picks one plan in `first_fill_plans` (`python -m vending.plan_store pick`).
 This command reads that plan, turns each of its slots into the agent's desired
@@ -13,13 +14,15 @@ read back by `python -m vending.sync_requests`, exactly as the agent's would be.
 
 The plan's own pack prices are a model's estimates, so they are never sent.
 Every product is bought the way the team's sourcing table says, and a product
-whose table row has no checked price is refused (#202).
+whose primary or alternate row has no checked price is refused (#202).
 
 On top of the planner's gates, the command refuses, with every reason at once
 and nothing sent:
 
 - `plan_assignment`: the plan was picked for another slot assignment than ours now;
-- `no_checked_price`: a product with no sourcing row, or one with no checked price;
+- `no_checked_price`: a product with no sourcing row, or a primary or alternate row with no checked price.
+  The request sends the alternate too, so an unchecked one is refused, not dropped: dropping it would send a
+  request the person never saw. Check its price (`sourcing set SKU --alternate`) or remove it;
 - `test_opening`: the ledger's opening is from before the fall cut, the test opening of 11 Nov (#215);
 - `fill_already_sent`: a request since the opening, or any request this command sent, was accepted and not
   rejected, so the fill has gone. This command's own requests count whenever they were sent, so an opening
@@ -36,8 +39,22 @@ purchases" in `vending.planner`.
 
 The submit needs `--hash`, the hash the preview printed, and refuses
 (`plan_changed`) when the plan now hashes to anything else: a changed plan,
-price, pack or balance can't slip through. Who submitted it, and the plan's ID,
-go in `action_log` (tool `fill.submit`) with the submit's reply.
+price, pack or balance can't slip through. The hash covers the planner's hash of
+the request, the picked plan's ID and our slots (the server's assignment), so a
+hash from one plan or assignment never sends another (`approval_hash`). Who
+submitted it, and the plan's ID, go in `action_log` (tool `fill.submit`) with
+the submit's reply.
+
+The submit holds the pick and the slot assignment for its whole transaction: a
+`plan_store pick` or a new assignment waits until the send is over. Right before
+the POST it reads the pick and our slots again and refuses (`pick_changed`) if
+either is not what it planned.
+
+The request is due by 23:59 ET on Sun 29 Nov (`key_dates.FILL_REQUEST`). Right
+before the POST the submit checks the clock and, from midnight on, refuses
+(`fill_deadline`) unless `--late` is given: a late request may be denied, but it
+may not be, so a person can still choose to send it. The log records `late`.
+The preview warns once the deadline has passed.
 
 The planner's store cutoffs time purchases for a Friday visit. The fill is
 stocked on Mon 30 Nov (David, 20 Nov), so the command also warns about each
@@ -48,17 +65,19 @@ it arrives late and is stocked at the next scheduled visit (David, 17 Nov).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.types.json import set_json_loads
 
-from vending import db, ledger, plan_rounds, planner, planning, settings, slots, sourcing, start, submissions
+from vending import (db, key_dates, ledger, plan_rounds, planner, planning, settings, slots, sourcing, start,
+                     submissions)
 from vending.bridge import Bridge
 from vending.pricing import Refusal
 from vending.tools import desired_state as schema
@@ -67,14 +86,36 @@ from vending.write_gate import Refused, run_write
 
 TOOL = "fill.submit"
 EASTERN = ZoneInfo("America/New_York")
-# Staff buy and stock the fill on Mon 30 Nov (David, 20 Nov: planning/2026-11-20-david-update.md).
-DAY_ONE_VISIT = date(2026, 11, 30)
+# Staff buy and stock the fill on Mon 30 Nov (David, 20 Nov), as the Key dates panel lists it.
+DAY_ONE_VISIT = key_dates.STOCKING.day
 FRIDAY = 4
 # Codes this command adds to the planner's.
 PLAN_ASSIGNMENT = "plan_assignment"
 NO_CHECKED_PRICE = "no_checked_price"
 TEST_OPENING = "test_opening"
 ALREADY_SENT = "fill_already_sent"
+PICK_CHANGED = "pick_changed"
+PLAN_CHANGED = "plan_changed"
+PAST_DEADLINE = "fill_deadline"
+
+
+def fill_deadline() -> datetime:
+    """When the fill request is late: the end of its deadline minute (23:59 ET Sun 29 Nov), from the Key dates
+    panel's list, so the date is written down once."""
+    kd = key_dates.FILL_REQUEST
+    return datetime.combine(kd.day, kd.at, EASTERN) + timedelta(minutes=1)
+
+
+def _deadline_text() -> str:
+    kd = key_dates.FILL_REQUEST
+    return f"{kd.at:%H:%M} ET {kd.day:%a %d %b}"
+
+
+def approval_hash(plan_hash: str, plan_id: int, ours: Sequence[str]) -> str:
+    """The hash the preview prints and the submit needs: the planner's hash of the request, bound to the picked
+    plan's ID and our slots (the server's assignment), so one plan's or assignment's hash can't send another."""
+    body = json.dumps({"plan_hash": plan_hash, "plan_id": plan_id, "slots": list(ours)}, sort_keys=True)
+    return hashlib.sha256(body.encode()).hexdigest()
 
 
 class NoPick(LookupError):
@@ -89,6 +130,7 @@ class Picked:
     loaded_by: str
     slots: tuple[str, ...]          # the assignment it was loaded for
     round: plan_rounds.Round | None  # None when it was loaded for another assignment
+    row: tuple = field(default=(), repr=False)   # the stored row as read, to tell if it changed
 
 
 @dataclass(frozen=True)
@@ -99,24 +141,35 @@ class Preview:
     refusals: tuple[Refusal, ...]   # the planner's and this command's, all at once
     warnings: tuple[str, ...]
     blocked: str | None = None      # what a person must do before anything can be planned
+    ours: tuple[str, ...] = ()      # our slots (the server's assignment) when it was planned
+    late: bool = False              # past the fill request's deadline
 
     @property
     def ok(self) -> bool:
         return self.plan is not None and not self.refusals and self.blocked is None
 
+    @property
+    def approval(self) -> str | None:
+        """The hash to submit with (`approval_hash`), or None when nothing can be sent."""
+        return approval_hash(self.plan.plan_hash, self.picked.id, self.ours) if self.ok else None
+
 
 def picked(conn: psycopg.Connection, ours: tuple[str, ...]) -> Picked:
     """The picked plan, checked against `ours` when it was loaded for the same assignment."""
-    with conn.cursor() as cur:
-        set_json_loads(json.loads, context=cur)   # the plan loader's decoder, as the dashboard reads it
-        row = cur.execute("select id, label, loaded_at, loaded_by, plan, projection, slots from first_fill_plans"
-                          " where picked").fetchone()
+    row = _picked_row(conn)
     if row is None:
         raise NoPick("No first-fill plan is picked; pick one with python -m vending.plan_store pick ID --by NAME.")
     plan_id, label, loaded_at, loaded_by, plan, projection, stored = row
     same = set(stored) == set(ours)
     checked = plan_rounds.parse_round(label, plan, projection, ours, saved_at=loaded_at) if same else None
-    return Picked(plan_id, label, loaded_at, loaded_by, tuple(stored), checked)
+    return Picked(plan_id, label, loaded_at, loaded_by, tuple(stored), checked, row)
+
+
+def _picked_row(conn: psycopg.Connection) -> tuple | None:
+    with conn.cursor() as cur:
+        set_json_loads(json.loads, context=cur)   # the plan loader's decoder, as the dashboard reads it
+        return cur.execute("select id, label, loaded_at, loaded_by, plan, projection, slots from first_fill_plans"
+                           " where picked").fetchone()
 
 
 def desired_state(checked: plan_rounds.Round) -> schema.DesiredState:
@@ -161,9 +214,11 @@ def _sent(conn: psycopg.Connection, opened_at: datetime | None) -> list[tuple[st
 
 
 def _unpriced(conn: psycopg.Connection, checked: plan_rounds.Round) -> list[Refusal]:
-    """A refusal per slot whose product has no sourcing row, no store, or no checked price (#202)."""
+    """A refusal per slot whose product has no sourcing row, no store, or no checked price, and one per
+    product whose alternate, which the request would send too, has no checked price (#202)."""
     skus = sorted({s.sku for s in checked.slots.values() if s.sku})
-    primary = {o.sku: o for o in sourcing.options_for(conn, skus) if o.rank == "primary"}
+    options = sourcing.options_for(conn, skus)
+    primary = {o.sku: o for o in options if o.rank == "primary"}
     found = []
     for s in checked.slots.values():
         o = primary.get(s.sku) if s.sku else None
@@ -178,6 +233,15 @@ def _unpriced(conn: psycopg.Connection, checked: plan_rounds.Round) -> list[Refu
         found.append(Refusal(NO_CHECKED_PRICE, (
             f"slot {s.slot}: {why}; look it up and record it (python -m vending.sourcing set "
             f"{s.sku or 'SKU'} --store ... --pack N --price P --by NAME; #202)"), s.slot))
+    for o in options:
+        if o.rank != "alternate" or o.sku not in primary or (o.store and o.expected_cents is not None):
+            continue
+        used = sorted(s.slot for s in checked.slots.values() if s.sku == o.sku)
+        found.append(Refusal(NO_CHECKED_PRICE, (
+            f"{o.sku}'s alternate ({o.store or 'no store'}) has no checked price, and the request would send it "
+            f"for slot{'s' if len(used) > 1 else ''} {', '.join(used)}; look it up and record it (python -m "
+            f"vending.sourcing set {o.sku} --alternate --store ... --pack N --price P --by NAME), or remove it "
+            f"(python -m vending.sourcing remove {o.sku} --alternate --by NAME; #202)")))
     return found
 
 
@@ -214,49 +278,94 @@ def preview(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
     ours = slots.our_slots(conn)
     pick = picked(conn, ours)
     own = checks(conn, pick, ours)
+    late = (now or ledger.db_now(conn)) >= fill_deadline()
+    deadline = [f"past the fill request deadline ({_deadline_text()}): a late request may be denied; to send it "
+                "anyway, add --late to the submit"] if late else []
     if pick.round is None:
-        return Preview(pick, None, None, tuple(own), ())
+        return Preview(pick, None, None, tuple(own), tuple(deadline), ours=ours, late=late)
     try:
         plan, gathered = planning.plan(conn, desired_state(pick.round), bridge, now, pool=True)
     except planning.NotReady as blocked:
-        return Preview(pick, None, None, tuple(own), (), blocked=str(blocked))
+        return Preview(pick, None, None, tuple(own), tuple(deadline), blocked=str(blocked), ours=ours, late=late)
     return Preview(pick, plan, gathered, _merge(own, plan.refusals),
-                   (*plan.warnings, *day_one_warnings(plan, gathered.now, visit), *_plan_warnings(pick.round)))
+                   (*deadline, *plan.warnings, *day_one_warnings(plan, gathered.now, visit),
+                    *_plan_warnings(pick.round)), ours=ours, late=late)
 
 
 def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Callable[[], psycopg.Connection],
-           by: str, expected_plan_hash: str, now: datetime | None = None) -> submit_tool.SubmitReply:
+           by: str, expected_plan_hash: str, now: datetime | None = None, *, late: bool = False,
+           ) -> submit_tool.SubmitReply:
     """Send the picked plan through the agent's submit, inside the write gate. Raises `Refused` with every reason.
 
     The checks run again inside the gate's transaction, holding the halt lock, so nothing can change between
-    them and the send. With any refusal, the planner still runs so its refusals are reported too, but nothing
-    is sent.
+    them and the send. The transaction also holds the pick and the slot assignment, so a repick or a new
+    assignment waits until the send is over; right before the POST, the pick, our slots, the hash and the
+    deadline are checked once more (`_before_send`). With any refusal, the planner still runs so its refusals
+    are reported too, but nothing is sent. `late` sends after the deadline anyway.
     """
     if not by.strip():
         raise ValueError("--by needs your name")
     if not expected_plan_hash.strip():
         raise ValueError("--hash needs the plan hash the preview printed")
-    arguments = {"by": by.strip(), "expected_plan_hash": expected_plan_hash.strip()}
+    expected = expected_plan_hash.strip()
+    arguments = {"by": by.strip(), "expected_plan_hash": expected}
+    if late:
+        arguments["late"] = True
 
     def action(conn: psycopg.Connection) -> submit_tool.SubmitReply:
+        # A pick (`plan_store pick`) and a new slot assignment (`slots record`) wait for this transaction.
+        conn.execute("lock table first_fill_plans in share mode")
+        conn.execute("select 1 from slot_assignment where id = 1 for share")
         ours = slots.our_slots(conn)
         pick = picked(conn, ours)
         arguments.update(plan_id=pick.id, label=pick.label)
         own = checks(conn, pick, ours)
         if pick.round is None:
-            raise Refused(own)
+            raise Refused([*own, *_deadline(conn, now, late)])
         desired = desired_state(pick.round)
         if own:
             try:
                 plan, _ = planning.plan(conn, desired, bridge(), now, pool=True)
             except planning.NotReady:
-                raise Refused(own) from None
-            raise Refused(list(_merge(own, plan.refusals)))
-        return submit_tool.submit_desired_state(desired, bridge, connect, now, expected_plan_hash.strip(),
-                                                pool=True)(conn)
+                raise Refused([*own, *_deadline(conn, now, late)]) from None
+            raise Refused([*_merge(own, plan.refusals), *_deadline(conn, now, late)])
+
+        def before_send(conn: psycopg.Connection, plan: planner.Plan) -> list[Refusal]:
+            return _before_send(conn, plan, pick, ours, expected, now, late)
+
+        return submit_tool.submit_desired_state(desired, bridge, connect, now, pool=True,
+                                                before_send=before_send)(conn)
 
     # The gate logs `arguments` after the action has filled in the plan's ID.
     return run_write(conn, TOOL, arguments, action)
+
+
+def _before_send(conn: psycopg.Connection, plan: planner.Plan, pick: Picked, ours: tuple[str, ...], expected: str,
+                 now: datetime | None, late: bool) -> list[Refusal]:
+    """The last checks, right before the POST, in the same transaction: the hash, the pick, our slots, the clock."""
+    found = []
+    # A refused plan has no hash; its refusals already say what is wrong.
+    if plan.plan_hash and (now_hash := approval_hash(plan.plan_hash, pick.id, ours)) != expected:
+        found.append(Refusal(PLAN_CHANGED, (
+            f"the plan now hashes to {now_hash}, not {expected} as previewed: the picked plan, our slots (the "
+            "server's assignment), the lines, their worst-case cost or the visit fee changed since. Preview again "
+            "and submit what it shows.")))
+    if _picked_row(conn) != pick.row or slots.our_slots(conn) != ours:
+        found.append(Refusal(PICK_CHANGED, (
+            f"the picked plan or our slots (the server's assignment) changed while this submit ran; it planned "
+            f"plan #{pick.id} (round {pick.label}). Nothing was sent. Preview again and submit what it shows.")))
+    found.extend(_deadline(conn, now, late))
+    return found
+
+
+def _deadline(conn: psycopg.Connection, now: datetime | None, late: bool) -> list[Refusal]:
+    """A refusal once the fill request's deadline has passed, unless `late`. The clock is read now, not reused."""
+    at = now or ledger.db_now(conn)
+    if late or at < fill_deadline():
+        return []
+    return [Refusal(PAST_DEADLINE, (
+        f"the fill request was due by {_deadline_text()}, and it is now {at.astimezone(EASTERN):%a %d %b %H:%M} "
+        "ET. A late request may be denied. To send it anyway, run the same command with --late."))]
 
 
 def _merge(own: list[Refusal], planned: tuple[Refusal, ...]) -> tuple[Refusal, ...]:
@@ -298,8 +407,9 @@ def render(p: Preview) -> str:
         out += ["", f"REFUSED ({len(p.refusals)}): nothing can be sent until each is fixed.",
                 *(f"- {r.code}: {r.message}" for r in p.refusals)]
     if p.ok:
-        out += ["", f"Plan hash: {p.plan.plan_hash}",
-                f"To send it: python -m vending.fill --submit --hash {p.plan.plan_hash} --by NAME"]
+        out += ["", f"Plan hash: {p.approval}",
+                f"To send it: python -m vending.fill --submit --hash {p.approval}{' --late' if p.late else ''} "
+                "--by NAME"]
     else:
         out += ["", "Plan hash: none (refused plans have no hash)"]
     return "\n".join(out)
@@ -338,6 +448,8 @@ def main(argv: list[str] | None = None, *, bridge: Callable[[], Bridge] = Bridge
     parser.add_argument("--submit", action="store_true", help="send the request; without it, preview only")
     parser.add_argument("--hash", help="the plan hash the preview printed (required with --submit)")
     parser.add_argument("--by", help="your name, for the log (required with --submit)")
+    parser.add_argument("--late", action="store_true",
+                        help=f"send after the fill request's deadline ({_deadline_text()}) anyway; it may be denied")
     parser.add_argument("--visit", type=date.fromisoformat, default=DAY_ONE_VISIT,
                         help=f"the stocking day, for the cutoff warnings (default {DAY_ONE_VISIT})")
     args = parser.parse_args(argv)
@@ -351,7 +463,7 @@ def main(argv: list[str] | None = None, *, bridge: Callable[[], Bridge] = Bridge
                 print(render(preview(conn, bridge(), now, args.visit)))
                 return 0
             try:
-                reply = submit(conn, bridge, connect, args.by, args.hash, now)
+                reply = submit(conn, bridge, connect, args.by, args.hash, now, late=args.late)
             except Refused as refused:
                 print(f"Refused; nothing was sent ({len(refused.refusals)}):", file=sys.stderr)
                 for r in refused.refusals:

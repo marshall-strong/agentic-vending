@@ -86,9 +86,10 @@ def test_the_preview_shows_every_line_the_cost_and_the_hash_and_sends_nothing(db
         assert re.search(rf"^{slot}\s+PICKLE\s+8\s+from slot {PICKLE[0]}\s+-\s+-\s+\$3\.00", out, re.M)
     # As round 6 pools them: 70 Coca-Cola in six 12-packs, 80 Pickle Potion in four 24-packs.
     assert "Total: expected $146.22, at most $162.00. Spendable $600.00; $438.00 left at most." in out
-    # The same hash the agent's preview gives for the same desired state.
+    # The agent's hash for the same desired state, bound to the plan's ID and our slots (finding 5).
     with open_in(*schema_url) as conn:
-        assert plan_hash == fill.preview(conn, fake.client(), NOW).plan.plan_hash
+        p = fill.preview(conn, fake.client(), NOW)
+    assert plan_hash == p.approval == fill.approval_hash(p.plan.plan_hash, plan_id, TEST_SLOTS)
     assert f"--submit --hash {plan_hash} --by NAME" in out
     # Sunday evening: Amazon's cutoff for the Monday stocking (Saturday 23:59) has passed, in-store's hasn't.
     assert "past the Amazon cutoff for the Mon 30 Nov stocking (Sat 28 Nov 23:59 ET)" in out
@@ -119,6 +120,8 @@ def test_a_store_cutoff_on_the_stocking_day_is_only_a_warning(db, fake, schema_u
 def test_a_submit_records_the_request_as_the_agent_would_with_who_and_which_plan(db, fake, schema_url, capsys):  # noqa: F811
     plan_id = seed(db, fake)
     _, plan_hash = previewed(schema_url, fake, capsys)
+    with open_in(*schema_url) as conn:
+        request_hash = fill.preview(conn, fake.client(), NOW).plan.plan_hash
     assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 0
     out = capsys.readouterr().out
     assert "Submitted purchase request pr-1 (pending): 20 lines, at most 162.00" in out
@@ -128,9 +131,9 @@ def test_a_submit_records_the_request_as_the_agent_would_with_who_and_which_plan
     assert posted["lines"][0]["primary"] == {
         "sku": "COKE20", "store": "Costco", "packs": 6, "units_per_pack": 12, "max_price_per_pack": "13.00",
         "sale_price": "2.50", "change_product": True}
-    # Where the request sync finds it on 30 Nov, with the hash that was previewed.
+    # Where the request sync finds it on 30 Nov, with the planner's hash of the request, as the agent's would be.
     assert db.execute("select request_id, status, plan_hash, request_body from purchase_requests").fetchall() == [
-        ("pr-1", "pending", plan_hash, posted)]
+        ("pr-1", "pending", request_hash, posted)]
     assert db.execute("select status, request_id from purchase_submissions").fetchall() == [("accepted", "pr-1")]
     [(arguments, outcome, result)] = db.execute(
         "select arguments, outcome, result from action_log where tool = 'fill.submit'").fetchall()
@@ -305,3 +308,148 @@ def test_an_unsettled_submission_blocks_the_preview_and_the_submit(db, fake, sch
     out, again = previewed(schema_url, fake, capsys)
     assert again is None and "submission_unresolved" in out
     assert len(fake.posts) == 1
+
+
+# --- Review findings 3-6 --------------------------------------------------------------------------
+
+def load_plan(conn, plan=None, label="7") -> int:
+    """Another stored plan for our slots, unpicked."""
+    return conn.execute(
+        "insert into first_fill_plans (loaded_by, label, source_note, plan, projection, slots)"
+        " values ('Test Loader', %s, 'round/plan.json', %s, '{}', %s) returning id",
+        (label, Jsonb(plan or plan_json()), list(TEST_SLOTS))).fetchone()[0]
+
+
+def picked_id(conn) -> int:
+    return conn.execute("select id from first_fill_plans where picked").fetchone()[0]
+
+
+def test_an_unchecked_alternate_is_refused_with_nothing_sent(db, fake, schema_url, capsys):  # noqa: F811
+    """Finding 3: a checked Costco primary with an unchecked Walmart alternate posted both."""
+    seed(db, fake)
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", expected_cents=None, max_cents=1500), NOW)
+    out, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash is None and "Plan hash: none" in out
+    assert "- no_checked_price: COKE20's alternate (Walmart) has no checked price" in out
+    assert run(schema_url, fake, "--submit", "--hash", "0" * 64, "--by", "Test Submitter") == 1
+    capsys.readouterr()
+    assert codes(db) == ["no_checked_price"] and fake.posts == []
+    # Checked, it goes in the request.
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", expected_cents=1400, max_cents=1500), NOW)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 0
+    [posted] = fake.posts
+    assert posted["lines"][0]["alternate"]["store"] == "Walmart"
+
+
+def test_a_repick_waits_for_the_send_and_can_not_slip_in_before_it(db, fake, schema_url, capsys):  # noqa: F811
+    """Finding 4: picking round 7 while the submit was sending round 6 went through, so round 6 was sent while
+    round 7 was the pick. The submit now holds the pick for its whole transaction: a repick waits until it ends."""
+    import threading
+
+    from vending import plan_store
+
+    six = seed(db, fake)
+    seven = load_plan(db)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    fake.hold = threading.Event()
+    result = {}
+    sender = threading.Thread(target=lambda: result.update(code=run(
+        schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter")))
+    sender.start()
+    try:
+        assert fake.received.wait(30)
+        with open_in(*schema_url) as other:
+            other.execute("set lock_timeout = '1s'")
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                plan_store.pick(other, seven, "Test Picker")
+    finally:
+        fake.hold.set()
+        sender.join(30)
+    assert result == {"code": 0} and len(fake.posts) == 1 and picked_id(db) == six
+    [(arguments,)] = db.execute("select arguments from action_log where tool = 'fill.submit'").fetchall()
+    assert arguments["plan_id"] == six
+    # Once the send is over, the repick goes through.
+    with open_in(*schema_url) as other:
+        plan_store.pick(other, seven, "Test Picker")
+    assert picked_id(db) == seven
+
+
+def test_a_pick_changed_inside_the_submit_is_refused_before_the_post(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Finding 4: the picked plan is read again right before the POST, in the same transaction, and must be the
+    one the submit planned."""
+    from vending import planning
+
+    seed(db, fake)
+    seven = load_plan(db)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    real = planning.plan
+
+    def repicked(conn, *args, **kwargs):
+        conn.execute("update first_fill_plans set picked = (id = %s)", (seven,))
+        return real(conn, *args, **kwargs)
+
+    monkeypatch.setattr(planning, "plan", repicked)
+    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 1
+    assert "pick_changed" in capsys.readouterr().err and fake.posts == []
+
+
+def test_a_hash_is_bound_to_the_plans_id(db, fake, schema_url, capsys):  # noqa: F811
+    """Finding 5: the hash covered only the request, so a plan with the same lines under another ID reused it."""
+    seed(db, fake)
+    _, six_hash = previewed(schema_url, fake, capsys)
+    seven = load_plan(db)
+    db.execute("update first_fill_plans set picked = (id = %s)", (seven,))
+    _, seven_hash = previewed(schema_url, fake, capsys)
+    assert seven_hash and seven_hash != six_hash
+    assert run(schema_url, fake, "--submit", "--hash", six_hash, "--by", "Test Submitter") == 1
+    assert "plan_changed" in capsys.readouterr().err and fake.posts == []
+    assert run(schema_url, fake, "--submit", "--hash", seven_hash, "--by", "Test Submitter") == 0
+
+
+def test_a_hash_is_bound_to_our_slot_assignment():
+    """Finding 5: the same plan and request under another assignment hashes differently."""
+    base = fill.approval_hash("a" * 64, 6, TEST_SLOTS)
+    assert base == fill.approval_hash("a" * 64, 6, tuple(TEST_SLOTS))
+    assert base != fill.approval_hash("a" * 64, 6, (*TEST_SLOTS[:-1], "99"))
+    assert base != fill.approval_hash("a" * 64, 7, TEST_SLOTS)
+    assert base != fill.approval_hash("b" * 64, 6, TEST_SLOTS)
+
+
+SUN_LAST_SECOND = datetime(2026, 11, 30, 4, 59, 59, tzinfo=timezone.utc)   # Sun 29 Nov 23:59:59 Eastern
+MON_0030 = datetime(2026, 11, 30, 5, 30, tzinfo=timezone.utc)              # Mon 30 Nov 00:30 Eastern
+
+
+def test_a_submit_after_the_sunday_deadline_is_refused_without_late(db, fake, schema_url, capsys):  # noqa: F811
+    """Finding 6: a hash from Sunday evening still posted at 00:30 ET on Mon 30 Nov."""
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    argv = ["--submit", "--hash", plan_hash, "--by", "Test Submitter"]
+    assert fill.main(argv, bridge=fake.client, connect=lambda: open_in(*schema_url), now=MON_0030) == 1
+    err = capsys.readouterr().err
+    assert "fill_deadline: the fill request was due by 23:59 ET Sun 29 Nov" in err and "--late" in err
+    assert fake.posts == [] and codes(db) == ["fill_deadline"]
+    # With --late, a person sends it anyway; the log says so.
+    assert fill.main([*argv, "--late"], bridge=fake.client, connect=lambda: open_in(*schema_url), now=MON_0030) == 0
+    assert len(fake.posts) == 1
+    [(arguments,)] = db.execute("select arguments from action_log where tool = 'fill.submit' and outcome = 'done'"
+                                ).fetchall()
+    assert arguments["late"] is True
+
+
+def test_the_last_second_of_sunday_is_still_on_time(db, fake, schema_url, capsys):  # noqa: F811
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    assert fill.main(["--submit", "--hash", plan_hash, "--by", "Test Submitter"], bridge=fake.client,
+                     connect=lambda: open_in(*schema_url), now=SUN_LAST_SECOND) == 0
+    assert len(fake.posts) == 1
+
+
+def test_a_preview_after_the_deadline_warns_and_says_to_add_late(db, fake, schema_url, capsys):  # noqa: F811
+    seed(db, fake)
+    assert fill.main([], bridge=fake.client, connect=lambda: open_in(*schema_url), now=MON_0030) == 0
+    out = capsys.readouterr().out
+    assert "past the fill request deadline (23:59 ET Sun 29 Nov)" in out
+    assert re.search(r"--submit --hash [0-9a-f]{64} --late --by NAME", out)
+    assert fill.main([], bridge=fake.client, connect=lambda: open_in(*schema_url), now=SUN_LAST_SECOND) == 0
+    assert "fill request deadline" not in capsys.readouterr().out
