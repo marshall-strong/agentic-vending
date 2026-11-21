@@ -31,8 +31,10 @@ from vending import dashboard
 DEMO, DEMO_STATE = "/dashboard/demo", "/dashboard/demo/state.json"
 LIVE = dashboard.DEMO_LIVE_HREF
 SNAPSHOT = Path(__file__).with_name("snapshot.json")
+# The Products page drawn from made-up data (`vending.products_page.DEMO_ROUTE`), linked from Back stock.
+DEMO_PRODUCTS = "/dashboard/demo/products"
 # Links on the demo page: back to the live page first.
-NAV = (("Live dashboard", LIVE), ("Home", "/"))
+NAV = (("Live dashboard", LIVE), ("Products", DEMO_PRODUCTS), ("Home", "/"))
 
 _TAGS = {"$datetime": datetime.fromisoformat, "$decimal": Decimal, "$fraction": Fraction}
 
@@ -94,7 +96,7 @@ def load(path: Path = SNAPSHOT) -> dict:
 
 def page() -> str:
     """The demo page: the live page's `render`, in demo mode."""
-    return dashboard.render(load(), json_href=DEMO_STATE, nav=NAV, demo=True)
+    return dashboard.render(load(), json_href=DEMO_STATE, nav=NAV, demo=True, charts={"products": DEMO_PRODUCTS})
 
 
 def state_json() -> str:

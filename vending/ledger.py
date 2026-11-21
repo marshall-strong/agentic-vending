@@ -28,10 +28,26 @@ range is asked for, the same boundary the stock count uses
 cost, tax remittances and adjustments.
 
 The sales tax inside the takings is set aside, not spendable: takings x 8/108
-per week, rounded half up to the cent (the team's 19 Oct decision; weeks start
-on Saturday, after the Friday visit, in Eastern time). What is still **owed**
-is the set-aside less what has been remitted, and the **spendable** balance is
-the balance minus that. It is what the planner's balance gate checks against.
+per tax week, rounded half up to the cent (the team's 19 Oct decision). The tax
+week is David's: he calculates the tax once a week, at 23:59 Saturday Eastern,
+on that week's takings (David, email 20 Nov 2026; the first calculation is Sat
+5 Dec 2026). So a tax week runs from Sunday 00:00 to Saturday 23:59:59 Eastern,
+daylight saving included (`TAX_WEEK_STARTS`, `tax_week_of`). The week in
+progress is set aside the same way, on its takings so far, so the spendable
+balance never counts tax that Saturday's calculation will take. The first tax
+week starts at the opening, so it is partial.
+
+The display weeks are a different thing: the P&L, the money chart, the
+briefing and the leaderboards group by Saturday-to-Friday weeks, after the
+Friday visit (`WEEK_STARTS`, `week_of`). A display week's tax is its share of
+the tax weeks' rounded tax: each rise in the counters adds what it changes in
+its tax week's rounded tax, and the display week sums those. So the display
+weeks' tax adds up to the tax weeks' tax exactly, though one display week can
+differ by a cent from rounding its own takings.
+
+What is still **owed** is the set-aside less what has been remitted, and the
+**spendable** balance is the balance minus that. It is what the planner's
+balance gate checks against.
 
 Capital and remittances move money without being profit or loss, so the P&L
 leaves them out. Adjustments are corrections to the books (a bottle deposit, a
@@ -102,8 +118,11 @@ DEBITS = ("tokens", "tax_remitted")
 # The planner's default; a `midweek_fee_cents` row in `config` overrides it for
 # requests that don't carry their own fee.
 DEFAULT_MIDWEEK_FEE_CENTS = 2500
-# The week turns over on Saturday, after the Friday visit (planner `Config.week_starts`).
+# The display week turns over on Saturday, after the Friday visit (planner `Config.week_starts`).
 WEEK_STARTS = 5
+# The tax week turns over on Sunday 00:00 Eastern: David calculates the tax at 23:59 Saturday on that
+# week's takings (email, 20 Nov 2026). Not the display week: see the module docstring.
+TAX_WEEK_STARTS = 6
 TIMEZONE = "America/New_York"
 OPEN_HINT = ("The ledger has no opening entry yet. A person records the starting capital with: "
              "python -m vending.ledger open --amount 600.00 --by NAME")
@@ -126,9 +145,9 @@ class Entry:
 
 @dataclass(frozen=True)
 class WeekTakings:
-    week: date                  # the Saturday the week began, Eastern time
+    week: date                  # the day it began, Eastern: a Saturday in `by_week`, a Sunday in `by_tax_week`
     takings_cents: int
-    tax_cents: int
+    tax_cents: int              # `by_tax_week`: the week's takings x 8/108, rounded; `by_week`: its share of that
 
 
 @dataclass(frozen=True)
@@ -137,9 +156,10 @@ class Takings:
     start_poll: datetime | None     # the baseline poll the deltas are measured from
     end_poll: datetime | None       # the last poll counted
     cents: int
-    tax_cents: int                  # set aside: summed per week, each rounded half up
-    by_week: tuple[WeekTakings, ...]
+    tax_cents: int                  # set aside: summed per tax week, each rounded half up
+    by_week: tuple[WeekTakings, ...]            # display weeks (Saturday to Friday)
     note: str | None = None
+    by_tax_week: tuple[WeekTakings, ...] = ()   # tax weeks (Sunday to Saturday), as David calculates them
 
 
 @dataclass(frozen=True)
@@ -157,6 +177,7 @@ class Balance:
     tax_remitted_cents: Fraction    # positive: what was handed over
     adjustments_cents: Fraction     # signed
     notes: tuple[str, ...]
+    receipts_missing: int = 0       # receipt lines with no total_paid, left out of `receipts_cents`
 
     @property
     def balance_cents(self) -> Fraction:
@@ -230,11 +251,12 @@ class WeekPnl:
     """One week of a P&L window, Saturday to Friday in Eastern time, cut to the window.
 
     The same lines as `Pnl`, each booked to the week it happened in. The weeks
-    of a window add up to `pnl()` over the same window.
+    of a window add up to `pnl()` over the same window. A week's tax is its
+    share of the tax weeks' rounded tax (Sunday to Saturday; module docstring).
     """
     week: date                              # the Saturday the week began, Eastern time
     takings_cents: int
-    tax_cents: int
+    tax_cents: int                          # its share of the tax weeks' rounded tax
     units_sold: int
     units_costed: int
     cost_of_sales_cents: Fraction           # of the costed units
@@ -509,10 +531,16 @@ def rises_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, un
     window, as the stock replay walks them: a reading just before `since` that
     the history shows is a misread or a restart reads the same from any window,
     so the units counted here are the units the replay costs (#172).
+
+    Every time is read as a UTC instant: Python compares two datetimes in the
+    same ZoneInfo by wall clock, ignoring `fold`, so the two 01:30 polls of a
+    fall-back night would otherwise be one key and cut as one. The polls
+    returned are in UTC.
     """
+    since, until = since.astimezone(timezone.utc), until.astimezone(timezone.utc)
     by_poll: dict[datetime, dict[str, int]] = defaultdict(dict)
     for at, selection, value in rows:
-        by_poll[at][selection] = value
+        by_poll[at.astimezone(timezone.utc)][selection] = value
     times = sorted(t for t in by_poll if t <= until)
     if not times:
         return None, None, [], "no polls in the window, so takings are unknown and counted as 0"
@@ -545,9 +573,43 @@ def opening_rises(rows: Iterable[tuple[datetime, str, int]], opened_at: datetime
     return rises_between(rows, opened_at, until)
 
 
+def poll_start(start: datetime, opened_at: datetime | None) -> datetime:
+    """Where the poll figures of a window that starts at `start` count from: the `since` of `rises_between`.
+
+    The polls' figures (takings and their tax, units sold, cost of sales and
+    shrinkage) count the rises at polls after `since`, so a window that starts
+    after the opening counts from one microsecond before `start`: a poll at that
+    midnight sharp is in the window (a tax week's Sunday 00:00 poll, say), and
+    the day before, which ends a microsecond before it, doesn't take it too. A
+    window from the opening keeps the opening's poll as the baseline, so sales
+    before the opening are not counted. A window that starts before the
+    opening, or with no opening recorded, starts at `start`, as it always has:
+    the midnight rule is for the competition's tax weeks, and pre-opening
+    figures (development spend among them) stay as they were. Entries,
+    receipts and visits count from `start` itself, inclusive: never shifted.
+    One rule for `get_pnl`, the printable P&L and the money series.
+    """
+    if opened_at is not None and start > opened_at:
+        return start - timedelta(microseconds=1)
+    return start
+
+
 def week_of(moment_local: datetime, week_starts: int = WEEK_STARTS) -> date:
     """The day the week holding `moment_local` began: the latest `week_starts` weekday on or before it."""
     return moment_local.date() - timedelta(days=(moment_local.weekday() - week_starts) % 7)
+
+
+def tax_week_of(moment_local: datetime) -> date:
+    """The Sunday the tax week holding `moment_local` began (an Eastern wall clock, so daylight saving
+    is already in it): Sunday 00:00 to Saturday 23:59:59.999999, as David calculates the tax."""
+    return week_of(moment_local, TAX_WEEK_STARTS)
+
+
+def tax_week_end(week: date, tz: tzinfo | None = None) -> datetime:
+    """The last moment of the tax week that began on Sunday `week`: the next Sunday's midnight less a
+    microsecond, in `tz` (Eastern by default)."""
+    tz = tz or ZoneInfo(TIMEZONE)
+    return datetime.combine(week + timedelta(days=7), datetime.min.time(), tz) - timedelta(microseconds=1)
 
 
 def takings_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, until: datetime,
@@ -555,8 +617,10 @@ def takings_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, 
                     tax_percent: int = DEFAULT_TAX_PERCENT) -> Takings:
     """Takings and the tax inside them from `(polled_at, selection, lifetime_sales_cents)` rows. Pure.
 
-    Each rise in a slot's counter is booked to the week of the poll that showed
-    it. Tax is rounded per week, then summed.
+    Each rise in a slot's counter is booked to the weeks of the poll that showed
+    it. Tax is rounded per tax week (Sunday to Saturday), then summed. `by_week`
+    groups the same rises into `week_starts` weeks, each with its share of that
+    tax (see the module docstring).
     """
     return _takings(rises_between(rows, since, until), tz, week_starts, tax_percent)
 
@@ -565,11 +629,21 @@ def _takings(read: tuple[datetime | None, datetime | None, list[Rise], str | Non
              week_starts: int = WEEK_STARTS, tax_percent: int = DEFAULT_TAX_PERCENT) -> Takings:
     """`takings_between` from rises already read: (baseline poll, last poll, rises, note)."""
     baseline, last, rises, note = read
+    tax_weeks: dict[date, int] = defaultdict(int)
     weeks: dict[date, int] = defaultdict(int)
-    for r in rises:
-        weeks[week_of(r.at.astimezone(tz), week_starts)] += r.amount
-    by_week = tuple(WeekTakings(week, cents, tax_cents(cents, tax_percent)) for week, cents in sorted(weeks.items()))
-    return Takings(baseline, last, sum(w.takings_cents for w in by_week), sum(w.tax_cents for w in by_week), by_week, note)
+    shares: dict[date, int] = defaultdict(int)
+    for r in sorted(rises, key=lambda r: (r.at, r.selection)):
+        local = r.at.astimezone(tz)
+        tax_week, week = tax_week_of(local), week_of(local, week_starts)
+        before = tax_weeks[tax_week]
+        tax_weeks[tax_week] += r.amount
+        weeks[week] += r.amount
+        # What this rise adds to its tax week's rounded tax, so the display weeks add up to the tax weeks.
+        shares[week] += tax_cents(tax_weeks[tax_week], tax_percent) - tax_cents(before, tax_percent)
+    by_tax_week = tuple(WeekTakings(w, cents, tax_cents(cents, tax_percent)) for w, cents in sorted(tax_weeks.items()))
+    by_week = tuple(WeekTakings(w, cents, shares[w]) for w, cents in sorted(weeks.items()))
+    return Takings(baseline, last, sum(w.takings_cents for w in by_tax_week), sum(w.tax_cents for w in by_tax_week),
+                   by_week, note, by_tax_week)
 
 
 def _counter_rows(conn: psycopg.Connection, column: str, until: datetime) -> list[tuple[datetime, str, int]]:
@@ -640,7 +714,7 @@ def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance 
                      "re-date them or record them as a capital entry or adjustment if they belong in it")
     return Balance(as_of, start.at, start.amount_cents, _sum(recorded, "capital"), sold, receipts, lines, fees, visits,
                    -_sum(recorded, "tokens"), -_sum(recorded, "tax_remitted"), _sum(recorded, "adjustment"),
-                   tuple(notes))
+                   tuple(notes), receipts_missing=missing)
 
 
 @dataclass(frozen=True)
@@ -702,13 +776,19 @@ def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
     return notes
 
 
-def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
-    """Profit and loss between two moments, with inventory at cost as of `end`."""
+def pnl(conn: psycopg.Connection, start: datetime, end: datetime, polls_since: datetime | None = None) -> Pnl:
+    """Profit and loss between two moments, with inventory at cost as of `end`.
+
+    Entries, receipts and visits count from `start`, inclusive. The polls'
+    figures count the rises at polls after `polls_since` (default `start`; a
+    calendar window passes `poll_start(start, opening)`).
+    """
+    since = start if polls_since is None else polls_since
     notes: list[str] = []
-    sold = takings(conn, start, end)
+    sold = takings(conn, since, end)
     if sold.note:
         notes.append(sold.note)
-    units = units_sold(conn, start, end)
+    units = units_sold(conn, since, end)
     receipts, _, missing = _receipts(conn, start, end)
     if missing:
         notes.append(f"{missing} receipt lines have no total_paid, so purchases and cost of sales leave them out")
@@ -726,15 +806,15 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
                      "$600, and token spend and net leave it out")
 
     counted = stock.stock(conn, until=end)
-    # A rise is booked to the later poll, so the window's sales are the rises at polls after `start`.
-    sales = [s for s in counted.sales if start < s.at <= end]
+    # A rise is booked to the later poll, so the window's sales are the rises at polls after `since`.
+    sales = [s for s in counted.sales if since < s.at <= end]
     cost = summarize_sales(sales)
     if not units:
         notes.append("no sales in the window")
     notes += sales_cost_notes(units, cost, "cost of sales and margin")
     if sold.cents and not counted.slots:
         notes.append("the machine sold units but no receipts are stored, so nothing can be costed yet")
-    lost = [s for s in counted.shrinkage if start < s.at <= end]
+    lost = [s for s in counted.shrinkage if since < s.at <= end]
     shrinkage = sum((s.cost_cents for s in lost if s.cost_cents is not None), Fraction(0))
     shrinkage_complete = all(s.cost_cents is not None for s in lost)
     if not shrinkage_complete:
@@ -750,31 +830,35 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
                cost.unattributed_stock_cents, cost.unattributed_stock_provisional)
 
 
-def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> list[WeekPnl]:
+def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime,
+                polls_since: datetime | None = None) -> list[WeekPnl]:
     """`pnl()` split into weeks: one row for every week the window touches, quiet weeks included.
 
     Each line is booked to the week of the moment it happened, read the same
-    way `pnl()` reads it, so each column of the weeks sums to `pnl()`'s figure.
+    way `pnl()` reads it, so each column of the weeks sums to `pnl()`'s figure
+    over the same `start`, `end` and `polls_since`. The weeks are those from
+    `start`'s week, the true start, whatever `polls_since` is.
     """
     tz = ZoneInfo(TIMEZONE)
+    since = start if polls_since is None else polls_since
 
     def week(moment: datetime) -> date:
         return week_of(moment.astimezone(tz))
 
-    sold = {w.week: w for w in takings(conn, start, end).by_week}
+    sold = {w.week: w for w in takings(conn, since, end).by_week}
     units: dict[date, int] = defaultdict(int)
-    for r in rises_between(_counter_rows(conn, "lifetime_units", end), start, end)[2]:
+    for r in rises_between(_counter_rows(conn, "lifetime_units", end), since, end)[2]:
         units[week(r.at)] += r.amount
     counted = stock.stock(conn, until=end)
     weeks_sales: dict[date, list[stock.SaleCost]] = defaultdict(list)
     for s in counted.sales:
-        if start < s.at <= end:
+        if since < s.at <= end:
             weeks_sales[week(s.at)].append(s)
     lost_units: dict[date, int] = defaultdict(int)
     lost_cost: dict[date, Fraction] = defaultdict(Fraction)
     lost_unknown: set[date] = set()
     for s in counted.shrinkage:
-        if start < s.at <= end:
+        if since < s.at <= end:
             lost_units[week(s.at)] += s.units
             if s.cost_cents is None:
                 lost_unknown.add(week(s.at))

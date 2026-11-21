@@ -3,8 +3,10 @@
     python -m vending.pnl_report              # http://127.0.0.1:8767
     python -m vending.pnl_report --port 9000
 
-One row per week, Saturday to Friday in Eastern time, the ledger's week (the
-team's 19 Oct decision; the sales tax is rounded per week). The simple view
+One row per week, Saturday to Friday in Eastern time, the ledger's display
+week, after the Friday visit. The sales tax is rounded per tax week, Sunday to
+Saturday, as David calculates it (David, 20 Nov), so a row's tax is its share
+of the tax weeks' rounded tax (`vending.ledger`). The simple view
 (the default) shows units sold, revenue without tax, cost of sales, midweek visit
 fees, token spend, profit and the running total of profit; `?view=detailed` adds
 takings with tax, the sales tax set aside, shrinkage and adjustments. Above the
@@ -144,8 +146,8 @@ def load(conn: psycopg.Connection, start: date | None, end: date | None, view: s
 def read(conn: psycopg.Connection, start: date | None, end: date | None, view: str = "simple") -> Report:
     """Every figure on the page, in the caller's transaction: `load` without a snapshot of its own, for a
     caller that reads more in the same snapshot (`vending.pages` reads our slot assignment first)."""
-    # The app's clock, as get_pnl uses for "today" (ledger.balance takes "now" from
-    # the database clock, ledger.db_now).
+    # The app's clock (get_pnl takes "now" as the later of this and the database clock,
+    # and ledger.balance takes it from the database clock, ledger.db_now).
     printed_at = datetime.now(EASTERN)
     totals = get_pnl(conn, start, end)
     if not totals.success:
@@ -156,7 +158,12 @@ def read(conn: psycopg.Connection, start: date | None, end: date | None, view: s
     if rows > MAX_WEEKS:
         refused = Pnl(success=False, message=f"Choose a range of at most {MAX_WEEKS} weeks.")
         return Report(start, end, printed_at, refused, view=view)
-    weeks = ledger.pnl_by_week(conn, totals.start, totals.end)
+    # The weeks start at the true start's week and count the polls from the same poll start as the totals
+    # (`ledger.poll_start`), so a poll at the start day's midnight sharp is in both and the rows add up.
+    # A window that hasn't started is empty (get_pnl gives it no length): no rows, as it reads no ledger.
+    opened = ledger.opening(conn)
+    weeks = [] if totals.end <= totals.start else ledger.pnl_by_week(
+        conn, totals.start, totals.end, ledger.poll_start(totals.start, opened and opened.at))
     # The balance at the end of the last day shown, where the table stops; now when there is no end
     # date, or the end is today or later.
     balance_at = None if end is None or last_day >= printed_at.date() else totals.end

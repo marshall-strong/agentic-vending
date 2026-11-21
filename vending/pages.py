@@ -6,8 +6,10 @@
     /dashboard/money         the money chart: competition money by day (`vending.money_chart`)
     /dashboard/pnl           the weekly P&L (`vending.pnl_report`)
     /dashboard/spend         development spend by week (`vending.dev_spend`)
+    /dashboard/products      every product we can order, our sourcing, the day-one plan, back stock (`vending.products_page`)
     /dashboard/demo/money    the money chart with its made-up MOCK data, under a DEMO banner; no database
     /dashboard/demo/spend    dev spend from the team's run notes, under a DEMO banner; no database
+    /dashboard/demo/products the Products page from made-up data, under a DEMO banner; no database
     /db                      the DB explorer (`vending.db_explorer`)
 
     python -m vending.pages check                            # is the pages' login really read-only?
@@ -74,16 +76,18 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from vending import dashboard, db, db_explorer, demo, dev_spend, ledger, money_chart, pnl_report, settings
+from vending import (dashboard, db, db_explorer, demo, dev_spend, ledger, money_chart, pnl_report, products_page,
+                     settings)
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 
 READER = "READONLY_DATABASE_URL"
 DASHBOARD, STATE, EXPLORER = "/dashboard", "/dashboard/state.json", "/db"
 MONEY_CHART, PNL, SPEND = "/dashboard/money", "/dashboard/pnl", "/dashboard/spend"
-# Where the dashboard links to each chart (`dashboard.render`'s `charts`).
-CHARTS = {"money": MONEY_CHART, "pnl": PNL, "spend": SPEND}
+PRODUCTS = products_page.ROUTE
+# Where the dashboard links to each chart and to the Products page (`dashboard.render`'s `charts`).
+CHARTS = {"money": MONEY_CHART, "pnl": PNL, "spend": SPEND, "products": PRODUCTS}
 TITLES = {DASHBOARD: "Agent dashboard", STATE: "Agent dashboard", EXPLORER: "DB explorer",
-          MONEY_CHART: "Money chart", PNL: "Weekly P&L", SPEND: "Development spend"}
+          MONEY_CHART: "Money chart", PNL: "Weekly P&L", SPEND: "Development spend", PRODUCTS: products_page.TITLE}
 MAX_CONNECTIONS = 2
 # Seconds a request waits for one of those connections before it is told the page is busy.
 WAIT_SECONDS = 5
@@ -114,6 +118,8 @@ CSP_DASHBOARD = CSP + "; script-src 'unsafe-inline'; connect-src 'self'"
 # none, and its one form sends a GET back to itself.
 _LOCKED = "base-uri 'none'; frame-ancestors 'none'"
 CSP_PNL = f"{CSP}; form-action 'self'; {_LOCKED}"
+# The Products page runs no script and has no form.
+CSP_PRODUCTS = f"{CSP}; form-action 'none'; {_LOCKED}"
 
 # What every explorer leaves out, however it is run (here at /db, or `python -m vending.db_explorer`).
 # VA1, the machine-wide lifetime totals: usable only from polls taken before the fall cut
@@ -124,11 +130,57 @@ TOTALS = {
     "polls": db_explorer.Hide("", "", ("total_paid_cents", "total_paid_units"), "(hidden)"),
 }
 
+# What /db shows of a submission's `detail`, by its status, in place of the text stored (#165). The
+# stored text is the bridge's own words or our error about them: a 5xx answer's excerpt can carry an
+# upstream database error, and a row a person resolved keeps the text it had.
+_NOT_SHOWN = " (the bridge's own words aren't shown on this public page; they are in the database)"
+SUBMISSION_DETAIL = {
+    "accepted": "The bridge filed this request." + _NOT_SHOWN,
+    "refused": "The bridge refused this request; nothing was filed." + _NOT_SHOWN,
+    "not_filed": "This request was never filed." + _NOT_SHOWN,
+    "unknown": "Sent, but no usable answer came back, so it may or may not have been filed." + _NOT_SHOWN,
+}
+SUBMISSION_OTHER = "(this text isn't shown on this public page; it is in the database)"
+
+
+def _submission_detail(col: Callable[[str], sql.Composable]) -> sql.Composable:
+    """`purchase_submissions.detail` as /db shows it: a fixed line for the row's status, or null."""
+    lines = sql.SQL(" ").join(sql.SQL("when {} = {} then {}").format(col("status"), sql.Literal(status), sql.Literal(line))
+                              for status, line in SUBMISSION_DETAIL.items())
+    return sql.SQL("case when {} is null then null {} else {} end").format(
+        col("detail"), lines, sql.Literal(SUBMISSION_OTHER))
+
+
+# What /db shows in place of why a bench case wasn't judged (#165): `bench_runs.judge_notes` is
+# {case: {"note"|"problem": text}}, and a `problem` can be a database error (`vending.bench.judge`).
+BENCH_PROBLEM = "(why this case wasn't judged isn't shown on this public page; it is in the database)"
+
+
+def _judge_notes(col: Callable[[str], sql.Composable]) -> sql.Composable:
+    """`bench_runs.judge_notes` as /db shows it: each case's `note` as stored, and `BENCH_PROBLEM` for
+    its `problem` or for anything that isn't the stored shape."""
+    fixed = sql.SQL("to_jsonb({}::text)").format(sql.Literal(BENCH_PROBLEM))
+    return sql.SQL(
+        "case when {notes} is null then null"
+        " when jsonb_typeof({notes}) <> 'object' then {fixed}"
+        " else (select coalesce(jsonb_object_agg(e.key,"
+        "   case when jsonb_typeof(e.value) <> 'object' then {fixed}"
+        "        when e.value ? 'problem' then jsonb_set(e.value, array['problem'], {fixed})"
+        "        else e.value end), jsonb_build_object())"
+        "  from jsonb_each({notes}) as e) end").format(notes=col("judge_notes"), fixed=fixed)
+
+
 # What the public explorer leaves out besides, by table name. The dashboard's own list is
 # `dashboard.hide_errors`.
 HIDE = {
     "action_log": db_explorer.Hide("outcome", "failed", ("detail", "result"), dashboard.HIDDEN),
-    "agent_runs": db_explorer.Hide("status", "failed", ("detail",), dashboard.HIDDEN),
+    # A failed run's detail is a raw error; a run that submitted keeps only its confirmation (#165).
+    "agent_runs": db_explorer.Project("detail", ("status",), lambda col: dashboard.public_run_detail(
+        col("status"), col("detail")), dashboard.HIDDEN),
+    "bench_runs": db_explorer.Project("judge_notes", (), _judge_notes, BENCH_PROBLEM),
+    "purchase_submissions": db_explorer.Project("detail", ("status",), _submission_detail, SUBMISSION_OTHER),
+    # A step the model was told had failed holds the raw error (#165).
+    "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
     **TOTALS,
@@ -174,7 +226,7 @@ def stored_slots(conn: psycopg.Connection) -> tuple[str, ...]:
         return ()
 
 
-def explorer_rules(conn: psycopg.Connection, public: bool) -> tuple[dict[str, db_explorer.Hide],
+def explorer_rules(conn: psycopg.Connection, public: bool) -> tuple[dict[str, db_explorer.Hide | db_explorer.Project],
                                                                      dict[str, db_explorer.Only]]:
     """(hide, only) for `db_explorer.render`, the one policy both explorers use.
 
@@ -541,6 +593,8 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
     if path in DEMO_LIVE:
         # The charts' made-up versions, from files in the image: before every database check too.
         return _demo_reply(path)
+    if path == products_page.DEMO_ROUTE:
+        return _products_demo()
     if path not in TITLES:
         return None
     request = query = None
@@ -578,12 +632,17 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
                     found = money_data(conn) if path == MONEY_CHART else pnl_data(conn, query)
             elif path == SPEND:
                 found = spend_data(conn)
+            elif path == PRODUCTS:
+                products = products_page.read(conn, public=True)
             else:
                 snap = dashboard.snapshot(conn, public=True, syncs=syncs)
         if path in (MONEY_CHART, PNL, SPEND):
             reply = _chart_reply(path, found)
             _keep(key, reply)
             return reply
+        if path == PRODUCTS:
+            # Drawn after the connection is back, and inside this handler so a failure answers BROKEN.
+            return Reply(200, HTML, products_page.html(products, nav=PRODUCTS_NAV), CSP_PRODUCTS)
     except SlotsNotRecorded:
         return _problem(path, 503, NO_SLOTS)
     except Busy:
@@ -603,9 +662,22 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
         return Reply(200, JSON, dashboard.to_json(snap))
     picked = parse_qs(urlsplit(target).query).get("sel", [None])[0]    # checked against our slots by render
     page = dashboard.render(snap, json_href=STATE, charts=CHARTS,
-                            nav=(("Home", "/"), ("Database", EXPLORER), ("Weekly P&L", PNL), ("Dev spend", SPEND),
-                                 ("Demo copy", demo.DEMO)), picked=picked)
+                            nav=(("Home", "/"), ("Products", PRODUCTS), ("Database", EXPLORER), ("Weekly P&L", PNL),
+                                 ("Dev spend", SPEND), ("Demo copy", demo.DEMO)), picked=picked)
     return Reply(200, HTML, page, CSP_DASHBOARD)
+
+
+# Links above the Products page.
+PRODUCTS_NAV = (("Agent dashboard", DASHBOARD), ("Database", EXPLORER), ("Demo copy", products_page.DEMO_ROUTE))
+
+
+def _products_demo() -> Reply:
+    """The Products page from its made-up data. Opens no connection. Never raises, and puts no error text in a reply."""
+    try:
+        return Reply(200, HTML, products_page.demo_page(), CSP_PRODUCTS)
+    except Exception as error:  # noqa: BLE001 - a page answers, whatever happened
+        _log(type(error).__name__, f"{products_page.DEMO_ROUTE}: {type(error).__name__}: {error}")
+        return Reply(500, HTML, _notice("Demo", BROKEN))
 
 
 def _demo(path: str) -> Reply:
