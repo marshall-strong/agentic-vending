@@ -309,7 +309,8 @@ on the server.
 table holds a password or a key. **Left out:** the selections not assigned to us (the machine
 stores every selection, and `/db` shows only those in the stored assignment in `poll_selections`
 and `slot_counts`, and none while nothing is stored; the dashboard's JSON counts likewise), the dev machines' hostnames in `model_calls.host`, and the error text of failed tool calls and failed
-runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed), because a
+runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed, and
+`agent_steps.content` where `is_error` is true), because a
 database error names the host and the user. Refusals keep their text. The pages' own errors show
 one plain sentence; the detail is in the container's log.
 `/db` also hides the machine-wide totals in `polls` (`total_paid_cents` and `total_paid_units`) in
