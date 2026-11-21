@@ -12,7 +12,7 @@ The instructor's 12 Nov answers (PR #106, issue #107):
 
 - Our **day-one order fills all 20 slots to capacity**, paid from the $600 (whether a slot may take fewer units is still asked, #102).
 - The request is due by **23:59 Sun 29 Nov**, and staff buy and stock on **Mon 30 Nov**. Every product on it must be requested and approved in the catalog by **Wed 25 Nov**, or the whole request is denied (David, 17 Nov; `docs/planning/2026-11-17-david-answers.md`).
-- The machine goes live **Thu 3 Dec**. Restocks are **Friday afternoons** (3 PM target, likely later).
+- The machine goes live **Thu 3 Dec**. David's 20 Nov email also says 1 or 2 Dec, and that the machine won't operate before 3 Dec; asked (`docs/planning/2026-11-20-david-update.md`). Restocks are **Friday afternoons** (3 PM target, likely later).
 - The ledger opens **before the fill is fulfilled**, so its receipts count (#104, #106).
 
 This plan owns the Summative 2 money numbers; the restock policy (`docs/restock-policy.md`, #91) and demand doc (`docs/inventory-demand.md`, #93) cite them.
