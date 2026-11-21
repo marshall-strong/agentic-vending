@@ -1,6 +1,7 @@
 """The Products page (#55): every product we can order, our sourcing, the day-one plan, back stock."""
 
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from html import unescape
 
@@ -239,6 +240,34 @@ def test_a_missing_table_blanks_only_its_part(conn, page_conn):
     data = products_page.read(page_conn, NOW, public=True)
     assert data["sourcing"] == {"ok": False, "why": dashboard.PUBLIC_PANEL_ERROR}
     assert data["catalog"]["ok"] and data["closet"]["ok"]
+
+
+@pytest.mark.parametrize("table, panel", [("sourcing_options", "sourcing"), ("catalog_products", "catalog"),
+                                          ("product_requests", "catalog_requests")])
+def test_a_locked_table_blanks_only_its_part(schema_url, conn, page_conn, table, panel):
+    """A long migration or a stuck write holding one table used to fail the whole read, and so the route
+    (503). Now that panel gives up within about a second and says its fixed sentence; the rest is drawn."""
+    from tests.conftest import open_in
+
+    _seed(conn, opened_at=NOW - timedelta(days=1))
+    page_conn.execute("set statement_timeout = 5000")          # the pages' own limit
+    other = open_in(*schema_url)
+    try:
+        other.execute("begin")
+        other.execute(f"lock table {table} in access exclusive mode")
+        started = time.monotonic()
+        data = products_page.read(page_conn, NOW, public=True)
+        took = time.monotonic() - started
+    finally:
+        other.close()
+    assert took < 3, took
+    assert data[panel] == {"ok": False, "why": dashboard.PUBLIC_PANEL_ERROR}
+    others = {"catalog", "sourcing", "plan", "closet", "catalog_requests"} - {panel}
+    assert all(data[name]["ok"] for name in others), {name: data[name] for name in others}
+    page = products_page.html(data)
+    assert dashboard.PUBLIC_PANEL_ERROR in unescape(page)
+    # The snapshot keeps its own limit, not the panel's short one.
+    assert page_conn.execute("show statement_timeout").fetchone()[0] == "5s"
 
 
 def test_the_worker_serves_the_page_behind_the_read_only_login(site, conn):

@@ -79,8 +79,10 @@ def _closet(conn: psycopg.Connection, now: datetime, ours: dict) -> list[dict] |
 
 
 def read(conn: psycopg.Connection, now: datetime | None = None, public: bool = False) -> dict:
-    """Everything the page shows, from one repeatable-read, read-only transaction. A missing table
-    blanks only its own part. `public` hides read errors as the public dashboard does."""
+    """Everything the page shows, from one repeatable-read, read-only transaction. A missing, locked or
+    slow table blanks only its own part: each part is read like the dashboard's optional panels
+    (`dashboard._isolated`), so it gives up within a second. `public` hides read errors as the public
+    dashboard does."""
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
         now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
@@ -88,14 +90,16 @@ def read(conn: psycopg.Connection, now: datetime | None = None, public: bool = F
         slots = tuple(ours["data"]) if ours["ok"] else ()
         assigned = (dashboard._optional(conn, "select first_read_at from slot_assignment where id = 1")
                     if slots else None)
-        catalog_requests = dashboard._panel(lambda: dashboard._rows(conn, dashboard.CATALOG_REQUESTS_SQL))
+        def part(read):
+            return dashboard._panel(lambda: dashboard._isolated(conn, read))
+
+        catalog_requests = part(lambda: dashboard._rows(conn, dashboard.CATALOG_REQUESTS_SQL))
         data = {
             "as_of": now,
-            "catalog": dashboard._panel(lambda: dashboard._guarded(conn, lambda: _catalog(conn))),
-            "sourcing": dashboard._panel(lambda: dashboard._guarded(conn, lambda: _sourcing(conn))),
-            "plan": dashboard._panel(lambda: dashboard._isolated(conn, lambda: dashboard._first_fill(
-                conn, slots, assigned["first_read_at"] if assigned else None))),
-            "closet": dashboard._panel(lambda: dashboard._guarded(conn, lambda: _closet(conn, now, ours))),
+            "catalog": part(lambda: _catalog(conn)),
+            "sourcing": part(lambda: _sourcing(conn)),
+            "plan": part(lambda: dashboard._first_fill(conn, slots, assigned["first_read_at"] if assigned else None)),
+            "closet": part(lambda: _closet(conn, now, ours)),
             "catalog_requests": catalog_requests,
             "catalog_counts": dashboard._catalog_counts(catalog_requests),
         }
