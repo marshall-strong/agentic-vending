@@ -262,7 +262,7 @@ def test_notes_are_plain_sentences():
 # --- Database -----------------------------------------------------------------------------------
 
 from tests.conftest import CONNECT_TIMEOUT, open_in  # noqa: E402
-from tests.test_ledger import OPENED, deliver, open_ledger, sell  # noqa: E402
+from tests.test_ledger import OPENED, deliver, freeze_pnl_clock, open_ledger, sell  # noqa: E402
 
 END = date(2026, 11, 9)
 
@@ -325,11 +325,12 @@ def test_a_range_longer_than_the_page_shows_is_refused(conn):
     assert code == 400 and f"at most {pr.MAX_WEEKS} weeks" in body
 
 
-def test_the_week_limit_counts_rows_not_days(conn):
+def test_the_week_limit_counts_rows_not_days(conn, monkeypatch):
     """A range that starts midweek has a part week at each end, so the limit counts the Sat-to-Fri rows."""
     seed(conn)
     first = date(2026, 11, 11)                                            # a Wednesday, in the week of Sat 7 Nov
     last = date(2026, 11, 7) + timedelta(weeks=pr.MAX_WEEKS - 1, days=6)  # the Friday that ends row MAX_WEEKS
+    freeze_pnl_clock(monkeypatch, datetime.combine(last + timedelta(days=2), datetime.min.time(), pr.EASTERN))
     report = pr.load(conn, first, last)
     assert report.totals.success and len(report.weeks) == pr.MAX_WEEKS
     code, body = pr.render(pr.load(conn, first, last + timedelta(days=1)))   # one day into the next week
@@ -481,3 +482,47 @@ def test_unsplit_swap_sales_are_costed_exactly_none_with_the_estimate_beside_the
     assert "0 of 2 units costed exactly" in row and estimate in row, row
     total = pr.totals_row(get_pnl(conn, date(2026, 11, 1), date(2026, 11, 9)), [w])
     assert "0 of 2 units costed exactly" in total and estimate in total, total
+
+
+@pytest.mark.parametrize("start, end", [(date(2026, 12, 6), date(2026, 12, 11)),     # from a tax week's Sunday
+                                        (date(2026, 12, 12), date(2026, 12, 18))],   # from a display week's Saturday
+                         ids=["sunday-midnight", "saturday-midnight"])
+def test_weekly_rows_sum_to_the_totals_with_a_poll_at_a_week_boundary(conn, monkeypatch, start, end):
+    # A poll at the start day's midnight sharp is in the window, in the totals and in its week's row alike.
+    from tests.conftest import store_poll
+    from tests.test_ledger import LATER, et
+
+    freeze_pnl_clock(monkeypatch, LATER)
+    opened = et(2026, 11, 30, 13, 0)
+    open_ledger(conn, at=opened)
+    store_poll(conn, "open", opened.isoformat(), {"15": (135, 0)})
+    store_poll(conn, "sat", et(2026, 12, 5, 22, 0).isoformat(), {"15": (135, 2)})
+    store_poll(conn, "sun", et(2026, 12, 6, 0, 0).isoformat(), {"15": (135, 22)})       # $27.00 at Sunday 00:00
+    store_poll(conn, "sat2", et(2026, 12, 12, 0, 0).isoformat(), {"15": (135, 25)})     # $4.05 at Saturday 00:00
+    store_poll(conn, "mon", et(2026, 12, 14, 12, 0).isoformat(), {"15": (135, 26)})
+    report = pr.load(conn, start, end)
+    t = report.totals
+    assert t.revenue == {date(2026, 12, 6): "27.00", date(2026, 12, 12): "5.40"}[start]
+    assert ledger.money(sum(w.takings_cents for w in report.weeks)) == t.revenue
+    assert ledger.money(sum(w.tax_cents for w in report.weeks)) == t.tax_set_aside
+    assert sum(w.units_sold for w in report.weeks) == t.units_sold
+    assert report.weeks[0].week == pr._week_of(start)          # the rows start at the start day's week
+
+
+def test_a_range_that_starts_after_now_shows_no_figures(conn):
+    """The real clock: get_pnl reports a window that hasn't started as empty, and the page's weeks must
+    agree, not read the ledger at the window's start and show what is dated at that midnight."""
+    from tests.conftest import store_poll
+    from tests.test_ledger import et
+
+    open_ledger(conn)
+    store_poll(conn, "eve", et(2099, 12, 5, 22, 0).isoformat(), {"15": (135, 0)})
+    store_poll(conn, "midnight", et(2099, 12, 6, 0, 0).isoformat(), {"15": (135, 2)})
+    ledger.record(conn, "adjustment", 100, "dated at midnight", "marshall", et(2099, 12, 6, 0, 0))
+    deliver(conn, "r1", resolved_at="2099-12-06T05:00:00Z")
+    report = pr.load(conn, date(2099, 12, 6), date(2099, 12, 6))
+    assert report.totals.success and report.totals.net == "0.00"
+    for name in ("takings_cents", "units_sold", "adjustments_cents", "net_cents"):
+        assert sum(getattr(w, name) for w in report.weeks) == 0, name
+    code, body = pr.render(report)
+    assert code == 200 and "2.70" not in body and "1.00" not in body

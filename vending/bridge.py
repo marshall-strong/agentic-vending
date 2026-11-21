@@ -5,7 +5,8 @@ sync jobs and the write tools use. Only `poll`, which `vending.visit_polls` call
 around a visit, reads the machine live. The sync
 jobs read stored history and our purchase requests through it, with retries;
 `submit_desired_state` and `request_catalog_product` send their one POST through
-`post`, never retried, and `/health` tells a bad poll from an outage.
+`post`, and `vending.tracking` sends our books through `check_books`, each never
+retried, and `/health` tells a bad poll from an outage.
 
 Read failures are retried, then end in one of two ways. `BridgeUnreachable`
 means every later call would fail too, so the caller should stop: the bridge is
@@ -18,8 +19,9 @@ proxy can answer `502` to every request until the node has joined the tailnet.
 **No poll bytes in a message.** What the bridge sends back can hold the machine's whole document, and the
 worker's logs and `/health` are read by people (`docs/integrity.md`, "Logs carry no poll bytes"). So no
 error here quotes a body, a snippet, a bad status line or a header. A message holds the status, sizes and
-a reason this module wrote ("short read: 1234 of 2000 bytes"). The one exception is `post`, whose answer to
-our own purchase or catalog request is the reason the write tool shows the agent.
+a reason this module wrote ("short read: 1234 of 2000 bytes"). The exceptions are `post`, whose answer to
+our own purchase or catalog request is the reason the write tool shows the agent, and `check_books`, whose
+answer is about our own books.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -48,6 +51,9 @@ SESSION_HEADER = "X-Poll-Session-Id"
 # `true` means another caller's recent document, `X-Poll-Age-Seconds` how old it was (docs/snapshot-archive.md).
 CACHED_HEADER, AGE_HEADER = "X-Poll-Cached", "X-Poll-Age-Seconds"
 RETRIES = 4
+# The tracking check (`check_books`), and how much of an error answer it keeps: enough for a list of items.
+TRACKING_PATH = "/api/v1/tracking/check"
+TRACKING_ERROR_BYTES = 8192
 
 
 class LiveRead(NamedTuple):
@@ -125,6 +131,16 @@ class BridgeNoAnswer(BridgeError):
     """Sent, but no usable answer came back: a timeout, a dropped connection, or not JSON."""
 
 
+class BridgeNotJson(BridgeNoAnswer):
+    """A success status whose body isn't JSON. `status` is the status (None if the reply gave none);
+    `body` is the start of the body, kept only for `post` and `check_books` (else empty). Neither is in
+    the message, which says only the size."""
+
+    def __init__(self, status: int | None, size: int, body: bytes = b""):
+        super().__init__(f"the answer wasn't JSON ({size} bytes)")
+        self.status, self.body = status, body
+
+
 class BridgeUnreachable(BridgeError):
     """No network or a rejected key: every later call would fail the same way."""
 
@@ -170,6 +186,18 @@ class Bridge:
         """
         return json.loads(self._once("POST", path, body, keep_body=True))
 
+    def check_books(self, body: dict) -> dict:
+        """Our books as of one poll (`POST /api/v1/tracking/check`), once, never retried: the bridge
+        allows one check a day, and a retry after a lost answer could be refused as the day's second.
+
+        `vending.tracking` builds the body and stores the answer. Raises as `post` does; an error
+        answer is the bridge's JSON about our own books (`{error, error_type, detail, items}`), kept
+        whole enough to parse in `BridgeAnswered.detail`. A success status whose body isn't JSON raises
+        `BridgeNotJson`, with the status and the start of the body.
+        """
+        return json.loads(self._once("POST", TRACKING_PATH, body, keep_body=True,
+                                     kept_bytes=TRACKING_ERROR_BYTES))
+
     def poll(self) -> LiveRead:
         """Read the machine now (`POST /api/v1/poll`, about 8.5 s): the document, and the session id
         the bridge named in its `X-Poll-Session-Id` header (None if it sent none).
@@ -197,10 +225,10 @@ class Bridge:
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
               timeout: float | None = None, headers_out: dict[str, str] | None = None,
-              keep_body: bool = False) -> bytes:
-        """One try. `keep_body` puts the start of an error answer in `BridgeAnswered.detail`: only for
-        `post`, whose answer concerns our own request. Any other answer can hold a poll, so only its status
-        is kept."""
+              keep_body: bool = False, kept_bytes: int = 300) -> bytes:
+        """One try. `keep_body` puts the first `kept_bytes` of an error answer in `BridgeAnswered.detail`:
+        only for `post` and `check_books`, whose answers concern our own request. Any other answer can hold
+        a poll, so only its status is kept."""
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -210,15 +238,20 @@ class Bridge:
                                          data=None if body is None else json.dumps(body).encode())
         try:
             with urllib.request.urlopen(request, timeout=timeout or TIMEOUT_SECONDS) as response:
+                status = getattr(response, "status", None)
                 data = response.read()
                 if headers_out is not None:    # names lower-cased: HTTP header names have no case
                     headers_out.update({k.lower(): v for k, v in response.headers.items()})
         except urllib.error.HTTPError as error:
             # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
-            detail = _start_of_body(error, 300).decode(errors="replace") if keep_body else status_phrase(error.code)
+            detail = (_start_of_body(error, kept_bytes).decode(errors="replace") if keep_body
+                      else status_phrase(error.code))
             raise BridgeAnswered(error.code, detail) from None
         except urllib.error.URLError as error:
-            # urllib raises URLError only while connecting or sending.
+            # urllib raises URLError only while connecting or sending. Only a failure to connect proves
+            # the bridge got nothing; a reset or timeout once connected may come after it read the request.
+            if not _before_connected(error.reason):
+                raise BridgeNoAnswer(f"{type(error.reason).__name__} while sending: it may have arrived") from None
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
         except http.client.HTTPException as error:
             # An answer cut off part way (`IncompleteRead`) or not HTTP at all (`BadStatusLine`, which names
@@ -233,7 +266,7 @@ class Bridge:
             try:
                 json.loads(data)
             except ValueError:      # its message can name a byte of the answer
-                raise BridgeNoAnswer(f"the answer wasn't JSON ({len(data)} bytes)") from None
+                raise BridgeNotJson(status, len(data), data[:kept_bytes] if keep_body else b"") from None
         return data
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> bytes:
@@ -364,6 +397,24 @@ def _is_listing(body: object) -> bool:
     """Whether `body` is a day's listing: an object with a list of `polls`. Its rows are checked one by one
     by the sync (`listed_poll`), never all together."""
     return isinstance(body, dict) and isinstance(body.get("polls"), list)
+
+
+def _before_connected(reason: object) -> bool:
+    """Whether a `URLError`'s reason proves no byte of the request left: urllib refused it before
+    connecting, the name didn't resolve, the connection was refused, or connecting (TCP, or TLS for
+    https) failed or timed out. The request is written only once `HTTPConnection.connect` returns, so a
+    failure raised inside it is before; any other (a reset, a broken pipe, a timeout while writing) isn't."""
+    if not isinstance(reason, OSError):
+        return True
+    if isinstance(reason, (socket.gaierror, ConnectionRefusedError)):
+        return True
+    trace = reason.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        if code.co_name == "connect" and code.co_filename == http.client.__file__:
+            return True
+        trace = trace.tb_next
+    return False
 
 
 def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:

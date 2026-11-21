@@ -8,10 +8,12 @@ The full, live API reference is the bridge's own Swagger page:
 <http://aihub-pi:8000/docs> (Tailscale only). This page covers what we have learned using it,
 checked against the live spec on 29 Oct.
 
-**The bridge's version number does not change when the API does.** It said `0.1.0` on
-15 Oct and still says `0.1.0` on 29 Oct, after David reshaped purchase requests and added
-product requests. To see whether anything changed, compare
-<http://aihub-pi:8000/openapi.json> with the last copy you saved, not the version.
+**Don't rely on the bridge's version number to tell you the API changed.** It said `0.1.0` on
+15 Oct and still said `0.1.0` on 29 Oct, after David reshaped purchase requests and added
+product requests. On 20 Nov it said `0.4.0`, with the tracking check added. To see whether anything
+changed, compare <http://aihub-pi:8000/openapi.json> with the last copy saved, not the version. The
+20 Nov copy is [`bridge-openapi-2026-11-20.json`](bridge-openapi-2026-11-20.json), as fetched (one
+line; `python -m json.tool` it before a diff).
 
 ## Before you start
 
@@ -38,6 +40,7 @@ the tailnet is down, not the bridge.
 | `latest [--summary] [--out FILE]` | history + raw | The newest stored poll. `--summary` prints price and lifetime sales for our slots, from the stored assignment |
 | `request REQUEST_ID` | `GET /api/v1/purchase-requests/{id}` | `pending`, `rejected`, or the full receipts: the documented fields only, each checked. A `note`, `decision_note` or `loss_note` prints as its length, `(note omitted, N characters)` |
 | `poll --live [--out FILE]` | `POST /api/v1/poll` | Reads the machine right now. Refuses without `--live` |
+| (not in this script) | `POST /api/v1/tracking/check` | Our books checked against the bridge's, once a day. Use `python -m vending.tracking check`; see [below](#the-tracking-check) for why it isn't here |
 
 Examples:
 
@@ -193,6 +196,42 @@ our stock count right. There is still no route that lists our requests, so save 
 
 **What the API still can't do:** change a price without loading anything (every line loads
 at least one pack or unit), leave a slot empty, or list our requests.
+
+## The tracking check
+
+As of 20 Nov (v0.4.0). `POST /api/v1/tracking/check` takes our figures as of one poll and says,
+for each, `within` or `outside`. It never says by how much, which way, or which slot.
+
+- **Body** (no other keys): `as_of`, a poll's `session_id` from `GET /api/v1/history` (everything up to
+  and including that poll counts); `cash` and `sales_tax_owed`, in dollars (number or string); `coil`,
+  units per slot for **every slot we own and only those**; `back_stock`, units per SKU (a SKU left out
+  counts as 0).
+- **200**: `as_of`, `as_of_time` (UTC), `checked_at`, `results` (`cash`, `sales_tax_owed`, `coil`,
+  `back_stock`, each `within` or `outside`) and `next_check_from` (midnight Eastern).
+- **Errors** are `{error, error_type, detail, next_check_from?, items[]}`: `403` needs a team key;
+  `404 unknown_poll`; `409 not_reconciled_yet` (polls are folded into the books on the hour) or
+  `tracking_not_started`; `422 invalid_coil`, `unknown_sku` or `before_tracking_start`; `429
+  daily_check_used`. A body off the schema gets FastAPI's own `422`.
+- **One check per team per Eastern day.** A request refused before the check is made doesn't use it.
+  David, 20 Nov: no limit while testing; once the quarter starts, one a day.
+- **Tolerance** (David, 20 Nov): within $1 for money, within 2 units for counts. Whether 2 units is
+  per slot and per product or across all of them isn't said yet.
+- **Cash** is what we have to spend after the sales tax owed is taken out (David, 20 Nov): the ledger's
+  spendable balance.
+- On 20 Nov a live probe got `409 tracking_not_started` ("nothing to check against until the machine is
+  stocked for the project"). The books start when staff stock the machine, on Mon 30 Nov.
+
+`python -m vending.tracking check` works out our four figures as of a poll (default the newest stored
+one) from the ledger and the stock count and prints them; `--send --by NAME` sends them once and
+stores the request and the answer in `tracking_checks`. From the competition start it refuses a second
+send the same Eastern day unless the earlier one was refused without using the check. The day is the
+bridge's: a send reserved at 23:59:59 and checked at 00:00:01 uses the new day's check. The module's
+docstring has the details. The simulated bridge answers the same route (`vending/simulate/bridge.py`).
+
+**Why `scripts/bridge.py` doesn't send it.** That script only reads: it can't submit a purchase request,
+and it writes nothing to our database. A tracking check spends the day's one check, and its answer
+belongs in `tracking_checks` beside what we sent, behind the once-a-day guard. A send from the script
+would skip both. So it lives in `vending.tracking`, like the other writes.
 
 ## Product requests
 

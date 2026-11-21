@@ -25,7 +25,7 @@ localhost, the same rule as the agent dashboard, so another site can't rebind
 its name to us. The Container App serves the same page to anyone at `/db`,
 through `vending.pages`, which connects as a login that can only read. It passes
 `render` the same rules, and also hides the error text of failures and the dev
-machines' hostnames (`Hide`). Every link on the page is relative
+machines' hostnames (`Hide`, `Project`). Every link on the page is relative
 (`?schema=...`), so it works under any path.
 """
 
@@ -117,6 +117,22 @@ class Hide:
 
 
 @dataclass(frozen=True)
+class Project:
+    """One column of a table that a page shows only as `value` makes it from the row.
+
+    For a public page, when a fixed `when`/`equals` (`Hide`) can't say what is safe: a run that
+    submitted and then failed keeps its confirmation but not the error after it. `value` gets a
+    function that names a column of the row and returns the SQL for what to show instead (text,
+    or null). It runs in Postgres, so what it leaves out never leaves Postgres. `needs` are the
+    columns it reads: a copy of the table without one of them shows `shown` for every value.
+    """
+    column: str
+    needs: tuple[str, ...]
+    value: Callable[[Callable[[str], sql.Composable]], sql.Composable]
+    shown: str
+
+
+@dataclass(frozen=True)
 class Only:
     """Rows of one table that a page shows; every other row is left out, and not counted.
 
@@ -183,9 +199,15 @@ def _native(column: Column) -> bool:
     return column.type in NATIVE_TYPES or column.type.startswith(NATIVE_PREFIXES)
 
 
-def _pick(column: Column, hide: Hide | None = None, present: frozenset[str] = frozenset()) -> sql.Composable:
+def _pick(column: Column, hide: Hide | Project | None = None,
+          present: frozenset[str] = frozenset()) -> sql.Composable:
     name = sql.Identifier(ALIAS, column.name)
-    if hide is not None and column.name in hide.columns:
+    if isinstance(hide, Project) and column.name == hide.column:
+        if not all(need in present for need in hide.needs):
+            return sql.SQL("case when {} is null then null else {}::text end").format(name, sql.Literal(hide.shown))
+        value = hide.value(lambda other: sql.Identifier(ALIAS, other))
+        return sql.SQL("left(({})::text, {})").format(value, sql.Literal(SHOW_AT_MOST + 1))
+    if isinstance(hide, Hide) and column.name in hide.columns:
         # Decided in Postgres, so a hidden value is never fetched. As text, so the note and the
         # value are one type. NULL stays NULL: there was nothing to hide.
         shown = sql.SQL("left({}::text, {})").format(name, sql.Literal(SHOW_AT_MOST + 1))
@@ -243,10 +265,10 @@ class _ReadOnlyTransaction:
         return self.tx.__exit__(*exc)
 
 
-def rows(conn: psycopg.Connection, table: Table, offset: int = 0, hide: Hide | None = None,
+def rows(conn: psycopg.Connection, table: Table, offset: int = 0, hide: Hide | Project | None = None,
          only: Only | None = None) -> Rows:
     """One page of rows, in descending primary-key order when there is a key, from one moment.
-    `hide` leaves some values out and `only` some rows; see `Hide` and `Only`."""
+    `hide` leaves some values out and `only` some rows; see `Hide`, `Project` and `Only`."""
     with _snapshot(conn):
         cols = columns(conn, table)
         key = sorted((c for c in cols if c.primary_key), key=lambda c: c.primary_key)
@@ -471,7 +493,7 @@ def parse(target: str) -> Request:
     return Request(schema, table, int(raw))
 
 
-def render(conn: psycopg.Connection, request: Request, hide: Mapping[str, Hide] | None = None,
+def render(conn: psycopg.Connection, request: Request, hide: Mapping[str, Hide | Project] | None = None,
            nav: tuple[tuple[str, str], ...] = (), only: Mapping[str, Only] | None = None) -> tuple[int, str]:
     """(status, HTML) for a request. Nothing from the URL reaches SQL unless Postgres lists that
     table: an unlisted name is a 404, never a query. The whole page is one read-only transaction.
