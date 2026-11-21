@@ -12,7 +12,7 @@ from fractions import Fraction
 import pytest
 
 from vending import settings
-from vending.bridge import Bridge, BridgeAnswered, BridgeNoAnswer, BridgeUnreachable
+from vending.bridge import Bridge, BridgeAnswered, BridgeError, BridgeNoAnswer, BridgeUnreachable
 from vending.simulate import bridge as sim
 from vending.simulate.bridge import SimBridge
 from vending.simulate.world import Machine
@@ -945,6 +945,71 @@ def test_an_error_answer_holding_a_nul_is_stored(conn, answer):
     stored = conn.execute("select status, answer from tracking_checks").fetchone()
     assert stored[0] == out.status == answer.status and "\x00" not in json.dumps(stored[1], ensure_ascii=False)
     assert out.used_check is (False if answer.status == 409 else None)
+
+
+class SendFails:
+    """A connected socket that fails while the request is being written to it."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def setsockopt(self, *args):
+        pass
+
+    def sendall(self, data):
+        raise self.error
+
+    def close(self):
+        pass
+
+
+def failing_connection(monkeypatch, connect_error=None, send_error=None):
+    """The real urllib and http.client, with the network replaced: connecting raises `connect_error`, or
+    connects and writing the request raises `send_error`."""
+    import socket
+
+    def create_connection(*args, **kwargs):
+        if connect_error is not None:
+            raise connect_error
+        return SendFails(send_error)
+
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("no_proxy", "*")
+
+
+@pytest.mark.parametrize("connect_error, send_error, expected", [
+    (__import__("socket").gaierror(11001, "getaddrinfo failed"), None, BridgeUnreachable),
+    (ConnectionRefusedError(10061, "refused"), None, BridgeUnreachable),
+    (TimeoutError("timed out"), None, BridgeUnreachable),
+    (OSError(10051, "network unreachable"), None, BridgeUnreachable),
+    (None, ConnectionResetError(10054, "reset by peer"), BridgeNoAnswer),
+    (None, TimeoutError("timed out"), BridgeNoAnswer),
+    (None, BrokenPipeError(32, "broken pipe"), BridgeNoAnswer),
+], ids=["dns", "refused", "connect-timeout", "no-route", "reset-sending", "timeout-sending", "broken-pipe"])
+def test_only_a_failure_before_the_connection_opens_is_unreachable(monkeypatch, connect_error, send_error,
+                                                                   expected):
+    """Unreachable means nothing reached the bridge: the name didn't resolve, or connecting failed. Once
+    the connection is open, a reset or timeout may come after the bridge read the request."""
+    failing_connection(monkeypatch, connect_error, send_error)
+    with pytest.raises(BridgeError) as raised:
+        Bridge("http://bridge.test", "key").check_books(good_body())
+    assert type(raised.value) is expected
+
+
+def test_a_reset_while_sending_may_have_used_the_check(conn, monkeypatch):
+    """Through the real client: a reset while the request was being written is stored as no answer, may
+    have used the day's check, and blocks a second send that day."""
+    from vending import tracking
+
+    books(conn)
+    failing_connection(monkeypatch, send_error=ConnectionResetError(10054, "reset by peer"))
+    f = tracking.figures(conn, "p1")
+    out = tracking.send(conn, Bridge("http://bridge.test", "key"), f, "kevin", now=DURING)
+    assert (out.status, out.error_type, out.used_check) == (None, "no_answer", None)
+    with pytest.raises(tracking.AlreadyChecked, match="may have used it"):
+        tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=DURING)
 
 
 def test_a_database_error_storing_the_answer_prints_only_our_words(schema_url, monkeypatch, capsys):

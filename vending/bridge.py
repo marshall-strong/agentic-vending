@@ -29,6 +29,7 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -247,7 +248,10 @@ class Bridge:
                       else status_phrase(error.code))
             raise BridgeAnswered(error.code, detail) from None
         except urllib.error.URLError as error:
-            # urllib raises URLError only while connecting or sending.
+            # urllib raises URLError only while connecting or sending. Only a failure to connect proves
+            # the bridge got nothing; a reset or timeout once connected may come after it read the request.
+            if not _before_connected(error.reason):
+                raise BridgeNoAnswer(f"{type(error.reason).__name__} while sending: it may have arrived") from None
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
         except http.client.HTTPException as error:
             # An answer cut off part way (`IncompleteRead`) or not HTTP at all (`BadStatusLine`, which names
@@ -393,6 +397,24 @@ def _is_listing(body: object) -> bool:
     """Whether `body` is a day's listing: an object with a list of `polls`. Its rows are checked one by one
     by the sync (`listed_poll`), never all together."""
     return isinstance(body, dict) and isinstance(body.get("polls"), list)
+
+
+def _before_connected(reason: object) -> bool:
+    """Whether a `URLError`'s reason proves no byte of the request left: urllib refused it before
+    connecting, the name didn't resolve, the connection was refused, or connecting (TCP, or TLS for
+    https) failed or timed out. The request is written only once `HTTPConnection.connect` returns, so a
+    failure raised inside it is before; any other (a reset, a broken pipe, a timeout while writing) isn't."""
+    if not isinstance(reason, OSError):
+        return True
+    if isinstance(reason, (socket.gaierror, ConnectionRefusedError)):
+        return True
+    trace = reason.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        if code.co_name == "connect" and code.co_filename == http.client.__file__:
+            return True
+        trace = trace.tb_next
+    return False
 
 
 def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
