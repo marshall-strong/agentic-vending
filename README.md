@@ -5,6 +5,8 @@ An AI agent that runs part of a real vending machine as a business.
 Golisano Institute, Applied AI (AI Implementation, AI-R01-12627), Fall 2026.
 Meaghan Gartland, Sean Kelley, Kevin Sykes and Marshall Strong. Group B.
 
+**Project pages:** every live page about the project (roadmap and readiness, day-one plan, countdown, catalog requests, slots, sales map, dashboard sample) is listed in [`docs/artifacts.md`](docs/artifacts.md). Pages marked † there open only with a Golisano Claude sign-in.
+
 ## What we are building
 
 There is a Royal Vendors RVV NG drink machine in the building. It has 40 selections:
