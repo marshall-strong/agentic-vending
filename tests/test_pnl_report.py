@@ -507,3 +507,22 @@ def test_weekly_rows_sum_to_the_totals_with_a_poll_at_a_week_boundary(conn, monk
     assert ledger.money(sum(w.tax_cents for w in report.weeks)) == t.tax_set_aside
     assert sum(w.units_sold for w in report.weeks) == t.units_sold
     assert report.weeks[0].week == pr._week_of(start)          # the rows start at the start day's week
+
+
+def test_a_range_that_starts_after_now_shows_no_figures(conn):
+    """The real clock: get_pnl reports a window that hasn't started as empty, and the page's weeks must
+    agree, not read the ledger at the window's start and show what is dated at that midnight."""
+    from tests.conftest import store_poll
+    from tests.test_ledger import et
+
+    open_ledger(conn)
+    store_poll(conn, "eve", et(2099, 12, 5, 22, 0).isoformat(), {"15": (135, 0)})
+    store_poll(conn, "midnight", et(2099, 12, 6, 0, 0).isoformat(), {"15": (135, 2)})
+    ledger.record(conn, "adjustment", 100, "dated at midnight", "marshall", et(2099, 12, 6, 0, 0))
+    deliver(conn, "r1", resolved_at="2099-12-06T05:00:00Z")
+    report = pr.load(conn, date(2099, 12, 6), date(2099, 12, 6))
+    assert report.totals.success and report.totals.net == "0.00"
+    for name in ("takings_cents", "units_sold", "adjustments_cents", "net_cents"):
+        assert sum(getattr(w, name) for w in report.weeks) == 0, name
+    code, body = pr.render(report)
+    assert code == 200 and "2.70" not in body and "1.00" not in body
