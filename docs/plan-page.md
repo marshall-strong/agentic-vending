@@ -61,14 +61,28 @@ python -m vending.fill --submit --hash HASH --by NAME     # send it
    balance), the hash no longer matches, and the command refuses with `plan_changed`. Run the
    preview again.
 
+The request buys what the plan buys. The plan adds up each product's units across its slots and rounds
+that total up to whole packs: ten slots of 7 Coca-Cola is six 12-packs, not ten. So the request has:
+
+- one purchase line per product, on its first slot, with the packs for all its slots;
+- a back-stock line for each of the product's other slots, which loads that slot's units from those packs;
+- a note that names how many units go in each slot. The bridge's purchase line has no load target, so
+  without it the worker would fill the first slot with whatever fits.
+
+The bridge spec doesn't say if a line may load units that another line of the same request bought. We
+asked David on 19 Oct, with no answer yet. The note says it plainly. The agent's own plans still buy
+per slot.
+
 The command sends the products at the sourcing table's checked prices, never the plan's estimates.
 It refuses, with every reason and nothing sent, when:
 
 - the plan was picked for another slot assignment than our slots (the server's assignment) now
   (`plan_assignment`);
 - a product has no sourcing row, store or checked price (`no_checked_price`, #202);
-- the ledger has no opening, or only the test opening from before the fall cut (`test_opening`, #215);
-- a request since the opening was sent and not rejected (`fill_already_sent`);
+- the ledger has no opening, an opening dated after now, or only the test opening from before the fall
+  cut (`test_opening`, #215);
+- a request was sent since the opening, or by this command at any time, and was not rejected
+  (`fill_already_sent`);
 - the agent's own submit refuses: over spendable cash, a pending request, an unsettled submission,
   the halt switch, and the rest in [`tool-contracts.md`](tool-contracts.md).
 

@@ -21,7 +21,18 @@ and nothing sent:
 - `plan_assignment`: the plan was picked for another slot assignment than ours now;
 - `no_checked_price`: a product with no sourcing row, or one with no checked price;
 - `test_opening`: the ledger's opening is from before the fall cut, the test opening of 11 Nov (#215);
-- `fill_already_sent`: a request since the opening was accepted and not rejected, so the fill has gone.
+- `fill_already_sent`: a request since the opening, or any request this command sent, was accepted and not
+  rejected, so the fill has gone. This command's own requests count whenever they were sent, so an opening
+  recorded again after the fill can't hide it.
+
+The planner itself refuses (`Can't plan yet`) while the ledger's opening is dated after now: no money is
+ours before the opening.
+
+The plan buys each product once for all its slots, as the picked round counts it: units summed per
+product, then rounded up to whole packs. So the request has one purchase line per product, on its first
+slot, sized for all of them, and a back-stock line for each other slot that loads from that purchase. Its
+`note` names every slot's load, since the bridge's purchase line has no load target. See "Pooled
+purchases" in `vending.planner`.
 
 The submit needs `--hash`, the hash the preview printed, and refuses
 (`plan_changed`) when the plan now hashes to anything else: a changed plan,
@@ -129,19 +140,24 @@ def checks(conn: psycopg.Connection, pick: Picked, ours: tuple[str, ...]) -> lis
         refusals.append(Refusal(TEST_OPENING, (
             f"the ledger's opening is dated {opened.at.astimezone(EASTERN):%Y-%m-%d}, before the fall cut, so it is "
             "the test opening, not the real one (#215); reset it and record the real opening first")))
-    if opened is not None:
-        sent = conn.execute(
-            "select request_id, status from purchase_requests where submitted_at >= %s and status <> 'rejected'"
-            " order by submitted_at", (opened.at,)).fetchall()
-        if sent:
-            named = ", ".join(f"{rid} ({status})" for rid, status in sent)
-            refusals.append(Refusal(ALREADY_SENT, (
-                f"request {named} was sent since the ledger's opening and wasn't rejected, so the day-one fill has "
-                "gone; it can be sent again only if the bridge rejects it")))
+    if sent := _sent(conn, opened.at if opened is not None else None):
+        named = ", ".join(f"{rid} ({status})" for rid, status in sent)
+        refusals.append(Refusal(ALREADY_SENT, (
+            f"request {named} was sent as the fill or since the ledger's opening and wasn't rejected, so the "
+            "day-one fill has gone; it can be sent again only if the bridge rejects it")))
     # The agent's submit refuses this too; here it also stops a preview from looking clean.
     if unresolved := submissions.unresolved(conn):
         refusals.append(unresolved)
     return refusals
+
+
+def _sent(conn: psycopg.Connection, opened_at: datetime | None) -> list[tuple[str, str]]:
+    """Requests that aren't rejected: every one this command sent, and every one since the opening."""
+    return conn.execute(
+        "select request_id, status from purchase_requests where status <> 'rejected'"
+        " and (submitted_at >= %s or request_id in ("
+        "  select result->>'request_id' from action_log where tool = %s and result->>'request_id' is not null))"
+        " order by submitted_at, request_id", (opened_at, TOOL)).fetchall()
 
 
 def _unpriced(conn: psycopg.Connection, checked: plan_rounds.Round) -> list[Refusal]:
@@ -177,6 +193,7 @@ def day_one_warnings(plan: planner.Plan, now: datetime, visit: date = DAY_ONE_VI
     for line in plan.lines:
         if line.purchase is None:
             continue
+        stocked = [line.slot, *(slot for slot, _ in line.purchase.feeds)]   # a pooled purchase stocks them all
         for option in (line.purchase.primary, line.purchase.alternate):
             cutoff = cutoffs.get(option.store) if option else None
             if cutoff is None:
@@ -184,7 +201,7 @@ def day_one_warnings(plan: planner.Plan, now: datetime, visit: date = DAY_ONE_VI
             day = visit - timedelta(days=(FRIDAY - cutoff.weekday) % 7)
             deadline = datetime.combine(day, cutoff.at, EASTERN) + timedelta(seconds=59)
             if now > deadline:
-                late.setdefault((option.store, deadline), []).append(line.slot)
+                late.setdefault((option.store, deadline), []).extend(stocked)
     return [f"past the {store} cutoff for the {visit:%a %d %b} stocking ({deadline:%a %d %b %H:%M} ET) for slots "
             f"{', '.join(sorted(set(names)))}; those lines will likely miss it and be stocked at the next scheduled "
             "visit"
@@ -200,7 +217,7 @@ def preview(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
     if pick.round is None:
         return Preview(pick, None, None, tuple(own), ())
     try:
-        plan, gathered = planning.plan(conn, desired_state(pick.round), bridge, now)
+        plan, gathered = planning.plan(conn, desired_state(pick.round), bridge, now, pool=True)
     except planning.NotReady as blocked:
         return Preview(pick, None, None, tuple(own), (), blocked=str(blocked))
     return Preview(pick, plan, gathered, _merge(own, plan.refusals),
@@ -231,11 +248,12 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
         desired = desired_state(pick.round)
         if own:
             try:
-                plan, _ = planning.plan(conn, desired, bridge(), now)
+                plan, _ = planning.plan(conn, desired, bridge(), now, pool=True)
             except planning.NotReady:
                 raise Refused(own) from None
             raise Refused(list(_merge(own, plan.refusals)))
-        return submit_tool.submit_desired_state(desired, bridge, connect, now, expected_plan_hash.strip())(conn)
+        return submit_tool.submit_desired_state(desired, bridge, connect, now, expected_plan_hash.strip(),
+                                                pool=True)(conn)
 
     # The gate logs `arguments` after the action has filled in the plan's ID.
     return run_write(conn, TOOL, arguments, action)
@@ -292,7 +310,8 @@ def _table(plan: planner.Plan) -> str:
     rows = [header]
     for ln in plan.lines:
         if ln.purchase is None:
-            rows.append((ln.slot, ln.product, str(ln.units_to_load), "closet", "-", "-",
+            source = f"from slot {ln.fed_by}" if ln.fed_by else "closet"
+            rows.append((ln.slot, ln.product, str(ln.units_to_load), source, "-", "-",
                          _usd(ln.sale_price_cents), "-"))
             continue
         o, alt = ln.purchase.primary, ln.purchase.alternate

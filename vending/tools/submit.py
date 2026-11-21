@@ -75,15 +75,16 @@ class AnswerNotStored(RuntimeError):
 
 def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
                          connect: Callable[[], psycopg.Connection], now: datetime | None = None,
-                         expected_plan_hash: str | None = None,
+                         expected_plan_hash: str | None = None, *, pool: bool = False,
                          ) -> Callable[[psycopg.Connection], SubmitReply]:
     """The write action for the gate. `connect` opens the one side connection that records the
-    attempt; it must reach the same database as the gate's."""
+    attempt; it must reach the same database as the gate's. `pool` is the fill's (`vending.fill`), never
+    the agent's: see "Pooled purchases" in the planner."""
 
     def action(conn: psycopg.Connection) -> SubmitReply:
         client = bridge()
         try:
-            plan, gathered = planning.plan(conn, desired, client, now)
+            plan, gathered = planning.plan(conn, desired, client, now, pool=pool)
         except planning.NotReady as blocked:
             return SubmitReply(success=False, message=f"Can't submit yet: {blocked}")
         refusals = list(plan.refusals)

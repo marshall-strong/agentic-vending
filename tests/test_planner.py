@@ -240,6 +240,43 @@ class Purchases(unittest.TestCase):
         self.assertEqual(line(p, "15").purchase.primary.packs, 1)
         self.assertEqual(line(p, "16").purchase.primary.packs, 1)
         self.assertEqual(p.cost.max_cents, 2 * 1200)
+        self.assertNotIn("note", p.request())
+
+    def test_a_pooled_plan_buys_once_for_all_of_a_products_slots(self):
+        # `vending.fill`'s day-one plan: 6 short in slot 15 and 6 in slot 16 is one 24-pack, not two.
+        p = plan_restock(current(), replace(desired(
+            restock_15(), DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=6)), pool=True),
+            CONFIG, TUESDAY)
+        self.assertTrue(p.ok, p.refusals)
+        first, fed = line(p, "15"), line(p, "16")
+        self.assertEqual((first.source, first.purchase.primary.packs, first.purchase.alternate.packs),
+                         (PURCHASE, 1, 1))
+        self.assertEqual(first.purchase.feeds, (("16", 6),))
+        self.assertEqual(first.purchase.primary.units_to_closet, 12)    # 24 bought, 6 + 6 loaded
+        self.assertEqual((fed.source, fed.fed_by, fed.units_to_load, fed.purchase), (BACK_STOCK, "15", 6, None))
+        self.assertEqual(fed.to_api()["load"], {"sku": MTDEW, "units": 6, "sale_price": "2.50",
+                                                "change_product": True})
+        self.assertEqual(p.cost.max_cents, 1200)                        # the dearer option, once
+        # The fed slot sells units the purchase bought, so their cost sets its floor.
+        self.assertEqual([part.source.split(",")[0] for part in floor_of(p, "16").parts],
+                         ["primary BJs 24-pack", "alternate Amazon 12-pack"])
+        body = p.request()
+        self.assertIn("15=6", body["note"])
+        self.assertIn("16=6", body["note"])
+        self.assertIn("slot 15's purchase", p.directive)
+        self.assertIn("for slots 15, 16", p.directive)
+
+    def test_a_pooled_purchase_past_its_cutoff_makes_its_fed_slots_late_too(self):
+        p = plan_restock(current(), replace(desired(pickle_17(), DesiredSlot(
+            "18", product=PICKLE, sale_price="3.00", fill_to=6)), pool=True), CONFIG, THURSDAY_NOON)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertTrue(any("Amazon cutoff" in w and "17, 18" in w for w in p.warnings), p.warnings)
+
+    def test_a_pooled_plan_may_not_load_more_than_twenty_packs_on_one_line(self):
+        config = Config(slots=TEST_SLOTS, capacity_overrides=counted(30), timezone=EDT)
+        slots = [DesiredSlot(s, product=PICKLE, sale_price="3.00", fill_to=30) for s in TEST_SLOTS[2:11]]
+        p = plan_restock(current(), replace(desired(*slots), pool=True), config, TUESDAY)
+        self.assertIn("too_many_packs", codes(p))                       # 270 units in 12-packs is 23
 
     def test_given_sourcing_beats_the_table(self):
         given = Sourcing(MTDEW, PurchaseOption("Walmart", 6, "4.49"))

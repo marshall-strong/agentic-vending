@@ -77,12 +77,15 @@ def test_the_preview_shows_every_line_the_cost_and_the_hash_and_sends_nothing(db
     plan_id = seed(db, fake)
     out, plan_hash = previewed(schema_url, fake, capsys)
     assert f"First-fill plan #{plan_id}, round 6" in out
-    for slot in COKE:
-        assert re.search(rf"^{slot}\s+COKE20\s+7\s+Costco\s+1 x 12\s+1\.03 / 1\.08\s+\$2\.50", out, re.M)
-    for slot in PICKLE:
-        assert re.search(rf"^{slot}\s+PICKLE\s+8\s+Amazon\s+1 x 24\s+0\.75 / 0\.88\s+\$3\.00", out, re.M)
-    # Ten Costco 12-packs and ten Amazon 24-packs, each sized for its own slot.
-    assert "Total: expected $303.70, at most $340.00. Spendable $600.00; $260.00 left at most." in out
+    # One line per product buys the plan's packs for all its slots; the others load from that purchase.
+    assert re.search(rf"^{COKE[0]}\s+COKE20\s+7\s+Costco\s+6 x 12\s+1\.03 / 1\.08\s+\$2\.50", out, re.M)
+    assert re.search(rf"^{PICKLE[0]}\s+PICKLE\s+8\s+Amazon\s+4 x 24\s+0\.75 / 0\.88\s+\$3\.00", out, re.M)
+    for slot in COKE[1:]:
+        assert re.search(rf"^{slot}\s+COKE20\s+7\s+from slot {COKE[0]}\s+-\s+-\s+\$2\.50", out, re.M)
+    for slot in PICKLE[1:]:
+        assert re.search(rf"^{slot}\s+PICKLE\s+8\s+from slot {PICKLE[0]}\s+-\s+-\s+\$3\.00", out, re.M)
+    # As round 6 pools them: 70 Coca-Cola in six 12-packs, 80 Pickle Potion in four 24-packs.
+    assert "Total: expected $146.22, at most $162.00. Spendable $600.00; $438.00 left at most." in out
     # The same hash the agent's preview gives for the same desired state.
     with open_in(*schema_url) as conn:
         assert plan_hash == fill.preview(conn, fake.client(), NOW).plan.plan_hash
@@ -118,12 +121,12 @@ def test_a_submit_records_the_request_as_the_agent_would_with_who_and_which_plan
     _, plan_hash = previewed(schema_url, fake, capsys)
     assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 0
     out = capsys.readouterr().out
-    assert "Submitted purchase request pr-1 (pending): 20 lines, at most 340.00" in out
+    assert "Submitted purchase request pr-1 (pending): 20 lines, at most 162.00" in out
     assert "python -m vending.sync_requests" in out
     [posted] = fake.posts
     assert posted["off_cycle"] is False and [ln["slot"] for ln in posted["lines"]] == list(TEST_SLOTS)
     assert posted["lines"][0]["primary"] == {
-        "sku": "COKE20", "store": "Costco", "packs": 1, "units_per_pack": 12, "max_price_per_pack": "13.00",
+        "sku": "COKE20", "store": "Costco", "packs": 6, "units_per_pack": 12, "max_price_per_pack": "13.00",
         "sale_price": "2.50", "change_product": True}
     # Where the request sync finds it on 30 Nov, with the hash that was previewed.
     assert db.execute("select request_id, status, plan_hash, request_body from purchase_requests").fetchall() == [
@@ -133,6 +136,80 @@ def test_a_submit_records_the_request_as_the_agent_would_with_who_and_which_plan
         "select arguments, outcome, result from action_log where tool = 'fill.submit'").fetchall()
     assert arguments == {"by": "Test Submitter", "expected_plan_hash": plan_hash, "plan_id": plan_id, "label": "6"}
     assert outcome == "done" and result["request_id"] == "pr-1" and result["submission"] == 1
+
+
+def test_the_request_buys_the_plans_packs_and_names_each_slots_load(db, fake, schema_url, capsys):  # noqa: F811
+    """Review blocker 1: the plan pools units by product before rounding to packs, so the request must too.
+
+    A pack per slot bought 20 packs at a $340.00 max where the plan buys 10 at $162.00. The bridge's purchase
+    line has no load target, so the per-slot loads go in the request: back-stock lines carry their units, and
+    the note names every slot's load, the purchase lines' too."""
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 0
+    assert "at most 162.00" in capsys.readouterr().out
+    [posted] = fake.posts
+    lines = {ln["slot"]: ln for ln in posted["lines"]}
+    for first, rest, sku, units, price, packs in ((COKE[0], COKE[1:], "COKE20", 7, "2.50", 6),
+                                                   (PICKLE[0], PICKLE[1:], "PICKLE", 8, "3.00", 4)):
+        assert lines[first]["source"] == "purchase" and lines[first]["primary"]["packs"] == packs
+        for slot in rest:
+            assert lines[slot] == {"slot": slot, "source": "back_stock", "load": {
+                "sku": sku, "units": units, "sale_price": price, "change_product": True}}
+    assert sum(ln["primary"]["packs"] for ln in posted["lines"] if ln["source"] == "purchase") == 10
+    note = posted["note"]
+    assert len(note) <= 500
+    for slot in COKE:
+        assert f"{slot}={7}" in note
+    for slot in PICKLE:
+        assert f"{slot}={8}" in note
+
+
+def test_a_changed_load_changes_the_request_and_its_hash(db, fake, schema_url, capsys):  # noqa: F811
+    """A load target is part of the request, so a pick changed from 7 to 6 can't reuse the old hash."""
+    seed(db, fake)
+    _, before = previewed(schema_url, fake, capsys)
+    plan = plan_json()
+    plan["day_one"][1]["units"] = 6
+    db.execute("update first_fill_plans set plan = %s", (Jsonb(plan),))
+    _, after = previewed(schema_url, fake, capsys)
+    assert after and after != before
+    assert run(schema_url, fake, "--submit", "--hash", before, "--by", "Test Submitter") == 1
+    assert "plan_changed" in capsys.readouterr().err and fake.posts == []
+    assert run(schema_url, fake, "--submit", "--hash", after, "--by", "Test Submitter") == 0
+    [posted] = fake.posts
+    assert f"{COKE[1]}=6" in posted["note"]
+    assert {ln["slot"]: ln for ln in posted["lines"]}[COKE[1]]["load"]["units"] == 6
+
+
+def test_an_opening_dated_after_now_authorizes_nothing(db, fake, schema_url, capsys):  # noqa: F811
+    """Review blocker 2: an opening at 23:59 ET on 29 Nov put $600 in a 20:00 ET submit, and it posted."""
+    seed(db, fake, opened=datetime(2026, 11, 30, 4, 59, tzinfo=timezone.utc))
+    out, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash is None and "Can't plan yet" in out and "after now" in out and "$600.00" not in out
+    assert run(schema_url, fake, "--submit", "--hash", "0" * 64, "--by", "Test Submitter") == 1
+    capsys.readouterr()
+    assert fake.posts == [] and db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
+
+
+def test_a_fill_sent_before_the_ledgers_opening_still_counts_as_sent(db, fake, schema_url, capsys):  # noqa: F811
+    """Review blocker 2: the duplicate check looked only at requests since the opening, so an opening recorded
+    again after the fill went out hid it. The fill's own record is checked too."""
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 0
+    db.execute("update purchase_requests set status = 'fulfilled'")
+    later = datetime(2026, 11, 30, 2, 0, tzinfo=timezone.utc)
+    db.execute("update ledger_entries set at = %s where kind = 'opening'", (datetime(2026, 11, 30, 1, 30,
+                                                                                         tzinfo=timezone.utc),))
+    capsys.readouterr()
+    assert fill.main([], bridge=fake.client, connect=lambda: open_in(*schema_url), now=later) == 0
+    out = capsys.readouterr().out
+    assert "fill_already_sent: request pr-1 (fulfilled)" in out and "Plan hash: none" in out
+    assert fill.main(["--submit", "--hash", "0" * 64, "--by", "Test Submitter"], bridge=fake.client,
+                     connect=lambda: open_in(*schema_url), now=later) == 1
+    capsys.readouterr()
+    assert codes(db) == ["fill_already_sent"] and len(fake.posts) == 1
 
 
 def test_a_hash_that_does_not_match_the_preview_is_refused(db, fake, schema_url, capsys):  # noqa: F811

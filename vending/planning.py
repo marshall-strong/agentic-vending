@@ -29,6 +29,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 
@@ -119,6 +120,12 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     balance = ledger.balance(conn, now)
     if balance is None:
         raise NotReady(ledger.OPEN_HINT)
+    if balance.opening_at > now:
+        # `ledger.balance` counts the opening whenever it is dated, so a future one would lend
+        # money that isn't ours yet. Nothing is spent before the opening.
+        opens = balance.opening_at.astimezone(ZoneInfo(ledger.TIMEZONE))
+        raise NotReady(f"the ledger's opening is dated {opens:%Y-%m-%d %H:%M} ET, after now, so no money is ours "
+                       "to spend yet; wait for it, or re-date the opening if that time is wrong")
     notes.extend(balance.notes)
     spendable = math.floor(balance.spendable_cents)
 
@@ -219,8 +226,8 @@ def _bridge_catalog(bridge: Bridge) -> list[dict]:
     return products
 
 
-def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
-    """The validated tool input as the planner's dataclasses."""
+def to_planner(desired: schema.DesiredState, *, pool: bool = False) -> planner.DesiredState:
+    """The validated tool input as the planner's dataclasses. `pool` is never the agent's: see the planner."""
     return planner.DesiredState(
         slots=tuple(planner.DesiredSlot(s.slot, s.keep, s.product, s.sale_price, s.fill_to) for s in desired.slots),
         off_cycle=desired.off_cycle,
@@ -233,11 +240,12 @@ def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
             )
             for s in desired.sourcing
         ),
+        pool=pool,
     )
 
 
 def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
-         now: datetime | None = None) -> tuple[planner.Plan, Gathered]:
+         now: datetime | None = None, *, pool: bool = False) -> tuple[planner.Plan, Gathered]:
     """Run the planner on live data. Raises `NotReady` when a person has to act first.
 
     The halt switch is checked before the catalog is read, so that halted with
@@ -253,7 +261,7 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
         raise
     gathered = gather(conn, catalog, now)
     gathered = replace(gathered, notes=(*catalog_notes, *gathered.notes))
-    result = planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now)
+    result = planner.plan_restock(gathered.current, to_planner(desired, pool=pool), gathered.config, gathered.now)
     stale = _stale_table_prices(gathered.sourcing_rows, result, desired, gathered.now)
     if stale:
         result = replace(result, warnings=(*result.warnings, *stale))
