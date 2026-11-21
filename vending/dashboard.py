@@ -73,7 +73,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
 from vending import capacity, db, leaderboards, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
-from vending import agent_runs, key_dates, pricing_panel
+from vending import agent_runs, agent_schedule, key_dates, pricing_panel
 from vending import stock as stock_mod
 from vending import planner
 from vending.planner import IN_STORE_CUTOFF
@@ -842,6 +842,11 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
 
 
 # Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
+# The worker's scheduled agent runs (`vending.agent_schedule`) of the last week, and any still `running`,
+# newest first. Read from the table, not the worker's /health, so turning the schedule off hides none.
+# No `detail`: a failed one's can hold an error.
+SCHEDULED_RUNS_SQL = ("select due_at, mode, claimed_at, outcome, run_id from agent_schedule"
+                      " where due_at > %s or outcome = 'running' order by due_at desc limit 20")
 CATALOG_REQUESTS_SQL = ("select id, requested_at, name, size, status, sku, decision_note"
                         " from product_requests order by requested_at desc, id desc")
 
@@ -879,6 +884,8 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
                                        f" and started_at {comparison} %s",
                                  (live_since or now,))
     catalog = _panel(lambda: _rows(conn, CATALOG_REQUESTS_SQL))
+    scheduled = _panel(lambda: _isolated(conn, lambda: _rows(conn, SCHEDULED_RUNS_SQL,
+                                                              (now - agent_schedule.LOOKBACK,))))
     if live_since is None:
         spend = {"ok": True, "data": None}
     elif purchases["ok"]:
@@ -909,6 +916,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
                               if purchases["ok"] else purchases),
         "catalog_requests": catalog,
         "catalog_counts": _catalog_counts(catalog),
+        "scheduled_runs": scheduled,
     }
     try:
         lock = lock_at()
@@ -1024,7 +1032,7 @@ def attention(snap: dict) -> list[dict]:
 
     if (failing := _failing_syncs(snap.get("syncs"), now)) is not None:
         add("bad", failing)
-    if (scheduled := _scheduled_run(snap.get("syncs"))) is not None:
+    for scheduled in _scheduled_runs(snap.get("scheduled_runs"), snap.get("syncs"), now):
         add(*scheduled)
 
     catalog = snap["catalog_requests"]
@@ -1104,35 +1112,53 @@ def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
     return f"The worker's latest hourly sync{when} failed: {jobs}.{meaning} See `/health`."
 
 
-# How Needs attention reads the last scheduled agent run (`vending.agent_schedule`), by its outcome.
+# How Needs attention reads a scheduled agent run (`vending.agent_schedule`), by its outcome.
 SCHEDULED = {"failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started before its latest start"),
              "halted": ("warn", "was halted: the halt switch was on"), "skipped": ("info", "skipped"),
              "submitted": ("info", "submitted a purchase request"), "running": ("info", "is running now")}
+# Each of these stays in Needs attention for a week (`agent_schedule.LOOKBACK`), whatever ran after it.
+SCHEDULED_PROBLEMS = ("failed", "missed", "halted")
 
 
-def _scheduled_run(syncs: dict | None) -> tuple[str, str] | None:
-    """(level, sentence) on the last scheduled agent run, from the worker's `/health` (`agent_schedule`), or
-    None when scheduled runs are off or the worker didn't pass its state in. A wrong setting is `bad`: the
-    team thinks the agent runs, and it doesn't."""
-    schedule = (syncs or {}).get("agent_schedule")
-    if not isinstance(schedule, dict):
+def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
+    """(level, sentence) on one `agent_schedule` row, or None for an outcome it doesn't know."""
+    outcome = row.get("outcome")
+    if outcome not in SCHEDULED:
         return None
-    if schedule.get("mode") == "invalid":
-        return ("bad", "Scheduled agent runs are off because a setting is wrong (`AGENT_SCHEDULE_MODE`, "
-                       "`AGENT_SCHEDULE` or `AGENT_SCHEDULE_FROM`). The container's log says which.")
-    last = schedule.get("last")
-    if not isinstance(last, dict) or last.get("outcome") not in SCHEDULED:
-        return None
-    level, what = SCHEDULED[last["outcome"]]
+    level, what = SCHEDULED[outcome]
+    claimed = row.get("claimed_at")
+    if outcome == "running" and isinstance(claimed, datetime) and now - claimed > agent_schedule.STUCK_AFTER:
+        level, what = "bad", (f"has said `running` for {_span(now - claimed)}, past the agent's deadline: "
+                              "the worker probably stopped mid-run")
+    if outcome == "skipped" and row.get("mode") == "off":
+        what = f"skipped: `{agent_schedule.DB_MODE_KEY}` is off in the database"
     try:
-        due = _eastern(datetime.fromisoformat(last["due_at"]))
+        due = _eastern(row["due_at"])
         when = f" due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, AttributeError):
         when = ""
-    kind = "dry run" if last.get("mode") == "dry-run" else "live run"
-    run = f" (agent run {int(last['run_id'])})" if isinstance(last.get("run_id"), int) else ""
-    see = "" if last["outcome"] in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
+    kind = {"dry-run": "dry run", "live": "live run"}.get(row.get("mode"), "run")
+    run = f" (agent run {int(row['run_id'])})" if isinstance(row.get("run_id"), int) else ""
+    see = "" if outcome in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
     return level, f"The scheduled {kind}{when} {what}{run}.{see}"
+
+
+def _scheduled_runs(panel: dict | None, syncs: dict | None, now: datetime) -> list[tuple[str, str]]:
+    """Needs attention's lines on the scheduled agent runs: a wrong setting (from the worker's /health),
+    every failed, missed or halted run of the last week and every stuck one (from `agent_schedule`), and the
+    latest run whatever its outcome. Nothing when the table is empty or not there yet."""
+    out: list[tuple[str, str]] = []
+    schedule = (syncs or {}).get("agent_schedule")
+    if isinstance(schedule, dict) and schedule.get("mode") == "invalid":
+        out.append(("bad", "Scheduled agent runs are off because a setting is wrong (`AGENT_SCHEDULE_MODE`, "
+                           "`AGENT_SCHEDULE` or `AGENT_SCHEDULE_FROM`). The container's log says which."))
+    if not panel or not panel.get("ok"):
+        return out
+    for i, row in enumerate(panel["data"]):
+        line = _scheduled_line(row, now)
+        if line is not None and (i == 0 or line[0] != "info"):
+            out.append(line)
+    return out
 
 
 def verdict(items: list[dict]) -> str:

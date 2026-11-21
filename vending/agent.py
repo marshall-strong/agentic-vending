@@ -7,6 +7,12 @@ One run:
 
 1. If the halt switch is on, the run is recorded as `halted` and nothing else happens. It is
    checked again before every model request, so turning it on mid-run stops the run there.
+   Only one run goes at a time, in any mode, from any machine on the same database: a run holds a
+   database lock (`RUN_LOCK`) from start to end. A run that finds it taken is recorded as
+   `skipped` at once, and its detail names the other run. The whole run has a deadline
+   (`RUN_DEADLINE`): past it, the run stops and is `failed`. A model request already sent finishes
+   first (each has `REQUEST_TIMEOUT`), and an MCP request has `TOOL_TIMEOUT`, so a server that
+   stops answering can't hold the run, or the lock, for ever.
 2. It starts our MCP server (`python -m vending.server`, `VENDING_TOOLS=built`) over stdio and
    offers the model the tools the server lists. A dry run hides every write tool. A live run
    refuses to start while `submit_desired_state` isn't built, sends only the plan its last preview
@@ -40,7 +46,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -59,6 +65,12 @@ DEFAULT_EFFORT = "medium"
 MAX_TOKENS = 16_000
 MAX_TURNS = 15                      # tool rounds; on the last one the model must answer
 REQUEST_TIMEOUT = 300.0             # seconds for one model request; the SDK's default is 10 minutes
+TOOL_TIMEOUT = timedelta(minutes=2)  # one MCP request (a tool call, the tool list); the SDK waits for ever
+RUN_DEADLINE = 60 * 60.0            # seconds for a whole run; a placeholder, like the caps (#129)
+# The session advisory lock a run holds from start to end, so two runs never overlap (#213). Not the
+# migration lock (`vending.db`) or the scheduler's (`vending.agent_schedule.LOCK`).
+RUN_LOCK = 4_200_039
+BUSY = "Not started: another agent run was still going"
 # Never passed on to the server: the key the agent pays with, and what the SDK would pick up by itself.
 MODEL_KEY_VARS = frozenset({DEFAULT_KEY_ENV, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
 
@@ -439,11 +451,57 @@ def _settle(out: Outcome) -> None:
         out.status, out.detail = "failed", UNRESOLVED + out.unresolved + (f" Then: {out.detail}" if out.detail else "")
 
 
+def _take_run_lock(connect: Callable[[], psycopg.Connection]) -> psycopg.Connection | None:
+    """A connection holding `RUN_LOCK`, or None when another run holds it."""
+    conn = connect()
+    try:
+        if conn.execute("select pg_try_advisory_lock(%s)", (RUN_LOCK,)).fetchone()[0]:
+            return conn
+    except BaseException:
+        conn.close()
+        raise
+    conn.close()
+    return None
+
+
+def _give_back(lock: psycopg.Connection) -> None:
+    try:
+        lock.execute("select pg_advisory_unlock(%s)", (RUN_LOCK,))
+    except Exception:       # noqa: BLE001 - a dropped connection has released the lock already
+        pass
+    finally:
+        lock.close()
+
+
 async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT,
               connect: Callable[[], psycopg.Connection] = db.connect, client: Any = None,
               now: Callable[[], datetime] | None = None, open_tools: Callable | None = None,
-              max_turns: int = MAX_TURNS, rules_card: Path | None = None) -> tuple[int, Outcome]:
-    """One weekly run, recorded in `agent_runs`. Returns (run id, outcome)."""
+              max_turns: int = MAX_TURNS, rules_card: Path | None = None,
+              deadline: float = RUN_DEADLINE) -> tuple[int, Outcome]:
+    """One weekly run, recorded in `agent_runs`. Returns (run id, outcome).
+
+    Holds `RUN_LOCK` throughout. If another run holds it, this one is recorded as `skipped` and
+    nothing else happens. Past `deadline` seconds the run stops and is recorded as `failed`."""
+    lock = _take_run_lock(connect)
+    if lock is None:
+        with connect() as conn:
+            other = conn.execute("select id from agent_runs where status = 'running'"
+                                 " order by started_at desc, id desc limit 1").fetchone()
+            run_id = agent_runs.start(conn, mode="live" if live else "dry-run", model=model)
+            out = Outcome("skipped", BUSY + (f" (agent run {other[0]})." if other else "."))
+            agent_runs.finish(conn, run_id, out.status, detail=out.detail, cost_usd=Decimal(0))
+        return run_id, out
+    try:
+        return await _run_locked(live=live, model=model, effort=effort, connect=connect, client=client, now=now,
+                                 open_tools=open_tools, max_turns=max_turns, rules_card=rules_card,
+                                 deadline=deadline)
+    finally:
+        _give_back(lock)
+
+
+async def _run_locked(*, live: bool, model: str, effort: str, connect: Callable[[], psycopg.Connection],
+                      client: Any, now: Callable[[], datetime] | None, open_tools: Callable | None,
+                      max_turns: int, rules_card: Path | None, deadline: float) -> tuple[int, Outcome]:
     now = now or (lambda: datetime.now(timezone.utc))
     with connect() as conn:
         run_id = agent_runs.start(conn, mode="live" if live else "dry-run", model=model)
@@ -476,16 +534,22 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
             client = model_client()
         # Only a live run spends the competition's money; a dry run is test spend, under the test cap.
         harness = Harness(client, connect, purpose="live" if live else "test", by="agent")
-        async with (open_tools or _open_server)() as (listed, call_tool):
-            if live and SUBMIT not in {t.name for t in listed}:
-                out.detail = "submit_desired_state isn't built on this server, so a live run can't submit. Use a dry run."
-            else:
-                startup = await startup_read(call_tool, record_step)
-                await converse(harness, call_tool, tool_definitions(listed, live=live), out, model=model,
-                               effort=effort, system=system, opening=brief(now(), notes, live=live, startup=startup), live=live,
-                               halted=halted,
-                               on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
-                               label=f"agent run {run_id}", on_step=record_step)
+        # Cancellation lands at the next await: a model request in flight (in a thread) ends first.
+        with anyio.move_on_after(deadline) as timer:
+            async with (open_tools or _open_server)() as (listed, call_tool):
+                if live and SUBMIT not in {t.name for t in listed}:
+                    out.detail = ("submit_desired_state isn't built on this server, so a live run can't submit. "
+                                  "Use a dry run.")
+                else:
+                    startup = await startup_read(call_tool, record_step)
+                    await converse(harness, call_tool, tool_definitions(listed, live=live), out, model=model,
+                                   effort=effort, system=system,
+                                   opening=brief(now(), notes, live=live, startup=startup), live=live,
+                                   halted=halted,
+                                   on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
+                                   label=f"agent run {run_id}", on_step=record_step)
+        if timer.cancelled_caught:
+            out.status, out.detail = "failed", f"Stopped at the run's deadline ({deadline / 60:g} min)."
     except Exception as error:   # record the run whatever broke; the ledger already holds what was spent
         out.status, out.detail = "failed", f"{type(error).__name__}: {error}"[:1000]
     except BaseException as error:   # Ctrl-C or cancellation: record it, then let it through
@@ -513,7 +577,8 @@ def _open_server():
     @asynccontextmanager
     async def opened():
         params = StdioServerParameters(command=sys.executable, args=["-m", "vending.server"], env=server_env())
-        async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+        async with stdio_client(params) as (read, write), \
+                ClientSession(read, write, read_timeout_seconds=TOOL_TIMEOUT) as session:
             await session.initialize()
             listed = (await session.list_tools()).tools
             yield listed, session.call_tool

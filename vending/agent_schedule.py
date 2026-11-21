@@ -1,13 +1,24 @@
-"""Scheduled agent runs, started by the worker (#213). Off unless `AGENT_SCHEDULE_MODE` is set.
+"""Scheduled agent runs, started by the worker (#213). Off unless two settings both turn them on.
 
 The worker's loop asks `Scheduler.next_due` when the next run is due and calls `Scheduler.tick`
 then, as it does for the visit reads (`vending.visit_polls`). The run itself is the agent's own
 entry point, `vending.agent.run`, in a background thread, so the hourly syncs go on meanwhile.
 
-Settings (environment, or `.env`):
+**Off by default, twice.** The worker runs the agent only when both of these say so, and it runs
+the lower of the two (`off` < `dry-run` < `live`):
 
-- `AGENT_SCHEDULE_MODE`: `off` (unset is off), `dry-run` or `live`. A dry run is test spend, under
-  `model_test_daily_cap_cents`; a live run may submit a purchase request (`docs/agent.md`).
+- `AGENT_SCHEDULE_MODE` (environment, or `.env`): `off` (unset is off), `dry-run` or `live`. Unset,
+  the worker builds no scheduler at all and never touches `agent_schedule`.
+- `agent_schedule_mode` in the database's `config` table: the same three values; no row is off.
+  Set it with `python -m vending.config set agent_schedule_mode '"dry-run"' --by NAME`. It is
+  read under the scheduler's lock at each scheduled time, so a change reaches every replica at
+  once, an old one left over from a deploy too. Turning it down is how to stop the runs.
+
+A dry run is test spend, under `model_test_daily_cap_cents`; a live run may submit a purchase
+request (`docs/agent.md`).
+
+Other settings (environment, or `.env`):
+
 - `AGENT_SCHEDULE`: when, in Eastern time, as `day HH:MM-HH:MM`, comma-separated. The first time
   is when the run is due; the second is the latest it may start. Unset: `wed 14:00-22:00`, one
   restock run each Wednesday afternoon, so its order beats Amazon's Wed 23:59 cutoff (#188). A
@@ -18,22 +29,28 @@ Each time in the schedule gets one row in `agent_schedule` (`db/migrations/022_a
 keyed by the time, so it runs at most once whatever restarts or replicas there are:
 
 - The worker inserts the row before it starts the agent, and records the agent's ending
-  (`submitted`, `skipped`, `halted`, `failed`) and its run id when the agent returns.
+  (`submitted`, `skipped`, `halted`, `failed`) and its run id when the agent returns. If that
+  write fails, the worker tries it again every minute until it lands.
+- A time the database's mode turns off is recorded as `skipped`, with mode `off`.
 - A time the worker never reached before its latest start (it was down, or the schedule was off)
-  is recorded as `missed` once a worker runs again. One it reaches late but before its latest
-  start runs late, and its detail says so. Only the last `LOOKBACK` (7 days) is looked at.
-- Never two runs at once: a worker holds a database lock (`LOCK`) for the whole run, and a run
-  isn't started while another agent run (`live` or `dry-run`, by hand too) is still running; that
-  time is then recorded as `skipped`, and the detail names the other run.
+  is recorded as `missed` once a worker runs again. The clock is read again under the lock, so a
+  run never starts after its latest start. One reached late but before its latest start runs late,
+  and its detail says so. Only the last `LOOKBACK` (7 days) is looked at.
+- Never two runs at once: a worker holds a database lock (`LOCK`) while it claims a time and for
+  the whole run, and the agent holds its own lock (`vending.agent.RUN_LOCK`) for every run, by
+  hand too. A scheduled run that finds another agent run going is recorded as `skipped`, and the
+  detail names the other run. A run has a deadline (`vending.agent.RUN_DEADLINE`).
 - A row left `running` by a worker that stopped mid-run is marked `failed` by the next worker that
   takes the lock. It is never run again.
 
-`/health` shows the mode, the next time and the last scheduled run's outcome (never its detail,
-which can hold an error). The dashboard's Needs attention names a failed, missed or halted one.
+`/health` shows this worker's `AGENT_SCHEDULE_MODE`, the next time and the last scheduled run's
+outcome (never its detail, which can hold an error). The dashboard reads the `agent_schedule`
+table itself, so turning the schedule off never hides a failed or missed run.
 """
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -45,28 +62,36 @@ from vending import settings
 
 EASTERN = ZoneInfo("America/New_York")
 MODE_SETTING, TIMES_SETTING, FROM_SETTING = "AGENT_SCHEDULE_MODE", "AGENT_SCHEDULE", "AGENT_SCHEDULE_FROM"
+# The `config` key that must also turn the runs on (`vending.config.KNOWN`).
+DB_MODE_KEY = "agent_schedule_mode"
 # Placeholders until #129 decides: Wednesday 2 PM Eastern, so a run's order beats Amazon's Wed 23:59
 # cutoff (#188), and late until 10 PM, which still leaves time before it.
 DEFAULT_TIMES = "wed 14:00-22:00"
 DEFAULT_FROM = "2026-12-02"
 MODES = ("dry-run", "live")
-DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+RANK = {"off": 0, "dry-run": 1, "live": 2}
+DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 ENDINGS = ("submitted", "skipped", "halted", "failed")
+# `wed 14:00-22:00`: a day (3 letters or more of its name), then two 24-hour times. Nothing else.
+ENTRY = re.compile(r"([a-z]{3,})\s+(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})", re.IGNORECASE)
 # How far back a restarted worker looks for times it missed.
 LOOKBACK = timedelta(days=7)
 # A run started this long after its time is "late" in its detail.
 LATE_AFTER = timedelta(minutes=10)
 # The wait before trying again after the database failed or another worker held the lock.
 RETRY = timedelta(minutes=1)
-# Another agent run younger than this, still `running`, blocks a scheduled one. An older one died
-# with its process (the dashboard calls it stale after the same 2 hours).
-BUSY_WINDOW = timedelta(hours=2)
-# The session advisory lock a worker holds while it runs a scheduled agent run. Not the migration lock.
+# A row still `running` this long after it was claimed is stuck: past the agent's deadline
+# (`vending.agent.RUN_DEADLINE`, 1 hour) and a last model request (5 minutes). A test keeps them in step.
+STUCK_AFTER = timedelta(hours=1, minutes=15)
+# The session advisory lock a worker holds while it claims a time and runs it. Not the migration
+# lock, and not the agent's own `RUN_LOCK`.
 LOCK = 4_200_213
 MISSED = ("No run started between its time and its latest start ({latest}): "
           "the worker was down or the schedule was off.")
 SUPERSEDED = "Not run: a later time in the schedule was already due when the worker reached this one."
 STOPPED = "The worker stopped before this run ended, so its outcome wasn't recorded here; see agent_runs."
+OFF_IN_DB = (f"Not started: {DB_MODE_KEY} in the database is off or unset. "
+             f"Set it with python -m vending.config set {DB_MODE_KEY} to run.")
 
 
 @dataclass(frozen=True)
@@ -78,23 +103,24 @@ class Entry:
 
 @dataclass(frozen=True)
 class Schedule:
-    mode: str           # one of MODES
+    mode: str           # one of MODES: this worker's AGENT_SCHEDULE_MODE, the most it may run
     entries: tuple[Entry, ...]
     first_day: date     # Eastern
 
-    @property
-    def live(self) -> bool:
-        return self.mode == "live"
-
 
 def _entry(part: str) -> Entry:
-    words = part.split()
-    if len(words) != 2 or words[0][:3].lower() not in DAYS or "-" not in words[1]:
+    """One `day HH:MM-HH:MM`; ValueError for anything else."""
+    found = ENTRY.fullmatch(part)
+    if found is None:
         raise ValueError
-    start, end = (time.fromisoformat(t.strip()) for t in words[1].split("-", 1))
+    word, h1, m1, h2, m2 = found.groups()
+    days = [i for i, name in enumerate(DAYS) if name.startswith(word.lower())]
+    if len(days) != 1:
+        raise ValueError
+    start, end = time(int(h1), int(m1)), time(int(h2), int(m2))   # ValueError past 23:59
     if end <= start:
         raise ValueError
-    return Entry(DAYS.index(words[0][:3].lower()), start, end)
+    return Entry(days[0], start, end)
 
 
 def schedule() -> Schedule | None:
@@ -115,7 +141,7 @@ def schedule() -> Schedule | None:
         except ValueError:
             raise settings.SettingsError(
                 f"{TIMES_SETTING} has {part.strip()!r}, not a day and two times like 'wed 14:00-22:00' "
-                "(the second, the latest start, after the first, the same day)") from None
+                "(Eastern, 24-hour, no offset; the second, the latest start, after the first, the same day)") from None
     if not entries:
         raise settings.SettingsError(f"{TIMES_SETTING} lists no times")
     first = settings.get(FROM_SETTING, DEFAULT_FROM).strip()
@@ -124,6 +150,19 @@ def schedule() -> Schedule | None:
     except ValueError:
         raise settings.SettingsError(f"{FROM_SETTING} is {first!r}, not a date like 2026-12-02") from None
     return Schedule(mode, tuple(entries), first_day)
+
+
+def database_mode(conn) -> str:
+    """`agent_schedule_mode` from `config`: off when the row is missing or holds anything else."""
+    from vending.config import get_value
+
+    value = get_value(conn, DB_MODE_KEY)
+    return value if value in RANK else "off"
+
+
+def lower(a: str, b: str) -> str:
+    """The lower of two modes: `off` < `dry-run` < `live`."""
+    return min(a, b, key=lambda m: RANK.get(m, 0))
 
 
 def _instant(day: date, clock: time) -> datetime:
@@ -209,12 +248,20 @@ def finish(conn, due: datetime, outcome: str, detail: str | None, run_id: int | 
                  " where due_at = %s", (outcome, detail, run_id, due))
 
 
-def other_run(conn) -> int | None:
-    """Another agent run (live or dry run) still going, started in the last `BUSY_WINDOW`."""
-    row = conn.execute("select id from agent_runs where status = 'running' and mode in ('live', 'dry-run')"
-                       " and started_at > now() - %s order by started_at desc, id desc limit 1",
-                       (BUSY_WINDOW,)).fetchone()
-    return None if row is None else row[0]
+@dataclass(frozen=True)
+class Claim:
+    due: datetime
+    live: bool
+    note: str           # goes before the agent's detail: "Started 6 h 0 min late. "
+
+
+@dataclass(frozen=True)
+class Ending:
+    """A run's ending not yet written to its row."""
+    due: datetime
+    outcome: str
+    detail: str | None
+    run_id: int | None
 
 
 class Scheduler:
@@ -231,6 +278,7 @@ class Scheduler:
         self.known: set[datetime] = set()       # times that have a row
         self.loaded = False                     # whether the rows were read since the worker started
         self.last: dict | None = None
+        self.unfinished: Ending | None = None   # a run's ending whose write failed: written before anything else
 
     def connect(self):
         if self._connect is not None:
@@ -240,67 +288,73 @@ class Scheduler:
         return db.connect()
 
     def next_due(self, now: datetime) -> datetime:
-        """Now when a time is due with no row yet (or the rows haven't been read); else the next time."""
+        """Now when a time is due with no row yet (or the rows haven't been read, or an ending is
+        still to be written); else the next time."""
         if self.not_before is not None and now < self.not_before:
             return self.not_before
-        if not self.loaded or any(d not in self.known for d, _ in due_times(self.sched, now)):
+        if self.unfinished is not None or not self.loaded \
+                or any(d not in self.known for d, _ in due_times(self.sched, now)):
             return now
         return next_time(self.sched, now)
 
     def public(self) -> dict:
-        """What `/health` shows: the mode, the next time, and the last scheduled run without its detail."""
+        """What `/health` shows: this worker's mode, the next time, and the last scheduled run without its detail."""
         return {"mode": self.sched.mode, "next_at": next_time(self.sched, self.clock()).isoformat(),
                 "last": self.last}
 
     def tick(self, now: datetime) -> None:
-        """Record what is due at `now`, and start the run if one may start. Never raises."""
+        """Record what is due, and start the run if one may start. Never raises."""
         if self.not_before is not None and now < self.not_before:
             return
         if self.thread is not None and self.thread.is_alive():
             self.not_before = now + RETRY
             return
         try:
-            self._tick(now)
+            if self.unfinished is not None:
+                self._write_ending(self.unfinished)
+                self.unfinished = None
+            self._tick()
         except Exception as error:     # noqa: BLE001 - the worker must go on; the next try is a minute away
             from vending.worker import _describe
 
             self.not_before = now + RETRY
             self.log(f"agent schedule: {_describe(error)}; trying again in a minute")
 
-    def _tick(self, now: datetime) -> None:
+    def _tick(self) -> None:
         from vending import db
 
         conn = self.connect()
-        start = None
+        claim = None
         try:
             behind = db.pending(conn)
             if behind:
                 raise RuntimeError(f"the database is missing migrations: {', '.join(behind)}")
             if not conn.execute("select pg_try_advisory_lock(%s)", (LOCK,)).fetchone()[0]:
                 self.log("agent schedule: another worker is running a scheduled run; trying again in a minute")
-                self.not_before = now + RETRY
+                self.not_before = self.clock() + RETRY
                 return
             try:
-                start = self._locked(conn, now)
+                claim = self._locked(conn)
             finally:
-                if start is None:
+                if claim is None:
                     conn.execute("select pg_advisory_unlock(%s)", (LOCK,))
         finally:
-            if start is None:
+            if claim is None:
                 conn.close()
         # The run owns the connection now, and with it the lock: `_run` releases both.
         if self.background:
-            self.thread = threading.Thread(target=self._run, args=(conn, *start), name="agent_schedule", daemon=True)
+            self.thread = threading.Thread(target=self._run, args=(conn, claim), name="agent_schedule", daemon=True)
             self.thread.start()
         else:
-            self._run(conn, *start)
+            self._run(conn, claim)
 
-    def _locked(self, conn, now: datetime) -> tuple[datetime, str] | None:
-        """The work under the lock: (the time to run now, a note for its detail), or None."""
+    def _locked(self, conn) -> Claim | None:
+        """The work under the lock: the time to run now, or None."""
         swept = conn.execute("update agent_schedule set outcome = 'failed', finished_at = now(), detail = %s"
                              " where outcome = 'running' returning due_at", (STOPPED,)).fetchall()
         for (due,) in swept:
             self.log(f"agent schedule: the run due {_eastern(due)} was cut off when a worker stopped; recorded as failed")
+        now = self.clock()      # read again: taking the lock can take a while
         due = due_times(self.sched, now)
         have = {row[0] for row in conn.execute("select due_at from agent_schedule where due_at >= %s",
                                                (now - LOOKBACK - timedelta(days=1),)).fetchall()}
@@ -310,48 +364,63 @@ class Scheduler:
         for d, latest in todo:
             if (d, latest) == newest:
                 continue
-            detail = MISSED.format(latest=_eastern(latest)) if now >= latest else SUPERSEDED
-            if record(conn, d, latest, self.sched.mode, "missed", detail):
-                self.log(f"agent schedule: the run due {_eastern(d)} was missed")
-        start = self._claim(conn, now, *newest) if newest is not None else None
+            self._miss(conn, d, latest, now)
+        claim = self._claim(conn, *newest) if newest is not None else None
         self.known = {d for d, _ in due}
         self.loaded = True
         self.last = last_run(conn)
-        return start
+        return claim
 
-    def _claim(self, conn, now: datetime, due: datetime, latest: datetime) -> tuple[datetime, str] | None:
-        """Take the time `due` for this worker: (due, a note for the detail), or None when it can't run now."""
-        if not record(conn, due, latest, self.sched.mode, "running"):
-            return None         # another worker has it
-        busy = other_run(conn)
-        if busy is not None:
-            finish(conn, due, "skipped", f"Not started: agent run {busy} was still running.", None)
-            self.log(f"agent schedule: the run due {_eastern(due)} skipped; agent run {busy} is still running")
+    def _miss(self, conn, due: datetime, latest: datetime, now: datetime) -> None:
+        detail = MISSED.format(latest=_eastern(latest)) if now >= latest else SUPERSEDED
+        if record(conn, due, latest, self.sched.mode, "missed", detail):
+            self.log(f"agent schedule: the run due {_eastern(due)} was missed")
+
+    def _claim(self, conn, due: datetime, latest: datetime) -> Claim | None:
+        """Take the time `due` for this worker, or None when it doesn't run now."""
+        mode = lower(self.sched.mode, database_mode(conn))
+        now = self.clock()          # the last check before the claim: never start past the latest start
+        if now >= latest:
+            self._miss(conn, due, latest, now)
             return None
+        if mode == "off":
+            if record(conn, due, latest, "off", "skipped", OFF_IN_DB):
+                self.log(f"agent schedule: the run due {_eastern(due)} skipped; {DB_MODE_KEY} is off in the database")
+            return None
+        if not record(conn, due, latest, mode, "running"):
+            return None         # another worker has it
         late = now - due
-        self.log(f"agent schedule: starting the {self.sched.mode} run due {_eastern(due)}"
+        self.log(f"agent schedule: starting the {mode} run due {_eastern(due)}"
                  + (f", {_span(late)} late" if late >= LATE_AFTER else ""))
-        return due, (f"Started {_span(late)} late. " if late >= LATE_AFTER else "")
+        return Claim(due, mode == "live", f"Started {_span(late)} late. " if late >= LATE_AFTER else "")
 
-    def _run(self, lock_conn, due: datetime, note: str) -> None:
+    def _write_ending(self, ending: Ending) -> None:
+        with self.connect() as conn:        # a fresh connection: the lock's may have dropped during the run
+            finish(conn, ending.due, ending.outcome, ending.detail, ending.run_id)
+            self.last = last_run(conn)
+        self.log(f"agent schedule: the run due {_eastern(ending.due)} ended {ending.outcome}"
+                 + (f" (agent run {ending.run_id})" if ending.run_id is not None else ""))
+
+    def _run(self, lock_conn, claim: Claim) -> None:
         """Run the agent, then record its ending. Owns `lock_conn`: releases the lock and closes it."""
         from vending.worker import _describe
 
         try:
             try:
-                run_id, out = self.run_agent(self.sched.live)
+                run_id, out = self.run_agent(claim.live)
                 outcome, detail = getattr(out, "status", None), getattr(out, "detail", None)
             except BaseException as error:      # noqa: BLE001 - a thread's error would otherwise be lost
                 run_id, outcome, detail = None, "failed", f"The agent's entry point raised {_describe(error)}"
             if outcome not in ENDINGS:
                 outcome, detail = "failed", f"The agent ended with an unknown status {outcome!r}. {detail or ''}".strip()
-            with self.connect() as conn:        # a fresh connection: the lock's may have dropped during the run
-                finish(conn, due, outcome, (note + (detail or "")).strip() or None, run_id)
-                self.last = last_run(conn)
-            self.log(f"agent schedule: the run due {_eastern(due)} ended {outcome}"
-                     + (f" (agent run {run_id})" if run_id is not None else ""))
-        except Exception as error:      # noqa: BLE001 - the row stays running; the next worker's sweep fails it
-            self.log(f"agent schedule: could not record the run due {_eastern(due)}: {_describe(error)}")
+            ending = Ending(claim.due, outcome, (claim.note + (detail or "")).strip() or None, run_id)
+            try:
+                self._write_ending(ending)
+            except Exception as error:      # noqa: BLE001 - kept, and written at the next tick, a minute away
+                self.unfinished = ending
+                self.not_before = self.clock() + RETRY
+                self.log(f"agent schedule: could not record the run due {_eastern(claim.due)}: {_describe(error)}; "
+                         "trying again in a minute")
         finally:
             try:
                 lock_conn.execute("select pg_advisory_unlock(%s)", (LOCK,))
@@ -372,12 +441,14 @@ def default_scheduler(log: Callable[[str], None] = print) -> Scheduler | Invalid
     (logged; it never stops the worker)."""
     try:
         sched = schedule()
-    except settings.SettingsError as error:
+        if sched is None:
+            return None
+        first = next_time(sched, datetime.now(timezone.utc))
+    except Exception as error:      # noqa: BLE001 - a wrong setting must never stop the worker
         log(f"scheduled agent runs are off: {error}")
         return Invalid()
-    if sched is None:
-        return None
-    log(f"scheduled agent runs: {sched.mode}, next due {_eastern(next_time(sched, datetime.now(timezone.utc)))}")
+    log(f"scheduled agent runs: at most {sched.mode} ({DB_MODE_KEY} in the database must say so too), "
+        f"next due {_eastern(first)}")
     return Scheduler(sched, log=log)
 
 
@@ -394,19 +465,22 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sched = schedule()
     except settings.SettingsError as error:
-        print(f"Scheduled runs are off: {error}")
+        print(f"Scheduled runs are off here: {error}")
         sched = None
     else:
         if sched is None:
-            print(f"Scheduled runs are off ({MODE_SETTING} is unset or off).")
+            print(f"Scheduled runs are off here ({MODE_SETTING} is unset or off).")
         else:
-            print(f"Scheduled runs: {sched.mode}, from {sched.first_day:%a %d %b %Y}; "
+            print(f"{MODE_SETTING} here: {sched.mode}, from {sched.first_day:%a %d %b %Y}; "
                   f"next due {_eastern(next_time(sched, datetime.now(timezone.utc)))}.")
     with db.connect() as conn:
         behind = db.pending(conn)
         if behind:
             print(f"The database is missing migrations ({', '.join(behind)}); run python -m vending.db migrate.")
             return 2
+        in_db = database_mode(conn)
+        print(f"{DB_MODE_KEY} in the database: {in_db}. "
+              f"A worker runs {lower(sched.mode, in_db) if sched else 'off'} (the lower of the two).")
         rows = conn.execute("select due_at, mode, outcome, run_id, detail from agent_schedule"
                             " order by due_at desc limit %s", (args.rows,)).fetchall()
     if not rows:

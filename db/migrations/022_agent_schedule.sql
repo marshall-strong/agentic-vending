@@ -1,6 +1,6 @@
 -- One row per scheduled agent run the worker handled (`vending.agent_schedule`, #213).
 --
--- Numbered 022 because PR #204 uses 021; the migrator applies any file not yet applied.
+-- Numbered 022 because #204 added 021; the migrator applies any file not yet applied.
 --
 -- `due_at` is the primary key, so one time in the schedule gets one row, and so at most one run,
 -- whatever restarts or replicas there are. The worker inserts the row before it starts the agent.
@@ -9,11 +9,16 @@
 -- `outcome` is the agent run's own ending (`agent_runs.status`), or `missed`, or `running` while
 -- the run goes on. A row left `running` after its worker stopped is marked `failed` by the next
 -- worker that takes the schedule's lock.
+--
+-- Nothing writes here while the container's AGENT_SCHEDULE_MODE is unset or off. The agent runs only
+-- when `config.agent_schedule_mode` turns it on too (`vending/agent_schedule.py`).
 create table agent_schedule (
     due_at       timestamptz primary key,
     -- The latest the run may start. Past it, the time is recorded as `missed`.
     latest_at    timestamptz not null check (latest_at >= due_at),
-    mode         text        not null check (mode in ('live', 'dry-run')),
+    -- What the worker ran: the lower of its AGENT_SCHEDULE_MODE and `config.agent_schedule_mode`.
+    -- `off` when the database's setting turned the time off (then `skipped`).
+    mode         text        not null check (mode in ('live', 'dry-run', 'off')),
     claimed_at   timestamptz not null default now(),
     finished_at  timestamptz,
     outcome      text        not null default 'running'

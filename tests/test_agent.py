@@ -671,3 +671,104 @@ def test_different_startup_snapshots_leave_system_prompt_byte_identical(connect,
         clients.append(client)
     assert clients[0].sent[0]["system"].encode("utf-8") == clients[1].sent[0]["system"].encode("utf-8") == original
     assert clients[0].sent[0]["messages"][0] != clients[1].sent[0]["messages"][0]
+
+
+# --- One run at a time, and a deadline (#213) ---------------------------------------
+
+def _lock_free(conn, key):
+    """Whether `key` is free: takes it and gives it straight back."""
+    if not conn.execute("select pg_try_advisory_lock(%s)", (key,)).fetchone()[0]:
+        return False
+    conn.execute("select pg_advisory_unlock(%s)", (key,))
+    return True
+
+
+def test_a_run_never_overlaps_another_and_says_which_one_holds_it(connect, conn, schema_url):
+    from tests.conftest import open_in
+
+    from vending import agent_runs
+
+    going = agent_runs.start(conn, mode="dry-run", model="by hand")
+    with open_in(*schema_url) as other:
+        assert other.execute("select pg_try_advisory_lock(%s)", (agent.RUN_LOCK,)).fetchone()[0]
+        client, tools = Script(), Tools()
+        run_id, out = go(connect, client, tools, live=True)
+        # Recorded, and nothing read, called or sent.
+        assert (out.status, out.detail) == ("skipped", f"{agent.BUSY} (agent run {going}).")
+        assert client.sent == [] and tools.calls == []
+        assert stored(conn, run_id)[:2] == ("live", "skipped") and stored(conn, run_id)[5] == out.detail
+        other.execute("select pg_advisory_unlock(%s)", (agent.RUN_LOCK,))
+    # Once the other run lets go, a run goes ahead, and gives the lock back at its end.
+    run_id, out = go(connect, Script(answer()), Tools())
+    assert out.status == "skipped" and out.detail != f"{agent.BUSY} (agent run {going})."
+    assert _lock_free(conn, agent.RUN_LOCK)
+
+
+def test_a_run_that_breaks_gives_the_lock_back(connect, conn):
+    class Broken(Tools):
+        async def call(self, name, arguments):
+            raise RuntimeError("server died")
+
+    go(connect, Script(tool_turn(use("get_pnl"))), Broken())
+    assert _lock_free(conn, agent.RUN_LOCK)
+
+
+def test_a_server_that_stops_answering_is_cut_off_at_the_deadline(connect, conn):
+    class Hung(Tools):
+        async def call(self, name, arguments):
+            self.calls.append((name, arguments))
+            await anyio.sleep_forever()
+
+    tools = Hung()
+    run_id, out = go(connect, Script(tool_turn(use("get_pnl")), answer()), tools, deadline=0.5)
+    assert tools.calls, "the hung call was reached"
+    assert (out.status, out.detail) == ("failed", "Stopped at the run's deadline (0.00833333 min).")
+    assert stored(conn, run_id)[1] == "failed"
+    assert _lock_free(conn, agent.RUN_LOCK)
+
+
+def test_the_deadline_outlasts_a_model_request():
+    assert agent.RUN_DEADLINE > agent.REQUEST_TIMEOUT * 2
+    from vending import agent_schedule
+    # The dashboard calls a scheduled run stuck only once the agent's deadline, and a last request, are past.
+    assert agent_schedule.STUCK_AFTER.total_seconds() >= agent.RUN_DEADLINE + agent.REQUEST_TIMEOUT
+
+
+def test_every_mcp_request_has_a_read_timeout(monkeypatch):
+    import mcp
+    import mcp.client.stdio
+
+    made = {}
+
+    class Session:
+        def __init__(self, read, write, **kw):
+            made.update(kw)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def initialize(self):
+            pass
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[])
+
+        async def call_tool(self, name, arguments):
+            pass
+
+    @asynccontextmanager
+    async def stdio(params):
+        yield None, None
+
+    monkeypatch.setattr(mcp, "ClientSession", Session)
+    monkeypatch.setattr(mcp.client.stdio, "stdio_client", stdio)
+
+    async def open_it():
+        async with agent._open_server() as (listed, _):
+            return listed
+
+    assert anyio.run(open_it) == []
+    assert made["read_timeout_seconds"] == agent.TOOL_TIMEOUT

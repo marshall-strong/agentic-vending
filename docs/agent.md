@@ -36,22 +36,36 @@ The startup read has its own first `tool_result` step for `get_briefing`, labell
 
 ## When it runs unattended
 
-The worker (`python -m vending.worker`, the Azure container) starts the agent on a schedule, but only when `AGENT_SCHEDULE_MODE` is set. **Unset, it never runs the agent**, and the worker behaves as before. The code is `vending/agent_schedule.py`. It calls `vending.agent.run`, the same entry point as `python -m vending.agent`, so the halt switch, the caps and the records are the same.
+The worker (`python -m vending.worker`, the Azure container) can start the agent on a schedule. The code is `vending/agent_schedule.py`. It calls `vending.agent.run`, the same entry point as `python -m vending.agent`, so the halt switch, the caps, the lock and the records are the same.
 
-| Setting | Default | |
-|---|---|---|
-| `AGENT_SCHEDULE_MODE` | unset (off) | `off`, `dry-run` or `live`. `dry-run` is test spend; `live` may submit a purchase request |
-| `AGENT_SCHEDULE` | `wed 14:00-22:00` | Eastern times, comma-separated, as `day HH:MM-HH:MM`: when the run is due, then the latest it may start. The default is one restock run each Wednesday at 2 PM, so its order is in before Amazon's Wed 23:59 cutoff (#188) |
-| `AGENT_SCHEDULE_FROM` | `2026-12-02` | The first Eastern day with runs |
+**It is off by default, twice.** The worker runs the agent only when both of these turn it on, and it runs the lower of the two (`off`, then `dry-run`, then `live`):
 
-The times and the first day are placeholders until #129 decides them. The times follow Eastern wall-clock time through daylight saving.
+| Setting | Where | Default | |
+|---|---|---|---|
+| `AGENT_SCHEDULE_MODE` | the container app's env vars (or `.env`) | unset (off) | `off`, `dry-run` or `live`: the most this worker may run. Unset, the worker never starts the agent and never writes to `agent_schedule` |
+| `agent_schedule_mode` | the database's `config` table | no row (off) | `off`, `dry-run` or `live`. Read at each scheduled time, so a change reaches every replica at once |
+| `AGENT_SCHEDULE` | env | `wed 14:00-22:00` | Eastern times, comma-separated, as `day HH:MM-HH:MM` (24-hour, no offset): when the run is due, then the latest it may start. The default is one restock run each Wednesday at 2 PM, so its order is in before Amazon's Wed 23:59 cutoff (#188) |
+| `AGENT_SCHEDULE_FROM` | env | `2026-12-02` | The first Eastern day with runs |
 
-- **Turn it on:** set `AGENT_SCHEDULE_MODE=dry-run` (or `live`) on the container app, as [`docs/deploy.md`](deploy.md) shows. The worker reads it when it starts, so a new revision is needed. **Turn it off:** set it to `off`. The halt switch also stops a run that has started, and is the faster way.
-- **One run per time:** each time in the schedule gets one row in `agent_schedule` (migration 022), keyed by the time, before the agent starts. A restart, or a second replica, never runs the same time again. A database lock keeps two scheduled runs from going at once, and a scheduled run is not started while another agent run (one started by hand too) is still `running`. That time is recorded as `skipped`.
-- **A missed time:** if the worker was down at the time, a restarted worker records it as `missed`. If it comes back before the latest start, it runs late, and the row's detail says how late. If a worker stopped mid-run, the next one records that time as `failed`. It is never run again.
-- **What is recorded:** the row's `outcome` is the run's own ending (`submitted`, `skipped`, `halted`, `failed`), or `missed`, or `running` while it goes on, with the `agent_runs` id. A `skipped` or `halted` run is a result, not a success.
+The times and the first day are placeholders until #129 decides them. The times follow Eastern wall-clock time through daylight saving. A wrong value turns the runs off; the worker goes on, logs why, and the dashboard says a setting is wrong.
 
-**See the last run:** `python -m vending.agent_schedule` prints the settings as that machine reads them, the next time and the latest rows with their details. The worker's `/health` and its home page show the mode, the next time and the last scheduled run's outcome (never its detail). The dashboard's Needs attention says when the last one failed, was missed or was halted, or when a setting is wrong. The run itself is in the dashboard's runs, like any other.
+- **Turn it on:** set `AGENT_SCHEDULE_MODE` on the container app, as [`docs/deploy.md`](deploy.md) shows (the worker reads it when it starts, so a new revision is needed), and set the database's setting: `python -m vending.config set agent_schedule_mode '"dry-run"' --by <name>`. **Turn it down or off:** set the database's setting to `"dry-run"` or `"off"`. That takes effect at the next scheduled time on every replica, an old one left running during a deploy too. Changing only the env var does not reach a replica that is still running. The halt switch stops a run that has already started.
+- **One run at a time:** every agent run, by hand or scheduled, holds a database lock from start to end (`vending.agent.RUN_LOCK`). A run that finds it taken is recorded as `skipped` at once, and its detail names the other run. A run stops at a 60-minute deadline (`RUN_DEADLINE`) and is recorded as `failed`. A model request already sent finishes first (at most 5 minutes), and each tool call times out after 2 minutes (`TOOL_TIMEOUT`), so a server that stops answering can't hold the lock.
+- **One run per time:** each time in the schedule gets one row in `agent_schedule` (migration 022), keyed by the time, before the agent starts. A restart, or a second replica, never runs the same time again. A time the database's setting turns off is recorded as `skipped`, with mode `off`.
+- **A missed time:** if the worker was down at the time, a restarted worker records it as `missed`. If it comes back before the latest start, it runs late, and the row's detail says how late. The clock is read again just before the run is claimed, so a run never starts after its latest start. If a worker stopped mid-run, the next one records that time as `failed`. It is never run again.
+- **What is recorded:** the row's `outcome` is the run's own ending (`submitted`, `skipped`, `halted`, `failed`), or `missed`, or `running` while it goes on, with the `agent_runs` id. A `skipped` or `halted` run is a result, not a success. If the worker can't write the ending, it tries again every minute until it lands.
+
+**See the runs:** `python -m vending.agent_schedule` prints the settings as that machine reads them, the database's setting, the next time and the latest rows with their details. The dashboard's Needs attention reads the `agent_schedule` table itself, so turning the schedule off never hides a run: each failed, missed or halted run stays there for a week, whatever ran after it, and so does a run still `running` past the deadline. The newest run is always there. The worker's `/health` and its home page show its own `AGENT_SCHEDULE_MODE`, the next time and the last run's outcome (never its detail). The run itself is in the dashboard's runs, like any other.
+
+**The first fill (29 Nov) is not a scheduled run.** The fill request for the Mon 30 Nov stocking is sent by hand, before 23:59 ET Sun 29 Nov (#214). The schedule's first day is Wed 2 Dec. Leave `agent_schedule_mode` off until the fill is sent.
+
+**Try it on Azure before the first scheduled run.** Do a dry run from the deployed worker on a weekday from Mon 23 to Fri 27 Nov, so a problem shows before the fill and the first restock:
+
+1. Deploy with the model key: put `VENDING_ANTHROPIC_API_KEY` in `.env` and run the deploy script with `-SetSecrets` ([`docs/deploy.md`](deploy.md)). Migration 022 must be on the team database (`python -m vending.db migrate`); the worker refuses to schedule on a database that is behind.
+2. Pick a time at least 30 minutes after the new revision is up, for example Tuesday 3 PM: `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=dry-run "AGENT_SCHEDULE=tue 15:00-17:00" AGENT_SCHEDULE_FROM=2026-11-24`.
+3. Turn it on in the database: `python -m vending.config set agent_schedule_mode '"dry-run"' --by <name>`.
+4. At the time, the dashboard's Needs attention says the scheduled dry run is running, then how it ended. A dry run ends `skipped`; one that ends `halted` means the halt switch is on, and still proves the worker started it. `python -m vending.agent_schedule` shows the row and its detail. It is test spend, under `model_test_daily_cap_cents`.
+5. Afterwards, turn it off: `python -m vending.config set agent_schedule_mode '"off"' --by <name>`, and put the times back: `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --remove-env-vars AGENT_SCHEDULE AGENT_SCHEDULE_FROM`.
 
 ## Before the first run
 
