@@ -652,13 +652,18 @@ def hide_errors(snap: dict, *, public: bool = False) -> None:
             if step["is_error"]:
                 step["content"] = HIDDEN
     if public:
-        for name, panel in snap.items():
-            if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
-                continue
-            why = panel["why"]
-            if why != PUBLIC_PANEL_ERROR:
-                print(f"dashboard: {name}: {why}", file=sys.stderr, flush=True)
-                panel["why"] = PUBLIC_PANEL_ERROR
+        hide_panel_errors(snap)
+
+
+def hide_panel_errors(snap: dict, where: str = "dashboard") -> None:
+    """On a public page: each panel's read error goes to stderr, and the panel says `PUBLIC_PANEL_ERROR`."""
+    for name, panel in snap.items():
+        if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
+            continue
+        why = panel["why"]
+        if why != PUBLIC_PANEL_ERROR:
+            print(f"{where}: {name}: {why}", file=sys.stderr, flush=True)
+            panel["why"] = PUBLIC_PANEL_ERROR
 
 
 OLD_ASSIGNMENT = "Text omitted from before the current slot assignment."
@@ -831,6 +836,11 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
                     price.update(_scope_text(fields, ours))
 
 
+# Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
+CATALOG_REQUESTS_SQL = ("select id, requested_at, name, size, status, sku, decision_note"
+                        " from product_requests order by requested_at desc, id desc")
+
+
 def _catalog_counts(catalog: dict) -> dict:
     """Catalog requests by status, and the open ones against the bridge's cap, from the rows read.
 
@@ -863,9 +873,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
     model_test_count = _optional(conn, f"select count(*) as n from agent_runs where mode in ('dry-run', 'replay')"
                                        f" and started_at {comparison} %s",
                                  (live_since or now,))
-    catalog = _panel(lambda: _rows(
-        conn, "select id, requested_at, name, size, status, sku, decision_note"
-              " from product_requests order by requested_at desc, id desc"))
+    catalog = _panel(lambda: _rows(conn, CATALOG_REQUESTS_SQL))
     if live_since is None:
         spend = {"ok": True, "data": None}
     elif purchases["ok"]:
@@ -2100,19 +2108,21 @@ def _requests_html(purchases: dict, catalog: dict, now: datetime) -> str:
         if len(items) > REQUESTS_SHOWN:
             out += (f'<details class="more" data-key="more-requests"><summary>{len(items) - REQUESTS_SHOWN} older'
                     f'</summary><ul class="list">{"".join(items[REQUESTS_SHOWN:])}</ul></details>')
-    out += '<h3>Catalog requests</h3>'
+    return out + '<h3>Catalog requests</h3>' + catalog_requests_html(catalog, now)
+
+
+def catalog_requests_html(catalog: dict, now: datetime) -> str:
+    """Every catalog request, newest first, under its counts. The Products page (#55) shows the same list."""
     if (missing := _missing(catalog)) is not None:
-        out += missing
-    elif not catalog["data"]:
-        out += _catalog_lede(_catalog_counts(catalog)) + '<p class="empty">None yet.</p>'
-    else:
-        out += _catalog_lede(_catalog_counts(catalog)) + '<ul class="list">' + "".join(
-            f'<li><div class="head"><b>{_e(r["name"])}</b> <span class="dim">{_e(r["size"])}</span> '
-            f'{_pill(r["status"], _REQUEST_TONE.get(r["status"], "muted"))}</div>'
-            f'<div class="meta">asked {_time(r["requested_at"], "ago", now)}{_catalog_sku(r)}</div>'
-            + (f'<div class="detail">{_e(r["decision_note"])}</div>' if r["decision_note"] else "") + "</li>"
-            for r in catalog["data"]) + "</ul>"
-    return out
+        return missing
+    if not catalog["data"]:
+        return _catalog_lede(_catalog_counts(catalog)) + '<p class="empty">None yet.</p>'
+    return _catalog_lede(_catalog_counts(catalog)) + '<ul class="list">' + "".join(
+        f'<li><div class="head"><b>{_e(r["name"])}</b> <span class="dim">{_e(r["size"])}</span> '
+        f'{_pill(r["status"], _REQUEST_TONE.get(r["status"], "muted"))}</div>'
+        f'<div class="meta">asked {_time(r["requested_at"], "ago", now)}{_catalog_sku(r)}</div>'
+        + (f'<div class="detail">{_e(r["decision_note"])}</div>' if r["decision_note"] else "") + "</li>"
+        for r in catalog["data"]) + "</ul>"
 
 
 def _catalog_sku(r: dict) -> str:
@@ -2639,7 +2649,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     otherwise measure "3 days ago" and "in 1 day" from the viewer's own clock, not the snapshot's.
 
     `charts` is where that server serves the chart pages, by name ("money", "pnl", "spend"): the money
-    panel and the spend tile link to the ones given. Run on its own, the page has none."""
+    panel and the spend tile link to the ones given. Run on its own, the page has none. "products" is the
+    Products page (#55), linked from Back stock."""
     charts = charts or {}
     now = snap["as_of"]
     # Without scripts the page reloads itself; a pick of ours goes along (a #fragment never reaches us).
@@ -2676,7 +2687,9 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + f'<section id="requests"><h2>Requests</h2>'
               f'{_requests_html(snap["purchase_requests"], snap["catalog_requests"], now)}</section>'
             + f'<section id="closet"><h2>Back stock <span class="hint">the closet, from receipts</span></h2>'
-              f'{_closet_html(snap["stock"])}</section>'
+              + (f'<p class="charts"><a href="{_e(charts["products"])}">Every product we can order</a>, with our '
+                 'sourcing and this back stock</p>' if "products" in charts else "")
+              + f'{_closet_html(snap["stock"])}</section>'
             + "</div>"
             + boards
             + ('<footer>Made-up data from a fixed snapshot, shown with the live page\'s own code. Nothing here is '
@@ -2712,6 +2725,10 @@ def _error_page(message: str) -> str:
 
 # --- Server -------------------------------------------------------------------------------------
 
+# The Products page (#55) beside the page this server draws.
+PRODUCTS_PATH = "/products"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "vending-dashboard"
 
@@ -2720,20 +2737,27 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
         if host not in LOCAL_HOSTS:
             return self._send(403, "text/plain; charset=utf-8", "open this page as 127.0.0.1 or localhost")
-        if path not in ("/", "/state.json"):
+        if path not in ("/", "/state.json", PRODUCTS_PATH):
             return self._send(404, "text/plain; charset=utf-8", "not found")
         try:
             with connect() as conn:
-                snap = snapshot(conn)
+                if path == PRODUCTS_PATH:
+                    from vending import products_page
+                    data = products_page.read(conn)
+                else:
+                    snap = snapshot(conn)
         except (psycopg.Error, settings.SettingsError) as error:
             message = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
             if path == "/state.json":
                 return self._send(503, "application/json", to_json({"error": message}))
             return self._send(503, "text/html; charset=utf-8", _error_page(message))
+        if path == PRODUCTS_PATH:
+            return self._send(200, "text/html; charset=utf-8", products_page.html(data, nav=(("Agent dashboard", "/"),)))
         if path == "/state.json":
             return self._send(200, "application/json", to_json(snap))
         picked = parse_qs(urlsplit(self.path).query).get("sel", [None])[0]
-        self._send(200, "text/html; charset=utf-8", render(snap, picked=picked))
+        self._send(200, "text/html; charset=utf-8",
+                   render(snap, picked=picked, nav=(("Products", PRODUCTS_PATH),), charts={"products": PRODUCTS_PATH}))
 
     def _send(self, code: int, content_type: str, body: str) -> None:
         data = body.encode("utf-8")

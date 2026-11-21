@@ -1,7 +1,9 @@
 """Make the demo dashboard's made-up snapshot (`vending/demo/snapshot.json`).
 
     DATABASE_URL=postgresql://...@127.0.0.1:PORT/postgres python -m vending.demo.make
-    python -m vending.demo.make --check      # is the committed file what this makes?
+    python -m vending.demo.make --check      # are the committed files what this makes?
+
+It also makes the demo Products page's data (`vending/demo/products.json`, #55) from the same schema.
 
 It builds a throwaway schema in a LOCAL Postgres (it refuses any other host), fills it with made-up
 data, and runs the dashboard's own `snapshot()` on it as the public page does. So the file has exactly
@@ -564,6 +566,37 @@ def seed(conn) -> None:
     seed_actions(conn)
 
 
+# The Products page (#55): its extra seed goes in after the dashboard's snapshot, so the dashboard's file
+# doesn't change with it. The two day-one products that found no seller have no sourcing row (the page
+# flags them), Snapple's price is stale, GORGIE is sourced but not in the day-one plan, and Coca-Cola has
+# an alternate.
+UNSOURCED = ("TOPOCHICO-ORIGINAL-16BOT", "MOUNTAIN-BAJA_BLA-20BOT")
+STALE_SOURCING = {"SNAPPLE-ORIGINAL-16BOT": _utc(25, 17, month=11)}
+CATALOG_SYNCED = _utc(9, 14, 5)
+
+
+def seed_products(conn) -> None:
+    """The catalog's last sync, our sourcing rows and the picked day-one plan, for the Products page."""
+    from psycopg.types.json import Jsonb
+
+    from vending.sourcing import default_max
+
+    conn.execute("insert into catalog_syncs (synced_at, product_count) values (%s, %s)", (CATALOG_SYNCED, len(PRODUCTS)))
+    rows = [(sku, "primary", "Walmart", units, _cents(price), default_max(_cents(price)),
+             STALE_SOURCING.get(sku, _utc(4, 16)))
+            for sku, (_, _, _, _, units, price) in PRODUCTS.items() if sku not in UNSOURCED]
+    rows.append(("COCA-ORIGINAL-20BOT", "alternate", "Costco", 24, 3149, 3600, _utc(4, 16)))
+    with conn.cursor() as cur:
+        cur.executemany(
+            "insert into sourcing_options (sku, rank, store, units_per_pack, expected_cents, max_cents, checked_at,"
+            " checked_by) values (%s, %s, %s, %s, %s, %s, %s, 'demo')", rows)
+    day_one = [{"slot": slot, "sku": sku, "units": fill, "price_cents": _cents(price), "why": why}
+               for slot, sku, fill, price, _, why in DAY_ONE]
+    conn.execute("insert into first_fill_plans (loaded_at, loaded_by, label, source_note, plan, projection, slots, picked)"
+                 " values (%s, 'demo', '6', 'made up', %s, '{}', %s, true)",
+                 (_utc(28, 15, month=11), Jsonb({"day_one": day_one}), list(SELECTIONS)))
+
+
 # --- Making the file --------------------------------------------------------------------------------------
 
 def sync_round() -> dict:
@@ -597,6 +630,16 @@ def make(writer, reader) -> dict:
             run["detail"] = dashboard.HIDDEN
     snap["demo"] = True
     return snap
+
+
+def make_products(writer, reader) -> dict:
+    """The demo Products page's data, after `make` on the same schema: the extra seed, then the page's own
+    `read`, as the public page does."""
+    from vending import products_page, slots
+
+    with mock.patch.object(slots, "clock", lambda conn: AS_OF):
+        seed_products(writer)
+        return products_page.read(reader, AS_OF, public=True)
 
 
 def _require_local(url: str) -> None:
@@ -649,7 +692,7 @@ def render_file(snap: dict) -> str:
 
 
 def main(argv: list[str]) -> int:
-    from vending import settings
+    from vending import products_page, settings
     from vending.demo import SNAPSHOT
 
     parser = argparse.ArgumentParser(prog="python -m vending.demo.make", description=__doc__.splitlines()[0])
@@ -660,12 +703,15 @@ def main(argv: list[str]) -> int:
     _require_local(url)
     with scratch_schema(url) as (writer, reader):
         text = render_file(make(writer, reader))
+        products = products_page.render_file(make_products(writer, reader))
+    files = ((args.out, text), (args.out.with_name(products_page.DEMO_FILE.name), products))
     if args.check:
-        same = args.out.read_text(encoding="utf-8") == text
-        print("the committed snapshot is what the generator makes" if same else "the committed snapshot is OUT OF DATE; run without --check")
+        same = all(path.read_text(encoding="utf-8") == body for path, body in files)
+        print("the committed files are what the generator makes" if same else "the committed files are OUT OF DATE; run without --check")
         return 0 if same else 1
-    args.out.write_text(text, encoding="utf-8")
-    print(f"wrote {args.out} ({len(text):,} bytes, sha256 {hashlib.sha256(text.encode()).hexdigest()[:12]})")
+    for path, body in files:
+        path.write_text(body, encoding="utf-8")
+        print(f"wrote {path} ({len(body):,} bytes, sha256 {hashlib.sha256(body.encode()).hexdigest()[:12]})")
     return 0
 
 
