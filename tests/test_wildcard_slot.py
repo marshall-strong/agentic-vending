@@ -105,3 +105,20 @@ def test_the_slot_must_still_be_ours_when_planning(conn):
     conn.execute("update config set value = '37' where key = 'wildcard_slot'")
     with pytest.raises(planning.NotReady, match="in quotes"):
         planning.planner_config(conn)
+
+
+# The 20 Nov redraw spread our slots over every column, so column 4, the other side of the centre line, can be
+# ours too. Test data shaped like that layout; our real slots are whatever the server assigns.
+SPREAD = ["12", "14", "16", "18", "21", "23", "25", "27", "32", "34",
+          "36", "38", "41", "43", "45", "47", "52", "54", "56", "58"]
+
+
+@pytest.mark.parametrize("slot, ok", [("34", False), ("25", False), ("45", False), ("36", True), ("23", True)])
+def test_neither_column_beside_the_centre_line_can_be_the_wildcard(conn, slot, ok):
+    set_halted(conn, False, "test")
+    conn.execute("update slot_assignment set slots = %s", (SPREAD,))
+    if ok:
+        assert pick(conn, slot).success
+    else:
+        assert "beside the machine's centre line" in refusal(conn, slot)
+        assert config.get_value(conn, "wildcard_slot") is None

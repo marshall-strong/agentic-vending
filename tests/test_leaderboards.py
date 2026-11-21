@@ -1,6 +1,6 @@
 import json
 from contextlib import nullcontext
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -230,9 +230,12 @@ def test_edt_midnight_top_up_uncataloged_sku_and_weekly_tax(conn, page_conn):
     )
     assert week["flavor"][0]["name"] == week["brand"][0]["name"] == "Unknown"
     takings = ledger.takings(conn, opened, end)
-    assert [week.tax_cents for week in takings.by_week] == [1, 3]
-    assert row["revenue"] == "0.32"
-    assert data["since_opening"]["product"][0]["revenue"] == ledger.money(takings.cents - takings.tax_cents) == "0.41"
+    # All 45 cents are in one tax week (Sunday 4 to Saturday 10 July): 3.33 cents of tax, rounded to 3.
+    # The Friday display week's 10 cents added 1 of it, the Saturday week's 35 cents the other 2.
+    assert [(week.week, week.tax_cents) for week in takings.by_tax_week] == [(date(2027, 7, 4), 3)]
+    assert [week.tax_cents for week in takings.by_week] == [1, 2]
+    assert row["revenue"] == "0.33"
+    assert data["since_opening"]["product"][0]["revenue"] == ledger.money(takings.cents - takings.tax_cents) == "0.42"
 
 
 def test_back_stock_from_a_reassigned_slot_keeps_its_cost(conn, page_conn):

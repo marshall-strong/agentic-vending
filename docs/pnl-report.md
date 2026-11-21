@@ -33,8 +33,12 @@ SVG with a title and description for screen readers, and needs no script.
 next to its dates, so it shows in print and without colour too. A week whose profit is unknown is
 not marked, and neither is a week short by under half a cent, which shows as $0.00.
 
-One row per week. A week runs **Saturday to Friday, Eastern time**, the ledger's week: it turns
-over after the Friday visit, and the sales tax is rounded per week (the team's 19 Oct decision).
+One row per week. A week runs **Saturday to Friday, Eastern time**, the ledger's display week: it
+turns over after the Friday visit. The sales tax is not rounded on these weeks. David calculates it
+once a week at 23:59 Saturday Eastern, on that week's takings (email, 20 Nov 2026), so the ledger
+rounds it per **tax week**, Sunday 00:00 to Saturday 23:59:59. A row's tax is its share of that
+rounded tax, so the rows add up to the ledger's tax exactly; one row can be a cent away from
+rounding its own takings.
 The first and last weeks are cut to the range you chose.
 
 **Simple** (the default) shows Units sold, Revenue ex tax, Cost of sales, Visit fees, Token
@@ -46,7 +50,7 @@ adjustments, and the simple view says so under the table.
 |---|---|
 | Units sold | Rises in our slots' unit counters |
 | Takings (incl. tax) | Rises in the sales counters, tax included |
-| Sales tax set aside | Takings x 8/108, rounded half up per week |
+| Sales tax set aside | Takings x 8/108, rounded half up per tax week (Sunday to Saturday); the row's share of it |
 | Revenue ex tax | Takings less the tax set aside |
 | Cost of sales | The units sold, at first-in, first-out cost from the receipts: the oldest units go first |
 | Shrinkage | The cost of units lost without a sale |
