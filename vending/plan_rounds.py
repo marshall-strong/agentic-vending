@@ -27,8 +27,9 @@ Money is integer cents or an exact Fraction. A round-1 plan stored prices as JSO
 
 Only the selections in our current assignment (the inventory server's split, `vending.slots.our_slots`,
 passed in by the caller) may appear in a round; a file naming any other selection is refused, so the page
-can't show a value for it. The split may be redrawn before the 3 Dec start; if it is, the rounds are placed
-again. Standard library only.
+can't show a value for it. The split was redrawn once, on 20 Nov, and is final for the quarter. `load_rounds`
+sets aside a round placed in other slots (one made before the redraw), with only its projection's totals, so
+the rounds placed again for our slots still show. Standard library only.
 """
 
 from __future__ import annotations
@@ -59,6 +60,10 @@ _ROUND_DIR = re.compile(r"^round\d+$")
 
 class RoundError(ValueError):
     """A round file the page can't use. The message names the file and the problem."""
+
+
+class OtherSlots(RoundError):
+    """A round that places products in slots outside our assignment: one made before the redraw, say."""
 
 
 @dataclass(frozen=True)
@@ -286,7 +291,7 @@ def _projected(row: dict) -> Projected:
 def _check_slot(raw: Any, name: str, ours: tuple[str, ...]) -> str:
     slot = str(raw)
     if slot not in ours:
-        raise RoundError(f"{name}: slot {slot} isn't in our current assignment; "
+        raise OtherSlots(f"{name}: slot {slot} isn't in our current assignment; "
                          f"a round may only place products in those {len(ours)} slots")
     return slot
 
@@ -489,6 +494,71 @@ def _parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, .
 def load_all(root: Path, ours: tuple[str, ...]) -> list[Round]:
     """Every round under `root`, each checked against `ours` (our slots, from `vending.slots.our_slots`)."""
     return [load_round(rid, plan, projection, ours) for rid, plan, projection in discover(root)]
+
+
+@dataclass(frozen=True)
+class SetAside:
+    """A round placed in slots outside our assignment, so its slots aren't shown. Its totals are the
+    projection file's own figures, read as written, never recomputed or checked."""
+    id: str
+    plan_file: str
+    saved_at: datetime
+    outside: tuple[str, ...]             # the selections it names that aren't ours, shelf then column
+    reason: str                          # the loader's message
+    fill_most_cents: int | None
+    gross_profit_cents: dict[str, int]   # by scenario, where the projection has one
+
+
+def _named_slots(plan: Any, projection: Any) -> set[str]:
+    """Every selection a plan's day_one and its projection name, as text."""
+    named = set()
+    for row in (plan.get("day_one") if isinstance(plan, dict) else None) or []:
+        if isinstance(row, dict) and row.get("slot") is not None:
+            named.add(str(row["slot"]))
+    if isinstance(projection, dict):
+        for row in projection.get("slots") or []:
+            if isinstance(row, dict) and row.get("slot") is not None:
+                named.add(str(row["slot"]))
+        for block in (projection.get("scenarios") or {}).values():
+            for row in (block.get("per_slot") if isinstance(block, dict) else None) or []:
+                if isinstance(row, dict) and row.get("slot") is not None:
+                    named.add(str(row["slot"]))
+    return named
+
+
+def _set_aside(round_id: str, plan_path: Path, projection_path: Path | None, ours: tuple[str, ...],
+               error: OtherSlots) -> SetAside:
+    plan = _load(plan_path)
+    projection = _load(projection_path) if projection_path else {}
+    outside = sorted((s for s in _named_slots(plan, projection) if s not in ours),
+                     key=lambda s: (_slot_key(s) if re.fullmatch(r"\d{2}", s) else (9, 9), s))
+    gp = {}
+    if isinstance(projection, dict):
+        for scen in SCENARIOS:
+            block = (projection.get("scenarios") or {}).get(scen)
+            cents = _opt_int(((block or {}).get("totals") or {}).get("gross_profit_cents")) if isinstance(block, dict) else None
+            if cents is not None:
+                gp[scen] = cents
+    return SetAside(id=round_id, plan_file=f"{plan_path.parent.name}/{plan_path.name}",
+                    saved_at=datetime.fromtimestamp(plan_path.stat().st_mtime).astimezone(),
+                    outside=tuple(outside), reason=str(error),
+                    fill_most_cents=_opt_int(projection.get("fill_most_cents")) if isinstance(projection, dict) else None,
+                    gross_profit_cents=gp)
+
+
+def load_rounds(root: Path, ours: tuple[str, ...]) -> tuple[list[Round], list[SetAside]]:
+    """The rounds under `root` placed in our slots, and those set aside because they name other slots.
+
+    Rounds made before the 20 Nov redraw name the slots we had then. They can't be shown slot by slot
+    (the page shows values only in our slots), but they shouldn't stop the page either. Any other problem
+    with a file still raises RoundError."""
+    shown, aside = [], []
+    for rid, plan, projection in discover(root):
+        try:
+            shown.append(load_round(rid, plan, projection, ours))
+        except OtherSlots as error:
+            aside.append(_set_aside(rid, plan, projection, ours, error))
+    return shown, aside
 
 
 @dataclass(frozen=True)

@@ -135,6 +135,53 @@ def test_float_prices_are_read_as_exact_cents_and_bad_ones_refused(tmp_path):
         pr.load_all(tmp_path, TEST_SLOTS)
 
 
+# The 20 Nov redraw: alternating selections on every shelf. TEST_SLOTS shares 16, 18, 25, ... with it.
+REDRAWN = ("12", "14", "16", "18", "21", "23", "25", "27", "32", "34", "36", "38", "41", "43", "45", "47",
+           "52", "54", "56", "58")
+
+
+def placed_in(slots: tuple[str, ...]) -> tuple[dict, dict]:
+    """day_one() and projection() moved onto `slots`, in order."""
+    move = dict(zip(TEST_SLOTS, slots))
+    plan = {"day_one": [dict(row, slot=int(move[str(row["slot"])])) for row in day_one()]}
+    proj = projection()
+    for row in proj["slots"]:
+        row["slot"] = int(move[str(row["slot"])])
+    for block in proj["scenarios"].values():
+        for row in block["per_slot"]:
+            row["slot"] = int(move[str(row["slot"])])
+    return plan, proj
+
+
+def test_a_round_placed_in_other_slots_is_set_aside_with_its_own_totals(tmp_path):
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, projection(per_slot_gp=1500))   # before the redraw
+    write(tmp_path, "round5", "5", *placed_in(REDRAWN))
+    shown, aside = pr.load_rounds(tmp_path, REDRAWN)
+    assert [r.id for r in shown] == ["5"] and set(shown[0].slots) == set(REDRAWN)
+    (old,) = aside
+    assert old.id == "3" and old.plan_file == "round3/plan3.json"
+    assert old.outside == tuple(s for s in TEST_SLOTS if s not in REDRAWN)
+    assert len(old.outside) == 10 and "isn't in our current assignment" in old.reason
+    assert old.fill_most_cents == 4 * 4050 + 3 * 900                                       # as the file says
+    assert old.gross_profit_cents == {"low": 15000, "base": 30000, "high": 37500}
+
+
+def test_set_aside_is_only_for_other_slots_and_load_all_still_refuses_them(tmp_path):
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, projection())
+    with pytest.raises(pr.RoundError, match="isn't in our current assignment"):
+        pr.load_all(tmp_path, REDRAWN)
+    write(tmp_path, "round5", "5", {"note": "no day_one"})
+    with pytest.raises(pr.RoundError, match="no day_one list"):
+        pr.load_rounds(tmp_path, REDRAWN)
+
+
+def test_a_new_plan_with_an_old_projection_is_set_aside(tmp_path):
+    plan, _ = placed_in(REDRAWN)
+    write(tmp_path, "round5", "5", plan, projection())          # the projection still names the old slots
+    shown, (aside,) = pr.load_rounds(tmp_path, REDRAWN)
+    assert shown == [] and aside.outside == tuple(s for s in TEST_SLOTS if s not in REDRAWN)
+
+
 def test_a_slot_that_isnt_ours_is_refused(tmp_path):
     rows = day_one()
     rows[0]["slot"] = 11        # the other team's selection
