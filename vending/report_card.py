@@ -48,7 +48,7 @@ from vending import capacity, config, ledger, stock
 from vending.replay import scoring
 from vending.pricing import to_cents
 from vending.replay.deciders import MAX_FILL, Baseline
-from vending.replay.state import NoData, SlotWeek, WeekState, replay_week
+from vending.replay.state import COVERAGE_SLACK, NoData, SlotWeek, WeekState, replay_week
 from vending.slots import SlotsNotRecorded, our_slots
 
 if TYPE_CHECKING:
@@ -75,6 +75,7 @@ GRADES = {
     "no_plan": "No plan matched",
     "rejected": "Request rejected",
     "unscored": "Not scored",
+    "incomplete": "Incomplete data: not graded",
     "opening": "Opening week: not graded",
 }
 
@@ -197,7 +198,7 @@ class _Reader:
         replayer's reason isn't kept: the card says so in its own words."""
         if week not in self._weeks:
             try:
-                self._weeks[week] = replay_week(self.conn, week)
+                self._weeks[week] = replay_week(self.conn, week, until=self.now)
             except NoData:
                 self._weeks[week] = None
         return self._weeks[week]
@@ -233,7 +234,7 @@ def _blank(week: date, final: bool) -> dict:
     return {
         "week": week.isoformat(), "ends": (week + timedelta(days=6)).isoformat(), "final": final,
         "grade": "unscored", "run_id": None, "planned_at": None, "checks": [], "outcome": None,
-        "baseline": None, "comparison": None, "notes": [], "request": None,
+        "baseline": None, "comparison": None, "notes": [], "request": None, "polls": None,
     }
 
 
@@ -245,6 +246,8 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         return _graded(card)
     match = reader.plan_for(week)
     before, this = reader.week(week - WEEK), reader.week(week)
+    card["polls"] = {"last": list(before.polls) if before and before.polls else None,
+                     "this": list(this.polls) if this and this.polls else None}
     if before is None:
         # The hard checks still run: they need the plan, the receipts and the ledger, not the sales.
         card["notes"].append("Last week can't be rebuilt from the polls.")
@@ -297,12 +300,25 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         base = scoring.score(state, Baseline().decide(state), this)
         card["baseline"] = _outcome(base) if base.totals is not None else None
         card["comparison"] = _compare(scored, base, swapped)
+    thin = final and this is not None and _thin(this)
+    if thin:
+        days = (this.polls[1] - this.polls[0]) / timedelta(days=1)
+        card["notes"].append(f"The polls cover {days:.1f} days of this week, not 7, so the figures are shown but "
+                             "the grade is withheld.")
     if any(c["status"] == scoring.FAIL for c in card["checks"]):
         card["grade"] = "fail"
     elif card["comparison"] and card["comparison"]["result"]:
-        card["grade"] = card["comparison"]["result"]
+        card["grade"] = "incomplete" if thin else card["comparison"]["result"]
     card["notes"] += reader.notes
     return _graded(card)
+
+
+def _thin(week: WeekState) -> bool:
+    """Whether a week's sales span too little or too much of it to grade: the replayer's own bounds."""
+    if week.polls is None:
+        return True
+    span = week.polls[1] - week.polls[0]
+    return span < WEEK - COVERAGE_SLACK or span > WEEK + COVERAGE_SLACK
 
 
 def _graded(card: dict) -> dict:
@@ -585,7 +601,7 @@ def _day(iso: str) -> str:
 
 
 _GRADE_TONE = {"beat": "ok", "tied": "info", "behind": "warn", "fail": "bad", "no_plan": "warn",
-               "rejected": "warn", "unscored": "muted", "opening": "muted"}
+               "rejected": "warn", "unscored": "muted", "opening": "muted", "incomplete": "muted"}
 _REQUEST_WORDS = {"fulfilled": "request fulfilled", "submitted": "request submitted, no receipt yet",
                   "rejected": "request rejected"}
 _CHECK_TONE = {scoring.PASS: "ok", scoring.FAIL: "bad", scoring.SKIP: "muted"}
@@ -632,6 +648,13 @@ def _card_html(card: dict) -> str:
     if card["run_id"] is not None:
         plan = (f'<p class="sub">Plan from run {int(card["run_id"])}, made <time>{escape(_when(card["planned_at"]))}'
                 f'</time> ({escape(_REQUEST_WORDS.get(card.get("request"), "request unknown"))}).</p>')
+    covered = []
+    for label, key in (("last week", "last"), ("this week", "this")):
+        span = (card.get("polls") or {}).get(key)
+        if span:
+            covered.append(f'{label} <time>{escape(_when(span[0]))}</time> to <time>{escape(_when(span[1]))}</time>')
+    if covered:
+        plan += f'<p class="sub">Polls covered: {"; ".join(covered)}.</p>'
     checks = ""
     if card["checks"]:
         items = "".join(

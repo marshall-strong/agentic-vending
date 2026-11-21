@@ -76,10 +76,11 @@ def week_bounds(day: date) -> tuple[datetime, datetime]:
     return start, start + WEEK
 
 
-def replay_week(conn: psycopg.Connection, day: date) -> WeekState:
-    """The week starting at midnight Eastern on `day`, from stored polls only."""
+def replay_week(conn: psycopg.Connection, day: date, until: datetime | None = None) -> WeekState:
+    """The week starting at midnight Eastern on `day`, from stored polls only. With `until`, no poll
+    after it is read (a page drawn as of `until` can't have seen a later one)."""
     start, end = week_bounds(day)
-    sales = get_sales_history(conn, start, end, None)
+    sales = get_sales_history(conn, start, end if until is None else min(end, until), None)
     if not sales.success:
         raise NoData(f"Week of {day:%Y-%m-%d}: {sales.message}")
     ours = tuple(row.slot for row in sales.data)   # the stored assignment, via get_sales_history

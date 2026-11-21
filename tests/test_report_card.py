@@ -237,12 +237,12 @@ def test_replay_errors_are_not_quoted_and_one_week_s_failure_spares_the_rest(con
     from vending.replay.state import NoData
     real = report_card.replay_week
 
-    def replay(conn, day):
+    def replay(conn, day, until=None):
         if day.isoformat() == "2026-11-28":
             raise NoData(f"Week of {day}: {SECRET}")
         if day.isoformat() == "2026-12-12":
             raise RuntimeError(SECRET)
-        return real(conn, day)
+        return real(conn, day, until)
 
     monkeypatch.setattr(report_card, "replay_week", replay)
     week_of_sales(conn, opened[0])
@@ -371,6 +371,41 @@ def test_no_matched_plan_says_so_without_claiming_nothing_was_restocked(conn, pa
     assert week["checks"] == [] and week["outcome"] is None
     assert not any("nothing was restocked" in n for n in week["notes"])
     assert any(n.startswith("No submitted live plan matched") for n in week["notes"])
+
+
+def test_the_current_week_reads_no_poll_after_now(conn, page_conn, opened):
+    slot = opened[0]
+    product(conn)
+    week_of_sales(conn, slot)
+    store_poll(conn, "w1-day1", (SAT1 + timedelta(days=1)).isoformat(), {slot: (250, 104)})
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), request_id="r1",
+             plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}))
+    fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
+    now = SAT1 + timedelta(days=2)
+    snap, by_week = cards(page_conn, now)
+    week = by_week["2026-12-05"]
+    assert not week["final"] and week["outcome"]["sold"] == 2   # 102 to 104, not the later 108
+    assert week["polls"]["this"] == [SAT1 - timedelta(hours=1), SAT1 + timedelta(days=1)]
+    assert "Polls covered" in dashboard.render(snap)
+
+
+def test_a_closed_week_with_thin_polls_shows_figures_but_no_grade(conn, page_conn, opened):
+    slot = opened[0]
+    product(conn)
+    for name, at, units in (("w0-start", SAT1 - timedelta(days=7) + timedelta(hours=1), 100),
+                            ("w0-end", SAT1 - timedelta(hours=1), 102),
+                            ("w1-mid", SAT1 + timedelta(days=3), 105),
+                            ("w3", NOW - timedelta(hours=1), 112)):
+        store_poll(conn, name, at.isoformat(), {slot: (250, units)})
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), request_id="r1",
+             plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}))
+    fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
+    snap, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    assert week["final"] and week["outcome"]["sold"] == 3 and week["comparison"]["result"] == "beat"
+    assert week["grade"] == "incomplete" and week["grade_text"] == "Incomplete data: not graded"
+    assert any("3.0 days" in n for n in week["notes"])
+    assert "Incomplete data" in dashboard.render(snap)
 
 
 def test_without_polls_the_week_is_not_scored(conn, page_conn, opened):
