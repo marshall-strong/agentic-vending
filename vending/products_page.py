@@ -248,10 +248,10 @@ def _closet_cell(item: dict | None, closet: dict) -> str:
     return f'<b>{item["units"]}</b> <span class="dim">&times; {cost}</span>'
 
 
-def _row(sku: str | None, name: str, size: str | None, data: dict, plan: dict, closet: dict[str, dict]) -> str:
+def _row(sku: str | None, name: str, size: str | None, data: dict, entry: dict | None, closet: dict[str, dict]) -> str:
+    """One product's row. `entry` is its line in `planned` (keyed by SKU, or by name when it has none)."""
     rows = _sourcing_rows(data)
-    entry = plan.get(sku) if sku else None
-    gap = entry is not None and data["sourcing"]["ok"] and sku not in rows
+    gap = entry is not None and data["sourcing"]["ok"] and (sku is None or sku not in rows)
     flag = " " + _pill("no sourcing", "bad") if gap else ""
     return (f'<tr{' class="gap"' if gap else ""}><td><b>{_e(name)}</b>{flag}'
             + (f'<div><code>{_e(sku)}</code></div>' if sku else '<div class="dim">no SKU yet</div>')
@@ -309,7 +309,7 @@ def html(data: dict, *, nav: tuple[tuple[str, str], ...] = (), demo: bool = Fals
     else:
         products = catalog["data"]["products"]
         listed = {p["sku"] for p in products}
-        rows = [_row(p["sku"], p["name"], p["size"], data, plan_rows, closet) for p in products]
+        rows = [_row(p["sku"], p["name"], p["size"], data, plan_rows.get(p["sku"]), closet) for p in products]
         sourced = sum(1 for p in products if p["sku"] in _sourcing_rows(data))
         lede = (f'<p class="lede">{dashboard._plural(len(products), "product")} the catalog lists'
                 + (f", {sourced} with a sourcing row" if data["sourcing"]["ok"] else "")
@@ -326,7 +326,7 @@ def html(data: dict, *, nav: tuple[tuple[str, str], ...] = (), demo: bool = Fals
     extra = ""
     if extra_keys:
         rows = [_row(plan_rows[k]["sku"] if k in plan_rows else k,
-                     plan_rows[k]["product"] if k in plan_rows else k, None, data, plan_rows, closet)
+                     plan_rows[k]["product"] if k in plan_rows else k, None, data, plan_rows.get(k), closet)
                 for k in extra_keys]
         extra = ('<section id="unlisted"><h2>Not in the catalog <span class="hint">in the plan or the closet, '
                  'but not listed now: delisted, or waiting for an approval and its SKU</span></h2>'

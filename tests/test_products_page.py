@@ -97,6 +97,10 @@ def test_a_planned_line_with_no_sku_is_flagged_and_listed_outside_the_catalog():
     page = products_page.html(data)
     unlisted = page[page.index('id="unlisted"'):page.index('id="catalog-requests"')]
     assert "Iced Energy Peach" in unlisted and "no SKU yet" in unlisted and "<code>GONE-12</code>" in unlisted
+    # Its row keeps the plan's units and slot, and the badge the warning above gives it.
+    peach = re.search(r'<tr[^>]*>(?:(?!</tr>).)*Iced Energy Peach(?:(?!</tr>).)*</tr>', unlisted, re.S).group(0)
+    assert peach.startswith('<tr class="gap">') and "no sourcing" in peach
+    assert "in plan" in peach and "7 units" in _text(peach) and "slot 15" in _text(peach)
 
 
 def test_a_sourcing_price_older_than_7_days_is_stale():
