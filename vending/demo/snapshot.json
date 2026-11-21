@@ -2440,11 +2440,37 @@
       "plan_margin": "73.30",
       "baseline_margin": "32.01",
       "difference": "41.29",
-      "result": "beat"
+      "result": "beat",
+      "excluded": {
+       "swapped": [],
+       "unknown_cost": [
+        "55",
+        "58"
+       ]
+      }
      },
      "notes": [
       "In progress: scored on the sales so far. The grade can change until Friday ends."
      ],
+     "request": "fulfilled",
+     "polls": {
+      "last": [
+       {
+        "$datetime": "2026-12-01T12:00:00+00:00"
+       },
+       {
+        "$datetime": "2026-12-05T03:30:00+00:00"
+       }
+      ],
+      "this": [
+       {
+        "$datetime": "2026-12-05T03:30:00+00:00"
+       },
+       {
+        "$datetime": "2026-12-09T13:30:00+00:00"
+       }
+      ]
+     },
      "grade_text": "Beat the baseline"
     },
     {
@@ -2461,6 +2487,8 @@
      "notes": [
       "The first fill went in during this week, so the first graded week is the next one."
      ],
+     "request": null,
+     "polls": null,
      "grade_text": "Opening week: not graded"
     }
    ]

@@ -41,8 +41,8 @@ what changed and why.
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates). Then every catalog request, newest first: counts by status, the open (`pending`) ones against the bridge's cap and the places left, and each request's status, its SKU once it has one (an approved product may be added under a SKU we wouldn't guess), and the decision note | `purchase_requests`, `purchase_lines`, `product_requests` |
 | Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
 | Product leaderboards | The ten best sellers by SKU, flavor, and brand for our current assignment. Each row shows units sold, revenue excluding tax, and sell-through. Sell-through divides units sold by units loaded since the opening. For this week (Saturday to Friday, Eastern), it divides units sold by starting stock plus units loaded. The rate is unavailable if sales exceed recorded stock. Sales with an unknown product stay out of the rankings. The panel counts those sales and labels the units with an estimated cost. | `vending.stock`, `vending.ledger`, `catalog_products` |
-| Weekly report card | Under The plan. One card per week (Saturday to Friday, Eastern, the ledger's display weeks) from the opening, newest first, the last 8. Each scores the plan the Friday visit loaded, with the week replayer's scoring, beside its baseline: restock each slot to last week's sales at last week's price. **Hard checks** (valid plan, catalog, prices, balance) pass, fail or skip; a failed check fails the week, whatever it earned. **Outcome**: units sold, slots that sold out, unsold units and margin, for the plan and the baseline. **Against the baseline**: the margin difference on the slots both score. The opening week isn't graded, and the current week is graded on its sales so far. See [The weekly report card](#the-weekly-report-card) | `agent_runs`, polls (`vending.replay`), `vending.stock`, `vending.ledger`, `catalog_products`, `product_requests`, `config` |
-| Incident log | Under the report card. From the opening, newest first, the last 50: refused and failed tool calls, halt switch flips, live runs that failed, halted or were left running, live runs whose model was told a tool call failed (counted, not quoted), and weeks that failed a hard check. Each has a one-line note; a failure's text is never shown | `action_log`, `agent_runs`, `agent_steps`, the report card |
+| Weekly report card | Under The plan. One card per week (Saturday to Friday, Eastern, the ledger's display weeks) from the opening, newest first, the last 8. Each scores the plan its visit loaded (matched through the purchase request), with the week replayer's scoring, beside its baseline: restock each slot to last week's sales at last week's price. **Hard checks** (valid plan, catalog, prices, balance) pass, fail or skip; a failed check fails the week, whatever it earned. **Outcome**: units sold, slots that sold out (estimated), unsold units and margin, for the plan and the baseline. **Against the baseline**: the margin difference on the shared slots, with what it leaves out. The opening week isn't graded, the current week is graded on its sales so far, and a closed week whose polls cover too little of it shows its figures without a grade. See [The weekly report card](#the-weekly-report-card) | `agent_runs`, polls (`vending.replay`), `vending.stock`, `vending.ledger`, `catalog_products`, `product_requests`, `config` |
+| Incident log | Under the report card. From the opening, newest first, the last 50 (with the total counted): refused and failed tool calls, halt switch flips, live runs that failed, halted or were left running, live runs whose model was told a tool call failed (counted, not quoted), and weeks that failed a hard check. Each has a one-line note; a failure's text is never shown | `action_log`, `agent_runs`, `agent_steps`, the report card |
 | Footer | One small line on who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `page_visits`, `page_visit_totals` |
 
 ### The machine close-up
@@ -186,26 +186,40 @@ made-up data (`vending/demo/make.py`), runs `snapshot()` on it, writes the file 
 
 Computed in code by `vending/report_card.py` (#48); no model calls. For each week from the ledger's opening:
 
-- **The week's plan** is the latest live run that submitted a plan in the week before (status `submitted`,
-  with a plan). That is the plan the Friday visit loads at the start of the week. With none, the card says
-  "No plan submitted" and scores every slot as kept. Dry runs and replays never count.
+- **The week's plan** is matched to its visit through the run's purchase request (`agent_runs.request_id`). A
+  request whose receipt is in loads the week after its visit; with more than one for a week, the latest visit
+  wins (a paid midweek visit after the Friday request supersedes it, and the card names the plan it replaced).
+  A request with no receipt yet is meant for the week after the Friday the planner buys for when the run
+  started (the Thursday 23:59 Eastern cutoff, as on the plan panel), and is scored as if loaded, saying so. A
+  rejected request shows only the hard checks, graded "Request rejected". With no match the card says "No plan
+  matched" and scores nothing. Dry runs and replays never count; plans are read from two weeks before the
+  oldest card shown.
+- **The stored plan is validated first**, in fixed sentences that name only our slot numbers: a malformed
+  entry, a price or fill that isn't one, a product that isn't a SKU, or an entry outside our assignment fails
+  "valid plan" without quoting the plan. Then it is adapted: `off_cycle` reads as a midweek visit, a slot left
+  to fill its column is filled to its package's capacity (`vending.capacity`), and only a kept slot with no
+  reason gets a fixed one. Where the capacity isn't known the entry keeps its price and product for the checks,
+  and only its fill and outcome are unscored.
 - **Scoring** is the replayer's (`vending.replay.scoring.score`, [week-replayer.md](week-replayer.md)): last
-  week's sales and prices are the state, this week's sales are the demand. The receipts fill in what a replayed
-  week lacks: each slot's product and unit cost at the start of the week (what the visit loaded) and its units
-  when the plan was made (the stock before the visit). The catalog and balance are as they stood when the plan
-  was made. The stored plan is the desired state, so `off_cycle` reads as a midweek visit, a slot left to fill
-  its column is filled to its package's capacity (`vending.capacity`), and a slot with no reason (the agent
-  writes reasons only for slots it changes) gets a fixed one.
-- **Hard checks**: valid plan, catalog, prices and balance. The price check uses the planner's ceilings, so the
-  wildcard slot is held to its own (\$8.00, #166). The replayer's "no writes" check is left out, since a live run
-  is meant to write its request. A skip means the data isn't there and is never a pass.
-- **Outcome**: sold, sold out (slots that sold everything on the rail, so demand may have been higher),
-  unsold units (they keep their cost, so they are counted, not charged) and margin.
+  week's sales and prices are the state, this week's sales are the demand, read only from polls up to the
+  page's moment. The card shows the poll times each week's sales cover. The receipts fill in what a replayed
+  week lacks: each slot's product and units just before the visit, and its unit cost after it when the product
+  is the same. The catalog and balance are as they stood when the plan was made.
+- **Hard checks**: valid plan, catalog, prices and balance, run even when the polls can't rebuild last week.
+  The price check uses the planner's ceilings, so the wildcard slot is held to its own (\$8.00, #166). The
+  balance check fails when the known spend alone is over the funds, even with a cost unknown. The replayer's
+  "no writes" check is left out, since a live run is meant to write its request. A skip means the data isn't
+  there and is never a pass.
+- **Outcome**, for all scored slots: sold, sold out (estimated: the model's rail ran empty, so demand may have
+  been higher), unsold units (they keep their cost, so they are counted, not charged) and margin.
 - **Grade**: failed a hard check (whatever it earned), or beat, level with or behind the baseline on margin over
-  the slots both score, to the cent. A swapped slot has no sales to score against, so it is left out of both.
-  With no common slot, or a missing unit cost, it is "Not scored".
+  the shared slots, to the cent. A slot the visit swapped is left out (its sales are a product the baseline
+  never stocked), and the card says so beside the figures. A shared slot with unknown unit cost makes the
+  comparison unavailable; with no shared slot it is "Not scored".
 - The week holding the opening isn't graded: the first fill goes in partway through it. The current week says
-  "in progress", and its grade can change until Friday ends.
+  "in progress", and its grade can change until Friday ends. A closed week whose polls cover too little or too
+  much of it shows its figures as "Incomplete data: not graded".
+- A week that fails to score shows that, and the other weeks still show.
 
 Before the opening both panels say there is no data yet. Text in the card that names a numbered selection
 outside our assignment is replaced, as elsewhere on the page.
@@ -215,7 +229,8 @@ that failed, halted or still say `running` 2 hours on), `agent_steps` (a count o
 errors, for a run that didn't fail anyway) and the report card (weeks that failed a hard check). A failure's
 stored text is never read: the row says `error` and `hide_errors` gives it the fixed message, on the public
 page and the standalone one alike. A refusal keeps its first line, cut to 160 characters. A note from before
-the current slot assignment is replaced.
+the current slot assignment is replaced. Each source reads only its newest 50 rows, the total is counted in
+SQL, and a run that failed, halted or stuck is one incident (its tool errors aren't listed again).
 
 **Not built yet:** the agent reading a compact summary of its last few report cards and recent incidents
 before it plans (#48). That is a follow-up.

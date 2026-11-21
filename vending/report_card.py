@@ -1,31 +1,35 @@
 """The weekly report card and the incident log (#48), computed in code. No model calls.
 
 **Report card.** One card per display week of the ledger: Saturday to Friday, Eastern
-(`ledger.week_of`), from the ledger's opening on. The week's plan is the latest live run that
-submitted a plan in the week before it, since that plan is what the Friday visit loads at the start
-of the week. It is scored with the replayer's own scoring (`vending.replay.scoring.score`), against
-what our slots really sold in the week, next to the replayer's baseline (restock each slot to last
-week's sales at last week's price, `deciders.Baseline`) scored the same way:
+(`ledger.week_of`), from the ledger's opening on. The week's plan is the live run whose purchase
+request led to the visit that loads the week (`_Reader.plan_for`): matched by `request_id`, the
+latest receipt before the week wins, else a request still waiting on its receipt, else a rejected
+one. The stored plan is validated first (`validate_plan`, fixed sentences only). It is scored with the
+replayer's own scoring (`vending.replay.scoring.score`), against what our slots really sold in the
+week, next to the replayer's baseline (restock each slot to last week's sales at last week's price,
+`deciders.Baseline`) scored the same way:
 
 - **Hard checks** pass, fail or skip: a valid plan, catalog, prices (floor and ceiling, the
   wildcard's own ceiling for the wildcard slot) and balance. A skip means the data the check needs
   isn't there; it never counts as a pass. The replayer's "no writes" check is left out: a live run
   is meant to write its request.
-- **Outcome**, as the replayer scores it: units sold, slots that sold out (sold everything on the
-  rail; demand may have been higher), unsold units on the rail (they keep their cost, so they are
-  counted, not charged) and margin.
-- **Against the baseline**: the plan's margin less the baseline's on the slots both score (a new
-  product has no sales to score against, so a swapped slot is left out of both).
+- **Outcome**, as the replayer scores it: units sold, slots that sold out (estimated: the rail ran
+  empty in the model; demand may have been higher), unsold units on the rail (they keep their cost, so
+  they are counted, not charged) and margin.
+- **Against the baseline**: the plan's margin less the baseline's on the shared slots. A slot the
+  visit swapped is left out (its sales are a product the baseline never stocked); a shared slot with
+  unknown unit cost makes the comparison unavailable.
 
 A week that fails a hard check gets a failing grade, whatever it earned. The week holding the
 opening isn't graded: the first fill goes in partway through it. The current week is graded on its
-sales so far and says so.
+sales so far and says so. A closed week whose polls cover too little of it isn't graded either.
 
 The scoring needs each slot's product, stock and unit cost, which a replayed week doesn't have
-(`replay.state`). They come from the receipts (`vending.stock`): the product and unit cost in the
-slot at the start of the week (what the visit loaded), and the units on the rail when the plan was
-made (the stock before the visit). The catalog and balance are read as they stood when the plan was
-made; the ceilings are the planner's settings now.
+(`replay.state`). They come from the receipts (`vending.stock`): the product and units just before
+the visit, and the unit cost after it when the product is unchanged. Polls are read only up to the
+page's `now`. The catalog and balance are read as they stood when the plan was made; the ceilings
+are the planner's settings now. Every displayed sentence is a fixed template filled with validated
+values; one week that fails to score leaves the others.
 
 **Incident log.** From the opening on, newest first: refused and failed tool calls (`action_log`),
 halt switch flips (`action_log`, tool `halt`), live runs that failed, halted or were left running,
