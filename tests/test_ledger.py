@@ -788,6 +788,21 @@ def test_get_pnl_counts_saturdays_last_microsecond_in_saturday_only(db):  # noqa
     assert [sunday[k] for k in lines] == ["0.00", "0.00", "0.00", 0]
 
 
+@pytest.mark.parametrize("opens", [True, False], ids=["before-the-opening", "no-opening"])
+def test_get_pnl_before_the_opening_takes_the_midnight_poll_as_its_baseline(db, opens):  # noqa: F811
+    # A window before the opening (or with none) reads the polls from its start, as it always has: the poll at
+    # its midnight sharp is the baseline, so the $13.50 it shows was sold before the window.
+    if opens:
+        open_ledger(db, at=et(2026, 11, 30, 13, 0))
+    store_poll(db, "fri", et(2026, 11, 27, 22, 0).isoformat(), {"15": (135, 0)})
+    store_poll(db, "sat", et(2026, 11, 28, 0, 0).isoformat(), {"15": (135, 10)})
+    store_poll(db, "noon", et(2026, 11, 28, 12, 0).isoformat(), {"15": (135, 10)})
+    reply = call("get_pnl", {"start": "2026-11-28", "end": "2026-11-28"}).structuredContent
+    assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("0.00", "0.00", 0)
+    p = ledger.pnl(db, et(2026, 11, 28, 0, 0), et(2026, 11, 29, 0, 0) - timedelta(microseconds=1))
+    assert (p.takings.cents, p.units_sold) == (0, 0)                # the ledger read from the start itself
+
+
 def test_get_pnl_days_are_eastern_days(db):  # noqa: F811
     open_ledger(db)
     deliver(db, "r1")

@@ -460,12 +460,16 @@ def poll_start(start: datetime, opened_at: datetime | None) -> datetime:
     midnight sharp is in the window (a tax week's Sunday 00:00 poll, say), and
     the day before, which ends a microsecond before it, doesn't take it too. A
     window from the opening keeps the opening's poll as the baseline, so sales
-    before the opening are not counted. Entries, receipts and visits count from
-    `start` itself, inclusive: they are never shifted.
+    before the opening are not counted. A window that starts before the
+    opening, or with no opening recorded, starts at `start`, as it always has:
+    the midnight rule is for the competition's tax weeks, and pre-opening
+    figures (development spend among them) stay as they were. Entries,
+    receipts and visits count from `start` itself, inclusive: never shifted.
+    One rule for `get_pnl`, the printable P&L and the money series.
     """
-    if opened_at is not None and start == opened_at:
-        return start
-    return start - timedelta(microseconds=1)
+    if opened_at is not None and start > opened_at:
+        return start - timedelta(microseconds=1)
+    return start
 
 
 def week_of(moment_local: datetime, week_starts: int = WEEK_STARTS) -> date:

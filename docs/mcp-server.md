@@ -236,9 +236,11 @@ starts earlier, and a note gives their amount: they are development spend, not f
 opening yet, every model call is development spend. The other lines still cover the whole window.
 
 `get_pnl` takes its window as Eastern calendar days, inclusive, so a Friday evening sale lands in
-Friday. A poll at midnight sharp is in the day it starts, so a P&L over a tax week's days counts
-that Sunday's 00:00 poll; when the ledger opened at that midnight, the opening poll stays the
-baseline, so sales before the opening are not counted. Each row of `tax_weeks` (Sunday to Saturday,
+Friday. After the opening, a poll at midnight sharp is in the day it starts, so a P&L over a tax
+week's days counts that Sunday's 00:00 poll. When the ledger opened at that midnight, the opening
+poll stays the baseline, so sales before the opening are not counted; a window that starts before
+the opening reads its polls from its start, as before. Only the polls move: an entry, receipt or
+visit at Saturday 23:59:59.999999 is Saturday's. Each row of `tax_weeks` (Sunday to Saturday,
 as David calculates the tax) gives `from` and `to`, the part of the week the window counted, and
 `partial: true` when the window cut it (the first week from the opening, a midweek start, or a week
 still in progress), so its tax is the window's, not the week's figure. `units_sold` counts every rise in our slots' unit counters; cost of sales covers the

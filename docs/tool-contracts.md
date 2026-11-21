@@ -210,8 +210,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
 ## `get_pnl`
 
 - **Inputs**: optional `start` and `end`, calendar days in Eastern time, both inclusive. Default:
-  from the ledger's opening to today. A poll at `start`'s midnight sharp is counted, unless the
-  ledger opened at that moment (its poll is then the baseline).
+  from the ledger's opening to today. A poll at `start`'s midnight sharp is counted when `start`
+  is after the opening; from the opening's own moment, or before the opening, that poll is the
+  baseline. Entries, receipts and visits always count from `start`'s midnight itself.
 - **Outputs**: `revenue` (tax included), `tax_set_aside`, `revenue_ex_tax`, `units_sold`,
   `units_costed`, `cost_of_sales` (first-in, first-out cost from receipts) and
   `cost_of_sales_complete`, `units_estimated` and `estimated_cost_of_sales` (an estimate for
