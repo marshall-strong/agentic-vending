@@ -34,6 +34,25 @@ The startup read has its own first `tool_result` step for `get_briefing`, labell
 
 `plan` is the last plan that previewed OK (with its `plan_hash`), or the plan that was submitted. **It also carries what the dashboard shows beside the plan:** `visit` (`scheduled` or `midweek`), the run's `reason`, and a `reason` on each slot the model said it changed (its final answer lists them as `slot_reasons`). A run that stopped before answering stores the plan without reasons. `team_update` and `notes` come from the model's final answer. `cost_usd` is what the harness spent, estimates included.
 
+## When it runs unattended
+
+The worker (`python -m vending.worker`, the Azure container) starts the agent on a schedule, but only when `AGENT_SCHEDULE_MODE` is set. **Unset, it never runs the agent**, and the worker behaves as before. The code is `vending/agent_schedule.py`. It calls `vending.agent.run`, the same entry point as `python -m vending.agent`, so the halt switch, the caps and the records are the same.
+
+| Setting | Default | |
+|---|---|---|
+| `AGENT_SCHEDULE_MODE` | unset (off) | `off`, `dry-run` or `live`. `dry-run` is test spend; `live` may submit a purchase request |
+| `AGENT_SCHEDULE` | `wed 14:00-22:00` | Eastern times, comma-separated, as `day HH:MM-HH:MM`: when the run is due, then the latest it may start. The default is one restock run each Wednesday at 2 PM, so its order is in before Amazon's Wed 23:59 cutoff (#188) |
+| `AGENT_SCHEDULE_FROM` | `2026-12-02` | The first Eastern day with runs |
+
+The times and the first day are placeholders until #129 decides them. The times follow Eastern wall-clock time through daylight saving.
+
+- **Turn it on:** set `AGENT_SCHEDULE_MODE=dry-run` (or `live`) on the container app, as [`docs/deploy.md`](deploy.md) shows. The worker reads it when it starts, so a new revision is needed. **Turn it off:** set it to `off`. The halt switch also stops a run that has started, and is the faster way.
+- **One run per time:** each time in the schedule gets one row in `agent_schedule` (migration 022), keyed by the time, before the agent starts. A restart, or a second replica, never runs the same time again. A database lock keeps two scheduled runs from going at once, and a scheduled run is not started while another agent run (one started by hand too) is still `running`. That time is recorded as `skipped`.
+- **A missed time:** if the worker was down at the time, a restarted worker records it as `missed`. If it comes back before the latest start, it runs late, and the row's detail says how late. If a worker stopped mid-run, the next one records that time as `failed`. It is never run again.
+- **What is recorded:** the row's `outcome` is the run's own ending (`submitted`, `skipped`, `halted`, `failed`), or `missed`, or `running` while it goes on, with the `agent_runs` id. A `skipped` or `halted` run is a result, not a success.
+
+**See the last run:** `python -m vending.agent_schedule` prints the settings as that machine reads them, the next time and the latest rows with their details. The worker's `/health` and its home page show the mode, the next time and the last scheduled run's outcome (never its detail). The dashboard's Needs attention says when the last one failed, was missed or was halted, or when a setting is wrong. The run itself is in the dashboard's runs, like any other.
+
 ## Before the first run
 
 A run reads the database `DATABASE_URL` points at, so each of these is per database:
@@ -49,4 +68,4 @@ A run reads the database `DATABASE_URL` points at, so each of these is per datab
 ## Still to decide
 
 - **Model, effort and budget:** the defaults are `claude-opus-5-5` at `medium` effort (`--effort` also takes `low`, `high`, `xhigh` and `max`), and the caps are $1 per run and $4 per day. All of them are placeholders.
-- **Schedule:** when the worker starts the run (Thursday, before the midnight cutoff), and which flags start an off-cycle run. Until that is decided, run it by hand.
+- **Schedule:** the times the worker starts the run (the placeholder is Wednesday 2 PM, above), whether it runs `dry-run` or `live`, and which flags start an off-cycle run (#129, #219).

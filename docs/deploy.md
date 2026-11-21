@@ -123,12 +123,18 @@ entrypoint keeps retrying every minute in the background. `tailscaled`'s own log
 fails); it is cut to its last 500 lines whenever it passes 1 MB, so an always-on replica's log
 can't fill the disk.
 
-**The agent loop does not run yet.** When the harness exists it starts `python -m vending.server`
+**The agent runs here only when the schedule is on** (`vending/agent_schedule.py`, #213). With
+`AGENT_SCHEDULE_MODE` unset, the worker never starts the agent. Set to `dry-run` or `live`, it
+starts `vending.agent.run` at the times in `AGENT_SCHEDULE`, which starts `python -m vending.server`
 over stdio from the same image, with `VENDING_TOOLS=built` so only working tools are offered.
-Until then the container gets **no Anthropic key**, since nothing in it calls the model; the change
-that runs the agent loop here adds the secret to `$Secrets` in the deploy script, under the name the
-agent reads (`VENDING_ANTHROPIC_API_KEY`, per the README). The deploy of `c1505c2` on 11 Nov, from
-the script before this change, did set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
+[`docs/agent.md`](agent.md) has the settings. The container gets the model key as
+`VENDING_ANTHROPIC_API_KEY` (the name the agent reads, per the README), from the
+`vending-anthropic-api-key` secret in `$Secrets`. **The first deploy after this change needs
+`-SetSecrets`**, with `VENDING_ANTHROPIC_API_KEY` in `.env`: without the secret in the app the
+script stops before any change. The schedule settings are not in the script. Set them on the app:
+`az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=dry-run`
+(`off` turns the runs off again). A later deploy keeps them, because `--set-env-vars` only adds.
+The deploy of `c1505c2` on 11 Nov, from an older script, set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
 adds, so the script now passes `--remove-env-vars` for it when the app still has it (the list is
 `$Retired`). The `anthropic-api-key` secret itself stays in the app, unused by any variable; to
 delete it:

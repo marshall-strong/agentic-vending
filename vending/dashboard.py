@@ -983,6 +983,8 @@ def attention(snap: dict) -> list[dict]:
 
     if (failing := _failing_syncs(snap.get("syncs"), now)) is not None:
         add("bad", failing)
+    if (scheduled := _scheduled_run(snap.get("syncs"))) is not None:
+        add(*scheduled)
 
     catalog = snap["catalog_requests"]
     if catalog["ok"]:
@@ -1059,6 +1061,37 @@ def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
     codes = sorted({r["exit_code"] for r in failed if r.get("exit_code") in SYNC_EXITS})
     meaning = "".join(f" Exit {c}: {SYNC_EXITS[c]}." for c in codes)
     return f"The worker's latest hourly sync{when} failed: {jobs}.{meaning} See `/health`."
+
+
+# How Needs attention reads the last scheduled agent run (`vending.agent_schedule`), by its outcome.
+SCHEDULED = {"failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started before its latest start"),
+             "halted": ("warn", "was halted: the halt switch was on"), "skipped": ("info", "skipped"),
+             "submitted": ("info", "submitted a purchase request"), "running": ("info", "is running now")}
+
+
+def _scheduled_run(syncs: dict | None) -> tuple[str, str] | None:
+    """(level, sentence) on the last scheduled agent run, from the worker's `/health` (`agent_schedule`), or
+    None when scheduled runs are off or the worker didn't pass its state in. A wrong setting is `bad`: the
+    team thinks the agent runs, and it doesn't."""
+    schedule = (syncs or {}).get("agent_schedule")
+    if not isinstance(schedule, dict):
+        return None
+    if schedule.get("mode") == "invalid":
+        return ("bad", "Scheduled agent runs are off because a setting is wrong (`AGENT_SCHEDULE_MODE`, "
+                       "`AGENT_SCHEDULE` or `AGENT_SCHEDULE_FROM`). The container's log says which.")
+    last = schedule.get("last")
+    if not isinstance(last, dict) or last.get("outcome") not in SCHEDULED:
+        return None
+    level, what = SCHEDULED[last["outcome"]]
+    try:
+        due = _eastern(datetime.fromisoformat(last["due_at"]))
+        when = f" due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
+    except (KeyError, TypeError, ValueError):
+        when = ""
+    kind = "dry run" if last.get("mode") == "dry-run" else "live run"
+    run = f" (agent run {int(last['run_id'])})" if isinstance(last.get("run_id"), int) else ""
+    see = "" if last["outcome"] in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
+    return level, f"The scheduled {kind}{when} {what}{run}.{see}"
 
 
 def verdict(items: list[dict]) -> str:
