@@ -278,6 +278,39 @@ def test_figures_default_to_the_newest_good_poll_and_later_sales_do_not_count(co
     assert tracking.figures(conn, "p0").coil["15"] == 8
 
 
+def swap_15(conn, opened="2026-11-03T18:00:00Z", closed="2026-11-03T19:00:00Z"):
+    """A visit that loads another product into slot 15 (pulling nothing), the door open from `opened` to
+    `closed`: a product change, so the stock replay splits sales around it."""
+    from tests.test_sync_requests import BODY, receipt
+    from vending.purchase_requests import record, store
+
+    primary = {**BODY["lines"][0]["primary"], "sku": "PEPSI20", "change_product": True}
+    record(conn, "swap", OPENED + timedelta(days=2), False,
+           {"off_cycle": False, "lines": [{"slot": "15", "source": "purchase", "primary": primary}]})
+    store(conn, "swap", {
+        "id": "swap", "status": "fulfilled", "device_id": "vmc1", "created_at": "2026-11-03T12:00:00Z",
+        "updated_at": closed, "fulfilled_at": closed, "off_cycle": False, "note": None, "decision_note": None,
+        "total_paid": "0", "door_opened_at": opened, "door_closed_at": closed,
+        "lines": [{"line": 0, "slot": "15", "source": "purchase", "primary": primary, "alternate": None,
+                   "load": None, "receipt": receipt(sku="PEPSI20", resolved_at=closed)}]},
+          OPENED + timedelta(days=4))
+
+
+def test_a_later_poll_does_not_change_the_coil_as_of_an_earlier_one(conn):
+    """p1 is taken in the minute the door opens for a swap; a poll before the door closes shows 3 more
+    sold. The stock replay moves those sales to door open, before p1, unless only polls up to p1 count."""
+    from vending import tracking
+
+    open_ledger(conn)
+    fill(conn)
+    poll(conn, "p0", "2026-11-02T18:00:00+00:00")
+    poll(conn, "p1", "2026-11-03T18:00:00+00:00", sold_in_15=2)
+    swap_15(conn)
+    assert tracking.figures(conn, "p1").coil["15"] == 6
+    poll(conn, "p1b", "2026-11-03T18:30:00+00:00", sold_in_15=5)     # door still open
+    assert tracking.figures(conn, "p1").coil["15"] == 6
+
+
 def test_the_coil_is_our_slots_from_the_assignment_only(conn):
     from vending import tracking
 
@@ -351,8 +384,8 @@ def test_figures_refuse_a_count_that_is_a_range(conn, monkeypatch):
     books(conn)
     real = stock.stock
 
-    def ranged(conn, until=None, lines=None):
-        counted = real(conn, until=until, lines=lines)
+    def ranged(conn, until=None, lines=None, **kw):
+        counted = real(conn, until=until, lines=lines, **kw)
         return stock.Stock(counted.closet, tuple(
             stock.SlotCount(**{**c.__dict__, "units": c.units - 2, "unattributed": 2, "at_most": c.units})
             if c.slot == "16" else c for c in counted.slots), counted.warnings)
@@ -368,8 +401,8 @@ def test_figures_pass_on_warnings_about_our_slots_and_the_closet_only(conn, monk
     books(conn)
     real = stock.stock
 
-    def warned(conn, until=None, lines=None):
-        counted = real(conn, until=until, lines=lines)
+    def warned(conn, until=None, lines=None, **kw):
+        counted = real(conn, until=until, lines=lines, **kw)
         return stock.Stock(counted.closet, counted.slots, (
             stock.StockWarning("slot 15: ours", "15"), stock.StockWarning("slot 11: not ours", "11"),
             stock.StockWarning("the closet: ours", None)))

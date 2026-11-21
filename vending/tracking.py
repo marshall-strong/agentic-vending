@@ -178,7 +178,8 @@ def figures(conn: psycopg.Connection, as_of: str | None = None) -> Figures:
     if b.receipts_missing:
         raise CantCompute(f"{b.receipts_missing} receipt lines have no total_paid, so cash can't be known. "
                           "Run the purchase-request sync, or record the amounts, then try again.")
-    counted = stock.stock(conn, until=at)
+    # Only polls up to this one: a later poll must not change the figures as of this one.
+    counted = stock.stock(conn, until=at, polls_to_until=True)
     by_slot = {c.slot: c for c in counted.slots}
     unknown = [slot for slot in slots if slot not in by_slot]
     if unknown:
