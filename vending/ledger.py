@@ -7,6 +7,7 @@
     python -m vending.ledger adjust --amount -3.50 --detail "bottle deposit, per David" --by marshall
     python -m vending.ledger show
     python -m vending.ledger entries
+    python -m vending.ledger reset-test-opening --by marshall [--yes]
 
 The balance is never a stored figure (build plan, section 5). It is:
 
@@ -63,6 +64,11 @@ restart just before a window reads the same from any window.
 Money is exact (`Fraction` cents, `numeric` in the database) until it is shown.
 `money()` rounds half up to the cent only then.
 
+`reset-test-opening` moves a test opening into `ledger_entries_archive` so the
+real one can be recorded (#215, `docs/ledger-reset.md`). It is a dry run
+without `--yes`, and refuses once the competition has started, when the
+opening's detail doesn't say "test", or when it is dated on or after 29 Nov.
+
 The CLI never migrates: on a database that is behind it refuses to run and
 names `python -m vending.db migrate`, like the server and the halt switch.
 """
@@ -70,6 +76,7 @@ names `python -m vending.db migrate`, like the server and the halt switch.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections import defaultdict
 from collections.abc import Iterable
@@ -85,6 +92,7 @@ from psycopg.types.json import Jsonb
 from vending import config, counters, db, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.start import START
 from vending.tools.sales_history import tax_cents
 
 KINDS = ("opening", "capital", "tokens", "adjustment", "tax_remitted")
@@ -356,6 +364,119 @@ def entries(conn: psycopg.Connection, start: datetime | None = None, end: dateti
 def opening(conn: psycopg.Connection) -> Entry | None:
     found = [e for e in entries(conn) if e.kind == "opening"]
     return found[0] if found else None
+
+
+# --- Resetting the test opening (#215) ---------------------------------------------
+
+# The real opening is recorded on Sun 29 Nov, before the Mon 30 Nov fill. An opening dated before this
+# is from testing; one dated on or after it may be the real one, so the reset refuses it.
+RESET_CUTOFF = datetime(2026, 11, 29, tzinfo=ZoneInfo(TIMEZONE))
+# The test opening's detail says so: "opening capital (test state, 11 Nov; to be reset before launch)".
+TEST_MARK = re.compile(r"\btest\b", re.IGNORECASE)
+ARCHIVE_REASON = "test opening, reset before the real opening (#215)"
+
+
+@dataclass(frozen=True)
+class ResetPlan:
+    """What `reset_test_opening` would do: move `opening` to the archive, and nothing else.
+
+    The rest is what stays where it is and falls before the real opening once
+    that is recorded after it: the entries dated at or after the test opening,
+    by kind (count, signed total), and the receipt lines and midweek visits
+    since the test opening (count, total paid).
+    """
+    opening: Entry
+    now: datetime
+    later_entries: dict[str, tuple[int, Fraction]]
+    receipts: tuple[int, Fraction]
+    visits: tuple[int, int]
+
+
+def reset_refusal(opened: Entry | None, now: datetime, start: datetime | None = None) -> str | None:
+    """Why the opening can't be reset, or None if it can. Pure.
+
+    Three guards, all needed: the competition hasn't started (`vending.start.START`),
+    the opening's detail marks it as a test, and it is dated before `RESET_CUTOFF`.
+    The real opening is recorded on 29 Nov with a plain detail, so it fails both of
+    the last two, and a second reset finds no opening at all.
+    """
+    start = start or START
+    if now >= start:
+        return (f"the competition started at {start.isoformat()}, so the opening can't be reset now. "
+                "Nothing was changed")
+    if opened is None:
+        return f"the ledger has no opening entry, so there is nothing to reset. {OPEN_HINT.split('. ', 1)[1]}"
+    if not TEST_MARK.search(opened.detail):
+        return (f"the opening (entry {opened.id}, {opened.detail!r}) doesn't say it is a test, so it may be the "
+                "real one. Nothing was changed")
+    if opened.at >= RESET_CUTOFF:
+        return (f"the opening (entry {opened.id}) is dated {opened.at.isoformat()}, on or after "
+                f"{RESET_CUTOFF.isoformat()}, when the real opening is recorded, so it may be the real one. "
+                "Nothing was changed")
+    return None
+
+
+def plan_reset(conn: psycopg.Connection, now: datetime | None = None) -> ResetPlan:
+    """What the reset would change, read only. Raises `LedgerError` when it would refuse."""
+    now = now or db_now(conn)
+    opened = opening(conn)
+    why = reset_refusal(opened, now)
+    if why:
+        raise LedgerError(why)
+    later: dict[str, tuple[int, Fraction]] = {}
+    for e in entries(conn, opened.at):
+        if e.id == opened.id:
+            continue
+        count, total = later.get(e.kind, (0, Fraction(0)))
+        later[e.kind] = (count + 1, total + e.amount_cents)
+    paid = [stock.cents(line["total_paid"]) for line in stock.receipt_lines(conn)
+            if line["at"] is not None and line["at"] >= opened.at]
+    visits = _visit_rows(conn, opened.at, now)
+    return ResetPlan(opened, now, later, (len(paid), sum((p for p in paid if p is not None), Fraction(0))),
+                     (len(visits), sum(fee for _, fee in visits)))
+
+
+def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None = None) -> Entry:
+    """Move the test opening from `ledger_entries` to `ledger_entries_archive`, in one transaction, logged.
+
+    Only the opening moves. Model calls stay, and once the real opening is recorded after them they are
+    development spend (`_development`); receipts and visits before it are test purchases
+    (`stock.receipts_count_from`). The guards (`reset_refusal`) are checked again with the row locked, so
+    two people running it at once can't both move something.
+    """
+    if not by.strip():
+        raise LedgerError("a reset needs the name of who ran it (--by)")
+    with conn.transaction():
+        row = conn.execute("select id, at, kind, amount_cents, detail, reference, recorded_by from ledger_entries"
+                           " where kind = 'opening' for update").fetchone()
+        opened = None if row is None else Entry(row[0], row[1], row[2], Fraction(row[3]), row[4], row[5], row[6])
+        why = reset_refusal(opened, now or db_now(conn))
+        if why:
+            raise LedgerError(why)
+        conn.execute(
+            "insert into ledger_entries_archive (id, at, kind, amount_cents, detail, reference, recorded_by,"
+            " recorded_at, archived_by, reason)"
+            " select id, at, kind, amount_cents, detail, reference, recorded_by, recorded_at, %s, %s"
+            " from ledger_entries where id = %s",
+            (by.strip(), ARCHIVE_REASON, opened.id))
+        conn.execute("delete from ledger_entries where id = %s", (opened.id,))
+        conn.execute(
+            "insert into action_log (kind, tool, arguments, outcome, detail) values ('write', %s, %s, 'done', %s)",
+            ("ledger.reset_test_opening", Jsonb({"entry": opened.id, "amount": money(opened.amount_cents),
+                                                 "at": opened.at.isoformat(), "detail": opened.detail}),
+             f"test opening {money(opened.amount_cents)} of {opened.at:%Y-%m-%d} (entry {opened.id}) moved to "
+             f"ledger_entries_archive by {by.strip()}"))
+    return opened
+
+
+def archived(conn: psycopg.Connection) -> list[tuple[Entry, datetime, str]]:
+    """Entries taken out of the books: (entry, when archived, by whom), oldest first."""
+    if conn.execute("select to_regclass('ledger_entries_archive')").fetchone()[0] is None:
+        return []
+    return [(Entry(i, at, kind, Fraction(amount), detail, reference, by), when, who)
+            for i, at, kind, amount, detail, reference, by, when, who in conn.execute(
+                "select id, at, kind, amount_cents, detail, reference, recorded_by, archived_at, archived_by"
+                " from ledger_entries_archive order by archived_at, id")]
 
 
 def _development(e: Entry, opened: Entry | None) -> bool:
@@ -803,8 +924,13 @@ def main(argv: list[str] | None = None) -> int:
     adjust.add_argument("--by", required=True)
     adjust.add_argument("--reference")
     adjust.add_argument("--at", type=datetime.fromisoformat)
+    reset = sub.add_parser("reset-test-opening",
+                           help="move the test opening out of the books before the real one (#215); a dry run "
+                                "unless --yes")
+    reset.add_argument("--by", required=True, help="your name, for the log")
+    reset.add_argument("--yes", action="store_true", help="make the change; without it, only say what would change")
     sub.add_parser("show", help="the balance now")
-    sub.add_parser("entries", help="every entry, oldest first")
+    sub.add_parser("entries", help="every entry, oldest first, then any archived ones")
     args = parser.parse_args(argv)
 
     with db.connect() as conn:
@@ -834,12 +960,18 @@ def main(argv: list[str] | None = None) -> int:
                 entry = record(conn, "adjustment", dollars_to_cents(args.amount), args.detail, args.by,
                                _aware(args.at), args.reference)
                 print(f"Adjusted by {money(entry.amount_cents)}: {entry.detail}.")
+            elif args.action == "reset-test-opening":
+                return _reset(conn, args.by, args.yes)
             elif args.action == "show":
                 return _show(conn)
             else:
                 for e in entries(conn):
-                    print(f"{e.id:>4}  {e.at:%Y-%m-%d %H:%M}  {e.kind:12}  {money(e.amount_cents):>10}  {e.detail}"
-                          + (f"  [{e.reference}]" if e.reference else "") + f"  by {e.recorded_by}")
+                    print(_entry_line(e))
+                gone = archived(conn)
+                if gone:
+                    print("Archived, not in the books:")
+                    for e, when, who in gone:
+                        print(f"{_entry_line(e)}  (archived {when:%Y-%m-%d %H:%M} by {who})")
                 return 0
         except (LedgerError, SlotsNotRecorded) as error:
             # SlotsNotRecorded: the balance counts our slots' sales, so `show` needs the assignment
@@ -851,6 +983,42 @@ def main(argv: list[str] | None = None) -> int:
             if start is not None and entry.at < start.at:
                 print(f"Warning: this entry is dated before the opening on {start.at:%Y-%m-%d}, "
                       "so it is not in the balance.", file=sys.stderr)
+    return 0
+
+
+def _entry_line(e: Entry) -> str:
+    return (f"{e.id:>4}  {e.at:%Y-%m-%d %H:%M}  {e.kind:12}  {money(e.amount_cents):>10}  {e.detail}"
+            + (f"  [{e.reference}]" if e.reference else "") + f"  by {e.recorded_by}")
+
+
+def _reset(conn: psycopg.Connection, by: str, yes: bool) -> int:
+    """`reset-test-opening`: say what would change, then change it only with --yes. Times shown in UTC."""
+    plan = plan_reset(conn)         # LedgerError when it would refuse; main prints it
+    o = plan.opening
+    if not yes:
+        print("Dry run: nothing was changed. With --yes this moves one entry out of the books, into "
+              "ledger_entries_archive:")
+    else:
+        reset_test_opening(conn, by)
+        print("Moved one entry out of the books, into ledger_entries_archive:")
+    print(f"  {_entry_line(o)}")
+    print("Nothing else moves. Once the real opening is recorded, these fall before it:")
+    tokens = plan.later_entries.get("tokens")
+    print(f"  model calls since {o.at:%Y-%m-%d}: {tokens[0] if tokens else 0} entries, "
+          f"{money(-tokens[1] if tokens else 0)} spent. Development spend: on the dev-spend page, not in the balance")
+    print(f"  receipts since {o.at:%Y-%m-%d}: {plan.receipts[0]} lines, {money(plan.receipts[1])} paid. "
+          "Test purchases: not in the balance, the P&L or stock")
+    print(f"  midweek visits since {o.at:%Y-%m-%d}: {plan.visits[0]}, {money(plan.visits[1])} in fees. "
+          "Not in the balance or the P&L")
+    for kind, (count, total) in sorted(plan.later_entries.items()):
+        if kind != "tokens":
+            print(f"  {kind} entries since {o.at:%Y-%m-%d}: {count}, {money(total)}. Not in the balance; "
+                  "`ledger show` names them. Re-record any that belong in the competition books")
+    if yes:
+        print("The ledger has no opening now. Record the real one next: "
+              "python -m vending.ledger open --amount 600.00 --by NAME")
+    else:
+        print(f"To make the change: python -m vending.ledger reset-test-opening --by {by.strip() or 'NAME'} --yes")
     return 0
 
 
