@@ -79,6 +79,7 @@ def test_sim_before_the_books_begin_it_answers_tracking_not_started():
 
 def test_sim_within_at_exactly_one_dollar_and_two_units_outside_past_them():
     b, _ = sim_bridge()
+    b.daily_limit_from = None                          # two checks in one day: the tolerances, not the limit
     b.record_books("s1", AS_OF, 50000, 1000)
     answer = b.check_books(good_body(cash="499.00", sales_tax_owed=11,
                                      coil={**{s: 8 for s in TEST_SLOTS}, "15": 10, "16": 6}, back_stock={SKU: 14}))
@@ -140,11 +141,28 @@ def test_sim_refuses_a_body_off_the_schema_as_fastapi_would(change):
     assert status == 422 and isinstance(answer["detail"], list) and answer["detail"]
 
 
-def test_sim_one_check_a_day_from_the_limit_and_refusals_do_not_use_it():
-    b, clock = sim_bridge()
+def test_sim_by_default_allows_one_check_a_day_from_the_competition_start(monkeypatch):
+    """Not told otherwise, the simulated bridge limits checks from the same moment as the client."""
+    from vending import tracking
+
+    b, clock = sim_bridge(at=utc("2026-12-02T15:00:00+00:00"))
+    assert b.daily_limit_from == tracking.daily_from() == datetime(2026, 12, 3, tzinfo=EASTERN)
     b.record_books("s1", AS_OF, 50000, 1000)
     b.check_books(good_body())
-    b.check_books(good_body())                         # no limit set: testing
+    b.check_books(good_body())                         # before the start: testing, no limit
+    clock.at = AS_OF + timedelta(hours=2)              # Fri 4 Dec
+    b.check_books(good_body())
+    assert refusal(lambda: b.check_books(good_body()))[1]["error_type"] == "daily_check_used"
+    monkeypatch.setenv(tracking.DAILY_SETTING, "2026-12-10T00:00:00-05:00")
+    assert sim_bridge()[0].daily_limit_from == datetime(2026, 12, 10, tzinfo=EASTERN)
+
+
+def test_sim_one_check_a_day_from_the_limit_and_refusals_do_not_use_it():
+    b, clock = sim_bridge()
+    b.daily_limit_from = None                          # no limit: testing
+    b.record_books("s1", AS_OF, 50000, 1000)
+    b.check_books(good_body())
+    b.check_books(good_body())
     b.daily_limit_from = AS_OF
     clock.at = AS_OF + timedelta(days=1)               # a new Eastern day
     refusal(lambda: b.check_books(good_body(as_of="nope")))     # refused: doesn't use it
@@ -338,7 +356,8 @@ def test_the_coil_is_our_slots_from_the_assignment_only(conn):
     ours = [s for s in TEST_SLOTS if s != "58"] + ["11"]
     conn.execute("update slot_assignment set slots = %s", (ours,))
     from tests.conftest import store_poll
-    store_poll(conn, "p1x", "2026-11-03T19:00:00+00:00", {s: (PRICE, 102 if s == "15" else 100) for s in [*TEST_SLOTS, "11"]})
+    store_poll(conn, "p1x", "2026-11-03T19:00:00+00:00",
+               {s: (PRICE, 102 if s == "15" else 100) for s in [*TEST_SLOTS, "11"]})
     f = tracking.figures(conn, "p1x")
     assert list(f.coil) == ours and "58" not in f.coil
 
@@ -720,7 +739,6 @@ def test_figures_and_the_simulated_bridge_agree_end_to_end(conn):
     books(conn)
     f = tracking.figures(conn, "p1")
     b, clock = sim_bridge(at=DURING)
-    b.daily_limit_from = datetime(2026, 12, 3, tzinfo=EASTERN)
     b.record_books("p1", f.as_of_time, 60000 + 500 - 20 * 1237 - 37, 37,
                    coil={s: (6 if s == "15" else 8) for s in TEST_SLOTS}, back_stock={SKU: 61})
     out = tracking.send(conn, b, f, "kevin", now=DURING)

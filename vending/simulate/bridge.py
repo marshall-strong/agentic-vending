@@ -27,6 +27,7 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
+from vending import tracking
 from vending.bridge import TRACKING_PATH, BridgeAnswered
 from vending.simulate import world
 from vending.simulate.world import BY_SKU, Machine
@@ -85,7 +86,7 @@ class SimBridge:
     and checks them as it would the real server's answer."""
 
     def __init__(self, machine: Machine, now, catalog: list[dict] | None = None, team: str | None = None,
-                 count_tolerance: str = "per_entry"):
+                 count_tolerance: str = "per_entry", daily_limit_from: datetime | None | str = "default"):
         if count_tolerance not in COUNT_TOLERANCES:
             raise ValueError(f"count_tolerance is one of {COUNT_TOLERANCES}, not {count_tolerance!r}")
         self.machine, self.now, self.team = machine, now, team
@@ -94,10 +95,13 @@ class SimBridge:
         self.product_requests: list[dict] = []
         self.refused: list[dict] = []           # every 4xx it answered, for the report
         self.calls: list[tuple[str, str]] = []  # (method, path) in order
-        # The tracking check: the books per poll, when they began (None: not yet), and from when one a day.
+        # The tracking check: the books per poll, when they began (None: not yet), and from when one a day:
+        # by default from the client's own setting (`vending.tracking.daily_from`, the competition start),
+        # so a test that forgets it still meets the limit; None means no limit.
         self.books: dict[str, Books] = {}
         self.tracking_from: datetime | None = None
-        self.daily_limit_from: datetime | None = None
+        self.daily_limit_from: datetime | None = (tracking.daily_from() if daily_limit_from == "default"
+                                                  else daily_limit_from)
         self.count_tolerance = count_tolerance
         self.checks: list[dict] = []            # every check made: at, as_of, results
 
