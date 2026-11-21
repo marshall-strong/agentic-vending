@@ -76,6 +76,11 @@ def quiet(_):
     pass
 
 
+def doors(said):
+    """What was logged, less the receipt-price lines (`vending.receipt_prices`): these tests have no sourcing rows."""
+    return [s for s in said if "sourcing table" not in s]
+
+
 def test_pending_then_fulfilled(conn):
     submit(conn, "r1")
     bridge = FakeBridge({"r1": [pending("r1"), fulfilled("r1", receipt())]})
@@ -331,7 +336,7 @@ def test_half_a_pair_of_door_times_is_logged_naming_the_request(conn):
     submit(conn, "r1")
     said = []
     sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED)}), NOW, log=said.append)
-    assert said == ["r1: the receipt has door_opened_at but no door_closed_at; neither is kept, "
+    assert doors(said) == ["r1: the receipt has door_opened_at but no door_closed_at; neither is kept, "
                     "so its visit is dated by resolved_at"]
     assert door_row(conn) == (None, None)
 
@@ -348,7 +353,7 @@ def test_a_door_time_that_is_not_a_time_is_logged_and_the_rest_of_the_batch_stil
         "r2": fulfilled("r2", receipt(), door_opened_at=OPENED, door_closed_at=CLOSED),
     }), NOW, log=said.append)
     assert (report.checked, report.failed) == (2, 0)
-    assert said == [f"r1: door_opened_at is {bad!r}, not a time; neither door time is kept, "
+    assert doors(said) == [f"r1: door_opened_at is {bad!r}, not a time; neither door time is kept, "
                     "so its visit is dated by resolved_at"]
     assert door_row(conn, "r1") == (None, None)
     assert door_row(conn, "r2")[1] == datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc)
@@ -363,7 +368,7 @@ def test_a_door_time_with_a_date_and_no_time_is_logged_and_the_receipt_kept(conn
     report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED,
                                                     door_closed_at="2026-11-07")}), NOW, log=said.append)
     assert (report.checked, report.failed) == (1, 0)
-    assert said == ["r1: door_closed_at is '2026-11-07', not a time; neither door time is kept, "
+    assert doors(said) == ["r1: door_closed_at is '2026-11-07', not a time; neither door time is kept, "
                     "so its visit is dated by resolved_at"]
     assert door_row(conn) == (None, None)
     assert conn.execute("select count(*) from purchase_lines").fetchone()[0] == 1

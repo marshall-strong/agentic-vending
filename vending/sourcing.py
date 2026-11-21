@@ -44,6 +44,8 @@ if TYPE_CHECKING:
 
 RANKS = ("primary", "alternate")
 STALE_AFTER = timedelta(days=7)
+# `checked_by` on a price taken from a purchase receipt (`vending.receipt_prices`), not seen by a person.
+RECEIPT_BY = "receipt"
 # The team's rule of thumb (price list, 11 Nov): max = price + 15%, rounded up to 50 cents.
 DEFAULT_MARKUP = Decimal("1.15")
 MAX_ROUNDING_CENTS = 50
@@ -77,6 +79,11 @@ class Option:
 
     def is_stale(self, now: datetime) -> bool:
         return now - self.checked_at > STALE_AFTER
+
+    @property
+    def from_receipt(self) -> bool:
+        """The price is what the worker paid on a receipt (`vending.receipt_prices`), not one a person saw."""
+        return self.checked_by == RECEIPT_BY
 
 
 def cents(text: str, what: str) -> int:
@@ -342,8 +349,9 @@ def _show(conn: psycopg.Connection, now: datetime) -> int:
         per_unit = f", {_money(int(unit.to_integral_value(rounding=ROUND_CEILING)))} a unit" if unit else ""
         age = (now - o.checked_at).days
         stale = "  STALE" if o.is_stale(now) else ""
+        source = f"from {o.note or 'a receipt'}" if o.from_receipt else f"by {o.checked_by}"
         print(f"{o.sku:40} {o.rank:9} {describe(o)}{per_unit}; checked {o.checked_at:%Y-%m-%d} "
-              f"({age} days ago) by {o.checked_by}{stale}")
+              f"({age} days ago) {source}{stale}")
         if o.url:
             print(f"{'':40} {'':9} {o.url}")
     return 0
@@ -354,6 +362,8 @@ def _from_fields(f: dict[str, str], by: str, now: datetime) -> Option:
     sku = f.get("sku", "")
     if not sku:
         raise SourcingError("sku is empty")
+    if by.strip().lower() == RECEIPT_BY:
+        raise SourcingError(f"--by {RECEIPT_BY} is kept for prices taken from receipts; give your name")
     try:
         units = int(f.get("units_per_pack", ""))
     except ValueError:

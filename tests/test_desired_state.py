@@ -440,6 +440,19 @@ def test_a_table_price_over_a_week_old_is_used_but_flagged(db, fake):  # noqa: F
     assert "COKE20" in stale and "9 days ago" in stale and "python -m vending.sourcing set COKE20" in stale
 
 
+def test_a_receipt_refreshes_a_stale_table_price_and_the_planner_takes_it_as_fresh(db, fake):  # noqa: F811
+    """#202: the 12.37 the worker paid for r1's Costco 12-pack (resolved 7 Nov) replaces the 9-day-old 11.49."""
+    from vending import receipt_prices
+    ready(db, capacity=15)
+    stocked(db)
+    table_row(db, fake, checked=NOW - timedelta(days=9))
+    assert len(receipt_prices.apply(db, "r1", NOW).updated) == 1
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15)), fake.client(), NOW)
+    assert reply.ok and reply.refusals == []
+    assert reply.cost.expected == "12.37"
+    assert not any("sourcing table" in w for w in reply.warnings)
+
+
 def test_the_agents_own_max_wins_but_an_old_borrowed_expected_price_is_named(db, fake):  # noqa: F811
     """Marshall, #133: the agent's Costco 12-pack gives no expected price, so the planner borrows the
     table's $11.49 for the cost. The line keeps the agent's max; the 30-day-old price is named."""
