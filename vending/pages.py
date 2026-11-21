@@ -145,6 +145,25 @@ def _submission_detail(col: Callable[[str], sql.Composable]) -> sql.Composable:
         col("detail"), lines, sql.Literal(SUBMISSION_OTHER))
 
 
+# What /db shows in place of why a bench case wasn't judged (#165): `bench_runs.judge_notes` is
+# {case: {"note"|"problem": text}}, and a `problem` can be a database error (`vending.bench.judge`).
+BENCH_PROBLEM = "(why this case wasn't judged isn't shown on this public page; it is in the database)"
+
+
+def _judge_notes(col: Callable[[str], sql.Composable]) -> sql.Composable:
+    """`bench_runs.judge_notes` as /db shows it: each case's `note` as stored, and `BENCH_PROBLEM` for
+    its `problem` or for anything that isn't the stored shape."""
+    fixed = sql.SQL("to_jsonb({}::text)").format(sql.Literal(BENCH_PROBLEM))
+    return sql.SQL(
+        "case when {notes} is null then null"
+        " when jsonb_typeof({notes}) <> 'object' then {fixed}"
+        " else (select coalesce(jsonb_object_agg(e.key,"
+        "   case when jsonb_typeof(e.value) <> 'object' then {fixed}"
+        "        when e.value ? 'problem' then jsonb_set(e.value, array['problem'], {fixed})"
+        "        else e.value end), jsonb_build_object())"
+        "  from jsonb_each({notes}) as e) end").format(notes=col("judge_notes"), fixed=fixed)
+
+
 # What the public explorer leaves out besides, by table name. The dashboard's own list is
 # `dashboard.hide_errors`.
 HIDE = {
@@ -152,6 +171,7 @@ HIDE = {
     # A failed run's detail is a raw error; a run that submitted keeps only its confirmation (#165).
     "agent_runs": db_explorer.Project("detail", ("status",), lambda col: dashboard.public_run_detail(
         col("status"), col("detail")), dashboard.HIDDEN),
+    "bench_runs": db_explorer.Project("judge_notes", (), _judge_notes, BENCH_PROBLEM),
     "purchase_submissions": db_explorer.Project("detail", ("status",), _submission_detail, SUBMISSION_OTHER),
     # A step the model was told had failed holds the raw error (#165).
     "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),

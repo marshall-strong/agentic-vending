@@ -367,6 +367,26 @@ def test_db_shows_a_fixed_line_for_a_submission_not_the_bridges_own_words(site, 
         assert local.execute("select count(*) from purchase_submissions where detail = %s", (leak,)).fetchone()[0] == 2
 
 
+def test_db_withholds_why_a_bench_case_was_not_judged(site, schema_url, conn):
+    """#165: `bench_runs.judge_notes` keeps, per case, the judge's note or why it couldn't judge it,
+    and that `problem` can be a database error. /db shows a fixed line in its place."""
+    _, schema = schema_url
+    leak = f'not judged: OperationalError: connection to server at "{STEP_HOST}" failed; {STEP_URL}'
+    notes = {"week-1": {"problem": leak}, "week-2": {"note": "JUDGE-NOTE-MARKER"}, "week-3": leak}
+    conn.execute("insert into bench_runs (judge_notes) values (%s)", (Jsonb(notes),))
+    conn.execute("insert into bench_runs (judge_notes) values (%s)", (Jsonb(leak),))
+
+    status, _, body = _get(site, f"/db?schema={schema}&table=bench_runs")
+    shown = unescape(body)
+    assert status == 200
+    assert STEP_HOST not in shown and "Sw0rdf1sh" not in shown and "postgresql://" not in shown
+    assert "OperationalError" not in shown
+    assert "JUDGE-NOTE-MARKER" in shown and "week-1" in shown and pages.BENCH_PROBLEM in shown
+    with open_in(*schema_url) as local:
+        assert STEP_HOST in db_explorer.render(local, db_explorer.Request(schema, "bench_runs", 0))[1]
+        assert local.execute("select judge_notes from bench_runs order by id limit 1").fetchone()[0] == notes
+
+
 def test_the_served_dashboard_names_the_workers_failing_syncs_without_their_error_text(site):
     # The worker keeps its rounds in memory; the dashboard it serves gets them as /health has them.
     assert not any("hourly sync" in a["text"] for a in json.loads(_get(site, "/dashboard/state.json")[2])["attention"])
