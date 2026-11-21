@@ -224,7 +224,8 @@ for each, `within` or `outside`. It never says by how much, which way, or which 
 `python -m vending.tracking check` works out our four figures as of a poll (default the newest stored
 one) from the ledger and the stock count and prints them; `--send --by NAME` sends them once and
 stores the request and the answer in `tracking_checks`. From the competition start it refuses a second
-send the same Eastern day unless the earlier one was refused without using the check. The module's
+send the same Eastern day unless the earlier one was refused without using the check. The day is the
+bridge's: a send reserved at 23:59:59 and checked at 00:00:01 uses the new day's check. The module's
 docstring has the details. The simulated bridge answers the same route (`vending/simulate/bridge.py`).
 
 **Why `scripts/bridge.py` doesn't send it.** That script only reads: it can't submit a purchase request,

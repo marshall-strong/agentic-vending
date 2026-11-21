@@ -544,6 +544,115 @@ def test_no_usable_answer_may_have_used_the_check_but_never_arriving_did_not(con
     assert (out.status, out.used_check, out.answer) == (502, None, {"unparsed": "Bad Gateway"})
 
 
+def eastern(*parts) -> datetime:
+    return datetime(*parts, tzinfo=EASTERN).astimezone(timezone.utc)
+
+
+def next_midnight(moment: datetime) -> datetime:
+    """Midnight Eastern after `moment`: the bridge's `next_check_from`."""
+    return eastern(*(moment.astimezone(EASTERN).date() + timedelta(days=1)).timetuple()[:3])
+
+
+def iso(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class Times:
+    """The clock a send reads: one moment for the reservation, the next for the answer."""
+
+    def __init__(self, *moments):
+        self.moments = list(moments)
+
+    def __call__(self) -> datetime:
+        return self.moments.pop(0) if len(self.moments) > 1 else self.moments[0]
+
+
+# Eastern days a send can cross midnight into: an ordinary one, and the days either side of each clock
+# change (spring forward Sun 14 Mar 2027, fall back Sun 7 Nov 2027).
+MIDNIGHTS = [(2026, 12, 5), (2027, 3, 14), (2027, 3, 15), (2027, 11, 7), (2027, 11, 8)]
+
+
+@pytest.mark.parametrize("day", MIDNIGHTS)
+def test_a_send_the_bridge_checked_after_midnight_uses_the_new_days_check(conn, day):
+    """Reserved at 23:59:59, checked by the bridge at 00:00:01: the check used is the new day's."""
+    from vending import tracking
+
+    books(conn)
+    f = tracking.figures(conn, "p1")
+    midnight = eastern(*day)
+    checked = midnight + timedelta(seconds=1)
+    answer = {**WITHIN, "checked_at": iso(checked), "next_check_from": iso(next_midnight(midnight))}
+    out = tracking.send(conn, FakeBridge(answer), f, "kevin", now=Times(midnight - timedelta(seconds=1), checked))
+    assert out.status == 200
+    with pytest.raises(tracking.AlreadyChecked):
+        tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=midnight + timedelta(hours=10))
+    assert len(rows(conn)) == 1
+
+
+@pytest.mark.parametrize("day", MIDNIGHTS)
+def test_a_send_still_unanswered_across_midnight_blocks_the_new_day(conn, day):
+    """While the first send waits on the bridge, past midnight, a second one is refused."""
+    from vending import tracking
+
+    books(conn)
+    f = tracking.figures(conn, "p1")
+    midnight = eastern(*day)
+    second = []
+
+    class Slow(FakeBridge):
+        def check_books(self, body):
+            with pytest.raises(tracking.AlreadyChecked):
+                tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=midnight + timedelta(seconds=1))
+            second.append(True)
+            raise BridgeNoAnswer("timed out")
+
+    out = tracking.send(conn, Slow(), f, "kevin", now=Times(midnight - timedelta(seconds=1),
+                                                            midnight + timedelta(seconds=20)))
+    assert second and (out.status, out.used_check) == (None, None)
+    # Unsettled, and answered after midnight: it may have used either day's check.
+    for at in (midnight - timedelta(seconds=1), next_midnight(midnight) - timedelta(seconds=1)):
+        with pytest.raises(tracking.AlreadyChecked):
+            tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=at)
+    assert tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=next_midnight(midnight)).status == 200
+
+
+def test_a_send_the_bridge_checked_before_midnight_leaves_the_new_day_open(conn):
+    """Reserved and checked at 23:59:59, answered at 00:00:01: the old day's check, so the new day is free."""
+    from vending import tracking
+
+    books(conn)
+    f = tracking.figures(conn, "p1")
+    midnight = eastern(2026, 12, 5)
+    answer = {**WITHIN, "checked_at": iso(midnight - timedelta(seconds=1)), "next_check_from": iso(midnight)}
+    tracking.send(conn, FakeBridge(answer), f, "kevin",
+                  now=Times(midnight - timedelta(seconds=2), midnight + timedelta(seconds=1)))
+    assert tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=midnight + timedelta(hours=10)).status == 200
+
+
+def test_an_unanswered_send_left_behind_by_a_crash_blocks_only_its_own_days(conn):
+    """A row with no answer at all (the process died mid-send) blocks the days it could have reached the
+    bridge in, not every day after."""
+    from vending import tracking
+
+    books(conn)
+    f = tracking.figures(conn, "p1")
+    midnight = eastern(2026, 12, 5)
+
+    class Crash(FakeBridge):
+        def check_books(self, body):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        tracking.send(conn, Crash(), f, "kevin", now=midnight - timedelta(minutes=10))
+    for at in (midnight - timedelta(minutes=1), midnight + timedelta(hours=10)):    # it may have arrived at 00:05
+        with pytest.raises(tracking.AlreadyChecked):
+            tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=at)
+    with pytest.raises(KeyboardInterrupt):
+        tracking.send(conn, Crash(), f, "kevin", now=next_midnight(midnight) + timedelta(hours=10))
+    tomorrow = next_midnight(next_midnight(midnight))
+    assert tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=tomorrow + timedelta(hours=10)).status == 200
+
+
 def test_before_the_start_sends_are_not_limited(conn):
     from vending import tracking
 
@@ -562,7 +671,8 @@ def test_the_daily_start_is_a_setting(conn, monkeypatch):
     monkeypatch.setenv(tracking.DAILY_SETTING, "2026-11-20T00:00:00-05:00")
     books(conn)
     f = tracking.figures(conn, "p1")
-    tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=BEFORE)
+    checked = {**WITHIN, "checked_at": iso(BEFORE), "next_check_from": iso(next_midnight(BEFORE))}
+    tracking.send(conn, FakeBridge(checked), f, "kevin", now=BEFORE)
     with pytest.raises(tracking.AlreadyChecked):
         tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=BEFORE)
     monkeypatch.setenv(tracking.DAILY_SETTING, "3 Dec")

@@ -8,14 +8,15 @@
 --   false  the bridge refused it before checking (403, 404, 409, 422), or it never arrived;
 --   null   unknown: sent, but no usable answer (a timeout, a 5xx, a dropped connection).
 -- From the competition start, a second send on the same Eastern day is refused unless every earlier
--- row that day is `false` (`vending.tracking`).
+-- row that day is `false` (`vending.tracking`). An answered check counts on the bridge's day (the
+-- answer's `checked_at`), which can be the day after `eastern_day` when a send crosses midnight.
 --
 -- The request holds only our slots (the server's assignment) and our own closet.
 
 create table tracking_checks (
     id              bigint      generated always as identity primary key,
     sent_at         timestamptz not null,
-    eastern_day     date        not null,       -- `sent_at` in America/New_York: the bridge's day
+    eastern_day     date        not null,       -- `sent_at` in America/New_York
     sent_by         text        not null,
     as_of           text        not null,       -- the poll's session id
     as_of_time      timestamptz not null,       -- that poll's `started_at`, from our copy
