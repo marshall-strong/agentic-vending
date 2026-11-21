@@ -19,6 +19,9 @@ The page, top to bottom:
    cutoff countdown; spendable (from the ledger once it has opened; before that, only that
    it is development spend); catalog approvals; and the plan (for the first fill before the slot lock,
    for the next restock after).
+ - Key dates (`vending.key_dates`): before the start, each date from the instructors with a status
+   from our records (done, due in N days, overdue); from the start, the next restock request and
+   the next tax Saturday.
  - In the machine, one screen: the machine's whole front (`vending.machine_art`), our
    selections (the stored assignment, `vending.slots.our_slots`) with their package, count,
    price and next-restock badge, the rest half as wide and marked "Not ours"; with no assignment
@@ -70,7 +73,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
 from vending import capacity, db, leaderboards, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
-from vending import agent_runs, pricing_panel
+from vending import agent_runs, key_dates, pricing_panel
 from vending import stock as stock_mod
 from vending import planner
 from vending.planner import IN_STORE_CUTOFF
@@ -112,8 +115,8 @@ CUTOFF_SOON = timedelta(hours=24)
 # poll on the hour: `SYNC_AT_MINUTE`, as `vending.worker` reads it, else this.
 SYNC_AT_MINUTE = 5
 # The instructors must approve every product for the first fill by Wed 25 Nov 2026. The status bar says
-# so until the end of that day, Eastern. In UTC so the page needs no time-zone data.
-APPROVALS_DUE = datetime(2026, 11, 26, 5, 0, tzinfo=timezone.utc)
+# so until the end of that day, Eastern. The date lives with the other key dates (`vending.key_dates`).
+APPROVALS_DUE = key_dates.CATALOG.due
 # The machine's face: 5 shelves of 8 selections. Row r, column c is selection "rc".
 SHELVES, COLUMNS = machine_art.SHELVES, machine_art.COLUMNS
 # The mark on the wildcard slot's rows (#166): the one fixed slot that tests products.
@@ -825,7 +828,9 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
     if run and run["detail"] and run["detail"] != HIDDEN and _older_assignment(run["started_at"], assignment_at):
         run["detail"] = OLD_ASSIGNMENT
     for name, panel in snap.items():
-        if name not in ("runs", "pricing") or not panel["ok"]:
+        # Key dates' texts are fixed messages, dates and counts that name no selection; scoping them would
+        # hide the slot check's instructions exactly when no assignment can be read.
+        if name not in ("runs", "pricing", "key_dates") or not panel["ok"]:
             snap[name] = _scope_text(panel, ours)
     if (pricing := snap.get("pricing")) and pricing["ok"]:
         for row in pricing["data"]["rows"]:
@@ -906,10 +911,13 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
         "catalog_counts": _catalog_counts(catalog),
     }
     try:
-        before_lock = now < lock_at()
+        lock = lock_at()
     except settings.SettingsError:
         # The assignment panel explains the bad setting. Keep the weekly view available.
-        before_lock = False
+        lock = None
+    before_lock = lock is not None and now < lock
+    snap["key_dates"] = key_dates.panel(conn, now, opening, slots, snap["catalog_counts"], lock,
+                                        lambda read: _isolated(conn, read))
     if before_lock:
         snap["weekly_plan"] = snap["plan"]
         snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots, assignment_at)))
@@ -1870,8 +1878,8 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
         by = c["by_status"]
         extra = "".join(f' &middot; <span class="warn-text">{by[k]} {k}</span>' for k in ("sending", "unknown") if by[k])
         rejected = f' &middot; {by["rejected"]} rejected' if by["rejected"] else ""
-        last = APPROVALS_DUE - timedelta(hours=6)      # the deadline's day, in Eastern
-        due = f" &middot; due {last:%a} {last.day} {last:%b}" if now < APPROVALS_DUE else ""
+        day = key_dates.CATALOG.day
+        due = f" &middot; due {day:%a} {day.day} {day:%b}" if now < APPROVALS_DUE else ""
         left = f'<span class="{"bad-text" if not c["left"] else ""}">{_plural(c["left"], "place")} left</span>'
         cells.append(_cell("Catalog approvals", f'{by["approved"]} approved',
                            f'{by["pending"]} pending{rejected}{extra} &middot; {left}{due}', "#requests"))
@@ -2675,7 +2683,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
     boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
               if "leaderboards" in snap else "")
-    body = (head + _status_bar(snap, items, charts) + _cabinet_html(snap, items) + pricing + money
+    body = (head + _status_bar(snap, items, charts) + key_dates.html(snap.get("key_dates"))
+            + _cabinet_html(snap, items) + pricing + money
             + _plan_section(snap)
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
@@ -2708,7 +2717,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + ('<meta name="robots" content="noindex">' if demo else "")
             + reload
             + f'<title>{DEMO_TITLE if demo else ""}{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
-            f'<style>{STYLE}{machine_art.STYLE}</style></head><body>{banner}<main>{body}</main>'
+            f'<style>{STYLE}{machine_art.STYLE}{key_dates.STYLE}</style></head><body>{banner}<main>{body}</main>'
             f'<script>{SCRIPT % (int(refresh), int(demo), DEMO_STORAGE if demo else LIVE_STORAGE, visits.REFRESH_HEADER)}'
             '</script></body></html>')
 
