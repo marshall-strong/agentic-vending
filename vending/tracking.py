@@ -38,8 +38,10 @@ is stored in `tracking_checks` (migration 021) before it goes, then its answer.
 **Whose day.** The bridge counts a check on the Eastern day it checks it, which can be the day after
 we sent it (reserved 23:59:59, checked 00:00:01). So an answered check counts on the day of the
 bridge's `checked_at` (and the day before its `next_check_from`), not the day we sent it. A send
-still waiting, or with no usable answer, blocks every day from its send to its answer, or to
-`IN_FLIGHT` after the send if no answer was ever stored (`days_used`).
+still waiting, or with no usable answer (a timeout, a dropped connection, a 5xx, a malformed 200),
+blocks every day touched from its send to `IN_FLIGHT` after it, even once that outcome is stored: a
+connection reset at 23:59:55 doesn't mean the bridge didn't check it at 00:00:01 (`days_used`). Only
+a valid answer or a refusal the spec says didn't use the check ends that.
 
 **What the terminal shows.** Only our own words: the four verdicts when the 200 has the spec's shape
 (every field present, about the poll we sent, each verdict `within` or `outside`), else a message
@@ -81,10 +83,10 @@ DEFAULT_DAILY_FROM = "2026-12-03T00:00:00-05:00"
 # One send at a time across processes, so two can't both pass the once-a-day check.
 TRACKING_LOCK = 4_200_021
 
-# How long after its send a request with no stored answer may still reach the bridge. The client gives
-# up after `vending.bridge.TIMEOUT_SECONDS`; an hour leaves room for a slow network. Until then an
-# unanswered send blocks every Eastern day it touches; after it, a send left behind by a crash stops
-# blocking the days that follow.
+# How long after its send a request with no usable answer may still reach the bridge. The client gives
+# up after `vending.bridge.TIMEOUT_SECONDS`; an hour leaves room for a slow network. Until then such a
+# send blocks every Eastern day it touches, even after its timeout is stored; after it, a send left
+# behind by a crash stops blocking the days that follow.
 IN_FLIGHT = timedelta(hours=1)
 
 RESULTS = ("cash", "sales_tax_owed", "coil", "back_stock")
@@ -279,8 +281,9 @@ def days_used(sent_at: datetime, answered_at: datetime | None, status: int | Non
     The bridge counts a check on its own day, which can be the day after we sent it: reserved at
     23:59:59, checked at 00:00:01. So a check the bridge answered counts on the day of its
     `checked_at`, and the day before its `next_check_from` (midnight Eastern). Without those (a send
-    with no usable answer, or one still waiting), it may have used any day from the send to the
-    answer, or, still unanswered, to `IN_FLIGHT` after the send."""
+    with no usable answer, or one still waiting), it may have used any day from the send to
+    `IN_FLIGHT` after it, or to the answer if that came later. Storing a timeout doesn't shorten
+    that: the request may still be on its way to the bridge."""
     if used is False:
         return set()
     days: set[date] = set()
@@ -292,8 +295,8 @@ def days_used(sent_at: datetime, answered_at: datetime | None, status: int | Non
             days.add(eastern_day(next_from - timedelta(microseconds=1)))
         if days:
             return days
-    end = answered_at if answered_at is not None else sent_at + IN_FLIGHT
-    day, last = eastern_day(sent_at), eastern_day(max(end, sent_at))
+    end = max(sent_at + IN_FLIGHT, answered_at or sent_at)
+    day, last = eastern_day(sent_at), eastern_day(end)
     while day <= last:
         days.add(day)
         day += timedelta(days=1)

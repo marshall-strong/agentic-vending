@@ -654,6 +654,31 @@ def test_a_send_still_unanswered_across_midnight_blocks_the_new_day(conn, day):
     assert tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=next_midnight(midnight)).status == 200
 
 
+@pytest.mark.parametrize("answer", [
+    BridgeNoAnswer("timed out"),
+    BridgeNoAnswer("ConnectionResetError: the connection ended with no answer"),
+    {**WITHIN, "results": {**WITHIN["results"], "coil": "close"}},
+    BridgeAnswered(503, "Service Unavailable"),
+], ids=["timeout", "reset-after-send", "malformed-200", "5xx"])
+@pytest.mark.parametrize("recorded", [timedelta(seconds=-5), timedelta(seconds=10)], ids=["before", "after"])
+def test_an_ambiguous_answer_just_before_midnight_still_blocks_the_new_day(conn, answer, recorded):
+    """Sent at 23:59:50 with no usable answer, recorded before or after midnight: the bridge may still
+    have checked it after midnight, using the new day's check, so the new day stays blocked. The day
+    after is free."""
+    from vending import tracking
+
+    books(conn)
+    f = tracking.figures(conn, "p1")
+    midnight = eastern(2026, 12, 5)
+    out = tracking.send(conn, FakeBridge(answer), f, "kevin",
+                        now=Times(midnight - timedelta(seconds=10), midnight + recorded))
+    assert out.used_check is None
+    for at in (midnight + timedelta(seconds=30), midnight + timedelta(hours=10)):
+        with pytest.raises(tracking.AlreadyChecked):
+            tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=at)
+    assert tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=next_midnight(midnight)).status == 200
+
+
 def test_a_send_the_bridge_checked_before_midnight_leaves_the_new_day_open(conn):
     """Reserved and checked at 23:59:59, answered at 00:00:01: the old day's check, so the new day is free."""
     from vending import tracking
