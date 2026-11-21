@@ -262,7 +262,8 @@ def test_public_dashboard_has_no_spend_error_before_opening(site, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_public_dashboard_keeps_submit_confirmation_without_later_error(site, conn):
+def test_public_dashboard_keeps_submit_confirmation_without_later_error(site, schema_url, conn):
+    _, schema = schema_url
     now = conn.execute("select now()").fetchone()[0]
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=now - timedelta(minutes=1))
     run = agent_runs.start(conn, mode="live")
@@ -270,13 +271,19 @@ def test_public_dashboard_keeps_submit_confirmation_without_later_error(site, co
     detail = f"{confirmation}; afterwards: OperationalError: connection to db-private.example.test failed"
     agent_runs.finish(conn, run, "submitted", detail=detail, request_id="test-123")
 
-    for path in ("/dashboard", "/dashboard/state.json"):
+    for path in ("/dashboard", "/dashboard/state.json", f"/db?schema={schema}&table=agent_runs"):
         status, _, body = _get(site, path)
-        assert status == 200 and confirmation in body
-        assert "db-private.example.test" not in body and "OperationalError" not in body
-    state = json.loads(body)
-    assert state["status"]["latest_run"]["detail"] == state["runs"]["data"][0]["detail"] == confirmation
+        assert status == 200 and confirmation in body, path
+        assert "db-private.example.test" not in body and "OperationalError" not in body, path
+        assert "afterwards" not in body, path
+        if path == "/dashboard/state.json":
+            state = json.loads(body)
+            assert state["status"]["latest_run"]["detail"] == state["runs"]["data"][0]["detail"] == confirmation
     assert dashboard.snapshot(conn)["runs"]["data"][0]["detail"] == detail
+    # The team's own explorer and the database keep the whole detail.
+    with open_in(*schema_url) as local:
+        assert "db-private.example.test" in db_explorer.render(local, db_explorer.Request(schema, "agent_runs", 0))[1]
+        assert local.execute("select detail from agent_runs where id = %s", (run,)).fetchone()[0] == detail
 
 
 def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
@@ -306,6 +313,78 @@ def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
     with open_in(*schema_url) as local:
         assert "db.example.net" not in dashboard.to_json(dashboard.snapshot(local))
         assert "db.example.net" in db_explorer.render(local, db_explorer.Request(schema, "action_log", 0))[1]
+
+
+# A fake database host and connection string, planted in failed steps (#165).
+STEP_HOST = "vend-db-7f3a.postgres.example.internal"
+STEP_URL = f"postgresql://vend_admin:Sw0rdf1sh@{STEP_HOST}:5432/vending"
+
+
+@pytest.mark.parametrize("kind", ["tool_result", "tool_call", "text", "thinking"])
+def test_a_failed_step_of_any_kind_keeps_its_error_text_off_every_public_page(site, schema_url, conn, kind):
+    _, schema = schema_url
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    run = agent_runs.start(conn, mode="live")
+    tool = None if kind in ("thinking", "text") else "get_machine_state"
+    agent_runs.step(conn, run, 1, kind, f'OperationalError: connection to server at "{STEP_HOST}" failed; '
+                    f"tried {STEP_URL}", tool=tool, is_error=True)
+    agent_runs.step(conn, run, 1, "tool_result", "SUCCESSFUL-STEP-MARKER", tool="get_catalog")
+    agent_runs.finish(conn, run, "skipped", detail="nothing to buy")
+
+    page, body, explorer = (_get(site, path)[2] for path in (
+        "/dashboard", "/dashboard/state.json", f"/db?schema={schema}&table=agent_steps"))
+    for text in (page, body, explorer):
+        assert STEP_HOST not in text and "Sw0rdf1sh" not in text and "postgresql://" not in text
+        assert "SUCCESSFUL-STEP-MARKER" in text
+        assert "isn't shown on this public page" in unescape(text)
+    steps = json.loads(body)["runs"]["data"][0]["steps"]
+    assert [s["content"] for s in steps] == [dashboard.HIDDEN, "SUCCESSFUL-STEP-MARKER"]
+    # The database keeps the text, for whoever reads it with the team's own login.
+    with open_in(*schema_url) as local:
+        assert STEP_HOST in db_explorer.render(local, db_explorer.Request(schema, "agent_steps", 0))[1]
+
+
+def test_db_shows_a_fixed_line_for_a_submission_not_the_bridges_own_words(site, schema_url, conn):
+    """#165: a bridge 5xx excerpt can carry an upstream database error, and a resolved row keeps
+    the text it had. On /db, `purchase_submissions.detail` is a fixed line for its status."""
+    _, schema = schema_url
+    leak = f'the bridge answered 502: OperationalError: connection to server at "{STEP_HOST}" failed; {STEP_URL}'
+    for status, detail in (("unknown", leak), ("refused", f"422: {leak}"), ("not_filed", f"Could not reach {leak}"),
+                           ("accepted", leak), ("accepted", None), ("sending", None)):
+        conn.execute("insert into purchase_submissions (plan_hash, body, status, detail) values ('h', '{}', %s, %s)",
+                     (status, detail))
+
+    status, _, body = _get(site, f"/db?schema={schema}&table=purchase_submissions")
+    shown = unescape(body)
+    assert status == 200
+    assert STEP_HOST not in shown and "Sw0rdf1sh" not in shown and "postgresql://" not in shown
+    assert "OperationalError" not in shown
+    for line in pages.SUBMISSION_DETAIL.values():
+        assert line in shown
+    # The team's own explorer and the database keep the bridge's words.
+    with open_in(*schema_url) as local:
+        assert STEP_HOST in db_explorer.render(local, db_explorer.Request(schema, "purchase_submissions", 0))[1]
+        assert local.execute("select count(*) from purchase_submissions where detail = %s", (leak,)).fetchone()[0] == 2
+
+
+def test_db_withholds_why_a_bench_case_was_not_judged(site, schema_url, conn):
+    """#165: `bench_runs.judge_notes` keeps, per case, the judge's note or why it couldn't judge it,
+    and that `problem` can be a database error. /db shows a fixed line in its place."""
+    _, schema = schema_url
+    leak = f'not judged: OperationalError: connection to server at "{STEP_HOST}" failed; {STEP_URL}'
+    notes = {"week-1": {"problem": leak}, "week-2": {"note": "JUDGE-NOTE-MARKER"}, "week-3": leak}
+    conn.execute("insert into bench_runs (judge_notes) values (%s)", (Jsonb(notes),))
+    conn.execute("insert into bench_runs (judge_notes) values (%s)", (Jsonb(leak),))
+
+    status, _, body = _get(site, f"/db?schema={schema}&table=bench_runs")
+    shown = unescape(body)
+    assert status == 200
+    assert STEP_HOST not in shown and "Sw0rdf1sh" not in shown and "postgresql://" not in shown
+    assert "OperationalError" not in shown
+    assert "JUDGE-NOTE-MARKER" in shown and "week-1" in shown and pages.BENCH_PROBLEM in shown
+    with open_in(*schema_url) as local:
+        assert STEP_HOST in db_explorer.render(local, db_explorer.Request(schema, "bench_runs", 0))[1]
+        assert local.execute("select judge_notes from bench_runs order by id limit 1").fetchone()[0] == notes
 
 
 def test_the_served_dashboard_names_the_workers_failing_syncs_without_their_error_text(site):

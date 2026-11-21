@@ -65,11 +65,12 @@ from urllib.parse import parse_qs, urlsplit
 from typing import Any
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
 from vending import capacity, db, leaderboards, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
-from vending import pricing_panel
+from vending import agent_runs, pricing_panel
 from vending import stock as stock_mod
 from vending import planner
 from vending.planner import IN_STORE_CUTOFF
@@ -178,14 +179,14 @@ def _isolated(conn: psycopg.Connection, read: Callable[[], Any], timeout_ms: int
         raise Unavailable(type(error).__name__) from error
 
 
-def _rows(conn: psycopg.Connection, sql: str, params: tuple = ()) -> list[dict]:
-    return _guarded(conn, lambda: conn.cursor(row_factory=dict_row).execute(sql, params).fetchall())
+def _rows(conn: psycopg.Connection, query: str | sql.Composable, params: tuple = ()) -> list[dict]:
+    return _guarded(conn, lambda: conn.cursor(row_factory=dict_row).execute(query, params).fetchall())
 
 
-def _optional(conn: psycopg.Connection, sql: str, params: tuple = ()) -> dict | None:
+def _optional(conn: psycopg.Connection, query: str | sql.Composable, params: tuple = ()) -> dict | None:
     """One row, or None when there is none or its table isn't there yet."""
     try:
-        rows = _rows(conn, sql, params)
+        rows = _rows(conn, query, params)
     except Missing:
         return None
     return rows[0] if rows else None
@@ -238,17 +239,23 @@ PRE_OPENING_WRITES = (
 ACTIVITY_VISIBLE = "(at <= %s and (at >= %s or (kind = 'write' and tool = any(%s))))"
 
 
-def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None) -> dict:
+def _run_detail(public: bool, alias: str | None = None) -> sql.Composable:
+    """The `detail` column of `agent_runs`, as a public page or the team's own view selects it."""
+    status, detail = (sql.Identifier(*filter(None, (alias, name))) for name in ("status", "detail"))
+    return sql.SQL("{} as detail").format(public_run_detail(status, detail) if public else detail)
+
+
+def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None, public: bool = False) -> dict:
     flag = _optional(conn, "select value, updated_at, updated_by from config where key = 'halted'")
     # Fails closed like `vending.config.is_halted`: anything but JSON false is halted.
     halted = flag is None or flag["value"] is not False
-    run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail, cost_usd"
-                          " from agent_runs where mode = 'live' and started_at <= %s"
-                          " order by started_at desc, id desc limit 1", (now,))
+    run = _optional(conn, sql.SQL("select id, started_at, finished_at, mode, model, status, {}, cost_usd"
+                                  " from agent_runs where mode = 'live' and started_at <= %s"
+                                  " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run is None:   # no runs, or an agent_runs older than cost_usd: try without it
-        run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail"
-                              " from agent_runs where mode = 'live' and started_at <= %s"
-                              " order by started_at desc, id desc limit 1", (now,))
+        run = _optional(conn, sql.SQL("select id, started_at, finished_at, mode, model, status, {}"
+                                      " from agent_runs where mode = 'live' and started_at <= %s"
+                                      " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run and run["status"] == "running" and now - run["started_at"] > STALE_RUN:
         run["stale"] = True
     last = _optional(conn, f"select at, kind, tool, outcome from action_log where {ACTIVITY_VISIBLE}"
@@ -368,21 +375,22 @@ def _tags(conn: psycopg.Connection, now: datetime) -> dict:
 
 
 def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
-          ours: tuple[str, ...] = (), *, modes: tuple[str, ...] = ("live",)) -> list[dict]:
+          ours: tuple[str, ...] = (), *, modes: tuple[str, ...] = ("live",), public: bool = False) -> list[dict]:
     """The last runs, newest first, each with the slots its plan changed from the plan before it.
 
     The newest run with a plan compares a "keep" against `tags`, the prices on the tags now, as
     the Plan panel does; older runs have no record of their tag prices.
     """
-    rows = _rows(conn, """
-        select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, r.detail, r.cost_usd,
+    rows = _rows(conn, sql.SQL("""
+        select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, {detail}, r.cost_usd,
                r.request_id, r.team_update, r.notes, r.plan,
                (select p.plan from agent_runs p
                  where p.mode = r.mode and p.plan is not null
                    and (p.started_at, p.id) < (r.started_at, r.id)
                  order by p.started_at desc, p.id desc limit 1) as previous_plan
           from agent_runs r where r.mode = any(%s) and r.started_at <= %s
-         order by r.started_at desc, r.id desc limit %s""", (list(modes), now, RUN_ROWS))
+         order by r.started_at desc, r.id desc limit %s""").format(detail=_run_detail(public, "r")),
+                 (list(modes), now, RUN_ROWS))
     steps = _steps(conn, [r["id"] for r in rows])
     newest = True
     for r in rows:
@@ -590,7 +598,7 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
         conn.execute("set transaction isolation level repeatable read, read only")
         # Event timestamps come from Postgres. Use its clock for the same transaction's cutoff.
         now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
-        snap, assignment_at = _snapshot(conn, now)
+        snap, assignment_at = _snapshot(conn, now, public)
     snap["syncs"] = syncs
     hide_errors(snap, public=public)
     only_ours(snap, assignment_at)
@@ -603,28 +611,45 @@ HIDDEN = "(error text isn't shown on this public page; it is in the database and
 PUBLIC_PANEL_ERROR = "This part of the page can't be read right now."
 
 
+def public_run_detail(status: sql.Composable, detail: sql.Composable) -> sql.Composable:
+    """What a public page shows of an `agent_runs.detail`, as SQL over the row's `status` and `detail`.
+
+    A failed run's detail is a raw error: `HIDDEN` replaces it. A run that submitted and then stopped
+    on something else (`vending.agent._settle`) keeps its confirmation and loses what follows
+    `agent_runs.AFTERWARDS`, which can be a database error naming the host and the user. Worked out
+    in Postgres, so the dropped text never leaves it. The public dashboard (`snapshot`) and the
+    public explorer (`vending.pages.HIDE`) both read the column through this.
+    """
+    return sql.SQL(
+        "case when {status} = 'failed' and {detail} is not null then {hidden}"
+        " when {status} = 'submitted' and starts_with({detail}, {submitted}) and strpos({detail}, {afterwards}) > 0"
+        " then left({detail}, strpos({detail}, {afterwards}) - 1)"
+        " else {detail} end").format(
+        status=status, detail=detail, hidden=sql.Literal(HIDDEN),
+        submitted=sql.Literal(agent_runs.SUBMITTED), afterwards=sql.Literal(agent_runs.AFTERWARDS))
+
+
 def hide_errors(snap: dict, *, public: bool = False) -> None:
     """Replace the free text of every failure with `HIDDEN`, in place.
 
-    A failed tool call or run stores the raw error. A refusal keeps its text. On the public
-    page, a panel's read error goes to stderr. Clean the snapshot before building Needs
-    attention so both the page and `/state.json` get the same text.
+    A failed tool call or run stores the raw error, and a database error can name the host and
+    the user. So a failed run's detail, a failed call's detail and the content of every step
+    marked `is_error` (whatever its kind) are replaced. A refusal keeps its text. On the public
+    page, a panel's read error goes to stderr, and a run's detail was already read through
+    `public_run_detail`. Clean the snapshot before building Needs attention so both the page and
+    `/state.json` get the same text.
     """
     runs = snap["runs"]["data"] if snap["runs"]["ok"] else []
     for run in (snap["status"].get("latest_run"), *runs):
-        if not run or not (detail := run.get("detail")):
-            continue
-        if run["status"] == "failed":
+        if run and run.get("detail") and run["status"] == "failed":
             run["detail"] = HIDDEN
-        elif public and run["status"] == "submitted" and detail.startswith("Submitted purchase request "):
-            run["detail"] = detail.partition("; afterwards:")[0]
     if snap["activity"]["ok"]:
         for row in snap["activity"]["data"]:
             if row["outcome"] == "failed" and row["detail"]:
                 row["detail"] = HIDDEN
     for run in runs:
         for step in run["steps"]:
-            if step["kind"] == "tool_result" and step["is_error"]:
+            if step["is_error"]:
                 step["content"] = HIDDEN
     if public:
         for name, panel in snap.items():
@@ -823,7 +848,7 @@ def _catalog_counts(catalog: dict) -> dict:
                                  "unsettled": by_status["sending"] + by_status["unknown"]}}
 
 
-def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime | None]:
+def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> tuple[dict, datetime | None]:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
     assigned = _optional(conn, "select first_read_at from slot_assignment where id = 1") if slots else None
@@ -851,9 +876,9 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime |
         "as_of": now,
         "ours": ours,
         "wildcard": _wildcard(conn, slots),
-        "status": _status(conn, now, live_since),
+        "status": _status(conn, now, live_since, public),
         "plan": _panel(lambda: _plan(conn, slots, now, assignment_at)),
-        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots)),
+        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots, public=public)),
         "activity": _panel(lambda: _rows(
             conn, f"select id, at, kind, tool, outcome, detail, arguments from action_log where {ACTIVITY_VISIBLE}"
                   " order by at desc, id desc limit %s", (now, live_since, list(PRE_OPENING_WRITES), ACTIVITY_ROWS))),
