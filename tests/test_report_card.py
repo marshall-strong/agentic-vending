@@ -186,8 +186,48 @@ def test_a_plan_of_the_wrong_shape_fails_valid_plan(conn, page_conn, opened):
 def test_without_polls_the_week_is_not_scored(conn, page_conn, opened):
     _, by_week = cards(page_conn)
     week = by_week["2026-12-05"]
-    assert week["grade"] == "unscored" and week["outcome"] is None
+    assert week["grade"] == "no_plan" and week["outcome"] is None
     assert week["notes"][0].startswith("Last week can't be rebuilt from the polls")
+
+
+def test_hard_checks_run_without_last_week_s_polls(conn, page_conn, opened):
+    # No polls at all, so neither week can be replayed: the plan is still checked, and fails.
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), plan={"note": "not a plan"})
+    _, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    assert [c["name"] for c in week["checks"]] == ["valid plan", "catalog", "prices", "balance"]
+    assert week["checks"][0]["status"] == "fail" and week["grade"] == "fail"
+    assert week["outcome"] is None
+    assert any(n.startswith("Last week can't be rebuilt from the polls") for n in week["notes"])
+
+
+def test_a_price_over_the_ceiling_fails_when_the_column_capacity_is_unknown(conn, page_conn, opened):
+    slot = opened[0]
+    product(conn, size="odd crate")     # no capacity on the loading chart
+    week_of_sales(conn, slot)
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC),
+             plan=plan_for(opened, **{slot: {"sale_price": "9.00", "reason": "fill the column"}}))
+    fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
+    _, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    checks = {c["name"]: c for c in week["checks"]}
+    assert checks["valid plan"]["status"] == "pass"
+    assert checks["prices"]["status"] == "fail" and "$6.50" in checks["prices"]["detail"]
+    assert week["grade"] == "fail"
+    # Only the fill is unknown: that slot isn't scored, and the note says why.
+    assert any(f"Slot {slot}" in n and "capacity isn't known" in n for n in week["notes"])
+
+
+def test_balance_fails_when_the_known_spend_alone_is_over_the_funds():
+    state = WeekState(start=OPEN, end=OPEN, balance_cents=500, slots=(
+        SlotWeek("15", 250, 1, product="A", stock=0, unit_cost_cents=100),
+        SlotWeek("16", 250, 1, product="B", stock=0, unit_cost_cents=None)))
+    plan = Plan((SlotPlan("15", "r", fill_to=10, price_cents=250), SlotPlan("16", "r", fill_to=3, price_cents=250)))
+    check = scoring.check_balance(state, plan)
+    assert check.status == "fail" and "at least $10.00" in check.detail and "$5.00" in check.detail
+    # Under the funds, the unknown cost still leaves it unchecked.
+    plan = Plan((SlotPlan("15", "r", fill_to=4, price_cents=250), SlotPlan("16", "r", fill_to=3, price_cents=250)))
+    assert scoring.check_balance(state, plan).status == "skip"
 
 
 def test_a_dry_run_or_unsubmitted_plan_is_not_the_week_s_plan(conn, page_conn, opened):
@@ -202,13 +242,13 @@ def test_a_dry_run_or_unsubmitted_plan_is_not_the_week_s_plan(conn, page_conn, o
 
 
 def test_a_midweek_plan_reads_as_a_midweek_visit():
-    plan, notes = report_card._as_replay_plan(
+    plan, notes, unknown_fill = report_card._as_replay_plan(
         {"off_cycle": True, "slots": [{"slot": "15", "fill_to": 4, "sale_price": Decimal("2.50")}]},
         type("R", (), {"ours": ("15",), "capacity_of": lambda self, sku: None})(),
         WeekState(start=OPEN, end=OPEN, slots=(SlotWeek("15", 250, 1),)))
     assert plan == {"visit": "midweek", "reason": "", "slots": [
         {"slot": "15", "fill_to": 4, "sale_price": "2.50", "reason": report_card.NO_REASON}]}
-    assert notes == []
+    assert notes == [] and unknown_fill == frozenset()
 
 
 def test_the_replayer_s_price_check_takes_a_slot_s_own_ceiling():

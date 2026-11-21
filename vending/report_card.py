@@ -45,7 +45,7 @@ from zoneinfo import ZoneInfo
 from vending import capacity, config, ledger, stock
 from vending.replay import scoring
 from vending.replay.deciders import Baseline
-from vending.replay.state import NoData, WeekState, replay_week
+from vending.replay.state import NoData, SlotWeek, WeekState, replay_week
 from vending.slots import SlotsNotRecorded, our_slots
 
 if TYPE_CHECKING:
@@ -166,8 +166,11 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
     run = reader.plan_for(week)
     before, this = reader.week(week - WEEK), reader.week(week)
     if isinstance(before, str):
+        # The hard checks still run: they need the plan, the receipts and the ledger, not the sales.
         card["notes"].append(f"Last week can't be rebuilt from the polls: {before}")
-        return _graded(card)
+        before = WeekState(start=_start(week - WEEK), end=_start(week),
+                           slots=tuple(SlotWeek(s, None, None) for s in reader.ours))
+        this = "last week's sales are needed to score it"
     plan_made = run[1] if run else _start(week)
     state = _state(reader, before, week, plan_made)
     if run is None:
@@ -176,16 +179,17 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
                              "Scored as if every slot kept what it had.")
         answer: Any = {"visit": "scheduled", "reason": "No plan submitted.",
                        "slots": [{"slot": s, "keep": True, "reason": "No plan submitted."} for s in reader.ours]}
+        unknown_fill: frozenset[str] = frozenset()
     else:
         card["run_id"], card["planned_at"] = run[0], run[1]
-        answer, notes = _as_replay_plan(run[2], reader, state)
+        answer, notes, unknown_fill = _as_replay_plan(run[2], reader, state)
         card["notes"] += notes
     next_week = None if isinstance(this, str) else this
     if next_week is None:
         card["notes"].append(f"This week's sales can't be read from the polls yet: {this}")
     elif not final:
         card["notes"].append("In progress: scored on the sales so far. The grade can change until Friday ends.")
-    scored = scoring.score(state, answer, next_week)
+    scored = scoring.score(state, answer, next_week, unknown_fill=unknown_fill)
     card["checks"] = [{"name": c.name, "status": c.status, "detail": c.detail}
                       for c in scored.checks if c.name != "no writes"]
     if scored.totals is not None:
@@ -227,15 +231,17 @@ def _state(reader: _Reader, before: WeekState, week: date, plan_made: datetime) 
                    rejected=rejected, ceilings=reader.ceilings, notes=notes)
 
 
-def _as_replay_plan(raw: Any, reader: _Reader, state: WeekState) -> tuple[Any, list[str]]:
-    """A stored live plan (the desired state, `vending.agent.recorded_plan`) in the replayer's shape.
+def _as_replay_plan(raw: Any, reader: _Reader, state: WeekState) -> tuple[Any, list[str], frozenset[str]]:
+    """A stored live plan (the desired state, `vending.agent.recorded_plan`) in the replayer's shape,
+    its notes, and the slots whose fill isn't known.
 
     The desired state says `off_cycle` for a midweek visit and may leave `fill_to` out to fill the
-    column; the replayer wants `visit` and a number. A shape we can't read goes to the scorer as it
-    is, so it fails "valid plan" there."""
+    column; the replayer wants `visit` and a number. Where the column's capacity isn't known the
+    entry keeps its price and product and only its fill is left out, so every hard check still sees
+    it. A shape we can't read goes to the scorer as it is, so it fails "valid plan" there."""
     if not isinstance(raw, dict) or not isinstance(raw.get("slots"), list):
-        return raw, []
-    notes, slots, foreign = [], [], 0
+        return raw, [], frozenset()
+    notes, slots, foreign, unknown_fill = [], [], 0, set()
     for entry in raw["slots"]:
         if not isinstance(entry, dict) or entry.get("slot") is None:
             slots.append(entry)
@@ -253,8 +259,8 @@ def _as_replay_plan(raw: Any, reader: _Reader, state: WeekState) -> tuple[Any, l
             column = reader.capacity_of(row.get("product") or (held.product if held else None))
             if column is None:
                 notes.append(f"Slot {slot} was to be filled to its column, whose capacity isn't known, "
-                             "so it is scored as kept.")
-                row = {"slot": slot, "keep": True, "reason": row["reason"]}
+                             "so its outcome isn't scored.")
+                unknown_fill.add(slot)
             else:
                 row["fill_to"] = column
         slots.append(row)
@@ -262,7 +268,7 @@ def _as_replay_plan(raw: Any, reader: _Reader, state: WeekState) -> tuple[Any, l
         notes.append(f"The plan named {foreign} selection(s) outside the current assignment; they are left out.")
     visit = "midweek" if raw.get("off_cycle") or raw.get("visit") in ("midweek", "off_cycle") else "scheduled"
     reason = raw.get("reason") if isinstance(raw.get("reason"), str) else ""
-    return {"visit": visit, "reason": reason, "slots": slots}, notes
+    return {"visit": visit, "reason": reason, "slots": slots}, notes, frozenset(unknown_fill)
 
 
 def _outcome(scored: scoring.Score) -> dict:

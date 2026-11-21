@@ -84,14 +84,17 @@ class Score:
 
 
 def score(state: WeekState, answer: object, next_week: WeekState | None,
-          writes: int | None = None) -> Score:
+          writes: int | None = None, *, unknown_fill: frozenset[str] = frozenset()) -> Score:
     """Check `answer` (a Plan or raw JSON), then score it against `next_week`.
 
     `writes` is how many write tool calls were logged while the decider ran
-    (None if not measured).
+    (None if not measured). `unknown_fill` are slots whose plan may leave
+    `fill_to` out because the number isn't known here (the report card's "fill
+    the column" with no known capacity): every other field is still checked,
+    the balance counts their cost as unknown, and their outcome isn't scored.
     """
     ours = tuple(s.slot for s in state.slots)
-    plan, refusals = check_plan(answer, ours)
+    plan, refusals = check_plan(answer, ours, unknown_fill=unknown_fill)
     valid = Check("valid plan", FAIL if refusals else PASS,
                   "; ".join(_refusal(r) for r in refusals)
                   or f"All {len(ours)} slots once, every field well formed.")
@@ -167,15 +170,23 @@ def check_balance(state: WeekState, plan: Plan) -> Check:
         s = state.slot(sp.slot)
         if sp.keep:
             continue
+        if sp.fill_to is None:
+            unknown.append(sp.slot)
+            continue
         bought = sp.fill_to if s.stock is None or _switches(sp, s) else max(sp.fill_to - s.stock, 0)
         unit = _unit_cost(sp, s)
         if bought and unit is None:
             unknown.append(sp.slot)
         elif bought:
             cost += bought * unit
-    if unknown:
-        return Check("balance", SKIP, f"Unit cost unknown for slots {', '.join(unknown)}.")
     spend = _dollars(int(cost + Fraction(1, 2)))
+    if unknown:
+        # What is known is a lower bound on the spend: over the balance already, it fails.
+        if cost > state.balance_cents:
+            return Check("balance", FAIL, f"Costs at least {spend} at actual unit cost, over the "
+                         f"{_dollars(state.balance_cents)} balance (unit cost or fill unknown for slots "
+                         f"{', '.join(unknown)}).")
+        return Check("balance", SKIP, f"Unit cost unknown for slots {', '.join(unknown)}.")
     if cost > state.balance_cents:
         return Check("balance", FAIL, f"Costs {spend} at actual unit cost, over the {_dollars(state.balance_cents)} balance.")
     return Check("balance", PASS, f"Costs {spend} of {_dollars(state.balance_cents)} at actual unit cost.")
@@ -207,11 +218,15 @@ def _refusal(r) -> str:
 def _outcome(state: WeekState, plan: Plan, sp: SlotPlan, actual: SlotWeek | None) -> SlotOutcome:
     s = state.slot(sp.slot)
     price = s.price_cents if sp.keep else sp.price_cents
-    if _loads(state, plan, sp):
+    notes = []
+    fill_unknown = _loads(state, plan, sp) and sp.fill_to is None
+    if fill_unknown:
+        available = None
+        notes.append("fill unknown")
+    elif _loads(state, plan, sp):
         available = sp.fill_to if s.stock is None or _switches(sp, s) else max(sp.fill_to, s.stock)
     else:
         available = s.stock
-    notes = []
     if not sp.keep and not _loads(state, plan, sp):
         notes.append("the scheduled visit lands after this window")
     demand = None if actual is None else actual.units_sold
@@ -223,7 +238,7 @@ def _outcome(state: WeekState, plan: Plan, sp: SlotPlan, actual: SlotWeek | None
         notes.append("new product: no sales to score it against")
     elif demand is None:
         notes.append("no sales figure for the following week")
-    if available is None:
+    if available is None and not fill_unknown:
         notes.append("stock unknown")
     if actual is not None and actual.price_cents is not None and price is not None and price != actual.price_cents:
         notes.append(f"priced {_dollars(price)}, {_dollars(actual.price_cents)} was charged: same demand assumed")
