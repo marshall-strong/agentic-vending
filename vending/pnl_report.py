@@ -146,8 +146,8 @@ def load(conn: psycopg.Connection, start: date | None, end: date | None, view: s
 def read(conn: psycopg.Connection, start: date | None, end: date | None, view: str = "simple") -> Report:
     """Every figure on the page, in the caller's transaction: `load` without a snapshot of its own, for a
     caller that reads more in the same snapshot (`vending.pages` reads our slot assignment first)."""
-    # The app's clock, as get_pnl uses for "today" (ledger.balance takes "now" from
-    # the database clock, ledger.db_now).
+    # The app's clock (get_pnl takes "now" as the later of this and the database clock,
+    # and ledger.balance takes it from the database clock, ledger.db_now).
     printed_at = datetime.now(EASTERN)
     totals = get_pnl(conn, start, end)
     if not totals.success:

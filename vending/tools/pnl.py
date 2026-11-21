@@ -71,9 +71,17 @@ class Pnl(Reply):
     notes: list[str] = []
 
 
+def _now(conn: psycopg.Connection) -> datetime:
+    """Now: the later of the app's clock and the database's, which stamps an entry recorded without a time
+    (`ledger.db_now`), so nothing either made a moment ago falls after a window's cutoff."""
+    return max(datetime.now(EASTERN), ledger.db_now(conn))
+
+
 def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> Pnl:
-    """Both dates are Eastern calendar days, inclusive. Defaults: the opening moment to today."""
-    today = datetime.now(EASTERN).date()
+    """Both dates are Eastern calendar days, inclusive. Defaults: the opening moment to today.
+    A window that runs to today or later stops at now, so a week still in progress is partial."""
+    now = _now(conn)
+    today = now.astimezone(EASTERN).date()
     opened = ledger.opening(conn)
     if start is None:
         if opened is None:
@@ -85,6 +93,8 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
     if last_day < first.astimezone(EASTERN).date():
         return Pnl(success=False, message=f"end ({last_day}) is before start ({first.astimezone(EASTERN).date()}).")
     last = datetime.combine(last_day + timedelta(days=1), time.min, EASTERN) - timedelta(microseconds=1)
+    # Today or a later day ends now: the rest hasn't happened. A window that starts later than now is empty.
+    last = max(first, min(last, now))
     try:
         # A poll at `start`'s midnight sharp is in the window; entries, receipts and visits count from it.
         p = ledger.pnl(conn, first, last, ledger.poll_start(first, opened and opened.at))

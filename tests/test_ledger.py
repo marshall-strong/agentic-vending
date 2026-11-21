@@ -733,7 +733,18 @@ def test_get_pnl_end_to_end(db):  # noqa: F811
     assert call("get_pnl", {"start": "2026-11-09", "end": "2026-11-01"}).structuredContent["success"] is False
 
 
-def test_get_pnl_counts_a_poll_at_sunday_midnight_in_that_tax_week(db):  # noqa: F811
+def freeze_pnl_clock(monkeypatch, now: datetime) -> None:
+    """get_pnl's "now", the cutoff of a window that runs to today or later, and the day it calls today."""
+    import vending.tools.pnl as tool
+    monkeypatch.setattr(tool, "_now", lambda conn: now)
+
+
+# These windows run past the real date the tests may run on; get_pnl stops a window at now.
+LATER = datetime(2027, 1, 4, 12, 0, tzinfo=timezone.utc)
+
+
+def test_get_pnl_counts_a_poll_at_sunday_midnight_in_that_tax_week(db, monkeypatch):  # noqa: F811
+    freeze_pnl_clock(monkeypatch, LATER)
     opened = et(2026, 11, 30, 13, 0)                            # stocked Monday 30 Nov
     open_ledger(db, at=opened)
     store_poll(db, "open", opened.isoformat(), {"15": (135, 0)})
@@ -760,7 +771,8 @@ def test_get_pnl_counts_a_poll_at_sunday_midnight_in_that_tax_week(db):  # noqa:
         ("2026-12-06", "2026-12-06T00:00:00-05:00", False, "28.35")]
 
 
-def test_get_pnl_from_an_opening_at_midnight_keeps_the_opening_poll_as_the_baseline(db):  # noqa: F811
+def test_get_pnl_from_an_opening_at_midnight_keeps_the_opening_poll_as_the_baseline(db, monkeypatch):  # noqa: F811
+    freeze_pnl_clock(monkeypatch, LATER)
     opened = et(2026, 12, 6, 0, 0)                              # opened at Sunday midnight sharp
     open_ledger(db, at=opened)
     store_poll(db, "sat", et(2026, 12, 5, 22, 0).isoformat(), {"15": (135, 5)})
@@ -772,7 +784,8 @@ def test_get_pnl_from_an_opening_at_midnight_keeps_the_opening_poll_as_the_basel
     assert [(w["from"], w["partial"]) for w in reply["tax_weeks"]] == [("2026-12-06T00:00:00-05:00", False)]
 
 
-def test_get_pnl_counts_saturdays_last_microsecond_in_saturday_only(db):  # noqa: F811
+def test_get_pnl_counts_saturdays_last_microsecond_in_saturday_only(db, monkeypatch):  # noqa: F811
+    freeze_pnl_clock(monkeypatch, LATER)
     # Only the polls' midnight counts from a microsecond early: an entry, a receipt or a visit in Saturday's
     # last microsecond is Saturday's, never Sunday's too.
     open_ledger(db, at=et(2026, 11, 30, 13, 0))
@@ -789,7 +802,8 @@ def test_get_pnl_counts_saturdays_last_microsecond_in_saturday_only(db):  # noqa
 
 
 @pytest.mark.parametrize("opens", [True, False], ids=["before-the-opening", "no-opening"])
-def test_get_pnl_before_the_opening_takes_the_midnight_poll_as_its_baseline(db, opens):  # noqa: F811
+def test_get_pnl_before_the_opening_takes_the_midnight_poll_as_its_baseline(db, monkeypatch, opens):  # noqa: F811
+    freeze_pnl_clock(monkeypatch, LATER)
     # A window before the opening (or with none) reads the polls from its start, as it always has: the poll at
     # its midnight sharp is the baseline, so the $13.50 it shows was sold before the window.
     if opens:
@@ -801,6 +815,25 @@ def test_get_pnl_before_the_opening_takes_the_midnight_poll_as_its_baseline(db, 
     assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("0.00", "0.00", 0)
     p = ledger.pnl(db, et(2026, 11, 28, 0, 0), et(2026, 11, 29, 0, 0) - timedelta(microseconds=1))
     assert (p.takings.cents, p.units_sold) == (0, 0)                # the ledger read from the start itself
+
+
+def test_get_pnl_reports_a_week_in_progress_as_partial_up_to_now(db, monkeypatch):  # noqa: F811
+    now = et(2026, 12, 12, 12, 0)                               # Saturday noon: the tax week ends tonight
+    freeze_pnl_clock(monkeypatch, now)
+    opened = et(2026, 11, 30, 13, 0)
+    open_ledger(db, at=opened)
+    store_poll(db, "open", opened.isoformat(), {"15": (135, 0)})
+    store_poll(db, "sun", et(2026, 12, 6, 12, 0).isoformat(), {"15": (135, 2)})
+    ledger.record(db, "adjustment", -500, "dated this evening", "marshall", et(2026, 12, 12, 18, 0))
+    for end in (None, date(2026, 12, 12), date(2026, 12, 31)):    # default, today, a future day
+        reply = get_pnl(db, None, end)
+        assert reply.end == now.astimezone(timezone.utc), end
+        assert reply.adjustments == "0.00", end               # after now: not in the window yet
+        assert [(w["week"], w["to"], w["partial"]) for w in reply.tax_weeks] == [
+            ("2026-12-06", "2026-12-12T12:00:00-05:00", True)], end
+    # A past end date is a whole day, as before; the opening clips the first week, which began Sunday 29 Nov.
+    past = get_pnl(db, None, date(2026, 12, 5))
+    assert past.end == (et(2026, 12, 6, 0, 0) - timedelta(microseconds=1)).astimezone(timezone.utc)
 
 
 def test_get_pnl_days_are_eastern_days(db):  # noqa: F811

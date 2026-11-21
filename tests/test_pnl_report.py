@@ -262,7 +262,7 @@ def test_notes_are_plain_sentences():
 # --- Database -----------------------------------------------------------------------------------
 
 from tests.conftest import CONNECT_TIMEOUT, open_in  # noqa: E402
-from tests.test_ledger import OPENED, deliver, open_ledger, sell  # noqa: E402
+from tests.test_ledger import OPENED, deliver, freeze_pnl_clock, open_ledger, sell  # noqa: E402
 
 END = date(2026, 11, 9)
 
@@ -325,11 +325,12 @@ def test_a_range_longer_than_the_page_shows_is_refused(conn):
     assert code == 400 and f"at most {pr.MAX_WEEKS} weeks" in body
 
 
-def test_the_week_limit_counts_rows_not_days(conn):
+def test_the_week_limit_counts_rows_not_days(conn, monkeypatch):
     """A range that starts midweek has a part week at each end, so the limit counts the Sat-to-Fri rows."""
     seed(conn)
     first = date(2026, 11, 11)                                            # a Wednesday, in the week of Sat 7 Nov
     last = date(2026, 11, 7) + timedelta(weeks=pr.MAX_WEEKS - 1, days=6)  # the Friday that ends row MAX_WEEKS
+    freeze_pnl_clock(monkeypatch, datetime.combine(last + timedelta(days=2), datetime.min.time(), pr.EASTERN))
     report = pr.load(conn, first, last)
     assert report.totals.success and len(report.weeks) == pr.MAX_WEEKS
     code, body = pr.render(pr.load(conn, first, last + timedelta(days=1)))   # one day into the next week
@@ -486,11 +487,12 @@ def test_unsplit_swap_sales_are_costed_exactly_none_with_the_estimate_beside_the
 @pytest.mark.parametrize("start, end", [(date(2026, 12, 6), date(2026, 12, 11)),     # from a tax week's Sunday
                                         (date(2026, 12, 12), date(2026, 12, 18))],   # from a display week's Saturday
                          ids=["sunday-midnight", "saturday-midnight"])
-def test_weekly_rows_sum_to_the_totals_with_a_poll_at_a_week_boundary(conn, start, end):
+def test_weekly_rows_sum_to_the_totals_with_a_poll_at_a_week_boundary(conn, monkeypatch, start, end):
     # A poll at the start day's midnight sharp is in the window, in the totals and in its week's row alike.
     from tests.conftest import store_poll
-    from tests.test_ledger import et
+    from tests.test_ledger import LATER, et
 
+    freeze_pnl_clock(monkeypatch, LATER)
     opened = et(2026, 11, 30, 13, 0)
     open_ledger(conn, at=opened)
     store_poll(conn, "open", opened.isoformat(), {"15": (135, 0)})
