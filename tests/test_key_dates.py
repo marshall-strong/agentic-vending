@@ -22,8 +22,9 @@ def counts(approved=0, pending=0, rejected=0, sending=0, unknown=0):
                                                "sending": sending, "unknown": unknown}}}
 
 
-def facts(opening=None, plan=None, checked=TEST_CHECKED_AT, requests=()):
-    return {"opening": opening, "plan": plan, "slots_checked_at": checked, "requests": list(requests)}
+def facts(opening=None, plan=None, checked=TEST_CHECKED_AT, requests=(), slots_valid=True):
+    return {"opening": opening, "plan": plan, "slots_checked_at": checked, "slots_valid": slots_valid,
+            "requests": list(requests)}
 
 
 def request(rid, at, off_cycle=False, status="pending"):
@@ -117,13 +118,14 @@ def test_a_late_fill_request_says_so():
     assert c["status"] == "done" and "after the deadline" in c["text"]
 
 
-@pytest.mark.parametrize("now, checked, status", [
-    (et(11, 25), TEST_CHECKED_AT, "waiting"),          # stored; the lock hasn't come
-    (et(12, 2), et(12, 3, 0, 5), "done"),             # a check from the lock confirmed it
-    (et(12, 2), None, "due"),                          # nothing stored yet
+@pytest.mark.parametrize("now, checked, lock, status", [
+    (et(11, 25), TEST_CHECKED_AT, LOCK, "waiting"),          # stored; the lock hasn't come
+    (et(12, 2), et(12, 1, 0, 5), et(12, 1, 0), "done"),     # a check from the lock confirmed it
+    (et(12, 2), et(12, 3, 0, 5), LOCK, "waiting"),          # a check after the snapshot's time doesn't count
+    (et(12, 2), None, LOCK, "due"),                          # nothing stored yet
 ])
-def test_the_slot_check_waits_for_the_lock(now, checked, status):
-    assert check(rows(now, facts(checked=checked))["opening"], "slots_confirmed")["status"] == status
+def test_the_slot_check_waits_for_the_lock(now, checked, lock, status):
+    assert check(rows(now, facts(checked=checked), lock=lock)["opening"], "slots_confirmed")["status"] == status
 
 
 def test_a_bad_lock_setting_cant_tell():
@@ -162,7 +164,7 @@ def test_after_the_start_it_shrinks_to_the_next_restock_and_tax_saturday():
     (et(12, 6, 1), "Thu 10 Dec, 23:59", "Sat 12 Dec, 23:59"),
 ])
 def test_the_weekly_dates_roll_over_at_their_minute(now, restock, tax):
-    built = key_dates.build(now, facts(checked=et(12, 3, 0, 5)), counts(), LOCK)
+    built = key_dates.build(now, facts(checked=LOCK), counts(), LOCK)
     assert [r["when"] for r in built["rows"]] == [restock, tax]
 
 
@@ -293,3 +295,22 @@ def test_after_a_rejected_fill_the_first_restock_still_counts(conn, page_conn, m
     assert c["status"] == "done" and "Thu 3 Dec, 10:00" in c["text"]
     f = facts(opening=et(11, 28), requests=[request("WEEK1", et(12, 3, 10))])
     assert key_dates._fill(f) is None
+
+
+def test_an_invalid_assignment_checked_after_the_lock_is_not_confirmed(conn, page_conn, monkeypatch):
+    # Every reader of our slots refuses a row for another device, so Key dates mustn't call it confirmed.
+    monkeypatch.setattr(dashboard, "lock_at", lambda: LOCK)
+    conn.execute("update slot_assignment set device_id = 'vmc2', last_checked_at = %s", (et(12, 3, 0, 5),))
+    snap = dashboard.snapshot(page_conn, et(12, 3, 9))
+    assert not snap["ours"]["ok"]
+    rows = snap["key_dates"]["data"]["rows"]
+    assert rows[0]["key"] == "opening"
+    c = check(rows[0], "slots_confirmed")
+    assert c["status"] == "overdue" and "python -m vending.slots record" in c["text"]
+    c = check(rows_of(key_dates.build(et(11, 25), facts(checked=et(12, 3, 0, 5), slots_valid=False), counts(), LOCK),
+                      "opening"), "slots_confirmed")
+    assert c["status"] == "due" and "isn't valid" in c["text"]
+
+
+def rows_of(built, key):
+    return next(r for r in built["rows"] if r["key"] == key)

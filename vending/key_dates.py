@@ -14,7 +14,8 @@ Before the start each date shows with a status computed from our own records whe
 - **Fill request sent**: the first purchase request, not rejected, sent at or after the ledger's
   opening and before the start. A request before the opening is a test purchase, so with no opening
   it can't tell; a request from the start on is a restock, never the fill.
-- **Slots confirmed at the lock**: the stored assignment's `last_checked_at` at or after the lock.
+- **Slots confirmed at the lock**: a stored assignment that passes the checks every reader of our slots
+  makes (`vending.slots`), with `last_checked_at` from the lock through the snapshot's time.
 - **Restock request sent**: a purchase request that isn't off-cycle, isn't rejected, isn't the
   fill request, and was sent in the week to the cutoff.
 
@@ -37,6 +38,7 @@ from html import escape
 from typing import TYPE_CHECKING, Any
 
 from vending.planner import IN_STORE_CUTOFF
+from vending.slots import SlotsNotRecorded, _usable, stored
 from vending.start import EASTERN, START
 
 if TYPE_CHECKING:
@@ -126,7 +128,12 @@ def read(conn: psycopg.Connection, now: datetime, opening: datetime | None, ours
 
     cur = conn.cursor(row_factory=dict_row)
     picked = cur.execute("select slots from first_fill_plans where picked limit 1").fetchone()
-    assignment = cur.execute("select last_checked_at from slot_assignment where id = 1").fetchone()
+    assignment = stored(conn)
+    try:
+        _usable(assignment)   # the checks `vending.slots.our_slots` makes before anything reads our slots
+        valid = True
+    except SlotsNotRecorded:
+        valid = False
     requests = []
     if opening is not None:
         requests = cur.execute(
@@ -135,7 +142,8 @@ def read(conn: psycopg.Connection, now: datetime, opening: datetime | None, ours
             " order by submitted_at, request_id", (opening, now)).fetchall()
     return {"opening": opening,
             "plan": None if picked is None else {"current": bool(ours) and set(picked["slots"]) == set(ours)},
-            "slots_checked_at": assignment and assignment["last_checked_at"],
+            "slots_checked_at": assignment and assignment.last_checked_at,
+            "slots_valid": valid,
             "requests": requests}
 
 
@@ -237,7 +245,13 @@ def _slots_confirmed(kd: KeyDate, now: datetime, ctx: dict) -> dict:
         return {"status": "overdue" if late else "due",
                 "pill": "overdue" if late else f"due {countdown(days_until(now, _local(lock).date()))}",
                 "text": "no assignment stored: python -m vending.slots record"}
-    if checked >= lock:
+    if not ctx["facts"]["slots_valid"]:
+        late = now >= lock
+        return {"status": "overdue" if late else "due",
+                "pill": "overdue" if late else f"due {countdown(days_until(now, _local(lock).date()))}",
+                "text": "the stored assignment isn't valid, so every reader of our slots refuses it: clear "
+                        "slot_assignment, then python -m vending.slots record"}
+    if lock <= checked <= now:
         return _done(f"confirmed {moment_text(checked)}")
     if now < lock:
         return {"status": "waiting", "pill": "waiting",

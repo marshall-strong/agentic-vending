@@ -798,7 +798,9 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
     if run and run["detail"] and run["detail"] != HIDDEN and _older_assignment(run["started_at"], assignment_at):
         run["detail"] = OLD_ASSIGNMENT
     for name, panel in snap.items():
-        if name not in ("runs", "pricing") or not panel["ok"]:
+        # Key dates' texts are fixed messages, dates and counts that name no selection; scoping them would
+        # hide the slot check's instructions exactly when no assignment can be read.
+        if name not in ("runs", "pricing", "key_dates") or not panel["ok"]:
             snap[name] = _scope_text(panel, ours)
     if (pricing := snap.get("pricing")) and pricing["ok"]:
         for row in pricing["data"]["rows"]:
