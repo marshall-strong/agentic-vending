@@ -1,26 +1,45 @@
 """A stand-in for the DEX bridge, and the student worker who fulfils our requests.
 
-`SimBridge` answers the calls our code makes (`products`, `post`, `purchase_request`, `slots`) the way
-docs/dex-bridge.md says the real one does, including its 422 and 429 refusals. It never touches the
-network. `Worker.fulfil` is the Friday (or paid midweek) visit: it buys, loads, pulls and reprices
+`SimBridge` answers the calls our code makes (`products`, `post`, `purchase_request`, `slots`,
+`check_books`) the way docs/dex-bridge.md says the real one does, including its 422 and 429 refusals. It
+never touches the network.
+
+**The tracking check** (`check_books`, `POST /api/v1/tracking/check`) compares our figures with the
+books recorded for a poll (`record_books`): the true cash and tax owed, which the caller supplies (the
+simulated bridge keeps no money of its own), and the machine's coil and closet at that moment. Tolerance,
+from David on 20 Nov: within $1 for money (`MONEY_TOLERANCE_CENTS`), within 2 units for counts
+(`UNIT_TOLERANCE`). Whether 2 units is per slot and product or across all of them isn't said;
+`count_tolerance` is `"per_entry"` (each slot and each product within 2, the default) or `"total"` (the
+differences added up, without sign, within 2, the stricter reading). The order of the refusals is our
+guess; the real bridge's isn't documented.
+
+`Worker.fulfil` is the Friday (or paid midweek) visit: it buys, loads, pulls and reprices
 from the request and its directive, and writes the receipts the bridge then hands back.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
-from vending.bridge import BridgeAnswered
+from vending import tracking
+from vending.bridge import TRACKING_PATH, BridgeAnswered
 from vending.simulate import world
 from vending.simulate.world import BY_SKU, Machine
 from vending.slots import DEVICE_ID, our_team
 
 STORES = ("Walmart", "Costco", "Amazon", "BJs")
+
+# The tracking check's tolerance (David, 20 Nov): $1 for money, 2 units for counts.
+MONEY_TOLERANCE_CENTS = 100
+UNIT_TOLERANCE = 2
+COUNT_TOLERANCES = ("per_entry", "total")
+TRACKING_FIELDS = ("as_of", "cash", "sales_tax_owed", "coil", "back_stock")
 
 
 def _iso(moment: datetime) -> str:
@@ -33,6 +52,18 @@ def _money(cents: int | Fraction) -> str:
 
 def _cents(value: Any) -> int:
     return int((Decimal(str(value)) * 100).to_integral_value())
+
+
+@dataclass
+class Books:
+    """The bridge's books as of one poll: what a tracking check is compared with."""
+    session_id: str
+    at: datetime
+    cash_cents: int | Fraction
+    tax_owed_cents: int | Fraction
+    coil: dict[str, int]
+    back_stock: dict[str, int]
+    reconciled: bool = True        # False: the poll isn't folded into the books yet (`not_reconciled_yet`)
 
 
 @dataclass
@@ -54,13 +85,25 @@ class SimBridge:
     (`State.assignment`), under our team's name (`vending.slots.our_team`), so `vending.slots` stores
     and checks them as it would the real server's answer."""
 
-    def __init__(self, machine: Machine, now, catalog: list[dict] | None = None, team: str | None = None):
+    def __init__(self, machine: Machine, now, catalog: list[dict] | None = None, team: str | None = None,
+                 count_tolerance: str = "per_entry", daily_limit_from: datetime | None | str = "default"):
+        if count_tolerance not in COUNT_TOLERANCES:
+            raise ValueError(f"count_tolerance is one of {COUNT_TOLERANCES}, not {count_tolerance!r}")
         self.machine, self.now, self.team = machine, now, team
         self.catalog = catalog if catalog is not None else [p.catalog_entry() for p in world.PRODUCTS]
         self.requests: dict[str, Filed] = {}
         self.product_requests: list[dict] = []
         self.refused: list[dict] = []           # every 4xx it answered, for the report
         self.calls: list[tuple[str, str]] = []  # (method, path) in order
+        # The tracking check: the books per poll, when they began (None: not yet), and from when one a day:
+        # by default from the client's own setting (`vending.tracking.daily_from`, the competition start),
+        # so a test that forgets it still meets the limit; None means no limit.
+        self.books: dict[str, Books] = {}
+        self.tracking_from: datetime | None = None
+        self.daily_limit_from: datetime | None = (tracking.daily_from() if daily_limit_from == "default"
+                                                  else daily_limit_from)
+        self.count_tolerance = count_tolerance
+        self.checks: list[dict] = []            # every check made: at, as_of, results
 
     # --- reads ---------------------------------------------------------------------------------------
     def products(self) -> list[dict]:
@@ -93,6 +136,9 @@ class SimBridge:
         self.calls.append(("POST", path))
         if path == "/api/v1/purchase-requests":
             return self._purchase(body)
+        if path == TRACKING_PATH:
+            self.calls.pop()                    # `check_books` notes its own call
+            return self.check_books(body)
         if path == "/api/v1/product-requests":
             request_id = f"prq_sim_{len(self.product_requests) + 1:03d}"
             self.product_requests.append({"id": request_id, "body": body, "at": self.now().isoformat()})
@@ -138,6 +184,133 @@ class SimBridge:
             if line.get("alternate") and line.get("primary") and line["alternate"] == line["primary"]:
                 problems.append({"line": i, "error_type": "alternate_same_as_primary"})
         return problems
+
+
+    # --- the tracking check ----------------------------------------------------------------------------
+    def record_books(self, session_id: str, at: datetime, cash_cents: int | Fraction, tax_owed_cents: int | Fraction,
+                     *, coil: dict[str, int] | None = None, back_stock: dict[str, int] | None = None,
+                     reconciled: bool = True) -> Books:
+        """The books as of the poll `session_id`: the true money, given, and the machine's coil and closet
+        now unless given. The first books recorded start the tracking, unless `tracking_from` is set."""
+        books = Books(session_id, at, cash_cents, tax_owed_cents,
+                      dict(coil) if coil is not None else {s: st.units for s, st in self.machine.slots.items()},
+                      dict(back_stock) if back_stock is not None
+                      else {sku: n for sku, n in self.machine.closet.items() if n}, reconciled)
+        self.books[session_id] = books
+        if self.tracking_from is None:
+            self.tracking_from = at
+        return books
+
+    def check_books(self, body: Any) -> dict:
+        """`POST /api/v1/tracking/check`: within or outside for each figure, as the real bridge answers."""
+        self.calls.append(("POST", TRACKING_PATH))
+        now = self.now()
+        invalid = _schema_problems(body)
+        if invalid:
+            self._refuse(422, {"detail": invalid}, body)
+        if self.tracking_from is None:
+            self._refuse_tracking(409, "tracking_not_started", "nothing to check against until the machine is "
+                                  "stocked for the project", body)
+        books = self.books.get(body["as_of"])
+        if books is None:
+            self._refuse_tracking(404, "unknown_poll", "no such poll", body)
+        if books.at < self.tracking_from:
+            self._refuse_tracking(422, "before_tracking_start", "that poll is before the books began", body)
+        if not books.reconciled:
+            self._refuse_tracking(409, "not_reconciled_yet", "polls are folded in on the hour", body)
+        owned = set(self.machine.slots)
+        given = set(body["coil"])
+        wrong = sorted(given - owned) + sorted(owned - given)
+        if wrong:
+            self._refuse_tracking(422, "invalid_coil", "every slot you own, and only those", body,
+                                  [f"{s}: not yours" if s in given else f"{s}: missing" for s in wrong])
+        listed = {p["sku"] for p in self.catalog}
+        unknown = sorted(set(body["back_stock"]) - listed)
+        if unknown:
+            self._refuse_tracking(422, "unknown_sku", "not in the catalog", body, unknown)
+        day = now.astimezone(world.EASTERN).date()
+        next_from = datetime.combine(day + timedelta(days=1), time(0), world.EASTERN)
+        if self.daily_limit_from is not None and now >= self.daily_limit_from and any(
+                c["at"].astimezone(world.EASTERN).date() == day for c in self.checks):
+            self._refuse_tracking(429, "daily_check_used", "one check per team per day", body,
+                                  next_check_from=_iso(next_from))
+        results = {
+            "cash": _verdict(abs(_dollars_cents(body["cash"]) - books.cash_cents) <= MONEY_TOLERANCE_CENTS),
+            "sales_tax_owed": _verdict(abs(_dollars_cents(body["sales_tax_owed"]) - books.tax_owed_cents)
+                                       <= MONEY_TOLERANCE_CENTS),
+            "coil": _verdict(self._counts_within(body["coil"], books.coil)),
+            "back_stock": _verdict(self._counts_within(body["back_stock"], books.back_stock)),
+        }
+        self.checks.append({"at": now, "as_of": books.session_id, "results": results})
+        return {"as_of": books.session_id, "as_of_time": _iso(books.at), "checked_at": _iso(now),
+                "results": results, "next_check_from": _iso(next_from)}
+
+    def _counts_within(self, ours: dict[str, int], truth: dict[str, int]) -> bool:
+        """A missing key counts as 0 on either side."""
+        gaps = [abs(ours.get(k, 0) - truth.get(k, 0)) for k in set(ours) | set(truth)]
+        if self.count_tolerance == "total":
+            return sum(gaps) <= UNIT_TOLERANCE
+        return all(g <= UNIT_TOLERANCE for g in gaps)
+
+    def _refuse_tracking(self, status: int, error_type: str, detail: str, body: Any, items: list[str] = (),
+                         next_check_from: str | None = None) -> None:
+        answer = {"error": error_type.replace("_", " "), "error_type": error_type, "detail": detail,
+                  "items": list(items)}
+        if next_check_from is not None:
+            answer["next_check_from"] = next_check_from
+        self._refuse(status, answer, body)
+
+    def _refuse(self, status: int, answer: dict, body: Any) -> None:
+        self.refused.append({"at": self.now().isoformat(), "status": status, "answer": answer, "body": body})
+        raise BridgeAnswered(status, json.dumps(answer))
+
+
+def _verdict(ok: bool) -> str:
+    return "within" if ok else "outside"
+
+
+def _dollars_cents(value: Any) -> Fraction:
+    return Fraction(Decimal(str(value))) * 100
+
+
+def _schema_problems(body: Any) -> list[dict]:
+    """What FastAPI would refuse in a tracking body (`TrackingCheckCreate`), in its error shape."""
+    if not isinstance(body, dict):
+        return [{"type": "dict_type", "loc": ["body"], "msg": "Input should be a valid dictionary"}]
+    problems = [{"type": "missing", "loc": ["body", k], "msg": "Field required"}
+                for k in TRACKING_FIELDS if k not in body]
+    problems += [{"type": "extra_forbidden", "loc": ["body", k], "msg": "Extra inputs are not permitted"}
+                 for k in body if k not in TRACKING_FIELDS]
+    as_of = body.get("as_of")
+    if "as_of" in body and not (isinstance(as_of, str) and 1 <= len(as_of) <= 64):
+        problems.append({"type": "string_type", "loc": ["body", "as_of"], "msg": "1 to 64 characters"})
+    for k in ("cash", "sales_tax_owed"):
+        if k in body and not _amount(body[k]):
+            problems.append({"type": "number_type", "loc": ["body", k], "msg": "a number of dollars"})
+    for k, longest in (("coil", 8), ("back_stock", 64)):
+        if k not in body:
+            continue
+        v = body[k]
+        if not isinstance(v, dict):
+            problems.append({"type": "dict_type", "loc": ["body", k], "msg": "Input should be a valid dictionary"})
+            continue
+        for key, n in v.items():
+            if not (isinstance(key, str) and 1 <= len(key) <= longest):
+                problems.append({"type": "string_too_long", "loc": ["body", k, str(key)], "msg": "bad key"})
+            if isinstance(n, bool) or not isinstance(n, int) or not -10000 <= n <= 100000:
+                problems.append({"type": "int_type", "loc": ["body", k, str(key)], "msg": "a whole number of units"})
+    return problems
+
+
+def _amount(value: Any) -> bool:
+    """A number within +/-100000, or a string the bridge can read as dollars."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return False
+    try:
+        amount = Decimal(str(value))
+    except ArithmeticError:
+        return False
+    return amount.is_finite() and (isinstance(value, str) or -100000 <= amount <= 100000)
 
 
 _ROW = re.compile(r"^(\S+)\s{2,}(.+?)\s{2,}(\S+)\s{2,}(\S+)\s{2,}(\S+)\s{2,}(\S+(?: stock)?)\s{2,}(.+)$")

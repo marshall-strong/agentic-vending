@@ -481,7 +481,7 @@ def _record_submit(connect: Callable[[], psycopg.Connection], run_id: int, out: 
 def _settle(out: Outcome) -> None:
     """A run that submitted is `submitted`, whatever stopped it after; an unknown submit says so first."""
     if out.request_id is not None and out.status != "submitted":
-        out.detail = f"Submitted purchase request {out.request_id}; afterwards: {out.detail or 'stopped'}"
+        out.detail = f"{agent_runs.SUBMITTED}{out.request_id}{agent_runs.AFTERWARDS}{out.detail or 'stopped'}"
         out.status = "submitted"
     elif out.unresolved is not None and not out.detail.startswith(UNRESOLVED):
         out.status, out.detail = "failed", UNRESOLVED + out.unresolved + (f" Then: {out.detail}" if out.detail else "")

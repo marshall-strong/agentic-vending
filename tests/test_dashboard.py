@@ -441,6 +441,27 @@ def test_standalone_routes_scope_reassigned_slots_and_redact_failed_steps(served
     assert not any("RETIRED-" in label or "81.91" in label for label in re.findall(r'(?:aria-label|title)="([^"]*)"', page))
 
 
+@pytest.mark.parametrize("kind", ["tool_result", "tool_call", "text", "thinking"])
+def test_failed_steps_hide_their_error_text_and_successful_steps_keep_theirs(conn, page_conn, open_ledger, kind):
+    """#165: the content of a step marked `is_error` never reaches the page or the JSON."""
+    host = "vend-db-7f3a.postgres.example.internal"
+    run = _live_run(conn)
+    tool = None if kind in ("thinking", "text") else "get_machine_state"
+    agent_runs.step(conn, run, 1, kind, f"could not reach postgresql://vend_admin:Sw0rdf1sh@{host}:5432/vending",
+                    tool=tool, is_error=True)
+    agent_runs.step(conn, run, 2, "tool_result", '{"products": ["SUCCESSFUL-STEP-MARKER"]}', tool="get_catalog")
+    agent_runs.finish(conn, run, "skipped", detail="nothing to buy")
+    for public in (False, True):
+        snap = dashboard.snapshot(page_conn, MONDAY, public=public)
+        page, body = dashboard.render(snap), dashboard.to_json(snap)
+        for text in (page, body):
+            assert host not in text and "Sw0rdf1sh" not in text and "postgresql://" not in text
+            assert "SUCCESSFUL-STEP-MARKER" in text
+        steps = snap["runs"]["data"][0]["steps"]
+        assert steps[0]["content"] == dashboard.HIDDEN and steps[0]["is_error"]
+        assert "SUCCESSFUL-STEP-MARKER" in steps[1]["content"] and not steps[1]["is_error"]
+
+
 def test_rejected_test_request_does_not_change_verdict(conn, page_conn):
     conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status) "
                  "values ('test-rejection', %s, false, '{}', 'rejected')", (MONDAY,))
@@ -1814,3 +1835,15 @@ def test_the_pricing_leaderboards_and_charts_sit_inside_the_layout(conn, page_co
     assert ('<p class="charts">Charts: <a href="/dashboard/money">Money by day</a> &middot; '
             '<a href="/dashboard/pnl">Weekly P&amp;L</a></p>') in page
     assert '<a href="/dashboard/spend">Development spend by week</a>' in page.split('<section id="vm"')[0]
+
+
+def test_lane_products_skips_a_product_that_is_not_text():
+    """A stored plan whose product is a list (or any non-text) must not crash the whole snapshot."""
+    from vending import machine_art
+    snap = {
+        "stock": {"ok": True, "data": {"slots": {"12": {"product": "RB-8CAN"}, "14": {"product": ["A", "B"]}}}},
+        "counts": {"ok": True, "data": {"16": {"product": {"sku": "X"}}}},
+        "plan": {"ok": True, "data": {"slots": [{"slot": "18", "now": {"product": ["C"]}},
+                                                {"slot": "21", "now": {"product": "CELSIUS-12CAN"}}]}},
+    }
+    assert machine_art.lane_products(snap, ["12", "14", "16", "18", "21"]) == ["CELSIUS-12CAN", "RB-8CAN"]

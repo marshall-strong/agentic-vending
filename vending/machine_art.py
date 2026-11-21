@@ -143,17 +143,19 @@ def _f(v: float) -> str:
 def lane_products(snap: Mapping, ours: Iterable[str]) -> list[str]:
     """Every product our lanes hold now or the plan puts in them, for `read_products`. Only ours."""
     ours = set(ours)
-    found: set[str] = set()
+    named: list = []
     stock = snap.get("stock") or {}
     if stock.get("ok"):
-        found.update(v.get("product") for s, v in stock["data"]["slots"].items() if s in ours)
+        named += [v.get("product") for s, v in stock["data"]["slots"].items() if s in ours]
     counts = snap.get("counts") or {}
     if counts.get("ok"):
-        found.update(v.get("product") for s, v in counts["data"].items() if s in ours)
+        named += [v.get("product") for s, v in counts["data"].items() if s in ours]
     plan = snap.get("weekly_plan", snap.get("plan")) or {}
     if plan.get("ok") and plan["data"]:
-        found.update((s.get("now") or {}).get("product") for s in plan["data"]["slots"] if s["slot"] in ours)
-    return sorted(p for p in found if isinstance(p, str) and p)
+        named += [(s.get("now") or {}).get("product") for s in plan["data"]["slots"] if s["slot"] in ours]
+    # Only text is a product: a stored plan can hold anything, and a list or dict here (unhashable)
+    # used to crash the whole snapshot.
+    return sorted({p for p in named if isinstance(p, str) and p})
 
 
 def read_products(conn: Any, skus: list[str]) -> dict:

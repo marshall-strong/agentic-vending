@@ -19,6 +19,9 @@ The page, top to bottom:
    cutoff countdown; spendable (from the ledger once it has opened; before that, only that
    it is development spend); catalog approvals; and the plan (for the first fill before the slot lock,
    for the next restock after).
+ - Key dates (`vending.key_dates`): before the start, each date from the instructors with a status
+   from our records (done, due in N days, overdue); from the start, the next restock request and
+   the next tax Saturday.
  - In the machine, one screen: the machine's whole front (`vending.machine_art`), our
    selections (the stored assignment, `vending.slots.our_slots`) with their package, count,
    price and next-restock badge, the rest half as wide and marked "Not ours"; with no assignment
@@ -65,11 +68,13 @@ from urllib.parse import parse_qs, urlsplit
 from typing import Any
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import capacity, db, leaderboards, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
-from vending import pricing_panel
+from vending import (capacity, db, leaderboards, machine_art, money_panel, plan_rounds, report_card, settings,
+                     slot_counts, visits)
+from vending import agent_runs, key_dates, pricing_panel
 from vending import stock as stock_mod
 from vending import planner
 from vending.planner import IN_STORE_CUTOFF
@@ -111,8 +116,8 @@ CUTOFF_SOON = timedelta(hours=24)
 # poll on the hour: `SYNC_AT_MINUTE`, as `vending.worker` reads it, else this.
 SYNC_AT_MINUTE = 5
 # The instructors must approve every product for the first fill by Wed 25 Nov 2026. The status bar says
-# so until the end of that day, Eastern. In UTC so the page needs no time-zone data.
-APPROVALS_DUE = datetime(2026, 11, 26, 5, 0, tzinfo=timezone.utc)
+# so until the end of that day, Eastern. The date lives with the other key dates (`vending.key_dates`).
+APPROVALS_DUE = key_dates.CATALOG.due
 # The machine's face: 5 shelves of 8 selections. Row r, column c is selection "rc".
 SHELVES, COLUMNS = machine_art.SHELVES, machine_art.COLUMNS
 # The mark on the wildcard slot's rows (#166): the one fixed slot that tests products.
@@ -178,14 +183,14 @@ def _isolated(conn: psycopg.Connection, read: Callable[[], Any], timeout_ms: int
         raise Unavailable(type(error).__name__) from error
 
 
-def _rows(conn: psycopg.Connection, sql: str, params: tuple = ()) -> list[dict]:
-    return _guarded(conn, lambda: conn.cursor(row_factory=dict_row).execute(sql, params).fetchall())
+def _rows(conn: psycopg.Connection, query: str | sql.Composable, params: tuple = ()) -> list[dict]:
+    return _guarded(conn, lambda: conn.cursor(row_factory=dict_row).execute(query, params).fetchall())
 
 
-def _optional(conn: psycopg.Connection, sql: str, params: tuple = ()) -> dict | None:
+def _optional(conn: psycopg.Connection, query: str | sql.Composable, params: tuple = ()) -> dict | None:
     """One row, or None when there is none or its table isn't there yet."""
     try:
-        rows = _rows(conn, sql, params)
+        rows = _rows(conn, query, params)
     except Missing:
         return None
     return rows[0] if rows else None
@@ -238,17 +243,23 @@ PRE_OPENING_WRITES = (
 ACTIVITY_VISIBLE = "(at <= %s and (at >= %s or (kind = 'write' and tool = any(%s))))"
 
 
-def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None) -> dict:
+def _run_detail(public: bool, alias: str | None = None) -> sql.Composable:
+    """The `detail` column of `agent_runs`, as a public page or the team's own view selects it."""
+    status, detail = (sql.Identifier(*filter(None, (alias, name))) for name in ("status", "detail"))
+    return sql.SQL("{} as detail").format(public_run_detail(status, detail) if public else detail)
+
+
+def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None, public: bool = False) -> dict:
     flag = _optional(conn, "select value, updated_at, updated_by from config where key = 'halted'")
     # Fails closed like `vending.config.is_halted`: anything but JSON false is halted.
     halted = flag is None or flag["value"] is not False
-    run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail, cost_usd"
-                          " from agent_runs where mode = 'live' and started_at <= %s"
-                          " order by started_at desc, id desc limit 1", (now,))
+    run = _optional(conn, sql.SQL("select id, started_at, finished_at, mode, model, status, {}, cost_usd"
+                                  " from agent_runs where mode = 'live' and started_at <= %s"
+                                  " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run is None:   # no runs, or an agent_runs older than cost_usd: try without it
-        run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail"
-                              " from agent_runs where mode = 'live' and started_at <= %s"
-                              " order by started_at desc, id desc limit 1", (now,))
+        run = _optional(conn, sql.SQL("select id, started_at, finished_at, mode, model, status, {}"
+                                      " from agent_runs where mode = 'live' and started_at <= %s"
+                                      " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run and run["status"] == "running" and now - run["started_at"] > STALE_RUN:
         run["stale"] = True
     last = _optional(conn, f"select at, kind, tool, outcome from action_log where {ACTIVITY_VISIBLE}"
@@ -368,21 +379,22 @@ def _tags(conn: psycopg.Connection, now: datetime) -> dict:
 
 
 def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
-          ours: tuple[str, ...] = (), *, modes: tuple[str, ...] = ("live",)) -> list[dict]:
+          ours: tuple[str, ...] = (), *, modes: tuple[str, ...] = ("live",), public: bool = False) -> list[dict]:
     """The last runs, newest first, each with the slots its plan changed from the plan before it.
 
     The newest run with a plan compares a "keep" against `tags`, the prices on the tags now, as
     the Plan panel does; older runs have no record of their tag prices.
     """
-    rows = _rows(conn, """
-        select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, r.detail, r.cost_usd,
+    rows = _rows(conn, sql.SQL("""
+        select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, {detail}, r.cost_usd,
                r.request_id, r.team_update, r.notes, r.plan,
                (select p.plan from agent_runs p
                  where p.mode = r.mode and p.plan is not null
                    and (p.started_at, p.id) < (r.started_at, r.id)
                  order by p.started_at desc, p.id desc limit 1) as previous_plan
           from agent_runs r where r.mode = any(%s) and r.started_at <= %s
-         order by r.started_at desc, r.id desc limit %s""", (list(modes), now, RUN_ROWS))
+         order by r.started_at desc, r.id desc limit %s""").format(detail=_run_detail(public, "r")),
+                 (list(modes), now, RUN_ROWS))
     steps = _steps(conn, [r["id"] for r in rows])
     newest = True
     for r in rows:
@@ -590,7 +602,7 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
         conn.execute("set transaction isolation level repeatable read, read only")
         # Event timestamps come from Postgres. Use its clock for the same transaction's cutoff.
         now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
-        snap, assignment_at = _snapshot(conn, now)
+        snap, assignment_at = _snapshot(conn, now, public)
     snap["syncs"] = syncs
     hide_errors(snap, public=public)
     only_ours(snap, assignment_at)
@@ -603,37 +615,64 @@ HIDDEN = "(error text isn't shown on this public page; it is in the database and
 PUBLIC_PANEL_ERROR = "This part of the page can't be read right now."
 
 
+def public_run_detail(status: sql.Composable, detail: sql.Composable) -> sql.Composable:
+    """What a public page shows of an `agent_runs.detail`, as SQL over the row's `status` and `detail`.
+
+    A failed run's detail is a raw error: `HIDDEN` replaces it. A run that submitted and then stopped
+    on something else (`vending.agent._settle`) keeps its confirmation and loses what follows
+    `agent_runs.AFTERWARDS`, which can be a database error naming the host and the user. Worked out
+    in Postgres, so the dropped text never leaves it. The public dashboard (`snapshot`) and the
+    public explorer (`vending.pages.HIDE`) both read the column through this.
+    """
+    return sql.SQL(
+        "case when {status} = 'failed' and {detail} is not null then {hidden}"
+        " when {status} = 'submitted' and starts_with({detail}, {submitted}) and strpos({detail}, {afterwards}) > 0"
+        " then left({detail}, strpos({detail}, {afterwards}) - 1)"
+        " else {detail} end").format(
+        status=status, detail=detail, hidden=sql.Literal(HIDDEN),
+        submitted=sql.Literal(agent_runs.SUBMITTED), afterwards=sql.Literal(agent_runs.AFTERWARDS))
+
+
 def hide_errors(snap: dict, *, public: bool = False) -> None:
     """Replace the free text of every failure with `HIDDEN`, in place.
 
-    A failed tool call or run stores the raw error. A refusal keeps its text. On the public
-    page, a panel's read error goes to stderr. Clean the snapshot before building Needs
-    attention so both the page and `/state.json` get the same text.
+    A failed tool call or run stores the raw error, and a database error can name the host and
+    the user. So a failed run's detail, a failed call's detail and the content of every step
+    marked `is_error` (whatever its kind) are replaced. A refusal keeps its text. On the public
+    page, a panel's read error goes to stderr, and a run's detail was already read through
+    `public_run_detail`. Clean the snapshot before building Needs attention so both the page and
+    `/state.json` get the same text.
     """
     runs = snap["runs"]["data"] if snap["runs"]["ok"] else []
     for run in (snap["status"].get("latest_run"), *runs):
-        if not run or not (detail := run.get("detail")):
-            continue
-        if run["status"] == "failed":
+        if run and run.get("detail") and run["status"] == "failed":
             run["detail"] = HIDDEN
-        elif public and run["status"] == "submitted" and detail.startswith("Submitted purchase request "):
-            run["detail"] = detail.partition("; afterwards:")[0]
     if snap["activity"]["ok"]:
         for row in snap["activity"]["data"]:
             if row["outcome"] == "failed" and row["detail"]:
                 row["detail"] = HIDDEN
     for run in runs:
         for step in run["steps"]:
-            if step["kind"] == "tool_result" and step["is_error"]:
+            if step["is_error"]:
                 step["content"] = HIDDEN
+    # The incident log never reads a failure's text (`vending.report_card`); its row says `error`.
+    if (incidents := snap.get("incidents")) and incidents["ok"]:
+        for row in incidents["data"].get("rows", []):
+            if row["error"]:
+                row["note"] = HIDDEN
     if public:
-        for name, panel in snap.items():
-            if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
-                continue
-            why = panel["why"]
-            if why != PUBLIC_PANEL_ERROR:
-                print(f"dashboard: {name}: {why}", file=sys.stderr, flush=True)
-                panel["why"] = PUBLIC_PANEL_ERROR
+        hide_panel_errors(snap)
+
+
+def hide_panel_errors(snap: dict, where: str = "dashboard") -> None:
+    """On a public page: each panel's read error goes to stderr, and the panel says `PUBLIC_PANEL_ERROR`."""
+    for name, panel in snap.items():
+        if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
+            continue
+        why = panel["why"]
+        if why != PUBLIC_PANEL_ERROR:
+            print(f"{where}: {name}: {why}", file=sys.stderr, flush=True)
+            panel["why"] = PUBLIC_PANEL_ERROR
 
 
 OLD_ASSIGNMENT = "Text omitted from before the current slot assignment."
@@ -731,6 +770,18 @@ def _scope_text(value: Any, ours: set[str]) -> Any:
     return value
 
 
+def _scope_numbered(value: Any, ours: set[str]) -> Any:
+    """`value` with any text that names a numbered selection outside `ours` replaced."""
+    if isinstance(value, str):
+        named = {n for n in stock_mod._slots_named(value) if n.isdigit()}
+        return OUTSIDE_ASSIGNMENT if named - ours else value
+    if isinstance(value, list):
+        return [_scope_numbered(item, ours) for item in value]
+    if isinstance(value, dict):
+        return {key: _scope_numbered(item, ours) for key, item in value.items()}
+    return value
+
+
 def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
     """Scope the live dashboard to the current assignment before either response is built."""
     ours = set(our_selections(snap))
@@ -791,12 +842,23 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
             # The assignment audit writer includes both the old and the new slot lists.
             if row["tool"] == "slots.record":
                 row["detail"] = HIDDEN if row["outcome"] == "failed" else ASSIGNMENT_RECORDED
+    if (incidents := snap.get("incidents")) and incidents["ok"]:
+        for row in incidents["data"].get("rows", []):
+            if row["note"] and row["note"] != HIDDEN and _older_assignment(row["at"], assignment_at):
+                row["note"] = OLD_ASSIGNMENT
     run = snap.get("status", {}).get("latest_run")
     if run and run["detail"] and run["detail"] != HIDDEN and _older_assignment(run["started_at"], assignment_at):
         run["detail"] = OLD_ASSIGNMENT
     for name, panel in snap.items():
-        if name not in ("runs", "pricing") or not panel["ok"]:
+        # Key dates' texts are fixed messages, dates and counts that name no selection; scoping them would
+        # hide the slot check's instructions exactly when no assignment can be read.
+        if name not in ("runs", "pricing", "report_cards", "key_dates") or not panel["ok"]:
             snap[name] = _scope_text(panel, ours)
+    if (cards := snap.get("report_cards")) and cards["ok"]:
+        # Its text is the scorer's and ours, about a plan already cut to our assignment
+        # (`report_card._as_replay_plan`), and says "every slot" freely: only a numbered selection
+        # that isn't ours is redacted.
+        snap["report_cards"] = _scope_numbered(cards, ours)
     if (pricing := snap.get("pricing")) and pricing["ok"]:
         for row in pricing["data"]["rows"]:
             for price in (row, row["next"]):
@@ -804,6 +866,11 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
                     # Price checks are generated from our own figures and fixed messages.
                     fields = {key: value for key, value in price.items() if key not in ("next", "problems")}
                     price.update(_scope_text(fields, ours))
+
+
+# Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
+CATALOG_REQUESTS_SQL = ("select id, requested_at, name, size, status, sku, decision_note"
+                        " from product_requests order by requested_at desc, id desc")
 
 
 def _catalog_counts(catalog: dict) -> dict:
@@ -823,7 +890,7 @@ def _catalog_counts(catalog: dict) -> dict:
                                  "unsettled": by_status["sending"] + by_status["unknown"]}}
 
 
-def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime | None]:
+def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> tuple[dict, datetime | None]:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
     assigned = _optional(conn, "select first_read_at from slot_assignment where id = 1") if slots else None
@@ -838,22 +905,21 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime |
     model_test_count = _optional(conn, f"select count(*) as n from agent_runs where mode in ('dry-run', 'replay')"
                                        f" and started_at {comparison} %s",
                                  (live_since or now,))
-    catalog = _panel(lambda: _rows(
-        conn, "select id, requested_at, name, size, status, sku, decision_note"
-              " from product_requests order by requested_at desc, id desc"))
+    catalog = _panel(lambda: _rows(conn, CATALOG_REQUESTS_SQL))
     if live_since is None:
         spend = {"ok": True, "data": None}
     elif purchases["ok"]:
         spend = _panel(lambda: _spend(conn, now, live_since, purchases["data"][0]))
     else:
         spend = {"ok": False, "why": "No live spend available."}
+    cards = _panel(lambda: _isolated(conn, lambda: report_card.report_cards(conn, now)))
     snap = {
         "as_of": now,
         "ours": ours,
         "wildcard": _wildcard(conn, slots),
-        "status": _status(conn, now, live_since),
+        "status": _status(conn, now, live_since, public),
         "plan": _panel(lambda: _plan(conn, slots, now, assignment_at)),
-        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots)),
+        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots, public=public)),
         "activity": _panel(lambda: _rows(
             conn, f"select id, at, kind, tool, outcome, detail, arguments from action_log where {ACTIVITY_VISIBLE}"
                   " order by at desc, id desc limit %s", (now, live_since, list(PRE_OPENING_WRITES), ACTIVITY_ROWS))),
@@ -867,6 +933,9 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime |
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
         "money": _panel(lambda: _money_panel(conn, now)),
         "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
+        "report_cards": cards,
+        "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
+            conn, now, cards["data"] if cards["ok"] else None))),
         "purchase_requests": ({"ok": True, "data": purchases["data"][0][:REQUEST_ROWS]}
                               if purchases["ok"] else purchases),
         "catalog_requests": catalog,
@@ -877,10 +946,13 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime |
                   " order by id")),
     }
     try:
-        before_lock = now < lock_at()
+        lock = lock_at()
     except settings.SettingsError:
         # The assignment panel explains the bad setting. Keep the weekly view available.
-        before_lock = False
+        lock = None
+    before_lock = lock is not None and now < lock
+    snap["key_dates"] = key_dates.panel(conn, now, opening, slots, snap["catalog_counts"], lock,
+                                        lambda read: _isolated(conn, read))
     if before_lock:
         snap["weekly_plan"] = snap["plan"]
         snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots, assignment_at)))
@@ -1043,7 +1115,8 @@ def attention(snap: dict) -> list[dict]:
                       ("stock", "Stock"), ("purchase_requests", "Purchase requests"),
                       ("catalog_requests", "Catalog requests"), ("submissions", "Purchase submissions"),
                       ("money", "Money"),
-                      ("leaderboards", "Leaderboards")):
+                      ("leaderboards", "Leaderboards"), ("report_cards", "Report card"),
+                      ("incidents", "Incident log")):
         if key in snap and not snap[key]["ok"]:
             add("info", f"{name} isn't available: {snap[key]['why']}")
 
@@ -1852,8 +1925,8 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
         by = c["by_status"]
         extra = "".join(f' &middot; <span class="warn-text">{by[k]} {k}</span>' for k in ("sending", "unknown") if by[k])
         rejected = f' &middot; {by["rejected"]} rejected' if by["rejected"] else ""
-        last = APPROVALS_DUE - timedelta(hours=6)      # the deadline's day, in Eastern
-        due = f" &middot; due {last:%a} {last.day} {last:%b}" if now < APPROVALS_DUE else ""
+        day = key_dates.CATALOG.day
+        due = f" &middot; due {day:%a} {day.day} {day:%b}" if now < APPROVALS_DUE else ""
         left = f'<span class="{"bad-text" if not c["left"] else ""}">{_plural(c["left"], "place")} left</span>'
         cells.append(_cell("Catalog approvals", f'{by["approved"]} approved',
                            f'{by["pending"]} pending{rejected}{extra} &middot; {left}{due}', "#requests"))
@@ -2090,19 +2163,21 @@ def _requests_html(purchases: dict, catalog: dict, now: datetime) -> str:
         if len(items) > REQUESTS_SHOWN:
             out += (f'<details class="more" data-key="more-requests"><summary>{len(items) - REQUESTS_SHOWN} older'
                     f'</summary><ul class="list">{"".join(items[REQUESTS_SHOWN:])}</ul></details>')
-    out += '<h3>Catalog requests</h3>'
+    return out + '<h3>Catalog requests</h3>' + catalog_requests_html(catalog, now)
+
+
+def catalog_requests_html(catalog: dict, now: datetime) -> str:
+    """Every catalog request, newest first, under its counts. The Products page (#55) shows the same list."""
     if (missing := _missing(catalog)) is not None:
-        out += missing
-    elif not catalog["data"]:
-        out += _catalog_lede(_catalog_counts(catalog)) + '<p class="empty">None yet.</p>'
-    else:
-        out += _catalog_lede(_catalog_counts(catalog)) + '<ul class="list">' + "".join(
-            f'<li><div class="head"><b>{_e(r["name"])}</b> <span class="dim">{_e(r["size"])}</span> '
-            f'{_pill(r["status"], _REQUEST_TONE.get(r["status"], "muted"))}</div>'
-            f'<div class="meta">asked {_time(r["requested_at"], "ago", now)}{_catalog_sku(r)}</div>'
-            + (f'<div class="detail">{_e(r["decision_note"])}</div>' if r["decision_note"] else "") + "</li>"
-            for r in catalog["data"]) + "</ul>"
-    return out
+        return missing
+    if not catalog["data"]:
+        return _catalog_lede(_catalog_counts(catalog)) + '<p class="empty">None yet.</p>'
+    return _catalog_lede(_catalog_counts(catalog)) + '<ul class="list">' + "".join(
+        f'<li><div class="head"><b>{_e(r["name"])}</b> <span class="dim">{_e(r["size"])}</span> '
+        f'{_pill(r["status"], _REQUEST_TONE.get(r["status"], "muted"))}</div>'
+        f'<div class="meta">asked {_time(r["requested_at"], "ago", now)}{_catalog_sku(r)}</div>'
+        + (f'<div class="detail">{_e(r["decision_note"])}</div>' if r["decision_note"] else "") + "</li>"
+        for r in catalog["data"]) + "</ul>"
 
 
 def _catalog_sku(r: dict) -> str:
@@ -2374,6 +2449,7 @@ footer .visitors { margin:4px 0 0; font-size:11px; opacity:.8 }
 STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 STYLE += pricing_panel.STYLE   # the pricing panel's own rules
 STYLE += leaderboards.STYLE
+STYLE += report_card.STYLE
 
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
@@ -2629,7 +2705,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     otherwise measure "3 days ago" and "in 1 day" from the viewer's own clock, not the snapshot's.
 
     `charts` is where that server serves the chart pages, by name ("money", "pnl", "spend"): the money
-    panel and the spend tile link to the ones given. Run on its own, the page has none."""
+    panel and the spend tile link to the ones given. Run on its own, the page has none. "products" is the
+    Products page (#55), linked from Back stock."""
     charts = charts or {}
     now = snap["as_of"]
     # Without scripts the page reloads itself; a pick of ours goes along (a #fragment never reaches us).
@@ -2654,8 +2731,15 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
     boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
               if "leaderboards" in snap else "")
-    body = (head + _status_bar(snap, items, charts) + _cabinet_html(snap, items) + pricing + money
+    report = (f'<section id="report-card"><h2>Weekly report card <span class="hint">computed in code &middot; '
+              f'Saturday to Friday, Eastern</span></h2>{report_card.cards_html(snap["report_cards"])}</section>'
+              if "report_cards" in snap else "")
+    incidents = (f'<section id="incidents"><h2>Incident log <span class="hint">since the opening</span></h2>'
+                 f'{report_card.incidents_html(snap["incidents"])}</section>' if "incidents" in snap else "")
+    body = (head + _status_bar(snap, items, charts) + key_dates.html(snap.get("key_dates"))
+            + _cabinet_html(snap, items) + pricing + money
             + _plan_section(snap)
+            + report + incidents
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
               f'changed</span></h2>{_runs_html(snap["runs"], now)}</section>'
@@ -2666,7 +2750,9 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + f'<section id="requests"><h2>Requests</h2>'
               f'{_requests_html(snap["purchase_requests"], snap["catalog_requests"], now)}</section>'
             + f'<section id="closet"><h2>Back stock <span class="hint">the closet, from receipts</span></h2>'
-              f'{_closet_html(snap["stock"])}</section>'
+              + (f'<p class="charts"><a href="{_e(charts["products"])}">Every product we can order</a>, with our '
+                 'sourcing and this back stock</p>' if "products" in charts else "")
+              + f'{_closet_html(snap["stock"])}</section>'
             + "</div>"
             + boards
             + ('<footer>Made-up data from a fixed snapshot, shown with the live page\'s own code. Nothing here is '
@@ -2685,7 +2771,7 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + ('<meta name="robots" content="noindex">' if demo else "")
             + reload
             + f'<title>{DEMO_TITLE if demo else ""}{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
-            f'<style>{STYLE}{machine_art.STYLE}</style></head><body>{banner}<main>{body}</main>'
+            f'<style>{STYLE}{machine_art.STYLE}{key_dates.STYLE}</style></head><body>{banner}<main>{body}</main>'
             f'<script>{SCRIPT % (int(refresh), int(demo), DEMO_STORAGE if demo else LIVE_STORAGE, visits.REFRESH_HEADER)}'
             '</script></body></html>')
 
@@ -2702,6 +2788,10 @@ def _error_page(message: str) -> str:
 
 # --- Server -------------------------------------------------------------------------------------
 
+# The Products page (#55) beside the page this server draws.
+PRODUCTS_PATH = "/products"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "vending-dashboard"
 
@@ -2710,20 +2800,27 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
         if host not in LOCAL_HOSTS:
             return self._send(403, "text/plain; charset=utf-8", "open this page as 127.0.0.1 or localhost")
-        if path not in ("/", "/state.json"):
+        if path not in ("/", "/state.json", PRODUCTS_PATH):
             return self._send(404, "text/plain; charset=utf-8", "not found")
         try:
             with connect() as conn:
-                snap = snapshot(conn)
+                if path == PRODUCTS_PATH:
+                    from vending import products_page
+                    data = products_page.read(conn)
+                else:
+                    snap = snapshot(conn)
         except (psycopg.Error, settings.SettingsError) as error:
             message = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
             if path == "/state.json":
                 return self._send(503, "application/json", to_json({"error": message}))
             return self._send(503, "text/html; charset=utf-8", _error_page(message))
+        if path == PRODUCTS_PATH:
+            return self._send(200, "text/html; charset=utf-8", products_page.html(data, nav=(("Agent dashboard", "/"),)))
         if path == "/state.json":
             return self._send(200, "application/json", to_json(snap))
         picked = parse_qs(urlsplit(self.path).query).get("sel", [None])[0]
-        self._send(200, "text/html; charset=utf-8", render(snap, picked=picked))
+        self._send(200, "text/html; charset=utf-8",
+                   render(snap, picked=picked, nav=(("Products", PRODUCTS_PATH),), charts={"products": PRODUCTS_PATH}))
 
     def _send(self, code: int, content_type: str, body: str) -> None:
         data = body.encode("utf-8")
