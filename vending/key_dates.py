@@ -7,7 +7,9 @@ check waits for `vending.slots.lock_at()` (`SLOTS_LOCK_AT`), so neither is writt
 
 Before the start each date shows with a status computed from our own records where they exist:
 
-- **Catalog approvals**: the catalog requests' counts (`product_requests`).
+- **Catalog approvals**: every product the picked first-fill plan loads is in our copy of the catalog
+  (`catalog_products`, not delisted). With no plan picked, it is the catalog requests' counts
+  (`product_requests`), labelled "Catalog queue clear", since that can't say the fill's products are in.
 - **First-fill plan picked**: a picked row in `first_fill_plans` (`vending.plan_store pick`), made for
   the current slot assignment.
 - **Ledger opening recorded**: the opening entry (`vending.ledger open`).
@@ -127,7 +129,15 @@ def read(conn: psycopg.Connection, now: datetime, opening: datetime | None, ours
     from psycopg.rows import dict_row
 
     cur = conn.cursor(row_factory=dict_row)
-    picked = cur.execute("select slots from first_fill_plans where picked limit 1").fetchone()
+    picked = cur.execute("select slots, plan, projection from first_fill_plans where picked limit 1").fetchone()
+    plan = None
+    if picked is not None:
+        skus = planned_skus(picked["plan"], picked["projection"])
+        listed = {r["sku"] for r in cur.execute(
+            "select sku from catalog_products where delisted_at is null and sku = any(%s)",
+            ([s for s in skus if s],)).fetchall()}
+        plan = {"current": bool(ours) and set(picked["slots"]) == set(ours),
+                "products": len(skus), "missing": sum(1 for s in skus if s not in listed)}
     assignment = stored(conn)
     try:
         _usable(assignment)   # the checks `vending.slots.our_slots` makes before anything reads our slots
@@ -141,10 +151,28 @@ def read(conn: psycopg.Connection, now: datetime, opening: datetime | None, ours
             " where status <> 'rejected' and submitted_at >= %s and submitted_at <= %s"
             " order by submitted_at, request_id", (opening, now)).fetchall()
     return {"opening": opening,
-            "plan": None if picked is None else {"current": bool(ours) and set(picked["slots"]) == set(ours)},
+            "plan": plan,
             "slots_checked_at": assignment and assignment.last_checked_at,
             "slots_valid": valid,
             "requests": requests}
+
+
+def planned_skus(plan: dict, projection: dict | None) -> list[str | None]:
+    """The products a first-fill plan loads, each SKU once: a slot's own `sku`, else the projection's for
+    that slot, as `vending.plan_rounds` reads them. A slot with neither is a None, a product we can't
+    find in the catalog."""
+    by_slot = {str(s.get("slot")): s.get("sku") for s in (projection or {}).get("slots") or [] if isinstance(s, dict)}
+    skus: list[str | None] = []
+    unnamed: list[str | None] = []
+    for entry in plan.get("day_one") or []:
+        if not isinstance(entry, dict):
+            continue
+        sku = entry.get("sku") or by_slot.get(str(entry.get("slot")))
+        if not sku:
+            unnamed.append(None)
+        elif sku not in skus:
+            skus.append(sku)
+    return skus + unnamed
 
 
 def _local(moment: datetime) -> datetime:
@@ -188,13 +216,39 @@ def _done(text: str) -> dict:
     return {"status": "done", "pill": "done", "text": text}
 
 
-def _catalog(kd: KeyDate, now: datetime, ctx: dict) -> dict:
-    counts = ctx["catalog_counts"]
+def _tally(counts: dict | None) -> str | None:
+    """The catalog requests' counts in words, or None when they can't be read."""
     if not counts or not counts.get("ok"):
+        return None
+    by = counts["data"]["by_status"]
+    waiting = by["pending"] + by["sending"] + by["unknown"]
+    return f"{by['approved']} approved, {waiting} waiting" + (f", {by['rejected']} rejected" if by["rejected"] else "")
+
+
+def _catalog(kd: KeyDate, now: datetime, ctx: dict) -> dict:
+    plan = ctx["facts"] and ctx["facts"]["plan"]
+    if plan is not None:
+        tally = _tally(ctx["catalog_counts"])
+        requests = f"; requests: {tally}" if tally else ""
+        n, missing = plan["products"], plan["missing"]
+        if missing == 0:
+            return _done(f"all {n} of the plan's products are in the catalog{requests}")
+        text = f"{missing} of the plan's {n} products {'isn' if missing == 1 else 'aren'}'t in the catalog{requests}"
+        if now >= kd.due:
+            return {"status": "missed", "pill": "passed", "text": f"{text}: a request naming them is denied"}
+        return _open(kd, now, text)
+    queue = _catalog_queue(kd, now, ctx["catalog_counts"])
+    return {**queue, "label": "Catalog queue clear"}
+
+
+def _catalog_queue(kd: KeyDate, now: datetime, counts: dict | None) -> dict:
+    """With no picked plan: whether the catalog requests are all answered, which can't say the fill's
+    products are in."""
+    tally = _tally(counts)
+    if tally is None:
         return {"status": "unknown", "pill": "can't tell", "text": "the catalog requests can't be read"}
     by = counts["data"]["by_status"]
     waiting = by["pending"] + by["sending"] + by["unknown"]
-    tally = f"{by['approved']} approved, {waiting} waiting" + (f", {by['rejected']} rejected" if by["rejected"] else "")
     if waiting == 0 and by["approved"]:
         return _done(tally)
     if waiting and now >= kd.due:

@@ -27,6 +27,10 @@ def facts(opening=None, plan=None, checked=TEST_CHECKED_AT, requests=(), slots_v
             "requests": list(requests)}
 
 
+# A picked plan for our current slots whose two products are both in the catalog.
+PLAN = {"current": True, "products": 2, "missing": 0}
+
+
 def request(rid, at, off_cycle=False, status="pending"):
     return {"request_id": rid, "submitted_at": at, "off_cycle": off_cycle, "status": status}
 
@@ -79,11 +83,11 @@ def test_nothing_recorded_yet_reads_as_due_in_n_days():
 
 def test_everything_recorded_reads_as_done():
     opening = et(11, 28, 18)
-    f = facts(opening=opening, plan={"current": True}, requests=[request("R1", et(11, 29, 20))])
+    f = facts(opening=opening, plan=PLAN, requests=[request("R1", et(11, 29, 20))])
     r = rows(et(11, 29, 21), f, counts(approved=20, rejected=1))
     assert check(r["catalog"], "catalog") == {
         "key": "catalog", "label": "Catalog approvals", "status": "done", "pill": "done",
-        "text": "20 approved, 0 waiting, 1 rejected"}
+        "text": "all 2 of the plan's products are in the catalog; requests: 20 approved, 0 waiting, 1 rejected"}
     assert [check(r["fill_request"], n)["status"] for n in ("plan_picked", "ledger_opening", "fill_request")] == \
         ["done", "done", "done"]
     assert check(r["fill_request"], "ledger_opening")["text"] == "opened Sat 28 Nov, 18:00"
@@ -108,7 +112,7 @@ def test_missed_deadlines_read_as_overdue():
 
 
 def test_a_plan_picked_for_an_earlier_assignment_is_not_done():
-    c = check(rows(et(11, 21), facts(plan={"current": False}))["fill_request"], "plan_picked")
+    c = check(rows(et(11, 21), facts(plan={**PLAN, "current": False}))["fill_request"], "plan_picked")
     assert c["status"] == "due" and "earlier slot assignment" in c["text"]
 
 
@@ -217,7 +221,7 @@ def test_a_snapshot_from_before_the_panel_draws_no_section():
 
 
 def test_the_section_marks_each_status_and_the_unconfirmed_day():
-    f = facts(opening=et(11, 28), plan={"current": True})
+    f = facts(opening=et(11, 28), plan=PLAN)
     page = key_dates.html({"ok": True, "data": key_dates.build(et(11, 29), f, counts(pending=1), LOCK)})
     assert page.startswith('<section id="dates"')
     assert '<span class="pill ok">done</span> <b>Ledger opening recorded</b>' in page
@@ -314,3 +318,36 @@ def test_an_invalid_assignment_checked_after_the_lock_is_not_confirmed(conn, pag
 
 def rows_of(built, key):
     return next(r for r in built["rows"] if r["key"] == key)
+
+
+def test_the_catalog_check_wants_every_product_in_the_picked_plan():
+    # Every request approved, but the picked plan loads a product the catalog doesn't list.
+    plan = {"current": True, "products": 2, "missing": 1}
+    c = check(rows(et(11, 20), facts(plan=plan), counts(approved=20))["catalog"], "catalog")
+    assert (c["label"], c["status"], c["pill"]) == ("Catalog approvals", "due", "due in 5 days")
+    assert c["text"].startswith("1 of the plan's 2 products isn't in the catalog")
+    c = check(rows(et(11, 26), facts(plan=plan), counts(approved=20))["catalog"], "catalog")
+    assert (c["status"], c["pill"]) == ("missed", "passed")
+    c = check(rows(et(11, 20), facts(plan={**plan, "missing": 0}), counts(approved=20, pending=1))["catalog"], "catalog")
+    assert c["status"] == "done" and c["text"].startswith("all 2 of the plan's products are in the catalog")
+    # With no plan picked, it is the queue's count, and says so.
+    c = check(rows(et(11, 20), facts(), counts(approved=20))["catalog"], "catalog")
+    assert (c["label"], c["status"]) == ("Catalog queue clear", "done")
+
+
+def test_the_catalog_check_reads_the_picked_plans_products(conn, page_conn, tmp_path, monkeypatch):
+    from tests.test_dashboard import _first_fill_plan
+    monkeypatch.setattr(dashboard, "lock_at", lambda: LOCK)
+    _first_fill_plan(conn, tmp_path)     # Red Bull (SIM-RB) and Coke (SIM-COKE)
+
+    def catalog():
+        snap = dashboard.snapshot(page_conn, et(11, 20))
+        return check({x["key"]: x for x in snap["key_dates"]["data"]["rows"]}["catalog"], "catalog")
+
+    conn.execute("insert into catalog_products (sku, name, last_response) values ('SIM-RB', 'Red Bull', '{}')")
+    c = catalog()
+    assert c["status"] == "due" and c["text"].startswith("1 of the plan's 2 products isn't in the catalog")
+    conn.execute("insert into catalog_products (sku, name, last_response) values ('SIM-COKE', 'Coke', '{}')")
+    assert catalog()["status"] == "done"
+    conn.execute("update catalog_products set delisted_at = now() where sku = 'SIM-COKE'")
+    assert catalog()["status"] == "due"
