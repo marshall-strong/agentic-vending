@@ -409,10 +409,16 @@ def rises_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, un
     window, as the stock replay walks them: a reading just before `since` that
     the history shows is a misread or a restart reads the same from any window,
     so the units counted here are the units the replay costs (#172).
+
+    Every time is read as a UTC instant: Python compares two datetimes in the
+    same ZoneInfo by wall clock, ignoring `fold`, so the two 01:30 polls of a
+    fall-back night would otherwise be one key and cut as one. The polls
+    returned are in UTC.
     """
+    since, until = since.astimezone(timezone.utc), until.astimezone(timezone.utc)
     by_poll: dict[datetime, dict[str, int]] = defaultdict(dict)
     for at, selection, value in rows:
-        by_poll[at][selection] = value
+        by_poll[at.astimezone(timezone.utc)][selection] = value
     times = sorted(t for t in by_poll if t <= until)
     if not times:
         return None, None, [], "no polls in the window, so takings are unknown and counted as 0"

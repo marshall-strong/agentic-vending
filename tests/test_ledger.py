@@ -122,6 +122,27 @@ def test_the_first_tax_week_starts_at_the_opening_and_is_partial():
     assert [(w.week, w.takings_cents, w.tax_cents) for w in mid.by_tax_week] == [(date(2026, 11, 29), 500, 37)]
 
 
+@pytest.mark.parametrize("zone", [EASTERN, timezone.utc], ids=["eastern", "utc"])
+def test_takings_between_keeps_both_fall_back_polls_apart(zone):
+    # Fall back, Sun 1 Nov 2026: 01:30 Eastern happens twice, 05:30 UTC (EDT, fold 0) and 06:30 UTC (EST,
+    # fold 1). Python compares two times in the same ZoneInfo by wall clock, so they must be read as instants.
+    first = datetime(2026, 11, 1, 1, 30, tzinfo=EASTERN, fold=0)
+    second = datetime(2026, 11, 1, 1, 30, tzinfo=EASTERN, fold=1)
+    assert (first.astimezone(timezone.utc).hour, second.astimezone(timezone.utc).hour) == (5, 6)
+    rows = [(datetime(2026, 11, 1, 0, 30, tzinfo=EASTERN).astimezone(zone), "15", 0),
+            (first.astimezone(zone) if zone is timezone.utc else first, "15", 1350),
+            (second.astimezone(zone) if zone is timezone.utc else second, "15", 2700)]
+    as_of_first = takings_between(rows, rows[0][0], first, EASTERN)
+    assert (as_of_first.cents, as_of_first.tax_cents) == (1350, 100)
+    # Compared in UTC: Python calls any inter-zone == with a time in a fold unequal (PEP 495).
+    assert as_of_first.end_poll.astimezone(timezone.utc) == first.astimezone(timezone.utc)
+    as_of_second = takings_between(rows, rows[0][0], second, EASTERN)
+    assert (as_of_second.cents, as_of_second.tax_cents) == (2700, 200)
+    # Counted from the first 01:30, only the second one's rise is in the window.
+    since_first = takings_between(rows, first, second, EASTERN)
+    assert (since_first.start_poll.astimezone(timezone.utc), since_first.cents) == (first.astimezone(timezone.utc), 1350)
+
+
 def test_tax_is_rounded_on_the_weeks_takings_not_on_each_sale():
     # Ten $1.25 sales, one per poll: each holds 9.26 cents of tax, which rounds to 9 a sale (90),
     # but the week's $12.50 holds 92.59, which rounds to 93. The ledger sets aside 93.
