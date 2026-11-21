@@ -42,10 +42,10 @@ def plan_for(ours, **changes):
             "reason": "test plan"}
 
 
-def live_run(conn, at, status="submitted", plan=None, detail=None):
+def live_run(conn, at, status="submitted", plan=None, detail=None, request_id=None):
     run = agent_runs.start(conn, mode="live", model="claude-sonnet-5-5")
     if status != "running":
-        agent_runs.finish(conn, run, status, plan=plan, detail=detail)
+        agent_runs.finish(conn, run, status, plan=plan, detail=detail, request_id=request_id)
     conn.execute("update agent_runs set started_at = %s, finished_at = case when status = 'running' then null"
                  " else %s end where id = %s", (at, at + timedelta(minutes=5), run))
     return run
@@ -95,7 +95,7 @@ def test_a_plan_that_restocks_beats_the_baseline(conn, page_conn, opened):
     week_of_sales(conn, slot)
     # Planned on Thursday of the opening week; the Friday visit loads 8 at $1.00 a unit.
     run = live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC),
-                   plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}))
+                   plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}), request_id="r1")
     fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
     snap, by_week = cards(page_conn)
     assert list(by_week) == ["2026-12-19", "2026-12-12", "2026-12-05", "2026-11-28"]
@@ -117,10 +117,10 @@ def test_a_plan_that_restocks_beats_the_baseline(conn, page_conn, opened):
         "7.89", "7.89", "2.63", "5.26")
     assert week["grade"] == "beat" and week["grade_text"] == "Beat the baseline"
 
-    # No run submitted a plan in week 1, so week 2 restocked nothing.
+    # No run submitted a plan in week 1, so no plan matched week 2's visit.
     assert by_week["2026-12-12"]["grade"] == "no_plan"
     current = by_week["2026-12-19"]
-    assert not current["final"] and any(n.startswith("In progress") for n in current["notes"])
+    assert not current["final"] and current["grade"] == "no_plan"
 
     page = dashboard.render(snap)
     assert page.index('id="plan"') < page.index('id="report-card"') < page.index('id="incidents"') < page.index('id="runs"')
@@ -133,7 +133,7 @@ def test_a_failed_hard_check_fails_the_week_whatever_it_earned(conn, page_conn, 
     product(conn)
     week_of_sales(conn, slot, price=700)
     live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC),
-             plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "7.00", "reason": "dear"}}))
+             plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "7.00", "reason": "dear"}}), request_id="r1")
     fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
     snap, by_week = cards(page_conn)
     week = by_week["2026-12-05"]
@@ -154,7 +154,7 @@ def test_the_wildcard_slot_is_checked_against_its_own_ceiling(conn, page_conn, o
     config.set_value(conn, "wildcard_slot", slot, "test")
     week_of_sales(conn, slot, price=700)
     live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC),
-             plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "7.00", "reason": "wildcard"}}))
+             plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "7.00", "reason": "wildcard"}}), request_id="r1")
     fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
     _, by_week = cards(page_conn)
     prices = next(c for c in by_week["2026-12-05"]["checks"] if c["name"] == "prices")
@@ -166,7 +166,7 @@ def test_fill_to_the_column_uses_the_package_capacity(conn, page_conn, opened):
     product(conn)   # a 12 oz can: 8 a column on the loading chart
     week_of_sales(conn, slot)
     live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC),
-             plan=plan_for(opened, **{slot: {"sale_price": "2.50", "reason": "fill the column"}}))
+             plan=plan_for(opened, **{slot: {"sale_price": "2.50", "reason": "fill the column"}}), request_id="r1")
     fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
     _, by_week = cards(page_conn)
     week = by_week["2026-12-05"]
@@ -291,7 +291,7 @@ def test_a_fulfilled_product_swap_is_left_out_of_the_comparison(conn, page_conn,
     receipt(conn, "fill", OPEN + timedelta(hours=1), [(a, "OLD-CAN", 4, "2.00", 0, None),
                                                       (b, "KEPT-CAN", 10, "10.00", 0, None)])
     two_slot_sales(conn, a, b)
-    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), plan=plan_for(opened, **{
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), request_id="friday", plan=plan_for(opened, **{
         a: {"product": "NEW-CAN", "fill_to": 8, "sale_price": "2.50", "reason": "swap it"}}))
     # The Friday visit pulls the 2 OLD-CAN left and loads 8 NEW-CAN.
     receipt(conn, "friday", SAT1 - timedelta(hours=3), [(a, "NEW-CAN", 8, "8.00", 2, "OLD-CAN")])
@@ -303,6 +303,74 @@ def test_a_fulfilled_product_swap_is_left_out_of_the_comparison(conn, page_conn,
     assert week["grade"] == "tied"
     assert any(f"Slot {a}" in n and "swapped" in n for n in week["notes"])
     assert "ahead by" not in dashboard.render(snap)
+
+
+def pending(conn, request_id, at, *, status="pending", off_cycle=False):
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status)"
+                 " values (%s, %s, %s, '{}', %s)", (request_id, at, off_cycle, status))
+
+
+def test_the_week_s_plan_is_the_one_its_visit_loaded(conn, page_conn, opened):
+    slot = opened[0]
+    product(conn)
+    week_of_sales(conn, slot)
+    loaded = live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), request_id="fri1",
+                      plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}))
+    fulfilled(conn, "fri1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
+    # Friday 13:00 Eastern, after Thursday's cutoff: this request is for the next Friday's visit.
+    later = live_run(conn, datetime(2026, 12, 4, 18, tzinfo=UTC), request_id="fri2",
+                     plan=plan_for(opened, **{slot: {"fill_to": 3, "sale_price": "2.50", "reason": "less"}}))
+    pending(conn, "fri2", datetime(2026, 12, 4, 18, 1, tzinfo=UTC))
+    snap, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    assert (week["run_id"], week["request"]) == (loaded, "fulfilled")
+    assert week["outcome"]["sold"] == 6 and week["grade"] == "beat"
+    after = by_week["2026-12-12"]
+    assert (after["run_id"], after["request"]) == (later, "submitted")
+    assert any("no receipt yet" in n for n in after["notes"])
+    assert "request submitted" in dashboard.render(snap)
+
+
+def test_a_paid_midweek_visit_supersedes_the_friday_request(conn, page_conn, opened):
+    slot = opened[0]
+    product(conn)
+    week_of_sales(conn, slot)
+    friday = live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), request_id="fri",
+                      plan=plan_for(opened, **{slot: {"fill_to": 3, "sale_price": "2.50", "reason": "few"}}))
+    pending(conn, "fri", datetime(2026, 12, 3, 20, 1, tzinfo=UTC))
+    plan = plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "many"}})
+    plan["off_cycle"], plan["visit"] = True, "midweek"
+    # A later run on Thursday sends a paid midweek visit, fulfilled on Friday morning.
+    midweek = live_run(conn, datetime(2026, 12, 3, 22, tzinfo=UTC), request_id="mid", plan=plan)
+    receipt(conn, "mid", datetime(2026, 12, 4, 15, tzinfo=UTC), [(slot, SKU, 8, "8.00", 0, None)], off_cycle=True)
+    _, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    assert (week["run_id"], week["request"]) == (midweek, "fulfilled")
+    assert any(f"run {friday}" in n and "superseded" in n for n in week["notes"])
+
+
+def test_a_rejected_request_loaded_nothing(conn, page_conn, opened):
+    slot = opened[0]
+    week_of_sales(conn, slot)
+    run = live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), request_id="no",
+                   plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}))
+    pending(conn, "no", datetime(2026, 12, 3, 20, 1, tzinfo=UTC), status="rejected")
+    snap, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    assert (week["run_id"], week["request"], week["grade"]) == (run, "rejected", "rejected")
+    assert week["outcome"] is None and week["checks"][0]["status"] == "pass"
+    assert any("rejected" in n for n in week["notes"])
+    assert "Request rejected" in dashboard.render(snap)
+
+
+def test_no_matched_plan_says_so_without_claiming_nothing_was_restocked(conn, page_conn, opened):
+    week_of_sales(conn, opened[0])
+    snap, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    assert week["grade"] == "no_plan" and week["grade_text"] == "No plan matched"
+    assert week["checks"] == [] and week["outcome"] is None
+    assert not any("nothing was restocked" in n for n in week["notes"])
+    assert any(n.startswith("No submitted live plan matched") for n in week["notes"])
 
 
 def test_without_polls_the_week_is_not_scored(conn, page_conn, opened):
@@ -328,7 +396,7 @@ def test_a_price_over_the_ceiling_fails_when_the_column_capacity_is_unknown(conn
     product(conn, size="odd crate")     # no capacity on the loading chart
     week_of_sales(conn, slot)
     live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC),
-             plan=plan_for(opened, **{slot: {"sale_price": "9.00", "reason": "fill the column"}}))
+             plan=plan_for(opened, **{slot: {"sale_price": "9.00", "reason": "fill the column"}}), request_id="r1")
     fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
     _, by_week = cards(page_conn)
     week = by_week["2026-12-05"]

@@ -37,7 +37,7 @@ row says `error: True` and `dashboard.hide_errors` puts its fixed message in.
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from html import escape
@@ -72,7 +72,8 @@ GRADES = {
     "tied": "Level with the baseline",
     "behind": "Behind the baseline",
     "fail": "Failed a hard check",
-    "no_plan": "No plan submitted",
+    "no_plan": "No plan matched",
+    "rejected": "Request rejected",
     "unscored": "Not scored",
     "opening": "Opening week: not graded",
 }
@@ -113,16 +114,69 @@ def _start(week: date) -> datetime:
     return datetime.combine(week, time.min, EASTERN)
 
 
+@dataclass(frozen=True)
+class _Match:
+    """A live run's plan and the visit its purchase request led to."""
+    run_id: int
+    started_at: datetime
+    plan: Any
+    request: str                    # fulfilled (a receipt is in), submitted (none yet) or rejected
+    week: date                      # the week whose start the visit loads
+    visit_at: datetime | None = None    # just before the visit: the door opening, else the receipt time
+    loads: tuple[tuple[str, str | None], ...] = ()   # (slot, product) the receipt loaded
+    superseded: tuple[int, ...] = ()    # other runs' plans for the same week this one replaced
+
+
+def _visit_week(started: datetime, off_cycle: bool) -> date:
+    """The week a request with no receipt yet is meant to load: a Friday request's is the week after
+    the Friday the planner buys for when the run started (Thursday 23:59 Eastern is the cutoff, as on
+    the plan panel); a midweek one's is the week after the run's."""
+    from vending import planner
+    local = started.astimezone(EASTERN)
+    week = ledger.week_of(local) + WEEK
+    if not off_cycle and planner._past_cutoff(local, planner.IN_STORE_CUTOFF, ledger.WEEK_STARTS):
+        week += WEEK
+    return week
+
+
+def _visits(lines: list[dict]) -> dict[str, tuple[datetime, tuple[tuple[str, str | None], ...]]]:
+    """Each fulfilled request's visit from its receipt: (just before it, (slot, product) loaded)."""
+    out: dict[str, tuple[datetime, list]] = {}
+    for line in lines:
+        opened, closed = line["door_opened_at"], line["door_closed_at"]
+        at = opened if opened is not None and closed is not None else line["at"]
+        if at is None:
+            continue
+        first, loads = out.get(line["request_id"], (at, []))
+        if line["outcome"] in stock.LOADING and line["units_loaded"]:
+            loads.append((line["slot"], line["sku"]))
+        out[line["request_id"]] = (min(first, at), loads)
+    return {rid: (at, tuple(loads)) for rid, (at, loads) in out.items()}
+
+
 class _Reader:
-    """What every week's card reads once: the runs with plans, the stock movements, the catalog,
-    the capacities and the ceilings."""
+    """What every week's card reads once: the runs with plans and their requests, the stock
+    movements, the catalog, the capacities and the ceilings."""
 
     def __init__(self, conn: psycopg.Connection, ours: tuple[str, ...], now: datetime, opened: datetime):
         self.conn, self.ours, self.now, self.opened = conn, ours, now, opened
-        self.runs = conn.execute(
-            "select id, started_at, plan from agent_runs where mode = 'live' and status = 'submitted'"
-            " and plan is not null and started_at <= %s order by started_at, id", (now,)).fetchall()
-        self.moves = stock.load_movements(conn, until=now)
+        # Receipts in by `now`: a later one is a visit the page can't have seen yet.
+        lines = [line for line in stock.receipt_lines(conn) if line["at"] is not None and line["at"] <= now]
+        self.moves = stock.load_movements(conn, lines, until=now)
+        visits = _visits(lines)
+        self.matches = []
+        for run_id, started, plan, request_id, status, off_cycle in conn.execute(
+                "select r.id, r.started_at, r.plan, r.request_id, q.status, q.off_cycle from agent_runs r"
+                " left join purchase_requests q on q.request_id = r.request_id where r.mode = 'live'"
+                " and r.status = 'submitted' and r.plan is not null and r.started_at <= %s"
+                " order by r.started_at, r.id", (now,)):
+            if request_id in visits:
+                at, loads = visits[request_id]
+                self.matches.append(_Match(run_id, started, plan, "fulfilled",
+                                           ledger.week_of(at.astimezone(EASTERN)) + WEEK, at, loads))
+            else:
+                self.matches.append(_Match(run_id, started, plan, "rejected" if status == "rejected" else "submitted",
+                                           _visit_week(started, bool(off_cycle))))
         self.catalog = conn.execute("select sku, size, first_seen_at, delisted_at from catalog_products").fetchall()
         self.rejected = conn.execute(
             "select sku, requested_at from product_requests where status = 'rejected' and sku is not null").fetchall()
@@ -148,22 +202,17 @@ class _Reader:
                 self._weeks[week] = None
         return self._weeks[week]
 
-    def plan_for(self, week: date) -> tuple | None:
-        """The latest live run that submitted a plan in the week before `week`: (id, started_at, plan)."""
-        start, before = _start(week), _start(week - WEEK)
-        found = [r for r in self.runs if before <= r[1] < start]
-        return found[-1] if found else None
-
-    def visit_loads(self, since: datetime, until: datetime) -> dict[str, tuple[datetime, str | None]]:
-        """Each slot's first load in [since, until), from the receipts: (just before it, the product loaded).
-        "Just before" is the door opening when the receipt has door times, since the pull comes then."""
-        out: dict[str, tuple[datetime, str | None]] = {}
-        for m in self.moves:
-            if m.kind in ("purchase", "load") and m.to_slot and m.slot and since <= m.at < until:
-                at = m.opened_at or m.at
-                if m.slot not in out or at < out[m.slot][0]:
-                    out[m.slot] = (at, m.sku)
-        return out
+    def plan_for(self, week: date) -> _Match | None:
+        """The plan loaded at the start of `week`, matched through its purchase request: the run whose
+        request's receipt is the latest visit before the week (a paid midweek visit after a Friday
+        request supersedes it), else the latest still waiting on a receipt, else the latest rejected."""
+        found = [m for m in self.matches if m.week == week]
+        for request in ("fulfilled", "submitted", "rejected"):
+            picks = [m for m in found if m.request == request]
+            if picks:
+                pick = max(picks, key=lambda m: (m.visit_at or m.started_at, m.run_id))
+                return replace(pick, superseded=tuple(m.run_id for m in found if m is not pick))
+        return None
 
     def slots_at(self, moment: datetime) -> dict[str, stock.SlotCount]:
         return {s.slot: s for s in stock.replay(self.moves, moment, inclusive=False).slots}
@@ -184,7 +233,7 @@ def _blank(week: date, final: bool) -> dict:
     return {
         "week": week.isoformat(), "ends": (week + timedelta(days=6)).isoformat(), "final": final,
         "grade": "unscored", "run_id": None, "planned_at": None, "checks": [], "outcome": None,
-        "baseline": None, "comparison": None, "notes": [],
+        "baseline": None, "comparison": None, "notes": [], "request": None,
     }
 
 
@@ -194,7 +243,7 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         card["grade"] = "opening"
         card["notes"].append("The first fill went in during this week, so the first graded week is the next one.")
         return _graded(card)
-    run = reader.plan_for(week)
+    match = reader.plan_for(week)
     before, this = reader.week(week - WEEK), reader.week(week)
     if before is None:
         # The hard checks still run: they need the plan, the receipts and the ledger, not the sales.
@@ -204,29 +253,40 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         this = None
     elif this is None:
         card["notes"].append("This week's sales can't be read from the polls yet.")
-    plan_made = run[1] if run else _start(week)
-    state, swapped = _state(reader, before, week, plan_made)
+    if match is None:
+        card["grade"] = "no_plan"
+        card["notes"].append("No submitted live plan matched this week's visit through its purchase request, "
+                             "so there is no plan to score.")
+        return _graded(card)
+    card["run_id"], card["planned_at"], card["request"] = match.run_id, match.started_at, match.request
+    if match.superseded:
+        card["notes"].append(f"This plan superseded the plan from run{'s' if len(match.superseded) > 1 else ''} "
+                             f"{', '.join(str(int(r)) for r in match.superseded)} for the same week.")
+    if match.request == "submitted":
+        card["notes"].append("Its purchase request has no receipt yet, so it is scored as if the visit loaded it.")
+    elif match.request == "rejected":
+        card["notes"].append("Its purchase request was rejected, so the visit loaded nothing from it. "
+                             "Only the hard checks are shown.")
+    state, swapped = _state(reader, before, week, match)
+    problems = validate_plan(match.plan, reader.ours)
+    if problems:
+        card["checks"] = [{"name": "valid plan", "status": scoring.FAIL, "detail": " ".join(problems)}] + [
+            {"name": name, "status": scoring.SKIP, "detail": "No valid plan to check."} for name, _ in scoring.CHECKS]
+        card["grade"] = "fail"
+        card["notes"] += reader.notes
+        return _graded(card)
     for slot in swapped:
         card["notes"].append(f"Slot {slot}'s product was swapped at the visit: this week's sales are the new "
                              "product's, so the slot is left out of the comparison with the baseline.")
-    if run is None:
-        card["grade"] = "no_plan"
-        card["notes"].append("No live run submitted a plan last week, so nothing was restocked at the visit. "
-                             "Scored as if every slot kept what it had.")
-        answer: Any = {"visit": "scheduled", "reason": "No plan submitted.",
-                       "slots": [{"slot": s, "keep": True, "reason": "No plan submitted."} for s in reader.ours]}
-        unknown_fill: frozenset[str] = frozenset()
-    else:
-        card["run_id"], card["planned_at"] = run[0], run[1]
-        problems = validate_plan(run[2], reader.ours)
-        if problems:
-            card["checks"] = [{"name": "valid plan", "status": scoring.FAIL, "detail": " ".join(problems)}] + [
-                {"name": name, "status": scoring.SKIP, "detail": "No valid plan to check."} for name, _ in scoring.CHECKS]
-            card["grade"] = "fail"
-            card["notes"] += reader.notes
-            return _graded(card)
-        answer, notes, unknown_fill = _as_replay_plan(run[2], reader, state)
-        card["notes"] += notes
+    answer, notes, unknown_fill = _as_replay_plan(match.plan, reader, state)
+    card["notes"] += notes
+    if match.request == "rejected":
+        scored = scoring.score(state, answer, None, unknown_fill=unknown_fill)
+        card["checks"] = [{"name": c.name, "status": c.status, "detail": c.detail}
+                          for c in scored.checks if c.name != "no writes"]
+        card["grade"] = "fail" if any(c["status"] == scoring.FAIL for c in card["checks"]) else "rejected"
+        card["notes"] += reader.notes
+        return _graded(card)
     if this is not None and not final:
         card["notes"].append("In progress: scored on the sales so far. The grade can change until Friday ends.")
     scored = scoring.score(state, answer, this, unknown_fill=unknown_fill)
@@ -239,7 +299,7 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         card["comparison"] = _compare(scored, base, swapped)
     if any(c["status"] == scoring.FAIL for c in card["checks"]):
         card["grade"] = "fail"
-    elif card["grade"] != "no_plan" and card["comparison"] and card["comparison"]["result"]:
+    elif card["comparison"] and card["comparison"]["result"]:
         card["grade"] = card["comparison"]["result"]
     card["notes"] += reader.notes
     return _graded(card)
@@ -250,18 +310,17 @@ def _graded(card: dict) -> dict:
     return card
 
 
-def _state(reader: _Reader, before: WeekState, week: date, plan_made: datetime) -> tuple[WeekState, tuple[str, ...]]:
+def _state(reader: _Reader, before: WeekState, week: date, match: _Match) -> tuple[WeekState, tuple[str, ...]]:
     """Last week's replayed state, with what the receipts know, and the slots the visit swapped.
 
     Product and units are the slot's just before the visit, so a plan that changes the product is a
     switch to the scorer. The unit cost is the slot's at the start of this week when the product is
     the same (what is on the rail after the visit), else the old product's. A slot whose product
-    before the visit isn't on record takes the product the visit loaded. The catalog and balance are
-    read as they stood when the plan was made."""
-    start = _start(week)
-    loads = reader.visit_loads(plan_made, start)
-    visit_at = min((at for at, _sku in loads.values()), default=start)
-    after, pre_visit = reader.slots_at(start), reader.slots_at(visit_at)
+    before the visit isn't on record takes the product the visit loaded. With no receipt the visit is
+    taken as the start of the week. The catalog and balance are read as they stood when the plan was made."""
+    start, plan_made = _start(week), match.started_at
+    loads = dict(match.loads)
+    after, pre_visit = reader.slots_at(start), reader.slots_at(match.visit_at or start)
     slots, swapped = [], []
     for s in before.slots:
         now, then = after.get(s.slot), pre_visit.get(s.slot)
@@ -269,7 +328,7 @@ def _state(reader: _Reader, before: WeekState, week: date, plan_made: datetime) 
             slots.append(replace(s, product=now.product if now else None,
                                  unit_cost_cents=now.unit_cost if now else None, stock=None))
             continue
-        if s.slot in loads and loads[s.slot][1] != then.product:
+        if s.slot in loads and loads[s.slot] != then.product:
             swapped.append(s.slot)
         cost = now.unit_cost if now is not None and now.product == then.product else then.unit_cost
         slots.append(replace(s, product=then.product, unit_cost_cents=cost, stock=then.units))
@@ -526,7 +585,9 @@ def _day(iso: str) -> str:
 
 
 _GRADE_TONE = {"beat": "ok", "tied": "info", "behind": "warn", "fail": "bad", "no_plan": "warn",
-               "unscored": "muted", "opening": "muted"}
+               "rejected": "warn", "unscored": "muted", "opening": "muted"}
+_REQUEST_WORDS = {"fulfilled": "request fulfilled", "submitted": "request submitted, no receipt yet",
+                  "rejected": "request rejected"}
 _CHECK_TONE = {scoring.PASS: "ok", scoring.FAIL: "bad", scoring.SKIP: "muted"}
 _KIND = {"refused": ("Refused", "warn"), "failed": ("Failed", "bad"), "halt_on": ("Halt on", "warn"),
          "halt_off": ("Halt off", "info"), "halt": ("Halt switch", "info"), "run_failed": ("Run failed", "bad"),
@@ -569,7 +630,8 @@ def _card_html(card: dict) -> str:
     state = "" if card["final"] or card["grade"] == "opening" else ' <span class="hint">in progress</span>'
     plan = ""
     if card["run_id"] is not None:
-        plan = f'<p class="sub">Plan from run {int(card["run_id"])}, made <time>{escape(_when(card["planned_at"]))}</time>.</p>'
+        plan = (f'<p class="sub">Plan from run {int(card["run_id"])}, made <time>{escape(_when(card["planned_at"]))}'
+                f'</time> ({escape(_REQUEST_WORDS.get(card.get("request"), "request unknown"))}).</p>')
     checks = ""
     if card["checks"]:
         items = "".join(
