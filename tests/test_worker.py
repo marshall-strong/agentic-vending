@@ -170,10 +170,12 @@ def test_the_default_jobs_never_migrate(monkeypatch):
     monkeypatch.setattr(db, "connect", lambda: nullcontext(object()))
     monkeypatch.setattr(db, "pending", lambda conn: ["999_not_yet_applied.sql"])
     monkeypatch.setattr(db, "migrate", lambda conn: migrated.append(conn) or [])
+    monkeypatch.setenv("TRACKING_DAILY", "on")     # off, the daily check never opens the database
     results = worker.run_round(worker.default_jobs(), log=lambda _: None)
-    assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog", "sync_product_requests"]
+    assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog",
+                                        "sync_product_requests", "tracking_daily"]
     assert migrated == []
-    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 5
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 6
 
 
 # --- The home page at / (#54) -----------------------------------------------------

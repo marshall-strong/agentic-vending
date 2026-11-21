@@ -1,0 +1,317 @@
+"""The worker's daily tracking check (`vending.tracking_daily`, #218): when it sends, that it never sends twice
+in a day (a worker restart included), the quiet skip before the ledger opening, and where an `outside` verdict
+shows: the dashboard, the incident log and the agent's briefing. No network: the bridge is a fake."""
+
+from __future__ import annotations
+
+from datetime import datetime, time, timedelta, timezone
+
+import pytest
+from psycopg.types.json import Jsonb
+
+from tests.conftest import TEST_SLOTS, open_in
+from tests.test_tracking import FakeBridge, fill, open_ledger, poll, refused
+from vending import settings, tracking, tracking_daily
+from vending.bridge import BridgeNoAnswer
+from vending.start import EASTERN
+
+SETTINGS = (tracking_daily.MODE_SETTING, tracking_daily.AT_SETTING, tracking.DAILY_SETTING)
+
+
+@pytest.fixture(autouse=True)
+def _settings(monkeypatch):
+    """Every setting at its default, whatever a developer's `.env` says; then the daily send on."""
+    for name in SETTINGS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(settings, "_FILE", {k: v for k, v in settings._FILE.items() if k not in SETTINGS})
+    monkeypatch.setenv(tracking_daily.MODE_SETTING, "on")
+
+
+def utc(text: str) -> datetime:
+    return datetime.fromisoformat(text).astimezone(timezone.utc)
+
+
+# Fri 4 Dec 2026: 06:05 Eastern is 11:05 UTC. The 05:00 Eastern poll is in the bridge's books by 06:00.
+SETTLED = utc("2026-12-04T10:00:00+00:00")
+NOW = utc("2026-12-04T11:05:00+00:00")
+
+
+def answer(as_of="p1", outside=(), checked_at=NOW):
+    """A 200 of the spec's shape, checked at `checked_at`; the next check from the following midnight Eastern."""
+    day = checked_at.astimezone(EASTERN).date() + timedelta(days=1)
+    next_from = datetime.combine(day, time.min, EASTERN)
+    return {"as_of": as_of, "as_of_time": SETTLED.isoformat(), "checked_at": checked_at.isoformat(),
+            "results": {k: "outside" if k in outside else "within" for k in tracking.RESULTS},
+            "next_check_from": next_from.isoformat()}
+
+
+def books(conn):
+    """The opening, a fill of our slots, a poll before it all, the settled poll and one this hour."""
+    open_ledger(conn)
+    fill(conn)
+    poll(conn, "p0", "2026-11-02T18:00:00+00:00")
+    poll(conn, "p1", SETTLED.isoformat(), sold_in_15=2)
+    poll(conn, "p2", "2026-12-04T11:00:00+00:00", sold_in_15=5)     # this hour: not folded in yet
+
+
+def sends(conn):
+    return conn.execute("select id, sent_by, as_of, status, used_check, eastern_day from tracking_checks"
+                        " order by id").fetchall()
+
+
+def run(conn, bridge, now=NOW):
+    lines: list[str] = []
+    code = tracking_daily.run(conn, lambda: bridge, now=now, log=lines.append)
+    return code, lines
+
+
+# --- When it sends ----------------------------------------------------------------------------------
+
+def test_it_is_off_by_default_and_then_never_opens_the_database(monkeypatch, capsys):
+    from vending import db
+
+    monkeypatch.delenv(tracking_daily.MODE_SETTING)
+    monkeypatch.setattr(db, "connect", lambda: pytest.fail("off must not connect"))
+    assert tracking_daily.main([]) == 0
+    assert "off" in capsys.readouterr().out
+    monkeypatch.setenv(tracking_daily.MODE_SETTING, "Off")
+    assert tracking_daily.main([]) == 0
+
+
+def test_a_wrong_setting_fails_the_job(conn, monkeypatch):
+    monkeypatch.setenv(tracking_daily.MODE_SETTING, "yes")
+    assert run(conn, FakeBridge())[0] == 2
+    monkeypatch.setenv(tracking_daily.MODE_SETTING, "on")
+    for wrong in ("6am", "22:00", "23:30", "06:00+01:00"):
+        monkeypatch.setenv(tracking_daily.AT_SETTING, wrong)
+        assert run(conn, FakeBridge())[0] == 2, wrong
+
+
+def test_it_sends_once_as_of_the_newest_poll_already_in_the_bridges_books(conn):
+    books(conn)
+    bridge = FakeBridge(answer())
+    code, lines = run(conn, bridge)
+    assert code == 0
+    assert [b["as_of"] for b in bridge.sent] == ["p1"]          # not p2, taken this hour
+    assert set(bridge.sent[0]["coil"]) == set(TEST_SLOTS)
+    [(_, by, as_of, status, used, day)] = sends(conn)
+    assert (by, as_of, status, used, str(day)) == (tracking_daily.WORKER, "p1", 200, True, "2026-12-04")
+    assert "cash within" in lines[-1]
+
+
+def test_a_worker_restart_never_sends_twice_in_one_day(schema_url):
+    """Each round below is a fresh connection, as after a restart: the only memory is the database."""
+    with open_in(*schema_url) as conn:
+        books(conn)
+    bridge = FakeBridge(answer(), answer())
+    later = [NOW, NOW + timedelta(hours=1), NOW + timedelta(hours=9), utc("2026-12-05T02:55:00+00:00")]
+    codes = []
+    for moment in later:            # 06:05, 07:05, 15:05 and 21:55 Eastern on Fri 4 Dec
+        with open_in(*schema_url) as conn:
+            codes.append(run(conn, bridge, moment))
+    assert [c for c, _ in codes] == [0, 0, 0, 0]
+    assert len(bridge.sent) == 1
+    assert all("used or may be" in lines[-1] for _, lines in codes[1:])
+    with open_in(*schema_url) as conn:
+        assert len(sends(conn)) == 1
+
+
+def test_the_next_day_it_sends_again(conn):
+    books(conn)
+    poll(conn, "p3", "2026-12-05T10:00:00+00:00")
+    bridge = FakeBridge(answer(), answer("p3", checked_at=NOW + timedelta(days=1)))
+    run(conn, bridge)
+    assert run(conn, bridge, NOW + timedelta(days=1))[0] == 0
+    assert [b["as_of"] for b in bridge.sent] == ["p1", "p3"]
+
+
+@pytest.mark.parametrize("moment", ["2026-12-04T10:55:00+00:00",      # 05:55 Eastern
+                                    "2026-12-05T03:00:00+00:00",      # 22:00 Eastern
+                                    "2026-12-05T04:59:00+00:00"])     # 23:59 Eastern
+def test_it_sends_only_from_six_to_ten_pm_eastern(conn, moment):
+    books(conn)
+    bridge = FakeBridge()
+    code, lines = run(conn, bridge, utc(moment))
+    assert (code, bridge.sent, sends(conn)) == (0, [], [])
+    assert "not due" in lines[-1]
+
+
+def test_the_time_is_a_setting(conn, monkeypatch):
+    books(conn)
+    monkeypatch.setenv(tracking_daily.AT_SETTING, "07:30")
+    bridge = FakeBridge(answer("p2"))
+    assert run(conn, bridge)[0] == 0 and bridge.sent == []
+    # 07:35 Eastern: the 06:00 Eastern poll is in the bridge's books now.
+    assert run(conn, bridge, NOW + timedelta(hours=1, minutes=30))[0] == 0
+    assert [b["as_of"] for b in bridge.sent] == ["p2"]
+
+
+def test_a_person_who_sent_today_already_blocks_the_worker(conn):
+    books(conn)
+    tracking.send(conn, FakeBridge(answer()), tracking.figures(conn, "p1"), "kevin", now=NOW - timedelta(minutes=30))
+    bridge = FakeBridge()
+    assert run(conn, bridge)[0] == 0
+    assert bridge.sent == []
+
+
+# --- Skips and failures -----------------------------------------------------------------------------
+
+def test_with_no_ledger_opening_it_skips_quietly(conn):
+    fill(conn)
+    poll(conn, "p1", SETTLED.isoformat())
+    bridge = FakeBridge()
+    code, lines = run(conn, bridge)
+    assert (code, bridge.sent, sends(conn)) == (0, [], [])
+    assert "skipped" in lines[-1] and "no opening" in lines[-1]
+
+
+def test_an_opening_after_now_is_no_opening_yet(conn):
+    open_ledger(conn, at=NOW + timedelta(days=1))
+    assert run(conn, FakeBridge())[0] == 0 and sends(conn) == []
+
+
+def test_with_no_poll_since_the_opening_it_skips_quietly(conn):
+    open_ledger(conn, at=NOW - timedelta(minutes=30))
+    poll(conn, "p1", SETTLED.isoformat())
+    code, lines = run(conn, FakeBridge())
+    assert code == 0 and sends(conn) == [] and "skipped" in lines[-1]
+
+
+def test_figures_it_cannot_work_out_fail_the_job_and_send_nothing(conn):
+    open_ledger(conn)
+    poll(conn, "p1", SETTLED.isoformat())          # no receipt has loaded our slots
+    bridge = FakeBridge()
+    code, lines = run(conn, bridge)
+    assert (code, bridge.sent, sends(conn)) == (1, [], [])
+    assert "not sent" in lines[-1]
+
+
+def test_a_stale_newest_poll_fails_the_job(conn):
+    books(conn)
+    code, lines = run(conn, FakeBridge(), NOW + timedelta(hours=7))
+    assert code == 1 and sends(conn) == [] and "history sync may have stopped" in lines[-1]
+
+
+def test_a_send_with_no_usable_answer_blocks_the_rest_of_the_day(conn):
+    books(conn)
+    bridge = FakeBridge(BridgeNoAnswer("timed out"))
+    assert run(conn, bridge)[0] == 3
+    assert run(conn, bridge, NOW + timedelta(hours=1))[0] == 0
+    assert len(bridge.sent) == 1
+
+
+def test_a_send_left_unanswered_by_a_crash_blocks_the_day(conn):
+    """The worker died between storing the request and the answer: the row has no answer at all."""
+    books(conn)
+    conn.execute("insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request)"
+                 " values (%s, '2026-12-04', %s, 'p1', %s, %s)",
+                 (NOW - timedelta(minutes=10), tracking_daily.WORKER, SETTLED, Jsonb({})))
+    bridge = FakeBridge()
+    assert run(conn, bridge)[0] == 0 and bridge.sent == []
+
+
+def test_a_refusal_before_the_check_is_tried_again_next_round_at_most_three_times(conn):
+    books(conn)
+    bridge = FakeBridge(*[refused(409, "not_reconciled_yet")] * 3)
+    codes = [run(conn, bridge, NOW + timedelta(hours=h))[0] for h in range(4)]
+    assert codes == [0, 0, 0, 1]
+    assert len(bridge.sent) == 3
+    assert [used for _, _, _, _, used, _ in sends(conn)] == [False] * 3
+
+
+def test_a_refusal_that_will_not_settle_on_its_own_fails_the_job(conn):
+    books(conn)
+    assert run(conn, FakeBridge(refused(422, "invalid_coil")))[0] == 1
+
+
+def test_two_workers_cannot_both_send_before_the_daily_limit_starts(conn):
+    """Before 3 Dec `send` alone allows a second send; the worker's `once_a_day` refuses it under the lock."""
+    books(conn)
+    early = utc("2026-11-25T11:05:00+00:00")
+    found = tracking.figures(conn, "p0")
+    checked = answer("p0", checked_at=early)
+    tracking.send(conn, FakeBridge(checked), found, tracking_daily.WORKER, now=early, once_a_day=True)
+    with pytest.raises(tracking.AlreadyChecked):
+        tracking.send(conn, FakeBridge(checked), found, tracking_daily.WORKER, now=early, once_a_day=True)
+    tracking.send(conn, FakeBridge(checked), found, "kevin", now=early)     # by hand: testing, no limit
+
+
+# --- Where the verdicts show ------------------------------------------------------------------------
+
+def test_an_outside_verdict_reaches_the_dashboard_and_the_incident_log(conn):
+    from vending import dashboard, report_card
+
+    books(conn)
+    run(conn, FakeBridge(answer(outside=("coil",))))
+    later = NOW + timedelta(hours=1)
+    data = tracking_daily.panel(conn, later)
+    [check] = data["checks"]
+    assert check["outside"] == ["coil"] and data["on"] and data["at"] == "06:00"
+    [(level, text)] = tracking_daily.attention(data)
+    assert level == "bad" and "coil" in text
+    html = tracking_daily.panel_html({"ok": True, "data": data})
+    assert html.count('class="pill bad"') == 1 and html.count('class="pill ok"') == 3
+    incidents = report_card.incidents(conn, later)
+    [row] = [r for r in incidents["rows"] if r["kind"] == "books_outside"]
+    assert "the coil" in row["note"] and not row["error"]
+    assert "Books outside" in report_card.incidents_html({"ok": True, "data": incidents})
+    snap, _ = dashboard._snapshot(conn, later)
+    assert snap["tracking"]["ok"] and snap["tracking"]["data"]["checks"][0]["outside"] == ["coil"]
+    assert any("tracking check" in a["text"] for a in dashboard.attention(snap))
+
+
+def test_a_check_within_on_every_figure_is_no_incident(conn):
+    from vending import report_card
+
+    books(conn)
+    run(conn, FakeBridge(answer()))
+    assert not [r for r in report_card.incidents(conn, NOW + timedelta(hours=1))["rows"]
+                if r["kind"].startswith(("books", "check"))]
+    assert tracking_daily.attention(tracking_daily.panel(conn, NOW)) == []
+
+
+def test_a_check_with_no_usable_answer_is_an_incident_and_shows_no_verdicts(conn):
+    from vending import report_card
+
+    books(conn)
+    run(conn, FakeBridge(BridgeNoAnswer("timed out")))
+    [row] = [r for r in report_card.incidents(conn, NOW + timedelta(hours=1))["rows"]
+             if r["kind"] == "check_unanswered"]
+    assert "may have used" in row["note"]
+    html = tracking_daily.panel_html({"ok": True, "data": tracking_daily.panel(conn, NOW)})
+    assert "No verdicts" in html and "pill" not in html
+
+
+def test_the_panel_says_when_the_daily_send_is_off(conn, monkeypatch):
+    monkeypatch.setenv(tracking_daily.MODE_SETTING, "off")
+    html = tracking_daily.panel_html({"ok": True, "data": tracking_daily.panel(conn, NOW)})
+    assert "The daily send is off" in html and "No checks sent yet" in html
+
+
+def test_an_outside_verdict_is_in_the_agents_next_briefing(conn):
+    from tests.test_briefing import NOW as BRIEF_NOW, sample
+    from vending import briefing
+
+    sample(conn)
+    as_of = BRIEF_NOW - timedelta(hours=1)
+    conn.execute("insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+                 " answered_at, status, answer, used_check, results)"
+                 " values (%s, '2026-11-12', 'worker (daily)', 'poll-3', %s, '{}', %s, 200, %s, true, %s)",
+                 (BRIEF_NOW - timedelta(minutes=30), as_of, BRIEF_NOW - timedelta(minutes=30),
+                  Jsonb({"checked_at": (BRIEF_NOW - timedelta(minutes=30)).isoformat()}),
+                  Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    b = briefing.build(conn, BRIEF_NOW)
+    assert b.tracking is not None and b.tracking.results["cash"] == "outside"
+    assert [a.lookup for a in b.alerts if a.code == "books_outside_cash"] == ["get_account_balance"]
+    text = briefing.render(b)
+    assert "cash OUTSIDE" in text and "coil within" in text
+
+
+def test_the_briefing_says_when_no_check_has_been_answered(conn):
+    from tests.test_briefing import NOW as BRIEF_NOW, sample
+    from vending import briefing
+
+    sample(conn)
+    b = briefing.build(conn, BRIEF_NOW)
+    assert b.tracking is None and not [a for a in b.alerts if a.code.startswith("books_outside")]
+    assert "Tracking check (bridge's books vs ours): none answered yet." in briefing.render(b)

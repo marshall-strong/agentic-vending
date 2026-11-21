@@ -43,7 +43,8 @@ what changed and why.
 | Back stock | What the receipts say is in the closet, and what each unit cost us. Links to the [Products page](#the-products-page) | `vending.stock` |
 | Product leaderboards | The ten best sellers by SKU, flavor, and brand for our current assignment. Each row shows units sold, revenue excluding tax, and sell-through. Sell-through divides units sold by units loaded since the opening. For this week (Saturday to Friday, Eastern), it divides units sold by starting stock plus units loaded. The rate is unavailable if sales exceed recorded stock. Sales with an unknown product stay out of the rankings. The panel counts those sales and labels the units with an estimated cost. | `vending.stock`, `vending.ledger`, `catalog_products` |
 | Weekly report card | Under The plan. One card per week (Saturday to Friday, Eastern, the ledger's display weeks) from the opening, newest first, the last 8. Each scores the plan its visit loaded (matched through the purchase request), with the week replayer's scoring, beside its baseline: restock each slot to last week's sales at last week's price. **Hard checks** (valid plan, catalog, prices, balance) pass, fail or skip; a failed check fails the week, whatever it earned. **Outcome**: units sold, slots that sold out (estimated), unsold units and margin, for the plan and the baseline. **Against the baseline**: the margin difference on the shared slots, with what it leaves out. The opening week isn't graded, the current week is graded on its sales so far, and a closed week whose polls cover too little of it shows its figures without a grade. See [The weekly report card](#the-weekly-report-card) | `agent_runs`, polls (`vending.replay`), `vending.stock`, `vending.ledger`, `catalog_products`, `product_requests`, `config` |
-| Incident log | Under the report card. From the opening, newest first, the last 50 (with the total counted): refused and failed tool calls, halt switch flips, live runs that failed, halted or were left running, live runs whose model was told a tool call failed (counted, not quoted), and weeks that failed a hard check. Each has a one-line note; a failure's text is never shown | `action_log`, `agent_runs`, `agent_steps`, the report card |
+| Incident log | Under the report card. From the opening, newest first, the last 50 (with the total counted): refused and failed tool calls, halt switch flips, live runs that failed, halted or were left running, live runs whose model was told a tool call failed (counted, not quoted), weeks that failed a hard check, and tracking checks that read `outside` on a figure or got no usable answer. Each has a one-line note; a failure's text is never shown | `action_log`, `agent_runs`, `agent_steps`, the report card, `tracking_checks` |
+| Tracking check | Under Money. The last 7 checks, newest first: when it was sent and by whom, the poll it was as of, and the bridge's four verdicts (cash, sales tax owed, coil, back stock), each `within` or `outside`. A send with no verdicts says why, in our words. It says whether the worker's daily send is on (`TRACKING_DAILY`, off by default). Needs attention adds **Problem** when the newest answered check read `outside` on any figure. See [`vending/tracking_daily.py`](../vending/tracking_daily.py) | `tracking_checks` |
 | Footer | One small line on who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `page_visits`, `page_visit_totals` |
 
 ### The machine close-up
@@ -306,9 +307,21 @@ stored text is never read: the row says `error` and `hide_errors` gives it the f
 page and the standalone one alike. A refusal keeps its first line, cut to 160 characters. A note from before
 the current slot assignment is replaced. Each source reads only its newest 50 rows, the total is counted in
 SQL, and a run that failed, halted or stuck is one incident (its tool errors aren't listed again).
+`tracking_checks` (#218) adds a row for each check the bridge answered `outside` on any figure (which figures,
+and the poll it was as of; the bridge never says by how much) and for each send that may have used the day's
+check with no verdicts. Only the stored verdicts and our own codes are read, never the bridge's text.
 
 **Not built yet:** the agent reading a compact summary of its last few report cards and recent incidents
 before it plans (#48). That is a follow-up.
+
+## The tracking check
+
+![The tracking check panel and its incident rows, fake data on a scratch database](images/tracking-check-panel.png)
+
+The panel lists the last 7 checks from `tracking_checks`, newest first, each with the bridge's four verdicts.
+A check with an `outside` verdict is also a row in the incident log and a **Problem** in Needs attention,
+and the agent's next briefing has it (`books_outside_<figure>`). The worker sends one check a day only when
+`TRACKING_DAILY=on` ([`deploy.md`](deploy.md)); off, a person sends with `python -m vending.tracking check --send`.
 
 ## Catalog requests
 

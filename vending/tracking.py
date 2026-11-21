@@ -328,11 +328,12 @@ def blocking(conn: psycopg.Connection, day: date) -> list[tuple[int, int | None,
 
 
 def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
-         now: datetime | Callable[[], datetime] | None = None) -> Outcome:
+         now: datetime | Callable[[], datetime] | None = None, once_a_day: bool = False) -> Outcome:
     """Send `found` once, never retried, storing the request first and the answer after.
 
     `now` is the time for both (default the database clock); a callable is asked for each.
-    Raises `AlreadyChecked` from `daily_from()` on, when today's check is used or may be."""
+    Raises `AlreadyChecked` from `daily_from()` on, when today's check is used or may be. With
+    `once_a_day` (the worker's daily send, `vending.tracking_daily`) it does so before then too."""
     if not by or not by.strip():
         raise ValueError("a send needs a name, for the record")
     fixed = now
@@ -343,7 +344,7 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
         conn.execute("select pg_advisory_xact_lock(%s)", (TRACKING_LOCK,))
         moment = stamp()
         day = eastern_day(moment)
-        if moment >= daily_from():
+        if once_a_day or moment >= daily_from():
             earlier = blocking(conn, day)
             if earlier:
                 said = "; ".join(f"#{i}: " + ("no usable answer, so it may have used it" if s is None
