@@ -24,7 +24,8 @@ the stock replayed to it. Nothing after the poll counts, the bridge's rule.
 receipt with no `total_paid` (cash would leave it out), one of our slots with no counted receipt
 (nothing says what is in it), or a slot whose count is a range because sales across a product change
 couldn't be split (`stock.SlotCount.at_most`). The poll must be ours (`DEVICE_ID`) with a good
-checksum, a counter for every one of our slots, at or after the ledger's opening.
+checksum, a counter for every one of our slots, at or after the ledger's opening, and no other good
+poll of ours may share its `started_at` (the bridge gives no order between two polls at one moment).
 
 **One check a day.** The bridge allows one check per team per Eastern day, and a request it refuses
 before checking (bad body, unknown poll, books not reconciled yet) doesn't use it. David, 20 Nov: no
@@ -210,6 +211,14 @@ def poll_time(conn: psycopg.Connection, session_id: str) -> datetime:
         raise CantCompute(f"Poll {session_id} is of {device}, not our machine {DEVICE_ID}.")
     if not good:
         raise CantCompute(f"Poll {session_id} failed its checksum, so its counters aren't known. Pick another.")
+    # The ledger and the stock cut at a time, so a second good poll of ours at the same moment would count
+    # as up to this one, and the bridge gives no order between them.
+    tied = conn.execute("select count(*) from polls where device_id = %s and crc_ok and started_at = %s"
+                        " and session_id <> %s", (DEVICE_ID, started, session_id)).fetchone()[0]
+    if tied:
+        raise CantCompute(f"Poll {session_id} shares its time {started.isoformat()} with {tied} other poll"
+                          f"{'s' if tied != 1 else ''} of our machine, so the figures as of it can't be told "
+                          "apart. Pick a different poll with --as-of. Nothing was sent.")
     return started
 
 

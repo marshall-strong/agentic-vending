@@ -329,6 +329,25 @@ def test_a_later_poll_does_not_change_the_coil_as_of_an_earlier_one(conn):
     assert tracking.figures(conn, "p1").coil["15"] == 6
 
 
+def test_a_poll_sharing_its_time_with_another_of_our_polls_is_refused(conn):
+    """A second good poll of our machine at p1's exact `started_at`, showing 5 sold, turned p1's coil
+    for slot 15 from 6 into 3: the replay cuts at the time and can't tell the two apart, and the bridge
+    gives no order between them. So neither is used. A poll of another machine at that time is fine."""
+    from vending import tracking
+
+    books(conn)
+    poll(conn, "elsewhere", "2026-11-03T18:00:00+00:00", sold_in_15=5, device_id="vmc2")
+    assert tracking.figures(conn, "p1").coil["15"] == 6
+    poll(conn, "p1tie", "2026-11-03T18:00:00+00:00", sold_in_15=5)
+    for session in ("p1", "p1tie"):
+        with pytest.raises(tracking.CantCompute, match=r"shares its time .* --as-of\. Nothing was sent"):
+            tracking.figures(conn, session)
+    assert tracking.figures(conn, "p2").coil["15"] == 3
+    poll(conn, "p2tie", "2026-11-04T18:00:00+00:00", sold_in_15=5)
+    with pytest.raises(tracking.CantCompute, match="shares its time"):
+        tracking.figures(conn)                         # the newest poll, by default
+
+
 def test_a_good_poll_missing_a_counter_for_one_of_our_slots_is_refused(conn):
     """p1 passed its checksum but has no counter for slot 15: as of it the coil read 8 (not 6) and the
     tax owed $0.00 (not $0.37), because the sales up to it couldn't be seen. Nothing is sent."""
