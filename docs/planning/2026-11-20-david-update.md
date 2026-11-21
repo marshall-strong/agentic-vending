@@ -35,7 +35,7 @@ Each answer is "within" (±$1 or ±2 units) or "outside". There is no rate limit
 
 David does it this way to reduce rounding. The first calculation is Sat 5 Dec.
 
-**What it changes.** Our ledger already rounds tax per week, but its weeks start at 00:00 on Saturday (`vending/ledger.py`, `WEEK_STARTS`). David's week ends at 23:59 on Saturday, so ours ends a day earlier. Another branch aligns the ledger. Until it does, a Saturday's tax falls in a different week from David's, and "sales tax owed" can differ from his by a few cents. That is inside the check's $1 tolerance, but it adds up if we also differ on when tax is owed (question 2).
+**What it changes.** Our ledger already rounds tax per week, but its weeks start at 00:00 on Saturday (`vending/ledger.py`, `WEEK_STARTS`). David's week ends at 23:59 on Saturday, so ours ends a day earlier. Another branch aligns the ledger. Until it does, a Saturday's tax falls in a different week from David's, and "sales tax owed" can differ from his by a few cents. That is inside the check's $1 tolerance, but it adds up if we also differ on when tax is owed.
 
 ### 3. Slots are reassigned and final for the quarter
 
@@ -102,9 +102,18 @@ A read-only check of main at `9a1eb8b`, 20 Nov.
 ## Questions for David
 
 1. **Opening day.** The email says the machine won't operate until 3 Dec, and also that 1 or 2 Dec is the first day of operation. Which is it? If it depends on stocking, when will we know?
-2. **When tax becomes owed.** Does `sales_tax_owed` grow with each sale during the week, or only after Saturday's 23:59 calculation? The tracking check compares our figure with yours, so we need the same rule.
-3. **Paying the tax.** Is sales tax ever taken out of our cash? If so, when: after each Saturday calculation, or once at the end?
-4. **The day-one fill and cash.** When the books start, is the cost of the 30 Nov fill already taken out of the $600? On 12 Nov you said the fill comes out of the $600 and you would check (12 Nov notes, row 3).
-5. **Tracking tolerance.** Is ±2 units for each slot and each product, or for the total? Is ±$1 for cash and tax each?
-6. **Interval counters.** After the 30 Nov reset, will the interval counters be reset again during the quarter (at each restock, say)? We don't use them, but the door counter's since-reset count is in every poll.
-7. **Tracking check timing.** Once the quarter starts, is the 1 call a day counted per calendar day, Eastern? Does a call that gets an error count?
+2. **Interval counters.** After the 30 Nov reset, will the interval counters be reset again during the quarter (at each restock, say)? We don't use them, but the door counter's since-reset count is in every poll.
+
+## Settled without asking
+
+- **Tax owed accrues with each sale.** Saturday 23:59 is when the week's tax is calculated and rounded, not when it starts to count (Kevin, 20 Nov).
+- **The check's day.** The route's own spec says one check per team per day, midnight to midnight Eastern, and a request refused before the check (bad body, unknown poll, poll not yet in the books) doesn't use it up.
+
+## Learn by testing, 30 Nov to 3 Dec
+
+Checks are unlimited until the quarter starts, and the books start at the 30 Nov stocking. Use those days to find out, instead of asking:
+
+- whether the day-one fill cost is already out of the $600 when the books start (send cash both ways);
+- whether ±2 units applies per slot and per product or to the total (move one slot by 3);
+- whether ±$1 applies to cash and tax separately;
+- when, if ever, tax leaves cash (compare after the first Saturday calculation, 5 Dec).
