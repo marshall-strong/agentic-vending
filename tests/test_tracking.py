@@ -653,6 +653,30 @@ def test_an_unanswered_send_left_behind_by_a_crash_blocks_only_its_own_days(conn
     assert tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=tomorrow + timedelta(hours=10)).status == 200
 
 
+@pytest.mark.parametrize("answer", [
+    {**WITHIN, "results": {**WITHIN["results"], "coil": "close"}},
+    {**WITHIN, "results": {k: v for k, v in WITHIN["results"].items() if k != "back_stock"}},
+    {**WITHIN, "results": ["within"] * 4},
+    {k: v for k, v in WITHIN.items() if k != "checked_at"},
+    {k: v for k, v in WITHIN.items() if k != "next_check_from"},
+    {k: v for k, v in WITHIN.items() if k != "as_of_time"},
+    {**WITHIN, "checked_at": "yesterday"},
+    {**WITHIN, "as_of": "p2"},                         # not the poll we sent
+    ["within", "within", "within", "within"],
+], ids=["verdict", "missing-verdict", "results-list", "no-checked_at", "no-next_check_from", "no-as_of_time",
+        "bad-checked_at", "other-poll", "not-an-object"])
+def test_a_malformed_200_is_not_a_success_and_may_have_used_the_check(conn, answer):
+    from vending import tracking
+
+    books(conn)
+    f = tracking.figures(conn, "p1")
+    out = tracking.send(conn, FakeBridge(answer), f, "kevin", now=DURING)
+    assert (out.status, out.results, out.used_check, out.error_type) == (200, None, None, "malformed_answer")
+    assert rows(conn)[0][:4] == (200, "malformed_answer", None, None)
+    with pytest.raises(tracking.AlreadyChecked):
+        tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=DURING)
+
+
 def test_before_the_start_sends_are_not_limited(conn):
     from vending import tracking
 
@@ -731,6 +755,7 @@ def test_check_send_needs_by_and_stores_the_answer(schema_url, monkeypatch, caps
     with open_in(*schema_url) as conn:
         books(conn)
     monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setenv(tracking.DAILY_SETTING, "2099-01-01T00:00:00-05:00")   # two sends, whatever today is
     with pytest.raises(SystemExit):
         tracking.main(["check", "--send"], bridge=lambda: pytest.fail("sent without a name"))
     bridge = FakeBridge(WITHIN)
@@ -740,10 +765,42 @@ def test_check_send_needs_by_and_stores_the_answer(schema_url, monkeypatch, caps
     bridge = FakeBridge(refused(409, "tracking_not_started", detail="nothing to check against", items=[]))
     assert tracking.main(["check", "--send", "--by", "kevin"], bridge=lambda: bridge) == 1
     out = capsys.readouterr().out
-    assert "tracking_not_started" in out and "still there" in out
+    assert "409: the project's books haven't begun" in out and "still there" in out
     assert tracking.main(["show"]) == 0
     shown = capsys.readouterr().out
     assert "#2" in shown and "#1" in shown and "coil outside" in shown
+
+
+EVIL = "EVIL[2J]0;owned"     # reply text, escape codes and all, that must never reach the terminal
+
+
+@pytest.mark.parametrize("answer, status, says", [
+    (refused(409, "not_reconciled_yet", error=EVIL, detail=EVIL, items=[EVIL, EVIL]), 1,
+     ["409", "isn't in the bridge's books yet", "2 items", "still there"]),
+    (refused(422, EVIL, detail=EVIL, items=[EVIL]), 1, ["422", "unknown error type", "1 item"]),
+    (BridgeAnswered(422, json.dumps({"detail": [{"msg": EVIL, "loc": ["body", EVIL]}]})), 1,
+     ["422", "didn't match the bridge's schema"]),
+    (BridgeAnswered(503, EVIL), 1, ["503", "may have used today's check"]),
+    ({**WITHIN, "as_of": "p1", "results": {**WITHIN["results"], "coil": EVIL}, "next_check_from": EVIL}, 3,
+     ["200", "not the shape the spec gives", "may have used today's check"]),
+], ids=["known", "unknown-type", "fastapi-422", "5xx", "malformed-200"])
+def test_the_terminal_shows_only_our_own_words_never_the_reply(schema_url, monkeypatch, capsys, answer, status,
+                                                               says):
+    from tests.conftest import open_in
+    from vending import db, tracking
+
+    with open_in(*schema_url) as conn:
+        books(conn)
+    monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+    assert tracking.main(["check", "--as-of", "p1", "--send", "--by", "kevin"],
+                         bridge=lambda: FakeBridge(answer)) == status
+    out = capsys.readouterr()
+    for word in says:
+        assert word in out.out
+    assert tracking.main(["show"]) == 0
+    shown = capsys.readouterr()
+    for text in (out.out, out.err, shown.out, shown.err):
+        assert "EVIL" not in text and "" not in text and "owned" not in text
 
 
 def test_check_refuses_when_a_figure_cannot_be_worked_out(schema_url, monkeypatch, capsys):

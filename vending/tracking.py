@@ -40,6 +40,13 @@ bridge's `checked_at` (and the day before its `next_check_from`), not the day we
 still waiting, or with no usable answer, blocks every day from its send to its answer, or to
 `IN_FLIGHT` after the send if no answer was ever stored (`days_used`).
 
+**What the terminal shows.** Only our own words: the four verdicts when the 200 has the spec's shape
+(every field present, about the poll we sent, each verdict `within` or `outside`), else a message
+picked by the `error_type` codes the spec names (any other code prints as "unknown error type") or by
+the status. The bridge's `error`, `detail` and `items` are stored with the check, never printed. A 200
+of another shape isn't a success: it is stored as `malformed_answer`, may have used the day's check,
+and the command exits 3.
+
 The bridge's tolerance (David, 20 Nov): within $1 for money, within 2 units for counts.
 
 Times are the database clock (`clock`), as in `vending.ledger.db_now`. The CLI never migrates.
@@ -84,6 +91,38 @@ VERDICTS = ("within", "outside")
 
 # Statuses that mean the bridge refused before checking, so the day's check is still there.
 REFUSED_BEFORE_CHECK = (400, 401, 403, 404, 409, 422)
+
+# A 200's fields, all required by the spec (`TrackingCheckResult`).
+ANSWER_FIELDS = ("as_of", "as_of_time", "checked_at", "results", "next_check_from")
+
+# What we print for each `error_type` the spec names (v0.4.0), and for our own words for a send with no
+# usable answer. The bridge's own text (`error`, `detail`, `items`) is stored with the check, never
+# printed: the terminal shows only these.
+ERROR_TYPES = {
+    "unknown_poll": "the bridge has no such poll",
+    "not_reconciled_yet": "that poll isn't in the bridge's books yet; polls are folded in on the hour",
+    "tracking_not_started": "the project's books haven't begun",
+    "invalid_coil": "the coil wasn't every slot we own and only those",
+    "unknown_sku": "back stock named a product that isn't in the catalog",
+    "before_tracking_start": "that poll was taken before the books began",
+    "daily_check_used": "today's check was already used",
+    # Ours, not the bridge's.
+    "unreachable": "it never reached the bridge",
+    "no_answer": "sent, but no usable answer came back (a timeout or a dropped connection)",
+    "malformed_answer": "the bridge answered 200, but not the shape the spec gives, so the verdicts can't be read",
+}
+UNKNOWN_ERROR_TYPE = "unknown error type"
+
+# What we print for a status with no `error_type` we know.
+STATUSES = {
+    400: "the bridge refused the request",
+    401: "the bridge refused our key",
+    403: "the bridge needs a team key, not the instructor's",
+    404: "the bridge has no such poll",
+    409: "the bridge can't check that poll yet",
+    422: "the request body didn't match the bridge's schema",
+    429: "today's check was already used",
+}
 
 
 class CantCompute(RuntimeError):
@@ -305,6 +344,13 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
     except BridgeError as error:           # sent, but no usable answer: it may have run
         return _answered(conn, stamp, row_id, None, {"no_answer": str(error)[:300]}, "no_answer", None)
     error_type = answer.get("error_type") if isinstance(answer, dict) and status != 200 else None
+    if not isinstance(error_type, str):
+        error_type = None
+    elif len(error_type) > 100:
+        error_type = error_type[:100]      # kept as sent, but never printed unless it is one we know
+    if status == 200 and _results(answer, found.as_of) is None:
+        # The bridge answered, so it may well have used the check, but the verdicts can't be read.
+        return _answered(conn, stamp, row_id, status, answer, "malformed_answer", None, found.as_of)
     if status == 200:
         used: bool | None = True
     elif status == 429:
@@ -313,15 +359,28 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
         used = False
     else:
         used = None                        # a 5xx or a status the spec doesn't name
-    return _answered(conn, stamp, row_id, status, answer, error_type, used)
+    return _answered(conn, stamp, row_id, status, answer, error_type, used, found.as_of)
+
+
+def _results(answer: Any, as_of: str) -> dict[str, str] | None:
+    """The four verdicts of a 200 of the spec's shape about the poll we sent, or None.
+
+    Every field is required: `as_of` is our poll, `as_of_time`, `checked_at` and `next_check_from`
+    are times with an offset, and `results` holds the four, each `within` or `outside`."""
+    if not isinstance(answer, dict) or any(k not in answer for k in ANSWER_FIELDS):
+        return None
+    if answer["as_of"] != as_of or any(_time(answer[k]) is None
+                                       for k in ("as_of_time", "checked_at", "next_check_from")):
+        return None
+    given = answer["results"]
+    if not isinstance(given, dict) or any(given.get(k) not in VERDICTS for k in RESULTS):
+        return None
+    return {k: given[k] for k in RESULTS}
 
 
 def _answered(conn: psycopg.Connection, stamp: Callable[[], datetime], row_id: int, status: int | None,
-              answer: Any, error_type: str | None, used: bool | None) -> Outcome:
-    results = None
-    if status == 200 and isinstance(answer, dict) and isinstance(answer.get("results"), dict) \
-            and all(answer["results"].get(k) in VERDICTS for k in RESULTS):
-        results = {k: answer["results"][k] for k in RESULTS}
+              answer: Any, error_type: str | None, used: bool | None, as_of: str = "") -> Outcome:
+    results = _results(answer, as_of) if status == 200 and used else None
     next_from = _time(answer.get("next_check_from")) if isinstance(answer, dict) else None
     conn.execute(
         "update tracking_checks set answered_at = %s, status = %s, answer = %s, error_type = %s, used_check = %s,"
@@ -355,24 +414,42 @@ def _print_figures(f: Figures) -> None:
     print(json.dumps(f.body(), indent=2))
 
 
+def said(status: int | None, error_type: str | None) -> str:
+    """Our own words for an answer: by its `error_type` if the spec names it, else by its status."""
+    if error_type is not None:
+        return ERROR_TYPES.get(error_type, UNKNOWN_ERROR_TYPE)
+    if status is None:
+        return "no answer stored"
+    if status >= 500:
+        return "the bridge failed (a server error)"
+    return STATUSES.get(status, "a status the spec doesn't name")
+
+
+def _verdicts(results: Any) -> str:
+    """`cash within, ...` from stored verdicts: only the four we know, each only `within` or `outside`."""
+    if not isinstance(results, dict):
+        return ""
+    return ", ".join(f"{k} {results[k]}" if results.get(k) in VERDICTS else f"{k} ?" for k in RESULTS)
+
+
 def _print_outcome(o: Outcome) -> None:
     if o.status is None:
-        print(f"Check #{o.id}: no usable answer ({o.error_type}). "
-              + ("It never reached the bridge." if o.used_check is False
+        print(f"Check #{o.id}: no usable answer: {said(None, o.error_type)}. "
+              + ("Today's check is still there." if o.used_check is False
                  else "It may have used today's check."))
         return
     if o.results is not None:
-        print(f"Check #{o.id}: " + ", ".join(f"{k} {v}" for k, v in o.results.items()))
+        print(f"Check #{o.id}: " + _verdicts(o.results))
     else:
-        print(f"Check #{o.id}: {o.status} {o.error_type or ''}".rstrip())
-        if isinstance(o.answer, dict):
-            for key in ("error", "detail"):
-                if o.answer.get(key):
-                    print(f"  {key}: {o.answer[key]}")
-            for item in o.answer.get("items") or []:
-                print(f"  - {item}")
+        print(f"Check #{o.id}: {o.status}: {said(o.status, o.error_type)}.")
+        items = o.answer.get("items") if isinstance(o.answer, dict) else None
+        if isinstance(items, list) and items:
+            print(f"  The bridge listed {len(items)} item{'s' if len(items) != 1 else ''}. They are stored "
+                  "with the check in tracking_checks, not shown here.")
     if o.used_check is False:
         print("The bridge refused it before checking, so today's check is still there.")
+    elif o.used_check is None:
+        print("It may have used today's check.")
     if o.next_check_from is not None:
         print(f"Next check from {o.next_check_from.astimezone(EASTERN):%Y-%m-%d %H:%M %Z}.")
 
@@ -383,9 +460,9 @@ def _show(conn: psycopg.Connection) -> int:
     if not rows:
         print("No checks sent yet.")
     for i, sent, by, as_of, status, error_type, used, results in rows:
-        said = ", ".join(f"{k} {v}" for k, v in results.items()) if results else (error_type or "no answer")
+        words = _verdicts(results) if results else said(status, error_type)
         print(f"#{i}  {sent.astimezone(EASTERN):%Y-%m-%d %H:%M}  by {by}  as of {as_of}  "
-              f"{status if status is not None else '-'}  {said}  used: {used}")
+              f"{status if status is not None else '-'}  {words}  used: {used}")
     return 0
 
 
@@ -426,9 +503,10 @@ def main(argv: list[str] | None = None, bridge: Callable[[], Any] = Bridge) -> i
             print(error, file=sys.stderr)
             return 1
         _print_outcome(outcome)
-        if outcome.status is None:
-            return 3
-        return 0 if outcome.status == 200 else 1
+        if outcome.results is not None:
+            return 0
+        # No verdicts we can read: 3 when the check may have been used without them, else 1.
+        return 3 if outcome.status is None or outcome.status == 200 else 1
 
 
 if __name__ == "__main__":
