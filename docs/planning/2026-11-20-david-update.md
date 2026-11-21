@@ -103,11 +103,11 @@ A read-only check of main at `9a1eb8b`, 20 Nov.
 
 1. **Opening day.** The email says the machine won't operate until 3 Dec, and also that 1 or 2 Dec is the first day of operation. Which is it? If it depends on stocking, when will we know?
 2. **Interval counters.** After the 30 Nov reset, will the interval counters be reset again during the quarter (at each restock, say)? We don't use them, but the door counter's since-reset count is in every poll.
-3. **Model spend in cash.** Our ledger takes the agent's model (API) spend out of cash, as the brief says. The bridge can't see that bill. Should the `cash` we send to the tracking check include it, or leave it out? Once the agent runs, the gap passes $1 within days, so the check would read "outside" for that reason alone.
 
 ## Settled without asking
 
 - **Tax owed accrues with each sale.** Saturday 23:59 is when the week's tax is calculated and rounded, not when it starts to count (Kevin, 20 Nov).
+- **Model spend is in `cash`.** The course has our Anthropic API key and sees our model spend itself, so the cash we send has it taken out, as our ledger does (Kevin, 20 Nov).
 - **The check's day.** The route's own spec says one check per team per day, midnight to midnight Eastern, and a request refused before the check (bad body, unknown poll, poll not yet in the books) doesn't use it up.
 
 ## Learn by testing, 30 Nov to 3 Dec
