@@ -92,9 +92,11 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
     last_day = end or today
     if last_day < first.astimezone(EASTERN).date():
         return Pnl(success=False, message=f"end ({last_day}) is before start ({first.astimezone(EASTERN).date()}).")
+    if first > now:
+        return _not_started(first)
     last = datetime.combine(last_day + timedelta(days=1), time.min, EASTERN) - timedelta(microseconds=1)
-    # Today or a later day ends now: the rest hasn't happened. A window that starts later than now is empty.
-    last = max(first, min(last, now))
+    # Today or a later day ends now: the rest hasn't happened.
+    last = min(last, now)
     try:
         # A poll at `start`'s midnight sharp is in the window; entries, receipts and visits count from it.
         p = ledger.pnl(conn, first, last, ledger.poll_start(first, opened and opened.at))
@@ -150,6 +152,22 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         tax_weeks=[_tax_week(w, first, last) for w in p.takings.by_tax_week],
         notes=list(p.notes),
     )
+
+
+def _not_started(first: datetime) -> Pnl:
+    """A window that starts after now: nothing in it has happened, so the ledger isn't read. Whatever is
+    dated in it (a poll, an entry or a receipt dated ahead) isn't counted. Every flow is zero; inventory at
+    its end isn't known yet, so it is left out."""
+    zero = ledger.money(0)
+    return Pnl(
+        success=True,
+        message=f"The window from {first.astimezone(EASTERN):%Y-%m-%d} (Eastern) hasn't started yet: nothing to report.",
+        count=0, start=first.astimezone(timezone.utc), end=first.astimezone(timezone.utc),
+        revenue=zero, tax_set_aside=zero, revenue_ex_tax=zero, units_sold=0, units_costed=0, cost_of_sales=zero,
+        cost_of_sales_complete=True, units_estimated=0, estimated_cost_of_sales=zero, unattributed_stock=zero,
+        unattributed_stock_provisional=False, gross_margin=zero, shrinkage=zero, shrinkage_units=0,
+        visit_fees=zero, visits=0, token_spend=zero, adjustments=zero, net=zero, purchases=zero, capital=zero,
+        tax_remitted=zero, weeks=[], tax_weeks=[])
 
 
 def _tax_week(w: ledger.WeekTakings, first: datetime, last: datetime) -> dict:

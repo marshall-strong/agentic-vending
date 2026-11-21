@@ -836,6 +836,24 @@ def test_get_pnl_reports_a_week_in_progress_as_partial_up_to_now(db, monkeypatch
     assert past.end == (et(2026, 12, 6, 0, 0) - timedelta(microseconds=1)).astimezone(timezone.utc)
 
 
+def test_get_pnl_for_a_window_that_starts_after_now_is_empty(db):  # noqa: F811
+    # The real clock, not a frozen one: the window and everything in it are dated well after any real now.
+    # It used to be moved to end at its start, so the midnight poll, entry and receipt counted.
+    open_ledger(db, at=et(2026, 11, 30, 13, 0))
+    store_poll(db, "eve", et(2099, 12, 5, 22, 0).isoformat(), {"15": (135, 0)})
+    store_poll(db, "midnight", et(2099, 12, 6, 0, 0).isoformat(), {"15": (135, 2)})
+    ledger.record(db, "adjustment", 100, "dated at midnight", "marshall", et(2099, 12, 6, 0, 0))
+    deliver(db, "r1", resolved_at="2099-12-06T05:00:00Z")
+    for end in (date(2099, 12, 6), date(2099, 12, 31)):
+        reply = get_pnl(db, date(2099, 12, 6), end)
+        assert reply.success, end
+        assert (reply.revenue, reply.units_sold, reply.adjustments, reply.purchases, reply.net) == (
+            "0.00", 0, "0.00", "0.00", "0.00"), end
+        assert (reply.weeks, reply.tax_weeks, reply.count) == ([], [], 0), end
+        assert reply.start == reply.end == et(2099, 12, 6, 0, 0), end
+        assert "hasn't started" in reply.message, end
+
+
 def test_get_pnl_days_are_eastern_days(db):  # noqa: F811
     open_ledger(db)
     deliver(db, "r1")
