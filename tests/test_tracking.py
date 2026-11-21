@@ -1012,6 +1012,26 @@ def test_a_reset_while_sending_may_have_used_the_check(conn, monkeypatch):
         tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=DURING)
 
 
+@pytest.mark.parametrize("error_type, stored", [
+    ("not_reconciled_yet\x00", "not_reconciled_yet�"),
+    ("not_reconciled_yet\ud800", "not_reconciled_yet?"),
+], ids=["nul", "lone-surrogate"])
+def test_an_error_type_the_database_cannot_hold_is_stored_made_safe(conn, error_type, stored):
+    """`error_type` is a text column, written from the reply: a NUL left the answer unwritten, and a lone
+    surrogate raised before the write. It is made safe as the JSON answer is, and the answer stored."""
+    from vending import tracking
+
+    books(conn)
+    f = tracking.figures(conn, "p1")
+    out = tracking.send(conn, FakeBridge(refused(409, error_type)), f, "kevin", now=DURING)
+    assert (out.status, out.error_type, out.used_check) == (409, stored, False)
+    assert rows(conn)[0][:3] == (409, stored, False)
+    [answer] = conn.execute("select answer from tracking_checks").fetchone()
+    assert answer["error_type"] == stored
+    out = tracking.send(conn, FakeBridge(WITHIN), f, "kevin", now=DURING)    # the day is still open
+    assert out.results is not None
+
+
 def test_a_database_error_storing_the_answer_prints_only_our_words(schema_url, monkeypatch, capsys):
     """Should storing the answer fail anyway, the error's text (which can quote the reply) isn't printed."""
     import psycopg

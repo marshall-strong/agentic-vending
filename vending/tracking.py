@@ -411,7 +411,8 @@ def _results(answer: Any, as_of: str) -> dict[str, str] | None:
 
 def _answered(conn: psycopg.Connection, stamp: Callable[[], datetime], row_id: int, status: int | None,
               answer: Any, error_type: str | None, used: bool | None, as_of: str = "") -> Outcome:
-    answer = _db_safe(answer)
+    # Every column written from the reply goes through `_db_safe`: the answer, and `error_type`, its text.
+    answer, error_type = _db_safe(answer), _db_safe(error_type)
     results = _results(answer, as_of) if status == 200 and used else None
     next_from = _time(answer.get("next_check_from")) if isinstance(answer, dict) else None
     conn.execute(
