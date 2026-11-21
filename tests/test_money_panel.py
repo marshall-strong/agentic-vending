@@ -249,7 +249,8 @@ def test_a_missing_ledger_table_blanks_only_the_panels_that_need_it(conn, page_c
     conn.execute("drop table ledger_entries cascade")
     snap = dashboard.snapshot(page_conn, NOW)
     panels = {k: v for k, v in snap.items() if isinstance(v, dict) and "ok" in v}
-    assert "money" in panels and {k for k, v in panels.items() if not v["ok"]} == {"money", "leaderboards"}
+    assert "money" in panels and {k for k, v in panels.items() if not v["ok"]} == {
+        "money", "leaderboards", "report_cards", "incidents"}
     assert snap["spend"] == {"ok": True, "data": None}
     assert "ledger_entries" in snap["money"]["why"]
     page = dashboard.render(snap)

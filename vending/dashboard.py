@@ -68,7 +68,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import capacity, db, leaderboards, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
+from vending import (capacity, db, leaderboards, machine_art, money_panel, plan_rounds, report_card, settings,
+                     slot_counts, visits)
 from vending import pricing_panel
 from vending import stock as stock_mod
 from vending import planner
@@ -626,6 +627,11 @@ def hide_errors(snap: dict, *, public: bool = False) -> None:
         for step in run["steps"]:
             if step["kind"] == "tool_result" and step["is_error"]:
                 step["content"] = HIDDEN
+    # The incident log never reads a failure's text (`vending.report_card`); its row says `error`.
+    if (incidents := snap.get("incidents")) and incidents["ok"]:
+        for row in incidents["data"].get("rows", []):
+            if row["error"]:
+                row["note"] = HIDDEN
     if public:
         for name, panel in snap.items():
             if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
@@ -731,6 +737,18 @@ def _scope_text(value: Any, ours: set[str]) -> Any:
     return value
 
 
+def _scope_numbered(value: Any, ours: set[str]) -> Any:
+    """`value` with any text that names a numbered selection outside `ours` replaced."""
+    if isinstance(value, str):
+        named = {n for n in stock_mod._slots_named(value) if n.isdigit()}
+        return OUTSIDE_ASSIGNMENT if named - ours else value
+    if isinstance(value, list):
+        return [_scope_numbered(item, ours) for item in value]
+    if isinstance(value, dict):
+        return {key: _scope_numbered(item, ours) for key, item in value.items()}
+    return value
+
+
 def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
     """Scope the live dashboard to the current assignment before either response is built."""
     ours = set(our_selections(snap))
@@ -791,12 +809,21 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
             # The assignment audit writer includes both the old and the new slot lists.
             if row["tool"] == "slots.record":
                 row["detail"] = HIDDEN if row["outcome"] == "failed" else ASSIGNMENT_RECORDED
+    if (incidents := snap.get("incidents")) and incidents["ok"]:
+        for row in incidents["data"].get("rows", []):
+            if row["note"] and row["note"] != HIDDEN and _older_assignment(row["at"], assignment_at):
+                row["note"] = OLD_ASSIGNMENT
     run = snap.get("status", {}).get("latest_run")
     if run and run["detail"] and run["detail"] != HIDDEN and _older_assignment(run["started_at"], assignment_at):
         run["detail"] = OLD_ASSIGNMENT
     for name, panel in snap.items():
-        if name not in ("runs", "pricing") or not panel["ok"]:
+        if name not in ("runs", "pricing", "report_cards") or not panel["ok"]:
             snap[name] = _scope_text(panel, ours)
+    if (cards := snap.get("report_cards")) and cards["ok"]:
+        # Its text is the scorer's and ours, about a plan already cut to our assignment
+        # (`report_card._as_replay_plan`), and says "every slot" freely: only a numbered selection
+        # that isn't ours is redacted.
+        snap["report_cards"] = _scope_numbered(cards, ours)
     if (pricing := snap.get("pricing")) and pricing["ok"]:
         for row in pricing["data"]["rows"]:
             for price in (row, row["next"]):
@@ -847,6 +874,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime |
         spend = _panel(lambda: _spend(conn, now, live_since, purchases["data"][0]))
     else:
         spend = {"ok": False, "why": "No live spend available."}
+    cards = _panel(lambda: _isolated(conn, lambda: report_card.report_cards(conn, now)))
     snap = {
         "as_of": now,
         "ours": ours,
@@ -867,6 +895,9 @@ def _snapshot(conn: psycopg.Connection, now: datetime) -> tuple[dict, datetime |
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
         "money": _panel(lambda: _money_panel(conn, now)),
         "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
+        "report_cards": cards,
+        "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
+            conn, now, cards["data"] if cards["ok"] else None))),
         "purchase_requests": ({"ok": True, "data": purchases["data"][0][:REQUEST_ROWS]}
                               if purchases["ok"] else purchases),
         "catalog_requests": catalog,
@@ -1028,7 +1059,8 @@ def attention(snap: dict) -> list[dict]:
     for key, name in (("plan", "Plan"), ("runs", "Runs"), ("activity", "Tool calls"), ("sales", "Sales"),
                       ("stock", "Stock"), ("purchase_requests", "Purchase requests"),
                       ("catalog_requests", "Catalog requests"), ("money", "Money"),
-                      ("leaderboards", "Leaderboards")):
+                      ("leaderboards", "Leaderboards"), ("report_cards", "Report card"),
+                      ("incidents", "Incident log")):
         if key in snap and not snap[key]["ok"]:
             add("info", f"{name} isn't available: {snap[key]['why']}")
 
@@ -2359,6 +2391,7 @@ footer .visitors { margin:4px 0 0; font-size:11px; opacity:.8 }
 STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 STYLE += pricing_panel.STYLE   # the pricing panel's own rules
 STYLE += leaderboards.STYLE
+STYLE += report_card.STYLE
 
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
@@ -2639,8 +2672,14 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
     boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
               if "leaderboards" in snap else "")
+    report = (f'<section id="report-card"><h2>Weekly report card <span class="hint">computed in code &middot; '
+              f'Saturday to Friday, Eastern</span></h2>{report_card.cards_html(snap["report_cards"])}</section>'
+              if "report_cards" in snap else "")
+    incidents = (f'<section id="incidents"><h2>Incident log <span class="hint">since the opening</span></h2>'
+                 f'{report_card.incidents_html(snap["incidents"])}</section>' if "incidents" in snap else "")
     body = (head + _status_bar(snap, items, charts) + _cabinet_html(snap, items) + pricing + money
             + _plan_section(snap)
+            + report + incidents
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
               f'changed</span></h2>{_runs_html(snap["runs"], now)}</section>'
