@@ -40,7 +40,7 @@ A run reads the database `DATABASE_URL` points at, so each of these is per datab
 
  - [ ] `python -m vending.db migrate`: the run needs `agent_runs` and `model_calls`.
  - [ ] `python -m vending.halt off --by <name>`: a halted database records the run as `halted` and does nothing else, dry runs included.
- - [ ] `python -m vending.ledger open --amount 600.00 --by <name>`: until then `get_account_balance` and `preview_desired_state` can only tell the model the ledger isn't open.
+ - [ ] `python -m vending.ledger open --amount 600.00 --by <name>`: until then `get_account_balance` and `preview_desired_state` can only tell the model the ledger isn't open. The team database still has the 11 Nov test opening: on 29 Nov, reset it first, as [ledger-reset.md](ledger-reset.md) says.
  - [ ] `VENDING_ANTHROPIC_API_KEY` set in your environment, as the README describes.
  - [ ] The class tailnet, since the read tools reach the bridge.
 

@@ -382,6 +382,22 @@ def test_a_live_run_reads_only_live_notes(connect, conn):
     assert "would submit 15" not in opening and "No notes yet" in opening
 
 
+def test_notes_from_before_the_current_slot_assignment_are_left_out(connect, conn):
+    """Run 2's notes name our slots from before the 20 Nov redraw; the next run must not read them (#216)."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    # The assignment changes after that run: `slots record` moves first_read_at to when it was read.
+    conn.execute("update slot_assignment set first_read_at = (select max(started_at) from agent_runs)"
+                 " + interval '1 microsecond'")
+    client = Script(answer(notes="New notes."))
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening
+    assert "written before our current slot assignment was recorded" in opening
+    client = Script(answer())
+    go(connect, client, Tools())                                    # notes written since then carry on
+    assert "New notes." in client.sent[0]["messages"][0]["content"]
+
+
 def test_the_server_never_gets_the_model_key(monkeypatch):
     for name in ("ANTHROPIC_API_KEY", "VENDING_ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.setenv(name, "not-a-real-key")
