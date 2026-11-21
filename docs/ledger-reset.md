@@ -5,7 +5,8 @@ The team ledger already has an opening entry from testing: entry 1, "opening cap
 real one while the test one is there (#215). This page says how to move the test opening out of
 the way and record the real one.
 
-**When:** Sun 29 Nov, by 23:59 Eastern, before the day-one fill request goes in. Staff buy and
+**When:** Sun 29 Nov, by 23:59 Eastern, before the day-one fill request goes in. The command refuses
+from 00:00 Eastern on Mon 30 Nov (`RESET_CLOSES`). Staff buy and
 stock on Mon 30 Nov. An opening recorded after the fill's receipt leaves the fill out of our books
 ([20 Nov notes](planning/2026-11-20-david-update.md)).
 
@@ -30,13 +31,23 @@ Every reader of the opening (the balance, the P&L, the money chart, the dashboar
 `get_account_balance`, `get_pnl` and the dev-spend page) reads `ledger_entries`, so they all move to
 the new opening together.
 
+**It moves one entry only:** entry 1, dated 11 Nov (Eastern), with the detail "opening capital
+(test state, 11 Nov; to be reset before launch)" exactly (`TEST_OPENING_ID`, `TEST_OPENING_DATE`,
+`TEST_OPENING_DETAIL` in `vending/ledger.py`). It doesn't look for the word "test", so the real
+opening is never moved, whatever its detail says.
+
 **It refuses**, and changes nothing, when any of these is true:
 
 1. The competition has started (`vending/start.py`, `START`).
-2. The opening's detail doesn't contain the word "test". The real opening says "opening capital".
-3. The opening is dated on or after 29 Nov 00:00 Eastern (`RESET_CUTOFF`), when the real one is
-   recorded.
-4. There is no opening. So a second reset refuses too.
+2. It is 00:00 Eastern on Mon 30 Nov or later (`RESET_CLOSES`). The fill can be stocked that day, so
+   an opening recorded then could fall after the fill's receipt.
+3. The archive already holds a reset. The reset runs once, even if a row like the test one comes
+   back.
+4. There is no opening.
+5. The opening isn't that exact entry.
+
+It reads these guards inside its transaction, after taking a lock and with the opening row locked,
+so two people running it at once can't both move something.
 
 ## The steps
 
@@ -87,15 +98,35 @@ Then the fill request can go in.
 - **The wrong amount went in at step 4:** the reset refuses the real opening, by design. Record
   the difference as an adjustment with a detail saying why, or ask the team before anything else.
 
+## If the window closed
+
+From 00:00 Eastern on Mon 30 Nov the command refuses. Don't edit the database by hand. What to do
+depends on how far the steps got:
+
+- **Step 3 ran, but step 4 didn't, and the fill's receipt is in:** record the real opening dated
+  before the receipt, so the fill counts. Give the time with its offset (a time without one is read
+  as UTC):
+
+  ```
+  python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T23:00:00-05:00
+  ```
+
+  Then do step 5. The opening's date decides which receipts, visits and model calls count, so check
+  that `ledger show` lists the fill's receipt.
+- **Step 3 never ran:** the 11 Nov test opening is still the opening, so the books count from
+  11 Nov. Run 2's model spend is in the balance, and the 12 Nov test receipt is in purchases and
+  stock. Ask the team before anything else. A fix then is a person's decision, recorded in the
+  ledger with a detail saying why, not a reset.
+
 ## Example
 
 The CLI on a scratch database seeded like the team ledger (a test opening on 11 Nov, two model
-calls, one test receipt). Times are UTC.
+calls, one test receipt). The CLI prints times in Eastern.
 
 ```
 $ python -m vending.ledger reset-test-opening --by kevin
 Dry run: nothing was changed. With --yes this moves one entry out of the books, into ledger_entries_archive:
-     1  2026-11-11 19:00  opening         600.00  opening capital (test state, 11 Nov; to be reset before launch)  by marshall
+     1  2026-11-11 14:00  opening         600.00  opening capital (test state, 11 Nov; to be reset before launch)  by marshall
 Nothing else moves. Once the real opening is recorded, these fall before it:
   model calls since 2026-11-11: 2 entries, 0.48 spent. Development spend: on the dev-spend page, not in the balance
   receipts since 2026-11-11: 1 lines, 12.37 paid. Test purchases: not in the balance, the P&L or stock

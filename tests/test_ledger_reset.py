@@ -12,7 +12,7 @@ psycopg = pytest.importorskip("psycopg")
 from tests.conftest import open_in, store_poll  # noqa: E402
 from tests.test_ledger import deliver  # noqa: E402
 from vending import dev_spend, ledger, money_panel, money_series, stock  # noqa: E402
-from vending.ledger import LedgerError, RESET_CUTOFF, reset_refusal  # noqa: E402
+from vending.ledger import LedgerError, RESET_CLOSES, reset_refusal  # noqa: E402
 from vending.start import START  # noqa: E402
 from vending.tools.account_balance import get_account_balance  # noqa: E402
 from vending.tools.pnl import get_pnl  # noqa: E402
@@ -39,17 +39,24 @@ def sell_after_the_opening(conn):
     store_poll(conn, "p4", "2026-12-01T18:00:00+00:00", {"15": (250, 107)})      # 3 sold: 750 cents
 
 
-def test_the_guard_needs_a_test_opening_before_the_cutoff_and_before_the_start():
-    def entry(detail=TEST_DETAIL, at=TEST_OPENED):
-        return ledger.Entry(1, at, "opening", Fraction(60000), detail, None, "marshall")
+def test_the_guard_needs_the_known_test_opening_inside_the_window():
+    def entry(detail=TEST_DETAIL, at=TEST_OPENED, id=1):
+        return ledger.Entry(id, at, "opening", Fraction(60000), detail, None, "marshall")
 
+    not_it = "isn't the 11 Nov test opening"
     assert reset_refusal(entry(), RESET_AT) is None
-    assert reset_refusal(entry("Opening capital (TEST)"), RESET_AT) is None
+    assert not_it in reset_refusal(entry("Opening capital (TEST)"), RESET_AT)
+    assert not_it in reset_refusal(entry("opening capital"), RESET_AT)
+    assert not_it in reset_refusal(entry(id=2), RESET_AT)
+    assert not_it in reset_refusal(entry(at=TEST_OPENED + timedelta(days=1)), RESET_AT)
+    # The date is Eastern: 23:30 Eastern on 11 Nov is 04:30 UTC on 12 Nov, and still the test day.
+    assert reset_refusal(entry(at=datetime(2026, 11, 12, 4, 30, tzinfo=timezone.utc)), RESET_AT) is None
+    assert not_it in reset_refusal(entry(at=datetime(2026, 11, 11, 4, 30, tzinfo=timezone.utc)), RESET_AT)
     assert "nothing to reset" in reset_refusal(None, RESET_AT)
-    assert "doesn't say it is a test" in reset_refusal(entry("opening capital"), RESET_AT)
-    assert "doesn't say it is a test" in reset_refusal(entry("opening capital, contested"), RESET_AT)
-    assert "on or after" in reset_refusal(entry(at=RESET_CUTOFF), RESET_AT)
-    assert reset_refusal(entry(at=RESET_CUTOFF - timedelta(seconds=1)), RESET_AT) is None
+    assert "already reset" in reset_refusal(entry(), RESET_AT, already=(RESET_AT, "kevin"))
+    assert "already reset" in reset_refusal(None, RESET_AT, already=(RESET_AT, "kevin"))
+    assert "window closed" in reset_refusal(entry(), RESET_CLOSES)
+    assert reset_refusal(entry(), RESET_CLOSES - timedelta(seconds=1)) is None
     assert "competition started" in reset_refusal(entry(), START)
     assert "competition started" in reset_refusal(None, START + timedelta(days=1))
 
@@ -111,19 +118,19 @@ def test_reset_then_open_counts_only_from_the_new_opening(conn):
 def test_a_second_reset_and_a_reset_after_the_real_opening_refuse(conn):
     seed(conn)
     ledger.reset_test_opening(conn, "kevin", RESET_AT)
-    with pytest.raises(LedgerError, match="nothing to reset"):
+    with pytest.raises(LedgerError, match="already reset"):
         ledger.reset_test_opening(conn, "kevin", RESET_AT)
-    with pytest.raises(LedgerError, match="nothing to reset"):
+    with pytest.raises(LedgerError, match="already reset"):
         ledger.plan_reset(conn, RESET_AT)
     ledger.record(conn, "opening", 60000, "opening capital", "kevin", REAL_OPENED)
-    with pytest.raises(LedgerError, match="doesn't say it is a test"):
+    with pytest.raises(LedgerError, match="already reset"):
         ledger.reset_test_opening(conn, "kevin", RESET_AT)
     assert ledger.opening(conn).at == REAL_OPENED and len(ledger.archived(conn)) == 1
 
 
 def test_a_real_opening_recorded_early_is_never_reset(conn):
     ledger.record(conn, "opening", 60000, "opening capital", "kevin", datetime(2026, 11, 20, tzinfo=timezone.utc))
-    with pytest.raises(LedgerError, match="doesn't say it is a test"):
+    with pytest.raises(LedgerError, match="isn't the 11 Nov test opening"):
         ledger.reset_test_opening(conn, "kevin", RESET_AT)
     assert ledger.opening(conn) is not None and ledger.archived(conn) == []
 
@@ -160,11 +167,11 @@ def test_cli_runbook_end_to_end(schema_url, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert out.startswith("Moved one entry out of the books") and "python -m vending.ledger open" in out
     assert ledger.main(["reset-test-opening", "--by", "kevin", "--yes"]) == 1
-    assert "nothing to reset" in capsys.readouterr().err
+    assert "already reset" in capsys.readouterr().err
     assert ledger.main(["open", "--amount", "600.00", "--by", "kevin", "--at", REAL_OPENED.isoformat()]) == 0
     capsys.readouterr()
     assert ledger.main(["reset-test-opening", "--by", "kevin"]) == 1
-    assert "doesn't say it is a test" in capsys.readouterr().err
+    assert "already reset" in capsys.readouterr().err
     assert ledger.main(["entries"]) == 0
     out = capsys.readouterr().out
     assert "Archived, not in the books:" in out and TEST_DETAIL in out
@@ -174,9 +181,8 @@ def test_cli_runbook_end_to_end(schema_url, monkeypatch, capsys):
     assert "Opening capital" in out and "2026-11-29" in out and "development spend" in out
 
 
-# --- Review findings (Sol, 21 Nov) ------------------------------------------------------------
+# --- Review findings (Sol, 21 Nov), fixed -------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="Sol finding 1 (blocker), not fixed yet")
 def test_a_real_opening_after_a_reset_is_never_archived_whatever_its_detail(conn):
     """Finding 1: the real opening's detail may say "test". Only the known test opening can move."""
     seed(conn)
@@ -191,7 +197,6 @@ def test_a_real_opening_after_a_reset_is_never_archived_whatever_its_detail(conn
     assert ledger.opening(conn).id == real.id and len(ledger.archived(conn)) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="Sol finding 1 (blocker), not fixed yet")
 def test_only_the_known_test_opening_matches(conn):
     """Finding 1: id 1, dated 11 Nov, with the exact detail. Anything else refuses, under the row lock."""
     assert (ledger.TEST_OPENING_ID, ledger.TEST_OPENING_DATE, ledger.TEST_OPENING_DETAIL) == (
@@ -202,7 +207,6 @@ def test_only_the_known_test_opening_matches(conn):
     assert ledger.opening(conn) is not None and ledger.archived(conn) == []
 
 
-@pytest.mark.xfail(strict=True, reason="Sol finding 1 (blocker), not fixed yet")
 def test_a_second_reset_refuses_even_if_the_test_opening_is_back(conn):
     """Finding 1: once the archive records a reset, nothing else is moved, even a row just like the test one."""
     seed(conn)
@@ -214,7 +218,6 @@ def test_a_second_reset_refuses_even_if_the_test_opening_is_back(conn):
     assert ledger.opening(conn).id == 1 and len(ledger.archived(conn)) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="Sol finding 2, not fixed yet")
 def test_the_reset_window_closes_at_midnight_eastern_on_30_nov(conn):
     """Finding 2: a reset on Mon 30 Nov would let the opening land after the fill's receipt."""
     closes = ledger.RESET_CLOSES
@@ -229,7 +232,6 @@ def test_the_reset_window_closes_at_midnight_eastern_on_30_nov(conn):
     assert ledger.reset_test_opening(conn, "kevin", closes - timedelta(seconds=1)).id == 1
 
 
-@pytest.mark.xfail(strict=True, reason="Sol finding 5, not fixed yet")
 def test_show_dates_the_opening_in_eastern(schema_url, monkeypatch, capsys):
     """Finding 5: an opening at 20:00 Eastern on 29 Nov is 01:00 UTC on 30 Nov. `show` says 29 Nov."""
     from vending import db as db_module

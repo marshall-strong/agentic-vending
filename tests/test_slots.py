@@ -143,6 +143,20 @@ def test_the_same_answer_again_only_moves_last_checked(empty):
     assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (AFTER,)
 
 
+def test_assigned_since_is_when_the_answer_was_stored_not_when_it_was_asked_for(empty):
+    """`slots record` asks at `now`, then stores. A run in between saw the old slots (#216, Sol finding 3)."""
+    assert slots.assigned_since(empty) is None
+    slots.record(empty, ANSWER, NOW)
+    stored = empty.execute("select stored_at from slot_assignment").fetchone()[0]
+    assert stored > NOW and slots.assigned_since(empty) == stored       # the database clock, after the ask
+    slots.record(empty, ANSWER, NOW + timedelta(days=1))                 # unchanged: still the same assignment
+    assert slots.assigned_since(empty) == stored
+    slots.record(empty, MOVED, NOW + timedelta(days=2))                  # changed: from when it was stored
+    assert slots.assigned_since(empty) > stored
+    empty.execute("update slot_assignment set stored_at = null")         # written before migration 023, or by hand
+    assert slots.assigned_since(empty) == NOW + timedelta(days=2)
+
+
 def test_an_unchanged_check_is_logged_only_when_it_confirms_the_assignment(empty):
     """The worker checks every hour; only the first check since the start says something new."""
     slots.record(empty, ANSWER, NOW)

@@ -204,11 +204,14 @@ def stored(conn: psycopg.Connection) -> Assignment | None:
 
 
 def assigned_since(conn: psycopg.Connection) -> datetime | None:
-    """When the stored assignment was first read (`first_read_at`), or None while none is stored.
+    """Since when the stored assignment is ours, or None while none is stored.
 
-    A changed assignment moves it (`_store`), so anything written before it, such as an agent run's
-    notes, was written for an older assignment."""
-    row = conn.execute("select first_read_at from slot_assignment where id = 1").fetchone()
+    The later of `first_read_at` (when the server was asked) and `stored_at` (when the answer was
+    written, migration 023). A changed assignment moves both (`_store`), so anything written before
+    this, such as an agent run's notes, was written for an older assignment. A run that started while
+    `slots record` waited on the server is after `first_read_at` but before `stored_at`: it saw only
+    the old slots, so it counts as before (#216)."""
+    row = conn.execute("select greatest(first_read_at, stored_at) from slot_assignment where id = 1").fetchone()
     return None if row is None else row[0]
 
 
@@ -278,8 +281,8 @@ def _store(conn: psycopg.Connection, answer: Any, at: datetime, lock: datetime, 
             if not person:
                 raise BadAssignment(f"no assignment is stored, and the worker only confirms one. {RECORD_HINT}")
             conn.execute(
-                "insert into slot_assignment (team, device_id, slots, first_read_at, last_checked_at, response)"
-                " values (%s, %s, %s, %s, %s, %s)",
+                "insert into slot_assignment (team, device_id, slots, first_read_at, last_checked_at, response,"
+                " stored_at) values (%s, %s, %s, %s, %s, %s, clock_timestamp())",
                 (new.team, new.device_id, list(new.slots), at, at, Jsonb(answer)))
             note = f" (the first check since the start at {lock.isoformat()})" if at >= lock else ""
             _log(conn, by, f"slot assignment recorded: {new.device_id} {', '.join(new.slots)}{note}")
@@ -307,9 +310,10 @@ def _store(conn: psycopg.Connection, answer: Any, at: datetime, lock: datetime, 
                 "the instructors say the new one is right, run: python -m vending.slots record --replace")
         if at < before.last_checked_at:
             raise BadAssignment("This server observation is older than the recorded assignment. Nothing was changed")
-        # first_read_at becomes when this assignment was first read; the log keeps the old one.
+        # first_read_at becomes when this assignment was first read, and stored_at when it was written: runs
+        # that started in between saw the old one (`assigned_since`). The log keeps the old one.
         conn.execute("update slot_assignment set team = %s, device_id = %s, slots = %s, response = %s,"
-                     " first_read_at = %s, last_checked_at = %s where id = 1",
+                     " first_read_at = %s, last_checked_at = %s, stored_at = clock_timestamp() where id = 1",
                      (new.team, new.device_id, list(new.slots), Jsonb(answer), at, at))
         if confirmed:
             outcome, note = "replaced", (f" (was {_describe(before)}, confirmed since the start at "

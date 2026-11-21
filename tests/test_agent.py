@@ -398,7 +398,6 @@ def test_notes_from_before_the_current_slot_assignment_are_left_out(connect, con
     assert "New notes." in client.sent[0]["messages"][0]["content"]
 
 
-@pytest.mark.xfail(strict=True, reason="Sol finding 3, not fixed yet")
 def test_notes_from_a_run_while_slots_record_waits_on_the_server_are_left_out(connect, conn):
     """`slots record` asks the server, a run starts and ends on the old slots, then the answer is stored.
 

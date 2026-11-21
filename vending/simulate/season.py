@@ -53,6 +53,7 @@ WALL_STAMPED = (("polls", "synced_at"), ("config", "updated_at"), ("action_log",
                 ("purchase_submissions", "at"), ("purchase_submissions", "resolved_at"),
                 ("agent_runs", "started_at"), ("agent_runs", "finished_at"), ("model_calls", "finished_at"),
                 ("slot_assignment", "first_read_at"), ("slot_assignment", "last_checked_at"),
+                ("slot_assignment", "stored_at"),
                 ("agent_steps", "at"), ("sourcing_options", "updated_at"))
 
 

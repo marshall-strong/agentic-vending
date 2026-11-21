@@ -80,10 +80,12 @@ restart just before a window reads the same from any window.
 Money is exact (`Fraction` cents, `numeric` in the database) until it is shown.
 `money()` rounds half up to the cent only then.
 
-`reset-test-opening` moves a test opening into `ledger_entries_archive` so the
-real one can be recorded (#215, `docs/ledger-reset.md`). It is a dry run
-without `--yes`, and refuses once the competition has started, when the
-opening's detail doesn't say "test", or when it is dated on or after 29 Nov.
+`reset-test-opening` moves the 11 Nov test opening into `ledger_entries_archive`
+so the real one can be recorded (#215, `docs/ledger-reset.md`). It is a dry run
+without `--yes`. It moves only that entry (entry 1, dated 11 Nov, with its exact
+detail), only once, and only before 00:00 Eastern on Mon 30 Nov.
+
+The CLI prints times in Eastern.
 
 The CLI never migrates: on a database that is behind it refuses to run and
 names `python -m vending.db migrate`, like the server and the halt switch.
@@ -92,7 +94,6 @@ names `python -m vending.db migrate`, like the server and the halt switch.
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from collections import defaultdict
 from collections.abc import Iterable
@@ -108,7 +109,7 @@ from psycopg.types.json import Jsonb
 from vending import config, counters, db, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
-from vending.start import START
+from vending.start import EASTERN, START
 from vending.tools.sales_history import tax_cents
 
 KINDS = ("opening", "capital", "tokens", "adjustment", "tax_remitted")
@@ -390,12 +391,19 @@ def opening(conn: psycopg.Connection) -> Entry | None:
 
 # --- Resetting the test opening (#215) ---------------------------------------------
 
-# The real opening is recorded on Sun 29 Nov, before the Mon 30 Nov fill. An opening dated before this
-# is from testing; one dated on or after it may be the real one, so the reset refuses it.
-RESET_CUTOFF = datetime(2026, 11, 29, tzinfo=ZoneInfo(TIMEZONE))
-# The test opening's detail says so: "opening capital (test state, 11 Nov; to be reset before launch)".
-TEST_MARK = re.compile(r"\btest\b", re.IGNORECASE)
+# The one entry the reset may move: the test opening on the team ledger, exactly as it was recorded on
+# 11 Nov. Matching on all three, not on the word "test", means the real opening can never be moved,
+# whatever its detail says (Sol review, finding 1).
+TEST_OPENING_ID = 1
+TEST_OPENING_DATE = date(2026, 11, 11)                  # its date in Eastern time
+TEST_OPENING_DETAIL = "opening capital (test state, 11 Nov; to be reset before launch)"
+# The reset closes at the start of Mon 30 Nov, Eastern, when staff can stock the day-one fill. A reset
+# after that could put the real opening after the fill's receipt, which then falls out of stock and
+# spend (Sol review, finding 2). The real opening is recorded on Sun 29 Nov.
+RESET_CLOSES = datetime(2026, 11, 30, tzinfo=EASTERN)
 ARCHIVE_REASON = "test opening, reset before the real opening (#215)"
+# Taken first by every reset, so the guards are read and the row moved by one reset at a time.
+RESET_LOCK = "vending.ledger.reset_test_opening"
 
 
 @dataclass(frozen=True)
@@ -414,35 +422,53 @@ class ResetPlan:
     visits: tuple[int, int]
 
 
-def reset_refusal(opened: Entry | None, now: datetime, start: datetime | None = None) -> str | None:
+def _eastern(moment: datetime) -> str:
+    return f"{moment.astimezone(EASTERN):%Y-%m-%d %H:%M} Eastern"
+
+
+def reset_refusal(opened: Entry | None, now: datetime, start: datetime | None = None, *,
+                  already: tuple[datetime, str] | None = None) -> str | None:
     """Why the opening can't be reset, or None if it can. Pure.
 
-    Three guards, all needed: the competition hasn't started (`vending.start.START`),
-    the opening's detail marks it as a test, and it is dated before `RESET_CUTOFF`.
-    The real opening is recorded on 29 Nov with a plain detail, so it fails both of
-    the last two, and a second reset finds no opening at all.
+    `already` is (when, by whom) of a reset the archive records, if any. Every guard is needed:
+    the competition hasn't started (`vending.start.START`), the window hasn't closed
+    (`RESET_CLOSES`), there is an opening, no reset has been done, and the opening is the
+    11 Nov test opening: entry `TEST_OPENING_ID`, dated `TEST_OPENING_DATE` in Eastern time,
+    with the detail `TEST_OPENING_DETAIL` exactly. The reset runs once.
     """
     start = start or START
     if now >= start:
-        return (f"the competition started at {start.isoformat()}, so the opening can't be reset now. "
+        return (f"the competition started at {_eastern(start)}, so the opening can't be reset now. "
+                "Nothing was changed")
+    if now >= RESET_CLOSES:
+        return (f"the reset window closed at {_eastern(RESET_CLOSES)} (Mon 30 Nov, when the day-one fill can be "
+                "stocked): an opening recorded now could fall after the fill's receipt. Nothing was changed. "
+                "See docs/ledger-reset.md, 'If the window closed'")
+    if already is not None:
+        when, who = already
+        return (f"the test opening was already reset ({_eastern(when)}, by {who}), so nothing else is moved. "
                 "Nothing was changed")
     if opened is None:
         return f"the ledger has no opening entry, so there is nothing to reset. {OPEN_HINT.split('. ', 1)[1]}"
-    if not TEST_MARK.search(opened.detail):
-        return (f"the opening (entry {opened.id}, {opened.detail!r}) doesn't say it is a test, so it may be the "
-                "real one. Nothing was changed")
-    if opened.at >= RESET_CUTOFF:
-        return (f"the opening (entry {opened.id}) is dated {opened.at.isoformat()}, on or after "
-                f"{RESET_CUTOFF.isoformat()}, when the real opening is recorded, so it may be the real one. "
-                "Nothing was changed")
+    if (opened.id, opened.at.astimezone(EASTERN).date(), opened.detail) != (
+            TEST_OPENING_ID, TEST_OPENING_DATE, TEST_OPENING_DETAIL):
+        return (f"the opening (entry {opened.id}, {_eastern(opened.at)}, {opened.detail!r}) isn't the 11 Nov test "
+                f"opening (entry {TEST_OPENING_ID}, {TEST_OPENING_DATE.isoformat()}, {TEST_OPENING_DETAIL!r}), so it "
+                "may be the real one. Nothing was changed")
     return None
+
+
+def _already_reset(conn: psycopg.Connection) -> tuple[datetime, str] | None:
+    """(when, by whom) of the first reset the archive records, or None."""
+    gone = archived(conn)
+    return None if not gone else (gone[0][1], gone[0][2])
 
 
 def plan_reset(conn: psycopg.Connection, now: datetime | None = None) -> ResetPlan:
     """What the reset would change, read only. Raises `LedgerError` when it would refuse."""
     now = now or db_now(conn)
     opened = opening(conn)
-    why = reset_refusal(opened, now)
+    why = reset_refusal(opened, now, already=_already_reset(conn))
     if why:
         raise LedgerError(why)
     later: dict[str, tuple[int, Fraction]] = {}
@@ -463,16 +489,18 @@ def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None =
 
     Only the opening moves. Model calls stay, and once the real opening is recorded after them they are
     development spend (`_development`); receipts and visits before it are test purchases
-    (`stock.receipts_count_from`). The guards (`reset_refusal`) are checked again with the row locked, so
-    two people running it at once can't both move something.
+    (`stock.receipts_count_from`). The guards (`reset_refusal`) are read inside the transaction, after
+    `RESET_LOCK` and with the opening row locked, and the clock is read after the lock, so two people
+    running it at once can't both move something, and a reset that waited can't pass the window.
     """
     if not by.strip():
         raise LedgerError("a reset needs the name of who ran it (--by)")
     with conn.transaction():
+        conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (RESET_LOCK,))
         row = conn.execute("select id, at, kind, amount_cents, detail, reference, recorded_by from ledger_entries"
                            " where kind = 'opening' for update").fetchone()
         opened = None if row is None else Entry(row[0], row[1], row[2], Fraction(row[3]), row[4], row[5], row[6])
-        why = reset_refusal(opened, now or db_now(conn))
+        why = reset_refusal(opened, now or db_now(conn), already=_already_reset(conn))
         if why:
             raise LedgerError(why)
         conn.execute(
@@ -486,7 +514,8 @@ def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None =
             "insert into action_log (kind, tool, arguments, outcome, detail) values ('write', %s, %s, 'done', %s)",
             ("ledger.reset_test_opening", Jsonb({"entry": opened.id, "amount": money(opened.amount_cents),
                                                  "at": opened.at.isoformat(), "detail": opened.detail}),
-             f"test opening {money(opened.amount_cents)} of {opened.at:%Y-%m-%d} (entry {opened.id}) moved to "
+             f"test opening {money(opened.amount_cents)} of {opened.at.astimezone(EASTERN):%Y-%m-%d} (entry "
+             f"{opened.id}) moved to "
              f"ledger_entries_archive by {by.strip()}"))
     return opened
 
@@ -1055,7 +1084,7 @@ def main(argv: list[str] | None = None) -> int:
                 if gone:
                     print("Archived, not in the books:")
                     for e, when, who in gone:
-                        print(f"{_entry_line(e)}  (archived {when:%Y-%m-%d %H:%M} by {who})")
+                        print(f"{_entry_line(e)}  (archived {_eastern(when)} by {who})")
                 return 0
         except (LedgerError, SlotsNotRecorded) as error:
             # SlotsNotRecorded: the balance counts our slots' sales, so `show` needs the assignment
@@ -1071,14 +1100,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _entry_line(e: Entry) -> str:
-    return (f"{e.id:>4}  {e.at:%Y-%m-%d %H:%M}  {e.kind:12}  {money(e.amount_cents):>10}  {e.detail}"
+    """One entry for `entries` and the reset: its time in Eastern, like every date the CLI prints."""
+    return (f"{e.id:>4}  {e.at.astimezone(EASTERN):%Y-%m-%d %H:%M}  {e.kind:12}  {money(e.amount_cents):>10}  {e.detail}"
             + (f"  [{e.reference}]" if e.reference else "") + f"  by {e.recorded_by}")
 
 
 def _reset(conn: psycopg.Connection, by: str, yes: bool) -> int:
-    """`reset-test-opening`: say what would change, then change it only with --yes. Times shown in UTC."""
+    """`reset-test-opening`: say what would change, then change it only with --yes. Times shown in Eastern."""
     plan = plan_reset(conn)         # LedgerError when it would refuse; main prints it
     o = plan.opening
+    since = f"{o.at.astimezone(EASTERN):%Y-%m-%d}"
     if not yes:
         print("Dry run: nothing was changed. With --yes this moves one entry out of the books, into "
               "ledger_entries_archive:")
@@ -1088,15 +1119,15 @@ def _reset(conn: psycopg.Connection, by: str, yes: bool) -> int:
     print(f"  {_entry_line(o)}")
     print("Nothing else moves. Once the real opening is recorded, these fall before it:")
     tokens = plan.later_entries.get("tokens")
-    print(f"  model calls since {o.at:%Y-%m-%d}: {tokens[0] if tokens else 0} entries, "
+    print(f"  model calls since {since}: {tokens[0] if tokens else 0} entries, "
           f"{money(-tokens[1] if tokens else 0)} spent. Development spend: on the dev-spend page, not in the balance")
-    print(f"  receipts since {o.at:%Y-%m-%d}: {plan.receipts[0]} lines, {money(plan.receipts[1])} paid. "
+    print(f"  receipts since {since}: {plan.receipts[0]} lines, {money(plan.receipts[1])} paid. "
           "Test purchases: not in the balance, the P&L or stock")
-    print(f"  midweek visits since {o.at:%Y-%m-%d}: {plan.visits[0]}, {money(plan.visits[1])} in fees. "
+    print(f"  midweek visits since {since}: {plan.visits[0]}, {money(plan.visits[1])} in fees. "
           "Not in the balance or the P&L")
     for kind, (count, total) in sorted(plan.later_entries.items()):
         if kind != "tokens":
-            print(f"  {kind} entries since {o.at:%Y-%m-%d}: {count}, {money(total)}. Not in the balance; "
+            print(f"  {kind} entries since {since}: {count}, {money(total)}. Not in the balance; "
                   "`ledger show` names them. Re-record any that belong in the competition books")
     if yes:
         print("The ledger has no opening now. Record the real one next: "
@@ -1112,7 +1143,8 @@ def _show(conn: psycopg.Connection) -> int:
         print(OPEN_HINT)
         return 1
     rows = [
-        ("Opening capital", b.opening_cents, b.opening_at.strftime("%Y-%m-%d")),
+        # Eastern, like the runbook: an opening at 20:00 on Sun 29 Nov is 01:00 UTC on Mon 30 Nov.
+        ("Opening capital", b.opening_cents, _eastern(b.opening_at)),
         ("Capital added", b.capital_cents, ""),
         ("Takings (tax included)", b.takings.cents, f"{len(b.takings.by_week)} weeks"),
         ("Receipts", -b.receipts_cents, f"{b.receipt_lines} lines"),
