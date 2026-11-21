@@ -184,7 +184,7 @@ A small panel under the status bar, so the team sees what's next without opening
 ![The Key dates panel before the start (made-up records, Sat 28 Nov) and from the start (the demo copy, Wed 9 Dec)](images/dashboard-key-dates.png)
 
 *Made-up records, not the team's: the top panel is drawn from invented facts at Sat 28 Nov 10:00 ET, the
-bottom one from the demo copy's snapshot. Rendered 20 Nov 2026.*
+bottom one from the demo copy's snapshot. Rendered 21 Nov 2026.*
 
 The dates live in one place, `DATES` in `vending/key_dates.py`, each with its source (David's answers of
 17 Nov in `docs/planning/2026-11-17-david-answers.md`, and his email of 20 Nov). Edit a date there: the

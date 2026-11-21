@@ -374,3 +374,8 @@ def test_a_restock_request_sent_in_the_cutoffs_last_minute_counts_for_that_week(
     restock = key_dates.build(et(12, 3, 23, 59, 40), f, counts(), LOCK)["rows"][0]
     assert restock["when"] == "Thu 3 Dec, 23:59" and not restock["passed"]
     assert check(restock, "restock_request")["status"] == "done"
+
+
+def test_the_section_says_its_times_are_eastern_after_the_start_too():
+    built = key_dates.build(et(12, 9, 10), facts(checked=LOCK), counts(), LOCK)
+    assert '<span class="hint">Eastern &middot; after the start' in key_dates.html({"ok": True, "data": built})

@@ -429,7 +429,7 @@ def html(panel_: dict | None) -> str:
             f'<span class="kd-when"><b>{escape(row["when"])}</b>{flag}{sub}</span>'
             f'<span class="kd-what">{escape(row["what"])}</span>'
             + (f'<ul class="kd-checks">{checks}</ul>' if checks else "") + "</li>")
-    hint = ("after the start: the next restock and the next tax Saturday" if data["after_start"]
+    hint = ("Eastern &middot; after the start: the next restock and the next tax Saturday" if data["after_start"]
             else "Eastern &middot; from David's answers (17 Nov) and email (20 Nov); hover a date for its source")
     unread = f'<p class="honest">{escape(READ_FAILED)}.</p>' if data["unread"] else ""
     return (f'<section id="dates" class="kd"><h2>Key dates <span class="hint">{hint}</span></h2>{unread}'
