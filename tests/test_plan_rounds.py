@@ -182,6 +182,27 @@ def test_a_new_plan_with_an_old_projection_is_set_aside(tmp_path):
     assert shown == [] and aside.outside == tuple(s for s in TEST_SLOTS if s not in REDRAWN)
 
 
+def _redrawn_without_a_slot() -> tuple[dict, dict]:
+    plan, proj = placed_in(REDRAWN)
+    del plan["day_one"][0]["slot"]
+    return plan, proj
+
+
+@pytest.mark.parametrize("files, problem", [
+    # An old round (other slots) whose plan also has a fractional price: the price is the problem.
+    (lambda: ({"day_one": day_one(**{"15": {"price_cents": 350.5}})}, projection()), "isn't a whole number of cents"),
+    # An old projection beside a plan with no day_one list.
+    (lambda: ({"note": "no day_one"}, projection()), "no day_one list"),
+    # A plan placed in our slots with one slot missing: not a selection at all, so not "other slots".
+    (_redrawn_without_a_slot, "isn't a selection"),
+])
+def test_a_round_in_other_slots_is_checked_in_full_before_it_is_set_aside(tmp_path, files, problem):
+    write(tmp_path, "round3", "3", *files())
+    with pytest.raises(pr.RoundError, match=problem) as refused:
+        pr.load_rounds(tmp_path, REDRAWN)
+    assert not isinstance(refused.value, pr.OtherSlots)
+
+
 def test_a_slot_that_isnt_ours_is_refused(tmp_path):
     rows = day_one()
     rows[0]["slot"] = 11        # the other team's selection
