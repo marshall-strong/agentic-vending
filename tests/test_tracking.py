@@ -311,6 +311,25 @@ def test_a_later_poll_does_not_change_the_coil_as_of_an_earlier_one(conn):
     assert tracking.figures(conn, "p1").coil["15"] == 6
 
 
+def test_a_good_poll_missing_a_counter_for_one_of_our_slots_is_refused(conn):
+    """p1 passed its checksum but has no counter for slot 15: as of it the coil read 8 (not 6) and the
+    tax owed $0.00 (not $0.37), because the sales up to it couldn't be seen. Nothing is sent."""
+    from tests.conftest import store_poll
+    from vending import tracking
+
+    open_ledger(conn)
+    fill(conn)
+    poll(conn, "p0", "2026-11-02T18:00:00+00:00")
+    store_poll(conn, "p1", "2026-11-03T18:00:00+00:00", {s: (PRICE, 100) for s in TEST_SLOTS if s != "15"})
+    poll(conn, "p2", "2026-11-04T18:00:00+00:00", sold_in_15=5)
+    with pytest.raises(tracking.CantCompute, match="Poll p1 has no counter for our slots 15, so"):
+        tracking.figures(conn, "p1")
+    store_poll(conn, "p3", "2026-11-05T18:00:00+00:00", {s: (PRICE, 105) for s in TEST_SLOTS if s not in ("15", "58")})
+    with pytest.raises(tracking.CantCompute, match="Poll p3 has no counter for our slots 15, 58"):
+        tracking.figures(conn)                         # the newest poll, by default
+    assert tracking.figures(conn, "p2").coil["15"] == 3
+
+
 def test_the_coil_is_our_slots_from_the_assignment_only(conn):
     from vending import tracking
 
@@ -318,7 +337,9 @@ def test_the_coil_is_our_slots_from_the_assignment_only(conn):
     fill(conn, slots=("11",), request_id="other")       # a receipt for a selection that isn't ours
     ours = [s for s in TEST_SLOTS if s != "58"] + ["11"]
     conn.execute("update slot_assignment set slots = %s", (ours,))
-    f = tracking.figures(conn, "p1")
+    from tests.conftest import store_poll
+    store_poll(conn, "p1x", "2026-11-03T19:00:00+00:00", {s: (PRICE, 102 if s == "15" else 100) for s in [*TEST_SLOTS, "11"]})
+    f = tracking.figures(conn, "p1x")
     assert list(f.coil) == ours and "58" not in f.coil
 
 

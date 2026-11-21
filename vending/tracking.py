@@ -24,7 +24,7 @@ the stock replayed to it. Nothing after the poll counts, the bridge's rule.
 receipt with no `total_paid` (cash would leave it out), one of our slots with no counted receipt
 (nothing says what is in it), or a slot whose count is a range because sales across a product change
 couldn't be split (`stock.SlotCount.at_most`). The poll must be ours (`DEVICE_ID`) with a good
-checksum, at or after the ledger's opening.
+checksum, a counter for every one of our slots, at or after the ledger's opening.
 
 **One check a day.** The bridge allows one check per team per Eastern day, and a request it refuses
 before checking (bad body, unknown poll, books not reconciled yet) doesn't use it. David, 20 Nov: no
@@ -169,6 +169,13 @@ def figures(conn: psycopg.Connection, as_of: str | None = None) -> Figures:
     session = as_of or newest_poll(conn)
     at = poll_time(conn, session)
     slots = our_slots(conn)
+    have = {row[0] for row in conn.execute("select selection from poll_selections where session_id = %s"
+                                           " and selection = any(%s)", (session, list(slots)))}
+    lacking = [slot for slot in slots if slot not in have]
+    if lacking:
+        # Without the counter, the sales up to this poll can't be seen: the coil reads high, the tax low.
+        raise CantCompute(f"Poll {session} has no counter for our slots {', '.join(lacking)}, so the sales up "
+                          "to it can't be counted. Pick another poll with --as-of. Nothing was sent.")
     b = ledger.balance(conn, at)
     if b is None:
         raise CantCompute(ledger.OPEN_HINT)
