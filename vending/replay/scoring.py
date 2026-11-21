@@ -140,6 +140,7 @@ def check_catalog(state: WeekState, plan: Plan) -> Check:
 
 def check_prices(state: WeekState, plan: Plan) -> Check:
     problems, unchecked = [], 0
+    ceilings = dict(state.ceilings)
     for sp in plan.slots:
         if sp.keep:
             continue
@@ -147,10 +148,12 @@ def check_prices(state: WeekState, plan: Plan) -> Check:
         unchecked += cost is None
         # With no unit cost, a price must still be above zero: free drinks never clear a floor.
         floor = PRICE_STEP_CENTS if cost is None else floor_cents(cost)
-        problems += check_price(sp.price_cents, floor, PRICE_CEILING_CENTS, sp.slot)
+        problems += check_price(sp.price_cents, floor, ceilings.get(sp.slot, PRICE_CEILING_CENTS), sp.slot)
     if problems:
         return Check("prices", FAIL, "; ".join(_refusal(r) for r in problems))
     detail = f"5-cent steps, above zero, at most the ceiling of {_dollars(PRICE_CEILING_CENTS)}"
+    detail += "".join(f" ({_dollars(cents)} for slot {slot})" for slot, cents in sorted(ceilings.items())
+                      if cents != PRICE_CEILING_CENTS)
     if unchecked:
         return Check("prices", SKIP, f"{detail}; but the floor isn't checked on {unchecked} slots (unit cost unknown).")
     return Check("prices", PASS, f"{detail}; above every floor.")

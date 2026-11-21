@@ -2377,6 +2377,164 @@
    }
   }
  },
+ "report_cards": {
+  "ok": true,
+  "data": {
+   "opened": true,
+   "weeks": [
+    {
+     "week": "2026-12-05",
+     "ends": "2026-12-11",
+     "final": false,
+     "grade": "beat",
+     "run_id": 1,
+     "planned_at": {
+      "$datetime": "2026-12-02T19:00:00+00:00"
+     },
+     "checks": [
+      {
+       "name": "valid plan",
+       "status": "pass",
+       "detail": "All 20 slots once, every field well formed."
+      },
+      {
+       "name": "catalog",
+       "status": "pass",
+       "detail": "17 named products, all in the catalog."
+      },
+      {
+       "name": "prices",
+       "status": "skip",
+       "detail": "5-cent steps, above zero, at most the ceiling of $6.50; but the floor isn't checked on 2 slots (unit cost unknown)."
+      },
+      {
+       "name": "balance",
+       "status": "skip",
+       "detail": "Unit cost unknown for slots 55, 58."
+      }
+     ],
+     "outcome": {
+      "scored": 18,
+      "slots": 20,
+      "sold": 73,
+      "sold_out_slots": 3,
+      "stockout_units": 6,
+      "unsold_units": 63,
+      "revenue": "176.83",
+      "margin": "73.30",
+      "fee": null
+     },
+     "baseline": {
+      "scored": 20,
+      "slots": 20,
+      "sold": 32,
+      "sold_out_slots": 18,
+      "stockout_units": 47,
+      "unsold_units": 2,
+      "revenue": "78.42",
+      "margin": null,
+      "fee": null
+     },
+     "comparison": {
+      "slots": 18,
+      "plan_margin": "73.30",
+      "baseline_margin": "32.01",
+      "difference": "41.29",
+      "result": "beat"
+     },
+     "notes": [
+      "In progress: scored on the sales so far. The grade can change until Friday ends."
+     ],
+     "grade_text": "Beat the baseline"
+    },
+    {
+     "week": "2026-11-28",
+     "ends": "2026-12-04",
+     "final": true,
+     "grade": "opening",
+     "run_id": null,
+     "planned_at": null,
+     "checks": [],
+     "outcome": null,
+     "baseline": null,
+     "comparison": null,
+     "notes": [
+      "The first fill went in during this week, so the first graded week is the next one."
+     ],
+     "grade_text": "Opening week: not graded"
+    }
+   ]
+  }
+ },
+ "incidents": {
+  "ok": true,
+  "data": {
+   "opened": true,
+   "total": 6,
+   "rows": [
+    {
+     "at": {
+      "$datetime": "2026-12-09T14:53:00+00:00"
+     },
+     "week": "2026-12-05",
+     "kind": "refused",
+     "what": "submit_desired_state",
+     "note": "A request for this Friday is already pending (pr-002). Wait for it to be filled or rejected.",
+     "error": false
+    },
+    {
+     "at": {
+      "$datetime": "2026-12-09T14:52:00+00:00"
+     },
+     "week": "2026-12-05",
+     "kind": "failed",
+     "what": "get_pnl",
+     "note": "(error text isn't shown on this public page; it is in the database and the container's log)",
+     "error": true
+    },
+    {
+     "at": {
+      "$datetime": "2026-12-09T14:50:00+00:00"
+     },
+     "week": "2026-12-05",
+     "kind": "tool_errors",
+     "what": "Run 6",
+     "note": "The model was told 1 tool call failed. See How it decided under Runs.",
+     "error": false
+    },
+    {
+     "at": {
+      "$datetime": "2026-12-07T14:09:00+00:00"
+     },
+     "week": "2026-12-05",
+     "kind": "refused",
+     "what": "submit_desired_state",
+     "note": "Selection 37: $3.50 is above the price ceiling of $3.25. Price it at or under the ceiling.",
+     "error": false
+    },
+    {
+     "at": {
+      "$datetime": "2026-12-04T14:01:00+00:00"
+     },
+     "week": "2026-11-28",
+     "kind": "failed",
+     "what": "get_machine_state",
+     "note": "(error text isn't shown on this public page; it is in the database and the container's log)",
+     "error": true
+    },
+    {
+     "at": {
+      "$datetime": "2026-12-04T14:00:00+00:00"
+     },
+     "week": "2026-11-28",
+     "kind": "run_failed",
+     "what": "Run 2",
+     "note": "(error text isn't shown on this public page; it is in the database and the container's log)",
+     "error": true
+    }
+   ]
+  }
+ },
  "purchase_requests": {
   "ok": true,
   "data": [
