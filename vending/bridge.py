@@ -137,6 +137,10 @@ class ConnectionFailed(BridgeUnreachable):
     """
 
 
+class BridgeNotFound(BridgeError):
+    """A `404` from a read: the bridge has nothing at that path (an unknown request ID, say)."""
+
+
 class BridgeRateLimited(BridgeError):
     """Still `429` after every retry. Later calls in the same run would only make it worse."""
 
@@ -257,6 +261,8 @@ class Bridge:
                     raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
                 # The status and our own name for it; the body can hold a poll.
                 detail = f"{error.code} {status_phrase(error.code)} from {path}".replace("  ", " ")
+                if error.code == 404:
+                    raise BridgeNotFound(detail) from None
                 # A 5xx from everything, `/health` included, is an outage (or
                 # the Tailscale proxy before the node joins), not this request.
                 if error.code >= 500 and path != "/health" and not self._is_up():

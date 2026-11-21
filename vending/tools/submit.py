@@ -25,8 +25,9 @@ is written to stderr and the error the agent sees names the request ID and the
 row already settled by something else (`submissions.AlreadySettled`), which
 `settle` refuses to overwrite. While a row is `sending`
 or `unknown`, the request may or may not exist on the bridge, so the tool
-refuses to submit anything until a person settles it with
-`python -m vending.submissions resolve`.
+refuses to submit anything until it is settled: by `python -m vending.submissions check`
+(which a live agent run also does first) when the bridge can answer for it, otherwise by a person
+with `python -m vending.submissions resolve`.
 """
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ ROUTE = "/api/v1/purchase-requests"
 
 class SubmitReply(WriteReply):
     request_id: str | None = None
+    # The request's status when accepted; otherwise how the record was settled: `refused` (the bridge
+    # said no) and `not_filed` (it never left) mean nothing was ordered, `unknown` that it may have been.
     status: str | None = None
     plan_hash: str | None = None
     submission: int | None = None
@@ -123,12 +126,12 @@ def _send(client: Bridge, plan: planner.Plan, body: dict, row: int, side: psycop
         if error.status >= 500:
             return _unknown(side, row, plan, f"the bridge answered {error.status}: {error.detail}")
         submissions.settle(side, row, "refused", detail=str(error))
-        return SubmitReply(success=False, submission=row, plan_hash=plan.plan_hash,
+        return SubmitReply(success=False, status="refused", submission=row, plan_hash=plan.plan_hash,
                            message=f"The bridge refused the request ({error}); nothing was ordered. "
                                    "Fix what it names and preview again.")
     except BridgeUnreachable as error:
         submissions.settle(side, row, "not_filed", detail=str(error))
-        return SubmitReply(success=False, submission=row, plan_hash=plan.plan_hash,
+        return SubmitReply(success=False, status="not_filed", submission=row, plan_hash=plan.plan_hash,
                            message=f"Couldn't reach the bridge ({error}); nothing was sent.")
     except BridgeNoAnswer as error:
         return _unknown(side, row, plan, str(error))

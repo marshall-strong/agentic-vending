@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from vending import bridge as bridge_module
-from vending.bridge import RETRIES, Bridge, BridgeError, BridgeRateLimited, BridgeUnreachable
+from vending.bridge import RETRIES, Bridge, BridgeError, BridgeNotFound, BridgeRateLimited, BridgeUnreachable
 
 KEY = "made-up-key"
 DAY = "2026-10-01"
@@ -102,10 +102,10 @@ def bridge(sleeps):
 
 
 def refuses_with_plain_error(call, match=""):
-    """`call` raises `BridgeError` itself, the kind that doesn't stop a run."""
+    """`call` raises `BridgeError` itself (or `BridgeNotFound`, for a `404`), the kind that doesn't stop a run."""
     with pytest.raises(BridgeError, match=match) as raised:
         call()
-    assert type(raised.value) is BridgeError
+    assert type(raised.value) is (BridgeNotFound if str(raised.value).startswith("404 ") else BridgeError)
 
 
 def test_raw_returns_the_stored_bytes_and_sends_the_key(bridge, sleeps):

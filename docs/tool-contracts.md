@@ -345,13 +345,15 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   - Something a person must fix first: `success: false`, "Can't submit yet:" and what to do.
   - The bridge says too many requests are open (`429`): refused `too_many_open_requests`; wait for
     earlier ones to be decided.
-  - The bridge refuses the request (another `4xx`): `success: false` with the bridge's reason;
-    nothing was ordered.
-  - Bridge unreachable: `success: false`, "nothing was sent"; the record is `not_filed`.
+  - The bridge refuses the request (another `4xx`): `success: false`, `status: refused`, with the
+    bridge's reason; nothing was ordered.
+  - Bridge unreachable: `success: false`, `status: not_filed`, "nothing was sent"; the record is
+    `not_filed`.
   - Sent but no usable answer (a timeout, a `5xx`, or an answer with no request ID): the record is
     `unknown`, the agent is told not to submit again, and every later preview and submit refuses
-    `submission_unresolved` until a person checks the bridge and runs
-    `python -m vending.submissions resolve`.
+    `submission_unresolved` until the row is settled. `python -m vending.submissions check` (which
+    a live agent run also does first) settles it only if the row holds a request ID the bridge can
+    answer for; otherwise a person checks the bridge and runs `python -m vending.submissions resolve`.
   - Accepted, but storing the answer fails (the database dropped mid-call): the request ID is
     written to the server's error log as a `LOST ANSWER` line, and the error the agent sees names
     the ID and the `resolve` command. The record stays `sending`, which blocks further submits.
