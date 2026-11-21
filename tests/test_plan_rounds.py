@@ -203,6 +203,15 @@ def test_a_round_in_other_slots_is_checked_in_full_before_it_is_set_aside(tmp_pa
     assert not isinstance(refused.value, pr.OtherSlots)
 
 
+def test_a_set_aside_round_with_malformed_totals_is_refused_naming_the_file(tmp_path):
+    proj = projection()
+    proj["scenarios"]["base"]["totals"] = [123]
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, proj)
+    with pytest.raises(pr.RoundError, match=r"round3/projection3\.json: .*base.*totals") as refused:
+        pr.load_rounds(tmp_path, REDRAWN)
+    assert not isinstance(refused.value, pr.OtherSlots)
+
+
 def test_a_slot_that_isnt_ours_is_refused(tmp_path):
     rows = day_one()
     rows[0]["slot"] = 11        # the other team's selection

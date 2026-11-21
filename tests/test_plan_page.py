@@ -218,6 +218,28 @@ def test_a_round_placed_again_shows_beside_the_set_aside_ones(tmp_path):
     assert len(re.findall(r'<span class="cell theirs"', html)) == 20
 
 
+def test_a_set_aside_round_with_malformed_totals_gets_the_normal_refusal(tmp_path, monkeypatch):
+    from tests.test_plan_rounds import REDRAWN
+    root = tmp_path / "rounds"
+    root.mkdir()
+    proj = projection()
+    proj["scenarios"]["base"]["totals"] = [123]
+    write(root, "round3", "3", {"day_one": day_one()}, proj)            # placed before the redraw
+    monkeypatch.setattr(plan_page, "read_our_slots", lambda: REDRAWN)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), plan_page._handler(root, use_db=False))
+    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
+    try:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/")
+            raise AssertionError("expected 500")
+        except urllib.error.HTTPError as error:
+            text = error.read().decode()
+            assert error.code == 500 and text.startswith("can't read the rounds: round3/projection3.json")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_the_page_refuses_with_nothing_stored(tmp_path, schema_url, monkeypatch, capsys):
     with open_in(*schema_url) as conn:
         conn.execute("delete from slot_assignment")

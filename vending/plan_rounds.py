@@ -65,7 +65,13 @@ class RoundError(ValueError):
 
 class OtherSlots(RoundError):
     """A round that places products in slots outside our assignment: one made before the redraw, say.
-    Raised only once the whole round has passed every other check."""
+    Raised only once the whole round has passed every other check, so it carries the checked round and
+    the projection it was read from."""
+
+    def __init__(self, message: str, checked: Round, projection: dict) -> None:
+        super().__init__(message)
+        self.checked = checked
+        self.projection = projection
 
 
 @dataclass(frozen=True)
@@ -368,6 +374,8 @@ def _parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, .
             continue
         scen_rows[scen] = {_check_slot(r.get("slot"), jname, ours, outside): r for r in block.get("per_slot") or []}
         t = block.get("totals") or {}
+        if not isinstance(t, dict):
+            raise RoundError(f"{jname}: the {scen} scenario's totals aren't an object")
         totals[scen] = Totals(_opt_num(t.get("units_sold")), _opt_int(t.get("gross_profit_cents")),
                               _opt_int(t.get("model_spend_cents")), _opt_int(t.get("profit_cents")),
                               _opt_int(t.get("week1_gp_cents")))
@@ -484,22 +492,23 @@ def _parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, .
 
     notes = {k: plan[k] for k in ("fallbacks", "asks", "checks", "expect", "note", "truncated") if plan.get(k)}
     _check_note_slots(notes.get("fallbacks"), pname, ours, outside)
-    if outside:
-        slot, name = next(iter(outside.items()))
-        raise OtherSlots(f"{name}: slot {slot} isn't in our current assignment; "
-                         f"a round may only place products in those {len(ours)} slots")
     for k in ("problems", "needs_hand_count", "needs_new_source"):
         if projection.get(k):
             notes[k] = projection[k]
     if isinstance(plan.get("totals"), dict) and plan["totals"].get("cap_note"):
         notes["cap_note"] = plan["totals"]["cap_note"]
-    return Round(
+    checked = Round(
         id=round_id, folder=folder, plan_file=pname, projection_file=projection_file, saved_at=saved_at,
         slots=dict(sorted(slots.items(), key=lambda kv: _slot_key(kv[0]))),
         catalog_requests=[r for r in plan.get("catalog_requests") or [] if isinstance(r, dict)],
         purchases=purchases, fill_expected_cents=fill_expected, fill_most_cents=fill_most,
         totals=totals, weeks=weeks, window=projection.get("window"),
         assumptions=projection.get("assumptions") or {}, notes=notes, warnings=warnings, ours=ours)
+    if outside:
+        slot, name = next(iter(outside.items()))
+        raise OtherSlots(f"{name}: slot {slot} isn't in our current assignment; "
+                         f"a round may only place products in those {len(ours)} slots", checked, projection)
+    return checked
 
 
 def load_all(root: Path, ours: tuple[str, ...]) -> list[Round]:
@@ -537,24 +546,14 @@ def _named_slots(plan: Any, projection: Any) -> set[str]:
     return named
 
 
-def _set_aside(round_id: str, plan_path: Path, projection_path: Path | None, ours: tuple[str, ...],
-               error: OtherSlots) -> SetAside:
-    plan = _load(plan_path)
-    projection = _load(projection_path) if projection_path else {}
-    outside = sorted((s for s in _named_slots(plan, projection) if s not in ours),
+def _set_aside(plan_path: Path, ours: tuple[str, ...], error: OtherSlots) -> SetAside:
+    """From the round as the loader checked it: its totals came through the same parser as a shown round's."""
+    r, projection = error.checked, error.projection
+    outside = sorted((s for s in _named_slots(_load(plan_path), projection) if s not in ours),
                      key=lambda s: (_slot_key(s) if re.fullmatch(r"\d{2}", s) else (9, 9), s))
-    gp = {}
-    if isinstance(projection, dict):
-        for scen in SCENARIOS:
-            block = (projection.get("scenarios") or {}).get(scen)
-            cents = _opt_int(((block or {}).get("totals") or {}).get("gross_profit_cents")) if isinstance(block, dict) else None
-            if cents is not None:
-                gp[scen] = cents
-    return SetAside(id=round_id, plan_file=f"{plan_path.parent.name}/{plan_path.name}",
-                    saved_at=datetime.fromtimestamp(plan_path.stat().st_mtime).astimezone(),
-                    outside=tuple(outside), reason=str(error),
-                    fill_most_cents=_opt_int(projection.get("fill_most_cents")) if isinstance(projection, dict) else None,
-                    gross_profit_cents=gp)
+    gp = {scen: t.gross_profit_cents for scen, t in r.totals.items() if t.gross_profit_cents is not None}
+    return SetAside(id=r.id, plan_file=r.plan_file, saved_at=r.saved_at, outside=tuple(outside), reason=str(error),
+                    fill_most_cents=_opt_int(projection.get("fill_most_cents")), gross_profit_cents=gp)
 
 
 def load_rounds(root: Path, ours: tuple[str, ...]) -> tuple[list[Round], list[SetAside]]:
@@ -568,7 +567,7 @@ def load_rounds(root: Path, ours: tuple[str, ...]) -> tuple[list[Round], list[Se
         try:
             shown.append(load_round(rid, plan, projection, ours))
         except OtherSlots as error:
-            aside.append(_set_aside(rid, plan, projection, ours, error))
+            aside.append(_set_aside(plan, ours, error))
     return shown, aside
 
 
