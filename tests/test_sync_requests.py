@@ -3,6 +3,7 @@ shaped like the bridge's `PurchaseRequestPending` and `PurchaseRequestDetail`.
 Skipped like `test_sync_history` when there is no database."""
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from fractions import Fraction
 
 import pytest
@@ -74,6 +75,11 @@ class FakeBridge:
 
 def quiet(_):
     pass
+
+
+def doors(said):
+    """What was logged, less the receipt-price lines (`vending.receipt_prices`): these tests have no sourcing rows."""
+    return [s for s in said if "sourcing table" not in s]
 
 
 def test_pending_then_fulfilled(conn):
@@ -237,10 +243,38 @@ def test_a_late_pending_answer_does_not_overwrite_a_final_one(conn, final):
         store(conn, "nope", pending("nope"), NOW)
 
 
+def test_an_older_answer_does_not_replace_a_newer_receipt(conn):
+    """A slow read can arrive after the bridge corrected the receipt. Its older `updated_at` gives it away."""
+    submit(conn, "r1")
+    store(conn, "r1", fulfilled("r1", receipt(total_paid="12.99"), updated_at="2026-11-08T10:00:00Z"), NOW)
+    stale = store(conn, "r1", fulfilled("r1", receipt(total_paid="12.37")), NOW + timedelta(minutes=5))
+    assert stale.status == "fulfilled" and stale.new_losses == 0
+    assert stale.warnings == ("r1: the bridge's answer last changed 2026-11-07T16:30:00+00:00, older than the one "
+                              "stored (2026-11-08T10:00:00+00:00); kept the stored receipt",)
+    assert conn.execute("select total_paid from purchase_lines").fetchone() == (Decimal("12.99"),)
+    assert conn.execute("select updated_at, last_response->'lines'->0->'receipt'->>'total_paid'"
+                        " from purchase_requests").fetchone() == (datetime(2026, 11, 8, 10, tzinfo=timezone.utc), "12.99")
+    # The same revision read again, or a newer one, is still stored.
+    assert store(conn, "r1", fulfilled("r1", receipt(total_paid="12.98"), updated_at="2026-11-08T10:00:00Z"),
+                 NOW).warnings == ()
+    assert conn.execute("select total_paid from purchase_lines").fetchone() == (Decimal("12.98"),)
+
+
 def test_a_float_amount_is_refused(conn):
     submit(conn, "r1")
     with pytest.raises(ValueError):
         store(conn, "r1", fulfilled("r1", receipt(total_paid=12.37)), NOW)
+
+
+def test_an_amount_too_large_to_store_is_refused_and_the_sync_goes_on(conn):
+    """Postgres can't hold 1e999999 as numeric. That must be a bad answer, not an error that stops the sync."""
+    submit(conn, "r1", days_ago=3)
+    submit(conn, "r2")
+    said = []
+    report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(total_paid="1e999999")),
+                                    "r2": fulfilled("r2", receipt())}), NOW, log=said.append)
+    assert (report.failed, report.fulfilled) == (1, 1)
+    assert any(line.startswith("r1: ") and "not an amount" in line for line in said), said
 
 
 def test_main_refuses_a_schema_missing_migrations(database_url, monkeypatch, capsys):
@@ -331,7 +365,7 @@ def test_half_a_pair_of_door_times_is_logged_naming_the_request(conn):
     submit(conn, "r1")
     said = []
     sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED)}), NOW, log=said.append)
-    assert said == ["r1: the receipt has door_opened_at but no door_closed_at; neither is kept, "
+    assert doors(said) == ["r1: the receipt has door_opened_at but no door_closed_at; neither is kept, "
                     "so its visit is dated by resolved_at"]
     assert door_row(conn) == (None, None)
 
@@ -348,7 +382,7 @@ def test_a_door_time_that_is_not_a_time_is_logged_and_the_rest_of_the_batch_stil
         "r2": fulfilled("r2", receipt(), door_opened_at=OPENED, door_closed_at=CLOSED),
     }), NOW, log=said.append)
     assert (report.checked, report.failed) == (2, 0)
-    assert said == [f"r1: door_opened_at is {bad!r}, not a time; neither door time is kept, "
+    assert doors(said) == [f"r1: door_opened_at is {bad!r}, not a time; neither door time is kept, "
                     "so its visit is dated by resolved_at"]
     assert door_row(conn, "r1") == (None, None)
     assert door_row(conn, "r2")[1] == datetime(2026, 11, 7, 16, 34, tzinfo=timezone.utc)
@@ -363,7 +397,7 @@ def test_a_door_time_with_a_date_and_no_time_is_logged_and_the_receipt_kept(conn
     report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED,
                                                     door_closed_at="2026-11-07")}), NOW, log=said.append)
     assert (report.checked, report.failed) == (1, 0)
-    assert said == ["r1: door_closed_at is '2026-11-07', not a time; neither door time is kept, "
+    assert doors(said) == ["r1: door_closed_at is '2026-11-07', not a time; neither door time is kept, "
                     "so its visit is dated by resolved_at"]
     assert door_row(conn) == (None, None)
     assert conn.execute("select count(*) from purchase_lines").fetchone()[0] == 1

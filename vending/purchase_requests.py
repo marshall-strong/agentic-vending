@@ -27,6 +27,7 @@ RECEIPT_COLUMNS = (
     "slot_reassigned", "resolved_at",
 )
 _MONEY = {"total_paid", "unit_cost_paid"}
+_TOO_MUCH = Decimal(10) ** 9
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,10 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     `ValueError` before anything is written, so a bad read never wipes a good one.
     That includes door times with close before open (`door_times`). Once a request is
     `fulfilled` or `rejected`, a `pending` answer is ignored and the stored status returned.
+
+    An answer whose `updated_at` is older than the stored one is ignored too, with a warning: a slow read
+    can arrive after the bridge corrected the receipt, and it must not put the old receipt back. The check
+    is part of the same UPDATE, so two reads that race can't both win.
     """
     if response.get("id") not in (None, request_id):
         raise ValueError(f"asked for {request_id}, the bridge answered about {response.get('id')}")
@@ -79,6 +84,7 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
         raise ValueError(f"unexpected answer for {request_id}: status {response.get('status')!r} and no lines")
     opened, closed = door_times(request_id, response)
     warnings = () if opened is not None else tuple(_door_time_warnings(request_id, response))
+    total_paid, changed_at = _money(response.get("total_paid")), _when(response.get("updated_at"))
 
     with conn.transaction():
         updated = conn.execute(
@@ -88,18 +94,24 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
                    updated_at = %s, last_checked = %s, last_response = %s,
                    door_opened_at = %s, door_closed_at = %s
              where request_id = %s and not (%s = 'pending' and status <> 'pending')
+               and (%s::timestamptz is null or updated_at is null or updated_at <= %s)
             """,
-            (status, response.get("decision_note"), _money(response.get("total_paid")),
-             _when(response.get("fulfilled_at")), _when(response.get("updated_at")),
-             checked_at, Jsonb(response), opened, closed, request_id, status),
+            (status, response.get("decision_note"), total_paid,
+             _when(response.get("fulfilled_at")), changed_at,
+             checked_at, Jsonb(response), opened, closed, request_id, status, changed_at, changed_at),
         ).rowcount
         if not updated:
-            stored = conn.execute("select status from purchase_requests where request_id = %s", (request_id,)).fetchone()
+            stored = conn.execute("select status, updated_at from purchase_requests where request_id = %s",
+                                  (request_id,)).fetchone()
             if stored is None:
                 raise ValueError(f"{request_id} is not in purchase_requests; record it when it is submitted")
             # A request only ever leaves `pending`. A `pending` answer that arrives after a final one
             # (a slow read that outlived its timeout) is stale, so it must not clear the receipt or door times.
-            return Stored(stored[0])
+            if status == "pending" and stored[0] != "pending":
+                return Stored(stored[0])
+            return Stored(stored[0], warnings=(
+                f"{request_id}: the bridge's answer last changed {changed_at.isoformat()}, older than the one "
+                f"stored ({stored[1].isoformat()}); kept the stored receipt",))
         if status != "fulfilled":
             return Stored(status, warnings=warnings)
         before = conn.execute(
@@ -207,7 +219,9 @@ def _money(value: str | int | None) -> Decimal | None:
         amount = Decimal(str(value))
     except InvalidOperation:
         raise ValueError(f"not an amount: {value!r}") from None
-    if not amount.is_finite():
+    # Postgres `numeric` can't hold some finite Decimals (1e999999), and the error would stop the sync.
+    # No receipt comes near a billion dollars, so anything that large is a bad answer.
+    if not amount.is_finite() or abs(amount) >= _TOO_MUCH:
         raise ValueError(f"not an amount: {value!r}")
     return amount
 
