@@ -280,7 +280,8 @@ Both routes use the current slot assignment for stock, plans and saved tool repl
 lock, `plan` holds the first-fill plan and `weekly_plan` holds the agent's plan. A note replaces
 plan reasons and run and activity text from before the current assignment. Saved poll replies
 show figures only for rows that name a current selection. The stored audit records keep the full replies.
-The stored error text of failed calls, tool results and runs stays out of both responses.
+The stored error text of failed calls and runs stays out of both responses, and so does the
+content of every step marked `is_error` (a failed tool reply, or any other step so marked) (#165).
 The public page keeps the confirmation when a submit succeeds and the run later fails.
 The public page gives a fixed message when a panel cannot read its data. The detail goes to
 stderr. The standalone page shows the detail in the panel.

@@ -191,7 +191,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   opening capital + later capital + takings - receipts - midweek visit fees - token spend - tax
   remitted, plus or minus adjustments. Each part is its own field (`opening`, `capital`,
   `revenue`, `receipts`, `visit_fees` and `visits`, `token_spend`, `tax_remitted`,
-  `adjustments`). Also `tax_set_aside`, `tax_owed` (set aside less remitted) and `spendable`
+  `adjustments`). Also `tax_set_aside` (takings x 8/108, rounded half up per tax week, Sunday to
+  Saturday Eastern, the week in progress on its takings so far), `tax_owed` (set aside less
+  remitted) and `spendable`
   (balance less tax owed), which is the figure the planner's spend check uses. Plus `as_of`,
   `opening_at` and `notes`.
 - **Preconditions**: a person has opened the ledger with
@@ -208,7 +210,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
 ## `get_pnl`
 
 - **Inputs**: optional `start` and `end`, calendar days in Eastern time, both inclusive. Default:
-  from the ledger's opening to today.
+  from the ledger's opening to today. A poll at `start`'s midnight sharp is counted when `start`
+  is after the opening; from the opening's own moment, or before the opening, that poll is the
+  baseline. Entries, receipts and visits always count from `start`'s midnight itself.
 - **Outputs**: `revenue` (tax included), `tax_set_aside`, `revenue_ex_tax`, `units_sold`,
   `units_costed`, `cost_of_sales` (first-in, first-out cost from receipts) and
   `cost_of_sales_complete`, `units_estimated` and `estimated_cost_of_sales` (an estimate for
@@ -218,7 +222,13 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   a sale), `visit_fees`, `visits`, `token_spend`, `adjustments`, `net`; also `purchases`,
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
   (`inventory_machine`, `inventory_closet`, `inventory`, `inventory_complete`); per-week revenue
-  in `weeks`; and `notes`.
+  in `weeks` (Saturday to Friday, each with its share of the tax); `tax_weeks`, each Sunday to
+  Saturday tax week's revenue and tax as David calculates it (`week`, the Sunday it starts, and
+  `ends` at Saturday 23:59:59.999999 Eastern), with `from` and `to`, the part of the week the window
+  counted (Eastern), and `partial`: true when the window cut the week (it starts midweek, or at an
+  opening after that week's Sunday 00:00, or it ends before Saturday), so its `revenue` and `tax` are
+  the window's, not the whole week's figure; and `notes`. An `end` of today or later stops the window
+  at now: `end` in the reply is now, and the week in progress is `partial` with `to` now.
 - **Preconditions**: the ledger is open, unless `start` is given (`end` then defaults to today).
 - **Side effects**: one `action_log` row.
 - **Cost**: database queries only.
@@ -438,7 +448,7 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   for the config change.
 - **Cost**: database only.
 - **Failure behavior**: code `wildcard`, every reason at once: not one of ours, not on a middle
-  shelf (2 to 4), column 5 (beside the machine's centre line), no reason, or a slot already set.
+  shelf (2 to 4), column 4 or 5 (beside the machine's centre line), no reason, or a slot already set.
   `halted` when the halt switch is on.
 - **Owner**: Kevin Sykes (PR #166).
 

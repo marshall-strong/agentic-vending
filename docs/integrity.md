@@ -22,9 +22,13 @@ course staff's rule, not a team choice. See `docs/agent/interloper.md`.
 Which selections are ours is the inventory server's assignment (brief, section 1). The
 machine is split evenly between the two teams. The instructors change the assignment exactly once,
 through the server, before the competition starts, and that change is what the competition uses
-(David, 16 Nov, as Kevin reported; nobody knows yet whether it has happened). The brief (section 1)
-says the assignment is fixed for both quarters, so the change is the instructors' practice, not the
-brief's text.
+(David, 16 Nov, as Kevin reported). It happened by 20 Nov: David wrote that slots have been
+reassigned and will not change during the quarter. The brief (section 1) says the assignment is
+fixed for both quarters, so the change is the instructors' practice, not the brief's text.
+
+David's 20 Nov email adds an honor rule: don't influence others with knowledge of who owns what in
+the machine. Don't tell anyone which selections are ours or theirs, and don't steer customers
+toward or away from a selection except through our own prices and products.
 
 ## Fall data (before the fall cut)
 
@@ -36,8 +40,8 @@ and prices from all 40 selections, for polls taken before the cut (Kevin, 15 Nov
 **The cut comes before the day-one fill.** Once staff start loading the teams' products they
 "basically turn it off" (David, 12 Nov), and from then on the machine's prices and counters are the
 teams' own choices. The cut is the setting `FALL_CUTOFF`: unset, 18 Nov 2026 00:00 Eastern, the
-first day of the break after Fall Quarter classes, safely before any loading (about 30 Nov to
-2 Dec). It is never later than the start, 3 Dec 2026 00:00 Eastern.
+first day of the break after Fall Quarter classes, safely before the loading on Mon 30 Nov
+(David, 20 Nov). It is never later than the start, 3 Dec 2026 00:00 Eastern.
 
 **From the cut on**, nothing reads per-selection sales, prices or stock outside our assignment.
 What counts is when the poll was taken, not when the data is read: fall data stays usable after the
@@ -71,6 +75,9 @@ repo root points here.
 - **Our stock count reads only our machine's counters.** `vending/stock.py` reads poll
   counters only from `DEVICE_ID`, and only for selections in the current server assignment
   that our own receipts name. A historical receipt does not authorize reads after reassignment.
+- **The tracking check sends and stores only our slots.** `vending/tracking.py` builds `coil` from
+  our slots (the server's assignment, `vending.slots.our_slots`) and passes on stock warnings only
+  for those slots and our closet.
 - **Count estimates use the same assignment.** Both the count rows and the counter query filter
   selections in SQL. Dashboard response filtering is an additional display check.
 - **The bridge script never prints a whole poll.** `scripts/bridge.py` (`raw`, `latest`,
