@@ -451,6 +451,23 @@ def opening_rises(rows: Iterable[tuple[datetime, str, int]], opened_at: datetime
     return rises_between(rows, opened_at, until)
 
 
+def poll_start(start: datetime, opened_at: datetime | None) -> datetime:
+    """Where the poll figures of a window that starts at `start` count from: the `since` of `rises_between`.
+
+    The polls' figures (takings and their tax, units sold, cost of sales and
+    shrinkage) count the rises at polls after `since`, so a window that starts
+    after the opening counts from one microsecond before `start`: a poll at that
+    midnight sharp is in the window (a tax week's Sunday 00:00 poll, say), and
+    the day before, which ends a microsecond before it, doesn't take it too. A
+    window from the opening keeps the opening's poll as the baseline, so sales
+    before the opening are not counted. Entries, receipts and visits count from
+    `start` itself, inclusive: they are never shifted.
+    """
+    if opened_at is not None and start == opened_at:
+        return start
+    return start - timedelta(microseconds=1)
+
+
 def week_of(moment_local: datetime, week_starts: int = WEEK_STARTS) -> date:
     """The day the week holding `moment_local` began: the latest `week_starts` weekday on or before it."""
     return moment_local.date() - timedelta(days=(moment_local.weekday() - week_starts) % 7)
@@ -633,13 +650,19 @@ def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
     return notes
 
 
-def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
-    """Profit and loss between two moments, with inventory at cost as of `end`."""
+def pnl(conn: psycopg.Connection, start: datetime, end: datetime, polls_since: datetime | None = None) -> Pnl:
+    """Profit and loss between two moments, with inventory at cost as of `end`.
+
+    Entries, receipts and visits count from `start`, inclusive. The polls'
+    figures count the rises at polls after `polls_since` (default `start`; a
+    calendar window passes `poll_start(start, opening)`).
+    """
+    since = start if polls_since is None else polls_since
     notes: list[str] = []
-    sold = takings(conn, start, end)
+    sold = takings(conn, since, end)
     if sold.note:
         notes.append(sold.note)
-    units = units_sold(conn, start, end)
+    units = units_sold(conn, since, end)
     receipts, _, missing = _receipts(conn, start, end)
     if missing:
         notes.append(f"{missing} receipt lines have no total_paid, so purchases and cost of sales leave them out")
@@ -657,15 +680,15 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
                      "$600, and token spend and net leave it out")
 
     counted = stock.stock(conn, until=end)
-    # A rise is booked to the later poll, so the window's sales are the rises at polls after `start`.
-    sales = [s for s in counted.sales if start < s.at <= end]
+    # A rise is booked to the later poll, so the window's sales are the rises at polls after `since`.
+    sales = [s for s in counted.sales if since < s.at <= end]
     cost = summarize_sales(sales)
     if not units:
         notes.append("no sales in the window")
     notes += sales_cost_notes(units, cost, "cost of sales and margin")
     if sold.cents and not counted.slots:
         notes.append("the machine sold units but no receipts are stored, so nothing can be costed yet")
-    lost = [s for s in counted.shrinkage if start < s.at <= end]
+    lost = [s for s in counted.shrinkage if since < s.at <= end]
     shrinkage = sum((s.cost_cents for s in lost if s.cost_cents is not None), Fraction(0))
     shrinkage_complete = all(s.cost_cents is not None for s in lost)
     if not shrinkage_complete:

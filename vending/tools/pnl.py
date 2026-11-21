@@ -78,19 +78,16 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
     if start is None:
         if opened is None:
             return Pnl(success=False, message=ledger.OPEN_HINT + " Or give start and end dates.")
-        first = since = opened.at
+        first = opened.at
     else:
         first = datetime.combine(start, time.min, EASTERN)
-        # The ledger counts the rises at polls after `since`, so a calendar start is counted from one microsecond
-        # before midnight: a poll at midnight sharp is in the window (a tax week's Sunday 00:00 poll, say). An
-        # opening at that midnight stays the baseline, so its poll's rise (sales before the opening) is not counted.
-        since = first if opened is not None and opened.at == first else first - timedelta(microseconds=1)
     last_day = end or today
     if last_day < first.astimezone(EASTERN).date():
         return Pnl(success=False, message=f"end ({last_day}) is before start ({first.astimezone(EASTERN).date()}).")
     last = datetime.combine(last_day + timedelta(days=1), time.min, EASTERN) - timedelta(microseconds=1)
     try:
-        p = ledger.pnl(conn, since, last)
+        # A poll at `start`'s midnight sharp is in the window; entries, receipts and visits count from it.
+        p = ledger.pnl(conn, first, last, ledger.poll_start(first, opened and opened.at))
     except SlotsNotRecorded as error:
         return Pnl(success=False, message=str(error))
     net = ledger.money(p.net_cents)

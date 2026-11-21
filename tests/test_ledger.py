@@ -772,6 +772,22 @@ def test_get_pnl_from_an_opening_at_midnight_keeps_the_opening_poll_as_the_basel
     assert [(w["from"], w["partial"]) for w in reply["tax_weeks"]] == [("2026-12-06T00:00:00-05:00", False)]
 
 
+def test_get_pnl_counts_saturdays_last_microsecond_in_saturday_only(db):  # noqa: F811
+    # Only the polls' midnight counts from a microsecond early: an entry, a receipt or a visit in Saturday's
+    # last microsecond is Saturday's, never Sunday's too.
+    open_ledger(db, at=et(2026, 11, 30, 13, 0))
+    last_moment = et(2026, 12, 5, 23, 59) + timedelta(seconds=59, microseconds=999999)
+    ledger.record(db, "adjustment", -1000, "bottle deposit", "marshall", last_moment)
+    deliver(db, "r1", off_cycle=True, visit_fee_cents=2500,
+            resolved_at=last_moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"))
+    lines = ("adjustments", "purchases", "visit_fees", "visits")
+    saturday = call("get_pnl", {"start": "2026-12-05", "end": "2026-12-05"}).structuredContent
+    sunday = call("get_pnl", {"start": "2026-12-06", "end": "2026-12-06"}).structuredContent
+    both = call("get_pnl", {"start": "2026-12-05", "end": "2026-12-06"}).structuredContent
+    assert [saturday[k] for k in lines] == [both[k] for k in lines] == ["-10.00", "12.37", "25.00", 1]
+    assert [sunday[k] for k in lines] == ["0.00", "0.00", "0.00", 0]
+
+
 def test_get_pnl_days_are_eastern_days(db):  # noqa: F811
     open_ledger(db)
     deliver(db, "r1")

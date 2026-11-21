@@ -325,9 +325,9 @@ def daily(conn: psycopg.Connection, start: date, end: date, now: datetime | None
         why = NO_OPENING if opened is None else _before_opening(opened)
         return [_not_counted(d, why, now) for d in dates]
     first = max(_midnight(start), opened.at)                    # the first moment counted
-    # `ledger.pnl`'s start for this window. Sales count at polls after it: the
+    # `ledger.pnl`'s poll start for this window (`ledger.poll_start`). Sales count at polls after it: the
     # poll at the opening is the baseline, and a poll at midnight sharp counts.
-    since = opened.at if opened.at >= _midnight(start) else _midnight(start) - MICROSECOND
+    since = ledger.poll_start(first, opened.at)
     book = _Book(conn, opened, first, since, until)
 
     out = []
