@@ -1,7 +1,8 @@
 # Column capacity
 
 All columns in our machine are the same. Capacity depends on the drink's package size. Kevin
-confirmed this on 19 Nov. On 21 Sep, David said a column takes “as many as physically fit,” set by
+confirmed this on 19 Nov. So the 20 Nov slot redraw changed no slot's capacity: a slot on any
+shelf, at any point across the machine, holds the same number of a given package. On 21 Sep, David said a column takes “as many as physically fit,” set by
 container size. He said the chart was “probably close to right.” [21 Sep meeting, row 12](planning/2026-09-21-design-brief-meeting.md)
 
 The team found the figures on the Package Loading chart, part 931,650,021, inside the door. It calls its
@@ -36,7 +37,7 @@ size or a closet shortfall can explain a smaller fill. Add the reason to the pla
 
 ## Count at the day-one stocking visit
 
-1. At the visit around 30 Nov, choose one assigned column for each package size you load.
+1. At the stocking visit on Mon 30 Nov, choose one of our slots for each package size you load.
 2. Fill that column to the pusher with as many units as fit without forcing them.
 3. Count the units and record the package size, SKU, date and your name.
 4. Use that count for the matching package size. Note the selection and count for any column that differs.
