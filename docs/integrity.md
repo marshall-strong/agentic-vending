@@ -71,6 +71,9 @@ repo root points here.
 - **Our stock count reads only our machine's counters.** `vending/stock.py` reads poll
   counters only from `DEVICE_ID`, and only for selections in the current server assignment
   that our own receipts name. A historical receipt does not authorize reads after reassignment.
+- **The tracking check sends and stores only our slots.** `vending/tracking.py` builds `coil` from
+  our slots (the server's assignment, `vending.slots.our_slots`) and passes on stock warnings only
+  for those slots and our closet.
 - **Count estimates use the same assignment.** Both the count rows and the counter query filter
   selections in SQL. Dashboard response filtering is an additional display check.
 - **The bridge script never prints a whole poll.** `scripts/bridge.py` (`raw`, `latest`,

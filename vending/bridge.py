@@ -5,7 +5,8 @@ sync jobs and the write tools use. Only `poll`, which `vending.visit_polls` call
 around a visit, reads the machine live. The sync
 jobs read stored history and our purchase requests through it, with retries;
 `submit_desired_state` and `request_catalog_product` send their one POST through
-`post`, never retried, and `/health` tells a bad poll from an outage.
+`post`, and `vending.tracking` sends our books through `check_books`, each never
+retried, and `/health` tells a bad poll from an outage.
 
 Read failures are retried, then end in one of two ways. `BridgeUnreachable`
 means every later call would fail too, so the caller should stop: the bridge is
@@ -18,8 +19,9 @@ proxy can answer `502` to every request until the node has joined the tailnet.
 **No poll bytes in a message.** What the bridge sends back can hold the machine's whole document, and the
 worker's logs and `/health` are read by people (`docs/integrity.md`, "Logs carry no poll bytes"). So no
 error here quotes a body, a snippet, a bad status line or a header. A message holds the status, sizes and
-a reason this module wrote ("short read: 1234 of 2000 bytes"). The one exception is `post`, whose answer to
-our own purchase or catalog request is the reason the write tool shows the agent.
+a reason this module wrote ("short read: 1234 of 2000 bytes"). The exceptions are `post`, whose answer to
+our own purchase or catalog request is the reason the write tool shows the agent, and `check_books`, whose
+answer is about our own books.
 """
 
 from __future__ import annotations
@@ -48,6 +50,9 @@ SESSION_HEADER = "X-Poll-Session-Id"
 # `true` means another caller's recent document, `X-Poll-Age-Seconds` how old it was (docs/snapshot-archive.md).
 CACHED_HEADER, AGE_HEADER = "X-Poll-Cached", "X-Poll-Age-Seconds"
 RETRIES = 4
+# The tracking check (`check_books`), and how much of an error answer it keeps: enough for a list of items.
+TRACKING_PATH = "/api/v1/tracking/check"
+TRACKING_ERROR_BYTES = 8192
 
 
 class LiveRead(NamedTuple):
@@ -170,6 +175,17 @@ class Bridge:
         """
         return json.loads(self._once("POST", path, body, keep_body=True))
 
+    def check_books(self, body: dict) -> dict:
+        """Our books as of one poll (`POST /api/v1/tracking/check`), once, never retried: the bridge
+        allows one check a day, and a retry after a lost answer could be refused as the day's second.
+
+        `vending.tracking` builds the body and stores the answer. Raises as `post` does; an error
+        answer is the bridge's JSON about our own books (`{error, error_type, detail, items}`), kept
+        whole enough to parse in `BridgeAnswered.detail`.
+        """
+        return json.loads(self._once("POST", TRACKING_PATH, body, keep_body=True,
+                                     kept_bytes=TRACKING_ERROR_BYTES))
+
     def poll(self) -> LiveRead:
         """Read the machine now (`POST /api/v1/poll`, about 8.5 s): the document, and the session id
         the bridge named in its `X-Poll-Session-Id` header (None if it sent none).
@@ -197,10 +213,10 @@ class Bridge:
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
               timeout: float | None = None, headers_out: dict[str, str] | None = None,
-              keep_body: bool = False) -> bytes:
-        """One try. `keep_body` puts the start of an error answer in `BridgeAnswered.detail`: only for
-        `post`, whose answer concerns our own request. Any other answer can hold a poll, so only its status
-        is kept."""
+              keep_body: bool = False, kept_bytes: int = 300) -> bytes:
+        """One try. `keep_body` puts the first `kept_bytes` of an error answer in `BridgeAnswered.detail`:
+        only for `post` and `check_books`, whose answers concern our own request. Any other answer can hold
+        a poll, so only its status is kept."""
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -215,7 +231,8 @@ class Bridge:
                     headers_out.update({k.lower(): v for k, v in response.headers.items()})
         except urllib.error.HTTPError as error:
             # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
-            detail = _start_of_body(error, 300).decode(errors="replace") if keep_body else status_phrase(error.code)
+            detail = (_start_of_body(error, kept_bytes).decode(errors="replace") if keep_body
+                      else status_phrase(error.code))
             raise BridgeAnswered(error.code, detail) from None
         except urllib.error.URLError as error:
             # urllib raises URLError only while connecting or sending.

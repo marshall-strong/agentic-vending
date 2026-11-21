@@ -149,6 +149,7 @@ class Balance:
     tax_remitted_cents: Fraction    # positive: what was handed over
     adjustments_cents: Fraction     # signed
     notes: tuple[str, ...]
+    receipts_missing: int = 0       # receipt lines with no total_paid, left out of `receipts_cents`
 
     @property
     def balance_cents(self) -> Fraction:
@@ -519,7 +520,7 @@ def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance 
                      "re-date them or record them as a capital entry or adjustment if they belong in it")
     return Balance(as_of, start.at, start.amount_cents, _sum(recorded, "capital"), sold, receipts, lines, fees, visits,
                    -_sum(recorded, "tokens"), -_sum(recorded, "tax_remitted"), _sum(recorded, "adjustment"),
-                   tuple(notes))
+                   tuple(notes), receipts_missing=missing)
 
 
 @dataclass(frozen=True)
