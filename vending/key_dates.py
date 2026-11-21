@@ -12,7 +12,8 @@ Before the start each date shows with a status computed from our own records whe
   the current slot assignment.
 - **Ledger opening recorded**: the opening entry (`vending.ledger open`).
 - **Fill request sent**: the first purchase request, not rejected, sent at or after the ledger's
-  opening. A request before the opening is a test purchase, so with no opening it can't tell.
+  opening and before the start. A request before the opening is a test purchase, so with no opening
+  it can't tell; a request from the start on is a restock, never the fill.
 - **Slots confirmed at the lock**: the stored assignment's `last_checked_at` at or after the lock.
 - **Restock request sent**: a purchase request that isn't off-cycle, isn't rejected, isn't the
   fill request, and was sent in the week to the cutoff.
@@ -210,7 +211,9 @@ def _ledger_opening(kd: KeyDate, now: datetime, ctx: dict) -> dict:
 
 
 def _fill(facts: dict) -> dict | None:
-    return facts["requests"][0] if facts["requests"] else None
+    """The fill request: the first request standing since the opening, sent before the start. A request
+    from the start on is never the fill, whatever came before it (a rejected fill leaves none)."""
+    return next((r for r in facts["requests"] if r["submitted_at"] < START), None)
 
 
 def _fill_request(kd: KeyDate, now: datetime, ctx: dict) -> dict:

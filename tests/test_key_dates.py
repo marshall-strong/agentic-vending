@@ -278,3 +278,18 @@ def test_the_first_restock_after_the_fill_counts_from_the_database(conn, page_co
     snap = dashboard.snapshot(page_conn, et(12, 2))
     r = {x["key"]: x for x in snap["key_dates"]["data"]["rows"]}
     assert check(r["first_restock_request"], "restock_request")["text"] == "sent Tue 1 Dec, 15:00, pending"
+
+
+def test_after_a_rejected_fill_the_first_restock_still_counts(conn, page_conn, monkeypatch):
+    # The Sunday fill was rejected, so the first request standing is Thursday's restock. A request from
+    # the start on is never the fill, so it counts as this week's restock and the fill isn't done.
+    monkeypatch.setattr(dashboard, "lock_at", lambda: LOCK)
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=et(11, 28))
+    _request(conn, "FILL", et(11, 29, 20), status="rejected")
+    _request(conn, "WEEK1", et(12, 3, 10))
+    snap = dashboard.snapshot(page_conn, et(12, 3, 12))
+    r = {x["key"]: x for x in snap["key_dates"]["data"]["rows"]}
+    c = check(r["next_restock_request"], "restock_request")
+    assert c["status"] == "done" and "Thu 3 Dec, 10:00" in c["text"]
+    f = facts(opening=et(11, 28), requests=[request("WEEK1", et(12, 3, 10))])
+    assert key_dates._fill(f) is None
