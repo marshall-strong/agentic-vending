@@ -742,13 +742,21 @@ def test_a_retry_waits_for_a_new_preview_in_an_earlier_turn(connect, conn):
     assert out.status == "failed"
 
 
-@pytest.mark.parametrize("status", ["refused", "not_filed"])
-def test_a_reply_that_says_nothing_was_ordered_allows_the_retry_too(connect, conn, status):
-    nothing = {"success": False, "status": status, "message": "nothing was ordered", "plan_hash": "abc"}
+@pytest.mark.parametrize("first", [
+    {"success": False, "status": "refused", "submission": 1, "message": "The bridge refused the request (422)"},
+    {"success": False, "status": "not_filed", "submission": 1, "message": "Couldn't reach the bridge"},
+    {"success": False, "status": "refused", "submission": 1, "message": "refused",
+     "refusals": [{"code": "too_many_open_requests", "message": "wait"}]},
+], ids=["bridge 4xx", "not filed", "429 refusal"])
+def test_a_reply_from_after_the_post_never_allows_a_retry(connect, conn, first):
+    """Only a refusal from before the POST (no submission number) allows the retry. Once a POST went out,
+    even a reply saying nothing was ordered ends the run's submits: when in doubt, never send twice."""
     client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("submit"))
-    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [nothing, SENT])
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [first, SENT])
     run_id, out = go(connect, client, tools, live=True)
-    assert len(sent_submits(tools)) == 2 and out.status == "submitted"
+    assert len(sent_submits(tools)) == 1 and out.status == "failed"
+    assert "can't submit again" in last_result(client, 2) and "already submitted" in last_result(client, 4)
+    assert "nothing was bought" in out.detail and out.unresolved is None
 
 
 @pytest.mark.parametrize("first", [
@@ -801,7 +809,10 @@ def check_steps(conn, run_id):
                         (run_id,)).fetchall()
 
 
-def test_a_live_run_settles_a_lost_reply_the_bridge_accepted(connect, conn):
+def test_a_live_run_settles_an_open_row_that_holds_a_request_id(connect, conn):
+    """A row that holds the bridge's ID (a person stored it, say) is settled from the bridge's answer. A real lost
+    reply holds none: `tests/test_submit.py::test_a_lost_reply_stays_blocked_for_later_runs` sends one through
+    the submit tool, and `test_a_live_run_leaves_a_lost_reply_it_cant_tell_open` below is its startup check."""
     row = open_row(conn, response={"id": "pr-lost"})
     bridge = Lookup({"pr-lost": {"id": "pr-lost", "status": "pending"}})
     run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)

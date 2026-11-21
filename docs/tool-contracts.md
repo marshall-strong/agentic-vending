@@ -355,11 +355,12 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   - Something a person must fix first: `success: false`, "Can't submit yet:" and what to do.
   - The bridge says too many requests are open (`429`): refused `too_many_open_requests`; wait for
     earlier ones to be decided.
-  - The bridge refuses the request (another `4xx`): `success: false`, `status: refused`, with the
-    bridge's reason; nothing was ordered.
-  - Bridge unreachable: `success: false`, `status: not_filed`, "nothing was sent"; the record is
-    `not_filed`.
-  - Sent but no usable answer (a timeout, a `5xx`, or an answer with no request ID): the record is
+  - The bridge refuses the request (`403` or `422`, the other statuses the route documents):
+    `success: false`, `status: refused`, with the bridge's reason; nothing was ordered.
+  - Bridge unreachable (the error was raised inside the connect): `success: false`,
+    `status: not_filed`, "nothing was sent"; the record is `not_filed`.
+  - Sent but no usable answer (a timeout, a send error once connected, a redirect, a `5xx`, any
+    other `4xx`, or an answer with no request ID): the record is
     `unknown`, the agent is told not to submit again, and every later preview and submit refuses
     `submission_unresolved` until the row is settled. `python -m vending.submissions check` (which
     a live agent run also does first) settles it only if the row holds a request ID the bridge can
@@ -367,7 +368,9 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   - Accepted, but storing the answer fails (the database dropped mid-call): the request ID is
     written to the server's error log as a `LOST ANSWER` line, and the error the agent sees names
     the ID and the `resolve` command. The record stays `sending`, which blocks further submits.
-  - The POST is never retried: a retry after a lost answer could order twice.
+  - The POST is never retried, and never redirected: a retry after a lost answer could order twice.
+    A refusal from before the POST has no `submission` number; any reply to a POST has one. The
+    agent tries once more only after the first kind (#217).
 - **Owner**: Marshall Strong (issue #20, PR #37).
 
 ## `get_purchase_requests`

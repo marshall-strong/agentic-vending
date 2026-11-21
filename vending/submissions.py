@@ -13,12 +13,13 @@ bridge, and both the tool and `preview_desired_state` refuse
 
 `check` settles what the bridge can answer by itself, and a live agent run does
 the same before it starts. It looks up an open row only by a request ID the row
-already holds (in `request_id`, or as `id` in the stored `response`): found
-means `accepted`; a `404` means `not_filed`, but only when the row is older than
-`SAFE_WAIT` and another of our requests reads fine on the same route, so a
-broken route can't pass for a missing request. Anything else leaves the row
-open. Most open rows hold no ID (a timeout leaves none), and the bridge can't
-find a request by anything else, so those still need a person.
+already holds (in `request_id`, or as `id` in the stored `response`), and only
+an answer naming that request settles it, as `accepted`. Anything else leaves
+the row open, a `404` included: the bridge has no answer that means "never
+filed", and another request reading fine doesn't show this one would. A lost
+reply (the POST arrived, no answer came back) leaves no ID, and the bridge has
+no lookup by anything else and no idempotency key, so those rows always need a
+person.
 
 To settle one, find out whether the bridge filed it. If the request ID is known
 (the server log has a `LOST ANSWER` line, or the row's `response` holds it),
@@ -46,7 +47,7 @@ import argparse
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
@@ -63,9 +64,6 @@ OPEN = ("sending", "unknown")
 RESOLVE_HINT = ("a person must run python -m vending.submissions check; if it can't tell, find out whether the "
                 "bridge filed it (ask the instructors if the request ID is unknown), then run: "
                 "python -m vending.submissions resolve {row} ...")
-# A `404` counts as "never filed" only for a row at least this old, so a request the bridge is
-# still writing can't be taken for a missing one.
-SAFE_WAIT = timedelta(minutes=30)
 AUTO_BY = "auto-check"     # `resolved_by` for a row `check` settled from the bridge's own answer
 
 
@@ -184,7 +182,7 @@ def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str
 @dataclass
 class Checked:
     row: int
-    status: str        # `accepted` or `not_filed` if settled; otherwise the row's status, still open
+    status: str        # `accepted` if settled; otherwise the row's status, still open
     why: str
 
 
@@ -194,23 +192,23 @@ def known_request_id(request_id: str | None, response: Any) -> str | None:
     return found.strip() if isinstance(found, str) and found.strip() else None
 
 
-def check(conn: psycopg.Connection, bridge: Callable[[], Any], now: datetime | None = None, *,
-          wait: timedelta = SAFE_WAIT, lock_timeout_ms: int | None = None) -> list[Checked]:
+def check(conn: psycopg.Connection, bridge: Callable[[], Any], *,
+          lock_timeout_ms: int | None = None) -> list[Checked]:
     """Settle each open row the bridge can answer for by itself. Returns one `Checked` per open row.
 
-    It never sends anything, and it settles only on the bridge's own answer: when in doubt the
-    row stays open. The bridge is read first, outside any lock; then each row is settled through
-    `resolve`, which takes the halt lock and refuses a row someone settled meanwhile.
-    `bridge` is called only if some open row holds a request ID.
+    It never sends anything, and it settles only on the bridge's own answer naming the request:
+    when in doubt the row stays open. It never settles a row as `not_filed`. The bridge is read
+    first, outside any lock; then each row is settled through `resolve`, which takes the halt lock
+    and refuses a row someone settled meanwhile. `bridge` is called only if some open row holds a
+    request ID.
     """
     from vending.bridge import BridgeError, BridgeNotFound
 
-    now = now or datetime.now(timezone.utc)
-    rows = conn.execute("select id, at, status, request_id, response from purchase_submissions"
+    rows = conn.execute("select id, status, request_id, response from purchase_submissions"
                         " where status = any(%s) order by id", (list(OPEN),)).fetchall()
     client = None
     results = []
-    for row, at, status, request_id, response in rows:
+    for row, status, request_id, response in rows:
         found = known_request_id(request_id, response)
         if found is None:
             results.append(Checked(row, status, "it holds no request ID, and the bridge can't find a request "
@@ -220,7 +218,8 @@ def check(conn: psycopg.Connection, bridge: Callable[[], Any], now: datetime | N
             client = client or bridge()
             answer = client.purchase_request(found)
         except BridgeNotFound:
-            settle_as, why = _absent(conn, client, found, at, now, wait)
+            settle_as, why = None, (f"the bridge has no {found} (404), which doesn't prove it was never filed: "
+                                    "the bridge has no answer that means that")
         except BridgeError as error:
             settle_as, why = None, f"the bridge couldn't be asked about {found} ({type(error).__name__})"
         except Exception as error:      # no bridge address or key set, say: the row just stays open
@@ -234,32 +233,12 @@ def check(conn: psycopg.Connection, bridge: Callable[[], Any], now: datetime | N
             results.append(Checked(row, status, why))
             continue
         try:
-            resolve(conn, row, settle_as or None, AUTO_BY, lock_timeout_ms=lock_timeout_ms)
+            resolve(conn, row, settle_as, AUTO_BY, lock_timeout_ms=lock_timeout_ms)
         except (ValueError, psycopg.errors.LockNotAvailable) as error:
             results.append(Checked(row, status, f"{why}, but it wasn't settled ({type(error).__name__})"))
             continue
-        results.append(Checked(row, "accepted" if settle_as else "not_filed", why))
+        results.append(Checked(row, "accepted", why))
     return results
-
-
-def _absent(conn: psycopg.Connection, client: Any, request_id: str, at: datetime, now: datetime,
-            wait: timedelta) -> tuple[str | None, str]:
-    """After a `404` for `request_id`: ("", why) to settle as never filed, or (None, why) to leave it open."""
-    from vending.bridge import BridgeError
-
-    if now - at < wait:
-        return None, f"the bridge has no {request_id} yet, but the row is under {wait} old"
-    control = conn.execute("select request_id from purchase_requests where request_id <> %s"
-                           " order by submitted_at desc limit 1", (request_id,)).fetchone()
-    if control is None:
-        return None, f"the bridge has no {request_id}, but no other request of ours shows the route works"
-    try:
-        seen = client.purchase_request(control[0])
-    except BridgeError as error:
-        return None, f"the bridge has no {request_id}, and reading {control[0]} failed too ({type(error).__name__})"
-    if not (isinstance(seen, dict) and seen.get("id") == control[0]):
-        return None, f"the bridge has no {request_id}, and its answer for {control[0]} doesn't name that request"
-    return "", f"the bridge has no {request_id}, though it returns our request {control[0]}"
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -3,6 +3,7 @@ entries, against a local HTTP server standing in for the bridge's catalog route,
 through the MCP client."""
 
 import json
+import socket
 import threading
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
@@ -44,6 +45,9 @@ class FakeBridge:
         self.catalog_body = None     # set to serve something other than {"products": CATALOG}
         self.cut = False             # answer the POST (with `answer`'s status) with a body shorter than its Content-Length
         self.answer = (201, {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
+        self.redirect: str | None = None  # answer the POST `303 See Other` to this path, which GETs as a 404
+        self.drop = False            # close the connection once the POST has arrived, before any reply
+        self.other_gets: list[str] = []  # GETs of anything but the catalog (a followed redirect, say)
         self.received = threading.Event()  # set once a POST has arrived
         self.hold: threading.Event | None = None  # if set, a POST isn't answered until this is
         fake = self
@@ -61,7 +65,11 @@ class FakeBridge:
                 self.wfile.write(data)
 
             def do_GET(self):
-                assert self.path == "/api/v1/products" and self.headers["X-API-Key"] == "test-key"
+                if self.path != "/api/v1/products":
+                    fake.other_gets.append(self.path)
+                    self._reply(404, {"detail": "Not Found"})
+                    return
+                assert self.headers["X-API-Key"] == "test-key"
                 fake.gets += 1
                 self._reply(fake.catalog_status, {"products": CATALOG} if fake.catalog_body is None else fake.catalog_body)
 
@@ -71,6 +79,16 @@ class FakeBridge:
                 fake.received.set()
                 if fake.hold is not None:
                     fake.hold.wait(30)
+                if fake.drop:
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    return
+                if fake.redirect is not None:
+                    self.send_response(303)
+                    self.send_header("Location", fake.redirect)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if fake.cut:
                     data = b'{"id": "pr-1", "status": "pen'
                     self.send_response(fake.answer[0])

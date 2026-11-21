@@ -13,9 +13,15 @@ anything is sent:
 2. POSTs the plan's request body once, never retried: a retry after a lost
    answer could order twice;
 3. settles the row on that same connection: `accepted` (and the request goes
-   into `purchase_requests` for the sync to read back), `refused` (a 4xx: the
-   bridge said no, and says why), `not_filed` (it never left), or `unknown`
-   (sent, no usable answer; a 5xx keeps the body the bridge sent).
+   into `purchase_requests` for the sync to read back), `refused` (a status the
+   route documents as a refusal, `REFUSED_STATUSES`: the bridge said no, and says
+   why), `not_filed` (it failed while connecting, so it never left), or `unknown`
+   (anything else: sent, no usable answer, a redirect, a 5xx or another 4xx; the
+   reason is kept, with the body the bridge sent).
+
+Only a refusal from before step 1 comes back with no `submission` number. That
+is how the agent tells "nothing was sent" (it may try once more) from a reply
+to a POST, which never allows another one in the same run.
 
 The reply carries the plan's `warnings` and `notes`, as preview's does.
 
@@ -43,11 +49,15 @@ from vending import planner, planning, submissions
 from vending.bridge import Bridge, BridgeAnswered, BridgeNoAnswer, BridgeUnreachable
 from vending.ledger import money
 from vending.pricing import Refusal
-from vending.tools import WriteReply
+from vending.tools import RefusalOut, WriteReply
 from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused
 
 ROUTE = "/api/v1/purchase-requests"
+# The statuses the route documents as refusals (`docs/bridge-openapi-2026-11-20.json`): a team key needed,
+# lines refused or no funds, too many open requests. Any other answer to the POST may not be the bridge's own
+# word on this request (a proxy, a redirect, a route that moved), so it is `unknown`, never `refused`.
+REFUSED_STATUSES = (403, 422, 429)
 
 
 class SubmitReply(WriteReply):
@@ -119,13 +129,16 @@ def _send(client: Bridge, plan: planner.Plan, body: dict, row: int, side: psycop
     try:
         answer = client.post(ROUTE, body)
     except BridgeAnswered as error:
-        if error.status == 429:
-            submissions.settle(side, row, "refused", detail=str(error))
-            raise Refused([Refusal("too_many_open_requests",
-                                   "the bridge has too many of our requests open; wait for earlier ones to be decided")]) from None
-        if error.status >= 500:
+        if error.status not in REFUSED_STATUSES:
             return _unknown(side, row, plan, f"the bridge answered {error.status}: {error.detail}")
         submissions.settle(side, row, "refused", detail=str(error))
+        if error.status == 429:
+            # Returned, not raised as `Refused`: it carries the submission number, so it reads as a reply to a POST.
+            refusal = Refusal("too_many_open_requests",
+                              "the bridge has too many of our requests open; wait for earlier ones to be decided")
+            return SubmitReply(success=False, status="refused", submission=row, plan_hash=plan.plan_hash, count=1,
+                               refusals=[RefusalOut(code=refusal.code, message=refusal.message)],
+                               message=f"submit_desired_state refused by the bridge ({error}); nothing was ordered.")
         return SubmitReply(success=False, status="refused", submission=row, plan_hash=plan.plan_hash,
                            message=f"The bridge refused the request ({error}); nothing was ordered. "
                                    "Fix what it names and preview again.")

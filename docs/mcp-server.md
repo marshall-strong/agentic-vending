@@ -159,6 +159,7 @@ the database connection, the server), what the bridge told us survives. Then:
 | --- | --- |
 | The bridge accepted it | becomes `pending`, with the bridge's request ID |
 | It certainly wasn't filed (no connection, a 4xx, a `429`) | is deleted |
+| A redirect (the POST follows none) | becomes `unknown` |
 | No answer came back (a timeout or a 5xx), or the answer had no request ID | becomes `unknown` |
 | The server died before storing the answer | stays `sending` |
 
@@ -323,9 +324,12 @@ side connection opened before anything is sent:
    twice.
 3. It settles the row on that same connection: `accepted` (and the request goes into
    `purchase_requests` in the same transaction, so `python -m vending.sync_requests` reads it back
-   from then on), `refused` (a `4xx`; the reply carries the bridge's reason, such as `422
-   invalid_lines`), `not_filed` (it never left), or `unknown` (sent, but a timeout, a `5xx` whose
-   body is kept in `detail`, or a cut-off answer).
+   from then on), `refused` (only a status the route documents as a refusal: `403`, `422` or
+   `429`; the reply carries the bridge's reason, such as `422 invalid_lines`), `not_filed` (it
+   failed inside the connect, so it never left), or `unknown` (anything else: a timeout, a send
+   error once connected, a redirect, a `5xx` or another `4xx`, whose body is kept in `detail`, or a
+   cut-off answer). The POST follows no redirect: urllib would follow a `303` with a GET, and that
+   GET's `404` would pass for a refusal.
 
 If the bridge accepted the request but storing that fails anyway (the database dropped between the
 POST and the settle), the answer is written to the server's stderr as a `LOST ANSWER` line and the

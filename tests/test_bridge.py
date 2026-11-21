@@ -29,6 +29,7 @@ class Answer:
     body: bytes = b""
     content_length: int | None = None  # What to claim, when it isn't the real length.
     wire: bytes | None = None  # Send exactly this and hang up, instead of a proper response.
+    location: str | None = None  # A `Location` header, for a redirect.
 
 
 DROP = Answer(wire=b"")
@@ -40,8 +41,15 @@ def listing(*polls, **fields):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        # Routes for a POST are keyed "POST /path"; it is recorded the same way.
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self._answer("POST " + self.path.split("?")[0])
+
     def do_GET(self):
-        path = self.path.split("?")[0]
+        self._answer(self.path.split("?")[0])
+
+    def _answer(self, path):
         self.server.requests.append(path)
         self.server.keys.add(self.headers.get("X-API-Key"))
         answers = self.server.routes.get(path, Answer(status=404, body=b"not found"))
@@ -55,6 +63,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(answer.wire)
             return
         self.send_response(answer.status)
+        if answer.location:
+            self.send_header("Location", answer.location)
         self.send_header("Content-Length", str(answer.content_length or len(answer.body)))
         self.end_headers()
         self.wfile.write(answer.body)
@@ -335,3 +345,33 @@ def test_a_request_read_that_isnt_json_is_a_bridge_error(monkeypatch):
     for read in (b.product_request, b.purchase_request):
         with pytest.raises(BridgeError, match="isn't JSON"):
             read("np_1")
+
+
+# --- A purchase POST: never redirected, and a send error proves nothing (#217) ----------
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_a_post_is_never_redirected(bridge, status):
+    """urllib would follow a POST's 303 with a GET, and that GET's 404 looked like the bridge refusing the order."""
+    from vending.bridge import BridgeAnswered
+
+    client = bridge({"POST /api/v1/purchase-requests": Answer(status=status, location="/api/v1/purchase-requests/pr-1"),
+                     "/api/v1/purchase-requests/pr-1": Answer(status=404, body=b"{}")})
+    with pytest.raises(BridgeAnswered) as raised:
+        client.post("/api/v1/purchase-requests", {"lines": []})
+    assert raised.value.status == status
+    assert client.server.requests == ["POST /api/v1/purchase-requests"]
+
+
+@pytest.mark.parametrize("reason", [ConnectionRefusedError("refused"), OSError("other"), "a string reason"])
+def test_only_a_failure_inside_connect_proves_nothing_left(reason):
+    """`_before_connected` reads where the error was raised, not its type: a refused or unresolved name raised
+    while sending is no proof. A reason that isn't an `OSError` is urllib's own, raised before it connects."""
+    assert bridge_module._before_connected(reason) is isinstance(reason, str)
+
+
+def test_a_refused_connection_proves_nothing_left(sleeps, monkeypatch):
+    with serve({}) as server:
+        url = server.url
+    with pytest.raises(BridgeUnreachable, match="Tailscale"):
+        Bridge(base_url=url, api_key=KEY).post("/api/v1/purchase-requests", {"lines": []})

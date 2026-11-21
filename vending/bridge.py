@@ -29,7 +29,6 @@ from __future__ import annotations
 import http.client
 import json
 import re
-import socket
 import time
 import urllib.error
 import urllib.parse
@@ -187,8 +186,11 @@ class Bridge:
         Raises `BridgeUnreachable` if the request certainly never arrived,
         `BridgeAnswered` for an HTTP error status, and `BridgeNoAnswer` if it
         was sent but no usable answer came back (it may or may not have run).
+        A redirect isn't followed: it comes back as `BridgeAnswered` with its
+        `3xx`. urllib would follow a `303` with a GET, and that GET's status
+        would pass for the bridge's answer to the POST.
         """
-        return json.loads(self._once("POST", path, body, keep_body=True))
+        return json.loads(self._once("POST", path, body, keep_body=True, redirects=False))
 
     def check_books(self, body: dict) -> dict:
         """Our books as of one poll (`POST /api/v1/tracking/check`), once, never retried: the bridge
@@ -229,10 +231,10 @@ class Bridge:
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
               timeout: float | None = None, headers_out: dict[str, str] | None = None,
-              keep_body: bool = False, kept_bytes: int = 300) -> bytes:
+              keep_body: bool = False, kept_bytes: int = 300, redirects: bool = True) -> bytes:
         """One try. `keep_body` puts the first `kept_bytes` of an error answer in `BridgeAnswered.detail`:
         only for `post` and `check_books`, whose answers concern our own request. Any other answer can hold
-        a poll, so only its status is kept."""
+        a poll, so only its status is kept. `redirects=False` raises a redirect as `BridgeAnswered`."""
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -241,7 +243,8 @@ class Bridge:
         request = urllib.request.Request(self.base_url + path, method=method, headers=headers,
                                          data=None if body is None else json.dumps(body).encode())
         try:
-            with urllib.request.urlopen(request, timeout=timeout or TIMEOUT_SECONDS) as response:
+            opener = urllib.request.urlopen if redirects else _NO_REDIRECTS.open
+            with opener(request, timeout=timeout or TIMEOUT_SECONDS) as response:
                 status = getattr(response, "status", None)
                 data = response.read()
                 if headers_out is not None:    # names lower-cased: HTTP header names have no case
@@ -252,8 +255,8 @@ class Bridge:
                       else status_phrase(error.code))
             raise BridgeAnswered(error.code, detail) from None
         except urllib.error.URLError as error:
-            # urllib raises URLError only while connecting or sending. Only a failure to connect proves
-            # the bridge got nothing; a reset or timeout once connected may come after it read the request.
+            # urllib raises URLError only while connecting or sending. Only a failure raised inside connect
+            # proves the bridge got nothing; any error once connected may come after it read the request.
             if not _before_connected(error.reason):
                 raise BridgeNoAnswer(f"{type(error.reason).__name__} while sending: it may have arrived") from None
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
@@ -405,14 +408,24 @@ def _is_listing(body: object) -> bool:
     return isinstance(body, dict) and isinstance(body.get("polls"), list)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Follows no redirect: the `3xx` is raised as an `HTTPError`, the answer to the request we sent."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_NO_REDIRECTS = urllib.request.build_opener(_NoRedirect)
+
+
 def _before_connected(reason: object) -> bool:
     """Whether a `URLError`'s reason proves no byte of the request left: urllib refused it before
-    connecting, the name didn't resolve, the connection was refused, or connecting (TCP, or TLS for
-    https) failed or timed out. The request is written only once `HTTPConnection.connect` returns, so a
-    failure raised inside it is before; any other (a reset, a broken pipe, a timeout while writing) isn't."""
+    connecting (a reason that isn't an `OSError`), or the error was raised inside
+    `HTTPConnection.connect` (the name didn't resolve, the connection was refused, or connecting, TCP or
+    TLS, failed or timed out). The request is written only once `connect` returns. Where the error was
+    raised decides, never its type: a refused connection or a bad name raised while writing proves nothing,
+    and neither does a reset, a broken pipe or a timeout."""
     if not isinstance(reason, OSError):
-        return True
-    if isinstance(reason, (socket.gaierror, ConnectionRefusedError)):
         return True
     trace = reason.__traceback__
     while trace is not None:

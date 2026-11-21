@@ -53,38 +53,30 @@ def state(conn, id):
 def test_a_request_the_bridge_has_is_settled_accepted_once(conn):
     id = row(conn, response={"id": "pr-1"})
     bridge = Lookup({"pr-1": {"id": "pr-1", "status": "pending"}})
-    [checked] = submissions.check(conn, bridge, NOW)
+    [checked] = submissions.check(conn, bridge)
     assert (checked.status, state(conn, id)) == ("accepted", ("accepted", "pr-1", "auto-check"))
     assert conn.execute("select count(*) from purchase_requests where request_id = 'pr-1'").fetchone() == (1,)
     assert submissions.unresolved(conn) is None
     # Nothing is left to check, so a second check can't record the request again.
-    assert submissions.check(conn, bridge, NOW) == [] and bridge.asked == ["pr-1"]
+    assert submissions.check(conn, bridge) == [] and bridge.asked == ["pr-1"]
 
 
-def test_a_request_the_bridge_doesnt_have_is_settled_not_filed(conn):
+def test_a_404_never_settles_a_row_as_not_filed(conn):
+    """A `404` for the ID a row holds isn't proof the request was never filed: another request reading fine
+    doesn't show this one would be visible, and the bridge has no answer that says "never filed". So the row
+    stays open for a person, however old it is."""
     ours(conn)
-    id = row(conn, response={"id": "pr-1"})
-    [checked] = submissions.check(conn, Lookup({"pr-old": {"id": "pr-old"}}), NOW)
-    assert checked.status == "not_filed" and "pr-old" in checked.why
-    assert state(conn, id) == ("not_filed", None, "auto-check")
-    assert submissions.unresolved(conn) is None
-
-
-def _too_young(conn):
-    ours(conn)
-    return row(conn, response={"id": "pr-1"}, age=timedelta(minutes=5))
-
-
-def _with_control(conn):
-    ours(conn)
-    return row(conn, response={"id": "pr-1"})
+    id = row(conn, response={"id": "pr-1"}, age=timedelta(days=2))
+    [checked] = submissions.check(conn, Lookup({"pr-old": {"id": "pr-old"}}))
+    assert checked.status == "unknown" and "404" in checked.why
+    assert state(conn, id) == ("unknown", None, None)
+    assert submissions.unresolved(conn).code == "submission_unresolved"
 
 
 @pytest.mark.parametrize("setup, known", [
-    pytest.param(_too_young, {"pr-old": {"id": "pr-old"}}, id="a 404 for a row under the safe wait"),
+    pytest.param(lambda c: row(c, response={"id": "pr-1"}, age=timedelta(minutes=5)), {},
+                 id="a 404 for a young row"),
     pytest.param(lambda c: row(c, response={"id": "pr-1"}), {}, id="a 404 with no other request to compare"),
-    pytest.param(_with_control, {"pr-old": BridgeNotFound("404")}, id="a 404 for the control request too"),
-    pytest.param(_with_control, {"pr-old": BridgeError("503")}, id="the control read fails"),
     pytest.param(lambda c: row(c, response={"id": "pr-1"}), {"pr-1": BridgeError("503")}, id="bridge down"),
     pytest.param(lambda c: row(c, response={"id": "pr-1"}), {"pr-1": {"id": "pr-2"}}, id="answer names another"),
     pytest.param(lambda c: row(c), {}, id="no request ID"),
@@ -93,7 +85,7 @@ def _with_control(conn):
 def test_anything_unsure_stays_open(conn, setup, known):
     id = setup(conn)
     before = state(conn, id)
-    [checked] = submissions.check(conn, Lookup(known), NOW)
+    [checked] = submissions.check(conn, Lookup(known))
     assert checked.status == before[0] and checked.status in submissions.OPEN and state(conn, id) == before
     assert submissions.unresolved(conn).code == "submission_unresolved"
 
@@ -103,7 +95,7 @@ def test_no_bridge_is_built_when_no_row_holds_an_id(conn):
 
     def bridge():
         raise AssertionError("built")
-    assert [c.status for c in submissions.check(conn, bridge, NOW)] == ["unknown"]
+    assert [c.status for c in submissions.check(conn, bridge)] == ["unknown"]
 
 
 def test_a_bridge_that_cant_be_built_leaves_the_row_open(conn):
@@ -111,7 +103,7 @@ def test_a_bridge_that_cant_be_built_leaves_the_row_open(conn):
 
     def bridge():
         raise RuntimeError("DEX_BASE_URL isn't set")
-    [checked] = submissions.check(conn, bridge, NOW)
+    [checked] = submissions.check(conn, bridge)
     assert checked.status == "unknown" and state(conn, id)[0] == "unknown"
 
 

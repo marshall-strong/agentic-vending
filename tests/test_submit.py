@@ -1,6 +1,8 @@
 """`submit_desired_state` through the MCP client, the write gate and Postgres, against the
 local fake bridge from `tests/test_desired_state.py`."""
 
+import http.client
+import socket
 import threading
 
 import pytest
@@ -128,7 +130,11 @@ def test_a_4xx_from_the_bridge_is_refused_with_its_reason(db, fake):  # noqa: F8
 def test_too_many_open_requests_is_a_refusal(db, fake):  # noqa: F811
     prepared(db)
     fake.answer = (429, {"detail": "too_many_open_requests"})
-    assert codes(submit()) == ["too_many_open_requests"]
+    reply = submit()
+    assert codes(reply) == ["too_many_open_requests"]
+    # It came back from the bridge, after the POST, so it carries the submission number: the agent's sign
+    # that this refusal isn't one from before sending, and allows no retry.
+    assert reply["submission"] == 1
     assert db.execute("select status from purchase_submissions").fetchall() == [("refused",)]
 
 
@@ -232,7 +238,8 @@ def test_a_plan_that_changed_since_the_preview_is_refused_when_its_hash_is_given
     store_poll(db, "b", "2026-11-09T10:00:00+00:00", {"15": (250, 106)})
     reply = submit(expected_plan_hash=previewed["plan_hash"])
     assert codes(reply) == ["plan_changed"] and previewed["plan_hash"] in reply["refusals"][0]["message"]
-    assert fake.posts == []
+    # Refused before any POST: no submission number, which is what lets the agent try once more.
+    assert fake.posts == [] and reply["submission"] is None
     again = preview()
     assert again["plan_hash"] != previewed["plan_hash"]
     assert submit(expected_plan_hash=again["plan_hash"])["success"] and len(fake.posts) == 1
@@ -323,6 +330,98 @@ def test_unreachable_bridge_is_not_filed(db, fake, monkeypatch):  # noqa: F811
     reply = submit()
     assert not reply["success"] and "Couldn't reach the bridge" in reply["message"]
     assert db.execute("select status from purchase_submissions").fetchall() == [("not_filed",)]
+
+
+# --- Never a second order after a POST that may have arrived (#217) ---------------------------
+# Each test sends the way the agent would retry: a fresh preview, then a submit with its hash. Whatever the
+# first POST got back, the bridge must see one POST only.
+
+
+def test_a_post_answered_with_a_redirect_is_never_sent_twice(db, fake):  # noqa: F811
+    prepared(db)
+    fake.redirect = "/api/v1/purchase-requests/pr-1"     # a GET there is a 404, which looked like a refusal
+    first = submit(preview()["plan_hash"])
+    second = submit(preview().get("plan_hash"))
+    assert len(fake.posts) == 1
+    assert fake.other_gets == []                            # the redirect isn't followed
+    assert first["status"] == "unknown" and "303" in first["message"]
+    assert codes(second) == ["submission_unresolved"]
+    assert db.execute("select status from purchase_submissions").fetchall() == [("unknown",)]
+
+
+@pytest.mark.parametrize("error", [ConnectionRefusedError, socket.gaierror, ConnectionResetError,
+                                   BrokenPipeError, TimeoutError])
+def test_a_send_error_after_the_post_arrived_is_never_sent_twice(db, fake, monkeypatch, error):  # noqa: F811
+    """urllib wraps an error while sending in `URLError`. One raised after the body left is no proof it didn't
+    arrive, whatever its type."""
+    prepared(db)
+    real = http.client.HTTPConnection.send
+    posting = []
+
+    def send(self, data):
+        real(self, data)
+        if isinstance(data, bytes) and data.startswith(b"POST /api/v1/purchase-requests"):
+            posting.append(True)
+        elif posting:
+            posting.clear()
+            assert fake.received.wait(10)                   # the whole POST is at the bridge
+            raise error("simulated: the socket failed once the body was written")
+
+    monkeypatch.setattr(http.client.HTTPConnection, "send", send)
+    first = submit(preview()["plan_hash"])
+    second = submit(preview().get("plan_hash"))
+    assert len(fake.posts) == 1
+    assert first["status"] == "unknown" and "may have arrived" in first["message"]
+    assert codes(second) == ["submission_unresolved"]
+    assert db.execute("select status from purchase_submissions").fetchall() == [("unknown",)]
+
+
+@pytest.mark.parametrize("status", [400, 404, 405, 409])
+def test_a_4xx_the_bridge_doesnt_document_for_this_route_is_unknown(db, fake, status):  # noqa: F811
+    """The route documents 403, 422 and 429 as refusals. Any other status may not be the bridge's own answer."""
+    prepared(db)
+    fake.answer = (status, {"detail": "?"})
+    first = submit(preview()["plan_hash"])
+    second = submit(preview().get("plan_hash"))
+    assert len(fake.posts) == 1 and first["status"] == "unknown" and str(status) in first["message"]
+    assert codes(second) == ["submission_unresolved"]
+
+
+def test_a_403_is_a_refusal(db, fake):  # noqa: F811
+    prepared(db)
+    fake.answer = (403, {"error": "forbidden", "error_type": "instructor_key"})
+    reply = submit()
+    assert reply["status"] == "refused" and reply["submission"] == 1
+    assert db.execute("select status from purchase_submissions").fetchall() == [("refused",)]
+
+
+@pytest.mark.parametrize("lost", ["closed before any reply", "read timeout"])
+def test_a_lost_reply_stays_blocked_for_later_runs(db, fake, monkeypatch, lost):  # noqa: F811
+    """#217's lost reply: the bridge has the POST, and no answer comes back. Nothing we hold names the request
+    on the bridge, and the bridge has no lookup by anything else, so neither the check nor a retry can settle it:
+    a person must."""
+    from vending import bridge as bridge_module
+
+    prepared(db)
+    if lost == "read timeout":
+        monkeypatch.setattr(bridge_module, "TIMEOUT_SECONDS", 1)
+        fake.hold = threading.Event()
+    else:
+        fake.drop = True
+    try:
+        first = submit(preview()["plan_hash"])
+    finally:
+        if fake.hold is not None:
+            fake.hold.set()
+    assert first["status"] == "unknown" and len(fake.posts) == 1
+    assert db.execute("select status, request_id, response from purchase_submissions").fetchall() == [
+        ("unknown", None, None)]
+    # A later live run checks before its model starts; this row holds nothing to look up.
+    [checked] = submissions.check(db, fake.client)
+    assert checked.status == "unknown" and "holds no request ID" in checked.why
+    fake.drop, fake.hold = False, None
+    second = submit(preview().get("plan_hash"))
+    assert codes(second) == ["submission_unresolved"] and len(fake.posts) == 1
 
 
 def test_halted_refuses_before_planning(db, fake):  # noqa: F811
