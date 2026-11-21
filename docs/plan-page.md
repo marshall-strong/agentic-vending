@@ -41,6 +41,40 @@ for the new assignment. At the lock, the dashboard switches to the agent's Frida
 
 The screenshots show the real round 1, 2a and 2b files. The catalog requests come from a throwaway local database seeded with sample requests, not from the team's database.
 
+## Send the picked plan as the day-one fill
+
+The fill's purchase request is due by 23:59 ET on Sun 29 Nov. Staff buy and stock it on Mon 30 Nov.
+`python -m vending.fill` turns the picked plan into that request (#214). It uses the agent's own
+planner, hash and submit, so the request is recorded the same way as the agent's.
+
+```
+python -m vending.fill                                    # preview only; sends nothing
+python -m vending.fill --submit --hash HASH --by NAME     # send it
+```
+
+1. Run the preview. It shows each line (slot, product, units, store, packs, unit cost, sale price),
+   the total cost against spendable cash, and the plan hash.
+2. Read the warnings. A line whose store cutoff for Mon 30 Nov has passed will likely be stocked at
+   the next scheduled visit. For Mon 30 Nov, the Amazon cutoff is Sat 28 Nov 23:59 and the in-store
+   cutoff is Sun 29 Nov 23:59.
+3. Send it with the hash from step 1. If anything changed since the preview (plan, price, pack or
+   balance), the hash no longer matches, and the command refuses with `plan_changed`. Run the
+   preview again.
+
+The command sends the products at the sourcing table's checked prices, never the plan's estimates.
+It refuses, with every reason and nothing sent, when:
+
+- the plan was picked for another slot assignment than our slots (the server's assignment) now
+  (`plan_assignment`);
+- a product has no sourcing row, store or checked price (`no_checked_price`, #202);
+- the ledger has no opening, or only the test opening from before the fall cut (`test_opening`, #215);
+- a request since the opening was sent and not rejected (`fill_already_sent`);
+- the agent's own submit refuses: over spendable cash, a pending request, an unsettled submission,
+  the halt switch, and the rest in [`tool-contracts.md`](tool-contracts.md).
+
+A sent request goes into `purchase_requests`, where the hourly `python -m vending.sync_requests`
+reads its status and receipts. `action_log` records who sent it and the plan's ID (tool `fill.submit`).
+
 ## Where each number comes from
 
 | On the page | Source | Computed here? |
