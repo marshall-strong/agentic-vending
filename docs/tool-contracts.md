@@ -222,8 +222,11 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
   (`inventory_machine`, `inventory_closet`, `inventory`, `inventory_complete`); per-week revenue
   in `weeks` (Saturday to Friday, each with its share of the tax); `tax_weeks`, each Sunday to
-  Saturday tax week's revenue and tax as David calculates it (the week's start, `ends` at Saturday
-  23:59:59.999999 Eastern); and `notes`.
+  Saturday tax week's revenue and tax as David calculates it (`week`, the Sunday it starts, and
+  `ends` at Saturday 23:59:59.999999 Eastern), with `from` and `to`, the part of the week the window
+  counted (Eastern), and `partial`: true when the window cut the week (it starts at the opening or
+  midweek, or ends before Saturday), so its `revenue` and `tax` are the window's, not the whole
+  week's figure; and `notes`.
 - **Preconditions**: the ledger is open, unless `start` is given (`end` then defaults to today).
 - **Side effects**: one `action_log` row.
 - **Cost**: database queries only.

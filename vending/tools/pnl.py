@@ -140,9 +140,18 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         inventory_complete=p.inventory_complete,
         weeks=[{"week": w.week.isoformat(), "revenue": ledger.money(w.takings_cents),
                 "tax_set_aside": ledger.money(w.tax_cents)} for w in p.takings.by_week],
-        tax_weeks=[{"week": w.week.isoformat(), "ends": ledger.tax_week_end(w.week).isoformat(),
-                    "revenue": ledger.money(w.takings_cents), "tax": ledger.money(w.tax_cents)}
-                   for w in p.takings.by_tax_week],
+        tax_weeks=[_tax_week(w, first, last) for w in p.takings.by_tax_week],
         notes=list(p.notes),
     )
 
+
+def _tax_week(w: ledger.WeekTakings, first: datetime, last: datetime) -> dict:
+    """One tax week of the reply: `from` and `to` are the part of it the window counted, Eastern. `partial` when
+    the window cut it, so its `revenue` and `tax` are not the week's whole figure (David's Saturday calculation)."""
+    begins = datetime.combine(w.week, time.min, EASTERN)
+    ends = ledger.tax_week_end(w.week)
+    counted_from, counted_to = max(begins, first.astimezone(EASTERN)), min(ends, last.astimezone(EASTERN))
+    return {"week": w.week.isoformat(), "ends": ends.isoformat(),
+            "from": counted_from.isoformat(), "to": counted_to.isoformat(),
+            "partial": counted_from > begins or counted_to < ends,
+            "revenue": ledger.money(w.takings_cents), "tax": ledger.money(w.tax_cents)}

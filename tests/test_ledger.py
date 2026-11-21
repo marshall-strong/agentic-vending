@@ -726,8 +726,10 @@ def test_get_pnl_end_to_end(db):  # noqa: F811
     assert reply["inventory"] == money(6 * UNIT_COST) == "6.75"
     assert reply["weeks"] == [{"week": "2026-11-07", "revenue": "12.50", "tax_set_aside": "0.93"}]
     # The polls are Saturday 7 Nov and Sunday 8 Nov, 12:00 Eastern: the sale is in the tax week from Sunday.
+    # The window ends Monday 9 Nov, so the tax week it counts is cut short: `partial`, and `to` says where.
     assert reply["tax_weeks"] == [{"week": "2026-11-08", "ends": "2026-11-14T23:59:59.999999-05:00",
-                                   "revenue": "12.50", "tax": "0.93"}]
+                                   "from": "2026-11-08T00:00:00-05:00", "to": "2026-11-09T23:59:59.999999-05:00",
+                                   "partial": True, "revenue": "12.50", "tax": "0.93"}]
     assert call("get_pnl", {"start": "2026-11-09", "end": "2026-11-01"}).structuredContent["success"] is False
 
 
@@ -746,10 +748,16 @@ def test_get_pnl_counts_a_poll_at_sunday_midnight_in_that_tax_week(db):  # noqa:
     assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("28.35", "2.10", 21)
     assert reply["start"].startswith("2026-12-06T05:00:00")      # still reported as Sunday's midnight
     assert reply["tax_weeks"] == [{"week": "2026-12-06", "ends": "2026-12-12T23:59:59.999999-05:00",
-                                   "revenue": "28.35", "tax": "2.10"}]
+                                   "from": "2026-12-06T00:00:00-05:00", "to": "2026-12-12T23:59:59.999999-05:00",
+                                   "partial": False, "revenue": "28.35", "tax": "2.10"}]
     # The day before ends at Saturday 23:59:59.999999, so it doesn't take the midnight poll too.
     saturday = call("get_pnl", {"start": "2026-12-05", "end": "2026-12-05"}).structuredContent
     assert (saturday["revenue"], saturday["units_sold"]) == ("2.70", 2)
+    # From the opening, the first tax week starts at the opening: a clipped week says so.
+    weeks = call("get_pnl", {"start": "2026-11-30", "end": "2026-12-12"}).structuredContent["tax_weeks"]
+    assert [(w["week"], w["from"], w["partial"], w["revenue"]) for w in weeks] == [
+        ("2026-11-29", "2026-11-30T00:00:00-05:00", True, "2.70"),
+        ("2026-12-06", "2026-12-06T00:00:00-05:00", False, "28.35")]
 
 
 def test_get_pnl_from_an_opening_at_midnight_keeps_the_opening_poll_as_the_baseline(db):  # noqa: F811
@@ -761,7 +769,7 @@ def test_get_pnl_from_an_opening_at_midnight_keeps_the_opening_poll_as_the_basel
     assert ledger.balance(db, et(2026, 12, 8, 0, 0)).takings.cents == 135
     reply = call("get_pnl", {"start": "2026-12-06", "end": "2026-12-12"}).structuredContent
     assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("1.35", "0.10", 1)
-    assert [(w["week"], w["revenue"]) for w in reply["tax_weeks"]] == [("2026-12-06", "1.35")]
+    assert [(w["from"], w["partial"]) for w in reply["tax_weeks"]] == [("2026-12-06T00:00:00-05:00", False)]
 
 
 def test_get_pnl_days_are_eastern_days(db):  # noqa: F811
