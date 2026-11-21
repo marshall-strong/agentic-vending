@@ -137,6 +137,37 @@ def test_only_the_login_page_takes_a_post_and_never_a_large_one(site):
     assert ask(site, "POST", "/login", big, {"Content-Type": "application/x-www-form-urlencoded"})[0] == 413
 
 
+def test_the_products_pages_are_behind_the_password_and_take_no_post(site, monkeypatch):
+    """`/dashboard/products` (live) and `/dashboard/demo/products` (made-up data), #55."""
+    from contextlib import contextmanager
+
+    from tests.test_products_page import _data
+    from vending import pages, products_page
+
+    @contextmanager
+    def connection():
+        yield object()
+
+    # The live page from made-up data, so no database is needed to see its headers.
+    monkeypatch.setattr(pages, "configured", lambda: True)
+    monkeypatch.setattr(pages, "_connection", connection)
+    monkeypatch.setattr(products_page, "read", lambda conn, public: _data())
+    routes = (products_page.ROUTE, products_page.DEMO_ROUTE)
+    for path in routes:
+        status, headers, _ = ask(site, "GET", path)
+        assert status == 303 and headers["Location"] == f"/login?next={path}", path
+    signed_in = {"Cookie": cookie_from(sign_in(site)[1])}
+    for path in routes:
+        status, headers, body = ask(site, "GET", path, headers=signed_in)
+        assert status == 200 and b"<h1>Products</h1>" in body, path
+        assert headers["Content-Security-Policy"] == pages.CSP_PRODUCTS, path
+        assert "script-src" not in headers["Content-Security-Policy"] and b"<script" not in body, path
+    for headers in ({}, signed_in):
+        for path in routes:
+            # No body: on Windows a body the server never read can fail the send before the 405 arrives.
+            assert ask(site, "POST", path, b"", headers)[0] == 405, path
+
+
 def test_when_every_check_slot_stays_taken_the_page_says_busy(monkeypatch):
     monkeypatch.setattr(gate, "WAIT_SECONDS", 0.05)
     monkeypatch.setattr(gate, "_next_try", {})

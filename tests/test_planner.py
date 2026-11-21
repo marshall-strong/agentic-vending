@@ -902,7 +902,7 @@ class TestWildcard(unittest.TestCase):
             self.assertIn("slot 16 holds now", " ".join(p.warnings))
 
     # The day-one fill: no slot has receipts, and one request names all 20 slots' products. The wildcard is
-    # 37, a slot the setter allows (shelf 3, not column 5); tests/test_wildcard_review.py previews it end to end.
+    # 37, a slot the setter allows (shelf 3, not column 4 or 5); tests/test_wildcard_review.py previews it end to end.
     DAY_ONE = {s: SlotState(s, None, None, 0, None, contents_known=False) for s in TEST_SLOTS}
 
     def day_one(self, *kept: str):
