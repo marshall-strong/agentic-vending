@@ -2563,6 +2563,10 @@
    ]
   }
  },
+ "tracking": {
+  "ok": true,
+  "data": null
+ },
  "purchase_requests": {
   "ok": true,
   "data": [
@@ -3700,5 +3704,6 @@
    "text": "Tool calls in the last 24 hours: 1 refused and 1 failed. See Tool calls below."
   }
  ],
+ "alerts": [],
  "demo": true
 }

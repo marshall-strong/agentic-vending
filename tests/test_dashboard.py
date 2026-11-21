@@ -13,6 +13,7 @@ from http.server import ThreadingHTTPServer
 
 import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 
 from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, TEST_SLOTS, store_poll
 from vending import agent_runs, dashboard, ledger
@@ -1834,3 +1835,108 @@ def test_lane_products_skips_a_product_that_is_not_text():
                                                 {"slot": "21", "now": {"product": "CELSIUS-12CAN"}}]}},
     }
     assert machine_art.lane_products(snap, ["12", "14", "16", "18", "21"]) == ["CELSIUS-12CAN", "RB-8CAN"]
+
+
+# --- Failure banner (#220) -----------------------------------------------------------------------
+
+SECRET = "connection to host db.private.internal refused for user vending_rw"
+
+
+def _syncs(*jobs, at=None):
+    """A worker round like `vending.worker.State.public` hands the page (`vending.worker.run_round`):
+    `(job name, fields)` pairs, `fields` holding `exit_code` and, when it has none, an `outcome`."""
+    at = at or (MONDAY - timedelta(minutes=5))
+    return {"started_at": (at - timedelta(hours=1)).isoformat(), "rounds": 3,
+            "last_round_at": at.isoformat(), "next_round_at": MONDAY.isoformat(),
+            "results": [{"job": job, "started_at": at.isoformat(), "seconds": 1.0,
+                         "outcome": "finished", **fields} for job, fields in jobs]}
+
+
+def test_a_failed_sync_round_shows_the_banner(conn, page_conn, open_ledger):
+    syncs = _syncs(("slots_check", {"exit_code": 0}), ("sync_history", {"exit_code": 3}),
+                   ("sync_catalog", {"exit_code": None, "outcome": "timed out"}))
+    snap = dashboard.snapshot(page_conn, MONDAY, syncs=syncs)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "sync_failed"
+    assert alert["at"] == MONDAY - timedelta(minutes=5)
+    assert "`sync_history` exit 3" in alert["text"] and "`sync_catalog` timed out" in alert["text"]
+    page = dashboard.render(snap)
+    assert '<div class="failbanner" role="alert">' in page
+    assert "Sync round failed" in page and "sync_history" in page and "timed out" in page
+
+
+def test_no_banner_when_everything_is_fine(conn, page_conn, open_ledger):
+    syncs = _syncs(("slots_check", {"exit_code": 0}), ("sync_history", {"exit_code": 0}),
+                   ("sync_requests", {"exit_code": 0}), ("sync_catalog", {"exit_code": 0}),
+                   ("sync_product_requests", {"exit_code": 0}))
+    snap = dashboard.snapshot(page_conn, MONDAY, syncs=syncs)
+    assert snap["alerts"] == []
+    page = dashboard.render(snap)
+    assert '<div class="failbanner"' not in page and 'role="alert"' not in page
+
+
+def test_a_fresh_database_shows_no_banner(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["alerts"] == []
+    assert '<div class="failbanner"' not in dashboard.render(snap)
+
+
+def test_a_failed_run_shows_the_banner_without_its_error_text(conn, page_conn, open_ledger):
+    run = _live_run(conn)
+    agent_runs.finish(conn, run, "failed", detail=SECRET)
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "run_failed"
+    assert alert["text"] == f"Run #{run} failed. See Runs below."
+    page = dashboard.render(snap)
+    assert SECRET not in page and SECRET not in dashboard.to_json(snap)
+    assert "Agent run failed" in page
+
+
+@pytest.mark.parametrize("status,kind", [("halted", "run_halted"), ("running", "run_stuck")])
+def test_a_halted_or_stuck_latest_run_shows_the_banner(conn, page_conn, open_ledger, status, kind):
+    run = _live_run(conn)
+    if status == "running":
+        conn.execute("update agent_runs set started_at = %s where id = %s",
+                     (MONDAY - dashboard.STALE_RUN - timedelta(minutes=1), run))
+    else:
+        agent_runs.finish(conn, run, status, detail="The halt switch is on.")
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == kind
+    assert dashboard.render(snap).count('role="alert"') == 1
+
+
+def test_a_tracking_check_outside_shows_the_banner_and_an_incident(conn, page_conn, open_ledger):
+    at = MONDAY - timedelta(hours=1)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-09', 'test', 's1', %s, '{}', %s, 200, %s, true, %s)",
+        (at, at, at + timedelta(minutes=5), Jsonb({"error": SECRET, "detail": SECRET}),
+         Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "tracking_outside"
+    assert alert["text"].startswith("The bridge's tracking check said cash outside")
+    page = dashboard.render(snap)
+    assert "Tracking check outside" in page and "cash" in page
+    assert SECRET not in page and SECRET not in dashboard.to_json(snap)
+    row, = snap["incidents"]["data"]["rows"]
+    assert row["kind"] == "tracking_outside" and "cash" in row["note"] and SECRET not in row["note"]
+    assert snap["incidents"]["data"]["total"] == 1
+    # The next check coming back all within clears the banner.
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-09', 'test', 's2', %s, '{}', %s, 200, '{}', true, %s)",
+        (MONDAY, MONDAY, MONDAY,
+         Jsonb({k: "within" for k in ("cash", "sales_tax_owed", "coil", "back_stock")})))
+    assert dashboard.snapshot(page_conn, MONDAY)["alerts"] == []
+
+
+def test_the_missed_run_hook_stays_quiet_until_a_schedule_is_recorded(page_conn):
+    """Nothing records an expected run schedule yet (`agent_runs` holds runs that happened; the
+    worker's round times are memory only), so the hook returns None and no alert appears."""
+    assert dashboard._missed_scheduled_run({"syncs": None}) is None
+    assert dashboard.snapshot(page_conn, MONDAY)["alerts"] == []

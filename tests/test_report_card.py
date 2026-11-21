@@ -585,3 +585,35 @@ def test_report_card_text_naming_a_selection_outside_ours_is_redacted():
                                                        "All 20 slots once, every field well formed."]}]}}
     notes = dashboard._scope_numbered(panel, ours)["data"]["weeks"][0]["notes"]
     assert notes == ["Slot 15 was kept.", dashboard.OUTSIDE_ASSIGNMENT, "All 20 slots once, every field well formed."]
+
+
+# --- Incident log: sync rounds and tracking checks -----------------------------------------------
+
+def test_a_failed_sync_round_and_an_outside_tracking_check_are_incidents(conn, page_conn, opened):
+    from tests.test_dashboard import _syncs
+    checked = OPEN + timedelta(hours=2)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-12-02', 'test', 's1', %s, '{}', %s, 200, %s, true, %s)",
+        (checked, checked, checked + timedelta(minutes=5), Jsonb({"error": SECRET}),
+         Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    snap = dashboard.snapshot(page_conn, NOW,
+                              syncs=_syncs(("sync_history", {"exit_code": 3}), at=OPEN + timedelta(hours=4)))
+    rows = snap["incidents"]["data"]["rows"]
+    kinds = [r["kind"] for r in rows]
+    assert "sync_failed" in kinds and "tracking_outside" in kinds
+    sync_row = next(r for r in rows if r["kind"] == "sync_failed")
+    assert sync_row["what"] == "Sync round" and "`sync_history` exit 3" in sync_row["note"]
+    tracking_row = next(r for r in rows if r["kind"] == "tracking_outside")
+    assert "cash" in tracking_row["note"] and SECRET not in tracking_row["note"]
+    assert SECRET not in dashboard.to_json(snap["incidents"]) and SECRET not in dashboard.render(snap)
+
+
+def test_a_sync_round_from_before_the_opening_is_not_an_incident(conn, page_conn, opened):
+    from tests.test_dashboard import _syncs
+    snap = dashboard.snapshot(page_conn, NOW,
+                              syncs=_syncs(("sync_history", {"exit_code": 1}), at=OPEN - timedelta(hours=1)))
+    assert not [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "sync_failed"]
+    # The banner is current state, so it still says the latest round failed; the log starts at the opening.
+    assert [a["kind"] for a in snap["alerts"]] == ["sync_failed"]

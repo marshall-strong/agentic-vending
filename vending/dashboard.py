@@ -14,6 +14,9 @@ machine that runs it. The Container App serves the same page to anyone at
 read. Both routes scope the data to the ledger opening and current assignment.
 
 The page, top to bottom:
+ - A failure banner at the very top when something is failing now (#220): the worker's latest
+   sync round, the latest agent run, and a tracking check that came back `outside`, one line
+   each in plain words and Eastern time, never the failure's own text.
  - The status bar, one row of six cells: the verdict (OK / check / problem) with the halt
    switch and the latest run; when the machine was last polled and the next sync; the order
    cutoff countdown; spendable (from the ledger once it has opened; before that, only that
@@ -73,7 +76,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
 from vending import (capacity, db, leaderboards, machine_art, money_panel, plan_rounds, report_card, settings,
-                     slot_counts, visits)
+                     slot_counts, tracking, visits)
 from vending import agent_runs, key_dates, pricing_panel
 from vending import stock as stock_mod
 from vending import planner
@@ -602,11 +605,12 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
         conn.execute("set transaction isolation level repeatable read, read only")
         # Event timestamps come from Postgres. Use its clock for the same transaction's cutoff.
         now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
-        snap, assignment_at = _snapshot(conn, now, public)
+        snap, assignment_at = _snapshot(conn, now, public, syncs)
     snap["syncs"] = syncs
     hide_errors(snap, public=public)
     only_ours(snap, assignment_at)
     snap["attention"] = attention(snap)
+    snap["alerts"] = build_alerts(snap)
     return snap
 
 
@@ -890,7 +894,23 @@ def _catalog_counts(catalog: dict) -> dict:
                                  "unsettled": by_status["sending"] + by_status["unknown"]}}
 
 
-def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> tuple[dict, datetime | None]:
+def _tracking(conn: psycopg.Connection) -> dict | None:
+    """The newest answered tracking check (`tracking_checks`, migration 021) and which of its four
+    verdicts said `outside`, or None when none has been answered yet. Only the verdicts and times
+    are read: the stored request and answer are the bridge's, and never shown or sent."""
+    rows = _rows(conn, "select id, sent_at, answered_at, results from tracking_checks"
+                       " where results is not null"
+                       " order by coalesce(answered_at, sent_at) desc, id desc limit 1")
+    if not rows:
+        return None
+    row = rows[0]
+    return {"checked_at": row["answered_at"] or row["sent_at"],
+            "outside": [k for k in tracking.RESULTS if row["results"].get(k) == "outside"],
+            "results": dict(row["results"])}
+
+
+def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
+              syncs: dict | None = None) -> tuple[dict, datetime | None]:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
     assigned = _optional(conn, "select first_read_at from slot_assignment where id = 1") if slots else None
@@ -935,7 +955,8 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
         "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
         "report_cards": cards,
         "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
-            conn, now, cards["data"] if cards["ok"] else None))),
+            conn, now, cards["data"] if cards["ok"] else None, syncs))),
+        "tracking": _panel(lambda: _isolated(conn, lambda: _tracking(conn))),
         "purchase_requests": ({"ok": True, "data": purchases["data"][0][:REQUEST_ROWS]}
                               if purchases["ok"] else purchases),
         "catalog_requests": catalog,
@@ -1116,22 +1137,74 @@ def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
     A job that crashed, timed out or was still running has no exit code; the worker counts it as
     failing too (`State.healthy`), so it is named with its outcome.
     """
-    if not syncs or not syncs.get("rounds"):
+    jobs = report_card.failed_sync_jobs(syncs)
+    if jobs is None:
         return None
-    failed = [r for r in syncs.get("results") or [] if r.get("exit_code") != 0]
-    if not failed:
-        return None
-    jobs = ", ".join(f"`{r.get('job')}` " + (f"exit {r['exit_code']}" if r.get("exit_code") is not None
-                                             else str(r.get("outcome") or "no exit code"))
-                     for r in failed)
     when = ""
-    try:
-        when = f" ({_span(now - datetime.fromisoformat(syncs['last_round_at']))} ago)"
-    except (KeyError, TypeError, ValueError):
-        pass
+    if (round_at := report_card.sync_round_at(syncs)) is not None:
+        when = f" ({_span(now - round_at)} ago)"
+    failed = [r for r in (syncs.get("results") or []) if r.get("exit_code") != 0]
     codes = sorted({r["exit_code"] for r in failed if r.get("exit_code") in SYNC_EXITS})
     meaning = "".join(f" Exit {c}: {SYNC_EXITS[c]}." for c in codes)
     return f"The worker's latest hourly sync{when} failed: {jobs}.{meaning} See `/health`."
+
+
+# --- Failure banner ------------------------------------------------------------------------------
+
+# The banner's lead words per alert kind (`build_alerts`).
+ALERT_LABELS = {"sync_failed": "Sync round failed", "run_failed": "Agent run failed",
+                "run_halted": "Agent run halted", "run_stuck": "Agent run stuck",
+                "tracking_outside": "Tracking check outside", "missed_run": "Scheduled run missed"}
+
+
+def build_alerts(snap: dict) -> list[dict]:
+    """What the page-top banner says now: the worker's latest sync round, the latest agent run,
+    and the newest tracking check's verdict. One line each, plain words the code wrote and a
+    time — never a failure's own text, which can quote a row or name the host; the detail stays
+    in the database, `/health` and the container's log. Built from the snapshot alone, so it
+    reads nothing, and `/state.json` carries the same list as `alerts`.
+    """
+    out: list[dict] = []
+
+    def add(kind: str, at: datetime | None, text: str) -> None:
+        out.append({"kind": kind, "at": at, "text": text})
+
+    if (jobs := report_card.failed_sync_jobs(snap.get("syncs"))) is not None:
+        add("sync_failed", report_card.sync_round_at(snap.get("syncs")),
+            f"The worker's latest sync round failed: {jobs}. See `/health`.")
+
+    run = snap["status"]["latest_run"]
+    if run and run.get("stale"):
+        add("run_stuck", run["started_at"],
+            f"Run #{run['id']} has said `running` for {_span(snap['as_of'] - run['started_at'])}: "
+            "the process probably died.")
+    elif run and run["status"] == "failed":
+        add("run_failed", run["started_at"], f"Run #{run['id']} failed. See Runs below.")
+    elif run and run["status"] == "halted":
+        add("run_halted", run["started_at"], f"Run #{run['id']} ended halted: the halt switch is on.")
+
+    if (check := snap.get("tracking")) and check["ok"] and check["data"] and check["data"]["outside"]:
+        outside = ", ".join(check["data"]["outside"])
+        add("tracking_outside", check["data"]["checked_at"],
+            f"The bridge's tracking check said {outside} outside: our figures and the bridge's counts "
+            "disagree. Compare with `python -m vending.tracking show`.")
+
+    if (missed := _missed_scheduled_run(snap)) is not None:
+        out.append(missed)
+    return out
+
+
+def _missed_scheduled_run(snap: dict) -> dict | None:
+    """A missed scheduled run would become a banner alert here, and there is none yet.
+
+    Nothing records an expected schedule to miss: `agent_runs` holds the runs that happened, and
+    the worker's round times live only in its memory (`vending.worker.State`), so a missed round
+    can't be told from one that was never planned. When a schedule is recorded (expected runs, or
+    worker rounds kept in the database), compare it with what happened here and return
+    `{'kind': 'missed_run', 'at': ..., 'text': ...}` for a run that never started. Until then this
+    returns None and the banner says nothing about missed runs.
+    """
+    return None
 
 
 def verdict(items: list[dict]) -> str:
@@ -1978,6 +2051,17 @@ def _attention_html(items: list[dict]) -> str:
     return f'<ul class="attention">{rows}</ul>'
 
 
+def _alerts_html(alerts: list[dict]) -> str:
+    """The page-top failure banner (#220): one line per current failure, or nothing when all is
+    well. The words are the code's own (`build_alerts`), the time is Eastern, and no failure's
+    text reaches it."""
+    if not alerts:
+        return ""
+    lines = "".join(f'<p><b>{_e(ALERT_LABELS.get(a["kind"], a["kind"]))}</b> '
+                    f'{_code(_e(a["text"]))} {_time(a["at"], "et")}</p>' for a in alerts)
+    return f'<div class="failbanner" role="alert">{lines}</div>'
+
+
 def _code(text: str) -> str:
     """Escaped text with `backticks` shown as code."""
     parts = text.split("`")
@@ -2221,6 +2305,12 @@ header.top .meta { color:var(--muted); font-size:12px; margin-left:auto }
 .demo-banner { position:sticky; top:0; z-index:20; padding:10px 16px; text-align:center; font-size:15px; font-weight:700;
   background:#ffd23f; color:#1a1400; border-bottom:3px solid #b8860b }
 .demo-banner a { color:inherit; text-decoration:underline }
+/* The failure banner (#220): one red line per current failure, at the very top of the page. */
+.failbanner { border:1px solid var(--bad); background:var(--bad-soft); border-radius:8px; padding:4px 12px;
+  margin:0 0 12px; font-size:14px }
+.failbanner p { margin:5px 0 }
+.failbanner b { color:var(--bad) }
+.failbanner time { white-space:nowrap }
 /* The status bar: one compact row of six cells; each links to its section. */
 .strip { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); background:var(--surface); border:1px solid var(--line);
   border-radius:10px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:10px }
@@ -2701,6 +2791,9 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     items = snap.get("attention")
     if items is None:
         items = attention(snap)
+    alerts = snap.get("alerts")
+    if alerts is None:                       # a snapshot made before the banner existed
+        alerts = build_alerts(snap)
     state = verdict(items)
     head = (f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
             + (f'<a class="chartlink" href="{_e(charts["money"])}">Money chart</a>' if "money" in charts else "")
@@ -2756,7 +2849,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + ('<meta name="robots" content="noindex">' if demo else "")
             + reload
             + f'<title>{DEMO_TITLE if demo else ""}{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
-            f'<style>{STYLE}{machine_art.STYLE}{key_dates.STYLE}</style></head><body>{banner}<main>{body}</main>'
+            f'<style>{STYLE}{machine_art.STYLE}{key_dates.STYLE}</style></head><body>{banner}'
+            f'<main>{_alerts_html(alerts)}{body}</main>'
             f'<script>{SCRIPT % (int(refresh), int(demo), DEMO_STORAGE if demo else LIVE_STORAGE, visits.REFRESH_HEADER)}'
             '</script></body></html>')
 
