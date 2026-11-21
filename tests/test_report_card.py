@@ -269,7 +269,8 @@ def receipt(conn, request_id, at, lines, *, status="fulfilled", off_cycle=False,
             " units_to_back_stock, units_from_back_stock, units_pulled, pulled_sku, slot_reassigned, resolved_at)"
             " values (%s, %s, %s, 'purchase', '{}', 'primary', %s, 'Walmart', 1, %s, %s, %s, null, %s, 0, 0, 0,"
             " %s, %s, false, %s)",
-            (request_id, n, slot, sku, loaded, loaded, Decimal(cost), loaded, pulled, pulled_sku, at))
+            (request_id, n, slot, sku, loaded, loaded, None if cost is None else Decimal(cost), loaded, pulled,
+             pulled_sku, at))
 
 
 def two_slot_sales(conn, a, b):
@@ -302,7 +303,34 @@ def test_a_fulfilled_product_swap_is_left_out_of_the_comparison(conn, page_conn,
     assert cmp["slots"] == 1 and cmp["result"] == "tied" and cmp["excluded"]["swapped"] == [a]
     assert week["grade"] == "tied"
     assert any(f"Slot {a}" in n and "swapped" in n for n in week["notes"])
-    assert "ahead by" not in dashboard.render(snap)
+    page = dashboard.render(snap)
+    assert "ahead by" not in page and "on 1 shared slot:" in page
+    assert f"Not in the comparison: slot {a} (swapped at the visit)." in page
+
+
+def test_the_table_and_comparison_say_which_slots_they_cover(conn, page_conn, opened):
+    slot = opened[0]
+    product(conn)
+    week_of_sales(conn, slot)
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), request_id="r1",
+             plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}))
+    fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
+    page = dashboard.render(cards(page_conn)[0])
+    assert ">All scored slots</th>" in page and "on 1 shared slot: ahead by $5.26" in page
+
+
+def test_an_unknown_cost_on_a_shared_slot_makes_the_comparison_unavailable(conn, page_conn, opened):
+    slot = opened[0]
+    product(conn)
+    week_of_sales(conn, slot)
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), request_id="r1",
+             plan=plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}))
+    receipt(conn, "r1", SAT1 - timedelta(hours=3), [(slot, SKU, 8, None, 0, None)])
+    snap, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    assert week["comparison"]["result"] is None and week["comparison"]["excluded"]["unknown_cost"] == [slot]
+    assert week["grade"] == "unscored"
+    assert f"Against the baseline: unavailable (unit cost unknown on shared slot {slot})." in dashboard.render(snap)
 
 
 def pending(conn, request_id, at, *, status="pending", off_cycle=False):

@@ -497,13 +497,17 @@ def _compare(plan: scoring.Score, base: scoring.Score, swapped: tuple[str, ...] 
         return None
     mine = {o.slot: o for o in plan.slots if o.sold is not None}
     theirs = {o.slot: o for o in base.slots if o.sold is not None}
-    common = sorted(mine.keys() & theirs.keys() - set(swapped))
+    order = [o.slot for o in plan.slots]
+    common = [s for s in order if s in mine and s in theirs and s not in swapped]
+    unknown = [s for s in order if any(o.get(s) is not None and o[s].margin_cents is None for o in (mine, theirs))]
     out: dict[str, Any] = {"slots": len(common), "plan_margin": None, "baseline_margin": None,
-                           "difference": None, "result": None, "excluded": {"swapped": list(swapped)}}
-    margins = [mine[s].margin_cents for s in common] + [theirs[s].margin_cents for s in common]
-    if not common or None in margins:
+                           "difference": None, "result": None,
+                           "excluded": {"swapped": list(swapped), "unknown_cost": unknown}}
+    shared_unknown = [s for s in common if s in unknown]
+    if not common or shared_unknown:
         out["why"] = ("no slot is scored for both" if not common else
-                      "a unit cost is unknown on a slot both score, so margins can't be compared")
+                      f"unit cost unknown on shared slot{'s' if len(shared_unknown) > 1 else ''} "
+                      f"{', '.join(shared_unknown)}")
         return out
     ours = sum(mine[s].margin_cents for s in common) - plan.totals.fee_cents
     baseline = sum(theirs[s].margin_cents for s in common) - base.totals.fee_cents
@@ -650,10 +654,11 @@ def cards_html(panel: dict) -> str:
                 'the first full week (Saturday to Friday, Eastern) after the first fill.</p>')
     if data.get("assignment_missing"):
         return '<p class="empty">Slot assignment unavailable, so no week can be scored.</p>'
-    out = ['<p class="sub lede">Each week (Saturday to Friday, Eastern) scores the plan the Friday visit loaded, '
-           "with the week replayer's scoring, against the baseline: restock each slot to last week's sales at "
-           "last week's price. A failed hard check fails the week, whatever it earned. Sold out means a slot "
-           "sold everything on its rail, so demand may have been higher. Unsold units keep their cost.</p>"]
+    out = ['<p class="sub lede">Each week (Saturday to Friday, Eastern) scores the plan its visit loaded, '
+           "matched through the purchase request, with the week replayer's scoring, against the baseline: restock "
+           "each slot to last week's sales at last week's price. A failed hard check fails the week, whatever it "
+           "earned. Sold out is estimated: the model's rail ran empty, so demand may have been higher. Unsold "
+           "units keep their cost.</p>"]
     for card in data["weeks"]:
         out.append(_card_html(card))
     return "".join(out)
@@ -683,23 +688,27 @@ def _card_html(card: dict) -> str:
     if card["outcome"] is not None:
         rows = (f'<tr><th scope="row">The plan</th>{_figures(card["outcome"])}</tr>'
                 f'<tr><th scope="row">Baseline</th>{_figures(card["baseline"])}</tr>')
-        table = ('<table class="rc-outcome"><thead><tr><th scope="col"></th><th scope="col">Sold</th>'
-                 '<th scope="col">Sold out</th><th scope="col">Unsold</th><th scope="col">Margin</th></tr></thead>'
+        table = ('<table class="rc-outcome"><thead><tr><th scope="col">All scored slots</th><th scope="col">Sold</th>'
+                 '<th scope="col">Sold out (estimated)</th><th scope="col">Unsold</th><th scope="col">Margin</th></tr></thead>'
                  f'<tbody>{rows}</tbody></table>')
     comparison = ""
     cmp = card["comparison"]
     if cmp is not None:
+        excluded = cmp.get("excluded") or {}
         if cmp["result"] is None:
-            comparison = f'<p class="sub">Against the baseline: can\'t compare ({escape(cmp["why"])}).</p>'
+            comparison = f'<p class="sub">Against the baseline: unavailable ({escape(cmp["why"])}).</p>'
+            left_out = [f"slot {s} (swapped at the visit)" for s in excluded.get("swapped", [])]
         else:
+            n = int(cmp["slots"])
             gap = "level" if cmp["result"] == "tied" else (
                 f'{"ahead" if cmp["result"] == "beat" else "behind"} by ${cmp["difference"].lstrip("-")}')
-            comparison = (f'<p class="sub">Against the baseline, on the {int(cmp["slots"])} slots both score: '
+            comparison = (f'<p class="sub">Against the baseline, on {n} shared slot{"s" if n != 1 else ""}: '
                           f'{escape(gap)} (margin ${escape(cmp["plan_margin"])} against '
                           f'${escape(cmp["baseline_margin"])}).</p>')
-            if any(o is not None and o["margin"] is None for o in (card["outcome"], card["baseline"])):
-                comparison += ('<p class="sub">A margin in the table is unknown when a slot it scores has no unit '
-                               'cost; the comparison leaves those slots out.</p>')
+            left_out = ([f"slot {s} (swapped at the visit)" for s in excluded.get("swapped", [])]
+                        + [f"slot {s} (unit cost unknown)" for s in excluded.get("unknown_cost", [])])
+        if left_out:
+            comparison += f'<p class="sub">Not in the comparison: {escape("; ".join(left_out))}.</p>'
     notes = "".join(f'<li>{escape(n)}</li>' for n in card["notes"])
     notes = f'<ul class="rc-notes">{notes}</ul>' if notes else ""
     return (f'<article class="rc-card"><h3>{escape(title)}{state} '
