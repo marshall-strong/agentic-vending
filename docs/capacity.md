@@ -35,12 +35,15 @@ plan line and under Needs attention. The first-fill plan shows it beside the pro
 size or a closet shortfall can explain a smaller fill. Add the reason to the plan line.
 [Preview tool](mcp-server.md) · [Weekly dashboard](dashboard.md)
 
-## Count at the day-one stocking visit
+## Count from the day-one fill's receipts
 
-1. At the stocking visit on Mon 30 Nov, choose one of our slots for each package size you load.
-2. Fill that column to the pusher with as many units as fit without forcing them.
-3. Count the units and record the package size, SKU, date and your name.
-4. Use that count for the matching package size. Note the selection and count for any column that differs.
+The course student worker buys and stocks the machine. The team never fills a slot or contacts the worker; counts
+come from the receipts.
+
+1. After the Mon 30 Nov fill, read its receipt: `python scripts/bridge.py request REQUEST_ID`.
+2. For each package size, take the units the receipt shows loaded into a slot we asked to fill to capacity.
+3. Use that count for the matching package size. Note the slot and count for any slot that differs.
+4. If no receipt shows it, ask the instructors rather than guess.
 5. Run `python -m vending.config show` and copy the current `capacity_overrides` object.
 6. Add or update each applicable SKU in that object. Keep the other entries.
 7. Save the complete object with your name. The command replaces the whole object.

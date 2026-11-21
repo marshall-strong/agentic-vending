@@ -180,7 +180,7 @@ quarter (`docs/planning/2026-11-20-david-update.md`).
 
 **Our team.** Every answer must name our team, `SLOTS_TEAM` (unset: `group-b`, the name the server
 has given since 12 Nov). An answer for another team, or with no team, is refused, so a swapped key
-or a misconfigured bridge can't hand us the other half of the machine.
+or a misconfigured bridge can't hand us an assignment outside our team.
 
 **The lock.** The assignment is fixed from the start. The lock time is the setting `SLOTS_LOCK_AT`,
 an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern,

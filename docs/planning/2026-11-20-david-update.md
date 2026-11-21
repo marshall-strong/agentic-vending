@@ -20,14 +20,14 @@ The catalog deadline (Wed 25 Nov) and the fill request deadline (23:59 Sun 29 No
 
 ### 1. A tracking check
 
-A new route checks our own totals against the course staff's: `POST /api/v1/tracking/check`. We send four things:
+A new route checks our own totals against the course staff's: `POST /api/v1/tracking/check`. We send four things, all as of the same stored poll (`as_of`):
 
 - **cash**: what we have to spend, less the sales tax owed;
 - **sales tax owed**;
 - **coil units** for each slot;
 - **back-stock units** for each product.
 
-Each answer is "within" (±$1 or ±2 units) or "outside". There is no rate limit while we test. Once the quarter starts, it is **1 call a day**. David means it for early detection, not troubleshooting.
+Each answer is "within" (±$1 or ±2 units) or "outside". Until staff stock the machine on 30 Nov, the route answers `tracking_not_started`. There is no rate limit while we test. Once the quarter starts, it is **1 call a day**. David means it for early detection, not troubleshooting.
 
 **What it changes.** Another branch builds the client. Our figures already exist: cash is the ledger's `spendable` (balance less sales tax owed, `vending/ledger.py`), coil units come from the stock count (`vending/stock.py`), and back stock is the closet count. One call a day means the worker should call it once, at a set time, and log the answer. A slot with unattributed units (`docs/cutover.md`) has a known count and an upper bound, so it can read "outside" by up to those units. Which figure to send for such a slot is a choice for that branch.
 
@@ -43,7 +43,7 @@ The bridge's answer for our team changed between 16 and 20 Nov. This is the one 
 
 David added an honor rule: **don't influence others with knowledge of who owns what in the machine.** That matches `docs/agent/competition-and-integrity.md`: never steer customers toward or away from a slot except through our own prices and products.
 
-**What it changes.** A person runs `python -m vending.slots record` to store the new assignment in the team database. Until then, the worker's `slots check` fails every round. The day-one plan is placed again on the new slots. See "What the redraw touches" below.
+**What it changes.** The new assignment was stored in the team database with `python -m vending.slots record` on 20 Nov, so the worker's `slots check` passes again. The day-one plan was placed again on the new slots (rounds 5 and 6). Still to do: the lock check on 3 Dec confirms it. See "What the redraw touches" below.
 
 ### 4. Mon 30 Nov: stocking and the counter reset
 
@@ -70,7 +70,7 @@ If the machine opens on 1 or 2 Dec:
 
 ### 6. The first restock
 
-Unchanged: a valid request received by 23:59 Thu 3 Dec is filled on Fri 4 Dec. If the machine opens on 1 Dec, the agent plans that request with two days of our sales instead of less than one.
+Unchanged: a valid request received by 23:59 Thu 3 Dec is filled on Fri 4 Dec. An earlier opening gives the agent more sales history to plan that request with; how much depends on the opening and submission times.
 
 ## Dates our code and docs use
 
