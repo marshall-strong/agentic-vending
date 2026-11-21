@@ -262,7 +262,8 @@ def test_public_dashboard_has_no_spend_error_before_opening(site, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_public_dashboard_keeps_submit_confirmation_without_later_error(site, conn):
+def test_public_dashboard_keeps_submit_confirmation_without_later_error(site, schema_url, conn):
+    _, schema = schema_url
     now = conn.execute("select now()").fetchone()[0]
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=now - timedelta(minutes=1))
     run = agent_runs.start(conn, mode="live")
@@ -270,13 +271,19 @@ def test_public_dashboard_keeps_submit_confirmation_without_later_error(site, co
     detail = f"{confirmation}; afterwards: OperationalError: connection to db-private.example.test failed"
     agent_runs.finish(conn, run, "submitted", detail=detail, request_id="test-123")
 
-    for path in ("/dashboard", "/dashboard/state.json"):
+    for path in ("/dashboard", "/dashboard/state.json", f"/db?schema={schema}&table=agent_runs"):
         status, _, body = _get(site, path)
-        assert status == 200 and confirmation in body
-        assert "db-private.example.test" not in body and "OperationalError" not in body
-    state = json.loads(body)
-    assert state["status"]["latest_run"]["detail"] == state["runs"]["data"][0]["detail"] == confirmation
+        assert status == 200 and confirmation in body, path
+        assert "db-private.example.test" not in body and "OperationalError" not in body, path
+        assert "afterwards" not in body, path
+        if path == "/dashboard/state.json":
+            state = json.loads(body)
+            assert state["status"]["latest_run"]["detail"] == state["runs"]["data"][0]["detail"] == confirmation
     assert dashboard.snapshot(conn)["runs"]["data"][0]["detail"] == detail
+    # The team's own explorer and the database keep the whole detail.
+    with open_in(*schema_url) as local:
+        assert "db-private.example.test" in db_explorer.render(local, db_explorer.Request(schema, "agent_runs", 0))[1]
+        assert local.execute("select detail from agent_runs where id = %s", (run,)).fetchone()[0] == detail
 
 
 def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):

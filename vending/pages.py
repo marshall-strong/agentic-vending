@@ -128,7 +128,9 @@ TOTALS = {
 # `dashboard.hide_errors`.
 HIDE = {
     "action_log": db_explorer.Hide("outcome", "failed", ("detail", "result"), dashboard.HIDDEN),
-    "agent_runs": db_explorer.Hide("status", "failed", ("detail",), dashboard.HIDDEN),
+    # A failed run's detail is a raw error; a run that submitted keeps only its confirmation (#165).
+    "agent_runs": db_explorer.Project("detail", ("status",), lambda col: dashboard.public_run_detail(
+        col("status"), col("detail")), dashboard.HIDDEN),
     # A step the model was told had failed holds the raw error (#165).
     "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
@@ -176,7 +178,7 @@ def stored_slots(conn: psycopg.Connection) -> tuple[str, ...]:
         return ()
 
 
-def explorer_rules(conn: psycopg.Connection, public: bool) -> tuple[dict[str, db_explorer.Hide],
+def explorer_rules(conn: psycopg.Connection, public: bool) -> tuple[dict[str, db_explorer.Hide | db_explorer.Project],
                                                                      dict[str, db_explorer.Only]]:
     """(hide, only) for `db_explorer.render`, the one policy both explorers use.
 
