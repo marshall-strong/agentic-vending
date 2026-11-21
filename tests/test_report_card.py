@@ -183,6 +183,79 @@ def test_a_plan_of_the_wrong_shape_fails_valid_plan(conn, page_conn, opened):
     assert week["checks"][0]["status"] == "fail" and week["grade"] == "fail"
 
 
+def _week_text(snap, week):
+    card = next(c for c in snap["report_cards"]["data"]["weeks"] if c["week"] == week)
+    page = dashboard.render(snap)
+    # The report card's own section: the Runs panel shows each run's plan as it was stored.
+    section = page[page.index('id="report-card"'):page.index('id="incidents"')]
+    return card, dashboard.to_json(card) + section
+
+
+def test_a_malformed_entry_fails_valid_plan_without_quoting_it(conn, page_conn, opened):
+    week_of_sales(conn, opened[0])
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), plan=plan_for(opened, **{
+        opened[0]: {"product": ["A", "B"], "sale_price": "2.50", "reason": "x"},
+        opened[1]: {"fill_to": 3, "sale_price": f"<b>{SECRET}</b>", "reason": "y"},
+        opened[2]: {"fill_to": "lots", "sale_price": "2.50", "reason": SECRET}}))
+    # A later plan for the week after, so the plan panel shows a well-formed one.
+    live_run(conn, datetime(2026, 12, 10, 20, tzinfo=UTC), plan=plan_for(opened))
+    snap = dashboard.snapshot(page_conn, NOW, public=True)
+    assert snap["report_cards"]["ok"]
+    card, text = _week_text(snap, "2026-12-05")
+    valid = card["checks"][0]
+    assert valid["status"] == "fail" and card["grade"] == "fail"
+    assert f"Slot {opened[0]}: the product isn't a catalog SKU." in valid["detail"]
+    assert f"Slot {opened[1]}: the sale price isn't a price." in valid["detail"]
+    assert f"Slot {opened[2]}: fill_to must be a whole number from 0 to 50." in valid["detail"]
+    assert SECRET not in text
+    assert "'lots'" not in text and '"lots"' not in text and "&quot;lots" not in text
+    assert [c["status"] for c in card["checks"][1:]] == ["skip"] * 3
+
+
+def test_an_entry_outside_our_assignment_fails_valid_plan(conn, page_conn, opened):
+    week_of_sales(conn, opened[0])
+    plan = plan_for(opened)
+    plan["slots"].append({"slot": "99", "keep": True, "reason": "not ours"})
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), plan=plan)
+    snap = dashboard.snapshot(page_conn, NOW, public=True)
+    card, text = _week_text(snap, "2026-12-05")
+    assert card["checks"][0] == {"name": "valid plan", "status": "fail",
+                                 "detail": "The plan names a selection outside our assignment."}
+    assert card["grade"] == "fail" and "99" not in dashboard.to_json(card)
+
+
+def test_a_changed_slot_with_no_reason_fails_valid_plan(conn, page_conn, opened):
+    week_of_sales(conn, opened[0])
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC),
+             plan=plan_for(opened, **{opened[0]: {"fill_to": 8, "sale_price": "2.50"}}))
+    _, by_week = cards(page_conn)
+    valid = by_week["2026-12-05"]["checks"][0]
+    assert valid["status"] == "fail" and "Every slot needs a short reason" in valid["detail"]
+
+
+def test_replay_errors_are_not_quoted_and_one_week_s_failure_spares_the_rest(conn, page_conn, opened, monkeypatch):
+    from vending.replay.state import NoData
+    real = report_card.replay_week
+
+    def replay(conn, day):
+        if day.isoformat() == "2026-11-28":
+            raise NoData(f"Week of {day}: {SECRET}")
+        if day.isoformat() == "2026-12-12":
+            raise RuntimeError(SECRET)
+        return real(conn, day)
+
+    monkeypatch.setattr(report_card, "replay_week", replay)
+    week_of_sales(conn, opened[0])
+    snap = dashboard.snapshot(page_conn, NOW, public=True)
+    assert snap["report_cards"]["ok"]
+    weeks = {c["week"]: c for c in snap["report_cards"]["data"]["weeks"]}
+    assert list(weeks) == ["2026-12-19", "2026-12-12", "2026-12-05", "2026-11-28"]
+    assert "Last week can't be rebuilt from the polls." in weeks["2026-12-05"]["notes"]
+    assert weeks["2026-12-19"]["grade"] == "unscored"
+    assert any(n.startswith("This week couldn't be scored") for n in weeks["2026-12-19"]["notes"])
+    assert SECRET not in dashboard.to_json(snap) and SECRET not in dashboard.render(snap)
+
+
 def test_without_polls_the_week_is_not_scored(conn, page_conn, opened):
     _, by_week = cards(page_conn)
     week = by_week["2026-12-05"]
@@ -246,8 +319,8 @@ def test_a_midweek_plan_reads_as_a_midweek_visit():
         {"off_cycle": True, "slots": [{"slot": "15", "fill_to": 4, "sale_price": Decimal("2.50")}]},
         type("R", (), {"ours": ("15",), "capacity_of": lambda self, sku: None})(),
         WeekState(start=OPEN, end=OPEN, slots=(SlotWeek("15", 250, 1),)))
-    assert plan == {"visit": "midweek", "reason": "", "slots": [
-        {"slot": "15", "fill_to": 4, "sale_price": "2.50", "reason": report_card.NO_REASON}]}
+    # A changed slot gets no default reason: the agent writes one for every slot it changes.
+    assert plan == {"visit": "midweek", "reason": "", "slots": [{"slot": "15", "fill_to": 4, "sale_price": "2.50"}]}
     assert notes == [] and unknown_fill == frozenset()
 
 

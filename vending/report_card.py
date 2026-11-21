@@ -36,15 +36,18 @@ row says `error: True` and `dashboard.hide_errors` puts its fixed message in.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from html import escape
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from vending import capacity, config, ledger, stock
 from vending.replay import scoring
-from vending.replay.deciders import Baseline
+from vending.pricing import to_cents
+from vending.replay.deciders import MAX_FILL, Baseline
 from vending.replay.state import NoData, SlotWeek, WeekState, replay_week
 from vending.slots import SlotsNotRecorded, our_slots
 
@@ -90,8 +93,20 @@ def report_cards(conn: psycopg.Connection, now: datetime) -> dict:
     current = ledger.week_of(now.astimezone(EASTERN))
     starts = [current - WEEK * n for n in range(WEEKS_SHOWN) if current - WEEK * n >= first]
     reader = _Reader(conn, ours, now, opened.at)
-    weeks = [_card(reader, week, opening_week=week == first, final=week < current) for week in starts]
+    weeks = [_isolated_card(reader, week, opening_week=week == first, final=week < current) for week in starts]
     return {"opened": True, "weeks": weeks}
+
+
+def _isolated_card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> dict:
+    """One week's card in its own savepoint: a failure scoring it leaves the other weeks standing.
+    The error's text is never shown, only that the week couldn't be scored."""
+    try:
+        with reader.conn.transaction():
+            return _card(reader, week, opening_week=opening_week, final=final)
+    except Exception:   # noqa: BLE001 - one week never takes the panel down
+        card = _blank(week, final)
+        card["notes"].append("This week couldn't be scored: the scoring failed. The other weeks are unaffected.")
+        return _graded(card)
 
 
 def _start(week: date) -> datetime:
@@ -113,7 +128,7 @@ class _Reader:
             "select sku, requested_at from product_requests where status = 'rejected' and sku is not null").fetchall()
         self.overrides = config.get_value(conn, "capacity_overrides", {}) or {}
         self.ceilings, self.notes = self._ceilings()
-        self._weeks: dict[date, WeekState | str] = {}
+        self._weeks: dict[date, WeekState | None] = {}
 
     def _ceilings(self) -> tuple[tuple[tuple[str, int], ...], list[str]]:
         from vending.planning import NotReady, planner_config
@@ -123,13 +138,14 @@ class _Reader:
             return (), ["The planner's settings couldn't be read, so every price is checked against $6.50."]
         return tuple((s, cfg.ceiling_for(s)) for s in self.ours), []
 
-    def week(self, week: date) -> WeekState | str:
-        """The replayed week starting on `week`, or why there is none (the replayer's own words)."""
+    def week(self, week: date) -> WeekState | None:
+        """The replayed week starting on `week`, or None when the polls can't rebuild it. The
+        replayer's reason isn't kept: the card says so in its own words."""
         if week not in self._weeks:
             try:
                 self._weeks[week] = replay_week(self.conn, week)
-            except NoData as error:
-                self._weeks[week] = str(error)
+            except NoData:
+                self._weeks[week] = None
         return self._weeks[week]
 
     def plan_for(self, week: date) -> tuple | None:
@@ -153,24 +169,30 @@ class _Reader:
         return capacity.for_product(sku, size, self.overrides)
 
 
-def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> dict:
-    card: dict[str, Any] = {
+def _blank(week: date, final: bool) -> dict:
+    return {
         "week": week.isoformat(), "ends": (week + timedelta(days=6)).isoformat(), "final": final,
         "grade": "unscored", "run_id": None, "planned_at": None, "checks": [], "outcome": None,
         "baseline": None, "comparison": None, "notes": [],
     }
+
+
+def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> dict:
+    card = _blank(week, final)
     if opening_week:
         card["grade"] = "opening"
         card["notes"].append("The first fill went in during this week, so the first graded week is the next one.")
         return _graded(card)
     run = reader.plan_for(week)
     before, this = reader.week(week - WEEK), reader.week(week)
-    if isinstance(before, str):
+    if before is None:
         # The hard checks still run: they need the plan, the receipts and the ledger, not the sales.
-        card["notes"].append(f"Last week can't be rebuilt from the polls: {before}")
+        card["notes"].append("Last week can't be rebuilt from the polls.")
         before = WeekState(start=_start(week - WEEK), end=_start(week),
                            slots=tuple(SlotWeek(s, None, None) for s in reader.ours))
-        this = "last week's sales are needed to score it"
+        this = None
+    elif this is None:
+        card["notes"].append("This week's sales can't be read from the polls yet.")
     plan_made = run[1] if run else _start(week)
     state = _state(reader, before, week, plan_made)
     if run is None:
@@ -182,19 +204,23 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         unknown_fill: frozenset[str] = frozenset()
     else:
         card["run_id"], card["planned_at"] = run[0], run[1]
+        problems = validate_plan(run[2], reader.ours)
+        if problems:
+            card["checks"] = [{"name": "valid plan", "status": scoring.FAIL, "detail": " ".join(problems)}] + [
+                {"name": name, "status": scoring.SKIP, "detail": "No valid plan to check."} for name, _ in scoring.CHECKS]
+            card["grade"] = "fail"
+            card["notes"] += reader.notes
+            return _graded(card)
         answer, notes, unknown_fill = _as_replay_plan(run[2], reader, state)
         card["notes"] += notes
-    next_week = None if isinstance(this, str) else this
-    if next_week is None:
-        card["notes"].append(f"This week's sales can't be read from the polls yet: {this}")
-    elif not final:
+    if this is not None and not final:
         card["notes"].append("In progress: scored on the sales so far. The grade can change until Friday ends.")
-    scored = scoring.score(state, answer, next_week, unknown_fill=unknown_fill)
+    scored = scoring.score(state, answer, this, unknown_fill=unknown_fill)
     card["checks"] = [{"name": c.name, "status": c.status, "detail": c.detail}
                       for c in scored.checks if c.name != "no writes"]
     if scored.totals is not None:
         card["outcome"] = _outcome(scored)
-        base = scoring.score(state, Baseline().decide(state), next_week)
+        base = scoring.score(state, Baseline().decide(state), this)
         card["baseline"] = _outcome(base) if base.totals is not None else None
         card["comparison"] = _compare(scored, base)
     if any(c["status"] == scoring.FAIL for c in card["checks"]):
@@ -231,29 +257,100 @@ def _state(reader: _Reader, before: WeekState, week: date, plan_made: datetime) 
                    rejected=rejected, ceilings=reader.ceilings, notes=notes)
 
 
-def _as_replay_plan(raw: Any, reader: _Reader, state: WeekState) -> tuple[Any, list[str], frozenset[str]]:
-    """A stored live plan (the desired state, `vending.agent.recorded_plan`) in the replayer's shape,
-    its notes, and the slots whose fill isn't known.
+# A product the scorer may name: a catalog SKU's characters only, so plan text can't ride along.
+_SKU = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+# Above this a "price" is not a shelf price at all ($1,000.00).
+_MAX_PRICE_CENTS = 100_000
+
+
+def _slot_name(entry: Any) -> str | None:
+    slot = entry.get("slot") if isinstance(entry, dict) else None
+    if isinstance(slot, int) and not isinstance(slot, bool):
+        return str(slot)
+    return slot if isinstance(slot, str) else None
+
+
+def _price_text(value: Any) -> str | None:
+    """A stored sale price as the replayer's text, or None when it isn't a shelf price."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, Decimal)):
+        return None
+    text = str(value)
+    try:
+        cents = to_cents(text)
+    except (ValueError, ArithmeticError):
+        return None
+    return text if 0 <= cents <= _MAX_PRICE_CENTS else None
+
+
+def validate_plan(raw: Any, ours: tuple[str, ...]) -> list[str]:
+    """Every reason a stored live plan isn't one the scorer can read, before anything adapts it.
+
+    Each reason is a fixed sentence: the only values in one are our own slot numbers, never the
+    plan's text or a field's value. An entry for a selection outside our assignment is a failure,
+    named without its number."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("slots"), list):
+        return ["The stored plan isn't in the plan's shape: it has no list of slots."]
+    problems: list[str] = []
+    seen: list[str] = []
+    foreign = shapeless = False
+    for entry in raw["slots"]:
+        slot = _slot_name(entry)
+        if slot is None:
+            shapeless = True
+        elif slot not in ours:
+            foreign = True
+        else:
+            seen.append(slot)
+            problems += _entry_problems(slot, entry)
+    head = (["The plan names a selection outside our assignment."] if foreign else []) + (
+        ["An entry in the plan's list of slots isn't a slot entry."] if shapeless else [])
+    twice = [s for s in ours if seen.count(s) > 1]
+    missing = [s for s in ours if s not in seen]
+    if twice:
+        problems.append(f"Slots listed more than once: {', '.join(twice)}.")
+    if missing:
+        problems.append(f"Slots missing from the plan: {', '.join(missing)}.")
+    if raw.get("off_cycle") is not None and not isinstance(raw["off_cycle"], bool):
+        problems.append("off_cycle must be true or false.")
+    if raw.get("reason") is not None and not isinstance(raw["reason"], str):
+        problems.append("The plan's reason isn't text.")
+    return head + problems
+
+
+def _entry_problems(slot: str, entry: dict) -> list[str]:
+    problems = []
+    if not isinstance(entry.get("keep", False), bool):
+        problems.append(f"Slot {slot}: keep must be true or false.")
+    fill = entry.get("fill_to")
+    if fill is not None and (isinstance(fill, bool) or not isinstance(fill, int) or not 0 <= fill <= MAX_FILL):
+        problems.append(f"Slot {slot}: fill_to must be a whole number from 0 to {MAX_FILL}.")
+    if entry.get("sale_price") is not None and _price_text(entry["sale_price"]) is None:
+        problems.append(f"Slot {slot}: the sale price isn't a price.")
+    product = entry.get("product")
+    if product is not None and not (isinstance(product, str) and _SKU.fullmatch(product)):
+        problems.append(f"Slot {slot}: the product isn't a catalog SKU.")
+    if entry.get("reason") is not None and not isinstance(entry["reason"], str):
+        problems.append(f"Slot {slot}: the reason isn't text.")
+    return problems
+
+
+def _as_replay_plan(raw: dict, reader: _Reader, state: WeekState) -> tuple[dict, list[str], frozenset[str]]:
+    """A stored live plan that passed `validate_plan` (the desired state, `vending.agent.recorded_plan`)
+    in the replayer's shape, its notes, and the slots whose fill isn't known.
 
     The desired state says `off_cycle` for a midweek visit and may leave `fill_to` out to fill the
     column; the replayer wants `visit` and a number. Where the column's capacity isn't known the
     entry keeps its price and product and only its fill is left out, so every hard check still sees
-    it. A shape we can't read goes to the scorer as it is, so it fails "valid plan" there."""
-    if not isinstance(raw, dict) or not isinstance(raw.get("slots"), list):
-        return raw, [], frozenset()
-    notes, slots, foreign, unknown_fill = [], [], 0, set()
+    it. Only a kept slot gets the default reason: the agent writes reasons only for what it changes."""
+    notes, slots, unknown_fill = [], [], set()
     for entry in raw["slots"]:
-        if not isinstance(entry, dict) or entry.get("slot") is None:
-            slots.append(entry)
-            continue
-        slot = str(entry["slot"])
-        if slot not in reader.ours:
-            foreign += 1
-            continue
-        row = {**entry, "slot": slot, "reason": entry.get("reason") or NO_REASON}
-        row.pop("plan_hash", None)
-        if row.get("sale_price") is not None and not isinstance(row["sale_price"], str):
-            row["sale_price"] = str(row["sale_price"])
+        slot = _slot_name(entry)
+        row = {key: entry[key] for key in ("keep", "fill_to", "sale_price", "product", "reason") if key in entry}
+        row["slot"] = slot
+        if row.get("keep") is True and not (row.get("reason") or "").strip():
+            row["reason"] = NO_REASON
+        if row.get("sale_price") is not None:
+            row["sale_price"] = _price_text(row["sale_price"])
         if not row.get("keep") and row.get("fill_to") is None:
             held = state.slot(slot)
             column = reader.capacity_of(row.get("product") or (held.product if held else None))
@@ -264,8 +361,6 @@ def _as_replay_plan(raw: Any, reader: _Reader, state: WeekState) -> tuple[Any, l
             else:
                 row["fill_to"] = column
         slots.append(row)
-    if foreign:
-        notes.append(f"The plan named {foreign} selection(s) outside the current assignment; they are left out.")
     visit = "midweek" if raw.get("off_cycle") or raw.get("visit") in ("midweek", "off_cycle") else "scheduled"
     reason = raw.get("reason") if isinstance(raw.get("reason"), str) else ""
     return {"visit": visit, "reason": reason, "slots": slots}, notes, frozenset(unknown_fill)
