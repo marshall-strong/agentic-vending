@@ -212,6 +212,14 @@ def test_a_set_aside_round_with_malformed_totals_is_refused_naming_the_file(tmp_
     assert not isinstance(refused.value, pr.OtherSlots)
 
 
+def test_a_round_whose_fallbacks_alone_name_other_slots_counts_them(tmp_path):
+    plan, proj = placed_in(REDRAWN)
+    plan["fallbacks"] = [{"slot": "15-17", "if": "x", "then": "y"}]     # 16 is ours; 15 and 17 aren't
+    write(tmp_path, "round5", "5", plan, proj)
+    shown, (aside,) = pr.load_rounds(tmp_path, REDRAWN)
+    assert shown == [] and aside.outside == ("15", "17")
+
+
 def test_a_slot_that_isnt_ours_is_refused(tmp_path):
     rows = day_one()
     rows[0]["slot"] = 11        # the other team's selection

@@ -65,13 +65,14 @@ class RoundError(ValueError):
 
 class OtherSlots(RoundError):
     """A round that places products in slots outside our assignment: one made before the redraw, say.
-    Raised only once the whole round has passed every other check, so it carries the checked round and
-    the projection it was read from."""
+    Raised only once the whole round has passed every other check, so it carries the checked round, the
+    projection it was read from, and every selection it names that isn't ours, shelf then column."""
 
-    def __init__(self, message: str, checked: Round, projection: dict) -> None:
+    def __init__(self, message: str, checked: Round, projection: dict, outside: tuple[str, ...]) -> None:
         super().__init__(message)
         self.checked = checked
         self.projection = projection
+        self.outside = outside
 
 
 @dataclass(frozen=True)
@@ -507,7 +508,8 @@ def _parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, .
     if outside:
         slot, name = next(iter(outside.items()))
         raise OtherSlots(f"{name}: slot {slot} isn't in our current assignment; "
-                         f"a round may only place products in those {len(ours)} slots", checked, projection)
+                         f"a round may only place products in those {len(ours)} slots", checked, projection,
+                         tuple(sorted(outside, key=_slot_key)))
     return checked
 
 
@@ -519,7 +521,7 @@ def load_all(root: Path, ours: tuple[str, ...]) -> list[Round]:
 @dataclass(frozen=True)
 class SetAside:
     """A round placed in slots outside our assignment, so its slots aren't shown. Its totals are the
-    projection file's own figures, read as written, never recomputed or checked."""
+    projection file's own figures, read as written and never recomputed."""
     id: str
     plan_file: str
     saved_at: datetime
@@ -529,30 +531,12 @@ class SetAside:
     gross_profit_cents: dict[str, int]   # by scenario, where the projection has one
 
 
-def _named_slots(plan: Any, projection: Any) -> set[str]:
-    """Every selection a plan's day_one and its projection name, as text."""
-    named = set()
-    for row in (plan.get("day_one") if isinstance(plan, dict) else None) or []:
-        if isinstance(row, dict) and row.get("slot") is not None:
-            named.add(str(row["slot"]))
-    if isinstance(projection, dict):
-        for row in projection.get("slots") or []:
-            if isinstance(row, dict) and row.get("slot") is not None:
-                named.add(str(row["slot"]))
-        for block in (projection.get("scenarios") or {}).values():
-            for row in (block.get("per_slot") if isinstance(block, dict) else None) or []:
-                if isinstance(row, dict) and row.get("slot") is not None:
-                    named.add(str(row["slot"]))
-    return named
-
-
-def _set_aside(plan_path: Path, ours: tuple[str, ...], error: OtherSlots) -> SetAside:
-    """From the round as the loader checked it: its totals came through the same parser as a shown round's."""
+def _set_aside(error: OtherSlots) -> SetAside:
+    """From the round as the loader checked it: its totals came through the same parser as a shown round's,
+    and its selections outside ours are the ones that set it aside."""
     r, projection = error.checked, error.projection
-    outside = sorted((s for s in _named_slots(_load(plan_path), projection) if s not in ours),
-                     key=lambda s: (_slot_key(s) if re.fullmatch(r"\d{2}", s) else (9, 9), s))
     gp = {scen: t.gross_profit_cents for scen, t in r.totals.items() if t.gross_profit_cents is not None}
-    return SetAside(id=r.id, plan_file=r.plan_file, saved_at=r.saved_at, outside=tuple(outside), reason=str(error),
+    return SetAside(id=r.id, plan_file=r.plan_file, saved_at=r.saved_at, outside=error.outside, reason=str(error),
                     fill_most_cents=_opt_int(projection.get("fill_most_cents")), gross_profit_cents=gp)
 
 
@@ -567,7 +551,7 @@ def load_rounds(root: Path, ours: tuple[str, ...]) -> tuple[list[Round], list[Se
         try:
             shown.append(load_round(rid, plan, projection, ours))
         except OtherSlots as error:
-            aside.append(_set_aside(plan, ours, error))
+            aside.append(_set_aside(error))
     return shown, aside
 
 
