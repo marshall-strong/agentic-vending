@@ -200,8 +200,9 @@ receipt has door times, else by each line's `resolved_at`: the same clock as the
 delivered (`docs/cutover.md`). Every fulfilled off-cycle request costs the midweek visit fee
 stored on it when it was submitted (`purchase_requests.visit_fee_cents`), or `config`
 `midweek_fee_cents` ($25.00 by default) for requests without one, so a later change to the config
-fee never rewrites past visits. The sales tax inside the takings (takings x 8/108, per week,
-rounded half up) is set aside; what is still **owed** is the set-aside less what has been
+fee never rewrites past visits. The sales tax inside the takings (takings x 8/108, per tax week,
+Sunday 00:00 to Saturday 23:59:59 Eastern as David calculates it, rounded half up; the week in
+progress on its takings so far) is set aside; what is still **owed** is the set-aside less what has been
 remitted, and the **spendable** balance is the balance minus that. It is what the planner's
 balance gate checks against. Only what no other table records lives in `ledger_entries`
 (migration 007): the one opening entry, later capital, each model call's cost, tax remittances
@@ -235,7 +236,17 @@ starts earlier, and a note gives their amount: they are development spend, not f
 opening yet, every model call is development spend. The other lines still cover the whole window.
 
 `get_pnl` takes its window as Eastern calendar days, inclusive, so a Friday evening sale lands in
-Friday. `units_sold` counts every rise in our slots' unit counters; cost of sales covers the
+Friday. After the opening, a poll at midnight sharp is in the day it starts, so a P&L over a tax
+week's days counts that Sunday's 00:00 poll. When the ledger opened at that midnight, the opening
+poll stays the baseline, so sales before the opening are not counted; a window that starts before
+the opening reads its polls from its start, as before. Only the polls move: an entry, receipt or
+visit at Saturday 23:59:59.999999 is Saturday's. Each row of `tax_weeks` (Sunday to Saturday,
+as David calculates the tax) gives `from` and `to`, the part of the week the window counted, and
+`partial: true` when the window cut it, so its tax is the window's, not the week's figure. The
+window cuts a week when it starts midweek, when it starts at an opening after that week's Sunday 00:00
+(an opening at Sunday 00:00 sharp leaves the week whole), or when it ends before Saturday. A window
+that runs to today or later stops at now, so the week in progress is `partial` with `to` now, and the
+reply's `end` is now. `units_sold` counts every rise in our slots' unit counters; cost of sales covers the
 units the receipts can cost (first in, first out, `vending.stock`), and `units_costed`,
 `cost_of_sales_complete: false` and a note say how many could not be (sold before we first loaded
 the slot, or past what we loaded). Units sold across a product change that the counters can't split
