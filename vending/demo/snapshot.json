@@ -2560,6 +2560,49 @@
    "unsettled": 0
   }
  },
+ "key_dates": {
+  "ok": true,
+  "data": {
+   "after_start": true,
+   "rows": [
+    {
+     "key": "next_restock_request",
+     "when": "Thu 10 Dec, 23:59",
+     "due": {
+      "$datetime": "2026-12-10T23:59:00-05:00"
+     },
+     "what": "Restock request due. Staff fill it Fri 11 Dec",
+     "source": "David's answers, 17 Nov (docs/planning/2026-11-17-david-answers.md); David's email to both teams, 20 Nov",
+     "unconfirmed": false,
+     "passed": false,
+     "countdown": "tomorrow",
+     "checks": [
+      {
+       "key": "restock_request",
+       "label": "Restock request sent",
+       "status": "done",
+       "pill": "done",
+       "text": "sent Mon 7 Dec, 09:40, pending"
+      }
+     ]
+    },
+    {
+     "key": "next_tax",
+     "when": "Sat 12 Dec, 23:59",
+     "due": {
+      "$datetime": "2026-12-12T23:59:00-05:00"
+     },
+     "what": "Weekly sales tax calculation",
+     "source": "David's email to both teams, 20 Nov",
+     "unconfirmed": false,
+     "passed": false,
+     "countdown": "in 3 days",
+     "checks": []
+    }
+   ],
+   "unread": false
+  }
+ },
  "products": {
   "ok": true,
   "data": {
