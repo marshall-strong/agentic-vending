@@ -308,6 +308,35 @@ def test_failures_keep_their_error_text_to_themselves(site, schema_url, conn):
         assert "db.example.net" in db_explorer.render(local, db_explorer.Request(schema, "action_log", 0))[1]
 
 
+# A fake database host and connection string, planted in failed steps (#165).
+STEP_HOST = "vend-db-7f3a.postgres.example.internal"
+STEP_URL = f"postgresql://vend_admin:Sw0rdf1sh@{STEP_HOST}:5432/vending"
+
+
+@pytest.mark.parametrize("kind", ["tool_result", "tool_call", "text", "thinking"])
+def test_a_failed_step_of_any_kind_keeps_its_error_text_off_every_public_page(site, schema_url, conn, kind):
+    _, schema = schema_url
+    ledger.record(conn, "opening", 60000, "opening capital", "test", at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    run = agent_runs.start(conn, mode="live")
+    tool = None if kind in ("thinking", "text") else "get_machine_state"
+    agent_runs.step(conn, run, 1, kind, f'OperationalError: connection to server at "{STEP_HOST}" failed; '
+                    f"tried {STEP_URL}", tool=tool, is_error=True)
+    agent_runs.step(conn, run, 1, "tool_result", "SUCCESSFUL-STEP-MARKER", tool="get_catalog")
+    agent_runs.finish(conn, run, "skipped", detail="nothing to buy")
+
+    page, body, explorer = (_get(site, path)[2] for path in (
+        "/dashboard", "/dashboard/state.json", f"/db?schema={schema}&table=agent_steps"))
+    for text in (page, body, explorer):
+        assert STEP_HOST not in text and "Sw0rdf1sh" not in text and "postgresql://" not in text
+        assert "SUCCESSFUL-STEP-MARKER" in text
+        assert "isn't shown on this public page" in unescape(text)
+    steps = json.loads(body)["runs"]["data"][0]["steps"]
+    assert [s["content"] for s in steps] == [dashboard.HIDDEN, "SUCCESSFUL-STEP-MARKER"]
+    # The database keeps the text, for whoever reads it with the team's own login.
+    with open_in(*schema_url) as local:
+        assert STEP_HOST in db_explorer.render(local, db_explorer.Request(schema, "agent_steps", 0))[1]
+
+
 def test_the_served_dashboard_names_the_workers_failing_syncs_without_their_error_text(site):
     # The worker keeps its rounds in memory; the dashboard it serves gets them as /health has them.
     assert not any("hourly sync" in a["text"] for a in json.loads(_get(site, "/dashboard/state.json")[2])["attention"])

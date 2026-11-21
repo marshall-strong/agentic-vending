@@ -606,7 +606,9 @@ PUBLIC_PANEL_ERROR = "This part of the page can't be read right now."
 def hide_errors(snap: dict, *, public: bool = False) -> None:
     """Replace the free text of every failure with `HIDDEN`, in place.
 
-    A failed tool call or run stores the raw error. A refusal keeps its text. On the public
+    A failed tool call or run stores the raw error, and a database error can name the host and
+    the user. So a failed run's detail, a failed call's detail and the content of every step
+    marked `is_error` (whatever its kind) are replaced. A refusal keeps its text. On the public
     page, a panel's read error goes to stderr. Clean the snapshot before building Needs
     attention so both the page and `/state.json` get the same text.
     """
@@ -624,7 +626,7 @@ def hide_errors(snap: dict, *, public: bool = False) -> None:
                 row["detail"] = HIDDEN
     for run in runs:
         for step in run["steps"]:
-            if step["kind"] == "tool_result" and step["is_error"]:
+            if step["is_error"]:
                 step["content"] = HIDDEN
     if public:
         for name, panel in snap.items():
