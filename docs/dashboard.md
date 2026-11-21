@@ -192,6 +192,9 @@ panel, `/state.json` (`key_dates`) and the status bar's catalog deadline (`APPRO
 The opening day is `vending.start.START`, and the slot check waits for the lock (`SLOTS_LOCK_AT`), so
 neither is written twice. Times are Eastern. A status is judged on the snapshot's clock, the database's,
 like the rest of the page. A date passes at its minute (23:59) or, for a whole day, at the midnight after it.
+The restock request's Thursday 23:59 is the exception: it is the planner's order cutoff
+(`planner._past_cutoff`), which passes only once that minute is over, so at 23:59:30 the row still shows
+that week and a request sent then counts for it. The tax Saturday passes at 23:59 itself.
 
 | Date | What | Status, from |
 |---|---|---|

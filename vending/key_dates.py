@@ -34,12 +34,12 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date, datetime, time, timedelta
 from html import escape
 from typing import TYPE_CHECKING, Any
 
-from vending.planner import IN_STORE_CUTOFF
+from vending.planner import IN_STORE_CUTOFF, Config, _past_cutoff, _week_of
 from vending.slots import SlotsNotRecorded, _usable, stored
 from vending.start import EASTERN, START
 
@@ -57,13 +57,17 @@ DEADLINE = time(23, 59)
 RESTOCK_WEEKDAY = 4      # Friday, as datetime.weekday()
 TAX_WEEKDAY = 5          # Saturday
 TAX_AT = DEADLINE
+# The planner's week, which turns over on Saturday after the Friday visit (`planner.Config.week_starts`).
+WEEK_STARTS = next(f.default for f in fields(Config) if f.name == "week_starts")
 
 
 @dataclass(frozen=True)
 class KeyDate:
     """One date. `day` is the day in Eastern; `at` a deadline's time that day, or None for the whole day.
     `earliest` marks a day that isn't confirmed: it may be as early as that. `checks` name the
-    records that say whether it is done (`CHECKS`)."""
+    records that say whether it is done (`CHECKS`). `through_minute` marks the planner's order cutoff,
+    which passes only once its minute is over (`planner._past_cutoff`): Thursday 23:59:30 still orders
+    for that Friday."""
     key: str
     day: date
     what: str
@@ -71,13 +75,15 @@ class KeyDate:
     at: time | None = None
     earliest: date | None = None
     checks: tuple[str, ...] = ()
+    through_minute: bool = False
 
     @property
     def due(self) -> datetime:
-        """When it has passed: the deadline's minute, or the end of a whole day."""
+        """When it has passed: the deadline's minute (the end of it, for the order cutoff), or the end of
+        a whole day."""
         if self.at is None:
             return datetime.combine(self.day + timedelta(days=1), time(0), EASTERN)
-        return datetime.combine(self.day, self.at, EASTERN)
+        return datetime.combine(self.day, self.at, EASTERN) + timedelta(minutes=1 if self.through_minute else 0)
 
 
 # --- The dates: edit here ---------------------------------------------------------------------
@@ -101,7 +107,7 @@ OPENING = KeyDate(
 FIRST_RESTOCK = KeyDate(
     "first_restock_request", date(2026, 12, 3),
     "First restock request due, whatever the opening day. Staff fill it Fri 4 Dec; then a restock visit every Friday",
-    ANSWERS_17NOV + "; " + EMAIL_20NOV, at=DEADLINE, checks=("restock_request",))
+    ANSWERS_17NOV + "; " + EMAIL_20NOV, at=IN_STORE_CUTOFF.at, checks=("restock_request",), through_minute=True)
 FIRST_TAX = KeyDate(
     "first_tax", date(2026, 12, 5),
     "First weekly sales tax calculation; then every Saturday at 23:59", EMAIL_20NOV, at=TAX_AT)
@@ -320,7 +326,7 @@ def _restock_request(kd: KeyDate, now: datetime, ctx: dict) -> dict:
         return _open(kd, now, "no ledger opening yet, so no request counts")
     fill = _fill(facts)
     since = kd.due - timedelta(days=7)
-    sent = [r for r in facts["requests"] if not r["off_cycle"] and since < r["submitted_at"] <= kd.due
+    sent = [r for r in facts["requests"] if not r["off_cycle"] and since <= r["submitted_at"] < kd.due
             and (fill is None or r["request_id"] != fill["request_id"])]
     if sent:
         return _done(f"sent {moment_text(sent[-1]['submitted_at'])}, {sent[-1]['status']}")
@@ -344,11 +350,15 @@ def _next_weekly(now: datetime, weekday: int, at: time) -> date:
 
 
 def weekly(now: datetime) -> tuple[KeyDate, KeyDate]:
-    """After the start: the next restock request's deadline and the next tax Saturday."""
-    cutoff = _next_weekly(now, IN_STORE_CUTOFF.weekday, IN_STORE_CUTOFF.at)
+    """After the start: the next restock request's deadline and the next tax Saturday. The restock is the
+    planner's: the cutoff of the week it still orders for (`planner._week_of`, `planner._past_cutoff`)."""
+    local = _local(now)
+    cutoff = _week_of(local, WEEK_STARTS) + timedelta(days=(IN_STORE_CUTOFF.weekday - WEEK_STARTS) % 7)
+    if _past_cutoff(local, IN_STORE_CUTOFF, WEEK_STARTS):
+        cutoff += timedelta(days=7)
     visit = cutoff + timedelta(days=(RESTOCK_WEEKDAY - cutoff.weekday()) % 7)
     restock = KeyDate("next_restock_request", cutoff, f"Restock request due. Staff fill it {day_text(visit)}",
-                      FIRST_RESTOCK.source, at=IN_STORE_CUTOFF.at, checks=("restock_request",))
+                      FIRST_RESTOCK.source, at=IN_STORE_CUTOFF.at, checks=("restock_request",), through_minute=True)
     tax = KeyDate("next_tax", _next_weekly(now, TAX_WEEKDAY, TAX_AT), "Weekly sales tax calculation",
                   FIRST_TAX.source, at=TAX_AT)
     return restock, tax

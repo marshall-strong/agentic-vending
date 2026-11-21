@@ -2569,7 +2569,7 @@
      "key": "next_restock_request",
      "when": "Thu 10 Dec, 23:59",
      "due": {
-      "$datetime": "2026-12-10T23:59:00-05:00"
+      "$datetime": "2026-12-11T00:00:00-05:00"
      },
      "what": "Restock request due. Staff fill it Fri 11 Dec",
      "source": "David's answers, 17 Nov (docs/planning/2026-11-17-david-answers.md); David's email to both teams, 20 Nov",

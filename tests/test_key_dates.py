@@ -54,7 +54,7 @@ def test_the_dates_are_in_one_place_and_reuse_the_start():
     # The status bar's catalog deadline is the same instant: the end of Wed 25 Nov, Eastern.
     assert dashboard.APPROVALS_DUE == key_dates.CATALOG.due == datetime(2026, 11, 26, 5, tzinfo=timezone.utc)
     assert key_dates.FILL_REQUEST.due == et(11, 29, 23, 59)
-    assert key_dates.FIRST_RESTOCK.due == et(12, 3, 23, 59)
+    assert key_dates.FIRST_RESTOCK.due == et(12, 4, 0, 0)    # the planner orders through the cutoff minute
     assert key_dates.FIRST_TAX.due == et(12, 5, 23, 59)
 
 
@@ -163,7 +163,8 @@ def test_after_the_start_it_shrinks_to_the_next_restock_and_tax_saturday():
 
 @pytest.mark.parametrize("now, restock, tax", [
     (et(12, 3, 0, 0), "Thu 3 Dec, 23:59", "Sat 5 Dec, 23:59"),       # the start: the first restock request
-    (et(12, 3, 23, 59), "Thu 10 Dec, 23:59", "Sat 5 Dec, 23:59"),     # the cutoff's minute has passed
+    (et(12, 3, 23, 59, 30), "Thu 3 Dec, 23:59", "Sat 5 Dec, 23:59"),  # the planner still orders for this Friday
+    (et(12, 4, 0, 0), "Thu 10 Dec, 23:59", "Sat 5 Dec, 23:59"),       # the cutoff's minute has passed
     (et(12, 5, 23, 59), "Thu 10 Dec, 23:59", "Sat 12 Dec, 23:59"),    # so has the tax minute
     (et(12, 6, 1), "Thu 10 Dec, 23:59", "Sat 12 Dec, 23:59"),
 ])
@@ -351,3 +352,25 @@ def test_the_catalog_check_reads_the_picked_plans_products(conn, page_conn, tmp_
     assert catalog()["status"] == "done"
     conn.execute("update catalog_products set delisted_at = now() where sku = 'SIM-COKE'")
     assert catalog()["status"] == "due"
+
+
+@pytest.mark.parametrize("now", [et(12, 3, 23, 58, 59), et(12, 3, 23, 59), et(12, 3, 23, 59, 59), et(12, 4, 0, 0),
+                                 et(12, 10, 23, 59, 30), et(12, 11, 0, 0, 1)])
+def test_the_restock_deadline_passes_when_the_planners_cutoff_does(now):
+    from dataclasses import fields
+
+    from vending import planner
+    week_starts = next(f.default for f in fields(planner.Config) if f.name == "week_starts")
+    past = planner._past_cutoff(now.astimezone(EASTERN), planner.IN_STORE_CUTOFF, week_starts)
+    restock, _ = key_dates.weekly(now)
+    # The row shows the cutoff the planner still orders for, and that cutoff hasn't passed for either.
+    assert now < restock.due
+    this_thursday = now.date() if now.weekday() == 3 else None
+    assert (restock.day == this_thursday) == (this_thursday is not None and not past)
+
+
+def test_a_restock_request_sent_in_the_cutoffs_last_minute_counts_for_that_week():
+    f = facts(opening=et(11, 28), checked=LOCK, requests=[request("WEEK1", et(12, 3, 23, 59, 20))])
+    restock = key_dates.build(et(12, 3, 23, 59, 40), f, counts(), LOCK)["rows"][0]
+    assert restock["when"] == "Thu 3 Dec, 23:59" and not restock["passed"]
+    assert check(restock, "restock_request")["status"] == "done"
