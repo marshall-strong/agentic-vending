@@ -348,6 +348,30 @@ def test_a_poll_sharing_its_time_with_another_of_our_polls_is_refused(conn):
         tracking.figures(conn)                         # the newest poll, by default
 
 
+def test_a_tied_poll_committed_after_the_tie_check_does_not_change_the_figures(schema_url, monkeypatch):
+    """The tie check and every figure read see one snapshot. A tied poll committed by another connection
+    between the tie check and the stock read used to slip through: slot 15 read 3, not 6."""
+    from tests.conftest import open_in
+    from vending import tracking
+
+    with open_in(*schema_url) as setup:
+        books(setup)
+    real_slots = tracking.our_slots
+
+    def slots_after_a_tie_lands(conn, *args, **kwargs):
+        with open_in(*schema_url) as other:            # autocommit: committed before the reads below
+            poll(other, "p1tie", "2026-11-03T18:00:00+00:00", sold_in_15=5)
+        return real_slots(conn, *args, **kwargs)
+
+    monkeypatch.setattr(tracking, "our_slots", slots_after_a_tie_lands)
+    with open_in(*schema_url) as conn:
+        f = tracking.figures(conn, "p1")
+        assert f.coil["15"] == 6
+        monkeypatch.setattr(tracking, "our_slots", real_slots)
+        with pytest.raises(tracking.CantCompute, match="shares its time"):
+            tracking.figures(conn, "p1")               # the next read sees the tie and refuses
+
+
 def test_a_good_poll_missing_a_counter_for_one_of_our_slots_is_refused(conn):
     """p1 passed its checksum but has no counter for slot 15: as of it the coil read 8 (not 6) and the
     tax owed $0.00 (not $0.37), because the sales up to it couldn't be seen. Nothing is sent."""

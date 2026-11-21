@@ -230,7 +230,18 @@ def poll_time(conn: psycopg.Connection, session_id: str) -> datetime:
 def figures(conn: psycopg.Connection, as_of: str | None = None) -> Figures:
     """Our four figures as of the poll `as_of` (default the newest stored one), or `CantCompute`.
 
+    Every read, the tie check in `poll_time` included, is in one repeatable-read, read-only
+    transaction, so a poll committed part way through can't reach the figures without the check
+    seeing it. A caller that already has a transaction open gets its reads in that one instead.
     Raises `SlotsNotRecorded` when our slots can't be read (`vending.slots.our_slots`)."""
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        return _figures(conn, as_of)
+    with conn.transaction():
+        conn.execute("set transaction isolation level repeatable read, read only")
+        return _figures(conn, as_of)
+
+
+def _figures(conn: psycopg.Connection, as_of: str | None) -> Figures:
     session = as_of or newest_poll(conn)
     at = poll_time(conn, session)
     slots = our_slots(conn)
