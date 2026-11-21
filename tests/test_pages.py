@@ -344,6 +344,29 @@ def test_a_failed_step_of_any_kind_keeps_its_error_text_off_every_public_page(si
         assert STEP_HOST in db_explorer.render(local, db_explorer.Request(schema, "agent_steps", 0))[1]
 
 
+def test_db_shows_a_fixed_line_for_a_submission_not_the_bridges_own_words(site, schema_url, conn):
+    """#165: a bridge 5xx excerpt can carry an upstream database error, and a resolved row keeps
+    the text it had. On /db, `purchase_submissions.detail` is a fixed line for its status."""
+    _, schema = schema_url
+    leak = f'the bridge answered 502: OperationalError: connection to server at "{STEP_HOST}" failed; {STEP_URL}'
+    for status, detail in (("unknown", leak), ("refused", f"422: {leak}"), ("not_filed", f"Could not reach {leak}"),
+                           ("accepted", leak), ("accepted", None), ("sending", None)):
+        conn.execute("insert into purchase_submissions (plan_hash, body, status, detail) values ('h', '{}', %s, %s)",
+                     (status, detail))
+
+    status, _, body = _get(site, f"/db?schema={schema}&table=purchase_submissions")
+    shown = unescape(body)
+    assert status == 200
+    assert STEP_HOST not in shown and "Sw0rdf1sh" not in shown and "postgresql://" not in shown
+    assert "OperationalError" not in shown
+    for line in pages.SUBMISSION_DETAIL.values():
+        assert line in shown
+    # The team's own explorer and the database keep the bridge's words.
+    with open_in(*schema_url) as local:
+        assert STEP_HOST in db_explorer.render(local, db_explorer.Request(schema, "purchase_submissions", 0))[1]
+        assert local.execute("select count(*) from purchase_submissions where detail = %s", (leak,)).fetchone()[0] == 2
+
+
 def test_the_served_dashboard_names_the_workers_failing_syncs_without_their_error_text(site):
     # The worker keeps its rounds in memory; the dashboard it serves gets them as /health has them.
     assert not any("hourly sync" in a["text"] for a in json.loads(_get(site, "/dashboard/state.json")[2])["attention"])

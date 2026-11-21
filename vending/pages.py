@@ -124,6 +124,27 @@ TOTALS = {
     "polls": db_explorer.Hide("", "", ("total_paid_cents", "total_paid_units"), "(hidden)"),
 }
 
+# What /db shows of a submission's `detail`, by its status, in place of the text stored (#165). The
+# stored text is the bridge's own words or our error about them: a 5xx answer's excerpt can carry an
+# upstream database error, and a row a person resolved keeps the text it had.
+_NOT_SHOWN = " (the bridge's own words aren't shown on this public page; they are in the database)"
+SUBMISSION_DETAIL = {
+    "accepted": "The bridge filed this request." + _NOT_SHOWN,
+    "refused": "The bridge refused this request; nothing was filed." + _NOT_SHOWN,
+    "not_filed": "This request was never filed." + _NOT_SHOWN,
+    "unknown": "Sent, but no usable answer came back, so it may or may not have been filed." + _NOT_SHOWN,
+}
+SUBMISSION_OTHER = "(this text isn't shown on this public page; it is in the database)"
+
+
+def _submission_detail(col: Callable[[str], sql.Composable]) -> sql.Composable:
+    """`purchase_submissions.detail` as /db shows it: a fixed line for the row's status, or null."""
+    lines = sql.SQL(" ").join(sql.SQL("when {} = {} then {}").format(col("status"), sql.Literal(status), sql.Literal(line))
+                              for status, line in SUBMISSION_DETAIL.items())
+    return sql.SQL("case when {} is null then null {} else {} end").format(
+        col("detail"), lines, sql.Literal(SUBMISSION_OTHER))
+
+
 # What the public explorer leaves out besides, by table name. The dashboard's own list is
 # `dashboard.hide_errors`.
 HIDE = {
@@ -131,6 +152,7 @@ HIDE = {
     # A failed run's detail is a raw error; a run that submitted keeps only its confirmation (#165).
     "agent_runs": db_explorer.Project("detail", ("status",), lambda col: dashboard.public_run_detail(
         col("status"), col("detail")), dashboard.HIDDEN),
+    "purchase_submissions": db_explorer.Project("detail", ("status",), _submission_detail, SUBMISSION_OTHER),
     # A step the model was told had failed holds the raw error (#165).
     "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
