@@ -438,7 +438,7 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   for the config change.
 - **Cost**: database only.
 - **Failure behavior**: code `wildcard`, every reason at once: not one of ours, not on a middle
-  shelf (2 to 4), column 5 (beside the machine's centre line), no reason, or a slot already set.
+  shelf (2 to 4), column 4 or 5 (beside the machine's centre line), no reason, or a slot already set.
   `halted` when the halt switch is on.
 - **Owner**: Kevin Sykes (PR #166).
 

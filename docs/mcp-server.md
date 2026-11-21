@@ -19,7 +19,7 @@ machine.
 | `get_project_rules` | **Works.** Our own notes on the project brief, from [`agent/`](agent/README.md). With no topic, the list of topics and their one-line summaries; with a topic, that file's text. A topic is a plain name from the list: paths, `..` and unknown names are refused with the list. Logged like any read. |
 | `request_catalog_product` | **Works.** Files a request to add a drink to the catalog (`POST /api/v1/product-requests`), recorded in `product_requests`. See below for what it refuses. |
 | `submit_desired_state` | **Works.** Plans the desired state again on live data inside the write gate, refuses with every problem at once, otherwise POSTs it once and records the request. Saves what it is about to send before sending, so a lost answer leaves a row a person settles with `python -m vending.submissions resolve`. |
-| `set_wildcard_slot` | **Works.** Sets config `wildcard_slot` once, through the write gate: one of our slots, on shelf 2 to 4, not column 5, with a reason. Asking again for the same slot changes nothing; a different slot is refused once one is set, and only a person can change it (`python -m vending.config`). |
+| `set_wildcard_slot` | **Works.** Sets config `wildcard_slot` once, through the write gate: one of our slots, on shelf 2 to 4, not column 4 or 5, with a reason. Asking again for the same slot changes nothing; a different slot is refused once one is set, and only a person can change it (`python -m vending.config`). |
 | `set_price` | **Dropped.** Prices change only at a worker visit (free Friday, $25 midweek), through `submit_desired_state`. The stub stays so a call gets that answer. |
 
 ## Run it
