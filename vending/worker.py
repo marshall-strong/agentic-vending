@@ -58,8 +58,11 @@ about every minute from 2:45 to 7 PM Eastern, so a read lands while the door is 
 (`vending.visit_polls`). A read that fails is logged and skipped. It is not a job of the round, so it
 never fails the round or /health. A read that runs past the round's time delays the round, never ends the loop.
 
-The agent itself (the model loop) does not run here yet; when it does, it
-starts `python -m vending.server` over stdio from the same image.
+The agent (the model loop) runs here only when `AGENT_SCHEDULE_MODE` is `dry-run` or `live`
+(`vending.agent_schedule`; unset, it never runs). Then, at the times in `AGENT_SCHEDULE` (Eastern), the loop
+starts `vending.agent.run` in a background thread, which starts `python -m vending.server` over stdio
+from the same image. Like the visit reads, a scheduled run is not a job of the round and never fails it.
+`/health` and `/` then also show the schedule's mode, its next time and the last scheduled run's outcome.
 
 `GET /dashboard/demo/simulations` shows simulated seasons from committed files
 (`vending.simulate.demo`), behind the same password. It never opens a database
@@ -114,6 +117,8 @@ class State:
     last_round_at: str | None = None
     next_round_at: str | None = None
     results: list[JobResult] = field(default_factory=list)
+    # The scheduled agent runs (`vending.agent_schedule`): anything with `public()`, or None when they're off.
+    schedule: object | None = None
 
     @property
     def healthy(self) -> bool:
@@ -121,12 +126,19 @@ class State:
         return all(r.exit_code == 0 for r in self.results)
 
     def public(self) -> dict:
-        """What /health shows: outcomes and exit codes, never error text."""
-        return {"status": "ok" if self.healthy else "failing",
-                "started_at": self.started_at, "rounds": self.rounds,
-                "last_round_at": self.last_round_at, "next_round_at": self.next_round_at,
-                "results": [{"job": r.job, "started_at": r.started_at, "seconds": r.seconds,
-                             "exit_code": r.exit_code, "outcome": r.outcome} for r in self.results]}
+        """What /health shows: outcomes and exit codes, never error text. With scheduled agent runs on, also
+        their mode, next time and last outcome (`agent_schedule`); off, the key isn't there."""
+        shown = {"status": "ok" if self.healthy else "failing",
+                 "started_at": self.started_at, "rounds": self.rounds,
+                 "last_round_at": self.last_round_at, "next_round_at": self.next_round_at,
+                 "results": [{"job": r.job, "started_at": r.started_at, "seconds": r.seconds,
+                              "exit_code": r.exit_code, "outcome": r.outcome} for r in self.results]}
+        if self.schedule is not None:
+            try:
+                shown["agent_schedule"] = self.schedule.public()
+            except Exception:       # noqa: BLE001 - /health must answer whatever the schedule's state
+                shown["agent_schedule"] = {"mode": "unknown", "next_at": None, "last": None}
+        return shown
 
 
 def _describe(problem: BaseException) -> str:
@@ -208,6 +220,26 @@ def _eastern(moment: str | None) -> str:
     except (TypeError, ValueError):
         return "unknown"
     return f"{local:%a %d %b}, {local.hour % 12 or 12}:{local:%M %p} ET"
+
+
+SCHEDULE_OUTCOMES = ("running", "submitted", "skipped", "halted", "failed", "missed")
+SCHEDULE_MODES = {"dry-run": "dry runs", "live": "live runs", "invalid": "off: a setting is wrong (see the log)"}
+
+
+def _schedule_facts(schedule: dict | None) -> str:
+    """The scheduled agent runs' boxes on /, or nothing when they're off (`agent_schedule` not in /health)."""
+    if not isinstance(schedule, dict):
+        return ""
+    mode = SCHEDULE_MODES.get(schedule.get("mode"), "unknown")
+    last = schedule.get("last") if isinstance(schedule.get("last"), dict) else None
+    if last is None:
+        done = "none yet"
+    else:
+        outcome = last.get("outcome") if last.get("outcome") in SCHEDULE_OUTCOMES else "unknown"
+        done = f"{outcome}, due {_eastern(last.get('due_at'))}"
+    return (f'\n    <div class="fact"><b>Scheduled agent run</b>{escape(mode)}; next '
+            f'{escape(_eastern(schedule.get("next_at")))}</div>'
+            f'\n    <div class="fact"><b>Last scheduled run</b>{escape(done)}</div>')
 
 
 def pages_ready() -> bool:
@@ -309,7 +341,7 @@ def home_page(public: dict, pages: bool = False) -> str:
   <section class="facts" aria-label="Sync rounds">
     <div class="fact"><b>Last round</b>{escape(_eastern(public.get("last_round_at")))}</div>
     <div class="fact"><b>Next round</b>{escape(_eastern(public.get("next_round_at")))}</div>
-    <div class="fact"><b>Rounds since start</b>{int(public.get("rounds") or 0)}</div>
+    <div class="fact"><b>Rounds since start</b>{int(public.get("rounds") or 0)}</div>{_schedule_facts(public.get("agent_schedule"))}
   </section>
   <section>
     <h2>Each job in the last round</h2>
@@ -542,9 +574,10 @@ def _stop(signum, frame):
 
 def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
          sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
-         reads=None, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> int:
-    """`reads` is the visit reader (`vending.visit_polls.Reader`). Left out, the real worker, started with
-    no `jobs`, builds its own from the settings; a test that passes `jobs` gets none, so it can't read the machine."""
+         reads=None, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), scheduler=None) -> int:
+    """`reads` is the visit reader (`vending.visit_polls.Reader`) and `scheduler` the scheduled agent runs
+    (`vending.agent_schedule.Scheduler`). Left out, the real worker, started with no `jobs`, builds each from
+    the settings; a test that passes `jobs` gets neither, so it can't read the machine or start the agent."""
     parser = argparse.ArgumentParser(prog="python -m vending.worker", description=__doc__.splitlines()[0])
     parser.add_argument("--once", action="store_true", help="one round, then exit with the worst exit code")
     parser.add_argument("--every", type=float, default=float(os.environ.get("SYNC_EVERY_MINUTES") or 60),
@@ -576,8 +609,14 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         from vending import visit_polls    # imported here: it needs the database driver, and the worker's other code doesn't
 
         reads = visit_polls.default_reader(log)
+    if scheduler is None and jobs is None and not args.once:
+        from vending import agent_schedule
+
+        scheduler = agent_schedule.default_scheduler(log)
+    # `Invalid` only reports a wrong setting on /health; it has no times to run.
+    ticks = scheduler if hasattr(scheduler, "tick") else None
     jobs = default_jobs() if jobs is None else jobs
-    state = State()
+    state = State(schedule=scheduler)
     running: dict[str, threading.Thread] = {}
     server = serve_health(state, args.port) if args.port and not args.once else None
     previous = None
@@ -603,10 +642,16 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
                 # Until the next round, take the visit reads when they are due. They are not jobs of the
                 # round: a read that fails is logged and never reaches `state`, so /health never shows it.
                 wake = due if reads is None else min(due, reads.next_due(now))
+                if ticks is not None:
+                    wake = min(wake, ticks.next_due(now))
                 sleep((wake - now).total_seconds())
                 if wake >= due:
                     break
-                reads.tick(clock())
+                if reads is not None:
+                    reads.tick(clock())
+                # A scheduled agent run starts in its own thread, so this returns in a moment.
+                if ticks is not None and ticks.next_due(now := clock()) <= now:
+                    ticks.tick(now)
                 now = clock()
     except (KeyboardInterrupt, Stopped):
         log("stopping")

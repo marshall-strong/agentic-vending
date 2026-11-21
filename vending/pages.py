@@ -129,6 +129,7 @@ TOTALS = {
 HIDE = {
     "action_log": db_explorer.Hide("outcome", "failed", ("detail", "result"), dashboard.HIDDEN),
     "agent_runs": db_explorer.Hide("status", "failed", ("detail",), dashboard.HIDDEN),
+    "agent_schedule": db_explorer.Hide("outcome", "failed", ("detail",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
     **TOTALS,
