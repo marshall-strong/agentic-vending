@@ -481,3 +481,27 @@ def test_unsplit_swap_sales_are_costed_exactly_none_with_the_estimate_beside_the
     assert "0 of 2 units costed exactly" in row and estimate in row, row
     total = pr.totals_row(get_pnl(conn, date(2026, 11, 1), date(2026, 11, 9)), [w])
     assert "0 of 2 units costed exactly" in total and estimate in total, total
+
+
+@pytest.mark.parametrize("start, end", [(date(2026, 12, 6), date(2026, 12, 11)),     # from a tax week's Sunday
+                                        (date(2026, 12, 12), date(2026, 12, 18))],   # from a display week's Saturday
+                         ids=["sunday-midnight", "saturday-midnight"])
+def test_weekly_rows_sum_to_the_totals_with_a_poll_at_a_week_boundary(conn, start, end):
+    # A poll at the start day's midnight sharp is in the window, in the totals and in its week's row alike.
+    from tests.conftest import store_poll
+    from tests.test_ledger import et
+
+    opened = et(2026, 11, 30, 13, 0)
+    open_ledger(conn, at=opened)
+    store_poll(conn, "open", opened.isoformat(), {"15": (135, 0)})
+    store_poll(conn, "sat", et(2026, 12, 5, 22, 0).isoformat(), {"15": (135, 2)})
+    store_poll(conn, "sun", et(2026, 12, 6, 0, 0).isoformat(), {"15": (135, 22)})       # $27.00 at Sunday 00:00
+    store_poll(conn, "sat2", et(2026, 12, 12, 0, 0).isoformat(), {"15": (135, 25)})     # $4.05 at Saturday 00:00
+    store_poll(conn, "mon", et(2026, 12, 14, 12, 0).isoformat(), {"15": (135, 26)})
+    report = pr.load(conn, start, end)
+    t = report.totals
+    assert t.revenue == {date(2026, 12, 6): "27.00", date(2026, 12, 12): "5.40"}[start]
+    assert ledger.money(sum(w.takings_cents for w in report.weeks)) == t.revenue
+    assert ledger.money(sum(w.tax_cents for w in report.weeks)) == t.tax_set_aside
+    assert sum(w.units_sold for w in report.weeks) == t.units_sold
+    assert report.weeks[0].week == pr._week_of(start)          # the rows start at the start day's week

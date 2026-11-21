@@ -704,31 +704,35 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime, polls_since: d
                cost.unattributed_stock_cents, cost.unattributed_stock_provisional)
 
 
-def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> list[WeekPnl]:
+def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime,
+                polls_since: datetime | None = None) -> list[WeekPnl]:
     """`pnl()` split into weeks: one row for every week the window touches, quiet weeks included.
 
     Each line is booked to the week of the moment it happened, read the same
-    way `pnl()` reads it, so each column of the weeks sums to `pnl()`'s figure.
+    way `pnl()` reads it, so each column of the weeks sums to `pnl()`'s figure
+    over the same `start`, `end` and `polls_since`. The weeks are those from
+    `start`'s week, the true start, whatever `polls_since` is.
     """
     tz = ZoneInfo(TIMEZONE)
+    since = start if polls_since is None else polls_since
 
     def week(moment: datetime) -> date:
         return week_of(moment.astimezone(tz))
 
-    sold = {w.week: w for w in takings(conn, start, end).by_week}
+    sold = {w.week: w for w in takings(conn, since, end).by_week}
     units: dict[date, int] = defaultdict(int)
-    for r in rises_between(_counter_rows(conn, "lifetime_units", end), start, end)[2]:
+    for r in rises_between(_counter_rows(conn, "lifetime_units", end), since, end)[2]:
         units[week(r.at)] += r.amount
     counted = stock.stock(conn, until=end)
     weeks_sales: dict[date, list[stock.SaleCost]] = defaultdict(list)
     for s in counted.sales:
-        if start < s.at <= end:
+        if since < s.at <= end:
             weeks_sales[week(s.at)].append(s)
     lost_units: dict[date, int] = defaultdict(int)
     lost_cost: dict[date, Fraction] = defaultdict(Fraction)
     lost_unknown: set[date] = set()
     for s in counted.shrinkage:
-        if start < s.at <= end:
+        if since < s.at <= end:
             lost_units[week(s.at)] += s.units
             if s.cost_cents is None:
                 lost_unknown.add(week(s.at))
