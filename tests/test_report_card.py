@@ -256,6 +256,55 @@ def test_replay_errors_are_not_quoted_and_one_week_s_failure_spares_the_rest(con
     assert SECRET not in dashboard.to_json(snap) and SECRET not in dashboard.render(snap)
 
 
+def receipt(conn, request_id, at, lines, *, status="fulfilled", off_cycle=False, paid="0"):
+    """A purchase request and its receipt lines: (slot, sku, units_loaded, paid, pulled, pulled_sku)."""
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status,"
+                 " total_paid, fulfilled_at) values (%s, %s, %s, '{}', %s, %s, %s)",
+                 (request_id, at - timedelta(days=1), off_cycle, status, Decimal(paid),
+                  at if status == "fulfilled" else None))
+    for n, (slot, sku, loaded, cost, pulled, pulled_sku) in enumerate(lines):
+        conn.execute(
+            "insert into purchase_lines (request_id, line_no, slot, source, asked, outcome, sku, store, packs_bought,"
+            " units_per_pack, units_bought, total_paid, unit_cost_paid, units_loaded, units_lost,"
+            " units_to_back_stock, units_from_back_stock, units_pulled, pulled_sku, slot_reassigned, resolved_at)"
+            " values (%s, %s, %s, 'purchase', '{}', 'primary', %s, 'Walmart', 1, %s, %s, %s, null, %s, 0, 0, 0,"
+            " %s, %s, false, %s)",
+            (request_id, n, slot, sku, loaded, loaded, Decimal(cost), loaded, pulled, pulled_sku, at))
+
+
+def two_slot_sales(conn, a, b):
+    """Slot `a` sells 2 in the opening week and 6 in week 1; slot `b` sells 1 in each, at $2.00."""
+    for name, at, (ua, ub) in (("w0-start", OPEN + timedelta(hours=2), (100, 50)),
+                               ("w0-end", SAT1 - timedelta(hours=1), (102, 51)),
+                               ("w1-start", SAT1 + timedelta(minutes=30), (102, 51)),
+                               ("w1-end", SAT2 - timedelta(hours=1), (108, 52)),
+                               ("w2", NOW - timedelta(hours=1), (109, 53))):
+        store_poll(conn, name, at.isoformat(), {a: (250, ua), b: (200, ub)})
+
+
+def test_a_fulfilled_product_swap_is_left_out_of_the_comparison(conn, page_conn, opened):
+    a, b = opened[0], opened[1]
+    product(conn, "OLD-CAN")
+    product(conn, "NEW-CAN")
+    product(conn, "KEPT-CAN")
+    # The first fill, after the opening: 4 of OLD-CAN in a, 10 of KEPT-CAN in b.
+    receipt(conn, "fill", OPEN + timedelta(hours=1), [(a, "OLD-CAN", 4, "2.00", 0, None),
+                                                      (b, "KEPT-CAN", 10, "10.00", 0, None)])
+    two_slot_sales(conn, a, b)
+    live_run(conn, datetime(2026, 12, 3, 20, tzinfo=UTC), plan=plan_for(opened, **{
+        a: {"product": "NEW-CAN", "fill_to": 8, "sale_price": "2.50", "reason": "swap it"}}))
+    # The Friday visit pulls the 2 OLD-CAN left and loads 8 NEW-CAN.
+    receipt(conn, "friday", SAT1 - timedelta(hours=3), [(a, "NEW-CAN", 8, "8.00", 2, "OLD-CAN")])
+    snap, by_week = cards(page_conn)
+    week = by_week["2026-12-05"]
+    cmp = week["comparison"]
+    # Slot a's sales this week are NEW-CAN's, which the baseline (keep OLD-CAN) never stocked.
+    assert cmp["slots"] == 1 and cmp["result"] == "tied" and cmp["excluded"]["swapped"] == [a]
+    assert week["grade"] == "tied"
+    assert any(f"Slot {a}" in n and "swapped" in n for n in week["notes"])
+    assert "ahead by" not in dashboard.render(snap)
+
+
 def test_without_polls_the_week_is_not_scored(conn, page_conn, opened):
     _, by_week = cards(page_conn)
     week = by_week["2026-12-05"]

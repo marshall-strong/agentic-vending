@@ -154,6 +154,17 @@ class _Reader:
         found = [r for r in self.runs if before <= r[1] < start]
         return found[-1] if found else None
 
+    def visit_loads(self, since: datetime, until: datetime) -> dict[str, tuple[datetime, str | None]]:
+        """Each slot's first load in [since, until), from the receipts: (just before it, the product loaded).
+        "Just before" is the door opening when the receipt has door times, since the pull comes then."""
+        out: dict[str, tuple[datetime, str | None]] = {}
+        for m in self.moves:
+            if m.kind in ("purchase", "load") and m.to_slot and m.slot and since <= m.at < until:
+                at = m.opened_at or m.at
+                if m.slot not in out or at < out[m.slot][0]:
+                    out[m.slot] = (at, m.sku)
+        return out
+
     def slots_at(self, moment: datetime) -> dict[str, stock.SlotCount]:
         return {s.slot: s for s in stock.replay(self.moves, moment, inclusive=False).slots}
 
@@ -194,7 +205,10 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
     elif this is None:
         card["notes"].append("This week's sales can't be read from the polls yet.")
     plan_made = run[1] if run else _start(week)
-    state = _state(reader, before, week, plan_made)
+    state, swapped = _state(reader, before, week, plan_made)
+    for slot in swapped:
+        card["notes"].append(f"Slot {slot}'s product was swapped at the visit: this week's sales are the new "
+                             "product's, so the slot is left out of the comparison with the baseline.")
     if run is None:
         card["grade"] = "no_plan"
         card["notes"].append("No live run submitted a plan last week, so nothing was restocked at the visit. "
@@ -222,7 +236,7 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         card["outcome"] = _outcome(scored)
         base = scoring.score(state, Baseline().decide(state), this)
         card["baseline"] = _outcome(base) if base.totals is not None else None
-        card["comparison"] = _compare(scored, base)
+        card["comparison"] = _compare(scored, base, swapped)
     if any(c["status"] == scoring.FAIL for c in card["checks"]):
         card["grade"] = "fail"
     elif card["grade"] != "no_plan" and card["comparison"] and card["comparison"]["result"]:
@@ -236,25 +250,36 @@ def _graded(card: dict) -> dict:
     return card
 
 
-def _state(reader: _Reader, before: WeekState, week: date, plan_made: datetime) -> WeekState:
-    """Last week's replayed state, with what the receipts know: product and unit cost at the start of
-    this week, units on the rail when the plan was made, and the catalog and balance then."""
-    loaded, planned = reader.slots_at(_start(week)), reader.slots_at(plan_made)
-    slots = []
+def _state(reader: _Reader, before: WeekState, week: date, plan_made: datetime) -> tuple[WeekState, tuple[str, ...]]:
+    """Last week's replayed state, with what the receipts know, and the slots the visit swapped.
+
+    Product and units are the slot's just before the visit, so a plan that changes the product is a
+    switch to the scorer. The unit cost is the slot's at the start of this week when the product is
+    the same (what is on the rail after the visit), else the old product's. A slot whose product
+    before the visit isn't on record takes the product the visit loaded. The catalog and balance are
+    read as they stood when the plan was made."""
+    start = _start(week)
+    loads = reader.visit_loads(plan_made, start)
+    visit_at = min((at for at, _sku in loads.values()), default=start)
+    after, pre_visit = reader.slots_at(start), reader.slots_at(visit_at)
+    slots, swapped = [], []
     for s in before.slots:
-        now, then = loaded.get(s.slot), planned.get(s.slot)
-        units = None
-        if now is not None and then is not None and then.product == now.product:
-            units = then.units
-        slots.append(replace(s, product=now.product if now else None,
-                             unit_cost_cents=now.unit_cost if now else None, stock=units))
+        now, then = after.get(s.slot), pre_visit.get(s.slot)
+        if then is None:
+            slots.append(replace(s, product=now.product if now else None,
+                                 unit_cost_cents=now.unit_cost if now else None, stock=None))
+            continue
+        if s.slot in loads and loads[s.slot][1] != then.product:
+            swapped.append(s.slot)
+        cost = now.unit_cost if now is not None and now.product == then.product else then.unit_cost
+        slots.append(replace(s, product=then.product, unit_cost_cents=cost, stock=then.units))
     # Before the opening there is no competition balance to check against.
     bal = ledger.balance(reader.conn, plan_made) if plan_made >= reader.opened else None
     spendable = None if bal is None else int(bal.spendable_cents // 1)
     rejected = frozenset(sku for sku, at in reader.rejected if at <= plan_made)
     notes = tuple(n for n in before.notes if not n.startswith(_REPLAY_UNKNOWN_NOTE))
     return replace(before, slots=tuple(slots), balance_cents=spendable, catalog=reader.catalog_at(plan_made),
-                   rejected=rejected, ceilings=reader.ceilings, notes=notes)
+                   rejected=rejected, ceilings=reader.ceilings, notes=notes), tuple(swapped)
 
 
 # A product the scorer may name: a catalog SKU's characters only, so plan text can't ride along.
@@ -382,15 +407,16 @@ def _outcome(scored: scoring.Score) -> dict:
     }
 
 
-def _compare(plan: scoring.Score, base: scoring.Score) -> dict | None:
-    """The plan's margin less the baseline's, on the slots both score. None when there's nothing to compare."""
+def _compare(plan: scoring.Score, base: scoring.Score, swapped: tuple[str, ...] = ()) -> dict | None:
+    """The plan's margin less the baseline's, on the slots both score, less any slot the visit swapped
+    (its sales are a product the baseline never stocked). None when there's nothing to compare."""
     if plan.totals is None or base.totals is None:
         return None
     mine = {o.slot: o for o in plan.slots if o.sold is not None}
     theirs = {o.slot: o for o in base.slots if o.sold is not None}
-    common = sorted(mine.keys() & theirs.keys())
+    common = sorted(mine.keys() & theirs.keys() - set(swapped))
     out: dict[str, Any] = {"slots": len(common), "plan_margin": None, "baseline_margin": None,
-                           "difference": None, "result": None}
+                           "difference": None, "result": None, "excluded": {"swapped": list(swapped)}}
     margins = [mine[s].margin_cents for s in common] + [theirs[s].margin_cents for s in common]
     if not common or None in margins:
         out["why"] = ("no slot is scored for both" if not common else
