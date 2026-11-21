@@ -337,6 +337,14 @@ def test_unresolved_submission_alert_both_ways(conn):
     assert "submission_unresolved" not in codes(briefing.build(conn, NOW))
 
 
+def test_an_unresolved_submission_says_orders_are_blocked_and_what_a_person_runs(conn):
+    conn.execute("insert into purchase_submissions(plan_hash,body,status) values ('hash',%s,'unknown')", (Jsonb(BODY),))
+    built = briefing.build(conn, NOW)
+    [alert] = [a for a in built.alerts if a.code == "submission_unresolved"]
+    assert "ORDERS BLOCKED" in alert.evidence and "vending.submissions check" in alert.evidence
+    assert "ORDERS BLOCKED" in briefing.render(built)
+
+
 def fill(conn, request_id, sent, loaded, off_cycle=False):
     purchase_requests.record(conn, request_id, sent, off_cycle, {**BODY, "off_cycle": off_cycle})
     response = fulfilled(request_id, receipt(resolved_at=loaded.isoformat()), fulfilled_at=loaded.isoformat())

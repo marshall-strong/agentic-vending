@@ -329,6 +329,7 @@ request that was filed would order twice. Then run one of:
 
 ```
 python -m vending.submissions list
+python -m vending.submissions check                                         # what the bridge can answer by itself
 python -m vending.submissions resolve 7 --request-id pr_abc123 --by kevin   # it was filed
 python -m vending.submissions resolve 7 --not-filed --by kevin              # it never was
 ```

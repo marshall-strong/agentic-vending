@@ -110,6 +110,19 @@ def test_a_fresh_database_shows_halted_and_empty_panels(page_conn):
     assert "No plan yet" in dashboard.render(snap)
 
 
+def test_an_open_submission_says_orders_are_blocked_and_what_to_run(conn, page_conn):
+    conn.execute("insert into purchase_submissions (at, plan_hash, body, status, detail) values"
+                 " (now() - interval '3 hours', 'h', '{}', 'unknown', 'TimeoutError: <raw bridge text>')")
+    snap = dashboard.snapshot(page_conn)
+    [blocked] = [a for a in snap["attention"] if "Orders are blocked" in a["text"]]
+    assert blocked["level"] == "bad" and "(unknown, 3 h ago)" in blocked["text"]
+    assert "python -m vending.submissions check" in blocked["text"] and "raw bridge text" not in blocked["text"]
+    page = dashboard.render(snap)
+    assert "Orders are blocked" in page and "<code>python -m vending.submissions check</code>" in page
+    conn.execute("update purchase_submissions set status = 'not_filed'")
+    assert not any("Orders are blocked" in a["text"] for a in dashboard.snapshot(page_conn)["attention"])
+
+
 def test_plan_compares_with_the_run_before(conn, page_conn, open_ledger):
     first = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, first, "skipped", plan=plan(

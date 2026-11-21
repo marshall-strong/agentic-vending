@@ -10,7 +10,10 @@ One run:
 2. It starts our MCP server (`python -m vending.server`, `VENDING_TOOLS=built`) over stdio and
    offers the model the tools the server lists. A dry run hides every write tool. A live run
    refuses to start while `submit_desired_state` isn't built, sends only the plan its last preview
-   accepted (with that preview's plan hash), and sends at most once.
+   accepted (with that preview's plan hash), and sends at most once. The one exception: a reply that
+   proves nothing was ordered (a refusal, the bridge's `4xx`, or a bridge it never reached) allows one
+   more submit, after a fresh preview. Before the model starts, a live run settles any submission
+   left open whose request the bridge can find by itself (`vending.submissions.check`).
 3. The system prompt is the rules card (`docs/agent/rules-card.md`, read once at the start; a run
    without it fails before any model request) followed by `SYSTEM`. Nothing in it changes between
    requests, so it is read from cache. The model gets the time, the week's rhythm and its own
@@ -122,14 +125,25 @@ class Outcome:
     answer: dict | None = None
     plan: dict | None = None            # the last plan that previewed ok, or the one submitted
     request_id: str | None = None       # set once a submit succeeded: the run is `submitted` from then on
-    submit_sent: bool = False           # a submit reached the server, whatever came back: never send another
+    submit_sent: bool = False           # a submit may have reached the bridge: never send another
+    submits: int = 0                    # submit calls sent to the server, at most MAX_SUBMITS
+    submit_refused: bool = False        # a submit came back proving nothing was ordered
+    needs_preview: bool = False         # ...and no preview has succeeded since, so a retry must wait
     unresolved: str | None = None       # a submit whose result is unknown: money may have been spent
     turn: int = 0                       # the model response being worked through
     plan_turn: int | None = None        # the response whose preview set `plan`: a submit must come later
     tool_calls: list[str] = field(default_factory=list)
 
 
-UNRESOLVED = ("SUBMISSION UNRESOLVED: the bridge may have accepted it. Check `python -m vending.submissions list` "
+# The first submit, and one retry after a reply that proves nothing was ordered.
+MAX_SUBMITS = 2
+# A submit reply's `status` when its record was settled as certainly not filed (`vending.tools.submit`).
+NOTHING_ORDERED = ("refused", "not_filed")
+RETRY_HINT = ("\n\nNothing was ordered, so this run may submit once more: preview again, read it, then submit "
+              "the plan it accepts.")
+NO_RETRY_HINT = "\n\nNothing was ordered. This run has used its one retry, so it can't submit again."
+
+UNRESOLVED = ("SUBMISSION UNRESOLVED: the bridge may have accepted it. Run `python -m vending.submissions check` "
               "before anyone submits again. ")
 
 
@@ -352,7 +366,7 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
         decision, reason = out.answer.get("decision"), out.answer.get("reason", "")
         if out.request_id is not None:
             out.status, out.detail = "submitted", reason
-        elif out.submit_sent:
+        elif out.submit_sent or out.submit_refused:
             out.status = "failed"       # the detail already says why
         elif decision == "submit" and live:
             out.status, out.detail = "failed", "It said submit but never called submit_desired_state."
@@ -377,6 +391,11 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
     if name == SUBMIT:
         if out.submit_sent:
             return "Not sent: you already submitted once this run.", True
+        if out.submits >= MAX_SUBMITS:
+            return "Not sent: this run has used its one retry after a refused submit.", True
+        if out.needs_preview:
+            return ("Not sent: your last submit was refused. Preview again, then submit the plan it accepts "
+                    "in a later turn."), True
         previewed = {k: v for k, v in (out.plan or {}).items() if k != "plan_hash"}
         if out.plan is None or not _same_plan(arguments.get("desired"), previewed):
             return ("Not sent: submit exactly the plan your last preview_desired_state accepted "
@@ -386,7 +405,8 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
                     "then submit in your next turn."), True
         if "expected_plan_hash" in (schemas[name].get("properties") or {}):
             arguments["expected_plan_hash"] = out.plan["plan_hash"]   # refused by the server if anything moved
-        out.submit_sent = True                    # set before sending: whatever happens next, never send again
+        out.submit_sent = True                    # set before sending: cleared only by a reply proving nothing was ordered
+        out.submits += 1
         try:
             result = await call_tool(name, arguments)
         except BaseException as error:            # the server died or we were stopped mid-send: it may have gone
@@ -400,6 +420,7 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
         if reply and reply.get("ok") and not failed and isinstance(arguments.get("desired"), dict):
             out.plan = {**arguments["desired"], "plan_hash": reply.get("plan_hash")}
             out.plan_turn = out.turn
+            out.needs_preview = False
     if name == SUBMIT:
         reply = reply or {}
         if not failed and reply.get("request_id"):
@@ -411,6 +432,10 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
             out.detail = UNRESOLVED + out.unresolved
         elif failed:
             out.detail = f"submit_desired_state was refused, nothing was bought: {text[:300]}"
+            if reply.get("refusals") or reply.get("status") in NOTHING_ORDERED:
+                # Refused before sending, or settled as certainly not filed: one more try, after a new preview.
+                out.submit_sent, out.submit_refused, out.needs_preview = False, True, True
+                text += RETRY_HINT if out.submits < MAX_SUBMITS else NO_RETRY_HINT
         else:
             out.unresolved = text[:500]
             out.detail = UNRESOLVED + "It reported success with no request id: " + out.unresolved
@@ -421,6 +446,29 @@ def server_env() -> dict[str, str]:
     """The server's environment: ours without any model key, which it never needs."""
     env = {k: v for k, v in os.environ.items() if k.upper() not in MODEL_KEY_VARS}
     return {**env, "VENDING_TOOLS": "built"}
+
+
+def check_submissions(connect: Callable[[], psycopg.Connection], bridge: Callable[[], Any] | None,
+                      record_step: Callable[..., None]) -> None:
+    """Before a live run's model loop: settle what the bridge can answer for (`submissions.check`).
+
+    It never sends anything, and when in doubt a row stays open, so the submit tool still refuses
+    `submission_unresolved`. A run with something to report records it as its first step.
+    """
+    from vending import submissions
+    from vending.bridge import Bridge
+    from vending.halt import WAIT_NOTICE_MS
+
+    try:
+        with connect() as conn:
+            checked = submissions.check(conn, bridge or Bridge, lock_timeout_ms=WAIT_NOTICE_MS)
+        if not checked:
+            return
+        metadata: dict[str, Any] = {"source": "startup", "submissions": [vars(c) for c in checked]}
+        failed = any(c.status in submissions.OPEN for c in checked)
+    except Exception as error:     # the rows stay as they were; the submit tool still guards them
+        metadata, failed = {"source": "startup", "error": f"{type(error).__name__}: {error}"[:500]}, True
+    record_step(1, "tool_result", json.dumps(metadata, sort_keys=True), tool="check_submissions", is_error=failed)
 
 
 def _record_submit(connect: Callable[[], psycopg.Connection], run_id: int, out: Outcome) -> None:
@@ -442,8 +490,12 @@ def _settle(out: Outcome) -> None:
 async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT,
               connect: Callable[[], psycopg.Connection] = db.connect, client: Any = None,
               now: Callable[[], datetime] | None = None, open_tools: Callable | None = None,
-              max_turns: int = MAX_TURNS, rules_card: Path | None = None) -> tuple[int, Outcome]:
-    """One weekly run, recorded in `agent_runs`. Returns (run id, outcome)."""
+              max_turns: int = MAX_TURNS, rules_card: Path | None = None,
+              bridge: Callable[[], Any] | None = None) -> tuple[int, Outcome]:
+    """One weekly run, recorded in `agent_runs`. Returns (run id, outcome).
+
+    `bridge` builds the client a live run's submission check reads with (`vending.bridge.Bridge` by default).
+    """
     now = now or (lambda: datetime.now(timezone.utc))
     with connect() as conn:
         run_id = agent_runs.start(conn, mode="live" if live else "dry-run", model=model)
@@ -476,6 +528,8 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
             client = model_client()
         # Only a live run spends the competition's money; a dry run is test spend, under the test cap.
         harness = Harness(client, connect, purpose="live" if live else "test", by="agent")
+        if live:
+            await anyio.to_thread.run_sync(lambda: check_submissions(connect, bridge, record_step))
         async with (open_tools or _open_server)() as (listed, call_tool):
             if live and SUBMIT not in {t.name for t in listed}:
                 out.detail = "submit_desired_state isn't built on this server, so a live run can't submit. Use a dry run."

@@ -671,3 +671,161 @@ def test_different_startup_snapshots_leave_system_prompt_byte_identical(connect,
         clients.append(client)
     assert clients[0].sent[0]["system"].encode("utf-8") == clients[1].sent[0]["system"].encode("utf-8") == original
     assert clients[0].sent[0]["messages"][0] != clients[1].sent[0]["messages"][0]
+
+
+# --- One retry after a submit that ordered nothing (#217) ------------------------------
+
+CHANGED = {"success": False, "message": "Refused: plan_changed", "plan_hash": "abc",
+           "refusals": [{"code": "plan_changed", "message": "the plan now hashes to def"}]}
+PREVIEWED_AGAIN = {**PREVIEWED, "plan_hash": "def"}
+SUBMIT_SCHEMA = {"type": "object", "properties": {"desired": {}, "expected_plan_hash": {}}}
+
+
+class InTurn(Tools):
+    """Answers each tool from its own list, one reply per call; the last reply repeats."""
+
+    async def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        queue = self.replies.get(name, [{"success": True, "message": "ok"}])
+        reply = queue.pop(0) if len(queue) > 1 else queue[0]
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(reply))],
+                               structuredContent=reply, isError=False)
+
+
+def live_tools(previews, submits):
+    return InTurn(LIVE_TOOLS, replies={"preview_desired_state": list(previews), "submit_desired_state": list(submits)},
+                  schemas={"submit_desired_state": SUBMIT_SCHEMA})
+
+
+def sent_submits(tools):
+    return [args for name, args in tools.calls if name == "submit_desired_state"]
+
+
+def last_result(client, request, index=0):
+    """The text of a tool result sent back to the model in `request` (0-based)."""
+    return client.sent[request]["messages"][-1]["content"][index]["content"]
+
+
+def test_a_plan_changed_refusal_allows_one_retry_after_a_new_preview(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    answer("submit", reason="restock 15"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [CHANGED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    # Each submit carries the hash of the preview just before it.
+    assert sent_submits(tools) == [{"desired": PLAN, "expected_plan_hash": "abc"},
+                                   {"desired": PLAN, "expected_plan_hash": "def"}]
+    assert "may submit once more" in last_result(client, 2)
+    assert stored(conn, run_id)[1] == "submitted" and stored(conn, run_id)[-1] == "req_9"
+
+
+def test_a_second_refusal_ends_the_retries(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    preview(id="p3"), tool_turn(submit(id="s3")), answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN, PREVIEWED_AGAIN], [CHANGED])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 2
+    assert "used its one retry" in last_result(client, 4)
+    assert "used its one retry" in last_result(client, 6)
+    assert out.status == "failed" and "nothing was bought" in out.detail
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_retry_waits_for_a_new_preview_in_an_earlier_turn(connect, conn):
+    client = Script(preview(), tool_turn(submit()), tool_turn(submit(id="s2")),
+                    tool_turn(use("preview_desired_state", {"desired": PLAN}, id="p2"), submit(id="s3")),
+                    answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [CHANGED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 1
+    assert "Preview again" in last_result(client, 3)
+    assert "read the preview's cost" in last_result(client, 4, 1)
+    assert out.status == "failed"
+
+
+@pytest.mark.parametrize("status", ["refused", "not_filed"])
+def test_a_reply_that_says_nothing_was_ordered_allows_the_retry_too(connect, conn, status):
+    nothing = {"success": False, "status": status, "message": "nothing was ordered", "plan_hash": "abc"}
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [nothing, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 2 and out.status == "submitted"
+
+
+@pytest.mark.parametrize("first", [
+    {"success": False, "status": "unknown", "message": "the bridge answered 502"},
+    {"success": False, "message": "Can't submit yet: no catalog"},
+    {"success": True, "message": "sent, but no id"},
+    SENT,
+])
+def test_no_reply_that_may_have_ordered_allows_another_send(connect, conn, first):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("skip"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [first, SENT])
+    go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 1
+    assert "already submitted" in last_result(client, 4)
+
+
+# --- Open submissions settled before the model starts (#217) ---------------------------
+
+class Lookup:
+    """A fake bridge that answers only `purchase_request`, from `known`; any other ID is a 404."""
+
+    def __init__(self, known):
+        self.known, self.asked = known, []
+
+    def __call__(self):
+        return self
+
+    def purchase_request(self, request_id):
+        from vending.bridge import BridgeNotFound
+
+        self.asked.append(request_id)
+        found = self.known.get(request_id, BridgeNotFound(f"404 Not Found from /{request_id}"))
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+
+def open_row(conn, *, response=None):
+    """A submission left `unknown` two hours ago, holding `response` if given."""
+    from psycopg.types.json import Jsonb
+
+    return conn.execute(
+        "insert into purchase_submissions (at, plan_hash, body, status, response) values"
+        " (now() - interval '2 hours', 'h', %s, 'unknown', %s) returning id",
+        (Jsonb({"lines": [], "off_cycle": False}), None if response is None else Jsonb(response))).fetchone()[0]
+
+
+def check_steps(conn, run_id):
+    return conn.execute("select content, is_error from agent_steps where run_id = %s and tool = 'check_submissions'",
+                        (run_id,)).fetchall()
+
+
+def test_a_live_run_settles_a_lost_reply_the_bridge_accepted(connect, conn):
+    row = open_row(conn, response={"id": "pr-lost"})
+    bridge = Lookup({"pr-lost": {"id": "pr-lost", "status": "pending"}})
+    run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert conn.execute("select status, request_id, resolved_by from purchase_submissions where id = %s",
+                        (row,)).fetchone() == ("accepted", "pr-lost", "auto-check")
+    [(content, is_error)] = check_steps(conn, run_id)
+    assert not is_error and json.loads(content)["submissions"][0]["status"] == "accepted"
+    # Settled once: the next run has nothing to check, and the request is recorded once.
+    run_id, _ = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert check_steps(conn, run_id) == [] and bridge.asked == ["pr-lost"]
+    assert conn.execute("select count(*) from purchase_requests where request_id = 'pr-lost'").fetchone() == (1,)
+
+
+def test_a_live_run_leaves_a_lost_reply_it_cant_tell_open(connect, conn):
+    row = open_row(conn)     # a timeout: no request ID to look up
+    bridge = Lookup({})
+    run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert conn.execute("select status from purchase_submissions where id = %s", (row,)).fetchone() == ("unknown",)
+    [(content, is_error)] = check_steps(conn, run_id)
+    assert is_error and "holds no request ID" in content and bridge.asked == []
+
+
+def test_a_dry_run_never_checks_the_bridge(connect, conn):
+    open_row(conn, response={"id": "pr-lost"})
+    bridge = Lookup({"pr-lost": {"id": "pr-lost"}})
+    go(connect, Script(answer("skip")), Tools(), bridge=bridge)
+    assert bridge.asked == []
