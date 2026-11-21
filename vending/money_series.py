@@ -11,7 +11,7 @@ balance, the sales tax still owed in it, inventory at cost, and net worth (the
 balance less that tax, plus inventory at cost). Each day also lists its events
 (visits, receipt lines, model calls, observed price changes) for a chart to
 mark, and notes for whatever it couldn't count. `by_week` adds the days up into
-the ledger's Saturday-to-Friday weeks. This is the data under the money chart,
+the ledger's Saturday-to-Friday display weeks. This is the data under the money chart,
 the weekly report and the agent's briefing. It reads; it decides nothing.
 
 It is competition money only. Counting starts at the ledger's opening entry,
@@ -35,11 +35,14 @@ opening, or from one microsecond before the first midnight when the window
 starts later (so a poll at midnight sharp counts), to the last day's end. An
 entry stamped in that first microsecond belongs to the day before and is left
 out. Each day's cash balance is `ledger.balance` at the day's end. Tax needs
-care: the ledger rounds the tax inside each week's takings, not each sale's,
-so a day's tax is what the day added to its week's rounded tax. A week cut by
-the window is rounded on its days inside it, as `ledger.pnl` does, so a window
-that starts midweek can put a cent of tax on a different day than one that
-starts at the opening.
+care: the ledger rounds the tax inside each tax week's takings, not each
+sale's, so a day's tax is what the day added to its tax week's rounded tax. Tax
+weeks run Sunday to Saturday, as David calculates the tax (David, 20 Nov;
+`ledger.tax_week_of`), and a day is always inside one. A tax week cut by the
+window is rounded on its days inside it, as `ledger.pnl` does, so a window that
+starts midweek can put a cent of tax on a different day than one that starts at
+the opening. The display weeks (`by_week`, Saturday to Friday) add up their
+days' tax, so they carry their share of the tax weeks' rounding.
 
 Cost of sales is `ledger.summarize_sales`: exact costs only. Units sold across
 a product change the counters can't split have no exact cost; their estimate
@@ -224,7 +227,7 @@ class Day(_Lines):
     counted_from: datetime | None   # midnight, or the opening on the opening day; None when not counted
     ended: bool                     # the day was over when the series was read
     takings_cents: int              # tax included, from the polls' counters
-    sales_tax_cents: int            # what the day added to its week's rounded set-aside
+    sales_tax_cents: int            # what the day added to its tax week's rounded set-aside
     units_sold: int                 # every rise in our slots' unit counters
     units_costed: int               # of those, the units whose cost the receipts know
     cost_of_sales_cents: Fraction   # of the costed units
@@ -368,7 +371,7 @@ class _Book:
         # (`ledger.opening_rises`), including those before a later window start.
         rises = ledger.opening_rises(sales_rows, opened.at, until)[2]
         self.cash += [(r.at, Fraction(r.amount)) for r in rises]
-        # The tax still owed at a moment counts from the opening too, rounded per week as the balance does.
+        # The tax still owed at a moment counts from the opening too, rounded per tax week as the balance does.
         self.open_rises = sorted((r.at, r.amount) for r in rises)
         self.remitted: list[tuple[datetime, Fraction]] = []
         self.poll_days = {_day(at) for at, _, _ in sales_rows}
@@ -462,7 +465,7 @@ class _Book:
         for at, cents in self.open_rises:
             if at > moment:
                 break
-            weeks[ledger.week_of(at.astimezone(EASTERN))] += cents
+            weeks[ledger.tax_week_of(at.astimezone(EASTERN))] += cents
         set_aside = sum(tax_cents(c, DEFAULT_TAX_PERCENT) for c in weeks.values())
         return set_aside - sum((c for at, c in self.remitted if at <= moment), Fraction(0))
 
@@ -488,11 +491,11 @@ class _Book:
             last[slot] = price
 
     def day(self, d: date, week_takings: dict[date, int], now: datetime) -> Day:
-        """Day `d`, which must be counted. `week_takings` runs each week's takings so far, for its tax."""
+        """Day `d`, which must be counted. `week_takings` runs each tax week's takings so far, for its tax."""
         start = max(_midnight(d), self.first)
         finish = _midnight(d + timedelta(days=1)) - MICROSECOND
         ended = finish < now
-        week = ledger.week_of(datetime.combine(d, time.min))
+        week = ledger.tax_week_of(datetime.combine(d, time.min))
         before = week_takings[week]
         week_takings[week] += self.takings[d]
         tax = tax_cents(week_takings[week], DEFAULT_TAX_PERCENT) - tax_cents(before, DEFAULT_TAX_PERCENT)

@@ -191,7 +191,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   opening capital + later capital + takings - receipts - midweek visit fees - token spend - tax
   remitted, plus or minus adjustments. Each part is its own field (`opening`, `capital`,
   `revenue`, `receipts`, `visit_fees` and `visits`, `token_spend`, `tax_remitted`,
-  `adjustments`). Also `tax_set_aside`, `tax_owed` (set aside less remitted) and `spendable`
+  `adjustments`). Also `tax_set_aside` (takings x 8/108, rounded half up per tax week, Sunday to
+  Saturday Eastern, the week in progress on its takings so far), `tax_owed` (set aside less
+  remitted) and `spendable`
   (balance less tax owed), which is the figure the planner's spend check uses. Plus `as_of`,
   `opening_at` and `notes`.
 - **Preconditions**: a person has opened the ledger with
@@ -218,7 +220,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   a sale), `visit_fees`, `visits`, `token_spend`, `adjustments`, `net`; also `purchases`,
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
   (`inventory_machine`, `inventory_closet`, `inventory`, `inventory_complete`); per-week revenue
-  in `weeks`; and `notes`.
+  in `weeks` (Saturday to Friday, each with its share of the tax); `tax_weeks`, each Sunday to
+  Saturday tax week's revenue and tax as David calculates it (the week's start, `ends` at Saturday
+  23:59:59.999999 Eastern); and `notes`.
 - **Preconditions**: the ledger is open, unless `start` is given (`end` then defaults to today).
 - **Side effects**: one `action_log` row.
 - **Cost**: database queries only.

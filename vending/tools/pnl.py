@@ -7,6 +7,9 @@ have loaded; `units_sold` counts every sale from our 20 slots and the reply
 says how many of them could not be costed. Shrinkage is the cost of units
 lost without a sale. Visit fees, token spend and adjustments come from the
 ledger; capital and tax remittances are shown but are not profit or loss.
+The sales tax is rounded per tax week, Sunday to Saturday Eastern, as David
+calculates it (`tax_weeks`); `weeks` are Saturday to Friday, each with its
+share of that tax.
 While any cost is missing (`cost_of_sales_complete` or `shrinkage_complete`
 false), `gross_margin` and `net` are over the known costs only, and the
 summary says "net at known costs (incomplete...)", never plain "net". Units
@@ -63,7 +66,8 @@ class Pnl(Reply):
     inventory_closet: str | None = None
     inventory: str | None = None
     inventory_complete: bool | None = None
-    weeks: list[dict] = []
+    weeks: list[dict] = []          # display weeks, Saturday to Friday; tax is each week's share
+    tax_weeks: list[dict] = []      # tax weeks, Sunday to Saturday, as David calculates the tax
     notes: list[str] = []
 
 
@@ -132,5 +136,8 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         inventory_complete=p.inventory_complete,
         weeks=[{"week": w.week.isoformat(), "revenue": ledger.money(w.takings_cents),
                 "tax_set_aside": ledger.money(w.tax_cents)} for w in p.takings.by_week],
+        tax_weeks=[{"week": w.week.isoformat(), "ends": ledger.tax_week_end(w.week).isoformat(),
+                    "revenue": ledger.money(w.takings_cents), "tax": ledger.money(w.tax_cents)}
+                   for w in p.takings.by_tax_week],
         notes=list(p.notes),
     )

@@ -3,8 +3,10 @@
     python -m vending.pnl_report              # http://127.0.0.1:8767
     python -m vending.pnl_report --port 9000
 
-One row per week, Saturday to Friday in Eastern time, the ledger's week (the
-team's 19 Oct decision; the sales tax is rounded per week). The simple view
+One row per week, Saturday to Friday in Eastern time, the ledger's display
+week, after the Friday visit. The sales tax is rounded per tax week, Sunday to
+Saturday, as David calculates it (David, 20 Nov), so a row's tax is its share
+of the tax weeks' rounded tax (`vending.ledger`). The simple view
 (the default) shows units sold, revenue without tax, cost of sales, midweek visit
 fees, token spend, profit and the running total of profit; `?view=detailed` adds
 takings with tax, the sales tax set aside, shrinkage and adjustments. Above the

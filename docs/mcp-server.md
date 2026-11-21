@@ -200,8 +200,9 @@ receipt has door times, else by each line's `resolved_at`: the same clock as the
 delivered (`docs/cutover.md`). Every fulfilled off-cycle request costs the midweek visit fee
 stored on it when it was submitted (`purchase_requests.visit_fee_cents`), or `config`
 `midweek_fee_cents` ($25.00 by default) for requests without one, so a later change to the config
-fee never rewrites past visits. The sales tax inside the takings (takings x 8/108, per week,
-rounded half up) is set aside; what is still **owed** is the set-aside less what has been
+fee never rewrites past visits. The sales tax inside the takings (takings x 8/108, per tax week,
+Sunday 00:00 to Saturday 23:59:59 Eastern as David calculates it, rounded half up; the week in
+progress on its takings so far) is set aside; what is still **owed** is the set-aside less what has been
 remitted, and the **spendable** balance is the balance minus that. It is what the planner's
 balance gate checks against. Only what no other table records lives in `ledger_entries`
 (migration 007): the one opening entry, later capital, each model call's cost, tax remittances
