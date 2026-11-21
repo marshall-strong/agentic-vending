@@ -6,8 +6,10 @@
     /dashboard/money         the money chart: competition money by day (`vending.money_chart`)
     /dashboard/pnl           the weekly P&L (`vending.pnl_report`)
     /dashboard/spend         development spend by week (`vending.dev_spend`)
+    /dashboard/products      every product we can order, our sourcing, the day-one plan, back stock (`vending.products_page`)
     /dashboard/demo/money    the money chart with its made-up MOCK data, under a DEMO banner; no database
     /dashboard/demo/spend    dev spend from the team's run notes, under a DEMO banner; no database
+    /dashboard/demo/products the Products page from made-up data, under a DEMO banner; no database
     /db                      the DB explorer (`vending.db_explorer`)
 
     python -m vending.pages check                            # is the pages' login really read-only?
@@ -74,16 +76,18 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from vending import dashboard, db, db_explorer, demo, dev_spend, ledger, money_chart, pnl_report, settings
+from vending import (dashboard, db, db_explorer, demo, dev_spend, ledger, money_chart, pnl_report, products_page,
+                     settings)
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 
 READER = "READONLY_DATABASE_URL"
 DASHBOARD, STATE, EXPLORER = "/dashboard", "/dashboard/state.json", "/db"
 MONEY_CHART, PNL, SPEND = "/dashboard/money", "/dashboard/pnl", "/dashboard/spend"
-# Where the dashboard links to each chart (`dashboard.render`'s `charts`).
-CHARTS = {"money": MONEY_CHART, "pnl": PNL, "spend": SPEND}
+PRODUCTS = products_page.ROUTE
+# Where the dashboard links to each chart and to the Products page (`dashboard.render`'s `charts`).
+CHARTS = {"money": MONEY_CHART, "pnl": PNL, "spend": SPEND, "products": PRODUCTS}
 TITLES = {DASHBOARD: "Agent dashboard", STATE: "Agent dashboard", EXPLORER: "DB explorer",
-          MONEY_CHART: "Money chart", PNL: "Weekly P&L", SPEND: "Development spend"}
+          MONEY_CHART: "Money chart", PNL: "Weekly P&L", SPEND: "Development spend", PRODUCTS: products_page.TITLE}
 MAX_CONNECTIONS = 2
 # Seconds a request waits for one of those connections before it is told the page is busy.
 WAIT_SECONDS = 5
@@ -114,6 +118,8 @@ CSP_DASHBOARD = CSP + "; script-src 'unsafe-inline'; connect-src 'self'"
 # none, and its one form sends a GET back to itself.
 _LOCKED = "base-uri 'none'; frame-ancestors 'none'"
 CSP_PNL = f"{CSP}; form-action 'self'; {_LOCKED}"
+# The Products page runs no script and has no form.
+CSP_PRODUCTS = f"{CSP}; form-action 'none'; {_LOCKED}"
 
 # What every explorer leaves out, however it is run (here at /db, or `python -m vending.db_explorer`).
 # VA1, the machine-wide lifetime totals: usable only from polls taken before the fall cut
@@ -541,6 +547,8 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
     if path in DEMO_LIVE:
         # The charts' made-up versions, from files in the image: before every database check too.
         return _demo_reply(path)
+    if path == products_page.DEMO_ROUTE:
+        return _products_demo()
     if path not in TITLES:
         return None
     request = query = None
@@ -578,12 +586,17 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
                     found = money_data(conn) if path == MONEY_CHART else pnl_data(conn, query)
             elif path == SPEND:
                 found = spend_data(conn)
+            elif path == PRODUCTS:
+                products = products_page.read(conn, public=True)
             else:
                 snap = dashboard.snapshot(conn, public=True, syncs=syncs)
         if path in (MONEY_CHART, PNL, SPEND):
             reply = _chart_reply(path, found)
             _keep(key, reply)
             return reply
+        if path == PRODUCTS:
+            # Drawn after the connection is back, and inside this handler so a failure answers BROKEN.
+            return Reply(200, HTML, products_page.html(products, nav=PRODUCTS_NAV), CSP_PRODUCTS)
     except SlotsNotRecorded:
         return _problem(path, 503, NO_SLOTS)
     except Busy:
@@ -603,9 +616,22 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
         return Reply(200, JSON, dashboard.to_json(snap))
     picked = parse_qs(urlsplit(target).query).get("sel", [None])[0]    # checked against our slots by render
     page = dashboard.render(snap, json_href=STATE, charts=CHARTS,
-                            nav=(("Home", "/"), ("Database", EXPLORER), ("Weekly P&L", PNL), ("Dev spend", SPEND),
-                                 ("Demo copy", demo.DEMO)), picked=picked)
+                            nav=(("Home", "/"), ("Products", PRODUCTS), ("Database", EXPLORER), ("Weekly P&L", PNL),
+                                 ("Dev spend", SPEND), ("Demo copy", demo.DEMO)), picked=picked)
     return Reply(200, HTML, page, CSP_DASHBOARD)
+
+
+# Links above the Products page.
+PRODUCTS_NAV = (("Agent dashboard", DASHBOARD), ("Database", EXPLORER), ("Demo copy", products_page.DEMO_ROUTE))
+
+
+def _products_demo() -> Reply:
+    """The Products page from its made-up data. Opens no connection. Never raises, and puts no error text in a reply."""
+    try:
+        return Reply(200, HTML, products_page.demo_page(), CSP_PRODUCTS)
+    except Exception as error:  # noqa: BLE001 - a page answers, whatever happened
+        _log(type(error).__name__, f"{products_page.DEMO_ROUTE}: {type(error).__name__}: {error}")
+        return Reply(500, HTML, _notice("Demo", BROKEN))
 
 
 def _demo(path: str) -> Reply:
