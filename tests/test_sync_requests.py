@@ -3,6 +3,7 @@ shaped like the bridge's `PurchaseRequestPending` and `PurchaseRequestDetail`.
 Skipped like `test_sync_history` when there is no database."""
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from fractions import Fraction
 
 import pytest
@@ -242,10 +243,38 @@ def test_a_late_pending_answer_does_not_overwrite_a_final_one(conn, final):
         store(conn, "nope", pending("nope"), NOW)
 
 
+def test_an_older_answer_does_not_replace_a_newer_receipt(conn):
+    """A slow read can arrive after the bridge corrected the receipt. Its older `updated_at` gives it away."""
+    submit(conn, "r1")
+    store(conn, "r1", fulfilled("r1", receipt(total_paid="12.99"), updated_at="2026-11-08T10:00:00Z"), NOW)
+    stale = store(conn, "r1", fulfilled("r1", receipt(total_paid="12.37")), NOW + timedelta(minutes=5))
+    assert stale.status == "fulfilled" and stale.new_losses == 0
+    assert stale.warnings == ("r1: the bridge's answer last changed 2026-11-07T16:30:00+00:00, older than the one "
+                              "stored (2026-11-08T10:00:00+00:00); kept the stored receipt",)
+    assert conn.execute("select total_paid from purchase_lines").fetchone() == (Decimal("12.99"),)
+    assert conn.execute("select updated_at, last_response->'lines'->0->'receipt'->>'total_paid'"
+                        " from purchase_requests").fetchone() == (datetime(2026, 11, 8, 10, tzinfo=timezone.utc), "12.99")
+    # The same revision read again, or a newer one, is still stored.
+    assert store(conn, "r1", fulfilled("r1", receipt(total_paid="12.98"), updated_at="2026-11-08T10:00:00Z"),
+                 NOW).warnings == ()
+    assert conn.execute("select total_paid from purchase_lines").fetchone() == (Decimal("12.98"),)
+
+
 def test_a_float_amount_is_refused(conn):
     submit(conn, "r1")
     with pytest.raises(ValueError):
         store(conn, "r1", fulfilled("r1", receipt(total_paid=12.37)), NOW)
+
+
+def test_an_amount_too_large_to_store_is_refused_and_the_sync_goes_on(conn):
+    """Postgres can't hold 1e999999 as numeric. That must be a bad answer, not an error that stops the sync."""
+    submit(conn, "r1", days_ago=3)
+    submit(conn, "r2")
+    said = []
+    report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(total_paid="1e999999")),
+                                    "r2": fulfilled("r2", receipt())}), NOW, log=said.append)
+    assert (report.failed, report.fulfilled) == (1, 1)
+    assert any(line.startswith("r1: ") and "not an amount" in line for line in said), said
 
 
 def test_main_refuses_a_schema_missing_migrations(database_url, monkeypatch, capsys):

@@ -1,13 +1,15 @@
 """Sourcing prices refreshed from purchase receipts (#202, `vending.receipt_prices`). Synthetic receipts shaped
 like the bridge's, stored through `vending.purchase_requests.store`, on a throwaway schema."""
 
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 pytest.importorskip("psycopg")
 
-from tests.conftest import conn  # noqa: E402,F401 - migrated schema with a server assignment
+from tests.conftest import conn, open_in  # noqa: E402,F401 - migrated schema with a server assignment
 from tests.test_sync_requests import FakeBridge, fulfilled, receipt, submit  # noqa: E402
 from vending import receipt_prices, sourcing  # noqa: E402
 from vending.purchase_requests import store  # noqa: E402
@@ -201,4 +203,159 @@ def test_nobody_can_sign_a_hand_price_as_a_receipt():
     fields = {"sku": "COKE20", "store": "Costco", "units_per_pack": "12", "price": "11.49"}
     with pytest.raises(sourcing.SourcingError, match="kept for prices taken from receipts"):
         sourcing._from_fields(fields, "Receipt", NOW)
+
+
+def blocked(other, pid, timeout=10.0):
+    """Wait until backend `pid` waits on a lock. `other` is a second connection."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if other.execute("select cardinality(pg_blocking_pids(%s)) > 0", (pid,)).fetchone()[0]:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@pytest.mark.parametrize("hand", [{"store": "Walmart", "most": 1200}, {"most": 1200}],
+                         ids=["store switched", "cap lowered"])
+def test_a_hand_change_made_while_a_receipt_is_applied_is_kept(coke, schema_url, hand):
+    """Review finding 1: a person changes the row while the refresh runs. The refresh must not put back the
+    old store or cap. The hand change is dated before the receipt, so only the row's identity and cap guard it."""
+    table_row(coke, NOW - timedelta(days=9))
+    fill(coke)
+    errors: list[BaseException] = []
+
+    def refresh():
+        try:
+            receipt_prices.apply(coke, "r1", NOW)
+        except BaseException as error:  # noqa: BLE001 - reported below
+            errors.append(error)
+
+    worker = threading.Thread(target=refresh)
+    with open_in(*schema_url) as other:
+        with other.transaction():
+            table_row(other, NOW - timedelta(days=8), note="hand change", **hand)
+            worker.start()
+            waited = blocked(other, coke.info.backend_pid)
+        worker.join(30)
+    assert waited, "the refresh never waited on the row the person was changing"
+    assert not worker.is_alive() and errors == []
+    o = row(coke)
+    assert (o.store, o.max_cents, o.expected_cents, o.note) == (hand.get("store", "Costco"), 1200, 1149, "hand change")
+
+
+def test_a_late_older_answer_does_not_undo_a_corrected_price(coke):
+    """Review finding 2: a corrected $12.99 receipt, then a delayed $12.37 answer with an older updated_at."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    corrected = fulfilled("r1", receipt(total_paid="12.99"), updated_at="2026-11-08T10:00:00Z")
+    late = fulfilled("r1", receipt(total_paid="12.37"))           # updated_at 2026-11-07T16:30
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": corrected}), now=NOW, log=said.append)
+    sync(coke, FakeBridge({"r1": late}), now=NOW, log=said.append)
+    assert row(coke).expected_cents == 1299
+    assert any("older than the one stored" in line for line in said), said
+
+
+def test_a_correction_that_withdraws_the_purchase_puts_back_the_price_before_it(coke):
+    """Review finding 3: the only purchase line becomes unavailable. The price that receipt set must not stay."""
+    checked = NOW - timedelta(days=9)
+    table_row(coke, checked)
+    fill(coke)
+    receipt_prices.apply(coke, "r1", NOW)
+    store(coke, "r1", fulfilled("r1", receipt(total_paid="11.99")), NOW)     # a correction first
+    receipt_prices.apply(coke, "r1", NOW)
+    assert row(coke).expected_cents == 1199
+    store(coke, "r1", fulfilled("r1", receipt(outcome="unavailable", packs_bought=0, units_bought=0,
+                                              total_paid=None)), NOW)
+    dry = receipt_prices.apply(coke, "r1", NOW, dry_run=True)
+    assert row(coke).expected_cents == 1199
+    applied = receipt_prices.apply(coke, "r1", NOW)
+    assert applied == dry and len(applied.updated) == 1 and "put back $11.49" in applied.updated[0], applied
+    o = row(coke)
+    assert (o.expected_cents, o.checked_at, o.checked_by, o.note) == (1149, checked, "Kevin", "15 Nov check")
+    assert receipt_prices.apply(coke, "r1", NOW) == receipt_prices.Applied()        # and it stays put back
+
+
+def test_a_withdrawn_receipt_puts_back_an_earlier_receipts_price(coke):
+    table_row(coke, NOW - timedelta(days=9))
+    fill(coke, "r0", receipt(total_paid="12.10", resolved_at="2026-11-05T16:00:00Z"))
+    fill(coke, "r1")
+    receipt_prices.apply(coke, "r0", NOW)
+    receipt_prices.apply(coke, "r1", NOW)
+    store(coke, "r1", fulfilled("r1", receipt(sku="PEPSI20")), NOW)     # now a substitution: no COKE20 price
+    receipt_prices.apply(coke, "r1", NOW)
+    o = row(coke)
+    assert (o.expected_cents, o.checked_by) == (1210, "receipt") and o.note.startswith("receipt r0:")
+
+
+def test_a_withdrawn_receipt_with_no_earlier_price_on_record_leaves_the_price_unknown(coke):
+    table_row(coke, NOW - timedelta(days=9))
+    fill(coke)
+    # A receipt price with no action_log entry behind it, so there is nothing to put back.
+    coke.execute("update sourcing_options set expected_cents = 1237, checked_at = %s, checked_by = 'receipt',"
+                 " note = 'receipt r1: paid $12.37 for 1 pack (line 0)'", (RESOLVED,))
+    store(coke, "r1", fulfilled("r1", receipt(outcome="unavailable", packs_bought=0, units_bought=0,
+                                              total_paid=None)), NOW)
+    applied = receipt_prices.apply(coke, "r1", NOW)
+    o = row(coke)
+    assert o.expected_cents is None and o.max_cents == 1350 and "price unknown" in applied.updated[0], applied
+    assert not o.note.startswith("receipt r1:")
+
+
+@pytest.mark.parametrize("amount", [
+    pytest.param("1e30", marks=pytest.mark.xfail(strict=True, reason="Sol finding 4, not fixed yet")),
+    "0.001"], ids=["too large", "rounds to nothing"])
+def test_an_amount_that_cannot_be_a_pack_price_is_skipped_and_the_sync_goes_on(coke, amount):
+    """Review finding 4: a finite but absurd total_paid must not stop the sync before later requests."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1", days_ago=3)
+    submit(coke, "r2", days_ago=2)
+    said: list[str] = []
+    report = sync(coke, FakeBridge({
+        "r1": fulfilled("r1", receipt(total_paid=amount)),
+        "r2": fulfilled("r2", receipt(total_paid="12.99", resolved_at="2026-11-08T16:00:00Z")),
+    }), now=NOW, log=said.append)
+    assert (report.checked, report.fulfilled, report.price_failures) == (2, 2, 0)
+    assert row(coke).expected_cents == 1299
+    assert any(line.startswith("r1 line 0: no price taken") for line in said), said
+
+
+@pytest.mark.xfail(strict=True, reason="Sol finding 5, not fixed yet")
+def test_a_correction_that_brings_a_new_problem_is_logged_once(coke):
+    """Review finding 5: the request was already fulfilled, and its corrected receipt puts the pack above the max."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt())}), now=NOW, log=said.append)
+    corrected = fulfilled("r1", receipt(total_paid="13.99"), updated_at="2026-11-08T10:00:00Z")
+    sync(coke, FakeBridge({"r1": corrected}), now=NOW, log=said.append)
+    sync(coke, FakeBridge({"r1": corrected}), now=NOW + timedelta(hours=1), log=said.append)
+    assert sum("above the primary row's max $13.50" in line for line in said) == 1, said
+
+
+@pytest.mark.parametrize("problem", ["future", "delisted"])
+def test_a_dry_run_says_what_the_write_will_do(coke, problem):
+    """Review finding 6: a dry run must refuse what the write refuses."""
+    table_row(coke, NOW - timedelta(days=9))
+    if problem == "future":
+        fill(coke, "r1", receipt(resolved_at="2026-11-09T12:10:00Z"))     # 10 minutes after NOW
+    else:
+        fill(coke)
+        coke.execute("update catalog_products set delisted_at = %s where sku = 'COKE20'", (NOW,))
+    dry = receipt_prices.apply(coke, "r1", NOW, dry_run=True)
+    real = receipt_prices.apply(coke, "r1", NOW)
+    assert dry == real and real.updated == [] and len(real.skipped) == 1, (dry, real)
+    assert row(coke).expected_cents == 1149
+
+
+def test_the_listing_dates_a_price_by_the_eastern_day(coke, capsys):
+    """Review finding 7: 11:30 PM ET on 27 Nov is 04:30 UTC on 28 Nov. The listing says 27 Nov."""
+    late = datetime(2026, 11, 28, 4, 30, tzinfo=timezone.utc)
+    sourcing.set_option(coke, sourcing.Option(
+        sku="COKE20", rank="primary", store="Costco", units_per_pack=12, expected_cents=1149, max_cents=1350,
+        url=None, pack_description=None, checked_at=late, checked_by="receipt", note="receipt r9: paid"),
+        late + timedelta(hours=1))
+    sourcing._show(coke, late + timedelta(hours=1))
+    out = capsys.readouterr().out
+    assert "checked 2026-11-27" in out, out
 
