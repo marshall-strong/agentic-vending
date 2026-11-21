@@ -127,10 +127,12 @@ def get_decider(name: str) -> Decider:
     raise ValueError(f"Unknown decider {name!r}. Use baseline, or file:PATH for a JSON plan.")
 
 
-def check_plan(answer: object, slots: tuple[str, ...]) -> tuple[Plan | None, list[Refusal]]:
+def check_plan(answer: object, slots: tuple[str, ...], *,
+               unknown_fill: frozenset[str] = frozenset()) -> tuple[Plan | None, list[Refusal]]:
     """The plan, or every reason it isn't a valid one. Never raises on bad input.
 
-    `slots` are the slots the plan must list once each; `score` passes the week's own.
+    `slots` are the slots the plan must list once each; `score` passes the week's own. A slot in
+    `unknown_fill` may leave `fill_to` out (`scoring.score` says when).
     """
     if isinstance(answer, Plan):
         plan, refusals = answer, []
@@ -143,7 +145,7 @@ def check_plan(answer: object, slots: tuple[str, ...]) -> tuple[Plan | None, lis
         return None, [Refusal("not_a_plan", f"Expected a plan or a JSON object, got {type(answer).__name__}.")]
     if plan is None:
         return None, refusals
-    refusals += _structure(plan, slots)
+    refusals += _structure(plan, slots, unknown_fill)
     return (None, refusals) if refusals else (plan, [])
 
 
@@ -195,7 +197,7 @@ def _parse(raw: Mapping) -> tuple[Plan | None, list[Refusal]]:
     return Plan(tuple(slots), visit=visit, reason=reason, sourcing=tuple(sourcing)), refusals
 
 
-def _structure(plan: Plan, slots: tuple[str, ...]) -> list[Refusal]:
+def _structure(plan: Plan, slots: tuple[str, ...], unknown_fill: frozenset[str] = frozenset()) -> list[Refusal]:
     refusals = []
     if plan.visit not in VISITS:
         refusals.append(Refusal("bad_visit", f"visit must be one of {', '.join(VISITS)}, not {plan.visit!r}."))
@@ -211,10 +213,10 @@ def _structure(plan: Plan, slots: tuple[str, ...]) -> list[Refusal]:
             refusals.append(Refusal("no_reason", "Every slot needs a short reason.", s.slot))
         if s.keep:
             continue
-        if s.fill_to is None or s.price_cents is None:
+        if s.price_cents is None or s.fill_to is None and s.slot not in unknown_fill:
             refusals.append(Refusal("not_a_plan", "Give fill_to and sale_price, or keep: true. "
                                     "(fill_to can't default to capacity: there is no slot capacity yet.)", s.slot))
-        elif not 0 <= s.fill_to <= MAX_FILL:
+        elif s.fill_to is not None and not 0 <= s.fill_to <= MAX_FILL:
             refusals.append(Refusal("bad_fill", f"fill_to must be 0 to {MAX_FILL}, not {s.fill_to}.", s.slot))
         if s.product is not None and not s.product.strip():
             refusals.append(Refusal("bad_product", "product is blank; leave it out to keep the current one.", s.slot))

@@ -63,6 +63,9 @@ class WeekState:
     # so only a $25 midweek visit can change what sells in it.
     midweek: bool = False
     notes: tuple[str, ...] = field(default=())
+    # (slot, ceiling in cents) for a slot whose ceiling isn't the team's $6.50: the wildcard's $8.00
+    # (#166). Empty for the replay's own weeks and cases; the report card fills it from the planner's config.
+    ceilings: tuple[tuple[str, int], ...] = ()
 
     def slot(self, slot: str) -> SlotWeek | None:
         return next((s for s in self.slots if s.slot == slot), None)
@@ -73,10 +76,11 @@ def week_bounds(day: date) -> tuple[datetime, datetime]:
     return start, start + WEEK
 
 
-def replay_week(conn: psycopg.Connection, day: date) -> WeekState:
-    """The week starting at midnight Eastern on `day`, from stored polls only."""
+def replay_week(conn: psycopg.Connection, day: date, until: datetime | None = None) -> WeekState:
+    """The week starting at midnight Eastern on `day`, from stored polls only. With `until`, no poll
+    after it is read (a page drawn as of `until` can't have seen a later one)."""
     start, end = week_bounds(day)
-    sales = get_sales_history(conn, start, end, None)
+    sales = get_sales_history(conn, start, end if until is None else min(end, until), None)
     if not sales.success:
         raise NoData(f"Week of {day:%Y-%m-%d}: {sales.message}")
     ours = tuple(row.slot for row in sales.data)   # the stored assignment, via get_sales_history
