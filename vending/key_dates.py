@@ -156,7 +156,10 @@ def read(conn: psycopg.Connection, now: datetime, opening: datetime | None, ours
             "select request_id, submitted_at, off_cycle, status from purchase_requests"
             " where status <> 'rejected' and submitted_at >= %s and submitted_at <= %s"
             " order by submitted_at, request_id", (opening, now)).fetchall()
+    from vending import ledger
+
     return {"opening": opening,
+            "test_opening": opening is not None and ledger.is_test_opening(ledger.opening(conn)),
             "plan": plan,
             "slots_checked_at": assignment and assignment.last_checked_at,
             "slots_valid": valid,
@@ -271,10 +274,17 @@ def _plan_picked(kd: KeyDate, now: datetime, ctx: dict) -> dict:
     return _done("picked, for our current slots")
 
 
+# The 11 Nov test opening isn't the real one: until it is reset (#215), the opening step isn't done.
+TEST_OPENING_TEXT = ("only the 11 Nov test opening: reset it, then record the real one "
+                     "(python -m vending.ledger reset-test-opening, then open; docs/ledger-reset.md)")
+
+
 def _ledger_opening(kd: KeyDate, now: datetime, ctx: dict) -> dict:
     opening = ctx["facts"]["opening"]
     if opening is None:
         return _open(kd, now, "not recorded: python -m vending.ledger open")
+    if ctx["facts"].get("test_opening"):
+        return _open(kd, now, TEST_OPENING_TEXT)
     return _done(f"{'opened' if opening <= now else 'opens'} {moment_text(opening)}")
 
 
@@ -286,6 +296,9 @@ def _fill(facts: dict) -> dict | None:
 
 def _fill_request(kd: KeyDate, now: datetime, ctx: dict) -> dict:
     facts = ctx["facts"]
+    if facts.get("test_opening"):
+        return {"status": "waiting", "pill": "waiting",
+                "text": "counts from the real opening: a request since the 11 Nov test opening is a test purchase"}
     if facts["opening"] is None:
         return {"status": "waiting", "pill": "waiting",
                 "text": "counts from the ledger opening: a request before it is a test purchase"}

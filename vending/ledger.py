@@ -426,6 +426,12 @@ def _eastern(moment: datetime) -> str:
     return f"{moment.astimezone(EASTERN):%Y-%m-%d %H:%M} Eastern"
 
 
+def is_test_opening(opened: Entry | None) -> bool:
+    """True if `opened` is the 11 Nov test opening the reset moves (id, Eastern date and detail). Pure."""
+    return opened is not None and (opened.id, opened.at.astimezone(EASTERN).date(), opened.detail) == (
+        TEST_OPENING_ID, TEST_OPENING_DATE, TEST_OPENING_DETAIL)
+
+
 def reset_refusal(opened: Entry | None, now: datetime, start: datetime | None = None, *,
                   already: tuple[datetime, str] | None = None) -> str | None:
     """Why the opening can't be reset, or None if it can. Pure.
@@ -450,8 +456,7 @@ def reset_refusal(opened: Entry | None, now: datetime, start: datetime | None = 
                 "Nothing was changed")
     if opened is None:
         return f"the ledger has no opening entry, so there is nothing to reset. {OPEN_HINT.split('. ', 1)[1]}"
-    if (opened.id, opened.at.astimezone(EASTERN).date(), opened.detail) != (
-            TEST_OPENING_ID, TEST_OPENING_DATE, TEST_OPENING_DETAIL):
+    if not is_test_opening(opened):
         return (f"the opening (entry {opened.id}, {_eastern(opened.at)}, {opened.detail!r}) isn't the 11 Nov test "
                 f"opening (entry {TEST_OPENING_ID}, {TEST_OPENING_DATE.isoformat()}, {TEST_OPENING_DETAIL!r}), so it "
                 "may be the real one. Nothing was changed")

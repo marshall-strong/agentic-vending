@@ -101,6 +101,30 @@ def test_an_opening_recorded_ahead_says_when_it_opens():
         "text": "opens Sun 29 Nov, 09:00"}
 
 
+def test_the_11_nov_test_opening_is_not_the_opening_step():   # Sol review of #222, finding 4
+    f = facts(opening=et(11, 11, 9), plan=PLAN, requests=[request("R0", et(11, 12, 0, 4))])
+    f["test_opening"] = True
+    r = rows(et(11, 27), f)
+    opening = check(r["fill_request"], "ledger_opening")
+    assert opening["status"] == "due" and "reset-test-opening" in opening["text"]
+    fill = check(r["fill_request"], "fill_request")
+    assert fill["status"] == "waiting" and "test purchase" in fill["text"]
+
+
+def test_the_test_opening_entry_is_recognised_exactly():
+    from fractions import Fraction
+
+    def entry(id=ledger.TEST_OPENING_ID, at=et(11, 11, 9), detail=ledger.TEST_OPENING_DETAIL):
+        return ledger.Entry(id=id, at=at, kind="opening", amount_cents=Fraction(60000), detail=detail,
+                            reference=None, recorded_by="test")
+
+    assert ledger.is_test_opening(entry())
+    assert not ledger.is_test_opening(None)
+    assert not ledger.is_test_opening(entry(id=2))
+    assert not ledger.is_test_opening(entry(at=et(11, 29, 9)))
+    assert not ledger.is_test_opening(entry(detail="opening capital"))
+
+
 def test_missed_deadlines_read_as_overdue():
     r = rows(et(11, 30, 9), c=counts(approved=10, pending=4))
     assert [check(r["fill_request"], n)["status"] for n in ("plan_picked", "ledger_opening")] == ["overdue", "overdue"]
