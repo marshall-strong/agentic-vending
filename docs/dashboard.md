@@ -199,15 +199,19 @@ that week and a request sent then counts for it. The tax Saturday passes at 23:5
 | Date | What | Status, from |
 |---|---|---|
 | Wed 25 Nov | Every first-fill product approved in the catalog | **Catalog approvals**: done when every product the picked first-fill plan loads (each slot's SKU, else the projection's) is in our copy of the catalog (`catalog_products`, not delisted); otherwise it says how many aren't. The copy is as fresh as the last catalog sync. After the day, a product still missing shows as "passed": a request naming it is denied. With no plan picked it is **Catalog queue clear** instead: done when no catalog request is pending, sending or unknown, which can't say the fill's products are in; any still waiting after the day "miss the fill". Not overdue: the instructors decide them |
-| Sun 29 Nov, 23:59 | First fill request due; record the ledger opening before it | **First-fill plan picked** (a picked `first_fill_plans` row for the current assignment), **Ledger opening recorded** (the opening entry; one dated ahead says when it opens), **Fill request sent** (the first request, not rejected, sent at or after the opening; "after the deadline" if late). Before the opening it waits: a request then is a test purchase |
+| Sun 29 Nov, 23:59 | First fill request due; record the ledger opening before it | **First-fill plan picked** (a picked `first_fill_plans` row for the current assignment), **Ledger opening recorded** (the opening entry; one dated ahead says when it opens), **Fill request sent** (the first request, not rejected, sent at or after the opening and before the start; "after the deadline" if late). Before the opening it waits: a request then is a test purchase. A request from the start on is a restock, never the fill, so a rejected fill can't make the first restock look like it |
 | Mon 30 Nov | Staff empty, buy and stock our first-fill request and reset the interval counters; the tracking check starts answering | Counts down only |
-| Tue 1 to Thu 3 Dec, **unconfirmed** | Opening day: the email says both "not until 3 Dec" and "1 or 2 Dec" | **Slots confirmed at the lock**: the stored assignment checked at or after the lock. Before the lock it waits |
+| Tue 1 to Thu 3 Dec, **unconfirmed** | Opening day: the email says both "not until 3 Dec" and "1 or 2 Dec" | **Slots confirmed at the lock**: a stored assignment that passes the checks every reader of our slots makes (`vending.slots`), checked from the lock through the snapshot's time. A row they refuse (another device or team, the wrong count) is due, or overdue from the lock, however recently it was checked. Before the lock a valid one waits |
 | Thu 3 Dec, 23:59 | First restock request due, filled Fri 4 Dec; then a visit every Friday | **Restock request sent**: a request that isn't off-cycle, rejected or the fill request, sent in the 7 days to the cutoff |
 | Sat 5 Dec, 23:59 | First weekly sales tax calculation; then every Saturday | Counts down only |
 
 From the start (`START`) the panel shrinks to the next restock request (Thursday 23:59, the planner's
 in-store cutoff, filled the Friday after) with the same check, and the next tax Saturday. If the slot
 assignment still isn't confirmed after the start, that row stays on top as overdue.
+
+A request's "sent" time is `purchase_requests.submitted_at`: our own clock just before the request went
+to the bridge, not when the bridge received it. A request sent in a deadline's last seconds can show as on
+time here and still reach the bridge after 23:59, so treat a send that close as late.
 
 The records are read in the page's read-only snapshot, in a savepoint with a short timeout. If the read
 fails, the dates still show, the checks that need it say "can't tell", and the error's text goes to the
