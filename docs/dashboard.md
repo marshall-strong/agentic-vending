@@ -40,7 +40,7 @@ what changed and why.
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
 | Money | **Balance**, **spendable** (balance less the sales tax set aside) and **profit since the opening**. One bar shows where the money in (opening, capital, takings) has gone: drinks bought, midweek visits, model spend, tax handed over, tax set aside, and what is still spendable. Then model spend against the proposed \$9 and visit fees against the proposed \$50, the profit and loss since the opening (units sold across a swap the counters can't split have no exact cost, so cost of sales and profit show as unknown, and their estimate gets its own line, labelled as an estimate and not in profit, #172), the proposed split of the \$600 (#113), and the ledger's notes about the live period. **Committed:** what the pending purchase requests could still cost at most (the dearer of each line's primary and alternate at `packs x max_price_per_pack`, plus an off-cycle request's visit fee), since the ledger counts a purchase only once it is fulfilled. If any pending line has no price we can read, the most is unknown, never counted as \$0, and so is what stays spendable after it. The ledger figures count spending from the opening entry. Before the opening entry, it says how to record it; an opening entry dated in the future (recorded ahead with `--at`) keeps that view and says when the ledger opens. Receipts and visit fees from before the opening are test purchases: once the opening is recorded, stock on hand and cost of sales leave them out too (`stock.receipts_count_from`, #150). A submission sent with no usable answer (`sending` or `unknown` in `purchase_submissions`) counts as committed too, since it may exist at the bridge. Needs attention adds: **Problem** if spendable is below zero, or if pending requests could cost more than is spendable; **Check** if spendable would fall under the proposed \$53 floor, if requests are pending with no opening entry or before an opening dated ahead (the date in Eastern), if a submission is unsettled, if a pending line has no price we can read, or if the ledger can't give a balance (for example, our slot assignment isn't recorded); **Info** if model spend passes \$9. If reading the ledger passes the statement timeout, only this panel says it isn't available; the rest of the page still shows | `vending.ledger` (`balance`, `pnl`), `purchase_requests`, `purchase_submissions` |
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates). Then every catalog request, newest first: counts by status, the open (`pending`) ones against the bridge's cap and the places left, and each request's status, its SKU once it has one (an approved product may be added under a SKU we wouldn't guess), and the decision note | `purchase_requests`, `purchase_lines`, `product_requests` |
-| Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
+| Back stock | What the receipts say is in the closet, and what each unit cost us. Links to the [Products page](#the-products-page) | `vending.stock` |
 | Product leaderboards | The ten best sellers by SKU, flavor, and brand for our current assignment. Each row shows units sold, revenue excluding tax, and sell-through. Sell-through divides units sold by units loaded since the opening. For this week (Saturday to Friday, Eastern), it divides units sold by starting stock plus units loaded. The rate is unavailable if sales exceed recorded stock. Sales with an unknown product stay out of the rankings. The panel counts those sales and labels the units with an estimated cost. | `vending.stock`, `vending.ledger`, `catalog_products` |
 | Footer | One small line on who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `page_visits`, `page_visit_totals` |
 
@@ -169,7 +169,8 @@ DATABASE_URL=postgresql://postgres:x@127.0.0.1:PORT/postgres python -m vending.d
 
 The generator refuses a host that isn't this machine. It builds a throwaway schema, fills it with
 made-up data (`vending/demo/make.py`), runs `snapshot()` on it, writes the file and drops the schema.
-`--check` says whether the committed file is current. Stop the container afterwards.
+It writes the [Products page](#the-products-page)'s demo data (`vending/demo/products.json`) from the
+same schema. `--check` says whether both committed files are current. Stop the container afterwards.
 
 ![The demo copy, light](dashboard/demo-1280-light.png)
 
@@ -217,6 +218,38 @@ The records are read in the page's read-only snapshot, in a savepoint with a sho
 fails, the dates still show, the checks that need it say "can't tell", and the error's text goes to the
 server's log, never to the page or the JSON. The panel shows no slot numbers and nothing about the other
 team.
+
+## The Products page
+
+`/dashboard/products` (#55): every product we can order and what is in back stock, so nobody has to
+query the tables. David asked for it on 11 Nov. It is linked as "Products" in the dashboard's header
+and from Back stock. `python -m vending.dashboard` serves it too, at `/products`.
+
+![The Products page, demo data](images/products-page-demo.png)
+
+*The demo copy (`/dashboard/demo/products`): made-up products, prices, plan and closet.*
+
+| Part | What's in it | Where it comes from |
+|---|---|---|
+| Warnings at the top | **The catalog's age:** never synced, or last synced more than 36 hours ago (the rule `get_catalog` uses). **Planned products with no sourcing row:** the planner has no store, pack or price for them (on 20 Nov, 8 of round 6's drinks had no checked price). A planned line with no SKU yet counts too. **Planned products with a stale price** (checked more than 7 days ago) | `catalog_syncs`, `sourcing_options`, `first_fill_plans` |
+| What we can order | One row per product the catalog lists now (delisted ones are left out), by name: SKU, name, size; **our sourcing** (store, pack, the pack's price when someone looked, the unit cost that makes rounded half up to the cent, the most we pay, the day it was checked and by whom, and **STALE** after 7 days; an alternate under it); **day-one plan** (the units and our slots it fills); **back stock** (units in the closet and what each cost us). A planned product with no sourcing row is shaded and marked **no sourcing** | `catalog_products`, `sourcing_options` (`vending.sourcing`), `first_fill_plans` (`vending.plan_store`), `vending.stock` |
+| Not in the catalog | A planned or closet product the catalog doesn't list now: delisted, or waiting for an approval and its SKU | the same |
+| Catalog requests | The dashboard's own list and counts (the same code: `dashboard.catalog_requests_html`) | `product_requests` |
+
+- **Which plan.** The picked first-fill plan; with none picked, the latest, labelled "latest, not picked".
+  It is the dashboard's own read (`dashboard._first_fill`), so a plan for an earlier slot assignment
+  shows its message and marks nothing.
+- **Back stock counts from the ledger's opening**, as the dashboard's Back stock does: receipts before
+  it are test purchases. Before the opening the column is empty and the page says why. The figures are
+  the dashboard's, read its way (`stock.stock` when our slots are recorded, else `stock.closet`).
+- **Read-only.** One `repeatable read, read only` transaction on the pages' read-only login. A missing
+  or unreadable table blanks only its own part; on the container the reason goes to the log, not the
+  page. Every value is escaped, money is exact (integer cents and fractions to text), and the page runs
+  no script (`form-action 'none'`, nothing loaded from elsewhere).
+- **Demo.** `/dashboard/demo/products` draws `vending/demo/products.json`, made by `python -m
+  vending.demo.make` with the dashboard's demo snapshot (the Products seed goes in after the
+  dashboard's snapshot, so that file doesn't change). It opens no connection.
+- **Visits.** Views of it aren't counted: `vending.visits.PAGES` lists `/dashboard` and `/db` only.
 
 ## Catalog requests
 
@@ -289,7 +322,8 @@ Both routes use the current slot assignment for stock, plans and saved tool repl
 lock, `plan` holds the first-fill plan and `weekly_plan` holds the agent's plan. A note replaces
 plan reasons and run and activity text from before the current assignment. Saved poll replies
 show figures only for rows that name a current selection. The stored audit records keep the full replies.
-The stored error text of failed calls, tool results and runs stays out of both responses.
+The stored error text of failed calls and runs stays out of both responses, and so does the
+content of every step marked `is_error` (a failed tool reply, or any other step so marked) (#165).
 The public page keeps the confirmation when a submit succeeds and the run later fails.
 The public page gives a fixed message when a panel cannot read its data. The detail goes to
 stderr. The standalone page shows the detail in the panel.

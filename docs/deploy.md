@@ -175,17 +175,18 @@ answers 503 until a person looks. The instructors change our assignment exactly 
 server, and that change is what the competition uses (David, 16 Nov; assumption A16). So a failed
 `slots_check` before the start most likely means the change has come: check it with the
 instructors, then run `python -m vending.slots record`, and replan the day-one fill if it is
-already bought.
+already bought. The change came by 20 Nov, and David says the slots won't change again this
+quarter (`docs/planning/2026-11-20-david-update.md`).
 
 **Our team.** Every answer must name our team, `SLOTS_TEAM` (unset: `group-b`, the name the server
 has given since 12 Nov). An answer for another team, or with no team, is refused, so a swapped key
-or a misconfigured bridge can't hand us the other half of the machine.
+or a misconfigured bridge can't hand us an assignment outside our team.
 
 **The lock.** The assignment is fixed from the start. The lock time is the setting `SLOTS_LOCK_AT`,
 an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern,
 Thu 3 Dec, the first day of Winter Quarter on the Institute's calendar and the start David gave on
-12 Nov). If the instructors move the start (to Wed 2 Dec, say), set it on the Container App, for
-example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
+12 Nov). If the instructors move the start (David's 20 Nov email names 1 or 2 Dec as well as 3 Dec;
+assumption A24), set it on the Container App, for example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
 Each process reads these settings itself: when you run `record` or `confirm` from a laptop, set the
 same `SLOTS_LOCK_AT` and `SLOTS_TEAM` as the Container App. Every `record`, `check` and `confirm`
 prints the lock and team it used, so a difference shows.
@@ -302,7 +303,8 @@ on the server.
 table holds a password or a key. **Left out:** the selections not assigned to us (the machine
 stores every selection, and `/db` shows only those in the stored assignment in `poll_selections`
 and `slot_counts`, and none while nothing is stored; the dashboard's JSON counts likewise), the dev machines' hostnames in `model_calls.host`, and the error text of failed tool calls and failed
-runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed), because a
+runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed, and
+`agent_steps.content` where `is_error` is true), because a
 database error names the host and the user. Refusals keep their text. The pages' own errors show
 one plain sentence; the detail is in the container's log.
 `/db` also hides the machine-wide totals in `polls` (`total_paid_cents` and `total_paid_units`) in

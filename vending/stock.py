@@ -1123,14 +1123,20 @@ def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetC
                  for c in first_in_first_out(movements_from_receipts(lines, losses)).closet)
 
 
-def stock(conn: psycopg.Connection, until: datetime | None = None, lines: list[dict] | None = None) -> Stock:
+def stock(conn: psycopg.Connection, until: datetime | None = None, lines: list[dict] | None = None, *,
+          polls_to_until: bool = False) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll.
 
     Once the ledger has an opening entry, receipt lines resolved before it (test purchases) and their
     later losses are left out (`_receipts`): see the module docstring. `lines` is
     `receipt_lines(conn)` when the caller has read it already.
+
+    By default every stored poll is read, even after `until`: a later poll can split a window that
+    spans a product change and move a sale to before `until` (#97). `polls_to_until=True` reads only
+    the polls up to `until`, so the count as of `until` is fixed once that poll is stored, whatever
+    comes later. The tracking check needs that (`vending.tracking`); other callers keep the default.
     """
-    return replay(load_movements(conn, lines), until)
+    return replay(load_movements(conn, lines, until=until if polls_to_until else None), until)
 
 
 def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None, *,
