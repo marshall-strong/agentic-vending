@@ -1801,3 +1801,15 @@ def test_the_pricing_leaderboards_and_charts_sit_inside_the_layout(conn, page_co
     assert ('<p class="charts">Charts: <a href="/dashboard/money">Money by day</a> &middot; '
             '<a href="/dashboard/pnl">Weekly P&amp;L</a></p>') in page
     assert '<a href="/dashboard/spend">Development spend by week</a>' in page.split('<section id="vm"')[0]
+
+
+def test_lane_products_skips_a_product_that_is_not_text():
+    """A stored plan whose product is a list (or any non-text) must not crash the whole snapshot."""
+    from vending import machine_art
+    snap = {
+        "stock": {"ok": True, "data": {"slots": {"12": {"product": "RB-8CAN"}, "14": {"product": ["A", "B"]}}}},
+        "counts": {"ok": True, "data": {"16": {"product": {"sku": "X"}}}},
+        "plan": {"ok": True, "data": {"slots": [{"slot": "18", "now": {"product": ["C"]}},
+                                                {"slot": "21", "now": {"product": "CELSIUS-12CAN"}}]}},
+    }
+    assert machine_art.lane_products(snap, ["12", "14", "16", "18", "21"]) == ["CELSIUS-12CAN", "RB-8CAN"]
