@@ -348,6 +348,27 @@ def test_a_poll_sharing_its_time_with_another_of_our_polls_is_refused(conn):
         tracking.figures(conn)                         # the newest poll, by default
 
 
+def a_tie_lands_after_the_tie_check(schema_url, monkeypatch, started_at: str, session: str = "p1tie"):
+    """Hook `tracking.our_slots`, read right after the tie check: on its first call another connection
+    commits a good poll of ours at `started_at` showing 5 sold from slot 15, then the real read runs.
+    Returns the real `our_slots`, for a test to put back."""
+    from tests.conftest import open_in
+    from vending import tracking
+
+    real_slots = tracking.our_slots
+    landed: list[str] = []
+
+    def slots_after_a_tie_lands(conn, *args, **kwargs):
+        if not landed:
+            with open_in(*schema_url) as other:        # autocommit: committed before the reads below
+                poll(other, session, started_at, sold_in_15=5)
+            landed.append(session)
+        return real_slots(conn, *args, **kwargs)
+
+    monkeypatch.setattr(tracking, "our_slots", slots_after_a_tie_lands)
+    return real_slots
+
+
 def test_a_tied_poll_committed_after_the_tie_check_does_not_change_the_figures(schema_url, monkeypatch):
     """The tie check and every figure read see one snapshot. A tied poll committed by another connection
     between the tie check and the stock read used to slip through: slot 15 read 3, not 6."""
@@ -356,14 +377,7 @@ def test_a_tied_poll_committed_after_the_tie_check_does_not_change_the_figures(s
 
     with open_in(*schema_url) as setup:
         books(setup)
-    real_slots = tracking.our_slots
-
-    def slots_after_a_tie_lands(conn, *args, **kwargs):
-        with open_in(*schema_url) as other:            # autocommit: committed before the reads below
-            poll(other, "p1tie", "2026-11-03T18:00:00+00:00", sold_in_15=5)
-        return real_slots(conn, *args, **kwargs)
-
-    monkeypatch.setattr(tracking, "our_slots", slots_after_a_tie_lands)
+    real_slots = a_tie_lands_after_the_tie_check(schema_url, monkeypatch, "2026-11-03T18:00:00+00:00")
     with open_in(*schema_url) as conn:
         f = tracking.figures(conn, "p1")
         assert f.coil["15"] == 6
@@ -625,10 +639,11 @@ def iso(moment: datetime) -> str:
 
 
 class Times:
-    """The clock a send reads: one moment for the reservation, the next for the answer."""
+    """The clock a send reads: one moment for the reservation and for the dispatch check just before
+    the request goes out, the next for the answer."""
 
     def __init__(self, *moments):
-        self.moments = list(moments)
+        self.moments = [moments[0], *moments]
 
     def __call__(self) -> datetime:
         return self.moments.pop(0) if len(self.moments) > 1 else self.moments[0]

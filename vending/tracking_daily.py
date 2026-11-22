@@ -21,7 +21,9 @@ deadline, not under yesterday's date, and not while another replica holds the re
 another's transient refusal is still backing off. The poll is picked and the figures are computed
 under that lock too, in the reservation's own transaction: the books of that moment, so a ledger
 correction or a newer poll committed meanwhile is in them, and a job that starts the evening
-before cannot send the previous evening's figures under the new day's date.
+before cannot send the previous evening's figures under the new day's date. The pick, the tie check,
+every figure and the reservation share one repeatable-read snapshot. The window and the Eastern day
+are checked once more just before the request: past them, the reservation is marked `not_sent`.
 
 **One request a night.** The request is never started later than 21:00 Eastern: by then it is given
 up by the client within seconds, hours before midnight, so the bridge cannot check it on the next
@@ -181,7 +183,9 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
         """The figures of the send's moment, inside the reservation's transaction: the newest settled
         poll of that moment, and the books as of it, so whatever committed while this job was on its
         way (a ledger correction, a newer poll, the day itself turning over) is what the check
-        reports. The pre-lock `found` above was only the check that there is anything to do today."""
+        reports. The pre-lock `found` above was only the check that there is anything to do today.
+        It runs in the send's one repeatable-read transaction, so `tracking.figures` reads there too:
+        the pick, the tie check and every figure see the same snapshot."""
         opening = ledger.opening(c)
         if opening is None:                     # cannot happen: the opening is append-only
             raise tracking.CantCompute(f"the ledger's opening is gone. {ledger.OPEN_HINT}")
@@ -200,7 +204,7 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     except tracking.AlreadyChecked as error:
         log(f"tracking_daily: {error}")
         return 0
-    except tracking.WindowClosed as error:
+    except (tracking.WindowClosed, tracking.DispatchClosed) as error:
         log(f"tracking_daily: {error}")
         return 1
     except tracking.StaleFigures as error:
@@ -254,7 +258,8 @@ def tries_today(conn: psycopg.Connection, day) -> tuple[int, int, datetime | Non
     `transient` counts the refusals that settle on their own (`tracking.TRANSIENT_REFUSALS`), toward
     `MAX_TRANSIENT`, and `last_transient_at` is when the newest one went out (the backoff waits after it)."""
     rows = conn.execute("select sent_at, used_check, error_type from tracking_checks"
-                        " where eastern_day = %s and sent_by = %s order by sent_at, id", (day, WORKER)).fetchall()
+                        " where eastern_day = %s and sent_by = %s and error_type is distinct from %s"
+                        " order by sent_at, id", (day, WORKER, tracking.NOT_SENT)).fetchall()
     transient = [(sent, used, error) for sent, used, error in rows
                  if used is False and error in tracking.TRANSIENT_REFUSALS]
     return len(rows) - len(transient), len(transient), transient[-1][0] if transient else None

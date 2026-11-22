@@ -170,6 +170,48 @@ def test_the_cutoff_is_enforced_again_when_the_send_is_ready(conn):
     assert "window" in lines[-1]
 
 
+def test_the_deadline_is_checked_again_just_before_the_post(conn, monkeypatch):
+    """A run started at 20:59:50 Eastern whose figures take until 21:00:10 does not post: the window
+    and the Eastern day are checked again just before the request goes out, and the reservation
+    already committed is marked unused, not sent, so it blocks nothing and is no try."""
+    books(conn)
+    poll(conn, "p3", "2026-12-05T00:30:00+00:00")     # 19:30 Eastern, so the newest poll isn't stale
+    clock = {"now": utc("2026-12-05T01:59:50+00:00")}  # 20:59:50 Eastern: due, the window is open
+    real_slots = tracking.our_slots
+
+    def slow_figures(c, *args, **kwargs):              # read inside figures(): the clock moves on
+        clock["now"] = utc("2026-12-05T02:00:10+00:00")   # 21:00:10 Eastern
+        return real_slots(c, *args, **kwargs)
+
+    monkeypatch.setattr(tracking, "our_slots", slow_figures)
+    bridge = FakeBridge(answer("p3"))
+    code, lines = run(conn, bridge, now=lambda: clock["now"])
+    assert (code, bridge.sent) == (1, [])
+    stored = conn.execute("select status, used_check, error_type, answered_at from tracking_checks").fetchall()
+    assert stored == [(None, False, "not_sent", utc("2026-12-05T02:00:10+00:00"))]
+    day = utc("2026-12-05T01:59:50+00:00").astimezone(EASTERN).date()
+    assert tracking.blocking(conn, day) == [] and tracking_daily.tries_today(conn, day)[0] == 0
+    assert "window" in lines[-1]
+
+
+def test_a_tied_poll_committed_after_the_daily_tie_check_does_not_change_the_sent_figures(schema_url,
+                                                                                        monkeypatch):
+    """The worker's send reads the poll, the tie check, the ledger and the stock in one repeatable-read
+    snapshot, with the reservation in the same transaction: a tied poll another connection commits
+    right after the tie check is not in the figures. It used to make slot 15 read 3, not 6."""
+    from tests.test_tracking import a_tie_lands_after_the_tie_check
+
+    with open_in(*schema_url) as setup:
+        books(setup)
+    a_tie_lands_after_the_tie_check(schema_url, monkeypatch, SETTLED.isoformat())
+    bridge = FakeBridge(answer("p1"))
+    with open_in(*schema_url) as job:
+        code = tracking_daily.run(job, lambda: bridge, now=NOW, log=lambda line: None)
+    assert code == 0 and len(bridge.sent) == 1
+    assert bridge.sent[0]["as_of"] == "p1"
+    assert bridge.sent[0]["coil"]["15"] == 6
+
+
 def test_a_poll_that_ages_past_the_limit_before_the_send_is_refused(conn):
     """A delayed worker: the job's checks pass at 06:05 Eastern on a poll of 05:00, but the send is
     only ready at 13:05, when even the newest settled poll (06:00 Eastern) is over the six-hour
@@ -241,7 +283,8 @@ def test_a_correction_committed_before_the_lock_is_in_the_sent_figures(schema_ur
     other = open_in(*schema_url)                    # a second connection, open across the job
     prepared = utc("2026-12-04T11:05:00+00:00")     # 06:05 Eastern: the job's own checks
     under_lock = utc("2026-12-04T11:06:00+00:00")   # 06:06 Eastern: the reservation, a minute later
-    steps = iter([prepared, "commit", under_lock, under_lock + timedelta(seconds=5)])
+    steps = iter([prepared, "commit", under_lock, under_lock + timedelta(seconds=1),
+                  under_lock + timedelta(seconds=5)])
 
     def clock():
         when = next(steps)
@@ -273,7 +316,8 @@ def test_a_poll_committed_before_the_lock_is_the_one_sent(schema_url):
     other = open_in(*schema_url)
     prepared = utc("2026-12-04T11:05:00+00:00")
     under_lock = utc("2026-12-04T11:06:00+00:00")
-    steps = iter([prepared, "commit", under_lock, under_lock + timedelta(seconds=5)])
+    steps = iter([prepared, "commit", under_lock, under_lock + timedelta(seconds=1),
+                  under_lock + timedelta(seconds=5)])
 
     def clock():
         when = next(steps)
@@ -301,7 +345,7 @@ def test_figures_prepared_the_evening_before_are_not_sent_the_next_morning(schem
     other = open_in(*schema_url)
     evening = utc("2026-12-05T01:55:00+00:00")      # 20:55 Eastern Friday: the job prepares here
     morning = utc("2026-12-06T11:05:00+00:00")      # 06:05 Eastern Saturday: the reservation
-    steps = iter([evening, "commit", morning, morning + timedelta(seconds=5)])
+    steps = iter([evening, "commit", morning, morning + timedelta(seconds=1), morning + timedelta(seconds=5)])
 
     def clock():
         when = next(steps)
@@ -358,7 +402,7 @@ def test_the_answer_is_stamped_when_it_is_stored(conn):
     """The reservation and the answer carry their own times: a job that runs long does not record the
     answer under the time it started."""
     books(conn)
-    stamps = iter([NOW, NOW + timedelta(minutes=2), NOW + timedelta(minutes=4)])
+    stamps = iter([NOW, NOW + timedelta(minutes=2), NOW + timedelta(minutes=3), NOW + timedelta(minutes=4)])
     run(conn, FakeBridge(answer()), now=lambda: next(stamps))
     sent_at, answered_at = conn.execute("select sent_at, answered_at from tracking_checks").fetchone()
     assert (sent_at, answered_at) == (NOW + timedelta(minutes=2), NOW + timedelta(minutes=4))
@@ -371,6 +415,7 @@ def test_a_reply_lost_after_midnight_blocks_the_next_morning(conn):
     books(conn)
     poll(conn, "p3", "2026-12-05T00:30:00+00:00")     # 19:30 Eastern, so the newest poll isn't stale
     stamps = iter([utc("2026-12-05T01:59:50+00:00"), utc("2026-12-05T01:59:55+00:00"),
+                   utc("2026-12-05T01:59:56+00:00"),     # the dispatch check, just before the request
                    utc("2026-12-05T05:01:00+00:00")])
     bridge = FakeBridge(BridgeNoAnswer("timed out"))
     assert run(conn, bridge, now=lambda: next(stamps))[0] == 3
@@ -394,6 +439,7 @@ def test_a_request_held_past_midnight_means_one_post_for_the_night(conn, monkeyp
     books(conn)
     poll(conn, "p3", "2026-12-05T00:30:00+00:00")     # 19:30 Eastern Friday, fresh at 20:59
     stamps = iter([utc("2026-12-05T01:59:50+00:00"), utc("2026-12-05T01:59:55+00:00"),
+                   utc("2026-12-05T01:59:56+00:00"),     # the dispatch check, just before the request
                    utc("2026-12-05T02:00:15+00:00")])
 
     class Held(FakeBridge):

@@ -36,8 +36,9 @@ usable answer (a timeout, a 5xx) may have used it, so it blocks the rest of the 
 is stored in `tracking_checks` (migration 021) before it goes, then its answer.
 
 **One request a night.** The request itself is never started later than 21:00 Eastern
-(`DISPATCH_DEADLINE`, raising `DispatchClosed`): started by then it is given up by the client within
-seconds - the timeout in `vending.bridge` - over three hours before midnight, so the bridge cannot
+(`DISPATCH_DEADLINE`, raising `DispatchClosed`), checked under the reservation's lock and again just
+before the request (past it then, the reservation is marked `not_sent` and unused): started by then
+it is given up by the client within seconds - the timeout in `vending.bridge` - over three hours before midnight, so the bridge cannot
 check it on the next Eastern day, and every stored send belongs to at most the Eastern days up to
 midnight. The daily job's window ends at the same hour (`tracking_daily.LAST_SEND`). A request from
 the previous day that is still unanswered - the process froze with the request on the wire - may
@@ -127,6 +128,10 @@ REFUSED_BEFORE_CHECK = (400, 401, 403, 404, 409, 422)
 # the worker retries them on a backoff instead of spending its tries (`tracking_daily.tries_today`).
 TRANSIENT_REFUSALS = ("not_reconciled_yet", "tracking_not_started")
 
+# Our `error_type` for a reservation that was never sent: the window, the deadline or the day had
+# passed by the moment just before the request (`send`). Stored with `used_check` false; no try.
+NOT_SENT = "not_sent"
+
 # A 200's fields, all required by the spec (`TrackingCheckResult`).
 ANSWER_FIELDS = ("as_of", "as_of_time", "checked_at", "results", "next_check_from")
 
@@ -145,6 +150,7 @@ ERROR_TYPES = {
     "unreachable": "it never reached the bridge",
     "no_answer": "sent, but no usable answer came back (a timeout or a dropped connection)",
     "malformed_answer": "the bridge answered, but not the shape the spec gives, so the verdicts can't be read",
+    NOT_SENT: "never sent: the send window or the dispatch deadline passed while it was being prepared",
 }
 UNKNOWN_ERROR_TYPE = "unknown error type"
 
@@ -194,7 +200,7 @@ class StaleFigures(RuntimeError):
 
 class LockBusy(RuntimeError):
     """Another send holds the reservation's lock at that moment, so nothing was sent and nothing
-    was recorded. The lock is taken without waiting (`pg_try_advisory_xact_lock`): a replica stuck
+    was recorded. The lock is taken without waiting (`pg_try_advisory_lock`): a replica stuck
     holding it must not strand every other replica's round behind it. The caller skips this round
     (`tracking_daily` logs a line) and the next round tries again."""
 
@@ -450,56 +456,78 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures | Callable[[psyco
     21:00 Eastern dispatch deadline (`DispatchClosed`); `stale` raises `StaleFigures` when the
     poll the figures are as of is older than the limit at that moment; `daily_tries` raises
     `TooManyTries` when the day's tries are spent and `BackingOff` while the newest transient
-    refusal is still within its backoff. All before anything is recorded. The lock is taken without
-    waiting (`pg_try_advisory_xact_lock`): a second replica that finds it held raises `LockBusy` and
-    skips its round, so a stuck holder cannot strand the others, and one that acquires it after the
-    reservation committed sees the reservation (`blocking`) and refuses. The lock is the
-    transaction's, so it releases when the reservation commits and the request goes out."""
+    refusal is still within its backoff. All before anything is recorded. The lock is the session's,
+    taken without waiting (`pg_try_advisory_lock`) before the reservation's transaction begins: a
+    second replica that finds it held raises `LockBusy` and skips its round, so a stuck holder cannot
+    strand the others, and one that acquires it after the reservation committed sees the reservation
+    (`blocking`) and refuses. Then one repeatable-read transaction holds the poll's pick, its tie
+    check, the ledger and stock reads, the day's earlier sends and the reservation's insert, so a
+    poll or correction committed part way through cannot reach some reads and not others. The lock
+    is released once that transaction ends, in `finally`.
+
+    Just before the request goes out the clock is read again and the window, the deadline and the
+    Eastern day are checked once more: computing the figures can take long enough to pass them. If
+    they have passed, the committed reservation is marked unused (`used_check` false, `error_type`
+    `not_sent`), the request is never started, and `WindowClosed` or `DispatchClosed` is raised."""
     if not by or not by.strip():
         raise ValueError("a send needs a name, for the record")
     fixed = now
     stamp: Callable[[], datetime] = (now if callable(now) else (lambda: fixed) if fixed is not None
                                      else (lambda: clock(conn)))
-    with conn.transaction():
-        # Taken without waiting: a holder stuck since an earlier round must not strand every other
-        # replica's round behind it (LockBusy), and the replica that gets it first has it outright.
-        reserved = conn.execute("select pg_try_advisory_xact_lock(%s)", (TRACKING_LOCK,)).fetchone()[0]
-        if not reserved:
-            raise LockBusy("another send holds the reservation's lock; nothing was sent")
-        moment = stamp()
-        local = moment.astimezone(EASTERN)
-        if window is not None and not window[0] <= local.time() < window[1]:
-            raise WindowClosed(f"the send window ({window[0]:%H:%M}-{window[1]:%H:%M} Eastern) closed while the "
-                               f"check was being prepared; it was ready at {local:%H:%M}, so nothing was sent")
-        if local.time() >= DISPATCH_DEADLINE:
-            raise DispatchClosed(
-                f"past the {DISPATCH_DEADLINE:%H:%M} Eastern dispatch deadline ({local:%H:%M} now): a request "
-                "started by the deadline is given up by the client within seconds, hours before midnight, but "
-                "one started now could still be checked by the bridge after midnight. Nothing was sent, and "
-                "nothing is recorded")
-        day = eastern_day(moment)
-        if callable(found):
-            found = found(conn, moment)
-        body = found.body()
-        if stale is not None and moment - found.as_of_time > stale:
-            raise StaleFigures(
-                f"the figures are as of the poll at {found.as_of_time.astimezone(EASTERN):%Y-%m-%d %H:%M} "
-                f"Eastern, over {int(stale.total_seconds() // 3600)} hours before the send, so the history "
-                "sync may have stopped; nothing was sent")
-        if daily_tries is not None:
-            _check_tries(conn, day, moment, daily_tries)
-        if once_a_day or moment >= daily_from():
-            earlier = blocking(conn, day, moment)
-            if earlier:
-                said = "; ".join(f"#{i}: " + ("no usable answer, so it may have used it" if s is None
-                                              else f"{s}" + ("" if used else ", may have used it"))
-                                 for i, s, used in earlier)
-                raise AlreadyChecked(f"Today's check ({day}, Eastern) is used or may be ({said}). "
-                                     "The next one is from midnight Eastern.")
-        row_id = conn.execute(
-            "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request)"
-            " values (%s, %s, %s, %s, %s, %s) returning id",
-            (moment, day, by.strip(), found.as_of, found.as_of_time, Jsonb(body))).fetchone()[0]
+    # Every connection the app opens is in autocommit (`vending.db.connect`), so the transaction below is
+    # the reservation's own; inside a caller's transaction it is a savepoint and the caller's isolation stands.
+    own = conn.autocommit and conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    # The session's lock, taken without waiting and before the snapshot below: a holder stuck since an
+    # earlier round must not strand every other replica's round behind it (LockBusy), and a snapshot
+    # taken after the lock sees every reservation committed before it.
+    if not conn.execute("select pg_try_advisory_lock(%s)", (TRACKING_LOCK,)).fetchone()[0]:
+        raise LockBusy("another send holds the reservation's lock; nothing was sent")
+    try:
+        with conn.transaction():
+            if own:
+                # One snapshot for the poll, the tie check, the ledger, the stock, the day's earlier
+                # sends and the reservation itself (`figures` reads in this transaction).
+                conn.execute("set transaction isolation level repeatable read")
+            moment = stamp()
+            day = eastern_day(moment)
+            _check_dispatch(moment, window, day)
+            if callable(found):
+                found = found(conn, moment)
+            body = found.body()
+            if stale is not None and moment - found.as_of_time > stale:
+                raise StaleFigures(
+                    f"the figures are as of the poll at {found.as_of_time.astimezone(EASTERN):%Y-%m-%d %H:%M} "
+                    f"Eastern, over {int(stale.total_seconds() // 3600)} hours before the send, so the history "
+                    "sync may have stopped; nothing was sent")
+            if daily_tries is not None:
+                _check_tries(conn, day, moment, daily_tries)
+            if once_a_day or moment >= daily_from():
+                earlier = blocking(conn, day, moment)
+                if earlier:
+                    said = "; ".join(f"#{i}: " + ("no usable answer, so it may have used it" if s is None
+                                                  else f"{s}" + ("" if used else ", may have used it"))
+                                     for i, s, used in earlier)
+                    raise AlreadyChecked(f"Today's check ({day}, Eastern) is used or may be ({said}). "
+                                         "The next one is from midnight Eastern.")
+            row_id = conn.execute(
+                "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request)"
+                " values (%s, %s, %s, %s, %s, %s) returning id",
+                (moment, day, by.strip(), found.as_of, found.as_of_time, Jsonb(body))).fetchone()[0]
+    finally:
+        try:
+            conn.execute("select pg_advisory_unlock(%s)", (TRACKING_LOCK,))
+        except psycopg.Error:
+            pass                           # a broken connection: its session lock goes with it
+
+    # The clock again, just before the request: computing the figures can take long enough to pass
+    # the window, the deadline or midnight. Then the reservation is marked unused, never sent.
+    ready = stamp()
+    try:
+        _check_dispatch(ready, window, day)
+    except (WindowClosed, DispatchClosed):
+        conn.execute("update tracking_checks set answered_at = %s, used_check = false, error_type = %s"
+                     " where id = %s", (ready, NOT_SENT, row_id))
+        raise
     status: int | None
     answer: Any
     try:
@@ -538,6 +566,24 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures | Callable[[psyco
     return _answered(conn, stamp, row_id, status, answer, error_type, used, found.as_of)
 
 
+def _check_dispatch(moment: datetime, window: tuple[time, time] | None, day: date) -> None:
+    """`WindowClosed` when `moment` is outside the caller's `window` (Eastern) or no longer on the
+    Eastern `day` the send was reserved under, `DispatchClosed` when it is past the 21:00 Eastern
+    deadline. Checked under the reservation's lock and again just before the request goes out."""
+    local = moment.astimezone(EASTERN)
+    if window is not None and not window[0] <= local.time() < window[1]:
+        raise WindowClosed(f"the send window ({window[0]:%H:%M}-{window[1]:%H:%M} Eastern) closed while the "
+                           f"check was being prepared; it was ready at {local:%H:%M}, so nothing was sent")
+    if local.time() >= DISPATCH_DEADLINE:
+        raise DispatchClosed(
+            f"past the {DISPATCH_DEADLINE:%H:%M} Eastern dispatch deadline ({local:%H:%M} now): a request "
+            "started by the deadline is given up by the client within seconds, hours before midnight, but "
+            "one started now could still be checked by the bridge after midnight. Nothing was sent")
+    if local.date() != day:
+        raise WindowClosed(f"the Eastern day turned ({day} to {local.date()}) while the check was being "
+                           "prepared, so nothing was sent")
+
+
 def _check_tries(conn: psycopg.Connection, day: date, moment: datetime, daily_tries: DailyTries) -> None:
     """`TooManyTries` when the day's tries are spent, `BackingOff` while the day's newest transient
     refusal is still within its backoff, and `BackingOff` while one of the day's sends has no answer
@@ -550,6 +596,7 @@ def _check_tries(conn: psycopg.Connection, day: date, moment: datetime, daily_tr
     by, tries_limit, transient_limit, backoff, backoff_cap = daily_tries
     rows = conn.execute("select id, sent_at, used_check, error_type from tracking_checks"
                         " where eastern_day = %s and sent_by = %s order by sent_at, id", (day, by)).fetchall()
+    rows = [row for row in rows if row[3] != NOT_SENT]     # never sent, so no try
     transient = [(id_, sent, error) for id_, sent, used, error in rows
                  if used is False and error in TRANSIENT_REFUSALS]
     tries = len(rows) - len(transient)
@@ -725,7 +772,7 @@ def main(argv: list[str] | None = None, bridge: Callable[[], Any] = Bridge) -> i
             return 0
         try:
             outcome = send(conn, bridge(), found, args.by)
-        except (AlreadyChecked, DispatchClosed, LockBusy, settings.SettingsError) as error:
+        except (AlreadyChecked, DispatchClosed, WindowClosed, LockBusy, settings.SettingsError) as error:
             print(error, file=sys.stderr)
             return 1
         except psycopg.Error as error:
