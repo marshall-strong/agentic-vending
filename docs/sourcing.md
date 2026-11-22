@@ -101,12 +101,18 @@ no web access is needed, and the price is never older than our last purchase of 
   with more `later_losses` (the bridge adds those to a filled request, and its spec doesn't say
   they change `updated_at`). Any other difference is kept out with one warning: we can't tell
   which answer is newer, so the stored one stays and a person checks it against the bridge.
-- **Later losses only grow.** A newer answer that drops or changes a later loss we stored is kept
-  out with one warning, so a loss already counted never goes back into stock.
+- **The correction rule.** Once we hold a fulfilled receipt, a newer fulfilled answer replaces it
+  only if it has exactly the same lines and each line's stored later losses start that line's new
+  list. A line is its line number, slot, source and the choices we asked for, and the lines must
+  also match the slots and sources of the request we sent. So a correction may change amounts,
+  prices and counts, add later losses, and change the door times. An answer that drops, adds or
+  changes a line (reason `lines_changed`), or drops or changes a later loss (`losses_shrank`), is
+  kept out with one warning. Its stock and prices stay, so an answer that leaves out one of two
+  lines can't erase that line's units or the price it set.
 - **Each answer kept out is recorded once** in `action_log` (tool `purchase_requests.ignored`),
   with the reason and the warning itself, so the warning is on record even if the sync's own log
   is lost.
-- **A malformed answer** (a time that is a number or outside 2020-2099, `lines` that isn't a list, a
+- **A malformed answer** (a time that is a number or outside 2020-2099, door times included, `lines` that isn't a list, a
   receipt that isn't an object, a count that isn't a whole number) fails that request only, with its reason logged.
   The stored receipt stays and the sync reads the next request.
 - **A price a correction stops giving** (the line became unavailable or a substitution) is not
@@ -122,7 +128,8 @@ no web access is needed, and the price is never older than our last purchase of 
   substitution (the receipt's SKU isn't the one we asked for), a missing amount or pack size,
   zero packs, units that don't add up, a pack price above the row's max (a person raises the max),
   and a drink bought at a store or pack size the table has no row for. The sync logs each reason
-  once per revision of the receipt, the first time it prices that revision, and records it in
+  once per revision of the receipt (its `updated_at` and lines, so a revision that brings a reason
+  back names it again), the first time it prices that revision, and records it in
   `action_log` (tool `receipt_prices.skipped`) with the pricing. A pricing that fails (a lock
   timeout, say) records nothing, so the next read names the reason.
 - **An amount that can't be real** (a billion dollars or more, more than 10 decimal places, or

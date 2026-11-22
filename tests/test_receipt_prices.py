@@ -11,9 +11,10 @@ import pytest
 pytest.importorskip("psycopg")
 
 from tests.conftest import conn, open_in  # noqa: E402,F401 - migrated schema with a server assignment
-from tests.test_sync_requests import BODY, FakeBridge, fulfilled, later, pending, receipt, submit  # noqa: E402
+from tests.test_sync_requests import (  # noqa: E402
+    BODY, CLOSED, OPENED, FakeBridge, door_row, fulfilled, later, pending, receipt, submit)
 from vending import receipt_prices, sourcing  # noqa: E402
-from vending.purchase_requests import store  # noqa: E402
+from vending.purchase_requests import record, store  # noqa: E402
 from vending.stock import stock  # noqa: E402
 from vending.sync_requests import sync  # noqa: E402
 
@@ -73,12 +74,13 @@ def test_a_fulfilled_receipt_refreshes_the_matching_row(coke):
 
 def test_several_packs_and_lines_give_one_pack_price(coke):
     table_row(coke, NOW - timedelta(days=9))
-    fill(coke, "r1", receipt(packs_bought=2, units_bought=24, total_paid="24.75"),
-         receipt(packs_bought=1, units_bought=12, total_paid="12.36"))
+    fill(coke, "r1", receipt(packs_bought=2, units_bought=24, total_paid="24.00"),
+         receipt(packs_bought=1, units_bought=12, total_paid="13.20"))
     receipt_prices.apply(coke, "r1", NOW)
-    # 37.11 for 3 packs is 12.37 a pack.
+    # Weighted by packs: 37.20 for 3 packs is 12.40 a pack. The mean of the lines' pack prices (12.00 and 13.20)
+    # would be 12.60, so this tells the two apart (round 6, finding 4).
     o = row(coke)
-    assert o.expected_cents == 1237 and "for 3 packs (lines 0, 1)" in o.note
+    assert o.expected_cents == 1240 and "for 3 packs (lines 0, 1)" in o.note
 
 
 def test_a_pack_price_rounds_half_up_to_the_cent(coke):
@@ -953,3 +955,108 @@ def test_a_correction_that_backdates_takes_the_newest_eligible_price(coke, hand,
         assert "from r1" in applied.updated[0], applied
     for request_id in ("r1", "r2"):
         assert receipt_prices.apply(coke, request_id, NOW).updated == []        # and it stays
+
+
+# Sol review, round 6. Once a receipt is stored fulfilled, a newer answer is stored only if it has exactly the same
+# lines (line number, slot, source and what we asked for), and each line's stored later losses start its new list.
+
+TWO_SLOTS = {"off_cycle": False, "lines": [BODY["lines"][0], {**BODY["lines"][0], "slot": "16"}]}
+
+
+def two_slot_answer(*receipts, slots=("15", "16"), **fields):
+    answer = fulfilled("r1", *receipts, **fields)
+    for line, slot in zip(answer["lines"], slots, strict=True):
+        line["slot"] = slot
+    return answer
+
+
+def coil(conn):
+    return sorted((s.slot, s.units) for s in stock(conn).slots)
+
+
+@pytest.mark.parametrize("change", ["missing", "extra", "moved", "source", "asked"])
+def test_a_newer_answer_with_different_lines_is_kept_out(coke, change):
+    """Round 6, finding 1: the stored receipt fills two slots (8 units each, $12.75 a pack). A newer answer with only
+    line 0 ($12.37) replaced both lines: the coil lost 8 units and the price fell to $12.37. An answer that drops,
+    adds or changes a line is kept out with one stored warning; one that changes only amounts is stored."""
+    table_row(coke, NOW - timedelta(days=9))
+    record(coke, "r1", NOW - timedelta(days=2), False, TWO_SLOTS, plan_hash="abc123")
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": two_slot_answer(receipt(total_paid="12.75"), receipt(total_paid="12.75"))}),
+         now=NOW, log=said.append)
+    assert coil(coke) == [("15", 8), ("16", 8)] and row(coke).expected_cents == 1275
+    newer = "2026-11-08T10:00:00Z"
+    cheap = receipt(total_paid="12.37")
+    if change == "missing":
+        changed = two_slot_answer(cheap, slots=("15",), updated_at=newer)
+    elif change == "extra":
+        changed = two_slot_answer(cheap, cheap, cheap, slots=("15", "16", "17"), updated_at=newer)
+    else:
+        changed = two_slot_answer(cheap, cheap, updated_at=newer)
+        line = changed["lines"][1]
+        if change == "moved":
+            line["slot"] = "17"
+        elif change == "source":
+            line["source"] = "back_stock"
+        else:
+            line["primary"] = {**line["primary"], "packs": 2}
+    for hours in (1, 2):
+        report = sync(coke, FakeBridge({"r1": changed}), now=NOW + timedelta(hours=hours), log=said.append)
+        assert (report.fulfilled, report.failed) == (1, 0), said
+    assert coil(coke) == [("15", 8), ("16", 8)]
+    assert row(coke).expected_cents == 1275
+    warned = [line for line in said if "different lines" in line]
+    assert len(warned) == 1 and warned[0].startswith("r1: "), said
+    assert [reason for reason, _ in kept_out_rows(coke)] == ["lines_changed"]
+    # The same two lines with new amounts are a correction, and stored.
+    fixed = two_slot_answer(cheap, cheap, updated_at="2026-11-08T12:00:00Z")
+    sync(coke, FakeBridge({"r1": fixed}), now=NOW + timedelta(hours=3), log=said.append)
+    assert row(coke).expected_cents == 1237 and coil(coke) == [("15", 8), ("16", 8)]
+
+
+def test_a_correction_whose_lines_differ_from_the_request_is_kept_out(coke):
+    """Round 6, finding 1: the lines are checked against the request we sent too. The fill (slots 15 and 17) is
+    stored as the bridge gave it, though we asked for 15 and 16; a correction with those same lines is kept out, so a
+    person looks at it."""
+    record(coke, "r1", NOW - timedelta(days=2), False, TWO_SLOTS, plan_hash="abc123")
+    store(coke, "r1", two_slot_answer(receipt(), receipt(), slots=("15", "17")), NOW)
+    again = two_slot_answer(receipt(units_loaded=4), receipt(), slots=("15", "17"), updated_at="2026-11-08T10:00:00Z")
+    [warning] = store(coke, "r1", again, NOW).warnings
+    assert "different lines from the request we sent" in warning, warning
+    assert coil(coke) == [("15", 8), ("17", 8)]
+    assert [reason for reason, _ in kept_out_rows(coke)] == ["lines_changed"]
+
+
+def test_a_door_time_out_of_range_fails_that_request_and_keeps_the_stored_pair(coke):
+    """Round 6, finding 2: a correction with a 1999 door time was read as having no door times, and it cleared the
+    valid pair stored with the fill. A door time out of range is now that request's error: it fails, the stored
+    pair stays, and the next request is read as usual. A door time left out still falls back as before."""
+    submit(coke, "r1", days_ago=3)
+    submit(coke, "r2", days_ago=2)
+    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt(), door_opened_at=OPENED, door_closed_at=CLOSED),
+                           "r2": pending("r2")}), now=NOW, log=quietly)
+    before = door_row(coke, "r1")
+    assert before[0] is not None
+    bad = fulfilled("r1", receipt(total_paid="12.99"), updated_at="2026-11-08T10:00:00Z",
+                    door_opened_at="1999-12-31T23:59:00Z", door_closed_at=CLOSED)
+    said: list[str] = []
+    report = sync(coke, FakeBridge({"r1": bad, "r2": fulfilled("r2", receipt())}), now=NOW + timedelta(hours=1),
+                  log=said.append)
+    assert (report.failed, report.fulfilled) == (1, 1), said
+    assert any(line.startswith("r1: ") and "kept what we had" in line for line in said), said
+    assert door_row(coke, "r1") == before
+    assert stocked(coke)[1][0][3] == Decimal("12.37")
+
+
+def test_a_skip_reason_is_named_again_when_a_later_revision_brings_it_back(coke):
+    """Round 6, finding 3: the skip warnings were deduplicated by a hash of the priced lines alone, so revision 3,
+    the same as revision 1, was taken as already named. The stored updated_at is part of the key now."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    said: list[str] = []
+    for hours, (paid, changed) in enumerate([("13.99", "2026-11-08T10:00:00Z"), ("12.37", "2026-11-08T11:00:00Z"),
+                                             ("13.99", "2026-11-08T12:00:00Z")]):
+        answer = fulfilled("r1", receipt(total_paid=paid), updated_at=changed)
+        for again in (0, 1):
+            sync(coke, FakeBridge({"r1": answer}), now=NOW + timedelta(hours=hours, minutes=again), log=said.append)
+    assert sum("above the primary row's max $13.50" in line for line in said) == 2, said

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -98,10 +99,16 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     `updated_at` as the stored receipt is the same revision: stored again if it is the same answer, or the same
     answer with more `later_losses` (the bridge adds them to a fulfilled request; the spec doesn't say it
     changes `updated_at`). Any other difference within one revision is kept out: we can't tell which is
-    newer, so the stored one stays. A newer revision is kept out too when it drops or changes a later loss
-    we stored (`_losses_shrank`): the bridge only adds to that list, and replacing the lines would delete
-    the loss and put its units back in the stock count. The request's row is locked while this is decided,
-    so two reads that race can't both win.
+    newer, so the stored one stays.
+
+    The correction rule: once a receipt is stored fulfilled, a newer fulfilled answer replaces it only if it
+    has exactly the same lines (`_lines_changed`: the same line numbers, each with the same slot, source and
+    choices we asked for, matching the slots and sources of the request we sent) and each line's stored later
+    losses start that line's new list (`_losses_shrank`). So a correction may change amounts, prices and
+    counts, add later losses and change door times; an answer that drops, adds or changes a line, or drops
+    or changes a later loss, is kept out. Replacing the lines with fewer would delete their units from the
+    stock count and their price from sourcing. The request's row is locked while this is decided, so two
+    reads that race can't both win.
 
     An amount that can't be real (1e30 dollars, or more than 10 decimal places) is stored as unknown, with a
     warning, and the rest of the receipt is kept: the fill happened, and the stock count needs its lines.
@@ -147,7 +154,8 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
             return Stored(was)
         kept = _kept_out(request_id, status, empty, changed_at, response, was, was_changed, was_answer)
         if kept is None and status == was == "fulfilled":
-            kept = _losses_shrank(conn, request_id, changed_at, losses)
+            kept = _lines_changed(conn, request_id, changed_at, lines) or _losses_shrank(
+                conn, request_id, changed_at, losses)
         if kept is not None:
             reason, warning = kept
             if not _first_time_kept_out(conn, request_id, response, reason, warning):
@@ -218,6 +226,36 @@ def _kept_out(request_id: str, status: str, empty: bool, changed_at: datetime | 
             f"({_eastern(changed_at)}) but different contents, so we can't tell which is newer; kept the "
             "stored receipt. A person should check it against the bridge")
     return None
+
+
+def _lines_changed(conn: psycopg.Connection, request_id: str, changed_at: datetime | None,
+                   lines: list[tuple]) -> tuple[str, str] | None:
+    """Why a fulfilled answer must not replace the stored receipt's lines, or None when it has the same ones.
+
+    A line is its line number, slot, source and the choices we asked for (`primary`, `alternate`, `load`). The
+    answer must have exactly the stored receipt's lines, and the slots and sources of the request we sent. A
+    correction changes what a line's receipt says, never which lines there are."""
+    def identity(line_no, slot, source, asked) -> tuple:
+        return line_no, slot, source, json.dumps(asked, sort_keys=True, default=str)
+
+    stored = Counter(identity(*row) for row in conn.execute(
+        "select line_no, slot, source, asked from purchase_lines where request_id = %s", (request_id,)))
+    answer = Counter(identity(line_no, slot, source, asked.obj) for _, line_no, slot, source, asked, *_ in lines)
+    body = conn.execute("select request_body from purchase_requests where request_id = %s",
+                        (request_id,)).fetchone()[0]
+    sent = body.get("lines") if isinstance(body, dict) else None
+    requested = (Counter((line.get("slot"), line.get("source")) for line in sent if isinstance(line, dict))
+                 if isinstance(sent, list) else None)
+    if answer == stored and (requested is None or requested == Counter(i[1:3] for i in answer.elements())):
+        return None
+    differ = sorted({str(i[0]) for i in (answer - stored) + (stored - answer)})
+    said = f"last changed {_eastern(changed_at)}" if changed_at else "no updated_at"
+    where = (f"the stored receipt on line{'' if len(differ) == 1 else 's'} {', '.join(differ)}" if differ
+             else "the request we sent")
+    return "lines_changed", (
+        f"{request_id}: the bridge's answer ({said}) has different lines from {where}; kept the stored receipt. "
+        "A correction may change amounts and add later losses, but not drop, add or change a line, so a person "
+        "should check it against the bridge")
 
 
 def _losses_shrank(conn: psycopg.Connection, request_id: str, changed_at: datetime | None,
@@ -361,7 +399,7 @@ def door_times(request_id: str, response: dict) -> tuple[datetime | None, dateti
     a string like "soon" or a date with no time), neither is kept: the visit needs both ends, and the
     receipt itself is still good. The answer is still kept whole in
     `last_response`. Close before open is a bad receipt: `ValueError`, so
-    `store` writes nothing.
+    `store` writes nothing. So is a time out of range (1999, `_door_when`).
     """
     opened, closed = _door_when(response.get("door_opened_at")), _door_when(response.get("door_closed_at"))
     if opened is None or closed is None:
@@ -372,17 +410,20 @@ def door_times(request_id: str, response: dict) -> tuple[datetime | None, dateti
 
 
 def _door_when(value: object) -> datetime | None:
-    """A door time, or None when there is none or it isn't a time the bridge could mean.
+    """A door time, or None when there is none or it isn't a time at all.
 
     A date with no time of day ("2026-11-07") isn't one: read as midnight it would
     put the door's close before its open, and the whole receipt would be refused.
+    A real time outside 2020-2099 (`_when`) is `ValueError`, so that request fails and keeps what we had: read
+    as no door times, a correction dated 1999 would clear the valid pair stored with the fill.
     """
     if not isinstance(value, str) or not any(sep in value.strip() for sep in ("T", "t", " ")):
         return None
     try:
-        return _when(value)
+        datetime.fromisoformat(value)
     except ValueError:
         return None
+    return _when(value)
 
 
 def _door_time_warnings(request_id: str, response: dict) -> list[str]:

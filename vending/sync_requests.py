@@ -151,10 +151,16 @@ def _refresh_prices(conn: psycopg.Connection, request_id: str, now: datetime, re
 
 
 def _first_time_skipped(conn: psycopg.Connection, request_id: str, reasons: list[str]) -> list[str]:
-    """The reasons not yet recorded for this revision of the request's receipt, now recorded in `action_log`."""
+    """The reasons not yet recorded for this revision of the request's receipt, now recorded in `action_log`.
+
+    A revision is the stored `updated_at` and the lines pricing reads. The `updated_at` tells revision 3 from
+    revision 1 when their lines are the same, so a reason that comes back is named again; for a receipt with no
+    `updated_at`, the lines alone tell its revisions apart."""
     if not reasons:
         return []
-    revision = hashlib.sha256(json.dumps(receipt_prices.priced_lines(conn, request_id), sort_keys=True,
+    changed = conn.execute("select updated_at from purchase_requests where request_id = %s",
+                           (request_id,)).fetchone()[0]
+    revision = hashlib.sha256(json.dumps([changed, receipt_prices.priced_lines(conn, request_id)], sort_keys=True,
                                          separators=(",", ":"), default=str).encode()).hexdigest()
     new = []
     for text in dict.fromkeys(reasons):
