@@ -17,6 +17,8 @@ from vending.ledger import (  # noqa: E402
     LedgerError,
     dollars_to_cents,
     money,
+    tax_week_end,
+    tax_week_of,
     takings_between,
     week_of,
 )
@@ -56,6 +58,113 @@ def test_week_starts_on_saturday():
     assert week_of(datetime(2026, 11, 1, 9, 0, tzinfo=EASTERN)) == date(2026, 10, 31)
     assert week_of(datetime(2026, 11, 7, 0, 0, tzinfo=EASTERN)) == date(2026, 11, 7)
     assert week_of(datetime(2026, 11, 6, 23, 59, tzinfo=EASTERN)) == date(2026, 10, 31)
+
+
+def et(*args) -> datetime:
+    """An Eastern wall-clock moment, in UTC."""
+    return datetime(*args, tzinfo=EASTERN).astimezone(timezone.utc)
+
+
+def test_the_tax_week_is_davids_sunday_to_saturday():
+    # David calculates the tax at 23:59 Saturday Eastern (20 Nov): Saturday ends the week, Sunday starts one.
+    assert tax_week_of(datetime(2026, 12, 5, 23, 59, 59, tzinfo=EASTERN)) == date(2026, 11, 29)
+    assert tax_week_of(datetime(2026, 12, 6, 0, 0, tzinfo=EASTERN)) == date(2026, 12, 6)
+    assert tax_week_of(datetime(2026, 11, 30, 13, 0, tzinfo=EASTERN)) == date(2026, 11, 29)
+    assert tax_week_end(date(2026, 11, 29)) == datetime(2026, 12, 5, 23, 59, 59, 999999, tzinfo=EASTERN)
+
+
+def test_a_week_straddling_saturday_2359_splits_the_tax_at_sunday_midnight():
+    rows = [(et(2026, 12, 5, 12, 0), "15", 0),
+            (et(2026, 12, 5, 23, 59), "15", 1234),              # Saturday 23:59: David's week ending 5 Dec
+            (et(2026, 12, 6, 0, 0), "15", 2468)]                # Sunday 00:00: the next week
+    t = takings_between(rows, rows[0][0], et(2026, 12, 7, 0, 0), EASTERN)
+    # Each 1234 holds 91.41 of tax: 91 + 91 = 182, not round(2468 x 8/108) = round(182.81) = 183.
+    assert [(w.week, w.takings_cents, w.tax_cents) for w in t.by_tax_week] == [
+        (date(2026, 11, 29), 1234, 91), (date(2026, 12, 6), 1234, 91)]
+    assert t.tax_cents == 182
+    # Both are in the display week that began Saturday 5 Dec, which carries the tax weeks' 182, not 183.
+    assert [(w.week, w.takings_cents, w.tax_cents) for w in t.by_week] == [(date(2026, 12, 5), 2468, 182)]
+
+
+def test_tax_weeks_follow_the_eastern_clock_across_daylight_saving():
+    # Fall back, Sun 1 Nov 2026: Saturday ends at 04:00 UTC (EDT), and the next week at 05:00 UTC (EST).
+    assert tax_week_of(datetime(2026, 11, 1, 3, 59, 59, tzinfo=timezone.utc).astimezone(EASTERN)) == date(2026, 10, 25)
+    assert tax_week_of(datetime(2026, 11, 1, 4, 0, tzinfo=timezone.utc).astimezone(EASTERN)) == date(2026, 11, 1)
+    assert tax_week_of(datetime(2026, 11, 8, 4, 30, tzinfo=timezone.utc).astimezone(EASTERN)) == date(2026, 11, 1)
+    assert tax_week_of(datetime(2026, 11, 8, 5, 0, tzinfo=timezone.utc).astimezone(EASTERN)) == date(2026, 11, 8)
+    utc_end = lambda week: tax_week_end(week).astimezone(timezone.utc)  # noqa: E731
+    assert utc_end(date(2026, 11, 1)) - utc_end(date(2026, 10, 25)) == timedelta(days=7, hours=1)
+    # Spring forward, Sun 14 Mar 2027: the week holding it is an hour short.
+    assert utc_end(date(2027, 3, 14)) - utc_end(date(2027, 3, 7)) == timedelta(days=7, hours=-1)
+    assert utc_end(date(2027, 3, 7)) == datetime(
+        2027, 3, 14, 4, 59, 59, 999999, tzinfo=timezone.utc)
+    # A poll at 04:30 UTC on Sun 8 Nov is 23:30 Saturday Eastern, so its sale is in the week of 1 Nov.
+    rows = [(datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc), "15", 0),
+            (datetime(2026, 11, 8, 4, 30, tzinfo=timezone.utc), "15", 125),
+            (datetime(2026, 11, 8, 5, 30, tzinfo=timezone.utc), "15", 250)]
+    t = takings_between(rows, rows[0][0], datetime(2026, 11, 9, tzinfo=timezone.utc), EASTERN)
+    assert [(w.week, w.takings_cents) for w in t.by_tax_week] == [(date(2026, 11, 1), 125), (date(2026, 11, 8), 125)]
+
+
+def test_the_first_tax_week_starts_at_the_opening_and_is_partial():
+    opened = et(2026, 11, 30, 13, 0)                            # stocked Monday 30 Nov
+    rows = [(et(2026, 11, 29, 18, 0), "15", 900),              # before the opening: the baseline is the last poll
+            (opened, "15", 1000),                               # at it, so test sales on Sunday never count
+            (et(2026, 12, 3, 12, 0), "15", 1500),
+            (et(2026, 12, 5, 22, 0), "15", 2234),
+            (et(2026, 12, 6, 9, 0), "15", 2734)]
+    t = takings_between(rows, opened, et(2026, 12, 7, 0, 0), EASTERN)
+    # Week one is Mon 30 Nov 13:00 to Sat 5 Dec 23:59:59: 1234 cents, 91.41 of tax.
+    assert [(w.week, w.takings_cents, w.tax_cents) for w in t.by_tax_week] == [
+        (date(2026, 11, 29), 1234, 91), (date(2026, 12, 6), 500, 37)]
+    # Mid-week, before Saturday's calculation, the week so far is set aside the same way.
+    mid = takings_between(rows, opened, et(2026, 12, 3, 12, 0), EASTERN)
+    assert [(w.week, w.takings_cents, w.tax_cents) for w in mid.by_tax_week] == [(date(2026, 11, 29), 500, 37)]
+
+
+@pytest.mark.parametrize("zone", [EASTERN, timezone.utc], ids=["eastern", "utc"])
+def test_takings_between_keeps_both_fall_back_polls_apart(zone):
+    # Fall back, Sun 1 Nov 2026: 01:30 Eastern happens twice, 05:30 UTC (EDT, fold 0) and 06:30 UTC (EST,
+    # fold 1). Python compares two times in the same ZoneInfo by wall clock, so they must be read as instants.
+    first = datetime(2026, 11, 1, 1, 30, tzinfo=EASTERN, fold=0)
+    second = datetime(2026, 11, 1, 1, 30, tzinfo=EASTERN, fold=1)
+    assert (first.astimezone(timezone.utc).hour, second.astimezone(timezone.utc).hour) == (5, 6)
+    rows = [(datetime(2026, 11, 1, 0, 30, tzinfo=EASTERN).astimezone(zone), "15", 0),
+            (first.astimezone(zone) if zone is timezone.utc else first, "15", 1350),
+            (second.astimezone(zone) if zone is timezone.utc else second, "15", 2700)]
+    as_of_first = takings_between(rows, rows[0][0], first, EASTERN)
+    assert (as_of_first.cents, as_of_first.tax_cents) == (1350, 100)
+    # Compared in UTC: Python calls any inter-zone == with a time in a fold unequal (PEP 495).
+    assert as_of_first.end_poll.astimezone(timezone.utc) == first.astimezone(timezone.utc)
+    as_of_second = takings_between(rows, rows[0][0], second, EASTERN)
+    assert (as_of_second.cents, as_of_second.tax_cents) == (2700, 200)
+    # Counted from the first 01:30, only the second one's rise is in the window.
+    since_first = takings_between(rows, first, second, EASTERN)
+    assert (since_first.start_poll.astimezone(timezone.utc), since_first.cents) == (first.astimezone(timezone.utc), 1350)
+
+
+def test_tax_is_rounded_on_the_weeks_takings_not_on_each_sale():
+    # Ten $1.25 sales, one per poll: each holds 9.26 cents of tax, which rounds to 9 a sale (90),
+    # but the week's $12.50 holds 92.59, which rounds to 93. The ledger sets aside 93.
+    start = et(2026, 12, 6, 8, 0)
+    rows = [(start + timedelta(hours=n), "15", 125 * n) for n in range(11)]
+    t = takings_between(rows, start, et(2026, 12, 12, 23, 0), EASTERN)
+    assert (t.cents, t.tax_cents) == (1250, 93)
+    assert sum(int(Fraction(125 * 8, 108) + Fraction(1, 2)) for _ in range(10)) == 90
+
+
+def test_display_weeks_carry_their_share_of_the_tax_weeks_rounding():
+    # The display week turns over on Saturday, the tax week on Sunday. Friday 4 Dec and Saturday 5 Dec
+    # are one tax week (from Sunday 29 Nov) but two display weeks.
+    rows = [(et(2026, 12, 4, 9, 0), "15", 0),
+            (et(2026, 12, 4, 18, 0), "15", 5),                  # Friday: 5 cents holds 0.37, rounded 0
+            (et(2026, 12, 5, 18, 0), "15", 10)]                 # Saturday: the week's 10 holds 0.74, rounded 1
+    t = takings_between(rows, rows[0][0], et(2026, 12, 6, 12, 0), EASTERN)
+    assert [(w.week, w.takings_cents, w.tax_cents) for w in t.by_tax_week] == [(date(2026, 11, 29), 10, 1)]
+    # Each display week has what its rises added to the tax week's rounded tax, so they sum to it,
+    # though Saturday's 5 cents on its own would round to 0.
+    assert [(w.week, w.takings_cents, w.tax_cents) for w in t.by_week] == [
+        (date(2026, 11, 28), 5, 0), (date(2026, 12, 5), 5, 1)]
 
 
 def test_takings_are_counted_from_the_last_poll_before_the_opening():
@@ -102,7 +211,7 @@ def test_polls_after_the_window_are_ignored():
 
 def test_no_polls_is_zero_with_a_note():
     t = takings_between([], T0, at(1), EASTERN)
-    assert (t.cents, t.tax_cents, t.by_week) == (0, 0, ())
+    assert (t.cents, t.tax_cents, t.by_week, t.by_tax_week) == (0, 0, (), ())
     assert "no polls" in t.note
 
 
@@ -408,28 +517,64 @@ def test_a_period_that_ends_between_a_swap_and_the_next_poll_books_the_split_wit
         assert getattr(first, name) + getattr(second, name) == getattr(whole, name), name
 
 
-def test_an_unsplit_swap_window_stays_in_cost_of_sales_and_says_why(conn):
-    # #112: as above, but the 17:00 poll shows 2 units and 700 cents, which fits no split of
-    # $2.50 and $4.00. The 2 units' cost (2 Red Bull at 150c) stays in cost of sales, by week too.
+def swap_receipts(conn, paid="15.00"):
+    """The ledger opened, 8 Coke loaded at UNIT_COST on Sat 7 Nov, and a swap to 10 Red Bull at 150c
+    each (`paid` for the 10; None: unknown) at 12:00 on Sun 8 Nov that pulls 7 Coke, so 1 Coke is
+    left to write off at the swap."""
     open_ledger(conn)
     deliver(conn, "r1")
     record_request(conn, "r2", OPENED + timedelta(days=6), False, BODY)
     store(conn, "r2", fulfilled("r2", receipt(
-        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid="15.00", unit_cost_paid="1.50",
+        sku="REDBULL", units_per_pack=10, units_bought=10, total_paid=paid,
+        unit_cost_paid=None if paid is None else f"{Decimal(paid) / 10:.2f}",
         units_loaded=10, units_lost=0, loss_note=None, units_to_back_stock=0, units_pulled=7, pulled_sku="COKE20",
         slot_reassigned=True, resolved_at="2026-11-08T12:00:00Z"), fulfilled_at="2026-11-08T12:30:00Z"), NOW)
+
+
+def unsplit_swap(conn):
+    """#112: Coke at $2.50 until the swap to Red Bull at $4.00 (`swap_receipts`); the 17:00 poll
+    shows 2 units and 700 cents, which fits no split of $2.50 and $4.00. The replay takes the 2
+    units from the Red Bull's count, 300c of stock, though which product sold is unknown."""
+    swap_receipts(conn)
     store_poll(conn, "a", "2026-11-07T17:00:00+00:00", {"15": (250, 100, 25000)})
     store_poll(conn, "b", "2026-11-08T17:00:00+00:00", {"15": (400, 102, 25700)})
+
+
+# The 2 units of the unsplit swap, at the midpoint of a Coke's and a Red Bull's cost (#172 item 5).
+SWAP_ESTIMATE = (UNIT_COST + 150) / 2 * 2
+
+
+def test_an_unsplit_swap_window_is_estimated_apart_from_exact_cost_of_sales(conn):
+    # #172 item 5: which product sold is unknown, so neither product's cost is exact. The
+    # exact cost of sales leaves them out, the estimate is reported apart, and the P&L says
+    # cost of sales is incomplete, by week too, as the money chart does.
+    unsplit_swap(conn)
     p = ledger.pnl(conn, OPENED, NOW)
-    # Their cost is in cost of sales, so they count as costed: the P&L page and get_pnl show a
-    # known figure instead of "unknown", and the note says the product may be wrong.
-    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 2, 300)
-    assert p.cost_of_sales_complete
-    assert any("can't split" in n and "may be the wrong product's" in n for n in p.notes)
+    assert (p.units_sold, p.units_costed, p.cost_of_sales_cents) == (2, 0, 0)
+    assert (p.units_estimated, p.estimated_cost_of_sales_cents) == (2, SWAP_ESTIMATE)
+    assert not p.cost_of_sales_complete
+    assert any("can't split" in n and "estimate" in n for n in p.notes)
     assert not any("have no known cost" in n for n in p.notes)
     weeks = ledger.pnl_by_week(conn, OPENED, NOW)
-    assert sum(w.cost_of_sales_cents for w in weeks) == 300
-    assert all(w.cost_of_sales_complete for w in weeks)
+    assert sum(w.units_costed for w in weeks) == 0 and sum(w.cost_of_sales_cents for w in weeks) == 0
+    assert sum(w.units_estimated for w in weeks) == 2
+    assert sum(w.estimated_cost_of_sales_cents for w in weeks) == SWAP_ESTIMATE
+    assert not all(w.cost_of_sales_complete for w in weeks)
+    # The agent's get_pnl shows the estimate apart, never inside cost of sales or net.
+    reply = get_pnl(conn, date(2026, 11, 1), date(2026, 11, 9))
+    assert (reply.units_costed, reply.cost_of_sales, reply.cost_of_sales_complete) == (0, "0.00", False)
+    assert (reply.units_estimated, reply.estimated_cost_of_sales) == (2, money(SWAP_ESTIMATE))
+
+
+def test_get_pnl_never_headlines_a_partial_net_as_net(conn):
+    # Review of #172 item 5: with cost of sales incomplete, `net` is net at known costs only. The
+    # summary says so, and names the estimate apart, labelled, outside net.
+    unsplit_swap(conn)
+    message = get_pnl(conn, date(2026, 11, 1), date(2026, 11, 9)).message
+    assert "net at known costs 5.36 (incomplete: 2 of 2 units sold not costed exactly" in message, message
+    assert f"estimated cost of 2 units {money(SWAP_ESTIMATE)}, an estimate not in net" in message, message
+    assert ", net 5.36" not in message
+
 
 
 def test_purchases_and_the_stock_they_bring_go_by_the_same_clock(conn):
@@ -525,6 +670,28 @@ def test_pnl_by_week_books_each_line_to_its_week_and_adds_up_to_pnl(conn):
         assert sum(getattr(w, name) for w in weeks) == getattr(p, name), name
 
 
+def test_the_balance_sets_aside_each_tax_week_and_the_week_in_progress(conn):
+    opened = et(2026, 11, 30, 13, 0)                            # stocked Monday 30 Nov
+    open_ledger(conn, at=opened)
+    store_poll(conn, "base", opened.isoformat(), {"15": (125, 0)})
+    store_poll(conn, "wed", et(2026, 12, 2, 12, 0).isoformat(), {"15": (125, 4)})
+    store_poll(conn, "sat", et(2026, 12, 5, 23, 59).isoformat(), {"15": (125, 10)})
+    store_poll(conn, "sun", et(2026, 12, 6, 0, 0).isoformat(), {"15": (125, 20)})
+    # Wednesday, before Saturday's calculation: the week so far, $5.00, holds 37.04 cents.
+    mid = ledger.balance(conn, et(2026, 12, 2, 12, 0))
+    assert (mid.takings.cents, mid.tax_owed_cents, mid.spendable_cents) == (500, 37, 60500 - 37)
+    # Saturday 23:59: the first week, $12.50, holds 92.59 cents.
+    sat = ledger.balance(conn, et(2026, 12, 5, 23, 59, 30))
+    assert (sat.takings.cents, sat.tax_owed_cents) == (1250, 93)
+    # Sunday 00:00 starts the next week: its $12.50 is rounded on its own, 93 + 93, not round(185.19).
+    sun = ledger.balance(conn, et(2026, 12, 6, 12, 0))
+    assert [(w.week, w.takings_cents, w.tax_cents) for w in sun.takings.by_tax_week] == [
+        (date(2026, 11, 29), 1250, 93), (date(2026, 12, 6), 1250, 93)]
+    assert (sun.tax_owed_cents, sun.spendable_cents) == (186, 62500 - 186)
+    ledger.record_remittance(conn, "0.93", "marshall", at=et(2026, 12, 7, 9, 0))
+    assert ledger.balance(conn, et(2026, 12, 7, 10, 0)).tax_owed_cents == 93
+
+
 def test_get_account_balance_asks_for_an_opening_entry_first(db):  # noqa: F811
     result = call("get_account_balance")
     assert not result.isError
@@ -553,9 +720,138 @@ def test_get_pnl_end_to_end(db):  # noqa: F811
     assert (reply["revenue"], reply["revenue_ex_tax"], reply["units_sold"], reply["units_costed"]) == ("12.50", "11.57", 5, 5)
     assert reply["cost_of_sales"] == money(5 * UNIT_COST) == "5.62"
     assert (reply["cost_of_sales_complete"], reply["shrinkage"], reply["net"]) == (True, "0.00", "5.95")
+    # Every cost known: the summary headlines plain net, with no estimate.
+    assert ", net 5.95," in reply["message"] and "known costs" not in reply["message"]
+    assert (reply["units_estimated"], "estimate" in reply["message"]) == (0, False)
     assert reply["inventory"] == money(6 * UNIT_COST) == "6.75"
     assert reply["weeks"] == [{"week": "2026-11-07", "revenue": "12.50", "tax_set_aside": "0.93"}]
+    # The polls are Saturday 7 Nov and Sunday 8 Nov, 12:00 Eastern: the sale is in the tax week from Sunday.
+    # The window ends Monday 9 Nov, so the tax week it counts is cut short: `partial`, and `to` says where.
+    assert reply["tax_weeks"] == [{"week": "2026-11-08", "ends": "2026-11-14T23:59:59.999999-05:00",
+                                   "from": "2026-11-08T00:00:00-05:00", "to": "2026-11-09T23:59:59.999999-05:00",
+                                   "partial": True, "revenue": "12.50", "tax": "0.93"}]
     assert call("get_pnl", {"start": "2026-11-09", "end": "2026-11-01"}).structuredContent["success"] is False
+
+
+def freeze_pnl_clock(monkeypatch, now: datetime) -> None:
+    """get_pnl's "now", the cutoff of a window that runs to today or later, and the day it calls today."""
+    import vending.tools.pnl as tool
+    monkeypatch.setattr(tool, "_now", lambda conn: now)
+
+
+# These windows run past the real date the tests may run on; get_pnl stops a window at now.
+LATER = datetime(2027, 1, 4, 12, 0, tzinfo=timezone.utc)
+
+
+def test_get_pnl_counts_a_poll_at_sunday_midnight_in_that_tax_week(db, monkeypatch):  # noqa: F811
+    freeze_pnl_clock(monkeypatch, LATER)
+    opened = et(2026, 11, 30, 13, 0)                            # stocked Monday 30 Nov
+    open_ledger(db, at=opened)
+    store_poll(db, "open", opened.isoformat(), {"15": (135, 0)})
+    store_poll(db, "sat", et(2026, 12, 5, 22, 0).isoformat(), {"15": (135, 2)})     # $2.70 in the week from 29 Nov
+    store_poll(db, "sun", et(2026, 12, 6, 0, 0).isoformat(), {"15": (135, 22)})     # Sunday 00:00 sharp: $27.00
+    store_poll(db, "mon", et(2026, 12, 7, 12, 0).isoformat(), {"15": (135, 23)})    # $1.35
+    # The full tax week from Sunday 6 Dec, as the balance counts it: $28.35, holding exactly $2.10.
+    full = {w.week: w for w in ledger.balance(db, et(2026, 12, 12, 23, 0)).takings.by_tax_week}[date(2026, 12, 6)]
+    assert (full.takings_cents, full.tax_cents) == (2835, 210)
+    # A P&L over that tax week's days agrees: the poll at Sunday midnight is in it, not dropped as the baseline.
+    reply = call("get_pnl", {"start": "2026-12-06", "end": "2026-12-12"}).structuredContent
+    assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("28.35", "2.10", 21)
+    assert reply["start"].startswith("2026-12-06T05:00:00")      # still reported as Sunday's midnight
+    assert reply["tax_weeks"] == [{"week": "2026-12-06", "ends": "2026-12-12T23:59:59.999999-05:00",
+                                   "from": "2026-12-06T00:00:00-05:00", "to": "2026-12-12T23:59:59.999999-05:00",
+                                   "partial": False, "revenue": "28.35", "tax": "2.10"}]
+    # The day before ends at Saturday 23:59:59.999999, so it doesn't take the midnight poll too.
+    saturday = call("get_pnl", {"start": "2026-12-05", "end": "2026-12-05"}).structuredContent
+    assert (saturday["revenue"], saturday["units_sold"]) == ("2.70", 2)
+    # From the opening, the first tax week starts at the opening: a clipped week says so.
+    weeks = call("get_pnl", {"start": "2026-11-30", "end": "2026-12-12"}).structuredContent["tax_weeks"]
+    assert [(w["week"], w["from"], w["partial"], w["revenue"]) for w in weeks] == [
+        ("2026-11-29", "2026-11-30T00:00:00-05:00", True, "2.70"),
+        ("2026-12-06", "2026-12-06T00:00:00-05:00", False, "28.35")]
+
+
+def test_get_pnl_from_an_opening_at_midnight_keeps_the_opening_poll_as_the_baseline(db, monkeypatch):  # noqa: F811
+    freeze_pnl_clock(monkeypatch, LATER)
+    opened = et(2026, 12, 6, 0, 0)                              # opened at Sunday midnight sharp
+    open_ledger(db, at=opened)
+    store_poll(db, "sat", et(2026, 12, 5, 22, 0).isoformat(), {"15": (135, 5)})
+    store_poll(db, "open", opened.isoformat(), {"15": (135, 25)})   # 20 sold before the opening: not ours to count
+    store_poll(db, "mon", et(2026, 12, 7, 12, 0).isoformat(), {"15": (135, 26)})
+    assert ledger.balance(db, et(2026, 12, 8, 0, 0)).takings.cents == 135
+    reply = call("get_pnl", {"start": "2026-12-06", "end": "2026-12-12"}).structuredContent
+    assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("1.35", "0.10", 1)
+    assert [(w["from"], w["partial"]) for w in reply["tax_weeks"]] == [("2026-12-06T00:00:00-05:00", False)]
+
+
+def test_get_pnl_counts_saturdays_last_microsecond_in_saturday_only(db, monkeypatch):  # noqa: F811
+    freeze_pnl_clock(monkeypatch, LATER)
+    # Only the polls' midnight counts from a microsecond early: an entry, a receipt or a visit in Saturday's
+    # last microsecond is Saturday's, never Sunday's too.
+    open_ledger(db, at=et(2026, 11, 30, 13, 0))
+    last_moment = et(2026, 12, 5, 23, 59) + timedelta(seconds=59, microseconds=999999)
+    ledger.record(db, "adjustment", -1000, "bottle deposit", "marshall", last_moment)
+    deliver(db, "r1", off_cycle=True, visit_fee_cents=2500,
+            resolved_at=last_moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"))
+    lines = ("adjustments", "purchases", "visit_fees", "visits")
+    saturday = call("get_pnl", {"start": "2026-12-05", "end": "2026-12-05"}).structuredContent
+    sunday = call("get_pnl", {"start": "2026-12-06", "end": "2026-12-06"}).structuredContent
+    both = call("get_pnl", {"start": "2026-12-05", "end": "2026-12-06"}).structuredContent
+    assert [saturday[k] for k in lines] == [both[k] for k in lines] == ["-10.00", "12.37", "25.00", 1]
+    assert [sunday[k] for k in lines] == ["0.00", "0.00", "0.00", 0]
+
+
+@pytest.mark.parametrize("opens", [True, False], ids=["before-the-opening", "no-opening"])
+def test_get_pnl_before_the_opening_takes_the_midnight_poll_as_its_baseline(db, monkeypatch, opens):  # noqa: F811
+    freeze_pnl_clock(monkeypatch, LATER)
+    # A window before the opening (or with none) reads the polls from its start, as it always has: the poll at
+    # its midnight sharp is the baseline, so the $13.50 it shows was sold before the window.
+    if opens:
+        open_ledger(db, at=et(2026, 11, 30, 13, 0))
+    store_poll(db, "fri", et(2026, 11, 27, 22, 0).isoformat(), {"15": (135, 0)})
+    store_poll(db, "sat", et(2026, 11, 28, 0, 0).isoformat(), {"15": (135, 10)})
+    store_poll(db, "noon", et(2026, 11, 28, 12, 0).isoformat(), {"15": (135, 10)})
+    reply = call("get_pnl", {"start": "2026-11-28", "end": "2026-11-28"}).structuredContent
+    assert (reply["revenue"], reply["tax_set_aside"], reply["units_sold"]) == ("0.00", "0.00", 0)
+    p = ledger.pnl(db, et(2026, 11, 28, 0, 0), et(2026, 11, 29, 0, 0) - timedelta(microseconds=1))
+    assert (p.takings.cents, p.units_sold) == (0, 0)                # the ledger read from the start itself
+
+
+def test_get_pnl_reports_a_week_in_progress_as_partial_up_to_now(db, monkeypatch):  # noqa: F811
+    now = et(2026, 12, 12, 12, 0)                               # Saturday noon: the tax week ends tonight
+    freeze_pnl_clock(monkeypatch, now)
+    opened = et(2026, 11, 30, 13, 0)
+    open_ledger(db, at=opened)
+    store_poll(db, "open", opened.isoformat(), {"15": (135, 0)})
+    store_poll(db, "sun", et(2026, 12, 6, 12, 0).isoformat(), {"15": (135, 2)})
+    ledger.record(db, "adjustment", -500, "dated this evening", "marshall", et(2026, 12, 12, 18, 0))
+    for end in (None, date(2026, 12, 12), date(2026, 12, 31)):    # default, today, a future day
+        reply = get_pnl(db, None, end)
+        assert reply.end == now.astimezone(timezone.utc), end
+        assert reply.adjustments == "0.00", end               # after now: not in the window yet
+        assert [(w["week"], w["to"], w["partial"]) for w in reply.tax_weeks] == [
+            ("2026-12-06", "2026-12-12T12:00:00-05:00", True)], end
+    # A past end date is a whole day, as before; the opening clips the first week, which began Sunday 29 Nov.
+    past = get_pnl(db, None, date(2026, 12, 5))
+    assert past.end == (et(2026, 12, 6, 0, 0) - timedelta(microseconds=1)).astimezone(timezone.utc)
+
+
+def test_get_pnl_for_a_window_that_starts_after_now_is_empty(db):  # noqa: F811
+    # The real clock, not a frozen one: the window and everything in it are dated well after any real now.
+    # It used to be moved to end at its start, so the midnight poll, entry and receipt counted.
+    open_ledger(db, at=et(2026, 11, 30, 13, 0))
+    store_poll(db, "eve", et(2099, 12, 5, 22, 0).isoformat(), {"15": (135, 0)})
+    store_poll(db, "midnight", et(2099, 12, 6, 0, 0).isoformat(), {"15": (135, 2)})
+    ledger.record(db, "adjustment", 100, "dated at midnight", "marshall", et(2099, 12, 6, 0, 0))
+    deliver(db, "r1", resolved_at="2099-12-06T05:00:00Z")
+    for end in (date(2099, 12, 6), date(2099, 12, 31)):
+        reply = get_pnl(db, date(2099, 12, 6), end)
+        assert reply.success, end
+        assert (reply.revenue, reply.units_sold, reply.adjustments, reply.purchases, reply.net) == (
+            "0.00", 0, "0.00", "0.00", "0.00"), end
+        assert (reply.weeks, reply.tax_weeks, reply.count) == ([], [], 0), end
+        assert reply.start == reply.end == et(2099, 12, 6, 0, 0), end
+        assert "hasn't started" in reply.message, end
 
 
 def test_get_pnl_days_are_eastern_days(db):  # noqa: F811

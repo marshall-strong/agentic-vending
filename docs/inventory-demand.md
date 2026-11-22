@@ -2,7 +2,7 @@
 
 ## What this is
 
-The project brief asks for a "separately documented inventory and demand estimation component" (section 5; issue #93). This is that document. It covers our 20 slots on machine `vmc1`, as the inventory server assigns them (`python -m vending.slots record`). On 15 Nov that is 15-18, 25-28, 35-38, 45-48 and 55-58. It may change once before the start on 3 Dec, and is fixed after (#75).
+The project brief asks for a "separately documented inventory and demand estimation component" (section 5; issue #93). This is that document. It covers our 20 slots on machine `vmc1`, as the inventory server assigns them (`python -m vending.slots record`). The instructors changed it once, by 20 Nov, and it is fixed for the quarter (David, 20 Nov; #75). Our slots are now on every shelf. `python -m vending.slots` shows the stored assignment.
 
 Before each Friday restock the agent needs two answers:
 
@@ -37,7 +37,7 @@ So, since the last product change, **on hand = loaded − sold − lost**, never
 
 **Counts check the arithmetic** (`get_machine_state`). `counted_on_hand` = units counted − units sold since. A count newer than the slot's last receipt wins. A count older than 7 days (`COUNT_STALE_DAYS`) is weak evidence. A slot with no receipts shows null (unknown), not 0.
 
-**Day one.** Staff empty the machine before 3 Dec. Our day-one order fills all 20 slots to capacity (7 to 11 units per column, `vending/capacity.py`) from the $600 (PR #106, #107; the $600 part is being checked, #106 row 3; whether a slot may take fewer units is asked in #102). Its receipts are every slot's first reset point.
+**Day one.** Staff empty the machine and stock it on Mon 30 Nov (David, 20 Nov). Our day-one order fills all 20 slots to [package capacity](capacity.md) from the $600 (PR #106, #107; the $600 part is being checked, #106 row 3; whether a slot may take fewer units is asked in #102). Its receipts are every slot's first reset point.
 
 ## How weekly demand is estimated
 
@@ -53,13 +53,13 @@ So, since the last product change, **on hand = loaded − sold − lost**, never
 
 The fast segment (slots 28, 38, 45, 46) sold 1.701 units per in-stock class day (REPORT.md, "Our slots"):
 
-| Column | Capacity (`vending/capacity.py`) | Class days to empty at 1.701 |
+| Package | [Capacity](capacity.md) | Class days to empty at 1.701 |
 |---|---|---|
 | 20 oz bottle | 7 | 7 ÷ 1.701 = 4.1 |
 | 12 oz can | 8 | 8 ÷ 1.701 = 4.7 |
 | 240/250 ml can | 11 | 11 ÷ 1.701 = 6.5 |
 
-A Friday-afternoon fill faces 5 class days (restock policy R2, #91). So a fast slot in bottles or 12 oz cans sells out before the next visit, and its week's sales are a floor. Packages not on the chart (for example a 16.9 oz bottle or a carton) need a counted `config.capacity_overrides` entry before the fill request (23:59 Sun 29 Nov); the 16 oz can gets 8, estimated from its width (A20).
+A Friday-afternoon fill faces 5 class days (restock policy R2, #91). So a fast slot in bottles or 12 oz cans sells out before the next visit, and its week's sales are a floor. Before the fill request (23:59 Sun 29 Nov), each planned product needs a [capacity figure](capacity.md).
 
 Whole week: 23.3 units per class day (REPORT.md, "Next 4 weeks") × 5 = 116.5, about 117 units. Rough: the REPORT's weekly figures give 26.0 (52 ÷ 2), 22.5 (44.9 ÷ 2) and 21.5 (64.6 ÷ 3) per class day; the REPORT doesn't say why they differ, so read 23.3 as within 21.5 to 26.0. (The REPORT's other "23.3", a machine-wide partial week scaled up, is unrelated.) Our slots hold 20 × 7 = 140 to 20 × 11 = 220 units, so a week's demand is 116.5 ÷ 220 = 53% to 116.5 ÷ 140 = 83% of capacity, spread unevenly.
 
@@ -126,8 +126,9 @@ To number in `docs/assumptions.md` (open PRs use A16-A19: #69 A16, #99 A17-A18, 
 - **When a slot's own rate counts** (Proposed, #91): after 5 in-stock class days.
 - **Wildcard slot** (Kevin, #100; adopted on #110, item 1, 16 Nov). A testing ground for the other 19 in one fixed slot, set once after the slot redraw (config `wildcard_slot`) and never moved: a product on trial there is copied into a silent regular slot (no sales since the last Friday visit) if it sells at least 4 units over at least 5 in-stock class days (`docs/agent/wildcard.md`, `vending/wildcard_trial.py`). Ceiling about $8.00 (others $6.50, PR #100); same floor as every slot (cost × 1.08 rounded up to 5 cents, `vending/pricing.py`). Aim: every sale profits, no loss leaders, which needs a floor above today's break-even (open). Ideas: premium drink, high-price test, rotating feature, seasonal bet, anchor. Purchase cap $82 (#90). For demand, no fall segment was priced that high to borrow a rate from (the dearest averaged $4.33, REPORT.md, "Our slots"). Rules: `docs/restock-policy.md` section 3; money: `docs/opening-capital-plan.md`.
 - **Swap first at a slow-seller flag** (Proposed by Kevin, 12 Nov): at most one price step down, then swap; pulled units to the closet at cost. Depends on A5, end stock valued at cost (#102, P2). See `docs/restock-policy.md` rule 3.
-- **Does the door counter stay in the polls after 3 Dec?** Yes (David, 17 Nov), and the polls carry the full, raw DEX response, so readers must filter to our slots from 3 Dec.
+- **Does the door counter stay in the polls after 3 Dec?** Yes (David, 17 Nov), and from 3 Dec the polls carry the full, raw DEX response. Readers must filter to our slots for every poll taken from the fall cut on (`FALL_CUTOFF`, 18 Nov when unset; `docs/integrity.md`).
 - **Day-one deadline:** catalog approvals by Wed 25 Nov, the fill request by 23:59 Sun 29 Nov, stocking Mon 30 Nov (David, 17 Nov).
+- **Opening day:** David's 20 Nov email says both "not until 3 Dec" and "1 or 2 Dec". We plan for 3 Dec until he answers (A24, `planning/2026-11-20-david-update.md`).
 
 ## Sources
 

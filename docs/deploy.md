@@ -11,7 +11,7 @@ so the container joins it with Tailscale in userspace mode.
 ## What runs in the container
 
 `Dockerfile` builds one image with the package and the Tailscale binaries. Its default command
-is `python -m vending.worker`: every hour it runs `python -m vending.sync_history`,
+is `python -m vending.worker`: every hour, at 5 minutes past (UTC), it runs `python -m vending.sync_history`,
 `python -m vending.sync_requests`, `python -m vending.sync_catalog` and
 `python -m vending.sync_product_requests` (which catalog requests were approved or rejected),
 each with a 30-minute
@@ -20,10 +20,18 @@ outcome per job (a `503` means the last round failed). Its root, `GET /`, is the
 page for people: whether the last round passed, each job's outcome, when the last and next rounds
 run (Eastern time), and links to the docs. It reloads itself every minute and works on a phone.
 Both are public, so they show exit codes and outcomes only, never error text (a database error
-names the host and user); the errors are in the log. The page is built from the same data as
+names the host and user); the errors are in the log, a database error as its class and SQLSTATE. The page is built from the same data as
 `/health`, so it can't show more. `docker/entrypoint.sh` joins the tailnet first and
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
+
+**Why 5 minutes past.** The course staff's poller reads the machine on the hour, and the bridge keeps
+every poll. A round at 5 past brings the new poll into our database about 5 minutes after it was
+taken, and the dashboard shows it on its next 30-second refresh. Before, a round ran an hour after
+the last one, at whatever minute the container had started, so a poll could wait up to an hour.
+`SYNC_AT_MINUTE` changes the minute (`off` brings back an hour from the last round), and
+`SYNC_EVERY_MINUTES` the gap. With a minute set, the gap must divide 60 or be a multiple of it
+(15 gives :05, :20, :35 and :50).
 
 **Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
 worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a
@@ -73,7 +81,8 @@ A read holds the bridge's one serial line, and anyone else's poll gets a `409` w
   failure is an error status, a timeout, a bridge that is down, or a step that broke; a read that went
   out but whose row is "not confirmed" is not one;
 - **a failed read never fails the round or `/health`.** Reads are not jobs of the round and appear in
-  neither. Only the log shows them.
+  neither. Only the log shows them, and it names a status, a size or a reason of our own, never what the
+  bridge sent back (`docs/integrity.md`, "Logs carry no poll bytes").
 
 Each step first re-reads our pending purchase requests (plain GETs, not machine reads), so a receipt
 is seen within a minute. The reads stop for the day once a request of ours was fulfilled that day and a
@@ -133,6 +142,22 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 python -m vending.db migrate
 ```
 
+Apply migration 025 (`purchase_submissions.purpose`, for `python -m vending.fill`) while no submit
+runs: the agent paused (`python -m vending.halt on --by NAME`) and no fill being sent. It waits at
+most 2 seconds for its lock. If a submit holds the table, it fails with "lock timeout" and changes
+nothing; run it again once the submit is over.
+
+Apply migration 020 before deploying the dashboard that reads the first-fill plan. Use the same
+owner login that ran `python -m vending.pages grant` so the page login inherits read access.
+From a laptop with the plan files and the writer login, load the plan and pick the ID it prints.
+
+```
+python -m vending.plan_store load DIR --round 3 --by NAME
+python -m vending.plan_store pick ID --by NAME
+```
+
+Use `python -m vending.plan_store list` to find the ID of a plan already loaded.
+
 **After the migration that adds `slot_assignment` (013, from #69), record our slots once.** Every
 agent tool, `preview_desired_state` and the ledger CLI read which selections are ours from that
 table, and until it has a row they refuse and name this command (the dashboard says our slots
@@ -155,17 +180,18 @@ answers 503 until a person looks. The instructors change our assignment exactly 
 server, and that change is what the competition uses (David, 16 Nov; assumption A16). So a failed
 `slots_check` before the start most likely means the change has come: check it with the
 instructors, then run `python -m vending.slots record`, and replan the day-one fill if it is
-already bought.
+already bought. The change came by 20 Nov, and David says the slots won't change again this
+quarter (`docs/planning/2026-11-20-david-update.md`).
 
 **Our team.** Every answer must name our team, `SLOTS_TEAM` (unset: `group-b`, the name the server
 has given since 12 Nov). An answer for another team, or with no team, is refused, so a swapped key
-or a misconfigured bridge can't hand us the other half of the machine.
+or a misconfigured bridge can't hand us an assignment outside our team.
 
 **The lock.** The assignment is fixed from the start. The lock time is the setting `SLOTS_LOCK_AT`,
 an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern,
 Thu 3 Dec, the first day of Winter Quarter on the Institute's calendar and the start David gave on
-12 Nov). If the instructors move the start (to Wed 2 Dec, say), set it on the Container App, for
-example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
+12 Nov). If the instructors move the start (David's 20 Nov email names 1 or 2 Dec as well as 3 Dec;
+assumption A24), set it on the Container App, for example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
 Each process reads these settings itself: when you run `record` or `confirm` from a laptop, set the
 same `SLOTS_LOCK_AT` and `SLOTS_TEAM` as the Container App. Every `record`, `check` and `confirm`
 prints the lock and team it used, so a difference shows.
@@ -217,6 +243,22 @@ https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/db
 at `/dashboard/state.json`. `/db` is the DB explorer ([`db-explorer.md`](db-explorer.md)). The
 home page links to both once they are set up. They are `vending/pages.py`.
 
+Beside the dashboard are its charts, each built per request from the same read-only login:
+
+| Route | What it shows |
+|---|---|
+| `/dashboard/money` | The money chart ([`money-chart.md`](money-chart.md)): competition money by day since the ledger's opening |
+| `/dashboard/pnl` | The weekly P&L ([`pnl-report.md`](pnl-report.md)); `?start`, `?end` and `?view` as in the local report |
+| `/dashboard/spend` | Development spend by week and day ([`dev-spend.md`](dev-spend.md)), up to the ledger's opening |
+| `/dashboard/demo/money` | The money chart with its seeded made-up data, under a DEMO banner. No database |
+| `/dashboard/demo/spend` | Dev spend from the team's run notes, under a DEMO banner. No database |
+
+Before the ledger's opening entry (or before an opening recorded ahead), the money chart and the
+P&L show no figures: they say there is no competition money yet, and the money chart links its
+demo. Only the two demo routes draw made-up data. A rendered chart is kept for 60 seconds, so
+people reloading charts can't keep both page connections busy. Views of the charts are not counted
+as visits: `page_visits.page` accepts only `/login`, `/dashboard` and `/db` (migration 016).
+
 **One shared password** (`vending/gate.py`, since 15 Nov 2026). Every page except `/health`
 asks for it first, at `/login`; a browser that gives it stays signed in for 30 days, and
 `/logout` forgets it in that browser only. The sign-in is a signed cookie the server keeps
@@ -266,11 +308,20 @@ on the server.
 table holds a password or a key. **Left out:** the selections not assigned to us (the machine
 stores every selection, and `/db` shows only those in the stored assignment in `poll_selections`
 and `slot_counts`, and none while nothing is stored; the dashboard's JSON counts likewise), the dev machines' hostnames in `model_calls.host`, and the error text of failed tool calls and failed
-runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed), because a
+runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed, and
+`agent_steps.content` where `is_error` is true), because a
 database error names the host and the user. Refusals keep their text. The pages' own errors show
 one plain sentence; the detail is in the container's log.
 `/db` also hides the machine-wide totals in `polls` (`total_paid_cents` and `total_paid_units`) in
-every row: from the start they include the other team's sales, and the total minus ours is theirs.
+every row. They may be used only from polls taken before the fall cut (`FALL_CUTOFF`, 18 Nov 2026
+00:00 Eastern when unset; `docs/integrity.md`), and from the cut on the total minus ours is the
+other selections' sales. The explorer can't test a poll's time, so it hides them for every poll.
+The money chart's receipt markers name a slot and product only for selections in the current
+assignment; a line for any other keeps its money in the totals and says only that it isn't ours now.
+
+**Script policies.** The money chart and dev spend carry their data inside the page and fetch
+nothing. Their one inline script runs by its SHA-256 hash in the `Content-Security-Policy`, so no
+other script can run. The P&L has no script; its one form sends a GET back to `/dashboard/pnl`.
 
 ### Setting up the read-only login (once)
 

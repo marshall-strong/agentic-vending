@@ -64,10 +64,39 @@ def test_rounds_pair_by_suffix_in_round_order_and_ignore_other_files(tmp_path):
     write(tmp_path, "round10", "10", {"day_one": day_one()})
     write(tmp_path, "round1", "1", {"day_one": day_one()}, projection())
     (tmp_path / "round1" / "plan1_sku.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "round2" / "r2a.plan.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "round2" / "r2a.answer.json").write_text("{}", encoding="utf-8")
+    write(tmp_path, "round4", "4", {"day_one": day_one()}, projection())
+    folder = tmp_path / "round4"
+    (folder / "plan4.json").rename(folder / "r4.plan.json")
     found = pr.discover(tmp_path)
-    assert [rid for rid, _, _ in found] == ["1", "2a", "2b", "10"]
+    assert [rid for rid, _, _ in found] == ["1", "2a", "2b", "4", "10"]
     assert found[1][2] is None and found[2][2].name == "projection2b.json"
+    assert found[3] == ("4", folder / "r4.plan.json", folder / "projection4.json")
+
+
+def test_a_checked_plan_wins_over_the_raw_answer_beside_it(tmp_path):
+    # Rounds 2 and 3 on the laptop keep both: planN.json (checked) and rN.plan.json (the model's answer).
+    write(tmp_path, "round2", "2a", {"day_one": day_one()}, projection())
+    (tmp_path / "round2" / "r2a.plan.json").write_text("{}", encoding="utf-8")
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, projection())
+    (tmp_path / "round3" / "r3.plan.json").write_text("{}", encoding="utf-8")
+    found = {rid: plan.name for rid, plan, _ in pr.discover(tmp_path)}
+    assert found == {"2a": "plan2a.json", "3": "plan3.json"}
+
+
+@pytest.mark.parametrize("first, second", [
+    ("plan3.json", "r3.plan.json"),
+    ("r3.plan.json", "plan3.json"),
+], ids=["checked-first", "raw-first"])
+def test_discover_refuses_the_same_round_in_different_folders(tmp_path, first, second):
+    for folder, filename in (("round2", first), ("round3", second)):
+        directory = tmp_path / folder
+        directory.mkdir()
+        (directory / filename).write_text("{}", encoding="utf-8")
+
+    with pytest.raises(pr.RoundError, match="round 3 has two plan files") as error:
+        pr.discover(tmp_path)
+    assert f"round2/{first}" in str(error.value) and f"round3/{second}" in str(error.value)
 
 
 def test_floor_and_fill_cost_are_recomputed_from_the_pack_list(tmp_path):
@@ -106,6 +135,91 @@ def test_float_prices_are_read_as_exact_cents_and_bad_ones_refused(tmp_path):
         pr.load_all(tmp_path, TEST_SLOTS)
 
 
+# The 20 Nov redraw: alternating selections on every shelf. TEST_SLOTS shares 16, 18, 25, ... with it.
+REDRAWN = ("12", "14", "16", "18", "21", "23", "25", "27", "32", "34", "36", "38", "41", "43", "45", "47",
+           "52", "54", "56", "58")
+
+
+def placed_in(slots: tuple[str, ...]) -> tuple[dict, dict]:
+    """day_one() and projection() moved onto `slots`, in order."""
+    move = dict(zip(TEST_SLOTS, slots))
+    plan = {"day_one": [dict(row, slot=int(move[str(row["slot"])])) for row in day_one()]}
+    proj = projection()
+    for row in proj["slots"]:
+        row["slot"] = int(move[str(row["slot"])])
+    for block in proj["scenarios"].values():
+        for row in block["per_slot"]:
+            row["slot"] = int(move[str(row["slot"])])
+    return plan, proj
+
+
+def test_a_round_placed_in_other_slots_is_set_aside_with_its_own_totals(tmp_path):
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, projection(per_slot_gp=1500))   # before the redraw
+    write(tmp_path, "round5", "5", *placed_in(REDRAWN))
+    shown, aside = pr.load_rounds(tmp_path, REDRAWN)
+    assert [r.id for r in shown] == ["5"] and set(shown[0].slots) == set(REDRAWN)
+    (old,) = aside
+    assert old.id == "3" and old.plan_file == "round3/plan3.json"
+    assert old.outside == tuple(s for s in TEST_SLOTS if s not in REDRAWN)
+    assert len(old.outside) == 10 and "isn't in our current assignment" in old.reason
+    assert old.fill_most_cents == 4 * 4050 + 3 * 900                                       # as the file says
+    assert old.gross_profit_cents == {"low": 15000, "base": 30000, "high": 37500}
+
+
+def test_set_aside_is_only_for_other_slots_and_load_all_still_refuses_them(tmp_path):
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, projection())
+    with pytest.raises(pr.RoundError, match="isn't in our current assignment"):
+        pr.load_all(tmp_path, REDRAWN)
+    write(tmp_path, "round5", "5", {"note": "no day_one"})
+    with pytest.raises(pr.RoundError, match="no day_one list"):
+        pr.load_rounds(tmp_path, REDRAWN)
+
+
+def test_a_new_plan_with_an_old_projection_is_set_aside(tmp_path):
+    plan, _ = placed_in(REDRAWN)
+    write(tmp_path, "round5", "5", plan, projection())          # the projection still names the old slots
+    shown, (aside,) = pr.load_rounds(tmp_path, REDRAWN)
+    assert shown == [] and aside.outside == tuple(s for s in TEST_SLOTS if s not in REDRAWN)
+
+
+def _redrawn_without_a_slot() -> tuple[dict, dict]:
+    plan, proj = placed_in(REDRAWN)
+    del plan["day_one"][0]["slot"]
+    return plan, proj
+
+
+@pytest.mark.parametrize("files, problem", [
+    # An old round (other slots) whose plan also has a fractional price: the price is the problem.
+    (lambda: ({"day_one": day_one(**{"15": {"price_cents": 350.5}})}, projection()), "isn't a whole number of cents"),
+    # An old projection beside a plan with no day_one list.
+    (lambda: ({"note": "no day_one"}, projection()), "no day_one list"),
+    # A plan placed in our slots with one slot missing: not a selection at all, so not "other slots".
+    (_redrawn_without_a_slot, "isn't a selection"),
+])
+def test_a_round_in_other_slots_is_checked_in_full_before_it_is_set_aside(tmp_path, files, problem):
+    write(tmp_path, "round3", "3", *files())
+    with pytest.raises(pr.RoundError, match=problem) as refused:
+        pr.load_rounds(tmp_path, REDRAWN)
+    assert not isinstance(refused.value, pr.OtherSlots)
+
+
+def test_a_set_aside_round_with_malformed_totals_is_refused_naming_the_file(tmp_path):
+    proj = projection()
+    proj["scenarios"]["base"]["totals"] = [123]
+    write(tmp_path, "round3", "3", {"day_one": day_one()}, proj)
+    with pytest.raises(pr.RoundError, match=r"round3/projection3\.json: .*base.*totals") as refused:
+        pr.load_rounds(tmp_path, REDRAWN)
+    assert not isinstance(refused.value, pr.OtherSlots)
+
+
+def test_a_round_whose_fallbacks_alone_name_other_slots_counts_them(tmp_path):
+    plan, proj = placed_in(REDRAWN)
+    plan["fallbacks"] = [{"slot": "15-17", "if": "x", "then": "y"}]     # 16 is ours; 15 and 17 aren't
+    write(tmp_path, "round5", "5", plan, proj)
+    shown, (aside,) = pr.load_rounds(tmp_path, REDRAWN)
+    assert shown == [] and aside.outside == ("15", "17")
+
+
 def test_a_slot_that_isnt_ours_is_refused(tmp_path):
     rows = day_one()
     rows[0]["slot"] = 11        # the other team's selection
@@ -128,6 +242,20 @@ def test_illegal_prices_and_overfull_columns_are_flagged(tmp_path):
     assert any("a column holds 11" in m for m in r.slots["17"].refusals)
     assert any("above the ceiling" in m for m in r.slots["18"].refusals)
     assert any("projection used $3.50" in w for w in r.warnings)
+
+
+def test_first_fill_shows_room_and_unknown_capacity_without_refusing(tmp_path):
+    under, full, unknown = TEST_SLOTS[-3:]
+    rows = day_one(**{under: {"units": 6, "why": "Only six available"},
+                      unknown: {"sku": "CARTON", "size": "11 oz carton", "units": 5}})
+    write(tmp_path, "round1", "1", {"day_one": rows}, projection())
+    r = pr.load_all(tmp_path, TEST_SLOTS)[0]
+    assert r.slots[under].fill_check == "fills 6 of 8: 2 spaces empty"
+    assert r.slots[under].why == "Only six available"
+    assert not r.slots[under].refusals
+    assert r.slots[full].fill_check is None
+    assert r.slots[unknown].fill_check == "capacity not counted"
+    assert not r.slots[unknown].refusals
 
 
 def test_changes_name_product_price_and_units(tmp_path):

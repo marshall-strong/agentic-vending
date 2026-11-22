@@ -4,8 +4,8 @@ The wildcard is fixed: config `wildcard_slot`, which `vending.config.set_value`
 refuses to change once set. A person sets it with
 `python -m vending.config set wildcard_slot '"37"' --by NAME`; the agent sets it
 with this tool, after the redraw, by the rule in the doc: an ordinary
-middle-shelf slot of ours, not the column beside the machine's centre line.
-The code checks what it can (ours, shelf 2 to 4, not column 5); the agent
+middle-shelf slot of ours, not beside the machine's centre line (column 4 or 5).
+The code checks what it can (ours, shelf 2 to 4, not column 4 or 5); the agent
 checks that the column takes cans and bottles.
 
 It goes through the write gate like every write tool: refused while halted,
@@ -27,7 +27,7 @@ from vending.write_gate import Refused
 Action = Callable[[psycopg.Connection], WriteReply]
 
 MIDDLE_SHELVES = ("2", "3", "4")   # not the top or bottom shelf
-CENTRE_COLUMN = "5"                # our column beside the machine's centre line
+CENTRE_COLUMNS = ("4", "5")        # the two columns either side of the machine's centre line (8 columns)
 
 
 def set_wildcard_slot(slot: str, reason: str) -> Action:
@@ -65,9 +65,9 @@ def problems(conn: psycopg.Connection, slot: str, reason: str) -> list[Refusal]:
             refusals.append(Refusal("wildcard", (
                 f"slot {slot} is on shelf {shelf}; the wildcard goes on a middle shelf "
                 f"({', '.join(MIDDLE_SHELVES)}), an ordinary position"), slot))
-        if column == CENTRE_COLUMN:
+        if column in CENTRE_COLUMNS:
             refusals.append(Refusal("wildcard", (
-                f"slot {slot} is in column {CENTRE_COLUMN}, beside the machine's centre line, the best-seen "
+                f"slot {slot} is in column {column}, beside the machine's centre line, the best-seen "
                 "position; pick another column so a trial isn't flattered"), slot))
     if not reason.strip():
         refusals.append(Refusal("wildcard", "give a reason: why this slot", slot))

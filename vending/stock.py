@@ -33,8 +33,9 @@ turns receipts into stock movements and replays them in time order:
   unattributed (#172): booked to neither product, with the reason
   (`SaleCost.unattributed`, `SlotCount.unattributed`). They still leave the
   slot's known count and keep the cost taken from it (`unattributed_cost_cents`):
-  that of the new product's oldest units, which may be the wrong product's; the ledger
-  counts it in cost of sales and says so in a note, so profit isn't overstated.
+  that of the new product's oldest units, which may be the wrong product's. So
+  the ledger leaves them out of exact cost of sales and reports an estimate
+  apart (`estimated_cost_cents`, #172 item 5).
 
 A slot's count starts again whenever its product changes, so `loaded` and
 `sold` are since the last change, and on hand is loaded - sold - unattributed
@@ -121,9 +122,16 @@ class Movement:
     seq: int = 0                         # receipt movements: the request's place in submission order (0: unknown)
     door: tuple[datetime, datetime] | None = None   # receipt movements: the receipt's door times, even if not used
     notes: tuple[StockWarning, ...] = ()  # warnings to pass on when this movement is replayed, each with its slot
+    # Last, so no earlier field's position moves: a sale's counters window start; `since` moves when it is split.
+    window_since: datetime | None = None
+
+    def __post_init__(self) -> None:
+        # A sale made with only `since` still knows where its window began once a split moves `since`.
+        if self.window_since is None and self.kind == "sale" and self.since is not None:
+            object.__setattr__(self, "window_since", self.since)
     door_conflict: str = ""              # sale: the receipt it contradicts, by selling with the door open
     split: bool = False                  # sale: already split at its changes; another pass leaves it alone
-    read_as_new: bool = False            # sale: unsplit, but main booked it all to the new product (`_old_units`)
+    gross_share_cents: int | None = None # sale: this product's share of the raw cents rise after a split
 
 
 @dataclass(frozen=True)
@@ -173,14 +181,21 @@ class SaleCost:
     `cost_cents` is what those of known cost cost, and `costed_units` is how
     many of them that is; the rest had no known cost or were past the count
     (oversold). `cost_cents` is None only when every unit counted had no known cost.
-    The ledger's cost of sales is the sum of these, plus `unattributed_cost_cents`:
-    for units sold across a product change the counters can't split, the cost
-    they took out of the new product's count. Their product is unknown, so
-    `product` is None, `unattributed` says why, and `cost_cents` stays None,
-    but the cost still lands in cost of sales and the books add up (#112,
-    #172). A window main read as all the new product's, and #172 leaves
-    unattributed, keeps that cost in `cost_cents` instead, as main had it, so
-    the money series still counts it as the ledger does. `at` is the poll that
+    The ledger's exact cost of sales is the sum of `cost_cents`
+    (`ledger.summarize_sales`). Units sold across a product change the
+    counters can't split have no exact cost: their product is unknown, so
+    `product` and `cost_cents` are None and `unattributed` says why.
+    `unattributed_cost_cents` is the cost they took out of the new product's
+    count, so the stock's books add up (#112, #172), but it may be the wrong
+    product's. `estimated_cost_cents` is what the ledger reports apart, as an
+    estimate: for a window across one change, the midpoint of the two
+    candidate unit costs (the old product's unit a sale before the visit's
+    pull would have taken, first in, first out, and the new product's oldest
+    unit) times the units, when both are known; otherwise None (#172 item 5).
+    `may_be_written_off` is true when units were written off at any product
+    change the window overlaps, however many it spans and whether or not the
+    debit's cost is known: a sale may explain one, so the debit and that
+    shrinkage are provisional. `at` is the poll that
     measured the units, the same moment the takings book them to. The old
     product's share of a window split at a product change left its count
     earlier, at the change: that is `taken_at`.
@@ -194,6 +209,12 @@ class SaleCost:
     taken_at: datetime | None = None   # when the units left the count, if before `at`
     unattributed_cost_cents: Fraction | None = None   # an unsplit window's cost; see above
     unattributed: str = ""             # why the product is unknown; empty when it is known
+    since: datetime | None = None      # the poll before `at`: the measured window is (since, at]
+    estimated_cost_cents: Fraction | None = None      # an unsplit window's estimate; see above
+    may_be_written_off: bool = False   # an unsplit window: the old units written off at the change may be these
+    gross_cents: int | None = None      # counter rise, or this product's share after a split
+    attributed: bool = True            # whether leaderboards can link these units to the product
+    attribution_since: datetime | None = None  # start of this product's share of the window
 
 
 @dataclass(frozen=True)
@@ -415,7 +436,7 @@ def sales_from_counters(rows: list[tuple]) -> list[Movement]:
                                   price_before=prices.get((selection, start)),
                                   price_after=prices.get((selection, at)),
                                   price_prior=prices.get((selection, before.get(start))),
-                                  prior_at=before.get(start)))
+                                  prior_at=before.get(start), window_since=start))
     return moves
 
 
@@ -446,10 +467,9 @@ def _read_as_new(m: Movement, change: Movement) -> bool:
 
 
 def _split_one(m: Movement, change: Movement, visits: list[tuple[str, datetime, datetime]]) -> list[Movement]:
-    """`_shares` at one change by `_old_units`. A window left unsplit that main read as all new is marked."""
-    old = _old_units(m, change, visits)
-    shares = _shares(m, change, old)
-    return [replace(shares[0], read_as_new=True)] if old is None and _read_as_new(m, change) else shares
+    """`_shares` at one change by `_old_units`. A window it can't split is left unattributed, even one
+    main read as all new: another visit may have set the price, so it may be the old product's (#172)."""
+    return _shares(m, change, _old_units(m, change, visits))
 
 
 def _request(m: Movement) -> str:
@@ -607,11 +627,17 @@ def _shares(m: Movement, change: Movement, old: int | None) -> list[Movement]:
     if old is None:
         return [replace(m, changes=1, split=True)]
     out = []
+    # The split has already been decided. Keep the counter rise for the whole
+    # window in `cents` and carry the amounts for the leaderboard separately.
+    old_cents = 0
     if old:
+        assert m.price_before is not None  # A positive old share came from _solve.
+        old_cents = old * m.price_before
         out.append(replace(m, at=change.opened_at or change.at, kind="sale_before_change", units=old,
-                           booked_at=m.at, seq=change.seq, split=True))
+                           booked_at=m.at, seq=change.seq, split=True, gross_share_cents=old_cents))
     if old < m.units:
-        out.append(replace(m, since=change.at, units=m.units - old, split=True))
+        new_cents = None if m.cents is None else m.cents - old_cents
+        out.append(replace(m, since=change.at, units=m.units - old, split=True, gross_share_cents=new_cents))
     return out
 
 
@@ -715,6 +741,11 @@ class _Pool:
         return tuple((layer.units, layer.unit_cost) for layer in self.layers)
 
 
+def _oldest_unit_cost(pool: _Pool) -> Fraction | None:
+    """The cost of the unit that leaves the pool next, first in, first out; None when empty or unknown."""
+    return pool.layers[0].unit_cost if pool.layers else None
+
+
 def _cost(layers: list[_Layer]) -> Fraction | None:
     """What the layers cost in all, or None if any of them has no known cost."""
     known, cost = _known(layers)
@@ -773,8 +804,12 @@ class _Slot:
     last_moved: datetime | None = None
     replaced: str | None = None   # the product this one replaced, if the slot changed
     written_off: int = 0          # units of `replaced` written off as shrinkage at the change
+    replaced_unit_cost: Fraction | None = None   # `replaced`'s candidate cost for unsplit sales; see `SaleCost`
+    # The oldest unit's cost before each request's first pull here: what a sale just before that visit took.
+    before_pull: dict[str, Fraction | None] = field(default_factory=dict)
     unattributed: int = 0         # sold in windows that can't be split; not in `sold`
     at_most: int = 0              # on hand if none of those were this product: loaded less everything else out
+    first_door_close: datetime | None = None  # first load's close minute, for leaderboard attribution
 
 
 def first_in_first_out(movements: list[Movement]) -> Stock:
@@ -794,6 +829,10 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
         warnings.append(StockWarning(text, slot))
     sales: list[SaleCost] = []
     shrinkage: list[Shrinkage] = []
+    # Units written off at each product change, (the change, units), and each unattributed sale's
+    # place in `sales` with its movement: a write-off at a change its window touches may be it.
+    changed_away: list[tuple[Movement, int]] = []
+    unknown_sales: list[tuple[int, Movement]] = []
 
     def shelf(sku: str) -> _Pool:
         return closet.setdefault(sku, _Pool())
@@ -820,6 +859,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                                 "which we never loaded with it; their cost is unknown")
                 shelf(m.sku).add(m.units, None)
                 continue
+            slot.before_pull.setdefault(_request(m), _oldest_unit_cost(slot.pool))
             layers = slot.pool.take_layers(m.units)
             taken = sum(layer.units for layer in layers)
             shelf(m.sku).add_layers(layers)
@@ -838,9 +878,16 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 warn(m.slot, f"{m.ref}: {slot.pool.units} units of {slot.product} still counted in slot "
                                 f"{m.slot} when it changed to {m.sku}; written off as shrinkage")
                 write_off(m.at, f"slot {m.slot}", slot.product, slot.pool.layers)
+                changed_away.append((m, slot.pool.units))
             if slot is None or changed:
+                # A sale of the old product just before this visit would have taken the unit that was
+                # oldest before the visit's own pull, which may have moved or emptied the pool since.
+                candidate = slot.before_pull.get(_request(m), _oldest_unit_cost(slot.pool)) if changed else None
                 slot = slots[m.slot] = _Slot(product=m.sku, since=m.at, replaced=slot.product if changed else None,
-                                             written_off=slot.pool.units if changed else 0)
+                                             written_off=slot.pool.units if changed else 0,
+                                             replaced_unit_cost=candidate,
+                                             first_door_close=m.at if slot is None and m.opened_at is not None
+                                             else None)
             if m.kind == "purchase":
                 survivors = m.to_slot + m.to_closet
                 each = None if m.paid_cents is None or not survivors else m.paid_cents / survivors
@@ -890,6 +937,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 warn(None if where == "the closet" else m.slot,
                      f"{m.ref}: {m.units} units of {m.sku} lost in {where} but we counted only {gone}")
         elif m.kind in ("sale", "sale_before_change") and slot is not None:
+            oldest = _oldest_unit_cost(slot.pool)
             taken, costed, cost = slot.pool.take(m.units)
             slot.oversold += m.units - taken
             if m.kind == "sale_before_change" and taken < m.units:
@@ -906,8 +954,10 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                              "unattributed, costed at the oldest units taken from "
                              f"{slot.product}'s count, which may be the wrong product's")
                 slot.unattributed += m.units
+                unknown_sales.append((len(sales), m))
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
-                                      unattributed=f"sold while {m.door_conflict}'s door times say the door was open"))
+                                      unattributed=f"sold while {m.door_conflict}'s door times say the door was open",
+                                      since=m.window_since, attributed=False))
             elif m.kind == "sale" and (across_change or m.changes):
                 # Still taken from the count (the new one, unless the door times show the
                 # window ended before it went in), so on hand errs low, but their cost
@@ -928,15 +978,39 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                                 f"costed at the oldest units taken from {slot.product}'s count, which may be the wrong "
                                 f"product's{written_off}")
                 slot.unattributed += m.units
-                # Main costed a window it read as all new in cost_cents; it stays there (see `SaleCost`).
-                sales.append(SaleCost(m.at, m.slot, None, m.units, costed, cost if m.read_as_new else None,
-                                      unattributed_cost_cents=None if m.read_as_new else cost,
-                                      unattributed=f"sold {across}; the counters can't split them"))
+                # Across one change the sale is the old product's or the new one's: estimate at the
+                # midpoint of their oldest units' costs, when both are known (#172 item 5).
+                estimate = None
+                if (across_change and m.changes <= 1
+                        and slot.replaced_unit_cost is not None and oldest is not None):
+                    estimate = (slot.replaced_unit_cost + oldest) / 2 * m.units
+                unknown_sales.append((len(sales), m))
+                sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
+                                      unattributed=f"sold {across}; the counters can't split them",
+                                      since=m.window_since,
+                                      estimated_cost_cents=estimate, attributed=False))
             else:
                 slot.sold += m.units
                 slot.at_most = max(0, slot.at_most - m.units)
+                gross = m.cents if m.gross_share_cents is None else m.gross_share_cents
+                # The first load isn't a swap. As in _split_by_door, a poll
+                # must reach past the start of the close minute to cover a sale.
+                # The stock and cost still use main's replay order at that instant.
+                attributed = m.kind != "sale" or m.at != slot.first_door_close
                 sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, costed, cost,
-                                      taken_at=m.at if m.booked_at else None))
+                                      taken_at=m.at if m.booked_at else None, since=m.window_since, gross_cents=gross,
+                                      attributed=attributed, attribution_since=m.since))
+
+    # Every change the window touches is a candidate, not only the slot's last one, by the replay's
+    # own rule (`_touches`: a poll exactly at a change without door times touches it), and a
+    # write-off there may be one of the sales whatever the debit's cost (#172 review). This doesn't
+    # apply `_split_by_door`'s door rules, which can rule out the written-off product (a window that
+    # starts inside its visit): that would mean splitting its inline logic out. So such a sale may be
+    # flagged when it can't be that product: over-flagging, the conservative side of "may be".
+    for i, m in unknown_sales:
+        if any(change.slot == m.slot and units and (m.since is None or _touches(m, change))
+               for change, units in changed_away):
+            sales[i] = replace(sales[i], may_be_written_off=True)
 
     for name, slot in sorted(slots.items()):
         if slot.oversold:
@@ -1049,17 +1123,24 @@ def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetC
                  for c in first_in_first_out(movements_from_receipts(lines, losses)).closet)
 
 
-def stock(conn: psycopg.Connection, until: datetime | None = None, lines: list[dict] | None = None) -> Stock:
+def stock(conn: psycopg.Connection, until: datetime | None = None, lines: list[dict] | None = None, *,
+          polls_to_until: bool = False) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll.
 
     Once the ledger has an opening entry, receipt lines resolved before it (test purchases) and their
     later losses are left out (`_receipts`): see the module docstring. `lines` is
     `receipt_lines(conn)` when the caller has read it already.
+
+    By default every stored poll is read, even after `until`: a later poll can split a window that
+    spans a product change and move a sale to before `until` (#97). `polls_to_until=True` reads only
+    the polls up to `until`, so the count as of `until` is fixed once that poll is stored, whatever
+    comes later. The tracking check needs that (`vending.tracking`); other callers keep the default.
     """
-    return replay(load_movements(conn, lines), until)
+    return replay(load_movements(conn, lines, until=until if polls_to_until else None), until)
 
 
-def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None) -> list[Movement]:
+def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None, *,
+                   until: datetime | None = None) -> list[Movement]:
     """Every stock movement on record, unsorted: what `stock()` replays.
 
     Separate so a caller that needs the stock at many moments (the daily money
@@ -1067,6 +1148,8 @@ def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None) ->
     for each, which is exactly `stock(conn, until=moment)` without a query per
     moment. Don't cut a prefix yourself: `replay` must split product changes
     (#97) before it cuts.
+
+    `until` bounds the polls used to interpret rises.
     """
     assigned = set(our_slots(conn))
     lines, losses = _receipts(conn, lines)
@@ -1075,11 +1158,12 @@ def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None) ->
     # poll_selections only has rows for polls whose checksum passed. The sync
     # stores every device's polls, so read only our machine's counters.
     # Cents and price too, to split a window that spans a product change (#97).
+    end_sql, end_args = (" and p.started_at <= %s", (until,)) if until is not None else ("", ())
     counters = conn.execute(
         "select s.selection, p.started_at, s.lifetime_units, s.lifetime_sales_cents, s.price_cents"
         " from poll_selections s"
-        " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)",
-        (DEVICE_ID, slots),
+        " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)" + end_sql,
+        (DEVICE_ID, slots, *end_args),
     ).fetchall()
     return movements_from_receipts(lines, losses) + sales_from_counters(counters)
 
@@ -1115,7 +1199,7 @@ def request_loads(conn: psycopg.Connection, request_ids: list[str],
 
 
 
-def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
+def replay(movements: list[Movement], until: datetime | None = None, *, inclusive: bool = True) -> Stock:
     """`first_in_first_out` of the movements up to `until`. Pure.
 
     Windows that span a product change are split before the cut (#97). A
@@ -1125,12 +1209,17 @@ def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
     like the takings, so it is in the stock as of `until` but not in its sales.
     So for one period opening + purchases - cost of sales - shrinkage = closing
     can be off by that share; over the two periods together it adds up.
+    Use `inclusive=False` for the stock just before a boundary.
     """
     movements = _split_at_changes(movements)
     if until is None:
         return first_in_first_out(movements)
-    counted = first_in_first_out([m for m in movements if m.at <= until])
-    return replace(counted, sales=tuple(s for s in counted.sales if s.at <= until))
+
+    def in_period(at: datetime) -> bool:
+        return at < until or (inclusive and at == until)
+
+    counted = first_in_first_out([m for m in movements if in_period(m.at)])
+    return replace(counted, sales=tuple(s for s in counted.sales if in_period(s.at)))
 
 
 _LINE_COLUMNS = ("request_id", "line_no", "slot", "outcome", "sku", "total_paid", "units_loaded",

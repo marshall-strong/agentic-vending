@@ -54,9 +54,9 @@ def _no_slot_lock(monkeypatch):
     monkeypatch.setattr(worker, "_slot_lock", lambda: None)
 
 
-def run_worker(clock, reader, job=lambda: 0, sleep=None, port=0):
+def run_worker(clock, reader, job=lambda: 0, sleep=None, port=0, at_minute="5"):
     """The worker's real loop on the fake clock, with one trivial job. Returns when the clock reaches its stop."""
-    return worker.main(["--every", "60", "--port", str(port)], jobs=[("a", job)],
+    return worker.main(["--every", "60", "--at-minute", at_minute, "--port", str(port)], jobs=[("a", job)],
                        sleep=sleep or clock.sleep, log=lambda _: None, reads=reader, clock=clock)
 
 
@@ -157,7 +157,8 @@ def test_a_read_that_runs_past_the_hourly_round_does_not_take_the_worker_down():
         clock.sleep(seconds)
 
     # The read that starts at 3:40:00 PM, five seconds before the round is due, ends five seconds after it.
-    run_worker(clock, Reader(SCHEDULE, run, lambda _: None), job=lambda: rounds.append(clock.now) or 0, sleep=sleep)
+    run_worker(clock, Reader(SCHEDULE, run, lambda _: None), job=lambda: rounds.append(clock.now) or 0, sleep=sleep,
+               at_minute="off")     # an hour from the last round, so the 3:40:00 PM read crosses 3:40:05 PM
     assert len(rounds) == 2 and rounds[1] - rounds[0] < timedelta(minutes=61)    # the round ran, right after the read
 
 
@@ -331,6 +332,12 @@ class Now:
         return self.now
 
 
+def session(n, kind="live"):
+    """A session id like the bridge's (32 hex digits) for read number `n`. The history's ids are of kind
+    "live"; another kind is an id the history doesn't have."""
+    return {"live": "a", "header": "b"}[kind] * 24 + f"{n:08x}"
+
+
 class Bridge:
     """The bridge as `step` uses it: a request that is pending, then fulfilled; reads that land in history.
     Each call takes the time in `takes` (a receipt read) or 8.5 s (the machine read) on the fake clock."""
@@ -338,7 +345,7 @@ class Bridge:
     def __init__(self, answers, clock):
         self.answers, self.polls, self.stored, self.asked = answers, 0, [], []
         self.clock, self.refresh_takes, self.sends_session_id = clock, timedelta(0), True
-        self.header_prefix = "live"             # what the header's id starts with; the history's ids start with "live"
+        self.header_kind = "live"               # the kind (`session`) of id the header names; the history's are "live"
         self.cached, self.age_seconds = False, 0.0
 
     def purchase_request(self, request_id):
@@ -348,10 +355,9 @@ class Bridge:
 
     def poll(self):
         self.polls += 1
-        session_id = f"live{self.polls}"
-        self.stored.append((session_id, self.clock.now))
+        self.stored.append((session(self.polls), self.clock.now))
         self.clock.now += timedelta(seconds=8.5)
-        named = f"{self.header_prefix}{self.polls}" if self.sends_session_id else None
+        named = session(self.polls, self.header_kind) if self.sends_session_id else None
         read = LiveRead(b"DXS*", named)
         if "cached" in LiveRead._fields:
             read = read._replace(cached=self.cached, age_seconds=self.age_seconds)
@@ -554,7 +560,7 @@ def test_a_read_whose_storage_is_not_confirmed_is_logged_and_still_a_read(conn, 
     break_it(machine)
     machine.clock.now = POLL_AT(15, 25)
     assert visit_polls.step(POLL_AT(15, 25), said.append) == READ       # the POST worked: not a failure
-    assert any("storage not confirmed" in line and "live1" in line for line in said)
+    assert any("storage not confirmed" in line and session(1) in line for line in said)
     assert not any("stored read" in line for line in said)
 
 
@@ -585,7 +591,7 @@ def test_real_poll_failures_still_back_off_after_unconfirmed_storage(conn, machi
 
 def test_a_header_id_that_is_not_the_history_id_keeps_the_one_minute_cadence_and_the_stop_rule(conn, machine):
     said = []
-    machine.header_prefix = "header"            # the header's ids are never the history's ids
+    machine.header_kind = "header"              # the header's ids are never the history's ids
     reader = Reader(SCHEDULE, lambda now: visit_polls.step(now, said.append), said.append)
     for minute in (25, 26, 27):                 # three successful POSTs, each with a usable row stored
         machine.clock.now = POLL_AT(15, minute)
@@ -636,7 +642,7 @@ def test_a_stored_read_is_logged_with_its_session_id(conn, machine):
     said = []
     machine.clock.now = POLL_AT(15, 25)
     assert visit_polls.step(POLL_AT(15, 25), said.append) == READ
-    assert any("live1" in line and "stored" in line for line in said)
+    assert any(session(1) in line and "stored" in line for line in said)
 
 
 def test_a_bridge_that_sends_no_session_id_is_checked_by_the_time_of_the_read(conn, machine):
@@ -693,3 +699,36 @@ def test_a_read_sent_whose_history_copy_outlives_the_timeout_is_not_a_failure(mo
     assert reader.failures == 0
     assert not any("failed in a row" in line for line in said)
     assert any("storage not confirmed" in line for line in said)
+
+
+def test_the_hourly_rounds_keep_to_five_past_while_the_reads_run():
+    # The two schedules share one loop (#177 and SYNC_AT_MINUTE): the reads come every minute in the
+    # window, and the rounds still come at 5 past each hour, never shifted by a read that ran long.
+    calls, rounds, sleeps = [], [], []
+    clock = Clock(at(FRI, 14, 50), at(FRI, 17, 10))
+    run_worker(clock, reader_of(calls), job=lambda: rounds.append(clock().astimezone(ET)) or 0)
+    assert rounds == [at(FRI, 14, 50), at(FRI, 15, 5), at(FRI, 16, 5), at(FRI, 17, 5)]
+    assert calls[0] == at(FRI, 14, 50) and len(calls) == 140
+
+
+def test_a_read_that_crosses_five_past_never_sleeps_a_negative_time():
+    # Each read takes 70 s, so the reads run back to back and the one in progress at 3:05 ends after it.
+    # The round runs as soon as that read ends, without a negative sleep; the next keeps to 4:05, give or
+    # take the read in progress then, and never drifts to the minute the last round ran.
+    rounds = []
+    clock = Clock(at(FRI, 15, 3), at(FRI, 16, 6))
+
+    def run(now):
+        clock.now += timedelta(seconds=70)
+        return READ
+
+    def sleep(seconds):
+        if seconds < 0:                                       # as `time.sleep` does
+            raise ValueError("sleep length must be non-negative")
+        clock.sleep(seconds)
+
+    run_worker(clock, Reader(SCHEDULE, run, lambda _: None), job=lambda: rounds.append(clock().astimezone(ET)) or 0,
+               sleep=sleep)
+    read = timedelta(seconds=70)
+    assert at(FRI, 15, 5) < rounds[1] <= at(FRI, 15, 5) + read
+    assert at(FRI, 16, 5) <= rounds[2] <= at(FRI, 16, 5) + read     # late by at most the read in progress

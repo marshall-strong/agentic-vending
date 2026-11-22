@@ -91,12 +91,12 @@ def test_model_spend_over_the_proposed_nine_dollars_is_worth_knowing(conn, page_
     assert any(a["level"] == "info" and "$9.01" in a["text"] for a in items)
 
 
-def test_dev_spend_before_the_opening_is_a_note_not_in_the_balance(conn, page_conn):
-    ledger.record_tokens(conn, "2.0000", "claude-opus-5-5", 1, 1, "msg_dev", at=OPENED - timedelta(days=3))
+def test_dev_spend_before_the_opening_is_omitted_from_money_panel(conn, page_conn):
+    ledger.record_tokens(conn, "2.0000", "claude-opus-5-5", 1, 1, "live pending", at=OPENED - timedelta(days=3))
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
     data = dashboard.snapshot(page_conn, NOW)["money"]["data"]
     assert data["balance"] == "600.00" and data["tokens"] == "0.00"
-    assert any("development spend" in n for n in data["notes"])
+    assert all("development spend" not in n for n in data["notes"])
 
 
 def test_a_line_it_cant_price_is_counted_as_unpriced_not_guessed(conn, page_conn):
@@ -175,7 +175,12 @@ def test_without_our_slot_assignment_the_panel_says_so_and_the_page_still_render
     assert any(a["level"] == "warn" and "can't give a balance" in a["text"] for a in snap["attention"])
     page = dashboard.render(snap)
     assert "No balance:" in page and 'id="vm"' in page
-    assert "Spent so far" in page and "Spent before the opening" not in page    # the period is unknown
+    # The ledger has opened, so the live spend counts from it; only the balance is unknown.
+    assert "Spent since the opening: drinks" in page and "Spent before the opening" not in page
+    # The ledger is open; it just can't give a balance. The Spendable cell says that, not "not open".
+    cell = dashboard._status_bar(snap).split('<span class="label">Spendable</span>')[1].split("</a>")[0]
+    assert '<span class="sv"><span class="dim">Balance unavailable</span></span>' in cell
+    assert "Ledger not open" not in page
 
 
 def test_once_the_ledger_is_open_the_spent_tile_reads_it(conn, page_conn):
@@ -188,10 +193,10 @@ def test_once_the_ledger_is_open_the_spent_tile_reads_it(conn, page_conn):
 
 # --- The competition counts from the opening (#104) ------------------------------------------------
 
-def test_before_the_opening_the_spent_tile_says_it_is_development_spend(conn, page_conn):
+def test_before_the_opening_the_spent_tile_omits_development_spend(conn, page_conn):
     fulfilled(conn, "pr-test", "15", "RB", units_loaded=11, paid="34.99", at=OPENED - timedelta(days=15))
     page = dashboard.render(dashboard.snapshot(page_conn, NOW))
-    assert "Spent before the opening" in page and "development and test, not from the $600" in page
+    assert "Spent before the opening" not in page and "$34.99" not in page
     assert "Spent so far" not in page and "Spent since the opening" not in page
     assert "the competition counts from the ledger's opening" in page
 
@@ -207,7 +212,7 @@ def test_an_opening_dated_ahead_keeps_the_pre_opening_view(conn, page_conn):
                for a in snap["attention"])
     page = dashboard.render(snap)
     assert "The ledger opens" in page and '<time datetime="2026-12-12T17:00:00+00:00" data-f="day"' in page
-    assert "Spent before the opening" in page and "the ledger opens" in page
+    assert "Spent before the opening" not in page
     money = page.split('<section id="money">')[1].split("</section>")[0]
     assert "Spent since the opening" not in page and "since the opening" not in money
     # Once that moment passes, the ledger is open.
@@ -239,17 +244,19 @@ def test_only_a_test_purchase_leaves_stock_on_hand_unknown(conn, page_conn):
     assert data["balance"] == "600.00" and data["receipts"] == "0.00" and data["pnl"]["inventory"] is None
 
 
-def test_a_missing_ledger_table_blanks_only_the_money_panel(conn, page_conn):
+def test_a_missing_ledger_table_blanks_only_the_panels_that_need_it(conn, page_conn):
     ledger.record(conn, "opening", 60000, "opening capital", "test", at=OPENED)
     conn.execute("drop table ledger_entries cascade")
     snap = dashboard.snapshot(page_conn, NOW)
     panels = {k: v for k, v in snap.items() if isinstance(v, dict) and "ok" in v}
-    assert "money" in panels and [k for k, v in panels.items() if not v["ok"]] == ["money"]
+    assert "money" in panels and {k for k, v in panels.items() if not v["ok"]} == {
+        "money", "leaderboards", "report_cards", "incidents"}
+    assert snap["spend"] == {"ok": True, "data": None}
     assert "ledger_entries" in snap["money"]["why"]
     page = dashboard.render(snap)
     assert "Not available" in page and 'id="vm"' in page
     # The Spent tile can't tell the period without the ledger, so it doesn't claim one.
-    assert "Spent so far" in page and "Spent before the opening" not in page
+    assert "Spent so far" not in page and "Spent before the opening" not in page
 
 
 # --- Review fixes ----------------------------------------------------------------------------------
@@ -284,8 +291,8 @@ def test_the_spent_tile_rounds_the_exact_total_once(conn, page_conn):
     fulfilled(conn, "pr-s", "15", "RB", units_loaded=1, paid="0.0049", at=OPENED + timedelta(days=1))
     ledger.record_tokens(conn, "0.0049", "claude-opus-5-5", 1, 1, "msg_s", at=OPENED + timedelta(days=2))
     snap = dashboard.snapshot(page_conn, NOW)
-    tile = dashboard._tiles(snap).split("Spent since the opening")[1]
-    assert '<span class="big">$0.01</span>' in tile
+    cell = dashboard._status_bar(snap).split("Spent since the opening")[1]
+    assert cell.startswith(" <b>$0.01</b>")
     assert snap["money"]["data"]["spent"] == "0.01"
 
 
@@ -311,3 +318,17 @@ def test_a_ledger_read_over_the_statement_timeout_blanks_only_the_money_panel(co
     assert any(a["text"].startswith("Money isn't available: ") for a in snap["attention"])
     page = dashboard.render(snap)
     assert "Not available: " in page and 'id="vm"' in page
+
+
+def test_an_unsplit_swap_shows_its_estimate_apart_from_profit(conn, page_conn):
+    # #172 item 5: units sold across a swap the counters can't split have no exact cost, so the
+    # panel's cost of sales and profit are unknown, and the estimate is its own labelled line.
+    from tests.test_ledger import SWAP_ESTIMATE, unsplit_swap
+    unsplit_swap(conn)
+    panel = dashboard.snapshot(page_conn, datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc))["money"]
+    p = panel["data"]["pnl"]
+    assert (p["units_sold"], p["units_costed"], p["units_estimated"]) == (2, 0, 2)
+    assert p["estimated_cost_of_sales"] == ledger.money(SWAP_ESTIMATE)
+    assert (p["cost_of_sales"], p["gross_margin"], p["net"]) == (None, None, None)
+    page = money_panel.html(panel)
+    assert f"${ledger.money(SWAP_ESTIMATE)}" in page and "(an estimate, not in profit)" in page

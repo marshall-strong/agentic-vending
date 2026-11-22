@@ -59,6 +59,8 @@ class MoneyWindow(BaseModel):
     visit_fees: str | None = None
     adjustments: str | None = None
     cost_of_sales_complete: bool = False
+    units_estimated: int = 0                      # sold across a swap the counters can't split (#172)
+    estimated_cost_of_sales: str | None = None    # their estimate: not in known_cost_of_sales, gross or net
     shrinkage_complete: bool = False
     sales_complete: bool = False
     gross_profit: str | None = None
@@ -195,6 +197,8 @@ def _window(conn, start: datetime, end: datetime, partial: bool, ours: tuple[str
         known_cost_of_sales=ledger.money(m.cost_of_sales_cents), known_shrinkage=ledger.money(m.shrinkage_cents),
         visit_fees=ledger.money(m.visit_fees_cents), adjustments=ledger.money(m.adjustments_cents),
         cost_of_sales_complete=m.cost_of_sales_complete, shrinkage_complete=m.shrinkage_complete,
+        units_estimated=m.units_estimated,
+        estimated_cost_of_sales=ledger.money(m.estimated_cost_of_sales_cents) if m.units_estimated else None,
         sales_complete=complete, gross_profit=ledger.money(gross),
         net_profit=ledger.money(m.net_cents) if profit_complete else None,
         live_api_spend=ledger.money(m.token_spend_cents), api_share_of_gross_profit=share, api_share_reason=reason)
@@ -351,13 +355,16 @@ def _requests(conn, b: Briefing) -> None:
         request_id=x.request_id, checked_at=None if x.last_checked is None else datetime.fromisoformat(x.last_checked),
         age_hours=_age(b.computed_at, datetime.fromisoformat(x.last_checked or x.submitted_at)),
         stale=x.request_id in r.not_checked_recently) for x in r.data]
-    b.requests.unresolved_submission_count = conn.execute(
-        "select count(*) from purchase_submissions where status in ('sending', 'unknown')").fetchone()[0]
+    unresolved = conn.execute("select id, status from purchase_submissions where status in ('sending', 'unknown')"
+                              " order by id").fetchall()
+    b.requests.unresolved_submission_count = len(unresolved)
     if r.not_checked_recently:
         _alert(b, "requests_stale", f"{len(r.not_checked_recently)} pending checks exceed 6h", "get_purchase_requests")
     if b.requests.unresolved_submission_count:
-        _alert(b, "submission_unresolved", f"{b.requests.unresolved_submission_count} submissions unresolved; do not resend",
-               "preview_desired_state")
+        named = ", ".join(f"{row} ({status})" for row, status in unresolved)
+        _alert(b, "submission_unresolved", f"ORDERS BLOCKED: submission {named} may already be on the bridge, so "
+               "no purchase request can be sent; do not resend. A person finds out whether the bridge filed it, then "
+               "runs `python -m vending.submissions resolve`", "preview_desired_state")
 
 
 def build(conn: psycopg.Connection, now: datetime | None = None) -> Briefing:
@@ -451,6 +458,9 @@ def render(b: Briefing) -> str:
         share = w.api_share_of_gross_profit
         lines.append(f"API/gross: {share + '%' if share is not None else '? (' + str(w.api_share_reason) + ')'}; "
                      f"adjustments ${w.adjustments}; costs {'complete' if w.cost_of_sales_complete and w.shrinkage_complete else 'INCOMPLETE'}.")
+        if w.units_estimated:
+            lines.append(f"{name}: ESTIMATE ${w.estimated_cost_of_sales} for {w.units_estimated} units sold across a swap "
+                         "the counters can't split; not in Known COS, Gross or Net.")
     lines.append("Change current minus previous ($; unequal/partial periods are not a trend): " + ", ".join(
         f"{key} {_cell(value)}" for key, value in b.money_change.items()))
     lines.append(f"Spendable snapshot: ${b.spendable or '?'}; call get_account_balance every run.")

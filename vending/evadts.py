@@ -22,6 +22,7 @@ stored raw, but none of its counters are trusted.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 
 
@@ -78,13 +79,43 @@ def _int(value: str) -> int:
         return int(value) if value.strip() else 0
     except ValueError:
         # A plain ValueError would escape the sync and stop it on this poll for good.
-        raise ParseError(f"expected a number, got {value!r}") from None
+        # Not the field: it is a figure from the document, and a message can reach a log.
+        raise ParseError("a field that should be a number isn't one") from None
 
 
 def _to_cents(value: int, decimal_places: int) -> int:
     if decimal_places > 2:
         raise ParseError(f"ID4 says {decimal_places} decimal places; only 0-2 are supported")
     return value * 10 ** (2 - decimal_places)
+
+
+# Records that may sit inside a selection block, between its PA1 and its PA2.
+IN_BLOCK = ("PA3", "PA4", "PA5", "PA7", "PA8")
+
+
+def records(lines: Iterable[str]) -> Iterator[tuple[list[str], str | None]]:
+    """Each line's fields, with the selection whose block the record is in, or None.
+
+    `PA1*<selection>` opens a block. `PA3`-`PA5`, `PA7` and `PA8` stay in it, and the next `PA2`
+    belongs to it and closes it. Any other record, a blank line included, ends the block, so a stray
+    `PA2` can't attach itself to the wrong selection. `parse` and `scripts/bridge.py` both read
+    selections this way. Only a `PA1`'s selection field is read here.
+    """
+    current: str | None = None
+    for line in lines:
+        fields = line.split("*")
+        tag = fields[0]
+        if tag == "PA1" and len(fields) > 1:
+            current = fields[1].strip()
+            yield fields, current
+        elif tag == "PA2":
+            yield fields, current
+            current = None
+        elif tag in IN_BLOCK:
+            yield fields, current
+        else:
+            current = None
+            yield fields, None
 
 
 def parse(raw: bytes) -> Poll:
@@ -106,10 +137,8 @@ def parse(raw: bytes) -> Poll:
     total_paid: tuple[int, int] | None = None
     prices: dict[str, int | None] = {}
     counters: dict[str, tuple[int, int]] = {}
-    current: str | None = None
 
-    for line in raw.decode("ascii", "replace").split("\r\n"):
-        fields = line.split("*")
+    for fields, selection in records(raw.decode("ascii", "replace").split("\r\n")):
         tag = fields[0]
         if tag == "ID1" and len(fields) > 1:
             # ID1-01 should be the serial, but our machine writes ">" there and
@@ -121,16 +150,10 @@ def parse(raw: bytes) -> Poll:
             decimal_places = _int(fields[1])
         elif tag == "VA1" and len(fields) > 2:
             total_paid = (_int(fields[1]), _int(fields[2]))
-        elif tag == "PA1" and len(fields) > 1:
-            current = fields[1].strip()
-            prices[current] = _int(fields[2]) if len(fields) > 2 and fields[2].strip() else None
-        elif tag == "PA2" and current is not None and len(fields) > 2:
-            counters[current] = (_int(fields[1]), _int(fields[2]))
-            current = None
-        elif tag not in ("PA3", "PA4", "PA5", "PA7", "PA8"):
-            # Any other record ends the selection block, so a stray PA2 can't
-            # attach itself to the wrong selection.
-            current = None
+        elif tag == "PA1" and selection is not None:
+            prices[selection] = _int(fields[2]) if len(fields) > 2 and fields[2].strip() else None
+        elif tag == "PA2" and selection is not None and len(fields) > 2:
+            counters[selection] = (_int(fields[1]), _int(fields[2]))
 
     selections = [
         Selection(

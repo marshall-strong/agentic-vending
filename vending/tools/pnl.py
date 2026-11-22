@@ -7,6 +7,15 @@ have loaded; `units_sold` counts every sale from our 20 slots and the reply
 says how many of them could not be costed. Shrinkage is the cost of units
 lost without a sale. Visit fees, token spend and adjustments come from the
 ledger; capital and tax remittances are shown but are not profit or loss.
+The sales tax is rounded per tax week, Sunday to Saturday Eastern, as David
+calculates it (`tax_weeks`); `weeks` are Saturday to Friday, each with its
+share of that tax.
+While any cost is missing (`cost_of_sales_complete` or `shrinkage_complete`
+false), `gross_margin` and `net` are over the known costs only, and the
+summary says "net at known costs (incomplete...)", never plain "net". Units
+sold across a swap the counters can't split have an estimate apart
+(`estimated_cost_of_sales`), in no profit figure; the stock they took is
+`unattributed_stock`, a reconciliation line, also in no profit figure.
 Inventory is every unit on hand, in the machine and the closet, at the cost
 we paid. See `vending.ledger`.
 
@@ -38,6 +47,10 @@ class Pnl(Reply):
     units_costed: int | None = None
     cost_of_sales: str | None = None
     cost_of_sales_complete: bool | None = None
+    units_estimated: int | None = None              # sold across a swap the counters can't split
+    estimated_cost_of_sales: str | None = None      # their estimate: not in cost_of_sales, margin or net
+    unattributed_stock: str | None = None           # stock those sales took: a reconciliation line, not in net
+    unattributed_stock_provisional: bool | None = None   # a write-off at the swap may be one of those sales
     gross_margin: str | None = None
     shrinkage: str | None = None
     shrinkage_units: int | None = None
@@ -53,15 +66,24 @@ class Pnl(Reply):
     inventory_closet: str | None = None
     inventory: str | None = None
     inventory_complete: bool | None = None
-    weeks: list[dict] = []
+    weeks: list[dict] = []          # display weeks, Saturday to Friday; tax is each week's share
+    tax_weeks: list[dict] = []      # tax weeks, Sunday to Saturday, as David calculates the tax
     notes: list[str] = []
 
 
+def _now(conn: psycopg.Connection) -> datetime:
+    """Now: the later of the app's clock and the database's, which stamps an entry recorded without a time
+    (`ledger.db_now`), so nothing either made a moment ago falls after a window's cutoff."""
+    return max(datetime.now(EASTERN), ledger.db_now(conn))
+
+
 def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> Pnl:
-    """Both dates are Eastern calendar days, inclusive. Defaults: the opening moment to today."""
-    today = datetime.now(EASTERN).date()
+    """Both dates are Eastern calendar days, inclusive. Defaults: the opening moment to today.
+    A window that runs to today or later stops at now, so a week still in progress is partial."""
+    now = _now(conn)
+    today = now.astimezone(EASTERN).date()
+    opened = ledger.opening(conn)
     if start is None:
-        opened = ledger.opening(conn)
         if opened is None:
             return Pnl(success=False, message=ledger.OPEN_HINT + " Or give start and end dates.")
         first = opened.at
@@ -70,17 +92,31 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
     last_day = end or today
     if last_day < first.astimezone(EASTERN).date():
         return Pnl(success=False, message=f"end ({last_day}) is before start ({first.astimezone(EASTERN).date()}).")
+    if first > now:
+        return _not_started(first)
     last = datetime.combine(last_day + timedelta(days=1), time.min, EASTERN) - timedelta(microseconds=1)
+    # Today or a later day ends now: the rest hasn't happened.
+    last = min(last, now)
     try:
-        p = ledger.pnl(conn, first, last)
+        # A poll at `start`'s midnight sharp is in the window; entries, receipts and visits count from it.
+        p = ledger.pnl(conn, first, last, ledger.poll_start(first, opened and opened.at))
     except SlotsNotRecorded as error:
         return Pnl(success=False, message=str(error))
     net = ledger.money(p.net_cents)
-    caveat = "" if p.cost_of_sales_complete else f" ({p.units_sold - p.units_costed} of {p.units_sold} units sold not costed)"
+    # A net over known costs only is never headlined as net (#172 review).
+    missing = []
+    if not p.cost_of_sales_complete:
+        missing.append(f"{p.units_sold - p.units_costed} of {p.units_sold} units sold not costed exactly")
+    if not p.shrinkage_complete:
+        missing.append("some units lost have no known cost")
+    if p.units_estimated:
+        missing.append(f"estimated cost of {p.units_estimated} units {ledger.money(p.estimated_cost_of_sales_cents)}, "
+                       "an estimate not in net")
+    headline = f"net at known costs {net} (incomplete: {'; '.join(missing)})" if missing else f"net {net}"
     return Pnl(
         success=True,
         message=(f"{first.astimezone(EASTERN):%Y-%m-%d} to {last_day} (Eastern days): revenue "
-                 f"{ledger.money(p.revenue_ex_tax_cents)} ex tax, net {net}{caveat}, "
+                 f"{ledger.money(p.revenue_ex_tax_cents)} ex tax, {headline}, "
                  f"inventory at cost {ledger.money(p.inventory_cents) or 'unknown'}."),
         count=len(p.takings.by_week),
         start=first.astimezone(timezone.utc),
@@ -92,6 +128,10 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         units_costed=p.units_costed,
         cost_of_sales=ledger.money(p.cost_of_sales_cents),
         cost_of_sales_complete=p.cost_of_sales_complete,
+        units_estimated=p.units_estimated,
+        estimated_cost_of_sales=ledger.money(p.estimated_cost_of_sales_cents),
+        unattributed_stock=ledger.money(p.unattributed_stock_cents),
+        unattributed_stock_provisional=p.unattributed_stock_provisional,
         gross_margin=ledger.money(p.gross_margin_cents),
         shrinkage=ledger.money(p.shrinkage_cents),
         shrinkage_units=p.shrinkage_units,
@@ -109,5 +149,34 @@ def get_pnl(conn: psycopg.Connection, start: date | None, end: date | None) -> P
         inventory_complete=p.inventory_complete,
         weeks=[{"week": w.week.isoformat(), "revenue": ledger.money(w.takings_cents),
                 "tax_set_aside": ledger.money(w.tax_cents)} for w in p.takings.by_week],
+        tax_weeks=[_tax_week(w, first, last) for w in p.takings.by_tax_week],
         notes=list(p.notes),
     )
+
+
+def _not_started(first: datetime) -> Pnl:
+    """A window that starts after now: nothing in it has happened, so the ledger isn't read. Whatever is
+    dated in it (a poll, an entry or a receipt dated ahead) isn't counted. Every flow is zero; inventory at
+    its end isn't known yet, so it is left out."""
+    zero = ledger.money(0)
+    return Pnl(
+        success=True,
+        message=f"The window from {first.astimezone(EASTERN):%Y-%m-%d} (Eastern) hasn't started yet: nothing to report.",
+        count=0, start=first.astimezone(timezone.utc), end=first.astimezone(timezone.utc),
+        revenue=zero, tax_set_aside=zero, revenue_ex_tax=zero, units_sold=0, units_costed=0, cost_of_sales=zero,
+        cost_of_sales_complete=True, units_estimated=0, estimated_cost_of_sales=zero, unattributed_stock=zero,
+        unattributed_stock_provisional=False, gross_margin=zero, shrinkage=zero, shrinkage_units=0,
+        visit_fees=zero, visits=0, token_spend=zero, adjustments=zero, net=zero, purchases=zero, capital=zero,
+        tax_remitted=zero, weeks=[], tax_weeks=[])
+
+
+def _tax_week(w: ledger.WeekTakings, first: datetime, last: datetime) -> dict:
+    """One tax week of the reply: `from` and `to` are the part of it the window counted, Eastern. `partial` when
+    the window cut it, so its `revenue` and `tax` are not the week's whole figure (David's Saturday calculation)."""
+    begins = datetime.combine(w.week, time.min, EASTERN)
+    ends = ledger.tax_week_end(w.week)
+    counted_from, counted_to = max(begins, first.astimezone(EASTERN)), min(ends, last.astimezone(EASTERN))
+    return {"week": w.week.isoformat(), "ends": ends.isoformat(),
+            "from": counted_from.isoformat(), "to": counted_to.isoformat(),
+            "partial": counted_from > begins or counted_to < ends,
+            "revenue": ledger.money(w.takings_cents), "tax": ledger.money(w.tax_cents)}

@@ -123,14 +123,35 @@ def read_log_tail(log_path: Path, count: int) -> list[str]:
     """The last `count` lines of the poll log, newest last."""
     if not log_path.exists():
         return []
-    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    # Split on newlines only: str.splitlines() also breaks at a vertical tab or a form feed, which an old line's
+    # quoted `problems` can hold, and the text after it would read as a structured line of its own.
+    lines = [line.rstrip("\r") for line in log_path.read_text(encoding="utf-8", errors="replace").split("\n")]
     return [line for line in lines if line.strip()][-count:]
 
 
-def field(line: str, name: str) -> str:
-    """Pull `name=value` out of one of our log lines."""
-    match = re.search(rf"\b{name}=(\"[^\"]*\"|\S+)", line)
-    return match.group(1).strip('"') if match else "?"
+# The structured start of an error line that `poll_snapshot.py` writes: its time, level and event, then
+# `reason=` for a failed run. Nothing after that point is read: older lines carry a snippet of the reply in
+# `detail`, and the first and last record of a document in `problems`, and either can say `reason=`.
+ERROR_START = re.compile(
+    r"^(?P<time>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) level=ERROR event=(?P<event>[a-z_]+)"
+    r"(?: reason=(?P<reason>[a-z_]+))?(?= |$)")
+# The reasons `poll_snapshot.py` writes (`PollError`), and the events that have none.
+REASONS = {"no_env_file", "no_base_url", "no_api_key", "tailscale_down", "peer_offline", "unreachable", "timeout",
+           "health_not_ok", "auth_rejected", "bridge_busy", "bridge_error", "transmit_disabled", "write_failed",
+           "unexpected"}
+FIXED_CODES = {"invalid_snapshot"}
+
+
+def describe_error(line: str) -> tuple[str, str]:
+    """(time, reason code) of an error line from its structured start alone; "?" and "unrecognised" for
+    anything that isn't one. The code is one of ours, never text from the line: this report is read by people
+    (docs/integrity.md)."""
+    match = ERROR_START.match(line)
+    if match is None:
+        return "?", "unrecognised"
+    if match["reason"] is not None:
+        return match["time"], match["reason"] if match["reason"] in REASONS else "unrecognised"
+    return match["time"], match["event"] if match["event"] in FIXED_CODES else "unrecognised"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,8 +215,9 @@ def main(argv: list[str] | None = None) -> int:
         failures = [line for line in tail if "level=ERROR" in line]
         if failures:
             last = failures[-1]
-            print(f"  Most recent error : {last.split(' ', 1)[0]}  reason={field(last, 'reason')}")
-            print(f"                      {field(last, 'detail')[:100]}")
+            # A code of ours only, read from the line's structured start: see `describe_error`.
+            when, reason = describe_error(last)
+            print(f"  Most recent error : {when}  reason={reason}")
         cached = sum(1 for line in tail if "cached=true" in line)
         if cached:
             print(f"  Served from cache : {cached} of the last {len(tail)} runs")

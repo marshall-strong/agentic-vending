@@ -4,7 +4,7 @@ One fixed slot tests products for the other 19 and may sell up to $8.00; it neve
 
 **Why** (#100; #110, item 1): a new product earns a regular slot by selling well in the wildcard first.
 
-**Pick it once.** If `get_machine_state` says no wildcard slot is set, pick one with `set_wildcard_slot` and say why: one of ours on a middle shelf (2 to 4), not column 5 (beside the centre line), in a column taking cans and bottles. Only a person can change it. Until it is set, no slot goes above $6.50.
+**Pick it once.** If `get_machine_state` says no wildcard slot is set, pick one with `set_wildcard_slot` and say why: one of ours on a middle shelf (2 to 4), not column 4 or 5 (centre), in a column taking cans and bottles. Only a person can change it. Until it is set, no slot goes above $6.50.
 
 **Each Friday plan**, read `wildcard_trial` in `get_machine_state`:
 
@@ -13,9 +13,9 @@ One fixed slot tests products for the other 19 and may sell up to $8.00; it neve
 - **extend**: 3 sold. Keep it one more Friday; by 10 days it needs 7.
 - **drop** (0 to 2 sold, or under 7 by 10 days) or **promoted** (another slot holds its product): switch the wildcard to the next product.
 - **price test**: priced above $6.50, so it can't be promoted.
-- **unknown**: don't promote. The reason says what to fix: a slot with no receipt, an unsettled counter, counts that disagree, or, for a pass, no price in 6 hours.
+- **unknown**: don't promote. The reason says what to fix: a slot with no receipt, an unsettled counter, counts that disagree, swap sales nothing could split (first loads too), or, for a pass, no price in 6 hours.
 
-**What counts.** Only what the polls saw: no gap over 6 hours, nor the poll window holding the load. Profit is information only.
+**What counts.** Only what the polls saw: no gap over 6 hours, nor the swap's poll window. Profit is information only.
 
 **Silent slots** (`silent_slots`). A promotion goes only into a regular slot that:
 
@@ -23,7 +23,7 @@ One fixed slot tests products for the other 19 and may sell up to $8.00; it neve
 - was watched for 4 in-stock class days, Monday to Thursday, each to 6 PM (so run Thursday evening);
 - has stock confirmed: that visit's own receipt loaded it, or a count since its last load names its SKU and units receipts allow. A disagreeing count makes it unknown.
 
-Never into a slot that sold. `unconfirmed_slots` may be empty: ask for a count before Friday.
+`unconfirmed_slots` may be empty: ask for a count before Friday.
 
 **Price it at or under $6.50** so the result carries over; $8.00 only for a deliberate price test. No loss leaders. Prices change only with a load.
 

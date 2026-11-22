@@ -43,8 +43,10 @@ same rules (`vending.pages.explorer_rules`), because of the integrity rule
   read (nothing stored yet, a table missing, or a login that may not read it), these two tables
   show no rows. The row counts and paging count only the rows shown.
 - **`polls.total_paid_cents` and `polls.total_paid_units` show *(hidden)* in every row.** They are
-  the machine-wide VA1 totals. From the start (3 Dec 2026) they include the other team's sales, and
-  the total minus ours is theirs.
+  the machine-wide VA1 totals, which may be used only from polls taken before the fall cut
+  (`FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern when unset; `docs/integrity.md`). From the cut on,
+  the total minus ours is the other selections' sales. The explorer can't test a poll's time, so it
+  hides them for every poll.
 - `polls.raw` shows only its size, like every `bytea`.
 
 The hidden values never leave Postgres: the filter and the *(hidden)* are in the query itself.

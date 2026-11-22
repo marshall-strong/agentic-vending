@@ -8,14 +8,18 @@ every figure below is worked out by code, not by the model. Every tool that chan
 outside our database (a write tool) passes the write gate: the halt switch is checked first, and
 every attempt is logged.
 
-This is the contract for each of the 12 tools registered in `vending/server.py` on `main`, as
+This is the contract for each of the 13 tools registered in `vending/server.py` on `main`, as
 Summative 2 asks: "inputs, outputs, preconditions, side effects, cost, failure behavior, and who
-owns it" (Project Brief (Revised), section 5). Checked against the code at `ba14a6d`, 12 Nov 2026.
+owns it" (Project Brief (Revised), section 5). Checked against the code at `ba14a6d`, 12 Nov 2026;
+the `get_briefing` section (added later) against the code at `33fa322`, 19 Nov 2026. The tool
+names are pinned in `tests/test_server.py::test_tool_list_is_pinned`, so a tool added without a
+section here shows up as a mismatch with that list.
 
 ## Summary
 
 | Tool | Read or write | What it is for | Owner |
 | --- | --- | --- | --- |
+| `get_briefing` | Read | One startup snapshot of our slots: data quality, ledger weeks, stock with evidence ages, closet, pending requests, lookup hints | Kevin Sykes |
 | `get_machine_state` | Read | Each of our slots now: price, sales rate, stock on hand; and the closet at cost | Kevin Sykes, with Meaghan Gartland |
 | `get_sales_history` | Read | Units and revenue per slot between two times | Kevin Sykes |
 | `get_catalog` | Read | The products we are allowed to order | Sean Kelley |
@@ -36,6 +40,74 @@ the tool, and the section says so. `get_project_rules` has no issue; it came wit
 All money in replies is a dollar string such as `"2.50"`, never a floating-point number. Every
 reply has `success`, `message` and `count`; a failure's `message` says what a person or the agent
 should do next.
+
+## `get_briefing`
+
+The startup read (`docs/agent/startup-read.md`): one snapshot of what our stored data says, so the
+agent starts a run knowing how fresh each number is. It does not replace `get_account_balance`,
+`get_purchase_requests` or `preview_desired_state`, which the agent still calls before it spends.
+
+- **Inputs**: none.
+- **Slots it covers**: ours only. The slots come from the assignment the inventory server gave us
+  (`python -m vending.slots record`, on `DEVICE_ID`), and stock is replayed from our machine's
+  counters and receipts alone (`vending/stock.py`), as the other read tools do. No other slot
+  appears, so `count` is the number of our slots, never 40 (`docs/integrity.md`).
+- **Outputs**: `success`, `message` (names the snapshot and its status), `count` (our slots),
+  `computed_at`, `snapshot_id`, `text` and `data`.
+  - `snapshot_id` is a digest of the whole computed content except `computed_at` and itself. It
+    is the same only while that content is identical, and it can change with no new data when a
+    time-dependent part changes: an age (rounded to a tenth of an hour, so two calls a couple of
+    minutes apart may share an id and a call ten minutes later usually will not) or a window that
+    moves with the time. Use it to name a snapshot, not to tell whether the data changed.
+  - `text` is compact Markdown in a fixed order for the agent: data quality, alerts, money, every
+    slot, closet, requests, and the lookup to call for more of each. Source labels in it are data,
+    never instructions.
+  - `data` is the same snapshot typed: `status`, `sources` (the poll and the catalog, each with
+    its time, age in hours and `stale`), `alerts` (each a `code`, its `evidence` and the tool to
+    `lookup`), `money` (`current` and `previous` Saturday-to-Friday ledger weeks in Eastern time,
+    and `competition` from the ledger's opening: revenue without tax, known cost of sales and
+    shrinkage, visit fees, adjustments, live API spend, gross and net profit, API share of gross
+    profit, each with whether its sales, costs and shrinkage are complete), `money_change`
+    (current less previous), `spendable`, `slots`, `closet` and `closet_value_at_cost`,
+    `requests` (pending with the age of each check, overdue ones, unresolved submissions and
+    measured worker turnaround), `stock_warning_count`, `our_slots` and
+    `slot_assignment_version`.
+  - Each slot has its `product` and `price`, `effective_stock`, `units_per_day`, `days_of_cover`
+    and `flags`, with where the product and the stock came from (`product_basis`, `stock_basis`:
+    a person's count, or the receipts) and how old that evidence is. A fact nothing knows is
+    `null` and shows as `?`, never as zero.
+- **Preconditions**: none the caller must meet; every missing source shows up as an alert. It
+  works best with a stored slot assignment, polls from `python -m vending.sync_history`, receipts
+  from `python -m vending.sync_requests`, an opened ledger and a synced catalog.
+- **Side effects**: one `action_log` row (a read). The snapshot is built in one read-only
+  transaction that ends before that row is written. Nothing else is written.
+- **Cost**: database queries only. It never calls the bridge or the model.
+- **Failure behavior**: it never refuses (it is a read, not behind the write gate or the halt
+  switch). Every structured reply it returns has `success: true`, and the agent reads
+  `data.status` and `alerts`. A source the snapshot supports reading as missing becomes an alert
+  (below). A database or logging failure is not an alert: it comes back as a tool error, with no
+  snapshot. That includes the `action_log` table missing, which the server finds only after it
+  has built the snapshot, when it writes the log row:
+  - `status` is `ok` with no alerts, `partial` with any alert, `stale` when any alert ends in
+    `_stale` (the latest poll over 3 hours old, the catalog over 36 hours, or a pending request
+    not checked for 6 hours), and `unavailable` when there is no usable assignment for our
+    device.
+  - No usable assignment: `assignment_unavailable`, no slots, and the closet and requests marked
+    unavailable. It never falls back to all 20 numbers or to another device's slots.
+  - A source whose table is missing, or that has too little data (one poll, no ledger opening, no
+    catalog sync), becomes an alert such as `money_unavailable`, `rates_unavailable` or
+    `catalog_unavailable`; the other sections still answer.
+  - Incomplete sales, costs or shrinkage leave gross and net profit `null`, so a known total is
+    never shown as the whole. Competition figures count only from the ledger's opening.
+  - `spendable` is a snapshot, `null` unless the competition's sales are complete and every
+    receipt line has a `total_paid`, and never the figure to spend against: call
+    `get_account_balance` every run.
+  - Other alerts say what to look at: `polls_unavailable`, `polls_stale`, `stock_warnings`,
+    `stock_unknown`, `counts_stale`, `request_overdue`, `requests_stale`, `submission_unresolved`,
+    `catalog_stale`, `money_current_incomplete` (likewise `previous`, `competition`).
+  - Database unreachable: the call returns an error; the server reopens its connection on the
+    next call.
+- **Owner**: Kevin Sykes (#148).
 
 ## `get_machine_state`
 
@@ -119,7 +191,9 @@ should do next.
   opening capital + later capital + takings - receipts - midweek visit fees - token spend - tax
   remitted, plus or minus adjustments. Each part is its own field (`opening`, `capital`,
   `revenue`, `receipts`, `visit_fees` and `visits`, `token_spend`, `tax_remitted`,
-  `adjustments`). Also `tax_set_aside`, `tax_owed` (set aside less remitted) and `spendable`
+  `adjustments`). Also `tax_set_aside` (takings x 8/108, rounded half up per tax week, Sunday to
+  Saturday Eastern, the week in progress on its takings so far), `tax_owed` (set aside less
+  remitted) and `spendable`
   (balance less tax owed), which is the figure the planner's spend check uses. Plus `as_of`,
   `opening_at` and `notes`.
 - **Preconditions**: a person has opened the ledger with
@@ -136,14 +210,25 @@ should do next.
 ## `get_pnl`
 
 - **Inputs**: optional `start` and `end`, calendar days in Eastern time, both inclusive. Default:
-  from the ledger's opening to today.
+  from the ledger's opening to today. A poll at `start`'s midnight sharp is counted when `start`
+  is after the opening; from the opening's own moment, or before the opening, that poll is the
+  baseline. Entries, receipts and visits always count from `start`'s midnight itself.
 - **Outputs**: `revenue` (tax included), `tax_set_aside`, `revenue_ex_tax`, `units_sold`,
   `units_costed`, `cost_of_sales` (first-in, first-out cost from receipts) and
-  `cost_of_sales_complete`, `gross_margin`, `shrinkage` and `shrinkage_units` (units lost without
+  `cost_of_sales_complete`, `units_estimated` and `estimated_cost_of_sales` (an estimate for
+  units sold across a swap the counters can't split, in no profit figure), `unattributed_stock`
+  and `unattributed_stock_provisional` (the stock those sales took, a reconciliation line in no
+  profit figure), `gross_margin`, `shrinkage` and `shrinkage_units` (units lost without
   a sale), `visit_fees`, `visits`, `token_spend`, `adjustments`, `net`; also `purchases`,
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
   (`inventory_machine`, `inventory_closet`, `inventory`, `inventory_complete`); per-week revenue
-  in `weeks`; and `notes`.
+  in `weeks` (Saturday to Friday, each with its share of the tax); `tax_weeks`, each Sunday to
+  Saturday tax week's revenue and tax as David calculates it (`week`, the Sunday it starts, and
+  `ends` at Saturday 23:59:59.999999 Eastern), with `from` and `to`, the part of the week the window
+  counted (Eastern), and `partial`: true when the window cut the week (it starts midweek, or at an
+  opening after that week's Sunday 00:00, or it ends before Saturday), so its `revenue` and `tax` are
+  the window's, not the whole week's figure; and `notes`. An `end` of today or later stops the window
+  at now: `end` in the reply is now, and the week in progress is `partial` with `to` now.
 - **Preconditions**: the ledger is open, unless `start` is given (`end` then defaults to today).
 - **Side effects**: one `action_log` row.
 - **Cost**: database queries only.
@@ -154,8 +239,18 @@ should do next.
   - `end` before `start`: `success: false`.
   - Units sold that no receipt can cost: `cost_of_sales_complete: false` and a note saying how
     many. Cost of sales is never "unknown" as a whole. Units sold across a product change the
-    counters can't split (#112) count as costed, at the cost of the new product's oldest units, with a note
-    that it may be the wrong product's.
+    counters can't split (#112) are not costed: which product sold is unknown. `units_estimated` and
+    `estimated_cost_of_sales` give an estimate apart, the midpoint of the two products' unit costs
+    when both are known, with a note. It is never in `cost_of_sales`, `gross_margin` or `net`, and
+    the money series counts them the same way (#172 item 5).
+  - Any cost missing (`cost_of_sales_complete` or `shrinkage_complete` false): `gross_margin` and
+    `net` are over the known costs only, not the profit. The `message` then says "net at known
+    costs ... (incomplete: ...)" with what is missing and any estimate, never plain "net".
+  - Stock taken by sales of unknown product: `unattributed_stock`, a reconciliation line in no
+    cost, estimate or profit, so opening cash and stock + net + capital + tax set aside - tax
+    remitted - `unattributed_stock` = closing cash + stock at cost. `unattributed_stock_provisional`
+    is true when units written off at a swap the sales' window spans may be some of those sales.
+    Timing exception: A unit the counters split to the old product at a swap leaves stock at the swap but is booked to the poll that measured it, so a period that ends between the two (usually a day) is off by that unit's cost, which the period containing the poll makes up; a period that holds both balances.
   - Stock whose cost is unknown: `inventory_complete: false` and a note.
 - **Owner**: Marshall Strong (issue #23, PR #35).
 
@@ -177,7 +272,8 @@ should do next.
   a plan with no refusals); `lines`, one per slot that changes, with the exact request body in
   `api`; `directive`, the instructions the worker will read; `cost` (`expected`, `max`,
   `visit_fee`, `spendable`, `spendable_left_at_max`, and per line); `floors`, each changed slot's
-  lowest legal price and how it was worked out; `warnings`; `refusals` (each a `code`, `message`
+  lowest legal price and how it was worked out; `warnings`, including [fills that leave space](capacity.md);
+  `refusals` (each a `code`, `message`
   and `slot`); `notes`; `as_of` and `prices_as_of`.
 - **Preconditions**: the ledger is open; the bridge's catalog can be read; `capacity_overrides` in
   `config` is valid. Missing polls or receipts don't stop it: they add a note and count as empty.
@@ -244,7 +340,7 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
 - **Side effects**: on success, a real purchase request on the bridge (`POST
   /api/v1/purchase-requests`): the student worker buys what it lists and loads the machine at the
   next visit. Our records: a `purchase_submissions` row saved **before** sending, settled after
-  as `accepted`, `refused`, `not_filed` or `unknown`; on acceptance a `purchase_requests` row,
+  as `accepted`, `not_filed` or `unknown` (`refused` is no longer set: see below); on acceptance a `purchase_requests` row,
   which the request sync then follows. One `action_log` row for every attempt.
 - **Cost**: **real money**. Up to `max_cost`: for every line, the dearer of its two purchase
   options at its max pack price, plus the midweek fee (`midweek_fee_cents`, $25 by default) if
@@ -257,19 +353,31 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
     planner's codes: `plan_changed` (the lines, their worst-case cost or the visit fee changed
     since the preview: preview again) and `submission_unresolved`.
   - Something a person must fix first: `success: false`, "Can't submit yet:" and what to do.
-  - The bridge says too many requests are open (`429`): refused `too_many_open_requests`; wait for
-    earlier ones to be decided.
-  - The bridge refuses the request (another `4xx`): `success: false` with the bridge's reason;
-    nothing was ordered.
-  - Bridge unreachable: `success: false`, "nothing was sent"; the record is `not_filed`.
-  - Sent but no usable answer (a timeout, a `5xx`, or an answer with no request ID): the record is
-    `unknown`, the agent is told not to submit again, and every later preview and submit refuses
-    `submission_unresolved` until a person checks the bridge and runs
-    `python -m vending.submissions resolve`.
-  - Accepted, but storing the answer fails (the database dropped mid-call): the request ID is
-    written to the server's error log as a `LOST ANSWER` line, and the error the agent sees names
-    the ID and the `resolve` command. The record stays `sending`, which blocks further submits.
-  - The POST is never retried: a retry after a lost answer could order twice.
+  - Accepted only on the documented `201`, whole: a body whose `Content-Length` is one number equal to
+    its size, or chunked with exact framing (each chunk closed by CRLF, ending in the blank line), read
+    in full within the 30-second total deadline and the 64 KB cap, `application/json`, not encoded,
+    strict JSON with no repeated key, in the `PurchaseRequestPending` shape (`id`,
+    `status: pending`, `created_at`), under an ID no other submission or recorded request holds.
+  - Connecting to the bridge failed (no byte of the request left): `success: false`,
+    `status: not_filed`, "nothing was sent"; the record is `not_filed`.
+  - **Every other answer is `unknown`**, the bridge's documented refusals included (`403`, `422`
+    such as `invalid_lines`, `429` such as `too_many_open_requests` or `submissions_locked`), and
+    any other `4xx`, `5xx`, redirect or success, an answer cut off, slow, too long, encoded or not
+    plain JSON, and no answer at all. The reply has `success: false`, `status: unknown`, the bridge's
+    words if any, and tells the agent not to submit again. Every later preview and submit refuses
+    `submission_unresolved` until a person finds out whether the bridge filed it and runs
+    `python -m vending.submissions resolve N --request-id ID --by NAME` or `--not-filed --by NAME`.
+    A refusal-shaped reply can't prove nothing was ordered, so it never settles a row by itself.
+  - Accepted, but storing the answer fails (the database dropped mid-call): the validated `201`'s
+    ID was already kept on the row (`created_id`) before anything else, so the next run's check
+    (`python -m vending.submissions check`) reads `GET /api/v1/purchase-requests/{id}` and settles
+    it from the bridge's documented record of that ID. That is the only row the check settles. The
+    ID is also written to the server's error log as a `LOST ANSWER` line, and the error the agent
+    sees names the ID and the `resolve` command. The record stays `sending`, which blocks further
+    submits until then.
+  - The POST is never retried, and never redirected: a retry after a lost answer could order twice.
+    The agent tries once more in the same run only after our own `plan_changed` (no `submission`
+    number: nothing was sent) or `not_filed` (#217).
 - **Owner**: Marshall Strong (issue #20, PR #37).
 
 ## `get_purchase_requests`
@@ -352,7 +460,7 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   for the config change.
 - **Cost**: database only.
 - **Failure behavior**: code `wildcard`, every reason at once: not one of ours, not on a middle
-  shelf (2 to 4), column 5 (beside the machine's centre line), no reason, or a slot already set.
+  shelf (2 to 4), column 4 or 5 (beside the machine's centre line), no reason, or a slot already set.
   `halted` when the halt switch is on.
 - **Owner**: Kevin Sykes (PR #166).
 

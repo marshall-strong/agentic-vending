@@ -4,8 +4,9 @@
 sync jobs and the write tools use. Only `poll`, which `vending.visit_polls` calls
 around a visit, reads the machine live. The sync
 jobs read stored history and our purchase requests through it, with retries;
-`submit_desired_state` and `request_catalog_product` send their one POST through
-`post`, never retried, and `/health` tells a bad poll from an outage.
+`request_catalog_product` sends its one POST through `post`, `submit_desired_state`
+through `post_answer`, and `vending.tracking` sends our books through `check_books`, each never
+retried, and `/health` tells a bad poll from an outage.
 
 Read failures are retried, then end in one of two ways. `BridgeUnreachable`
 means every later call would fail too, so the caller should stop: the bridge is
@@ -14,21 +15,38 @@ failed: an error status, a response cut off or unreadable, or a connection that
 keeps failing on one poll while `/health` still answers. A 5xx that outlasts
 the retries is checked against `/health` the same way, because Tailscale's
 proxy can answer `502` to every request until the node has joined the tailnet.
+
+**No poll bytes in a message.** What the bridge sends back can hold the machine's whole document, and the
+worker's logs and `/health` are read by people (`docs/integrity.md`, "Logs carry no poll bytes"). So no
+error here quotes a body, a snippet, a bad status line or a header. A message holds the status, sizes and
+a reason this module wrote ("short read: 1234 of 2000 bytes"). The exceptions are `post` and
+`post_answer`, whose answer to our own purchase or catalog request is the reason the write tool shows the
+agent, and `check_books`, whose
+answer is about our own books.
 """
 
 from __future__ import annotations
 
+import base64
 import http.client
 import json
+import re
+import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
+from http import HTTPStatus
 from typing import Any, NamedTuple
 
 from vending import settings
 
 TIMEOUT_SECONDS = 20
+# What a session id looks like before a log line or a URL names it: the bridge's ids are 32 hex digits
+# (docs/snapshot-archive.md). A record (`PA1*11*987*`), a bare counter or a line break is not one.
+_SESSION_ID = re.compile(r"[0-9a-fA-F]{32}")
 # A live read takes about 8.5 s, and may wait its turn for the serial line first.
 POLL_TIMEOUT_SECONDS = 30
 # The header a live read names its session in (docs/snapshot-archive.md).
@@ -36,6 +54,20 @@ SESSION_HEADER = "X-Poll-Session-Id"
 # `true` means another caller's recent document, `X-Poll-Age-Seconds` how old it was (docs/snapshot-archive.md).
 CACHED_HEADER, AGE_HEADER = "X-Poll-Cached", "X-Poll-Age-Seconds"
 RETRIES = 4
+# The tracking check (`check_books`), and how much of an error answer it keeps: enough for a list of items.
+TRACKING_PATH = "/api/v1/tracking/check"
+TRACKING_ERROR_BYTES = 8192
+# A purchase POST (`post_answer`): the longest it may take in all, from the first byte sent to the last byte of
+# the answer, and the most it reads of an answer. Reaching either ends it as `BridgeNoAnswer`, so the attempt is
+# `unknown`. The bridge's acceptance is a few hundred bytes.
+PURCHASE_DEADLINE_SECONDS = 30
+PURCHASE_ANSWER_BYTES = 65536
+# How much of an answer `PostAnswer.text` keeps, for the record and the message.
+PURCHASE_TEXT_CHARS = 500
+# The catalog (`products`), read by write tools while they hold the halt lock: the longest the whole read may
+# take, and the most it reads. Either ends it as `BridgeNoAnswer`, so a slow answer can't hold the lock.
+CATALOG_DEADLINE_SECONDS = 30
+CATALOG_ANSWER_BYTES = 4 * 1024 * 1024
 
 
 class LiveRead(NamedTuple):
@@ -46,6 +78,55 @@ class LiveRead(NamedTuple):
     session_id: str | None
     cached: bool | None = None
     age_seconds: float | None = None
+
+
+class ListedPoll(NamedTuple):
+    """One row of a day's listing that can be fetched and stored: its session id, and its start as a UTC time."""
+    session_id: str
+    started_at: datetime
+
+
+def valid_session_id(value: object) -> bool:
+    """Whether `value` is a session id: 32 hex digits, so safe to log and to put in a URL."""
+    return isinstance(value, str) and _SESSION_ID.fullmatch(value) is not None
+
+
+def parse_start_time(value: object) -> datetime | None:
+    """A listed poll's start as a UTC `datetime`, or None unless it is a real time with an offset.
+    "2026-02-30T12:00:00+00:00" is not one, and neither is a time with no offset."""
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+        return None if moment.utcoffset() is None else moment.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+def listed_poll(row: object) -> ListedPoll | None:
+    """A row of a day's listing as a `ListedPoll`, or None when it has no usable session id or start.
+    The row is the bridge's word: nothing from a row that fails is logged, fetched or stored."""
+    if not isinstance(row, dict) or not valid_session_id(row.get("session_id")):
+        return None
+    started = parse_start_time(row.get("started_at"))
+    return None if started is None else ListedPoll(row["session_id"], started)
+
+
+def status_phrase(status: int) -> str:
+    """The standard name of an HTTP status ("Bad Gateway"), written here and not taken from the reply."""
+    try:
+        return HTTPStatus(status).phrase
+    except ValueError:
+        return ""
+
+
+def _why_it_broke(error: http.client.HTTPException) -> str:
+    """A reason of our own for a reply that was cut off or was not HTTP. Never the bytes that came."""
+    if isinstance(error, http.client.IncompleteRead):
+        got = len(error.partial)
+        return f"short read: {got} of {got + error.expected} bytes" if isinstance(error.expected, int) \
+            else f"short read: {got} bytes, then the connection ended"
+    return f"the reply wasn't a whole HTTP answer ({type(error).__name__})"
 
 
 class BridgeError(RuntimeError):
@@ -64,6 +145,16 @@ class BridgeNoAnswer(BridgeError):
     """Sent, but no usable answer came back: a timeout, a dropped connection, or not JSON."""
 
 
+class BridgeNotJson(BridgeNoAnswer):
+    """A success status whose body isn't JSON. `status` is the status (None if the reply gave none);
+    `body` is the start of the body, kept only for `post` and `check_books` (else empty). Neither is in
+    the message, which says only the size."""
+
+    def __init__(self, status: int | None, size: int, body: bytes = b""):
+        super().__init__(f"the answer wasn't JSON ({size} bytes)")
+        self.status, self.body = status, body
+
+
 class BridgeUnreachable(BridgeError):
     """No network or a rejected key: every later call would fail the same way."""
 
@@ -74,6 +165,10 @@ class ConnectionFailed(BridgeUnreachable):
     The bridge is probably down, but `Bridge.raw` checks, because one poll can
     drop every time on a bridge that is otherwise fine.
     """
+
+
+class BridgeNotFound(BridgeError):
+    """A `404` from a read: the bridge has nothing at that path (an unknown request ID, say)."""
 
 
 class BridgeRateLimited(BridgeError):
@@ -95,8 +190,20 @@ class Bridge:
 
         Always a list. A reply of another shape comes back as an empty list, so
         `vending.planning` and the catalog sync can refuse it instead of crashing on it.
+
+        The whole read must end within `CATALOG_DEADLINE_SECONDS` (a total, not a gap between bytes) and
+        `CATALOG_ANSWER_BYTES`, else `BridgeNoAnswer`: the write tools read it while they hold the halt lock.
+        Raises `BridgeUnreachable` if connecting failed, `BridgeAnswered` for any status but `2xx` (only its
+        status: the body isn't quoted), and `BridgeNotJson` for a body that isn't JSON.
         """
-        body = json.loads(self._once("GET", "/api/v1/products"))
+        response, data = self._exchange("GET", "/api/v1/products", None, {"Accept": "application/json"},
+                                        deadline=CATALOG_DEADLINE_SECONDS, cap=CATALOG_ANSWER_BYTES)
+        if not 200 <= response.status < 300:
+            raise BridgeAnswered(response.status, status_phrase(response.status))
+        try:
+            body = json.loads(data)
+        except ValueError:      # its message can name a byte of the answer
+            raise BridgeNotJson(response.status, len(data)) from None
         products = body.get("products") if isinstance(body, dict) else body
         return products if isinstance(products, list) else []
 
@@ -106,8 +213,102 @@ class Bridge:
         Raises `BridgeUnreachable` if the request certainly never arrived,
         `BridgeAnswered` for an HTTP error status, and `BridgeNoAnswer` if it
         was sent but no usable answer came back (it may or may not have run).
+        A redirect isn't followed: it comes back as `BridgeAnswered` with its
+        `3xx`. urllib would follow a `303` with a GET, and that GET's status
+        would pass for the bridge's answer to the POST.
         """
-        return json.loads(self._once("POST", path, body))
+        return json.loads(self._once("POST", path, body, keep_body=True, redirects=False))
+
+    def post_answer(self, path: str, body: dict) -> PostAnswer:
+        """A purchase POST, once, never retried, never redirected: whatever HTTP answer came back, whole.
+
+        Raises `BridgeUnreachable` only when connecting failed (the name didn't resolve, the connection was
+        refused, TCP or TLS failed or timed out): nothing of the request had been written, so nothing left.
+        Through a proxy, that is the connection to the proxy (and, for `https`, its tunnel): anything after,
+        the proxy's own error answer included, may have reached the bridge.
+        Raises `BridgeNoAnswer` for anything once connected that isn't a whole answer: an error while writing
+        or reading, a body cut off or badly framed, an answer longer than `PURCHASE_ANSWER_BYTES`, or no whole
+        answer within `PURCHASE_DEADLINE_SECONDS` of starting to send (a total, not a gap between bytes).
+        Every other answer, a `3xx`, `4xx` or `5xx` included, comes back as a `PostAnswer`; `submit_desired_state`
+        settles a request only on the documented `201`.
+
+        It uses `http.client` directly, not urllib, so no redirect is followed and connecting is its own step.
+        It honors `http_proxy`, `https_proxy` and `no_proxy` as urllib does for the rest of this client
+        (`_route`): on Azure the bridge is reachable only through Tailscale's proxy (`docker/entrypoint.sh`).
+        """
+        response, data = self._exchange(
+            "POST", path, json.dumps(body).encode(),
+            {"Content-Type": "application/json", "Accept": "application/json", "Accept-Encoding": "identity"},
+            deadline=PURCHASE_DEADLINE_SECONDS, cap=PURCHASE_ANSWER_BYTES, strict=True)
+        parsed, problem = _framing(response, data) or _strict_json(response, data)
+        return PostAnswer(response.status, parsed, problem, _printable(data[:PURCHASE_TEXT_CHARS]))
+
+    def _exchange(self, method: str, path: str, body: bytes | None, headers: dict[str, str], *,
+                  deadline: float, cap: int, strict: bool = False) -> tuple[http.client.HTTPResponse, bytes]:
+        """One request, never retried or redirected, and its whole answer within `deadline` seconds and `cap`
+        bytes: (the response, its body). Raises as `post_answer` says; `strict` reads a chunked body with
+        exact framing (`_StrictResponse`). A message never quotes the answer."""
+        url = urllib.parse.urlsplit(self.base_url + path)
+        conn, target, more = _route(url)
+        if strict:
+            conn.response_class = _StrictResponse
+        # Only a POST can have run on the bridge; a GET that broke just has no answer.
+        maybe = ": it may have arrived" if method == "POST" else ""
+        try:
+            conn.connect()
+        except OSError as error:      # a bad name, a refused connection, a TCP or TLS failure or timeout
+            conn.close()
+            raise BridgeUnreachable(
+                f"Could not connect to {self.base_url} ({type(error).__name__}): nothing was sent. "
+                "Is Tailscale connected?") from None
+        # Kept for the deadline: an answer with `Connection: close` makes `getresponse` drop `conn.sock` while
+        # the response goes on reading from the same socket, so `conn.sock` can't be what the deadline shuts.
+        sock = conn.sock
+        expired = threading.Event()
+
+        def cut() -> None:            # the deadline: end the exchange wherever it is, writing or reading
+            expired.set()
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        timer = threading.Timer(deadline, cut)
+        timer.daemon = True
+        timer.start()
+        response = None
+        try:
+            conn.request(method, target, body=body, headers={"X-API-Key": self.api_key, **more, **headers})
+            response = conn.getresponse()
+            data = _read_capped(response, cap)
+        except _TooLong:
+            raise BridgeNoAnswer(f"its {response.status} answer ran past {cap} bytes{maybe}") from None
+        except (OSError, http.client.HTTPException, ValueError) as error:
+            started = "" if response is None else f" (a {response.status} answer had started)"
+            if expired.is_set():
+                raise BridgeNoAnswer(f"no whole answer within {deadline:g} s{started}{maybe}") from None
+            raise BridgeNoAnswer(f"{type(error).__name__} once connected{started}{maybe}") from None
+        finally:
+            timer.cancel()
+            if response is not None:
+                response.close()
+            conn.close()
+            sock.close()
+        if expired.is_set():          # a read the deadline ended can look like the end of the answer
+            raise BridgeNoAnswer(f"no whole answer within {deadline:g} s{maybe}")
+        return response, data
+
+    def check_books(self, body: dict) -> dict:
+        """Our books as of one poll (`POST /api/v1/tracking/check`), once, never retried: the bridge
+        allows one check a day, and a retry after a lost answer could be refused as the day's second.
+
+        `vending.tracking` builds the body and stores the answer. Raises as `post` does; an error
+        answer is the bridge's JSON about our own books (`{error, error_type, detail, items}`), kept
+        whole enough to parse in `BridgeAnswered.detail`. A success status whose body isn't JSON raises
+        `BridgeNotJson`, with the status and the start of the body.
+        """
+        return json.loads(self._once("POST", TRACKING_PATH, body, keep_body=True,
+                                     kept_bytes=TRACKING_ERROR_BYTES))
 
     def poll(self) -> LiveRead:
         """Read the machine now (`POST /api/v1/poll`, about 8.5 s): the document, and the session id
@@ -130,10 +331,16 @@ class Bridge:
             age = None
         if age is not None and age != age:      # nan
             age = None
-        return LiveRead(document, headers.get(SESSION_HEADER.lower()) or None, cached, age)
+        session_id = headers.get(SESSION_HEADER.lower())
+        # A header that isn't an id (it is read by people in the log) counts as no id.
+        return LiveRead(document, session_id if valid_session_id(session_id) else None, cached, age)
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
-              timeout: float | None = None, headers_out: dict[str, str] | None = None) -> bytes:
+              timeout: float | None = None, headers_out: dict[str, str] | None = None,
+              keep_body: bool = False, kept_bytes: int = 300, redirects: bool = True) -> bytes:
+        """One try. `keep_body` puts the first `kept_bytes` of an error answer in `BridgeAnswered.detail`:
+        only for `post` and `check_books`, whose answers concern our own request. Any other answer can hold
+        a poll, so only its status is kept. `redirects=False` raises a redirect as `BridgeAnswered`."""
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -142,25 +349,37 @@ class Bridge:
         request = urllib.request.Request(self.base_url + path, method=method, headers=headers,
                                          data=None if body is None else json.dumps(body).encode())
         try:
-            with urllib.request.urlopen(request, timeout=timeout or TIMEOUT_SECONDS) as response:
+            opener = urllib.request.urlopen if redirects else _NO_REDIRECTS.open
+            with opener(request, timeout=timeout or TIMEOUT_SECONDS) as response:
+                status = getattr(response, "status", None)
                 data = response.read()
                 if headers_out is not None:    # names lower-cased: HTTP header names have no case
                     headers_out.update({k.lower(): v for k, v in response.headers.items()})
         except urllib.error.HTTPError as error:
             # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
-            raise BridgeAnswered(error.code, _start_of_body(error, 300).decode(errors="replace")) from None
+            detail = (_start_of_body(error, kept_bytes).decode(errors="replace") if keep_body
+                      else status_phrase(error.code))
+            raise BridgeAnswered(error.code, detail) from None
         except urllib.error.URLError as error:
-            # urllib raises URLError only while connecting or sending.
+            # urllib raises URLError only while connecting or sending. Only a failure raised inside connect
+            # proves the bridge got nothing; any error once connected may come after it read the request.
+            if not _before_connected(error.reason):
+                raise BridgeNoAnswer(f"{type(error.reason).__name__} while sending: it may have arrived") from None
             raise BridgeUnreachable(f"Could not reach {self.base_url} ({error.reason}). Is Tailscale connected?") from None
-        except (OSError, http.client.HTTPException) as error:
-            # A timeout waiting for the answer, or an answer cut off part way
-            # (`IncompleteRead`): either way it was sent and may have run.
+        except http.client.HTTPException as error:
+            # An answer cut off part way (`IncompleteRead`) or not HTTP at all (`BadStatusLine`, which names
+            # the line it got). `RemoteDisconnected` is an `OSError` too and is handled below.
+            if not isinstance(error, OSError):
+                raise BridgeNoAnswer(_why_it_broke(error)) from None
+            raise BridgeNoAnswer(f"{type(error).__name__}: the connection ended with no answer") from None
+        except OSError as error:
+            # A timeout waiting for the answer: it was sent and may have run.
             raise BridgeNoAnswer(f"{type(error).__name__}: {error}") from None
         if expect_json:
             try:
                 json.loads(data)
-            except ValueError as error:
-                raise BridgeNoAnswer(f"the answer wasn't JSON ({error})") from None
+            except ValueError:      # its message can name a byte of the answer
+                raise BridgeNotJson(status, len(data), data[:kept_bytes] if keep_body else b"") from None
         return data
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> bytes:
@@ -182,7 +401,10 @@ class Bridge:
                     raise BridgeRateLimited(f"429 from {path}: still rate limited after {RETRIES} retries") from None
                 if error.code in (401, 403):
                     raise BridgeUnreachable(f"{error.code}: the bridge rejected our key. Check DEX_API_KEY.") from None
-                detail = f"{error.code} from {path}: {_start_of_body(error)!r}"
+                # The status and our own name for it; the body can hold a poll.
+                detail = f"{error.code} {status_phrase(error.code)} from {path}".replace("  ", " ")
+                if error.code == 404:
+                    raise BridgeNotFound(detail) from None
                 # A 5xx from everything, `/health` included, is an outage (or
                 # the Tailscale proxy before the node joins), not this request.
                 if error.code >= 500 and path != "/health" and not self._is_up():
@@ -198,7 +420,7 @@ class Bridge:
                 # `HTTPException` as well as an `OSError`, and it is a lost
                 # connection, so check `OSError`.
                 if not isinstance(error, OSError):
-                    raise BridgeError(f"broken response from {path}: {error!r}") from None
+                    raise BridgeError(f"broken response from {path}: {_why_it_broke(error)}") from None
                 raise ConnectionFailed(
                     f"Could not reach {self.base_url} ({getattr(error, 'reason', error)}). "
                     "Is Tailscale connected?"
@@ -220,24 +442,28 @@ class Bridge:
         try:
             return json.loads(payload)
         except ValueError:  # Not `JSONDecodeError`: bytes that aren't text raise `UnicodeDecodeError`.
-            raise BridgeError(f"/api/v1/slots was not JSON: {payload[:200]!r}") from None
+            raise BridgeError(f"/api/v1/slots was not JSON ({len(payload)} bytes)") from None
 
-    def history(self, day: str) -> list[dict]:
+    def history(self, day: str) -> list[Any]:
         """Stored polls for one UTC day (YYYY-MM-DD), oldest first.
 
         The bridge returns at most 500 polls per request and marks the answer
         `truncated`, so the sync asks one day at a time and refuses a truncated day.
+
+        Only the listing as a whole is checked here. A row that is not an object, or has no usable
+        session id or start (`listed_poll`), comes back as it is, so one bad row can't turn the whole
+        day into an error: the sync counts and skips it.
         """
         payload = self._get("/api/v1/history", {"start": day, "end": day})
         try:
             body = json.loads(payload)
         except ValueError:  # Not `JSONDecodeError`: bytes that aren't text raise `UnicodeDecodeError`.
-            raise BridgeError(f"history for {day} was not JSON: {payload[:200]!r}") from None
+            raise BridgeError(f"history for {day} was not JSON ({len(payload)} bytes)") from None
         if not _is_listing(body):
-            raise BridgeError(f"history for {day} was not a listing of polls: {payload[:200]!r}")
+            raise BridgeError(f"history for {day} was not a listing of polls ({len(payload)} bytes)")
         if body.get("truncated"):
-            raise BridgeError(f"history for {day} was truncated at {body.get('limit')} polls")
-        return [dict(p, device_id=body.get("device_id")) for p in body["polls"]]
+            raise BridgeError(f"history for {day}: listing truncated")   # not its `limit`: a figure of the bridge's
+        return [dict(p, device_id=body.get("device_id")) if isinstance(p, dict) else p for p in body["polls"]]
 
     def raw(self, session_id: str) -> bytes:
         """One stored poll, byte-for-byte.
@@ -279,15 +505,41 @@ class Bridge:
         try:
             return json.loads(body)
         except (ValueError, UnicodeDecodeError):
-            raise BridgeError(f"answer from {path} isn't JSON: {body[:200]!r}") from None
+            raise BridgeError(f"answer from {path} isn't JSON ({len(body)} bytes)") from None
 
 
 def _is_listing(body: object) -> bool:
-    """Whether `body` is a day's listing, with what the sync needs from every poll."""
-    return isinstance(body, dict) and isinstance(body.get("polls"), list) and all(
-        isinstance(p, dict) and isinstance(p.get("session_id"), str) and isinstance(p.get("started_at"), str)
-        for p in body["polls"]
-    )
+    """Whether `body` is a day's listing: an object with a list of `polls`. Its rows are checked one by one
+    by the sync (`listed_poll`), never all together."""
+    return isinstance(body, dict) and isinstance(body.get("polls"), list)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Follows no redirect: the `3xx` is raised as an `HTTPError`, the answer to the request we sent."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_NO_REDIRECTS = urllib.request.build_opener(_NoRedirect)
+
+
+def _before_connected(reason: object) -> bool:
+    """Whether a `URLError`'s reason proves no byte of the request left: urllib refused it before
+    connecting (a reason that isn't an `OSError`), or the error was raised inside
+    `HTTPConnection.connect` (the name didn't resolve, the connection was refused, or connecting, TCP or
+    TLS, failed or timed out). The request is written only once `connect` returns. Where the error was
+    raised decides, never its type: a refused connection or a bad name raised while writing proves nothing,
+    and neither does a reset, a broken pipe or a timeout."""
+    if not isinstance(reason, OSError):
+        return True
+    trace = reason.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        if code.co_name == "connect" and code.co_filename == http.client.__file__:
+            return True
+        trace = trace.tb_next
+    return False
 
 
 def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
@@ -296,6 +548,150 @@ def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
         return error.read(size)
     except (OSError, http.client.HTTPException):
         return b""
+
+
+def _route(url: urllib.parse.SplitResult) -> tuple[http.client.HTTPConnection, str, dict[str, str]]:
+    """The connection for `url`, the request target, and any header the proxy needs, chosen as urllib's
+    `ProxyHandler` chooses for the rest of this client: the proxy `getproxies()` names for the scheme
+    (`http_proxy`, `https_proxy`), unless `proxy_bypass` (`no_proxy`) says this host goes direct. Through the
+    proxy, `http` is sent in absolute form (`POST http://host/path`), `https` through a `CONNECT` tunnel, and a
+    proxy URL with a user and password adds `Proxy-Authorization`, as urllib does. Nothing is connected yet."""
+    host = url.netloc.rpartition("@")[2]
+    target = (url.path or "/") + (f"?{url.query}" if url.query else "")
+    kind = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
+    proxy = urllib.request.getproxies().get(url.scheme)
+    if not proxy or urllib.request.proxy_bypass(host):
+        return kind(url.hostname, url.port, timeout=TIMEOUT_SECONDS), target, {}
+    _, user, password, proxy_host = urllib.request._parse_proxy(proxy)
+    auth = {}
+    if user and password:
+        pair = f"{urllib.parse.unquote(user)}:{urllib.parse.unquote(password)}"
+        auth["Proxy-Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode("ascii")
+    conn = kind(proxy_host, timeout=TIMEOUT_SECONDS)
+    if url.scheme == "https":
+        conn.set_tunnel(host, headers=auth)
+        return conn, target, {}
+    return conn, f"{url.scheme}://{host}{target}", auth
+
+
+class PostAnswer(NamedTuple):
+    """A purchase POST's whole answer (`Bridge.post_answer`). `body` is the parsed JSON, or None. `problem` is
+    "" only when the answer has a `Content-Length` equal to its size or is chunked, framed exactly (`_framing`),
+    is `application/json` (UTF-8), not content-encoded, and strict JSON with no repeated key; otherwise it says
+    why not. `text` is the start of the raw body, for the record."""
+    status: int
+    body: Any
+    problem: str
+    text: str
+
+
+def _printable(data: bytes) -> str:
+    """Bytes as text a person can read and Postgres can store: undecodable bytes and control characters (a NUL
+    included) become U+FFFD; line breaks and tabs stay."""
+    keep = (chr(10), chr(9))
+    return "".join(c if c.isprintable() or c in keep else chr(0xFFFD) for c in data.decode(errors="replace"))
+
+
+class _TooLong(Exception):
+    pass
+
+
+class _StrictResponse(http.client.HTTPResponse):
+    """A purchase answer whose chunked framing must be exact. `http.client` takes a body that ends at the
+    last chunk's `0` line without the blank line after it, or a chunk followed by any two bytes, as whole;
+    here either raises `IncompleteRead`, so the answer is no answer (`BridgeNoAnswer`), not a `201`."""
+
+    def _read_next_chunk_size(self) -> int:
+        line = self.fp.readline(http.client._MAXLINE + 1)
+        size = line[:-2].split(b";", 1)[0]
+        if not line.endswith(b"\r\n") or not re.fullmatch(rb"[0-9A-Fa-f]{1,16}", size):
+            self._close_conn()
+            raise http.client.IncompleteRead(b"")
+        return int(size, 16)
+
+    def _get_chunk_left(self) -> int | None:
+        if self.chunk_left == 0:      # a chunk's data has been read: the CRLF that closes it, exactly
+            if self._safe_read(2) != b"\r\n":
+                self._close_conn()
+                raise http.client.IncompleteRead(b"")
+            self.chunk_left = None
+        return super()._get_chunk_left()
+
+    def _read_and_discard_trailer(self) -> None:
+        # The answer ends at a blank line (CRLF), after any trailer lines; ending at the connection's close is
+        # not the end of the answer.
+        while True:
+            line = self.fp.readline(http.client._MAXLINE + 1)
+            if line == b"\r\n":
+                return
+            if not line.endswith(b"\r\n") or len(line) > http.client._MAXLINE:
+                raise http.client.IncompleteRead(b"")
+
+
+def _framing(response: http.client.HTTPResponse, data: bytes) -> tuple[None, str] | None:
+    """(None, why) if the body's length isn't shown exactly; None if it is. A body with `Transfer-Encoding` must
+    have exactly one, `chunked`, and no `Content-Length`: `http.client` reads `chunked` and ignores a length
+    beside it, and reads any other coding by its length or to the close. A chunked body was checked as it was
+    read (`_StrictResponse`). Otherwise `Content-Length` must be one plain number equal to the bytes read:
+    `http.client` treats a length it can't read (`invalid`, `-1`, two values) as none and reads to the close."""
+    codings = response.headers.get_all("Transfer-Encoding") or []
+    if codings:
+        if len(codings) != 1 or codings[0].strip().lower() != "chunked":
+            return None, f"its Transfer-Encoding {', '.join(codings)[:40]!r} isn't plain chunked"
+        if response.getheader("Content-Length") is not None:
+            return None, "it has both Transfer-Encoding and Content-Length, so its length is ambiguous"
+        return None
+    length = response.getheader("Content-Length")
+    if length is None:
+        return None, "its body has no length and isn't chunked, so nothing shows it arrived whole"
+    if not re.fullmatch(r"[0-9]{1,12}", length.strip()) or int(length) != len(data):
+        return None, f"its Content-Length {length[:30]!r} isn't the {len(data)} bytes that came"
+    return None
+
+
+def _read_capped(response: http.client.HTTPResponse, limit: int) -> bytes:
+    """The whole body, at most `limit` bytes (`_TooLong` past that). `read1` reads the socket at most once per
+    call, so a slow body can't hold a read past the deadline's cut. A body shorter than its `Content-Length`
+    raises `IncompleteRead`; a badly framed chunked one raises from `http.client`."""
+    chunks, size = [], 0
+    while True:
+        chunk = response.read1(min(65536, limit + 1 - size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > limit:
+            raise _TooLong
+    if response.length:           # it said there was more
+        raise http.client.IncompleteRead(b"".join(chunks), response.length)
+    return b"".join(chunks)
+
+
+def _no_repeats(pairs: list[tuple[str, Any]]) -> dict:
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("a key appears twice")
+    return dict(pairs)
+
+
+def _no_constant(name: str) -> Any:
+    raise ValueError(f"{name} isn't JSON")
+
+
+def _strict_json(response: http.client.HTTPResponse, data: bytes) -> tuple[Any, str]:
+    """(the parsed body, "") or (None, why the answer isn't plain JSON)."""
+    content_type = response.getheader("Content-Type") or ""
+    media, _, params = content_type.partition(";")
+    charset = params.strip().lower().replace(" ", "")
+    if media.strip().lower() != "application/json" or charset not in ("", "charset=utf-8"):
+        return None, f"its Content-Type is {content_type[:60]!r}, not application/json"
+    encoding = (response.getheader("Content-Encoding") or "identity").strip().lower()
+    if encoding != "identity":
+        return None, f"its body is content-encoded ({encoding[:30]})"
+    try:
+        return json.loads(data.decode("utf-8"), object_pairs_hook=_no_repeats, parse_constant=_no_constant), ""
+    except (UnicodeDecodeError, ValueError) as error:
+        return None, f"its body isn't strict JSON ({type(error).__name__})"
 
 
 def _retry_after(error: urllib.error.HTTPError) -> float | None:

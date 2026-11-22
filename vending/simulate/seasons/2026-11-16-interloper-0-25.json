@@ -1,0 +1,30 @@
+{
+ "version": 1, "id": "2026-11-16-interloper-0-25", "simulated": true, "name": "Simple rule with the Interloper taking 0.25",
+ "strategy": "The simple refill rule ($0 of model spend), with the Interloper next door taking 0.25 of the demand for a drink it also sells at our price (more when we are dearer), and 0.4 of that from energy drinks",
+ "built": "2026-11-16T08:51-05:00",
+ "source": "PR #154 (branch sim_interloper, 1ad218a): docs/simulations/2026-11-16-interloper.md. Only the totals were kept; the seasons' data wasn't archived",
+ "decider": "scripted", "model": null, "effort": null, "seed": 20261203, "run_day": "Thu",
+ "assumptions": {"interloper": 0.25, "elasticity": 0.46, "facing_exponent": 0.5},
+ "assignment": null,
+ "totals": {
+  "profit_after_model": 412.11, "units_sold": 290, "units_lost": null, "revenue_ex_tax": null, "gross_profit": null, "model_spend": 0.0,
+  "balance_end": null, "inventory_at_cost_end": null, "runs": null, "submitted": null, "failed": null, "qualifying_units_directed": null
+ },
+ "weeks": [],
+ "decisions": [],
+ "sweep": {
+  "knob": "interloper",
+  "rows": [
+   {"value": 0, "profit_after_model": 462.33, "units_sold": 323, "red_bull": 156, "celsius": 64, "mountain_dew_20oz": 29},
+   {"value": 0.15, "profit_after_model": 434.1, "units_sold": 304},
+   {"value": 0.25, "profit_after_model": 412.11, "units_sold": 290, "red_bull": 142, "celsius": 54, "mountain_dew_20oz": 21},
+   {"value": 0.4, "profit_after_model": 380.33, "units_sold": 274, "red_bull": 129, "celsius": 53, "mountain_dew_20oz": 18}
+  ]
+ },
+ "notes": [
+  "Nobody can see the Interloper's sales, so the share it takes is a guess; the sweep shows the range.",
+  "Most of the loss is energy drinks (Red Bull and Celsius), not the cans it sells head to head.",
+  "This models customers only. Our pricing never uses the Interloper's prices (docs/agent/interloper.md).",
+  "Weekly figures, decisions and the season's slots weren't kept. Rerun it to get them (docs/simulations.md)."
+ ]
+}

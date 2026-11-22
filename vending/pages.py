@@ -1,7 +1,15 @@
-"""The pages anyone can open at the Container App's address: the agent dashboard and the DB explorer.
+"""The pages anyone can open at the Container App's address: the agent dashboard, its charts and the DB explorer.
 
     /dashboard               the agent dashboard (`vending.dashboard`)
     /dashboard/state.json    the same data as JSON
+    /dashboard/demo          a copy of the dashboard drawn from made-up data (`vending.demo`); no database
+    /dashboard/money         the money chart: competition money by day (`vending.money_chart`)
+    /dashboard/pnl           the weekly P&L (`vending.pnl_report`)
+    /dashboard/spend         development spend by week (`vending.dev_spend`)
+    /dashboard/products      every product we can order, our sourcing, the day-one plan, back stock (`vending.products_page`)
+    /dashboard/demo/money    the money chart with its made-up MOCK data, under a DEMO banner; no database
+    /dashboard/demo/spend    dev spend from the team's run notes, under a DEMO banner; no database
+    /dashboard/demo/products the Products page from made-up data, under a DEMO banner; no database
     /db                      the DB explorer (`vending.db_explorer`)
 
     python -m vending.pages check                            # is the pages' login really read-only?
@@ -31,6 +39,15 @@ that can't get one within `WAIT_SECONDS` is told the page is busy, every
 statement is cancelled after `STATEMENT_TIMEOUT_MS`, and the explorer shows 100
 rows a page. Hammering the pages makes the pages slow, not the syncs.
 
+The three chart pages are built per request from real data only, on the same connection and with
+the same error handling as the dashboard. Each has a loader (`money_data`, `pnl_data`,
+`spend_data`) and a function that renders it from its data alone (`money_page`, `pnl_page`,
+`spend_page`), so made-up data can be rendered the same way elsewhere. Before the ledger's opening
+entry, or before an opening dated ahead, the money chart and the P&L say there is no competition
+data yet (`NotYet`); the P&L never counts from before the opening, whatever dates the URL asks for.
+A rendered chart is served again for `CACHE_SECONDS` without its replay: dev spend without the
+database, the money chart and the P&L only while the stored slot assignment is the same.
+
 What the pages leave out: the selections that aren't ours by the stored assignment and the
 machine-wide poll totals (`explorer_rules`, which `python -m vending.db_explorer` uses too, and
 `dashboard.only_ours`), and the error text of failures (`HIDE`, and
@@ -42,24 +59,35 @@ container's log. No table holds a password or a key.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import re
 import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from html import escape
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from vending import dashboard, db, db_explorer, settings
+from vending import (dashboard, db, db_explorer, demo, dev_spend, ledger, money_chart, pnl_report, products_page,
+                     settings)
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 
 READER = "READONLY_DATABASE_URL"
 DASHBOARD, STATE, EXPLORER = "/dashboard", "/dashboard/state.json", "/db"
+MONEY_CHART, PNL, SPEND = "/dashboard/money", "/dashboard/pnl", "/dashboard/spend"
+PRODUCTS = products_page.ROUTE
+# Where the dashboard links to each chart and to the Products page (`dashboard.render`'s `charts`).
+CHARTS = {"money": MONEY_CHART, "pnl": PNL, "spend": SPEND, "products": PRODUCTS}
+TITLES = {DASHBOARD: "Agent dashboard", STATE: "Agent dashboard", EXPLORER: "DB explorer",
+          MONEY_CHART: "Money chart", PNL: "Weekly P&L", SPEND: "Development spend", PRODUCTS: products_page.TITLE}
 MAX_CONNECTIONS = 2
 # Seconds a request waits for one of those connections before it is told the page is busy.
 WAIT_SECONDS = 5
@@ -70,6 +98,12 @@ OPTIONS = f"-c default_transaction_read_only=on -c statement_timeout={STATEMENT_
 # within seconds instead of holding one of the page connections for 15 minutes or more.
 KEEPALIVES = {"keepalives": 1, "keepalives_idle": 5, "keepalives_interval": 2, "keepalives_count": 3,
               "tcp_user_timeout": STATEMENT_TIMEOUT_MS + 5_000}
+# Seconds a rendered chart page is served again without its replay. A chart replays the whole run,
+# so two viewers reloading one shouldn't hold both page connections and leave /dashboard busy. The
+# money chart and the P&L still read the stored assignment first, and keep a copy per assignment.
+CACHE_SECONDS = 60
+# Rendered chart pages kept at once: one each for the money chart and dev spend, the rest for P&L ranges.
+CACHE_ENTRIES = 32
 # Seconds a passed "this login can't write" check is trusted before it is made again.
 RECHECK_SECONDS = 600
 # Seconds between two log lines about the same kind of problem, so a stuck page can't flood the log.
@@ -79,21 +113,74 @@ HTML, JSON, TEXT = "text/html; charset=utf-8", "application/json", "text/plain; 
 # Neither page loads anything from anywhere else. The dashboard's own script refreshes it in place.
 CSP = "default-src 'none'; style-src 'unsafe-inline'"
 CSP_DASHBOARD = CSP + "; script-src 'unsafe-inline'; connect-src 'self'"
+# The chart pages fetch nothing: their data is inside them. The money chart and dev spend run one
+# inline script each, allowed by its hash (`chart_csp`), so no other script can run; the P&L has
+# none, and its one form sends a GET back to itself.
+_LOCKED = "base-uri 'none'; frame-ancestors 'none'"
+CSP_PNL = f"{CSP}; form-action 'self'; {_LOCKED}"
+# The Products page runs no script and has no form.
+CSP_PRODUCTS = f"{CSP}; form-action 'none'; {_LOCKED}"
 
 # What every explorer leaves out, however it is run (here at /db, or `python -m vending.db_explorer`).
-# VA1, the machine-wide lifetime totals: from the start (`vending.start.START`) they include the other
-# team's sales, and the total minus ours is theirs (`docs/integrity.md`). Hidden in every row, not
-# only from the start: `Hide` can't test a time, and nothing needs the pre-start ones. `raw` is safe
-# as it is: the explorer shows a bytea's size, never its bytes.
+# VA1, the machine-wide lifetime totals: usable only from polls taken before the fall cut
+# (`vending.start.fall_cut`); from the cut on, the total minus ours is the other selections' sales
+# (`docs/integrity.md`). Hidden for every poll: `Hide` can't test a time, and nothing needs the
+# pre-cut ones. `raw` is safe as it is: the explorer shows a bytea's size, never its bytes.
 TOTALS = {
     "polls": db_explorer.Hide("", "", ("total_paid_cents", "total_paid_units"), "(hidden)"),
 }
+
+# What /db shows of a submission's `detail`, by its status, in place of the text stored (#165). The
+# stored text is the bridge's own words or our error about them: a 5xx answer's excerpt can carry an
+# upstream database error, and a row a person resolved keeps the text it had.
+_NOT_SHOWN = " (the bridge's own words aren't shown on this public page; they are in the database)"
+SUBMISSION_DETAIL = {
+    "accepted": "The bridge filed this request." + _NOT_SHOWN,
+    "refused": "The bridge refused this request; nothing was filed." + _NOT_SHOWN,
+    "not_filed": "This request was never filed." + _NOT_SHOWN,
+    "unknown": "Sent, but no usable answer came back, so it may or may not have been filed." + _NOT_SHOWN,
+}
+SUBMISSION_OTHER = "(this text isn't shown on this public page; it is in the database)"
+
+
+def _submission_detail(col: Callable[[str], sql.Composable]) -> sql.Composable:
+    """`purchase_submissions.detail` as /db shows it: a fixed line for the row's status, or null."""
+    lines = sql.SQL(" ").join(sql.SQL("when {} = {} then {}").format(col("status"), sql.Literal(status), sql.Literal(line))
+                              for status, line in SUBMISSION_DETAIL.items())
+    return sql.SQL("case when {} is null then null {} else {} end").format(
+        col("detail"), lines, sql.Literal(SUBMISSION_OTHER))
+
+
+# What /db shows in place of why a bench case wasn't judged (#165): `bench_runs.judge_notes` is
+# {case: {"note"|"problem": text}}, and a `problem` can be a database error (`vending.bench.judge`).
+BENCH_PROBLEM = "(why this case wasn't judged isn't shown on this public page; it is in the database)"
+
+
+def _judge_notes(col: Callable[[str], sql.Composable]) -> sql.Composable:
+    """`bench_runs.judge_notes` as /db shows it: each case's `note` as stored, and `BENCH_PROBLEM` for
+    its `problem` or for anything that isn't the stored shape."""
+    fixed = sql.SQL("to_jsonb({}::text)").format(sql.Literal(BENCH_PROBLEM))
+    return sql.SQL(
+        "case when {notes} is null then null"
+        " when jsonb_typeof({notes}) <> 'object' then {fixed}"
+        " else (select coalesce(jsonb_object_agg(e.key,"
+        "   case when jsonb_typeof(e.value) <> 'object' then {fixed}"
+        "        when e.value ? 'problem' then jsonb_set(e.value, array['problem'], {fixed})"
+        "        else e.value end), jsonb_build_object())"
+        "  from jsonb_each({notes}) as e) end").format(notes=col("judge_notes"), fixed=fixed)
+
 
 # What the public explorer leaves out besides, by table name. The dashboard's own list is
 # `dashboard.hide_errors`.
 HIDE = {
     "action_log": db_explorer.Hide("outcome", "failed", ("detail", "result"), dashboard.HIDDEN),
-    "agent_runs": db_explorer.Hide("status", "failed", ("detail",), dashboard.HIDDEN),
+    # A failed run's detail is a raw error; a run that submitted keeps only its confirmation (#165).
+    "agent_runs": db_explorer.Project("detail", ("status",), lambda col: dashboard.public_run_detail(
+        col("status"), col("detail")), dashboard.HIDDEN),
+    "bench_runs": db_explorer.Project("judge_notes", (), _judge_notes, BENCH_PROBLEM),
+    "purchase_submissions": db_explorer.Project("detail", ("status",), _submission_detail, SUBMISSION_OTHER),
+    # A step the model was told had failed holds the raw error (#165).
+    "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
     **TOTALS,
@@ -123,6 +210,8 @@ def only(slots: tuple[str, ...]) -> dict[str, db_explorer.Only]:
                                                 sql.Identifier(table.schema, "polls"), sql.Literal(DEVICE_ID))),
         "slot_counts": db_explorer.Only(("device_id", "selection"), lambda table: _ours("selection", slots)
                                         + sql.SQL(" and t.device_id = {}").format(sql.Literal(DEVICE_ID))),
+        # Raw plans can reference local files and selections from an earlier assignment.
+        "first_fill_plans": db_explorer.Only((), lambda table: sql.SQL("false")),
     }
 
 
@@ -137,7 +226,7 @@ def stored_slots(conn: psycopg.Connection) -> tuple[str, ...]:
         return ()
 
 
-def explorer_rules(conn: psycopg.Connection, public: bool) -> tuple[dict[str, db_explorer.Hide],
+def explorer_rules(conn: psycopg.Connection, public: bool) -> tuple[dict[str, db_explorer.Hide | db_explorer.Project],
                                                                      dict[str, db_explorer.Only]]:
     """(hide, only) for `db_explorer.render`, the one policy both explorers use.
 
@@ -186,6 +275,9 @@ def _connect() -> psycopg.Connection:
 connect: Callable[[], psycopg.Connection] = _connect
 
 _slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+# (path, P&L query[, our slots]) -> (monotonic time it expires, reply), for the chart pages (`CACHE_SECONDS`).
+_cache: dict[tuple, tuple[float, "Reply"]] = {}
+_cache_lock = threading.Lock()
 _read_only_until = 0.0
 _logged: dict[str, float] = {}
 
@@ -282,7 +374,207 @@ def _notice(title: str, text: str) -> str:
 def _problem(path: str, status: int, text: str) -> Reply:
     if path == STATE:
         return Reply(status, JSON, dashboard.to_json({"error": text}))
-    return Reply(status, HTML, _notice("DB explorer" if path == EXPLORER else "Agent dashboard", text))
+    return Reply(status, HTML, _notice(TITLES[path], text))
+
+
+# --- The chart pages ----------------------------------------------------------------------------
+
+NO_SLOTS = ("This page can't be drawn: our slot assignment isn't recorded, and the money counts only "
+            "our slots. A person records it with python -m vending.slots record.")
+_SCRIPT = re.compile(r"<script>(.*?)</script>", re.S)
+
+
+def chart_csp(page: str) -> str:
+    """The policy for a chart page: nothing fetched, and only the page's own inline scripts run,
+    each allowed by its hash. Raises if a script tag has attributes, which the hashes would miss."""
+    scripts = _SCRIPT.findall(page)
+    if not scripts or page.count("<script") != len(scripts):
+        raise RuntimeError("a chart page's scripts can't all be allowed by hash")
+    hashes = " ".join(f"'sha256-{base64.b64encode(hashlib.sha256(code.encode()).digest()).decode()}'"
+                      for code in scripts)
+    return f"{CSP}; script-src {hashes}; form-action 'none'; {_LOCKED}"
+
+
+@dataclass(frozen=True)
+class NotYet:
+    """No competition data yet: the ledger has no opening entry (`opens_at` None), or one dated ahead."""
+    opens_at: datetime | None
+
+
+def _opened(conn: psycopg.Connection, now: datetime) -> ledger.Entry | NotYet:
+    """The ledger's opening entry, if it is at or before `now`."""
+    opened = ledger.opening(conn)
+    if opened is None:
+        return NotYet(None)
+    if opened.at > now:
+        return NotYet(opened.at)
+    return opened
+
+
+@contextmanager
+def snapshot(conn: psycopg.Connection) -> Iterator[psycopg.Connection]:
+    """One repeatable-read, read-only transaction: every read inside it sees the same database."""
+    with conn.transaction():
+        conn.execute("set transaction isolation level repeatable read, read only")
+        yield conn
+
+
+def money_data(conn: psycopg.Connection) -> dict | NotYet:
+    """What the money chart carries (`money_chart.data`), from the opening to today, or NotYet. Call it
+    inside a `snapshot`, the one the caller read our slot assignment in. Raises `SlotsNotRecorded`
+    without our slot assignment."""
+    now = ledger.db_now(conn)
+    opened = _opened(conn, now)
+    if isinstance(opened, NotYet):
+        return opened
+    return money_chart.data(conn, now=now) or NotYet(None)
+
+
+def spend_data(conn: psycopg.Connection) -> tuple[dev_spend.Report, dev_spend.Report]:
+    """Development spend by week and by day, from one snapshot. It ends at the ledger's opening
+    (`dev_spend.summarise`), so no competition money is in it."""
+    with snapshot(conn):
+        now = ledger.db_now(conn)
+        recorded, opened = dev_spend.calls(conn), dev_spend.opening_at(conn)
+    return (dev_spend.summarise(recorded, opened, "week", now),
+            dev_spend.summarise(recorded, opened, "day", now))
+
+
+def pnl_data(conn: psycopg.Connection, query: pnl_report.Query) -> pnl_report.Report | NotYet:
+    """The weekly P&L for `query`, or NotYet. The opening is checked before any date in the URL is used,
+    and a start on or before the opening's day counts from the opening itself: a model call made before
+    it is development spend, not the competition's (#104). Call it inside a `snapshot`, the one the caller
+    read our slot assignment in."""
+    opened = _opened(conn, ledger.db_now(conn))
+    if isinstance(opened, NotYet):
+        return opened
+    first = opened.at.astimezone(pnl_report.EASTERN).date()
+    start = query.start if query.start is not None and query.start > first else None
+    return pnl_report.read(conn, start, query.end, query.view)
+
+
+def _chart_nav(here: str) -> str:
+    """Links back to the dashboard and across to the other charts, above a chart page."""
+    links = [f'<a href="{DASHBOARD}" style="color:inherit">&larr; Agent dashboard</a>'] + [
+        f'<a href="{href}" style="color:inherit">{escape(TITLES[href])}</a>'
+        for href in (MONEY_CHART, PNL, SPEND) if href != here]
+    return ('<nav aria-label="Pages" style="font:14px/1.5 system-ui,sans-serif;margin:0 0 8px">'
+            + " &middot; ".join(links) + "</nav>")
+
+
+def _with_nav(page: str, here: str) -> str:
+    if page.count("<body>") != 1:
+        raise RuntimeError(f"{here}: the page has no single <body> to put its links in")
+    return page.replace("<body>", "<body>" + _chart_nav(here), 1)
+
+
+def not_yet_page(path: str, found: NotYet) -> str:
+    """What the money chart and the P&L show before the ledger opens: no figures, and why. The money
+    chart also links its demo, the one page that may draw made-up data."""
+    when = found.opens_at.astimezone(pnl_report.EASTERN) if found.opens_at is not None else None
+    if path == MONEY_CHART:
+        starts = (f"at the ledger opening ({PLANNED_OPENING})" if when is None else
+                  f"at the ledger opening, {when:%a %d %b %Y %H:%M} Eastern (recorded ahead of time)")
+        text = f"No competition money yet: the chart starts {starts}."
+        how = ledger.OPEN_HINT + "." if when is None else ""
+    elif when is None:
+        text, how = "There's no competition data until the ledger opens. " + ledger.OPEN_HINT + ".", ""
+    else:
+        text, how = (f"There's no competition data until the ledger opens, at {when:%a %d %b %Y %H:%M} Eastern. "
+                     "The opening was recorded ahead of time."), ""
+    page = _notice(TITLES[path], text)
+    extra = (f'<p><a href="{DEMO_MONEY}">See the demo with made-up data</a></p>' if path == MONEY_CHART else "")
+    extra += f'<p style="font-size:14px;opacity:.75">{escape(how)}</p>' if how else ""
+    page = page.replace('<p><a href="/">Back to the home page</a></p>', extra)
+    return _with_nav(page, path)
+
+
+# --- The chart demos: made-up data, no database ----------------------------------------------------
+
+DEMO_MONEY, DEMO_SPEND = "/dashboard/demo/money", "/dashboard/demo/spend"
+# When the team plans to record the opening (docs/opening-capital-plan.md); said only while none is recorded.
+PLANNED_OPENING = "about 30 Nov"
+DEMO_BANNERS = {
+    DEMO_MONEY: "DEMO: made-up data, not our machine",
+    DEMO_SPEND: "DEMO: the runs the team wrote down in its notes, not the ledger",
+}
+
+
+def _demo_banner(path: str) -> str:
+    """A banner that stays at the top of the screen while the page scrolls."""
+    return ('<div role="note" style="position:sticky;top:0;z-index:1000;background:#8a1a2a;color:#fff;'
+            'font:600 15px/1.4 system-ui,sans-serif;padding:8px 16px;text-align:center;margin:0 0 8px">'
+            f'{escape(DEMO_BANNERS[path])} &middot; <a href="{DEMO_LIVE[path]}" style="color:#fff">'
+            "the real page</a></div>")
+
+
+def demo_page(path: str, now: datetime | None = None) -> str:
+    """A chart demo: the money chart's own seeded MOCK data, or dev spend from the team's run notes.
+    Reads no database. Only these routes may draw made-up data."""
+    if path == DEMO_MONEY:
+        page = money_chart.page(None)
+    else:
+        now = now or datetime.now(pnl_report.EASTERN)
+        page = dev_spend.page(dev_spend.demo("week", now), dev_spend.demo("day", now))
+    page = _with_nav(page, DEMO_LIVE[path])
+    return page.replace("<body>", "<body>" + _demo_banner(path), 1)
+
+
+def _demo_reply(path: str) -> Reply:
+    """A chart demo. Opens no connection. Never raises, and puts no error text in a reply."""
+    try:
+        page = demo_page(path)
+        return Reply(200, HTML, page, chart_csp(page))
+    except Exception as error:  # noqa: BLE001 - a page answers, whatever happened
+        _log(type(error).__name__, f"{path}: {type(error).__name__}: {error}")
+        return Reply(500, HTML, _notice("Demo", BROKEN))
+
+
+DEMO_LIVE = {DEMO_MONEY: MONEY_CHART, DEMO_SPEND: SPEND}
+
+
+def money_page(payload: dict) -> str:
+    """The money chart from its data (`money_chart.data`'s shape), never with MOCK data."""
+    return _with_nav(money_chart.live_page(payload), MONEY_CHART)
+
+
+def spend_page(weeks: dev_spend.Report, days: dev_spend.Report) -> str:
+    """The development spend page from its two reports."""
+    return _with_nav(dev_spend.page(weeks, days), SPEND)
+
+
+def pnl_page(report: pnl_report.Report) -> tuple[int, str]:
+    """(status, page) for the weekly P&L from its report; its links and form stay under `PNL`."""
+    return pnl_report.render(report, base=PNL, nav=_chart_nav(PNL))
+
+
+def _cached(key: tuple) -> Reply | None:
+    with _cache_lock:
+        hit = _cache.get(key)
+    return hit[1] if hit is not None and time.monotonic() < hit[0] else None
+
+
+def _keep(key: tuple, reply: Reply) -> None:
+    """Keep a good reply for `CACHE_SECONDS`. Errors and refusals are never kept."""
+    if reply.status != 200:
+        return
+    with _cache_lock:
+        now = time.monotonic()
+        if key not in _cache and len(_cache) >= CACHE_ENTRIES:
+            for old in [k for k, (until, _) in _cache.items() if until <= now] or [min(_cache, key=lambda k: _cache[k][0])]:
+                del _cache[old]
+        _cache[key] = (now + CACHE_SECONDS, reply)
+
+
+def _chart_reply(path: str, found) -> Reply:
+    """The reply for a chart page from what its loader found."""
+    if isinstance(found, NotYet):
+        return Reply(200, HTML, not_yet_page(path, found), CSP_PNL)
+    if path == PNL:
+        status, page = pnl_page(found)
+        return Reply(status, HTML, page, CSP_PNL)
+    page = money_page(found) if path == MONEY_CHART else spend_page(*found)
+    return Reply(200, HTML, page, chart_csp(page))
 
 
 def respond(target: str, syncs: dict | None = None) -> Reply | None:
@@ -294,16 +586,35 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
     """
     parts = urlsplit(target)
     path = parts.path.rstrip("/")
-    if path not in (DASHBOARD, STATE, EXPLORER):
+    if path in (demo.DEMO, demo.DEMO_STATE):
+        # The made-up copy: read from a file, never from the database, so it comes before every
+        # database check and nothing below it can run for it.
+        return _demo(path)
+    if path in DEMO_LIVE:
+        # The charts' made-up versions, from files in the image: before every database check too.
+        return _demo_reply(path)
+    if path == products_page.DEMO_ROUTE:
+        return _products_demo()
+    if path not in TITLES:
         return None
-    request = None
+    request = query = None
     if path == EXPLORER:
         try:
             request = db_explorer.parse("/?" + parts.query if parts.query else "/")
         except db_explorer.BadRequest as error:
             return Reply(400, TEXT, str(error))
+    if path == PNL:
+        try:
+            query = pnl_report.parse("/?" + parts.query if parts.query else "/")
+        except pnl_report.BadRequest as error:   # what the visitor typed, escaped
+            return Reply(400, HTML, pnl_report.bad_request_page(error, PNL, _chart_nav(PNL)), CSP_PNL)
     if not configured():
         return _problem(path, 503, NOT_SET_UP)
+    # Dev spend reads no slot, so a kept copy needs no connection. The money chart and the P&L count our
+    # selections only, so theirs is kept per stored assignment, read below on every request.
+    key = (path, query)
+    if path == SPEND and (hit := _cached(key)) is not None:
+        return hit
     try:
         with _connection() as conn:
             if request is not None:
@@ -311,7 +622,29 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
                 status, body = db_explorer.render(
                     conn, request, hide, (("Home", "/"), ("Agent dashboard", DASHBOARD)), rows)
                 return Reply(status, HTML, body)
-            snap = dashboard.snapshot(conn, public=True, syncs=syncs)
+            if path in (MONEY_CHART, PNL):
+                # One snapshot for the assignment and the chart, so a copy is kept under the assignment
+                # its figures counted, even if a reassignment commits while it is being built.
+                with snapshot(conn):
+                    key = (path, query, stored_slots(conn))
+                    if (hit := _cached(key)) is not None:
+                        return hit
+                    found = money_data(conn) if path == MONEY_CHART else pnl_data(conn, query)
+            elif path == SPEND:
+                found = spend_data(conn)
+            elif path == PRODUCTS:
+                products = products_page.read(conn, public=True)
+            else:
+                snap = dashboard.snapshot(conn, public=True, syncs=syncs)
+        if path in (MONEY_CHART, PNL, SPEND):
+            reply = _chart_reply(path, found)
+            _keep(key, reply)
+            return reply
+        if path == PRODUCTS:
+            # Drawn after the connection is back, and inside this handler so a failure answers BROKEN.
+            return Reply(200, HTML, products_page.html(products, nav=PRODUCTS_NAV), CSP_PRODUCTS)
+    except SlotsNotRecorded:
+        return _problem(path, 503, NO_SLOTS)
     except Busy:
         return _problem(path, 503, BUSY)
     except CanWrite as error:
@@ -327,8 +660,37 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
         return _problem(path, 500, BROKEN)
     if path == STATE:
         return Reply(200, JSON, dashboard.to_json(snap))
-    page = dashboard.render(snap, json_href=STATE, nav=(("Home", "/"), ("Database", EXPLORER)))
+    picked = parse_qs(urlsplit(target).query).get("sel", [None])[0]    # checked against our slots by render
+    page = dashboard.render(snap, json_href=STATE, charts=CHARTS,
+                            nav=(("Home", "/"), ("Products", PRODUCTS), ("Database", EXPLORER), ("Weekly P&L", PNL),
+                                 ("Dev spend", SPEND), ("Demo copy", demo.DEMO)), picked=picked)
     return Reply(200, HTML, page, CSP_DASHBOARD)
+
+
+# Links above the Products page.
+PRODUCTS_NAV = (("Agent dashboard", DASHBOARD), ("Database", EXPLORER), ("Demo copy", products_page.DEMO_ROUTE))
+
+
+def _products_demo() -> Reply:
+    """The Products page from its made-up data. Opens no connection. Never raises, and puts no error text in a reply."""
+    try:
+        return Reply(200, HTML, products_page.demo_page(), CSP_PRODUCTS)
+    except Exception as error:  # noqa: BLE001 - a page answers, whatever happened
+        _log(type(error).__name__, f"{products_page.DEMO_ROUTE}: {type(error).__name__}: {error}")
+        return Reply(500, HTML, _notice("Demo", BROKEN))
+
+
+def _demo(path: str) -> Reply:
+    """The demo page or its JSON. Opens no connection. Never raises, and puts no error text in a reply."""
+    try:
+        if path == demo.DEMO_STATE:
+            return Reply(200, JSON, demo.state_json())
+        return Reply(200, HTML, demo.page(), CSP_DASHBOARD)
+    except Exception as error:  # noqa: BLE001 - a page answers, whatever happened
+        _log(type(error).__name__, f"{path}: {type(error).__name__}: {error}")
+        if path == demo.DEMO_STATE:
+            return Reply(500, JSON, dashboard.to_json({"demo": True, "error": BROKEN}))
+        return Reply(500, HTML, _notice("Demo copy", BROKEN))
 
 
 # --- Commands -----------------------------------------------------------------------------------

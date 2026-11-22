@@ -35,6 +35,11 @@ def _dumps(value: object) -> str:
 MODES = ("live", "dry-run", "replay")
 ENDINGS = ("submitted", "skipped", "halted", "failed")
 STEP_KINDS = ("thinking", "text", "tool_call", "tool_result")
+# How a run that submitted and then stopped on something else is described (`vending.agent._settle`):
+# the confirmation, then what stopped it. A public page shows only the confirmation
+# (`vending.dashboard.public_run_detail`), since what stopped it can be a database error.
+SUBMITTED = "Submitted purchase request "
+AFTERWARDS = "; afterwards: "
 # Characters of one step kept. A tool reply can be tens of kilobytes; the start says what it was.
 MAX_STEP_TEXT = 4000
 

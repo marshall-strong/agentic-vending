@@ -1,6 +1,6 @@
 """The long-running process in the Container App: the scheduled syncs, a health check and the public pages.
 
-    python -m vending.worker            # every SYNC_EVERY_MINUTES (60), forever
+    python -m vending.worker            # every SYNC_EVERY_MINUTES (60), forever, at SYNC_AT_MINUTE (5) past the hour
     python -m vending.worker --once     # one round, then exit with the worst exit code
 
 Each round runs, in order, `python -m vending.slots check`,
@@ -8,7 +8,11 @@ Each round runs, in order, `python -m vending.slots check`,
 `python -m vending.sync_catalog` and `python -m vending.sync_product_requests`, in this process. `slots check` goes first. It
 only confirms our slot assignment: if the server gives a different one, or none
 is stored, it changes nothing and fails the round until a person runs
-`python -m vending.slots record` (`vending.slots`). Besides the hourly rounds,
+`python -m vending.slots record` (`vending.slots`). The hourly rounds run at
+SYNC_AT_MINUTE (5) minutes past the hour, UTC, because the course staff's poller
+reads the machine on the hour: a new poll reaches the dashboard about five
+minutes after it is taken, not up to an hour later. `off` runs a round every
+SYNC_EVERY_MINUTES from the last, as before. Besides the hourly rounds,
 rounds run 1, 5 and 15 minutes after the slot lock (`SLOTS_LOCK_AT`, the start),
 so the check that confirms the assignment for the competition doesn't wait up to
 an hour, with every reader refusing meanwhile. The schedule uses this host's
@@ -31,7 +35,7 @@ browser, and a 503 there means the last round failed. `GET /` shows the same
 facts as a page for people: whether the last round passed, each job's outcome,
 when the next round runs, and links to the docs. It reloads itself every
 minute. Neither ever shows error text, because both are public and a database
-error names the host and user; the errors are in the log. The page is built
+error names the host and user; the errors are in the log (a database error as its class and SQLSTATE). The page is built
 only from `State.public()`, the same dict as `/health`, so it can't show more.
 
 `GET /dashboard` (with `/dashboard/state.json`) and `GET /db` are the agent
@@ -56,6 +60,10 @@ never fails the round or /health. A read that runs past the round's time delays 
 
 The agent itself (the model loop) does not run here yet; when it does, it
 starts `python -m vending.server` over stdio from the same image.
+
+`GET /dashboard/demo/simulations` shows simulated seasons from committed files
+(`vending.simulate.demo`), behind the same password. It never opens a database
+connection, and every page of it says it is simulated.
 """
 
 from __future__ import annotations
@@ -121,6 +129,18 @@ class State:
                              "exit_code": r.exit_code, "outcome": r.outcome} for r in self.results]}
 
 
+def _describe(problem: BaseException) -> str:
+    """What the log says of a job that crashed: the class and the message. A database error is its class and
+    SQLSTATE only: its text can quote the row it refused, which holds a poll (docs/integrity.md)."""
+    try:
+        import psycopg      # not imported at the top: the worker's other code doesn't need the driver
+    except ImportError:
+        psycopg = None
+    if psycopg is not None and isinstance(problem, psycopg.Error):
+        return f"{type(problem).__name__}: SQLSTATE {problem.sqlstate or 'none'}"
+    return f"{type(problem).__name__}: {problem}"
+
+
 def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: float | None = None,
               running: dict[str, threading.Thread] | None = None) -> list[JobResult]:
     """Run every job once, in order, even if one fails. Never raises.
@@ -146,7 +166,7 @@ def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: floa
             try:
                 done["code"] = int(run())
             except BaseException as problem:  # noqa: BLE001 - one job's crash must not stop the others
-                done["error"] = f"{type(problem).__name__}: {problem}"
+                done["error"] = _describe(problem)
 
         thread = threading.Thread(target=target, name=name, daemon=True)
         thread.start()
@@ -171,6 +191,8 @@ REPO = "https://github.com/marshall-strong/agentic-vending"
 # The setting `vending.pages` connects with. Named here too, so the home page can say whether the
 # pages are set up without importing them (and the database driver) to draw itself.
 PAGES_SETTING = "READONLY_DATABASE_URL"
+# The simulated seasons on the dashboard's demo copy (`vending.simulate.demo.ROOT`): files only, no database.
+SIMULATIONS = "/dashboard/demo/simulations"
 OUTCOMES = ("finished", "crashed", "timed out", "still running")
 JOB_NAMES = {"slots_check": "Our slot assignment", "sync_history": "Machine readings (sales history)",
              "sync_requests": "Purchase requests and receipts", "sync_catalog": "Product catalog",
@@ -332,7 +354,7 @@ class _Health(BaseHTTPRequestHandler):
         if path == gate.LOGOUT:
             return self._redirect(gate.LOGIN, gate.cleared_cookie())
         if gate.needs_password(path) and not gate.signed_in(self.headers.get("Cookie")):
-            if path == "/dashboard/state.json":
+            if path in ("/dashboard/state.json", "/dashboard/demo/state.json"):
                 # The dashboard's own refresh asks for this; a redirect would only fail there.
                 return self._send(401, "application/json", b'{"error": "signed out: reload the page to sign in"}')
             return self._redirect(gate.login_location(self.path))
@@ -341,6 +363,12 @@ class _Health(BaseHTTPRequestHandler):
             self._send(200 if self.state.healthy else 503, "application/json", body)
         elif path == "":
             self._send(200, "text/html; charset=utf-8", home_page(self.state.public(), pages_ready()).encode())
+        elif path == SIMULATIONS or path.startswith(SIMULATIONS + "/"):
+            # Before the other /dashboard pages, which read the database; these never do.
+            from vending.simulate import demo
+
+            status, kind, body, csp = demo.respond(self.path)
+            self._send(status, kind, body.encode(), csp)
         elif path.startswith(("/dashboard", "/db")):
             # Imported here, so the syncs and /health never depend on the pages' code.
             from vending import pages
@@ -388,7 +416,11 @@ class _Health(BaseHTTPRequestHandler):
 
     def _count_view(self, path: str, target: str) -> tuple[str, ...]:
         """Count a signed-in browser opening `path` (`target` is it with its query; `vending.visits`);
-        the cookies to set, if it has no id yet. Only queues the count, so the page never waits on it."""
+        the cookies to set, if it has no id yet. Only queues the count, so the page never waits on it.
+
+        The demo copy (`/dashboard/demo`, `vending.demo`) isn't one of `visits.PAGES`, so a view of it is
+        never counted: not as a visit, and it sets no browser cookie either. Visits are what people
+        read from the real page."""
         if path not in visits.PAGES:
             return ()
         browser, cookies = visits.identify(self.headers.get("Cookie"))
@@ -468,10 +500,31 @@ def _slot_lock() -> datetime | None:
         return None
 
 
-def next_round(now: datetime, every_minutes: float, lock: datetime | None) -> datetime:
-    """When the next round runs: `every_minutes` from `now`, or sooner, at the next of the extra rounds after the
-    slot lock (AFTER_LOCK) that falls in between. Their check confirms our assignment for the competition."""
-    due = now + timedelta(minutes=every_minutes)
+def aligns(every_minutes: float) -> bool:
+    """Whether rounds `every_minutes` apart can keep to the same minutes past every hour."""
+    return every_minutes > 0 and (60 % every_minutes == 0 or every_minutes % 60 == 0)
+
+
+def next_round(now: datetime, every_minutes: float, lock: datetime | None,
+               at_minute: float | None = None) -> datetime:
+    """When the next round runs, or sooner, at the next of the extra rounds after the slot lock (AFTER_LOCK)
+    that falls in between. Their check confirms our assignment for the competition.
+
+    With `at_minute`, rounds keep to that many minutes past the hour (UTC), `every_minutes` apart: the
+    first such time after `now`. A round that ran late, or an extra round, doesn't move the ones after it.
+    Without it, the next round is `every_minutes` after `now`. `every_minutes` must align (`aligns`)."""
+    if at_minute is None:
+        due = now + timedelta(minutes=every_minutes)
+    else:
+        step = timedelta(minutes=every_minutes)
+        # Under an hour apart, the first round of the hour is the minute modulo the gap: every 15 at
+        # minute 20 is :05, :20, :35 and :50, so a start at :02 runs at :05, not :20.
+        first = at_minute % every_minutes if every_minutes < 60 else at_minute
+        due = now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=first)
+        if every_minutes % 60 == 0:      # every few hours: count from midnight, so the hours stay put too
+            due = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=at_minute)
+        while due <= now:
+            due += step
     if lock is not None:
         extra = [lock + after for after in AFTER_LOCK if now < lock + after < due]
         if extra:
@@ -496,6 +549,9 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
     parser.add_argument("--once", action="store_true", help="one round, then exit with the worst exit code")
     parser.add_argument("--every", type=float, default=float(os.environ.get("SYNC_EVERY_MINUTES") or 60),
                         help="minutes between rounds (default SYNC_EVERY_MINUTES or 60)")
+    parser.add_argument("--at-minute", default=os.environ.get("SYNC_AT_MINUTE") or "5",
+                        help="minutes past the hour (UTC) the rounds keep to, or off "
+                             "(default SYNC_AT_MINUTE or 5: the staff's poller reads the machine on the hour)")
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("JOB_TIMEOUT_MINUTES") or 30),
                         help="minutes each job may run (default JOB_TIMEOUT_MINUTES or 30)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8080),
@@ -505,6 +561,17 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         parser.error("--every must be above zero")
     if args.timeout <= 0:
         parser.error("--timeout must be above zero")
+    at_minute = None
+    if args.at_minute.strip().lower() != "off":
+        try:
+            at_minute = float(args.at_minute)
+        except ValueError:
+            parser.error("--at-minute must be a number of minutes, or off")
+        if not 0 <= at_minute < 60:
+            parser.error("--at-minute must be from 0 to under 60")
+        if not aligns(args.every):
+            parser.error(f"--every {args.every:g} can't keep to the same minute every hour: "
+                         "use a number that divides 60 or a multiple of 60, or --at-minute off")
     if reads is None and jobs is None and not args.once:
         from vending import visit_polls    # imported here: it needs the database driver, and the worker's other code doesn't
 
@@ -525,7 +592,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             if args.once:
                 return max((r.exit_code if r.exit_code is not None else 1) for r in state.results)
             now = clock()
-            due = next_round(now, args.every, _slot_lock())
+            due = next_round(now, args.every, _slot_lock(), at_minute)
             state.next_round_at = due.isoformat()
             log(f"next round at {due:%Y-%m-%d %H:%M:%S} UTC")
             while True:

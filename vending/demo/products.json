@@ -1,0 +1,977 @@
+{
+ "demo": true,
+ "as_of": {
+  "$datetime": "2026-12-09T15:00:00+00:00"
+ },
+ "catalog": {
+  "ok": true,
+  "data": {
+   "synced_at": {
+    "$datetime": "2026-12-09T14:05:00+00:00"
+   },
+   "products": [
+    {
+     "sku": "BUBLY-PARADISE-12CAN",
+     "name": "bubly Paradise Paloma 12 oz",
+     "line": "bubly",
+     "flavor": "Paradise Paloma",
+     "size": "12 oz can"
+    },
+    {
+     "sku": "BUBLY-STRAWBER-12CAN",
+     "name": "bubly Strawberry 12 oz",
+     "line": "bubly",
+     "flavor": "Strawberry",
+     "size": "12 oz can"
+    },
+    {
+     "sku": "COCA-ORIGINAL-20BOT",
+     "name": "Coca-Cola 20 oz",
+     "line": "Coca-Cola",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "COCA-ZERO_SUG-20BOT",
+     "name": "Coke Zero 20 oz",
+     "line": "Coke Zero",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "COCA-DIET-20BOT",
+     "name": "Diet Coke 20 oz",
+     "line": "Diet Coke",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "DRPEPPER-ORIGINAL-20BOT",
+     "name": "Dr Pepper 20 oz",
+     "line": "Dr Pepper",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "GORGIE-ORIGINAL-20BOT",
+     "name": "GORGIE Electrolyte Water 20 oz",
+     "line": "GORGIE",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "MONSTER-ORIGINAL-16CAN",
+     "name": "Monster 16 oz",
+     "line": "Monster",
+     "flavor": null,
+     "size": "16 oz can"
+    },
+    {
+     "sku": "MOUNTAIN-ORIGINAL-20BOT",
+     "name": "Mountain Dew 20 oz",
+     "line": "Mountain Dew",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "MOUNTAIN-BAJA_BLA-20BOT",
+     "name": "Mountain Dew Baja Blast 20 oz",
+     "line": "Mountain Dew",
+     "flavor": "Baja Blast",
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "PEPSI-ORIGINAL-20BOT",
+     "name": "Pepsi 20 oz",
+     "line": "Pepsi",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "PREMIER-CHOCOLAT-11CAR",
+     "name": "Premier Protein Chocolate 11 oz",
+     "line": "Premier Protein",
+     "flavor": "Chocolate",
+     "size": "11 oz carton"
+    },
+    {
+     "sku": "RECESS-LIME-12CAN",
+     "name": "Recess Lime 12 oz",
+     "line": "Recess",
+     "flavor": "Lime",
+     "size": "12 oz can"
+    },
+    {
+     "sku": "REDBULL-ORIGINAL-8_4CAN",
+     "name": "Red Bull 250 ml",
+     "line": "Red Bull",
+     "flavor": null,
+     "size": "250 ml can"
+    },
+    {
+     "sku": "SNAPPLE-ORIGINAL-16BOT",
+     "name": "Snapple 16 oz",
+     "line": "Snapple",
+     "flavor": null,
+     "size": "16 oz bottle"
+    },
+    {
+     "sku": "SPRITE-ORIGINAL-20BOT",
+     "name": "Sprite 20 oz",
+     "line": "Sprite",
+     "flavor": null,
+     "size": "20 oz bottle"
+    },
+    {
+     "sku": "TOPOCHICO-ORIGINAL-16BOT",
+     "name": "Topo Chico 16 oz glass",
+     "line": "Topo Chico",
+     "flavor": null,
+     "size": "16 oz glass bottle"
+    },
+    {
+     "sku": "VITAMINWATER-DARK-20BOT",
+     "name": "vitaminwater dark 20 oz",
+     "line": "vitaminwater",
+     "flavor": "dark",
+     "size": "20 oz bottle"
+    }
+   ]
+  }
+ },
+ "sourcing": {
+  "ok": true,
+  "data": {
+   "BUBLY-PARADISE-12CAN": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 750,
+     "max_cents": 900,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "BUBLY-STRAWBER-12CAN": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 750,
+     "max_cents": 900,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "COCA-DIET-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1740,
+     "max_cents": 2050,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "COCA-ORIGINAL-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1740,
+     "max_cents": 2050,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    },
+    {
+     "rank": "alternate",
+     "store": "Costco",
+     "units_per_pack": 24,
+     "expected_cents": 3149,
+     "max_cents": 3600,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "COCA-ZERO_SUG-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1740,
+     "max_cents": 2050,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "DRPEPPER-ORIGINAL-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1680,
+     "max_cents": 1950,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "GORGIE-ORIGINAL-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1500,
+     "max_cents": 1750,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "MONSTER-ORIGINAL-16CAN": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 2100,
+     "max_cents": 2450,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "MOUNTAIN-ORIGINAL-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1620,
+     "max_cents": 1900,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "PEPSI-ORIGINAL-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1620,
+     "max_cents": 1900,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "PREMIER-CHOCOLAT-11CAR": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 3120,
+     "max_cents": 3600,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "RECESS-LIME-12CAN": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1140,
+     "max_cents": 1350,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "REDBULL-ORIGINAL-8_4CAN": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 2040,
+     "max_cents": 2350,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "SNAPPLE-ORIGINAL-16BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1380,
+     "max_cents": 1600,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-11-25T17:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "SPRITE-ORIGINAL-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1680,
+     "max_cents": 1950,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ],
+   "VITAMINWATER-DARK-20BOT": [
+    {
+     "rank": "primary",
+     "store": "Walmart",
+     "units_per_pack": 12,
+     "expected_cents": 1560,
+     "max_cents": 1800,
+     "pack_description": null,
+     "checked_at": {
+      "$datetime": "2026-12-04T16:00:00+00:00"
+     },
+     "checked_by": "demo"
+    }
+   ]
+  }
+ },
+ "plan": {
+  "ok": true,
+  "data": {
+   "id": 1,
+   "picked": true,
+   "slots": [
+    {
+     "slot": "11",
+     "sku": "COCA-ORIGINAL-20BOT",
+     "product": "COCA-ORIGINAL-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "Coca-Cola is the safest seller in the fall figures. Fill the lane.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "13",
+     "sku": "COCA-DIET-20BOT",
+     "product": "COCA-DIET-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "Diet Coke followed Coca-Cola in the fall figures.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "16",
+     "sku": "COCA-ZERO_SUG-20BOT",
+     "product": "COCA-ZERO_SUG-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "Coke Zero sold steadily in the fall.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "17",
+     "sku": "SPRITE-ORIGINAL-20BOT",
+     "product": "SPRITE-ORIGINAL-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "A lemon-lime to sit beside the colas.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "22",
+     "sku": "BUBLY-STRAWBER-12CAN",
+     "product": "BUBLY-STRAWBER-12CAN",
+     "price_cents": 175,
+     "units": 8,
+     "reason": "Cans are cheap to buy, so a lower price should keep them moving.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "24",
+     "sku": "BUBLY-PARADISE-12CAN",
+     "product": "BUBLY-PARADISE-12CAN",
+     "price_cents": 175,
+     "units": 8,
+     "reason": "A second bubly flavour, to see which one wins.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "25",
+     "sku": "TOPOCHICO-ORIGINAL-16BOT",
+     "product": "TOPOCHICO-ORIGINAL-16BOT",
+     "price_cents": 275,
+     "units": 7,
+     "reason": "Glass sparkling water, priced up for the bottle.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "28",
+     "sku": "VITAMINWATER-DARK-20BOT",
+     "product": "VITAMINWATER-DARK-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "A non-fizzy choice.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "31",
+     "sku": "PEPSI-ORIGINAL-20BOT",
+     "product": "PEPSI-ORIGINAL-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "Pepsi sold well in the fall figures.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "33",
+     "sku": "MOUNTAIN-ORIGINAL-20BOT",
+     "product": "MOUNTAIN-ORIGINAL-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "Mountain Dew is the strongest of the greens.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "36",
+     "sku": "DRPEPPER-ORIGINAL-20BOT",
+     "product": "DRPEPPER-ORIGINAL-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "Dr Pepper, for people who want neither cola.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "37",
+     "sku": "REDBULL-ORIGINAL-8_4CAN",
+     "product": "REDBULL-ORIGINAL-8_4CAN",
+     "price_cents": 300,
+     "units": 11,
+     "reason": "The energy drink with the best margin, and the small can fits 11.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "41",
+     "sku": "MONSTER-ORIGINAL-16CAN",
+     "product": "MONSTER-ORIGINAL-16CAN",
+     "price_cents": 325,
+     "units": 8,
+     "reason": "A second energy drink, in the bigger can.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "44",
+     "sku": "SNAPPLE-ORIGINAL-16BOT",
+     "product": "SNAPPLE-ORIGINAL-16BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "Tea, to cover a different taste.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "46",
+     "sku": "PREMIER-CHOCOLAT-11CAR",
+     "product": "PREMIER-CHOCOLAT-11CAR",
+     "price_cents": 400,
+     "units": 9,
+     "reason": "A protein shake for the gym crowd, at a price that pays for the carton.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "47",
+     "sku": "RECESS-LIME-12CAN",
+     "product": "RECESS-LIME-12CAN",
+     "price_cents": 225,
+     "units": 8,
+     "reason": "A new-wave drink that has a following.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "52",
+     "sku": "MOUNTAIN-BAJA_BLA-20BOT",
+     "product": "MOUNTAIN-BAJA_BLA-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "A colourful flavour for variety.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "54",
+     "sku": "COCA-ORIGINAL-20BOT",
+     "product": "COCA-ORIGINAL-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "A second Coca-Cola lane, since it sells best.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "55",
+     "sku": "TOPOCHICO-ORIGINAL-16BOT",
+     "product": "TOPOCHICO-ORIGINAL-16BOT",
+     "price_cents": 275,
+     "units": 7,
+     "reason": "More sparkling water, if it can be bought.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    },
+    {
+     "slot": "58",
+     "sku": "MOUNTAIN-BAJA_BLA-20BOT",
+     "product": "MOUNTAIN-BAJA_BLA-20BOT",
+     "price_cents": 250,
+     "units": 7,
+     "reason": "A second Baja Blast lane, if it can be bought.",
+     "fill_check": "capacity not counted",
+     "checks": {
+      "floor_cents": null,
+      "legal_price": null,
+      "capacity": null,
+      "capacity_assumed": false,
+      "expected_fill_share": null,
+      "max_fill_share": null,
+      "refusals": []
+     }
+    }
+   ],
+   "fill_expected_cents": null,
+   "fill_most_cents": null,
+   "fill_cap_cents": 36600
+  }
+ },
+ "closet": {
+  "ok": true,
+  "data": [
+   {
+    "product": "BUBLY-PARADISE-12CAN",
+    "units": 4,
+    "unit_cost": "0.63"
+   },
+   {
+    "product": "BUBLY-STRAWBER-12CAN",
+    "units": 3,
+    "unit_cost": "0.68"
+   },
+   {
+    "product": "COCA-DIET-20BOT",
+    "units": 5,
+    "unit_cost": "1.45"
+   },
+   {
+    "product": "COCA-ORIGINAL-20BOT",
+    "units": 15,
+    "unit_cost": "1.45"
+   },
+   {
+    "product": "COCA-ZERO_SUG-20BOT",
+    "units": 5,
+    "unit_cost": "1.45"
+   },
+   {
+    "product": "DRPEPPER-ORIGINAL-20BOT",
+    "units": 5,
+    "unit_cost": "1.40"
+   },
+   {
+    "product": "MONSTER-ORIGINAL-16CAN",
+    "units": 4,
+    "unit_cost": "1.75"
+   },
+   {
+    "product": "MOUNTAIN-BAJA_BLA-20BOT",
+    "units": 5,
+    "unit_cost": "1.40"
+   },
+   {
+    "product": "MOUNTAIN-ORIGINAL-20BOT",
+    "units": 14,
+    "unit_cost": "1.35"
+   },
+   {
+    "product": "PEPSI-ORIGINAL-20BOT",
+    "units": 5,
+    "unit_cost": "1.35"
+   },
+   {
+    "product": "PREMIER-CHOCOLAT-11CAR",
+    "units": 3,
+    "unit_cost": "2.60"
+   },
+   {
+    "product": "RECESS-LIME-12CAN",
+    "units": 4,
+    "unit_cost": "0.95"
+   },
+   {
+    "product": "REDBULL-ORIGINAL-8_4CAN",
+    "units": 2,
+    "unit_cost": "1.70"
+   },
+   {
+    "product": "SNAPPLE-ORIGINAL-16BOT",
+    "units": 5,
+    "unit_cost": "1.15"
+   },
+   {
+    "product": "SPRITE-ORIGINAL-20BOT",
+    "units": 5,
+    "unit_cost": "1.40"
+   },
+   {
+    "product": "TOPOCHICO-ORIGINAL-16BOT",
+    "units": 5,
+    "unit_cost": "1.20"
+   },
+   {
+    "product": "VITAMINWATER-DARK-20BOT",
+    "units": 5,
+    "unit_cost": "1.30"
+   }
+  ]
+ },
+ "catalog_requests": {
+  "ok": true,
+  "data": [
+   {
+    "id": 10,
+    "requested_at": {
+     "$datetime": "2026-12-08T14:00:00+00:00"
+    },
+    "name": "Snapple Peach Tea",
+    "size": "16 oz bottle",
+    "status": "pending",
+    "sku": null,
+    "decision_note": null
+   },
+   {
+    "id": 9,
+    "requested_at": {
+     "$datetime": "2026-12-03T16:00:00+00:00"
+    },
+    "name": "Monster Ultra White",
+    "size": "16 oz can",
+    "status": "pending",
+    "sku": null,
+    "decision_note": null
+   },
+   {
+    "id": 8,
+    "requested_at": {
+     "$datetime": "2026-12-01T15:00:00+00:00"
+    },
+    "name": "Iced Energy Peach",
+    "size": "12 oz can",
+    "status": "pending",
+    "sku": null,
+    "decision_note": null
+   },
+   {
+    "id": 7,
+    "requested_at": {
+     "$datetime": "2026-11-23T12:00:00+00:00"
+    },
+    "name": "Vita Coco Coconut Water",
+    "size": "11.1 oz carton",
+    "status": "rejected",
+    "sku": null,
+    "decision_note": "Not available from the distributor."
+   },
+   {
+    "id": 6,
+    "requested_at": {
+     "$datetime": "2026-11-22T17:00:00+00:00"
+    },
+    "name": "Recess Lime",
+    "size": "12 oz can",
+    "status": "approved",
+    "sku": "RECESS-LIME-12CAN",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 5,
+    "requested_at": {
+     "$datetime": "2026-11-21T16:00:00+00:00"
+    },
+    "name": "Mountain Dew Baja Blast",
+    "size": "20 oz bottle",
+    "status": "approved",
+    "sku": "MOUNTAIN-BAJA_BLA-20BOT",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 4,
+    "requested_at": {
+     "$datetime": "2026-11-20T13:00:00+00:00"
+    },
+    "name": "Red Bull",
+    "size": "250 ml can",
+    "status": "approved",
+    "sku": "REDBULL-ORIGINAL-8_4CAN",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 3,
+    "requested_at": {
+     "$datetime": "2026-11-19T15:00:00+00:00"
+    },
+    "name": "Premier Protein Chocolate",
+    "size": "11 oz carton",
+    "status": "approved",
+    "sku": "PREMIER-CHOCOLAT-11CAR",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 2,
+    "requested_at": {
+     "$datetime": "2026-11-19T15:00:00+00:00"
+    },
+    "name": "Topo Chico Sparkling Water",
+    "size": "16 oz glass bottle",
+    "status": "approved",
+    "sku": "TOPOCHICO-ORIGINAL-16BOT",
+    "decision_note": "Approved."
+   },
+   {
+    "id": 1,
+    "requested_at": {
+     "$datetime": "2026-11-18T14:00:00+00:00"
+    },
+    "name": "GORGIE Electrolyte Water",
+    "size": "20 oz bottle",
+    "status": "approved",
+    "sku": "GORGIE-ORIGINAL-20BOT",
+    "decision_note": "Approved."
+   }
+  ]
+ },
+ "catalog_counts": {
+  "ok": true,
+  "data": {
+   "total": 10,
+   "by_status": {
+    "pending": 3,
+    "approved": 6,
+    "rejected": 1,
+    "sending": 0,
+    "unknown": 0
+   },
+   "open": 3,
+   "cap": 25,
+   "left": 22,
+   "unsettled": 0
+  }
+ }
+}

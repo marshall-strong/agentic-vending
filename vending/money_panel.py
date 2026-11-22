@@ -38,7 +38,7 @@ from vending.slots import SlotsNotRecorded
 
 # Proposed in #113 ("Opening capital plan"), not yet agreed: how the $600 is split.
 PROPOSED_SPLIT: tuple[tuple[str, int], ...] = (
-    ("Day-one fill (most-we-pay)", 36_600),
+    ("First fill (most-we-pay)", 36_600),
     ("Midweek visits (2 x $25)", 5_000),
     ("Model spend (9 weeks x $1)", 900),
     ("Product-switch reserve", 6_800),
@@ -159,6 +159,9 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
         "committed": pending,
         "pnl": {
             "units_sold": p.units_sold, "units_costed": p.units_costed,
+            # Sold across a product change the counters can't split: an estimate, in no figure below (#172).
+            "units_estimated": p.units_estimated,
+            "estimated_cost_of_sales": m(p.estimated_cost_of_sales_cents) if p.units_estimated else None,
             "revenue_ex_tax": m(p.revenue_ex_tax_cents),
             "cost_of_sales": m(p.cost_of_sales_cents) if p.cost_of_sales_complete else None,
             "gross_margin": m(p.gross_margin_cents) if p.cost_of_sales_complete else None,
@@ -290,8 +293,10 @@ def _split_bar(d: dict) -> str:
             f'<div class="mkeys">{keys}</div><div class="sub">Money in: {money_in}.</div>')
 
 
-def html(panel: dict) -> str:
-    """The panel's inner HTML: a dashboard `_panel` dict, ok or not."""
+def html(panel: dict, pnl_href: str | None = None) -> str:
+    """The panel's inner HTML: a dashboard `_panel` dict, ok or not. `pnl_href` is where the server
+    serves the weekly P&L (`/dashboard/pnl` on the container); run on its own there is none, and the
+    panel names the command that prints it instead."""
     if not panel["ok"]:
         return f'<p class="empty">Not available: {_e(panel["why"])}</p>'
     d = panel["data"]
@@ -317,7 +322,7 @@ def html(panel: dict) -> str:
                 'the $600.</p>' + pend + plan)
     if not d["opened"]:
         return ('<p class="empty">No opening entry in the ledger yet, so there is no balance. Record the '
-                '$600 before the day-one fill (#107): <code>python -m vending.ledger open --amount 600.00 '
+                '$600 before the first fill (#107): <code>python -m vending.ledger open --amount 600.00 '
                 '--by NAME</code>. Spend before the opening is development, not from the $600.</p>' + pend + plan)
     p = d["pnl"]
     tiles = (
@@ -333,7 +338,7 @@ def html(panel: dict) -> str:
     meters = (_meter("Model spend", d["tokens"], MODEL_BUDGET_CENTS, "live calls, from the ledger")
               + _meter("Midweek visits", d["visit_fees"], VISIT_BUDGET_CENTS,
                        f'{d["visits"]} visit{"" if d["visits"] == 1 else "s"}'))
-    pnl_rows = "".join(f'<tr><td>{label}</td><td class="n">{value}</td></tr>' for label, value in (
+    rows = [
         ("Revenue without tax", _usd(p["revenue_ex_tax"])),
         ("Cost of the units sold", _usd(p["cost_of_sales"])),
         ("Gross margin", _usd(p["gross_margin"])),
@@ -342,14 +347,22 @@ def html(panel: dict) -> str:
         ("Model spend", _usd(p["tokens"])),
         ("<b>Profit</b>", f'<b>{_usd(p["net"])}</b>'),
         ("Stock on hand, at cost", _usd(p["inventory"]) + ("" if p["inventory_complete"] else " (some costs unknown)")),
-    ))
+    ]
+    if p.get("units_estimated"):
+        # Below the profit and labelled: an estimate is never folded into a profit figure (#172).
+        units = p["units_estimated"]
+        rows.append((f"Estimated cost of {units} unit{'' if units == 1 else 's'} sold across a swap the counters "
+                     "can't split (an estimate, not in profit)", _usd(p["estimated_cost_of_sales"])))
+    pnl_rows = "".join(f'<tr><td>{label}</td><td class="n">{value}</td></tr>' for label, value in rows)
     notes = "".join(f"<li>{_e(n)}</li>" for n in d["notes"])
     return (f'<div class="mtiles">{tiles}</div>'
             f'<h3>Where the money has gone</h3>{_split_bar(d)}{pend}'
             f'<h3>Against the proposed budget</h3>{meters}'
             f'<div class="grid2 mlow"><div><h3>Profit and loss since the opening</h3><table class="mpnl">{pnl_rows}</table>'
-            '<p class="sub">Weekly detail: <code>python -m vending.pnl_report</code>.</p></div>'
-            f'<div>{plan}' + (f'<h3>Ledger notes</h3><ul class="mnotes">{notes}</ul>' if notes else "") + "</div></div>")
+            + (f'<p class="sub">Weekly detail: <a href="{_e(pnl_href)}">the weekly P&amp;L</a> on the team&#39;s '
+               'dashboard, or <code>python -m vending.pnl_report</code> on a laptop.</p></div>' if pnl_href else
+               '<p class="sub">Weekly detail: <code>python -m vending.pnl_report</code>.</p></div>')
+            + f'<div>{plan}' + (f'<h3>Ledger notes</h3><ul class="mnotes">{notes}</ul>' if notes else "") + "</div></div>")
 
 
 STYLE = """

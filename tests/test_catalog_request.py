@@ -160,7 +160,8 @@ def test_a_rejected_request_stores_nothing(db, fake):  # noqa: F811
     assert db.execute("select outcome from action_log where tool = 'request_catalog_product'").fetchall() == [("failed",)]
 
 
-@pytest.mark.parametrize("answer", [(503, {"detail": "down"}, 0.0), (201, {"id": "late"}, 2.0)])
+@pytest.mark.parametrize("answer", [(503, {"detail": "down"}, 0.0), (201, {"id": "late"}, 2.0), (303, {}, 0.0)],
+                         ids=["5xx", "timeout", "a redirect, not followed"])
 def test_no_answer_is_stored_as_unknown_and_blocks_a_resend(db, fake, monkeypatch, answer):  # noqa: F811
     monkeypatch.setattr(bridge_module, "TIMEOUT_SECONDS", 0.5)
     fake.answer = answer
@@ -178,7 +179,7 @@ def test_a_cut_off_answer_is_stored_as_unknown_and_blocks_a_resend(db, fake):  #
     # request may exist: the same rules as a timeout, not a crash.
     fake.cut_off = True
     reply = ask()
-    assert not reply["success"] and reply["status"] == "unknown" and "IncompleteRead" in reply["message"]
+    assert not reply["success"] and reply["status"] == "unknown" and "short read:" in reply["message"]
     assert db.execute("select bridge_id, status from product_requests").fetchall() == [(None, "unknown")]
     assert db.execute("select outcome from action_log where tool = 'request_catalog_product'").fetchall() == [
         ("failed",)]

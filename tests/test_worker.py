@@ -46,8 +46,8 @@ def test_the_loop_sleeps_between_rounds_and_stops_on_interrupt():
         sleeps.append(seconds)
         if len(sleeps) == 2:
             raise KeyboardInterrupt
-    code = worker.main(["--every", "5", "--port", "0"], jobs=[("a", lambda: rounds.append(1) or 0)],
-                       sleep=sleep, log=lambda _: None)
+    code = worker.main(["--every", "5", "--at-minute", "off", "--port", "0"],
+                       jobs=[("a", lambda: rounds.append(1) or 0)], sleep=sleep, log=lambda _: None)
     assert code == 0 and len(rounds) == 2 and sleeps == [300.0, 300.0]
 
 
@@ -283,5 +283,150 @@ def test_the_loop_sleeps_until_the_round_after_the_lock(monkeypatch):
     def sleep(seconds):
         sleeps.append(seconds)
         raise KeyboardInterrupt
-    worker.main(["--every", "60", "--port", "0"], jobs=[("a", lambda: 0)], sleep=sleep, log=lambda _: None)
+    worker.main(["--every", "60", "--at-minute", "off", "--port", "0"], jobs=[("a", lambda: 0)], sleep=sleep,
+                log=lambda _: None)
     assert 600 < sleeps[0] < 680
+
+
+def test_rounds_keep_to_a_few_minutes_after_the_staff_poll():
+    # The staff's poller reads the machine on the hour, so a round at :05 brings each poll in within
+    # about five minutes, whenever the worker happened to start.
+    from datetime import datetime, timedelta, timezone
+
+    started = datetime(2026, 11, 19, 18, 42, 58, tzinfo=timezone.utc)   # a restart at 18:42
+    assert worker.next_round(started, 60, None, 5) == datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)
+    assert worker.next_round(started, 60, None) == started + timedelta(hours=1)        # off: as before
+    early = datetime(2026, 11, 19, 19, 2, tzinfo=timezone.utc)
+    assert worker.next_round(early, 60, None, 5) == datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)
+    on_time = datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)                       # a round that took no time
+    assert worker.next_round(on_time, 60, None, 5) == datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
+    assert worker.next_round(started, 15, None, 5) == datetime(2026, 11, 19, 18, 50, tzinfo=timezone.utc)
+    assert worker.next_round(started, 120, None, 5) == datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
+    # Under an hour apart with the minute past the gap: every 15 at minute 20 keeps to :05, :20, :35, :50.
+    assert worker.next_round(datetime(2026, 11, 19, 19, 2, tzinfo=timezone.utc), 15, None, 20) ==         datetime(2026, 11, 19, 19, 5, tzinfo=timezone.utc)
+    assert worker.next_round(datetime(2026, 11, 19, 20, 1, tzinfo=timezone.utc), 15, None, 20) ==         datetime(2026, 11, 19, 20, 5, tzinfo=timezone.utc)
+    late = datetime(2026, 11, 19, 23, 58, tzinfo=timezone.utc)                         # across midnight
+    assert worker.next_round(late, 60, None, 5) == datetime(2026, 11, 20, 0, 5, tzinfo=timezone.utc)
+
+
+def test_the_slot_lock_rounds_still_come_first_and_the_hour_comes_back():
+    from datetime import datetime, timedelta, timezone
+
+    lock = datetime(2026, 12, 3, 5, tzinfo=timezone.utc)                              # midnight Eastern
+    assert worker.next_round(lock - timedelta(minutes=20), 60, lock, 5) == lock + timedelta(minutes=1)
+    assert worker.next_round(lock + timedelta(minutes=1), 60, lock, 5) == lock + timedelta(minutes=5)
+    assert worker.next_round(lock + timedelta(minutes=5), 60, lock, 5) == lock + timedelta(minutes=15)
+    assert worker.next_round(lock + timedelta(minutes=15), 60, lock, 5) == lock + timedelta(hours=1, minutes=5)
+
+
+def test_the_loop_sleeps_until_the_minute_past_the_hour(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(worker, "_slot_lock", lambda: None)
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        raise KeyboardInterrupt
+    before = datetime.now(timezone.utc)
+    worker.main(["--every", "60", "--at-minute", "5", "--port", "0"], jobs=[("a", lambda: 0)], sleep=sleep,
+                log=lambda _: None)
+    due = before + timedelta(seconds=sleeps[0])
+    assert 0 < sleeps[0] <= 3600 and due.minute in (4, 5)         # 4: the clock moved on while the round ran
+
+
+@pytest.mark.parametrize("args", [["--at-minute", "60"], ["--at-minute", "-1"], ["--at-minute", "soon"],
+                                  ["--every", "7"], ["--every", "90"]])
+def test_a_minute_past_the_hour_needs_rounds_that_fit_the_hour(args):
+    with pytest.raises(SystemExit):
+        worker.main([*args, "--port", "0"], jobs=[], log=lambda _: None)
+
+
+def test_off_keeps_any_every():
+    assert worker.main(["--every", "7", "--at-minute", "off", "--once", "--port", "0"],
+                       jobs=[("a", lambda: 0)], log=lambda _: None) == 0
+
+
+# --- The chart pages behind the password ------------------------------------------------------------
+
+CHARTS = ("/dashboard/money", "/dashboard/pnl", "/dashboard/spend")
+
+
+def _ask(server, method: str, path: str, headers: dict | None = None):
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=20)
+    try:
+        # A POST with no body: the server refuses it without reading one, and on Windows a body it never
+        # read can make the client's send fail with WinError 10053 before the 405 arrives.
+        conn.request(method, path, body=b"" if method == "POST" else None, headers=headers or {})
+        reply = conn.getresponse()
+        return reply.status, dict(reply.getheaders()), reply.read().decode()
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def gated(monkeypatch):
+    """The worker's server with the password gate on, and every chart loader failing the test if reached."""
+    from vending import gate, pages
+
+    monkeypatch.setattr(gate, "ENABLED", True)
+    monkeypatch.setenv(gate.KEY_SETTING, "postgresql://reader:secret@example/db")
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "_cache", {})
+    for name in ("money_data", "pnl_data", "spend_data"):
+        monkeypatch.setattr(pages, name, lambda *args, _name=name: pytest.fail(f"{_name} reached without a sign-in"))
+    monkeypatch.setattr(pages, "connect", lambda: pytest.fail("a connection opened without a sign-in"))
+    server = worker.serve_health(worker.State(), 0)
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def test_the_chart_pages_send_a_signed_out_browser_to_the_password_page(gated):
+    from vending import gate
+
+    for path in CHARTS + tuple(p + "/" for p in CHARTS) + ("/dashboard/pnl?start=2026-12-05",):
+        status, headers, body = _ask(gated, "GET", path)
+        assert status == 303 and headers["Location"] == gate.login_location(path) and body == "", path
+    # A forged cookie is no better.
+    status, _, _ = _ask(gated, "GET", CHARTS[0], {"Cookie": f"{gate.COOKIE}=9999999999.forged"})
+    assert status == 303
+    # The dashboard's JSON twin still answers a signed-out refresh with JSON, as before.
+    status, headers, body = _ask(gated, "GET", "/dashboard/state.json")
+    assert status == 401 and headers["Content-Type"] == "application/json" and "signed out" in json.loads(body)["error"]
+
+
+def test_the_chart_pages_take_no_post_signed_in_or_not(gated):
+    from vending import gate
+
+    for path in CHARTS:
+        for headers in ({}, {"Cookie": f"{gate.COOKIE}={gate.token()}"}):
+            status, _, _ = _ask(gated, "POST", path, headers)
+            assert status == 405, path
+
+
+def test_a_signed_in_browser_gets_each_chart_page_with_its_policy(gated, monkeypatch):
+    from vending import gate, pages
+
+    seen = []
+
+    def respond(target, syncs=None):
+        seen.append(target)
+        return pages.Reply(200, pages.HTML, f"<p>{target}</p>", pages.CSP_PNL)
+    monkeypatch.setattr(pages, "respond", respond)
+    for path in CHARTS:
+        status, headers, body = _ask(gated, "GET", path, {"Cookie": f"{gate.COOKIE}={gate.token()}"})
+        assert status == 200 and body == f"<p>{path}</p>" and headers["Content-Security-Policy"] == pages.CSP_PNL
+        assert headers["Cache-Control"] == "no-store"
+    assert seen == list(CHARTS)
+
+
+def test_the_chart_demos_are_behind_the_password_too(gated, monkeypatch):
+    from vending import gate, pages
+
+    monkeypatch.setattr(pages, "demo_page", lambda path, now=None: pytest.fail("a demo rendered without a sign-in"))
+    for path in ("/dashboard/demo/money", "/dashboard/demo/spend"):
+        status, headers, _ = _ask(gated, "GET", path)
+        assert status == 303 and headers["Location"] == gate.login_location(path)
+        assert _ask(gated, "POST", path)[0] == 405

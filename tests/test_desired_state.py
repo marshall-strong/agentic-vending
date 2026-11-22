@@ -3,6 +3,7 @@ entries, against a local HTTP server standing in for the bridge's catalog route,
 through the MCP client."""
 
 import json
+import socket
 import threading
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
@@ -44,8 +45,20 @@ class FakeBridge:
         self.catalog_body = None     # set to serve something other than {"products": CATALOG}
         self.cut = False             # answer the POST (with `answer`'s status) with a body shorter than its Content-Length
         self.answer = (201, {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
+        self.redirect: str | None = None  # answer the POST `303 See Other` to this path, which GETs as a 404
+        self.drop = False            # close the connection once the POST has arrived, before any reply
+        self.other_gets: list[str] = []  # GETs of anything but the catalog (a followed redirect, say)
         self.received = threading.Event()  # set once a POST has arrived
+        self.stopping = threading.Event()  # set at teardown, to end a drip
         self.hold: threading.Event | None = None  # if set, a POST isn't answered until this is
+        self.raw: bytes | None = None  # answer the POST (with `answer`'s status) with exactly these bytes as its body
+        self.content_type: str | None = "application/json"  # the `Content-Type` sent with `raw` (None: none)
+        self.headers: dict[str, str] = {}  # more headers sent with `raw`
+        self.chunked = False         # send `raw` chunked (one chunk), not with a Content-Length
+        self.drip = 0.0              # send `raw` a byte at a time, this many seconds apart
+        self.catalog_drip = 0.0      # send the catalog's body a byte at a time, this many seconds apart
+        self.lookups: dict[str, dict] = {}  # what `GET /api/v1/purchase-requests/{id}` answers, by ID; others are 404
+        self.looked_up: list[str] = []  # every ID asked for that way (in `other_gets` too)
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -61,8 +74,38 @@ class FakeBridge:
                 self.wfile.write(data)
 
             def do_GET(self):
-                assert self.path == "/api/v1/products" and self.headers["X-API-Key"] == "test-key"
+                prefix = "/api/v1/purchase-requests/"
+                if self.path.startswith(prefix):
+                    asked = self.path[len(prefix):]
+                    fake.looked_up.append(asked)
+                    fake.other_gets.append(self.path)
+                    if asked in fake.lookups:
+                        self._reply(200, fake.lookups[asked])
+                    else:
+                        self._reply(404, {"detail": "Not Found"})
+                    return
+                if self.path != "/api/v1/products":
+                    fake.other_gets.append(self.path)
+                    self._reply(404, {"detail": "Not Found"})
+                    return
+                assert self.headers["X-API-Key"] == "test-key"
                 fake.gets += 1
+                if fake.catalog_drip:
+                    data = json.dumps({"products": CATALOG}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.flush()
+                    for byte in data:
+                        if fake.stopping.wait(fake.catalog_drip):
+                            return
+                        try:
+                            self.wfile.write(bytes([byte]))
+                            self.wfile.flush()
+                        except OSError:
+                            return
+                    return
                 self._reply(fake.catalog_status, {"products": CATALOG} if fake.catalog_body is None else fake.catalog_body)
 
             def do_POST(self):
@@ -71,6 +114,42 @@ class FakeBridge:
                 fake.received.set()
                 if fake.hold is not None:
                     fake.hold.wait(30)
+                if fake.drop:
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    return
+                if fake.redirect is not None:
+                    self.send_response(303)
+                    self.send_header("Location", fake.redirect)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if fake.raw is not None:
+                    self.send_response(fake.answer[0])
+                    if fake.content_type is not None:
+                        self.send_header("Content-Type", fake.content_type)
+                    for name, value in fake.headers.items():
+                        self.send_header(name, value)
+                    data = fake.raw
+                    if fake.chunked:
+                        self.send_header("Transfer-Encoding", "chunked")
+                        data = f"{len(data):x}".encode() + b"\r\n" + data + b"\r\n0\r\n\r\n"
+                    else:
+                        self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    if not fake.drip:
+                        self.wfile.write(data)
+                        return
+                    self.wfile.flush()
+                    for byte in data:
+                        if fake.stopping.wait(fake.drip):
+                            return
+                        try:
+                            self.wfile.write(bytes([byte]))
+                            self.wfile.flush()
+                        except OSError:
+                            return
+                    return
                 if fake.cut:
                     data = b'{"id": "pr-1", "status": "pen'
                     self.send_response(fake.answer[0])
@@ -96,6 +175,7 @@ def fake(db, monkeypatch):  # noqa: F811
     bridge = FakeBridge()
     monkeypatch.setattr(server, "bridge", bridge.client)
     yield bridge
+    bridge.stopping.set()
     bridge.server.shutdown()
     bridge.server.server_close()
 
@@ -264,6 +344,28 @@ def test_with_nothing_counted_the_catalog_size_sets_the_capacity(db, fake):  # n
     assert reply.ok and reply.lines[0].fill_to == 7
 
 
+@pytest.mark.parametrize("fill_to", [6, 8, None])
+def test_preview_warns_if_a_load_leaves_room(db, fake, fill_to):  # noqa: F811
+    ready(db, capacity=8)
+    slot = TEST_SLOTS[0]
+    reply = preview_desired_state(
+        db, desired({**restock_15(fill_to=fill_to), "slot": slot}, sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.success
+    checks = [w for w in reply.warnings if "spaces empty" in w]
+    assert checks == ([f"slot {slot}: fills 6 of 8: 2 spaces empty"] if fill_to == 6 else [])
+
+
+def test_preview_describes_unknown_capacity_without_an_underfill_warning(db, fake):  # noqa: F811
+    ready(db)
+    set_value(db, "capacity_overrides", {}, "test")
+    fake.catalog_body = {"products": [{**CATALOG[0], "size": "11 oz carton"}]}
+    reply = preview_desired_state(
+        db, desired(restock_15(fill_to=6), sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert codes(reply) == ["unknown_capacity"]
+    assert "capacity not counted" in reply.refusals[0].message
+    assert not any("spaces empty" in w for w in reply.warnings)
+
+
 def test_a_restock_plans_one_purchase_line_priced_against_its_floor(db, fake):  # noqa: F811
     ready(db, capacity=15)
     stocked(db)
@@ -418,6 +520,19 @@ def test_a_table_price_over_a_week_old_is_used_but_flagged(db, fake):  # noqa: F
     assert "COKE20" in stale and "9 days ago" in stale and "python -m vending.sourcing set COKE20" in stale
 
 
+def test_a_receipt_refreshes_a_stale_table_price_and_the_planner_takes_it_as_fresh(db, fake):  # noqa: F811
+    """#202: the 12.37 the worker paid for r1's Costco 12-pack (resolved 7 Nov) replaces the 9-day-old 11.49."""
+    from vending import receipt_prices
+    ready(db, capacity=15)
+    stocked(db)
+    table_row(db, fake, checked=NOW - timedelta(days=9))
+    assert len(receipt_prices.apply(db, "r1", NOW).updated) == 1
+    reply = preview_desired_state(db, desired(restock_15(fill_to=15)), fake.client(), NOW)
+    assert reply.ok and reply.refusals == []
+    assert reply.cost.expected == "12.37"
+    assert not any("sourcing table" in w for w in reply.warnings)
+
+
 def test_the_agents_own_max_wins_but_an_old_borrowed_expected_price_is_named(db, fake):  # noqa: F811
     """Marshall, #133: the agent's Costco 12-pack gives no expected price, so the planner borrows the
     table's $11.49 for the cost. The line keeps the agent's max; the 30-day-old price is named."""
@@ -488,7 +603,10 @@ def test_no_sourcing_anywhere_says_how_to_add_a_table_row(db, fake):  # noqa: F8
 
 # --- Through the MCP client -------------------------------------------------------------------
 
-def test_preview_end_to_end(db, fake):  # noqa: F811
+def test_preview_end_to_end(db, fake, monkeypatch):  # noqa: F811
+    # Through the MCP server "now" is the database clock: pinned to NOW, a Monday before every cutoff, so
+    # the Costco restock isn't refused past_cutoff late in the week (as tests/test_submit.py pins it).
+    monkeypatch.setattr(ledger, "db_now", lambda conn: NOW)
     ready(db)
     stocked(db)
     body = desired(restock_15(), sourcing=[coke_sourcing()]).model_dump()

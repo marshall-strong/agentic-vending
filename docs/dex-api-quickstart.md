@@ -56,9 +56,9 @@ If all three work, you're set up. The rest of the commands:
 
 | Command | What you get |
 | --- | --- |
-| `history --start 2026-10-20 --end 2026-10-21` | Stored polls in that range: `session_id`, `started_at`, size. Dates are UTC days. |
-| `raw SESSION_ID --out poll.dex` | One stored poll as the raw EVA-DTS text the machine sent |
-| `latest --out latest.dex` | The newest stored poll, raw |
+| `history --start 2026-10-20 --end 2026-10-21` | Stored polls in that range: `session_id`, `started_at`, size, and nothing else the reply holds. Dates are UTC days. |
+| `raw SESSION_ID --out poll.dex` | Saves one stored poll, the raw EVA-DTS text the machine sent, to a file for archiving. Printed instead, any poll shows only our selections and the door counter |
+| `latest --out latest.dex` | Saves the newest stored poll, raw, likewise |
 | `products` | The catalog we can order from: single items with `line`, `flavor` and `size`, no prices or pack sizes (three products on 29 Oct, one a test entry) |
 | `request REQUEST_ID` | Where one of our purchase requests has got to |
 
@@ -66,17 +66,17 @@ If all three work, you're set up. The rest of the commands:
 
 ## Other ways in
 
-**The Swagger page is the best way to see what each route takes and returns.** Open http://aihub-pi:8000/docs (Tailscale on), click **Authorize**, paste the key into `X-API-Key`, then use **Try it out** on any `GET` route.
+**The Swagger page is the best way to see what each route takes and returns.** Open http://aihub-pi:8000/docs (Tailscale on), click **Authorize**, paste the key into `X-API-Key`, then use **Try it out** only on the metadata routes: `GET /health`, `/api/v1/slots` and `/api/v1/products`. Don't try the history or poll routes there: their replies hold, or list, whole polls, which carry every selection and the machine-wide totals. Read polls through `scripts/bridge.py`, which shows every poll only as our selections and the door counter (`docs/integrity.md`). Pre-cut fall data for all 40 comes from `analysis/export_sales.py --fall-all`.
 
-**From PowerShell**, read the key out of `.env` and call any `GET` route. Each line is one statement:
+**From PowerShell**, read the key out of `.env` and call a metadata route (the same three). Each line is one statement:
 
 ```
 $key = (Get-Content .env | Where-Object { $_ -like 'DEX_API_KEY=*' }) -replace '^DEX_API_KEY=', ''
 Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/slots' -Headers @{ 'X-API-Key' = $key }
-Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/history?start=2026-10-21&end=2026-10-21' -Headers @{ 'X-API-Key' = $key }
+Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/products' -Headers @{ 'X-API-Key' = $key }
 ```
 
-**Skip the course Postman collection.** It dates from September and only has `/health`, the live poll and an old parse route; the history and purchasing routes aren't in it. If you prefer Postman anyway, import the routes from http://aihub-pi:8000/openapi.json, and keep any Postman environment file out of the repo: it holds the key in plain text.
+**Skip the course Postman collection.** It dates from September and only has `/health`, the live poll and an old parse route; the history and purchasing routes aren't in it. If you prefer Postman anyway, import the routes from http://aihub-pi:8000/openapi.json and use the same three metadata routes only, and keep any Postman environment file out of the repo: it holds the key in plain text.
 
 ## Rules
 
@@ -108,8 +108,10 @@ Invoke-RestMethod -Uri 'http://aihub-pi:8000/api/v1/history?start=2026-10-21&end
 | `ID4` | `ID4*2*1840*5` | The first field is the number of decimal places in every money figure: 2, so `450` is $4.50 |
 | `PA1` | `PA1*15*450*` | Selection 15 is priced at $4.50 |
 | `PA2` | `PA2*240*...` | The line after a `PA1`: that selection's lifetime units sold, then lifetime sales |
-| `VA1` | `VA1*...` | Machine-wide lifetime totals; all the `PA2` lines add up to it exactly |
+| `VA1` | `VA1*...` | Machine-wide lifetime totals; all the `PA2` lines add up to it exactly. Usable only from polls taken before the fall cut (`FALL_CUTOFF`, 18 Nov 2026 00:00 Eastern when unset, never later than the 3 Dec start; `docs/integrity.md`). From the cut on, the total minus ours is theirs |
 | `G85` | `G85*5CDB` | A checksum of the document |
+
+For a poll taken from the fall cut on, use `PA1` and `PA2` only for our selections, and not `VA1` (`docs/integrity.md`, "Fall data"). `scripts/bridge.py` prints every poll, whenever it was taken, rebuilt from our selections and the door counter only.
 
 Two things the machine doesn't tell us:
 

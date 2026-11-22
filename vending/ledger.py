@@ -7,6 +7,9 @@
     python -m vending.ledger adjust --amount -3.50 --detail "bottle deposit, per David" --by marshall
     python -m vending.ledger show
     python -m vending.ledger entries
+    python -m vending.ledger reset-test-opening --by marshall [--yes]
+    python -m vending.ledger safe-opening --fill REQUEST_ID
+    python -m vending.ledger open --recover --fill REQUEST_ID --by kevin [--yes]
 
 The balance is never a stored figure (build plan, section 5). It is:
 
@@ -27,18 +30,72 @@ range is asked for, the same boundary the stock count uses
 cost, tax remittances and adjustments.
 
 The sales tax inside the takings is set aside, not spendable: takings x 8/108
-per week, rounded half up to the cent (the team's 19 Oct decision; weeks start
-on Saturday, after the Friday visit, in Eastern time). What is still **owed**
-is the set-aside less what has been remitted, and the **spendable** balance is
-the balance minus that. It is what the planner's balance gate checks against.
+per tax week, rounded half up to the cent (the team's 19 Oct decision). The tax
+week is David's: he calculates the tax once a week, at 23:59 Saturday Eastern,
+on that week's takings (David, email 20 Nov 2026; the first calculation is Sat
+5 Dec 2026). So a tax week runs from Sunday 00:00 to Saturday 23:59:59 Eastern,
+daylight saving included (`TAX_WEEK_STARTS`, `tax_week_of`). The week in
+progress is set aside the same way, on its takings so far, so the spendable
+balance never counts tax that Saturday's calculation will take. The first tax
+week starts at the opening, so it is partial.
+
+The display weeks are a different thing: the P&L, the money chart, the
+briefing and the leaderboards group by Saturday-to-Friday weeks, after the
+Friday visit (`WEEK_STARTS`, `week_of`). A display week's tax is its share of
+the tax weeks' rounded tax: each rise in the counters adds what it changes in
+its tax week's rounded tax, and the display week sums those. So the display
+weeks' tax adds up to the tax weeks' tax exactly, though one display week can
+differ by a cent from rounding its own takings.
+
+What is still **owed** is the set-aside less what has been remitted, and the
+**spendable** balance is the balance minus that. It is what the planner's
+balance gate checks against.
 
 Capital and remittances move money without being profit or loss, so the P&L
 leaves them out. Adjustments are corrections to the books (a bottle deposit, a
 refund), so the P&L counts them. Shrinkage, the cost of units lost without a
 sale, comes from `vending.stock` and is its own P&L line.
 
+Cost of sales is exact: only sales whose cost the receipts know
+(`summarize_sales`). Units sold across a product change the counters can't
+split may be either product, so their cost is not exact. They are left out of
+cost of sales, which is then incomplete, and reported apart as an estimate
+(`units_estimated`, `estimated_cost_of_sales_cents`) that no profit figure
+includes (#172 item 5). The stock those sales took out of the count, at the
+cost it was taken (`unattributed_stock_cents`), is in no cost, estimate or
+profit either. It is its own reconciliation line, so the books still balance:
+opening cash and stock + net at known costs + capital + tax set aside - tax
+remitted - unattributed stock = closing cash + stock at cost. One timing
+exception, older than this line: a unit the counters split to the old product
+at a swap leaves stock at the swap but is booked to the poll that measured it,
+so a period that ends between the two is off by that unit's cost, which the
+period containing the poll makes up; one that holds both balances
+(`stock.replay`). Where a write-off
+at the same swap may be one of those sales, the line is provisional
+(`unattributed_stock_provisional`). The money series counts all of this the
+same way.
+
+Counters are read from their whole history first, as the stock replay reads
+them, and only then cut to the window (`rises_between`), so a misread or
+restart just before a window reads the same from any window.
+
 Money is exact (`Fraction` cents, `numeric` in the database) until it is shown.
 `money()` rounds half up to the cent only then.
+
+`reset-test-opening` moves the 11 Nov test opening into `ledger_entries_archive`
+so the real one can be recorded (#215, `docs/ledger-reset.md`). It is a dry run
+without `--yes`. It moves only that entry (entry 1, dated 11 Nov, with its exact
+detail), only once, and only before 00:00 Eastern on Mon 30 Nov.
+
+`safe-opening`, read only, is for when the fill request went in before the real
+opening was recorded: it prints the interval the opening must fall in, each bound
+read with the clock its reader uses, and the `open --recover` command.
+`open --recover` works the interval out again and records the opening at its
+suggested time in one transaction, under a lock that the writers of model calls,
+receipts and requests wait on, so nothing recorded between the two commands can
+end up in the books. It is a preview without `--yes`.
+
+The CLI prints times in Eastern.
 
 The CLI never migrates: on a database that is behind it refuses to run and
 names `python -m vending.db migrate`, like the server and the halt switch.
@@ -61,7 +118,8 @@ from psycopg.types.json import Jsonb
 
 from vending import config, counters, db, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
-from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.slots import DEVICE_ID, SlotsNotRecorded, assigned_at, our_slots
+from vending.start import EASTERN, START
 from vending.tools.sales_history import tax_cents
 
 KINDS = ("opening", "capital", "tokens", "adjustment", "tax_remitted")
@@ -71,8 +129,11 @@ DEBITS = ("tokens", "tax_remitted")
 # The planner's default; a `midweek_fee_cents` row in `config` overrides it for
 # requests that don't carry their own fee.
 DEFAULT_MIDWEEK_FEE_CENTS = 2500
-# The week turns over on Saturday, after the Friday visit (planner `Config.week_starts`).
+# The display week turns over on Saturday, after the Friday visit (planner `Config.week_starts`).
 WEEK_STARTS = 5
+# The tax week turns over on Sunday 00:00 Eastern: David calculates the tax at 23:59 Saturday on that
+# week's takings (email, 20 Nov 2026). Not the display week: see the module docstring.
+TAX_WEEK_STARTS = 6
 TIMEZONE = "America/New_York"
 OPEN_HINT = ("The ledger has no opening entry yet. A person records the starting capital with: "
              "python -m vending.ledger open --amount 600.00 --by NAME")
@@ -95,9 +156,9 @@ class Entry:
 
 @dataclass(frozen=True)
 class WeekTakings:
-    week: date                  # the Saturday the week began, Eastern time
+    week: date                  # the day it began, Eastern: a Saturday in `by_week`, a Sunday in `by_tax_week`
     takings_cents: int
-    tax_cents: int
+    tax_cents: int              # `by_tax_week`: the week's takings x 8/108, rounded; `by_week`: its share of that
 
 
 @dataclass(frozen=True)
@@ -106,9 +167,10 @@ class Takings:
     start_poll: datetime | None     # the baseline poll the deltas are measured from
     end_poll: datetime | None       # the last poll counted
     cents: int
-    tax_cents: int                  # set aside: summed per week, each rounded half up
-    by_week: tuple[WeekTakings, ...]
+    tax_cents: int                  # set aside: summed per tax week, each rounded half up
+    by_week: tuple[WeekTakings, ...]            # display weeks (Saturday to Friday)
     note: str | None = None
+    by_tax_week: tuple[WeekTakings, ...] = ()   # tax weeks (Sunday to Saturday), as David calculates them
 
 
 @dataclass(frozen=True)
@@ -126,6 +188,7 @@ class Balance:
     tax_remitted_cents: Fraction    # positive: what was handed over
     adjustments_cents: Fraction     # signed
     notes: tuple[str, ...]
+    receipts_missing: int = 0       # receipt lines with no total_paid, left out of `receipts_cents`
 
     @property
     def balance_cents(self) -> Fraction:
@@ -141,6 +204,15 @@ class Balance:
     def spendable_cents(self) -> Fraction:
         return self.balance_cents - self.tax_owed_cents
 
+    @property
+    def cash_without_takings_cents(self) -> Fraction:
+        """The spendable balance with no takings: opening and later capital, plus or minus adjustments, less
+        receipts, visit fees, model calls and tax remitted. Never above `spendable_cents` (takings less their
+        tax are never negative), and read from no poll, so a history backfill can't move it. The day-one fill
+        checks its request against this (`vending.fill`, round 4 of Sol's review)."""
+        return (self.opening_cents + self.capital_cents + self.adjustments_cents - self.receipts_cents
+                - self.visit_fees_cents - self.token_spend_cents - self.tax_remitted_cents)
+
 
 @dataclass(frozen=True)
 class Pnl:
@@ -148,7 +220,7 @@ class Pnl:
     end: datetime
     takings: Takings
     units_sold: int                         # every rise in our 20 slots' unit counters in the window
-    units_costed: int                       # of those, the units with a cost: from receipts, or an unsplit swap window (#112)
+    units_costed: int                       # of those, the units with an exact cost from receipts
     cost_of_sales_cents: Fraction           # of the costed units; 0 when nothing sold
     shrinkage_units: int                    # lost without a sale, written off or changed away
     shrinkage_cents: Fraction               # of the shrinkage whose cost is known
@@ -164,10 +236,15 @@ class Pnl:
     inventory_closet_cents: Fraction | None
     inventory_complete: bool
     notes: tuple[str, ...]
+    units_estimated: int = 0                # sold across a product change the counters can't split; not costed
+    estimated_cost_of_sales_cents: Fraction = Fraction(0)   # their estimate: in no profit figure (#172)
+    unattributed_stock_cents: Fraction = Fraction(0)        # stock those sales took: a reconciliation line
+    unattributed_stock_provisional: bool = False            # a write-off at the swap may be one of them
 
     @property
     def cost_of_sales_complete(self) -> bool:
-        return self.units_costed == self.units_sold
+        """Every unit sold has an exact cost. False while any is estimated or has no cost at all."""
+        return self.units_costed == self.units_sold and not self.units_estimated
 
     @property
     def revenue_ex_tax_cents(self) -> int:
@@ -194,11 +271,12 @@ class WeekPnl:
     """One week of a P&L window, Saturday to Friday in Eastern time, cut to the window.
 
     The same lines as `Pnl`, each booked to the week it happened in. The weeks
-    of a window add up to `pnl()` over the same window.
+    of a window add up to `pnl()` over the same window. A week's tax is its
+    share of the tax weeks' rounded tax (Sunday to Saturday; module docstring).
     """
     week: date                              # the Saturday the week began, Eastern time
     takings_cents: int
-    tax_cents: int
+    tax_cents: int                          # its share of the tax weeks' rounded tax
     units_sold: int
     units_costed: int
     cost_of_sales_cents: Fraction           # of the costed units
@@ -209,10 +287,14 @@ class WeekPnl:
     visits: int
     token_spend_cents: Fraction
     adjustments_cents: Fraction
+    units_estimated: int = 0
+    estimated_cost_of_sales_cents: Fraction = Fraction(0)   # in no profit figure, as in `Pnl`
+    unattributed_stock_cents: Fraction = Fraction(0)        # a reconciliation line, as in `Pnl`
+    unattributed_stock_provisional: bool = False
 
     @property
     def cost_of_sales_complete(self) -> bool:
-        return self.units_costed == self.units_sold
+        return self.units_costed == self.units_sold and not self.units_estimated
 
     @property
     def revenue_ex_tax_cents(self) -> int:
@@ -326,6 +408,359 @@ def opening(conn: psycopg.Connection) -> Entry | None:
     return found[0] if found else None
 
 
+# --- Resetting the test opening (#215) ---------------------------------------------
+
+# The one entry the reset may move: the test opening on the team ledger, exactly as it was recorded on
+# 11 Nov. Matching on all three, not on the word "test", means the real opening can never be moved,
+# whatever its detail says (Sol review, finding 1).
+TEST_OPENING_ID = 1
+TEST_OPENING_DATE = date(2026, 11, 11)                  # its date in Eastern time
+TEST_OPENING_DETAIL = "opening capital (test state, 11 Nov; to be reset before launch)"
+# The reset closes at the start of Mon 30 Nov, Eastern, when staff can stock the day-one fill. A reset
+# after that could put the real opening after the fill's receipt, which then falls out of stock and
+# spend (Sol review, finding 2). The real opening is recorded on Sun 29 Nov.
+RESET_CLOSES = datetime(2026, 11, 30, tzinfo=EASTERN)
+ARCHIVE_REASON = "test opening, reset before the real opening (#215)"
+# Taken first by every reset, so the guards are read and the row moved by one reset at a time.
+RESET_LOCK = "vending.ledger.reset_test_opening"
+
+
+@dataclass(frozen=True)
+class ResetPlan:
+    """What `reset_test_opening` would do: move `opening` to the archive, and nothing else.
+
+    The rest is what stays where it is and falls before a real opening recorded
+    at `now`, the plan's own clock (the runbook records it without `--at`): the
+    entries dated from the test opening to `now`, by kind (count, signed total),
+    and the receipt lines and midweek visits in that span (count, total paid).
+    `after_now` counts the entries and receipt lines dated after `now`: they
+    fall after an opening recorded then, so they are not in the lists (Sol
+    review of #222, round 4, finding 5).
+    """
+    opening: Entry
+    now: datetime
+    later_entries: dict[str, tuple[int, Fraction]]
+    receipts: tuple[int, Fraction]
+    visits: tuple[int, int]
+    after_now: int = 0
+
+
+def _eastern(moment: datetime) -> str:
+    return f"{moment.astimezone(EASTERN):%Y-%m-%d %H:%M} Eastern"
+
+
+def is_test_opening(opened: Entry | None) -> bool:
+    """True if `opened` is the 11 Nov test opening the reset moves (id, Eastern date and detail). Pure."""
+    return opened is not None and (opened.id, opened.at.astimezone(EASTERN).date(), opened.detail) == (
+        TEST_OPENING_ID, TEST_OPENING_DATE, TEST_OPENING_DETAIL)
+
+
+def real_opening(conn: psycopg.Connection) -> Entry | None:
+    """The ledger's opening, or None while there is none or it is the 11 Nov test opening.
+
+    The agent's notes carry over only from runs since this opening (`vending.agent.last_notes`)."""
+    opened = opening(conn)
+    return None if is_test_opening(opened) else opened
+
+
+def reset_refusal(opened: Entry | None, now: datetime, start: datetime | None = None, *,
+                  already: tuple[datetime, str] | None = None) -> str | None:
+    """Why the opening can't be reset, or None if it can. Pure.
+
+    `already` is (when, by whom) of a reset the archive records, if any. Every guard is needed:
+    the competition hasn't started (`vending.start.START`), the window hasn't closed
+    (`RESET_CLOSES`), there is an opening, no reset has been done, and the opening is the
+    11 Nov test opening: entry `TEST_OPENING_ID`, dated `TEST_OPENING_DATE` in Eastern time,
+    with the detail `TEST_OPENING_DETAIL` exactly. The reset runs once.
+    """
+    start = start or START
+    if now >= start:
+        return (f"the competition started at {_eastern(start)}, so the opening can't be reset now. "
+                "Nothing was changed")
+    if now >= RESET_CLOSES:
+        return (f"the reset window closed at {_eastern(RESET_CLOSES)} (Mon 30 Nov, when the day-one fill can be "
+                "stocked): an opening recorded now could fall after the fill's receipt. Nothing was changed. "
+                "See docs/ledger-reset.md, 'If the window closed'")
+    if already is not None:
+        when, who = already
+        return (f"the test opening was already reset ({_eastern(when)}, by {who}), so nothing else is moved. "
+                "Nothing was changed")
+    if opened is None:
+        return f"the ledger has no opening entry, so there is nothing to reset. {OPEN_HINT.split('. ', 1)[1]}"
+    if not is_test_opening(opened):
+        return (f"the opening (entry {opened.id}, {_eastern(opened.at)}, {opened.detail!r}) isn't the 11 Nov test "
+                f"opening (entry {TEST_OPENING_ID}, {TEST_OPENING_DATE.isoformat()}, {TEST_OPENING_DETAIL!r}), so it "
+                "may be the real one. Nothing was changed")
+    return None
+
+
+def _already_reset(conn: psycopg.Connection) -> tuple[datetime, str] | None:
+    """(when, by whom) of the first reset the archive records, or None."""
+    gone = archived(conn)
+    return None if not gone else (gone[0][1], gone[0][2])
+
+
+def plan_reset(conn: psycopg.Connection, now: datetime | None = None) -> ResetPlan:
+    """What the reset would change, read only. Raises `LedgerError` when it would refuse."""
+    now = now or db_now(conn)
+    opened = opening(conn)
+    why = reset_refusal(opened, now, already=_already_reset(conn))
+    if why:
+        raise LedgerError(why)
+    later: dict[str, tuple[int, Fraction]] = {}
+    after = 0
+    for e in entries(conn, opened.at):
+        if e.id == opened.id:
+            continue
+        if e.at > now:
+            after += 1
+            continue
+        count, total = later.get(e.kind, (0, Fraction(0)))
+        later[e.kind] = (count + 1, total + e.amount_cents)
+    lines = [line for line in stock.receipt_lines(conn) if line["at"] is not None and line["at"] >= opened.at]
+    paid = [stock.cents(line["total_paid"]) for line in lines if line["at"] <= now]
+    after += len(lines) - len(paid)
+    visits = _visit_rows(conn, opened.at, now)
+    return ResetPlan(opened, now, later, (len(paid), sum((p for p in paid if p is not None), Fraction(0))),
+                     (len(visits), sum(fee for _, fee in visits)), after)
+
+
+def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None = None) -> Entry:
+    """Move the test opening from `ledger_entries` to `ledger_entries_archive`, in one transaction, logged.
+
+    Only the opening moves. Model calls stay, and once the real opening is recorded after them they are
+    development spend (`_development`); receipts and visits before it are test purchases
+    (`stock.receipts_count_from`). The guards (`reset_refusal`) are read inside the transaction, after
+    `RESET_LOCK` and with the opening row locked, and the clock is read after the lock, so two people
+    running it at once can't both move something, and a reset that waited can't pass the window.
+
+    The clock is read again after the last write, inside the transaction. A write can wait on a lock that
+    another connection holds (`LOCK TABLE action_log`), and if 00:00 Eastern on Mon 30 Nov passes while it
+    waits, the reset raises the same "window closed" `LedgerError` and everything rolls back (Sol review,
+    round 2, finding 1). `now`, for tests, fixes both readings; without it both are the database clock (`db_now`).
+
+    The database checks the window again at commit (migration 022's deferred trigger on
+    `ledger_entries_archive`), because a pause after the last read could still commit after the cutoff (Sol
+    review, round 3, finding 1). That refusal is a `LedgerError` too.
+
+    The reset owns its transaction: on a connection already in one it refuses before reading anything, so no
+    caller can run it before midnight and commit after (or check the deferred trigger early with `SET
+    CONSTRAINTS ALL IMMEDIATE`) (Sol review, round 4, finding 1). On an idle connection it opens its own
+    transaction and commits it before it returns.
+    """
+    if not by.strip():
+        raise LedgerError("a reset needs the name of who ran it (--by)")
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        raise LedgerError("the reset runs in its own transaction, and this connection is already in one. "
+                          "Run it on a connection with no open transaction. Nothing was changed")
+    try:
+        with conn.transaction():
+            conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (RESET_LOCK,))
+            row = conn.execute("select id, at, kind, amount_cents, detail, reference, recorded_by from ledger_entries"
+                               " where kind = 'opening' for update").fetchone()
+            opened = None if row is None else Entry(row[0], row[1], row[2], Fraction(row[3]), row[4], row[5], row[6])
+            def clock() -> datetime:
+                return now if now is not None else db_now(conn)
+
+            why = reset_refusal(opened, clock(), already=_already_reset(conn))
+            if why:
+                raise LedgerError(why)
+            conn.execute(
+                "insert into ledger_entries_archive (id, at, kind, amount_cents, detail, reference, recorded_by,"
+                " recorded_at, archived_by, reason)"
+                " select id, at, kind, amount_cents, detail, reference, recorded_by, recorded_at, %s, %s"
+                " from ledger_entries where id = %s",
+                (by.strip(), ARCHIVE_REASON, opened.id))
+            conn.execute("delete from ledger_entries where id = %s", (opened.id,))
+            conn.execute(
+                "insert into action_log (kind, tool, arguments, outcome, detail) values ('write', %s, %s, 'done', %s)",
+                ("ledger.reset_test_opening", Jsonb({"entry": opened.id, "amount": money(opened.amount_cents),
+                                                     "at": opened.at.isoformat(), "detail": opened.detail}),
+                 f"test opening {money(opened.amount_cents)} of {opened.at.astimezone(EASTERN):%Y-%m-%d} (entry "
+                 f"{opened.id}) moved to "
+                 f"ledger_entries_archive by {by.strip()}"))
+            # After the last write: a write that waited past the window must not commit.
+            late = reset_refusal(opened, clock())
+            if late:
+                raise LedgerError(late)
+    except psycopg.errors.RaiseException as error:      # the database's check at commit
+        if "reset window closed" not in (error.diag.message_primary or ""):
+            raise
+        raise LedgerError(error.diag.message_primary) from None
+    return opened
+
+
+def archived(conn: psycopg.Connection) -> list[tuple[Entry, datetime, str]]:
+    """Entries taken out of the books: (entry, when archived, by whom), oldest first."""
+    if conn.execute("select to_regclass('ledger_entries_archive')").fetchone()[0] is None:
+        return []
+    return [(Entry(i, at, kind, Fraction(amount), detail, reference, by), when, who)
+            for i, at, kind, amount, detail, reference, by, when, who in conn.execute(
+                "select id, at, kind, amount_cents, detail, reference, recorded_by, archived_at, archived_by"
+                " from ledger_entries_archive order by archived_at, id")]
+
+
+# --- A safe time for a late opening (#215, docs/ledger-reset.md, "If the fill went in first") -------
+
+@dataclass(frozen=True)
+class SafeOpening:
+    """When a real opening recorded after the fill went in may be dated, read only.
+
+    It must be strictly after `lower`, the latest of the test period's records (`lower_what` names it), and
+    at or before `upper`, the earliest moment the fill counts from (`upper_what` names it): its
+    `submitted_at` to the minute, or one of its receipt lines or its visit, if earlier. `suggested` is the
+    next whole minute after `lower`, or `upper` itself when that minute is past it. None: no time works.
+    """
+    fill_id: str
+    fill_sent: datetime
+    fill_status: str
+    lower: datetime
+    lower_what: str
+    upper: datetime
+    upper_what: str
+    suggested: datetime | None
+
+
+def safe_opening(conn: psycopg.Connection, fill_id: str) -> SafeOpening:
+    """The interval a real opening must fall in when the fill request went in before it was recorded.
+
+    Each bound uses the clock its reader uses, by calling the reader's own code, so the choice can't drift
+    from the books (Sol review of #222, round 6):
+
+    - after the stored slot assignment's `first_read_at` (the 20 Nov redraw: notes before it never carry over);
+    - after every ledger entry: with no opening, every row in `ledger_entries` is test-period (`balance`
+      counts entries at or after the opening);
+    - after every test request's receipt lines on the receipt clock (`stock.receipt_lines`: door close,
+      else `resolved_at` where door times clash), and its visit fee on the visit clock (`visit_times`,
+      `fulfilled_at` for a visit with no lines);
+    - after every test request's `submitted_at` (Key dates takes the first request since the opening as
+      the fill);
+    - at or before the fill's own `submitted_at`, and at or before each of the fill's receipt lines on the
+      receipt clock and its visit on the visit clock: a receipt timed by door close counts from the
+      minute (14:00:00 for a request sent at 14:00:35), and one before the opening would drop out of
+      stock and spend (final check of #222, finding 2). Door times are to the minute, so a fill not
+      stocked yet may still get a door close at the minute it was sent: the bound is that minute.
+
+    A test request is any other request sent at or before the fill. Raises `LedgerError`, changing
+    nothing, while one of them is still pending or a submission is unresolved (its receipt could come
+    later), when the ledger already has an opening, or when the fill can't be the fill.
+    """
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        return _safe_opening(conn, fill_id)
+    with conn.transaction():
+        conn.execute("set transaction isolation level repeatable read, read only")
+        return _safe_opening(conn, fill_id)
+
+
+def _safe_opening(conn: psycopg.Connection, fill_id: str) -> SafeOpening:
+    opened = opening(conn)
+    if is_test_opening(opened):
+        raise LedgerError("The 11 Nov test opening is still the opening: the reset (step 3) never ran. "
+                          "Don't record an opening; ask the team (docs/ledger-reset.md, \"Step 3 never ran\").")
+    if opened is not None:
+        raise LedgerError(f"The ledger already has an opening, at {_eastern(opened.at)}. This command only picks "
+                          "a time for one that isn't recorded yet. Check Key dates and python -m vending.ledger show.")
+    row = conn.execute("select submitted_at, status from purchase_requests where request_id = %s",
+                       (fill_id,)).fetchone()
+    if row is None:
+        raise LedgerError(f"No purchase request {fill_id}. Give the fill's request ID, as purchase_requests "
+                          "stores it.")
+    fill_sent, fill_status = row
+    if fill_status == "rejected":
+        raise LedgerError(f"Request {fill_id} was rejected, so it isn't the fill. Ask the team.")
+    if fill_sent >= START:
+        raise LedgerError(f"Request {fill_id} was sent {_eastern(fill_sent)}, at or after the start: a restock, "
+                          "not the fill. Ask the team.")
+    redraw = assigned_at(conn)
+    if redraw is None:
+        raise LedgerError("No slot assignment is stored, so the redraw's time is unknown. "
+                          "Run python -m vending.slots record first.")
+    unresolved = conn.execute(
+        "select id from purchase_submissions where status in ('sending', 'unknown') and at <= %s order by at, id",
+        (fill_sent,)).fetchall()
+    if unresolved:
+        raise LedgerError(f"Resolve or wait for submission {unresolved[0][0]} first: it may be a request we can't "
+                          "see yet (python -m vending.submissions resolve). Then run this again.")
+    tests = conn.execute(
+        "select request_id, submitted_at, status from purchase_requests where request_id <> %s and submitted_at <= %s"
+        " order by submitted_at, request_id", (fill_id, fill_sent)).fetchall()
+    pending = [request_id for request_id, _, status in tests if status == "pending"]
+    if pending:
+        raise LedgerError(f"Resolve or wait for request {pending[0]} first: it is a test-period request still "
+                          "pending, so its receipt could land later. Then run this again.")
+    test_ids = {request_id for request_id, _, _ in tests}
+    bounds = [(redraw, "our slot assignment first read (slot_assignment.first_read_at)")]
+    bounds += [(sent, f"request {request_id} sent") for request_id, sent, _ in tests]
+    bounds += [(e.at, f"ledger entry {e.id} ({e.kind}, {money(e.amount_cents)}): {e.detail}") for e in entries(conn)]
+    lines = stock.receipt_lines(conn)
+    bounds += [(line["at"], f"receipt line {line['line_no']} of request {line['request_id']}") for line in lines
+               if line["request_id"] in test_ids and line["at"] is not None]
+    bounds += [(at, f"midweek visit fee of request {request_id}") for request_id, at, _ in visit_times(conn, lines)
+               if request_id in test_ids and at is not None]
+    lower, lower_what = max(bounds, key=lambda bound: bound[0])
+    # Receipt and visit first, so a tie names the receipt the cap protects.
+    caps = [(line["at"], f"receipt line {line['line_no']} of request {fill_id}") for line in lines
+            if line["request_id"] == fill_id and line["at"] is not None]
+    caps += [(at, f"visit of request {fill_id}") for request_id, at, _ in visit_times(conn, lines)
+             if request_id == fill_id and at is not None]
+    caps.append((fill_sent, f"request {fill_id} sent"))
+    if fill_sent.second or fill_sent.microsecond:
+        caps.append((fill_sent.replace(second=0, microsecond=0),
+                     f"the minute request {fill_id} was sent (door times are to the minute)"))
+    upper, upper_what = min(caps, key=lambda cap: cap[0])
+    suggested = lower.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    if suggested > upper:
+        suggested = upper if lower < upper else None
+    return SafeOpening(fill_id, fill_sent, fill_status, lower, lower_what, upper, upper_what, suggested)
+
+
+# The model-call harness's advisory lock (`vending.harness.LOCK_KEY`, not imported: the harness imports
+# this module). `recover_opening` takes it so a call whose worst case is being written finishes first.
+HARNESS_LOCK = 0x76656E64
+RECOVER_LOCK_TIMEOUT = "30s"
+# Every table a bound of `safe_opening` is read from that a writer can add to while the opening is worked
+# out: model calls and other entries, requests and their receipts (the sync writes both in one
+# transaction), and submissions. Share row exclusive waits for open writes and holds new ones until the
+# opening commits. The order (submissions, then requests, then lines) is the order the writers take them.
+RECOVER_TABLES = "purchase_submissions, purchase_requests, purchase_lines, ledger_entries"
+
+
+def recover_opening(conn: psycopg.Connection, fill_id: str, by: str, amount_cents: Fraction | int = 60000,
+                    detail: str = "opening capital") -> tuple[SafeOpening, Entry]:
+    """Work out `safe_opening` again and record the opening at its suggested time, in one transaction.
+
+    The interval is read after locking every table it is read from (`RECOVER_TABLES`) and the harness's
+    lock, so a model call, receipt or request recorded after a `safe-opening` preview is counted, and none
+    can be written between the reading and the opening (final check of #222, finding 1). Raises
+    `LedgerError`, recording nothing, when `safe_opening` refuses or no time works. Like the reset, it owns
+    its transaction: on a connection already in one it refuses.
+    """
+    if not by.strip():
+        raise LedgerError("an opening needs the name of who recorded it (--by)")
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        raise LedgerError("the recovery runs in its own transaction, and this connection is already in one. "
+                          "Run it on a connection with no open transaction. Nothing was recorded")
+    with conn.transaction():
+        conn.execute(f"set local lock_timeout = '{RECOVER_LOCK_TIMEOUT}'")
+        conn.execute("select pg_advisory_xact_lock(%s)", (HARNESS_LOCK,))
+        conn.execute(f"lock table {RECOVER_TABLES} in share row exclusive mode")
+        s = _safe_opening(conn, fill_id)
+        if s.suggested is None:
+            raise LedgerError(_no_time(s))
+        entry = record(conn, "opening", amount_cents, detail, by, s.suggested)
+    return s, entry
+
+
+def _no_time(s: SafeOpening) -> str:
+    return (f"No time works: the latest test-period record ({s.lower_what}, {_at(s.lower)}) is at or after the "
+            f"earliest moment the fill counts from ({s.upper_what}, {_at(s.upper)}). Don't record the opening. "
+            "Ask the team. Nothing was recorded")
+
+
+def _at(moment: datetime) -> str:
+    return f"{moment.astimezone(EASTERN):%a %d %b %Y %H:%M:%S} Eastern"
+
+
 def _development(e: Entry, opened: Entry | None) -> bool:
     """A model call before the opening, or before any opening: development spend, not from the $600 (#104)."""
     return e.kind == "tokens" and (opened is None or e.at < opened.at)
@@ -351,10 +786,21 @@ def rises_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, un
     The baseline is the last poll at or before `since` (or the first one after,
     with a note), so the rises counted are those at polls after `since` and at
     or before `until`. Returns (baseline poll, last poll counted, rises, note).
+
+    The counters are walked over every row first, and only then cut to the
+    window, as the stock replay walks them: a reading just before `since` that
+    the history shows is a misread or a restart reads the same from any window,
+    so the units counted here are the units the replay costs (#172).
+
+    Every time is read as a UTC instant: Python compares two datetimes in the
+    same ZoneInfo by wall clock, ignoring `fold`, so the two 01:30 polls of a
+    fall-back night would otherwise be one key and cut as one. The polls
+    returned are in UTC.
     """
+    since, until = since.astimezone(timezone.utc), until.astimezone(timezone.utc)
     by_poll: dict[datetime, dict[str, int]] = defaultdict(dict)
     for at, selection, value in rows:
-        by_poll[at][selection] = value
+        by_poll[at.astimezone(timezone.utc)][selection] = value
     times = sorted(t for t in by_poll if t <= until)
     if not times:
         return None, None, [], "no polls in the window, so takings are unknown and counted as 0"
@@ -367,14 +813,45 @@ def rises_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, un
         note = f"no poll at or before {since.isoformat()}, so takings start at the first poll after it"
     series: dict[str, list[tuple[datetime, int]]] = defaultdict(list)
     for t in times:
-        if t >= baseline:
-            for selection, value in by_poll[t].items():
-                series[selection].append((t, value))
+        for selection, value in by_poll[t].items():
+            series[selection].append((t, value))
     out = [Rise(at, selection, amount)
            for selection, readings in series.items()
-           for at, amount in counters.rises(readings)]
+           for at, amount in counters.rises(readings) if at > baseline]
     out.sort(key=lambda r: (r.at, r.selection))
     return baseline, times[-1], out, note
+
+
+def opening_rises(rows: Iterable[tuple[datetime, str, int]], opened_at: datetime, until: datetime
+                  ) -> tuple[datetime | None, datetime | None, list[Rise], str | None]:
+    """The opening baseline: every rise in a counter from the ledger's opening to `until`, as
+    `rises_between` reads it. One rule for the balance (`balance`) and the money chart's cash and tax
+    owed (`vending.money_series`), so they agree. The counter is read over its whole history first,
+    so a misread just before the opening is not the baseline: cents 25000 -> 24000 | opening | 25250
+    took 250 cents since the opening, not 1250 (#172 review round 2).
+    """
+    return rises_between(rows, opened_at, until)
+
+
+def poll_start(start: datetime, opened_at: datetime | None) -> datetime:
+    """Where the poll figures of a window that starts at `start` count from: the `since` of `rises_between`.
+
+    The polls' figures (takings and their tax, units sold, cost of sales and
+    shrinkage) count the rises at polls after `since`, so a window that starts
+    after the opening counts from one microsecond before `start`: a poll at that
+    midnight sharp is in the window (a tax week's Sunday 00:00 poll, say), and
+    the day before, which ends a microsecond before it, doesn't take it too. A
+    window from the opening keeps the opening's poll as the baseline, so sales
+    before the opening are not counted. A window that starts before the
+    opening, or with no opening recorded, starts at `start`, as it always has:
+    the midnight rule is for the competition's tax weeks, and pre-opening
+    figures (development spend among them) stay as they were. Entries,
+    receipts and visits count from `start` itself, inclusive: never shifted.
+    One rule for `get_pnl`, the printable P&L and the money series.
+    """
+    if opened_at is not None and start > opened_at:
+        return start - timedelta(microseconds=1)
+    return start
 
 
 def week_of(moment_local: datetime, week_starts: int = WEEK_STARTS) -> date:
@@ -382,20 +859,51 @@ def week_of(moment_local: datetime, week_starts: int = WEEK_STARTS) -> date:
     return moment_local.date() - timedelta(days=(moment_local.weekday() - week_starts) % 7)
 
 
+def tax_week_of(moment_local: datetime) -> date:
+    """The Sunday the tax week holding `moment_local` began (an Eastern wall clock, so daylight saving
+    is already in it): Sunday 00:00 to Saturday 23:59:59.999999, as David calculates the tax."""
+    return week_of(moment_local, TAX_WEEK_STARTS)
+
+
+def tax_week_end(week: date, tz: tzinfo | None = None) -> datetime:
+    """The last moment of the tax week that began on Sunday `week`: the next Sunday's midnight less a
+    microsecond, in `tz` (Eastern by default)."""
+    tz = tz or ZoneInfo(TIMEZONE)
+    return datetime.combine(week + timedelta(days=7), datetime.min.time(), tz) - timedelta(microseconds=1)
+
+
 def takings_between(rows: Iterable[tuple[datetime, str, int]], since: datetime, until: datetime,
                     tz: tzinfo, week_starts: int = WEEK_STARTS,
                     tax_percent: int = DEFAULT_TAX_PERCENT) -> Takings:
     """Takings and the tax inside them from `(polled_at, selection, lifetime_sales_cents)` rows. Pure.
 
-    Each rise in a slot's counter is booked to the week of the poll that showed
-    it. Tax is rounded per week, then summed.
+    Each rise in a slot's counter is booked to the weeks of the poll that showed
+    it. Tax is rounded per tax week (Sunday to Saturday), then summed. `by_week`
+    groups the same rises into `week_starts` weeks, each with its share of that
+    tax (see the module docstring).
     """
-    baseline, last, rises, note = rises_between(rows, since, until)
+    return _takings(rises_between(rows, since, until), tz, week_starts, tax_percent)
+
+
+def _takings(read: tuple[datetime | None, datetime | None, list[Rise], str | None], tz: tzinfo,
+             week_starts: int = WEEK_STARTS, tax_percent: int = DEFAULT_TAX_PERCENT) -> Takings:
+    """`takings_between` from rises already read: (baseline poll, last poll, rises, note)."""
+    baseline, last, rises, note = read
+    tax_weeks: dict[date, int] = defaultdict(int)
     weeks: dict[date, int] = defaultdict(int)
-    for r in rises:
-        weeks[week_of(r.at.astimezone(tz), week_starts)] += r.amount
-    by_week = tuple(WeekTakings(week, cents, tax_cents(cents, tax_percent)) for week, cents in sorted(weeks.items()))
-    return Takings(baseline, last, sum(w.takings_cents for w in by_week), sum(w.tax_cents for w in by_week), by_week, note)
+    shares: dict[date, int] = defaultdict(int)
+    for r in sorted(rises, key=lambda r: (r.at, r.selection)):
+        local = r.at.astimezone(tz)
+        tax_week, week = tax_week_of(local), week_of(local, week_starts)
+        before = tax_weeks[tax_week]
+        tax_weeks[tax_week] += r.amount
+        weeks[week] += r.amount
+        # What this rise adds to its tax week's rounded tax, so the display weeks add up to the tax weeks.
+        shares[week] += tax_cents(tax_weeks[tax_week], tax_percent) - tax_cents(before, tax_percent)
+    by_tax_week = tuple(WeekTakings(w, cents, tax_cents(cents, tax_percent)) for w, cents in sorted(tax_weeks.items()))
+    by_week = tuple(WeekTakings(w, cents, shares[w]) for w, cents in sorted(weeks.items()))
+    return Takings(baseline, last, sum(w.takings_cents for w in by_tax_week), sum(w.tax_cents for w in by_tax_week),
+                   by_week, note, by_tax_week)
 
 
 def _counter_rows(conn: psycopg.Connection, column: str, until: datetime) -> list[tuple[datetime, str, int]]:
@@ -444,7 +952,9 @@ def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance 
     if as_of is None:
         as_of = db_now(conn)
     notes: list[str] = []
-    sold = takings(conn, start.at, as_of)
+    # The opening baseline, the same rule as the money chart's cash (`opening_rises`).
+    sold = _takings(opening_rises(_counter_rows(conn, "lifetime_sales_cents", as_of), start.at, as_of),
+                    ZoneInfo(TIMEZONE))
     if sold.note:
         notes.append(sold.note)
     receipts, lines, missing = _receipts(conn, start.at, as_of)
@@ -464,26 +974,81 @@ def balance(conn: psycopg.Connection, as_of: datetime | None = None) -> Balance 
                      "re-date them or record them as a capital entry or adjustment if they belong in it")
     return Balance(as_of, start.at, start.amount_cents, _sum(recorded, "capital"), sold, receipts, lines, fees, visits,
                    -_sum(recorded, "tokens"), -_sum(recorded, "tax_remitted"), _sum(recorded, "adjustment"),
-                   tuple(notes))
+                   tuple(notes), receipts_missing=missing)
 
 
-def _has_cost(s: stock.SaleCost) -> bool:
-    """Whether a sale's cost is in cost of sales: from its receipts, or kept from an unsplit product change."""
-    return s.cost_cents is not None or s.unattributed_cost_cents is not None
+@dataclass(frozen=True)
+class SalesCost:
+    """What some sales cost: exactly, and apart from that, as an estimate (`summarize_sales`)."""
+    units_costed: int
+    cost_of_sales_cents: Fraction
+    units_estimated: int
+    estimated_cost_of_sales_cents: Fraction
+    unattributed_stock_cents: Fraction = Fraction(0)
+    unattributed_stock_provisional: bool = False
+    unattributed_stock_known: bool = False     # some debit's cost is known, $0.00 included
 
 
-def _sale_cost(s: stock.SaleCost) -> Fraction:
-    """What a sale adds to cost of sales: its known cost, or the cost an unsplit window took (#112)."""
-    return s.cost_cents if s.cost_cents is not None else (s.unattributed_cost_cents or Fraction(0))
+def summarize_sales(sales: Iterable[stock.SaleCost]) -> SalesCost:
+    """The cost of sales the P&L, its weeks and the money series all count, by one rule.
+
+    Exact: the sales with a `cost_cents`, their `costed_units` and cost. Estimated:
+    the sales with no exact cost but an `estimated_cost_cents` (an unsplit product
+    change, #172 item 5), all their units. Those are never in the exact figures, so
+    cost of sales is incomplete while there are any. Unattributed stock: what
+    sales of unknown product took out of the count (`unattributed_cost_cents`),
+    the reconciliation line that keeps the books whole; provisional if a write-off
+    at the same change may be one of those sales.
+    """
+    sales = list(sales)
+    exact = [s for s in sales if s.cost_cents is not None]
+    guessed = [s for s in sales if s.cost_cents is None and s.estimated_cost_cents is not None]
+    taken = [s for s in sales if s.cost_cents is None and s.unattributed_cost_cents is not None]
+    return SalesCost(sum(s.costed_units for s in exact), sum((s.cost_cents for s in exact), Fraction(0)),
+                     sum(s.units for s in guessed), sum((s.estimated_cost_cents for s in guessed), Fraction(0)),
+                     sum((s.unattributed_cost_cents for s in taken), Fraction(0)),
+                     # Whether or not the debit's cost is known (#172 review round 2).
+                     any(s.may_be_written_off for s in sales if s.cost_cents is None),
+                     bool(taken))
 
 
-def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
-    """Profit and loss between two moments, with inventory at cost as of `end`."""
+def sales_cost_notes(units_sold: int, cost: SalesCost, what: str) -> list[str]:
+    """Notes on the units sold whose cost isn't exact; `what` names the figures that leave it out."""
+    notes = []
+    if cost.units_estimated:
+        notes.append(f"{cost.units_estimated} of {units_sold} units sold across a product change the counters "
+                     f"can't split, so which product sold is unknown; {what} leave their cost out. It is estimated "
+                     f"apart at {money(cost.estimated_cost_of_sales_cents)} (the midpoint of the two products' "
+                     "costs); the estimate is in no profit figure")
+    unknown = units_sold - cost.units_costed - cost.units_estimated
+    if unknown > 0:
+        notes.append(f"{unknown} of {units_sold} units sold have no known cost (sold from a slot before we first "
+                     "loaded it, past what we loaded, or across a product change with no estimate), "
+                     f"so {what} leave their cost out")
+    if cost.unattributed_stock_known:
+        notes.append(f"{money(cost.unattributed_stock_cents)} of stock at cost left the count with sales of unknown "
+                     "product: a reconciliation line, in no cost, estimate or profit, by which net worth falls"
+                     + ("; provisional, since units written off at the same swap may be some of those sales"
+                        if cost.unattributed_stock_provisional else ""))
+    elif cost.unattributed_stock_provisional:
+        notes.append("units written off at a swap that sales of unknown product span may be some of those sales, "
+                     "so that shrinkage is provisional")
+    return notes
+
+
+def pnl(conn: psycopg.Connection, start: datetime, end: datetime, polls_since: datetime | None = None) -> Pnl:
+    """Profit and loss between two moments, with inventory at cost as of `end`.
+
+    Entries, receipts and visits count from `start`, inclusive. The polls'
+    figures count the rises at polls after `polls_since` (default `start`; a
+    calendar window passes `poll_start(start, opening)`).
+    """
+    since = start if polls_since is None else polls_since
     notes: list[str] = []
-    sold = takings(conn, start, end)
+    sold = takings(conn, since, end)
     if sold.note:
         notes.append(sold.note)
-    units = units_sold(conn, start, end)
+    units = units_sold(conn, since, end)
     receipts, _, missing = _receipts(conn, start, end)
     if missing:
         notes.append(f"{missing} receipt lines have no total_paid, so purchases and cost of sales leave them out")
@@ -501,26 +1066,15 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
                      "$600, and token spend and net leave it out")
 
     counted = stock.stock(conn, until=end)
-    # A rise is booked to the later poll, so the window's sales are the rises at polls after `start`.
-    sales = [s for s in counted.sales if start < s.at <= end]
-    # Sold across a product change the counters can't split: costed at the new product's oldest units (#112).
-    # They count as costed, since their cost is in cost of sales; the note says the product may be wrong.
-    guessed = sum(s.costed_units for s in sales if s.unattributed_cost_cents is not None)
-    units_costed = sum(s.costed_units for s in sales if _has_cost(s))
-    cost = sum((_sale_cost(s) for s in sales), Fraction(0))
+    # A rise is booked to the later poll, so the window's sales are the rises at polls after `since`.
+    sales = [s for s in counted.sales if since < s.at <= end]
+    cost = summarize_sales(sales)
     if not units:
         notes.append("no sales in the window")
-    else:
-        if guessed:
-            notes.append(f"{guessed} of {units} units sold across a product change the counters can't split; "
-                         "cost of sales includes them at the cost of the new product's oldest units, which may be the wrong "
-                         "product's")
-        if units_costed < units:
-            notes.append(f"{units - units_costed} of {units} units sold have no known cost (sold from a slot before "
-                         "we first loaded it, or past what we loaded), so cost of sales and margin leave their cost out")
+    notes += sales_cost_notes(units, cost, "cost of sales and margin")
     if sold.cents and not counted.slots:
         notes.append("the machine sold units but no receipts are stored, so nothing can be costed yet")
-    lost = [s for s in counted.shrinkage if start < s.at <= end]
+    lost = [s for s in counted.shrinkage if since < s.at <= end]
     shrinkage = sum((s.cost_cents for s in lost if s.cost_cents is not None), Fraction(0))
     shrinkage_complete = all(s.cost_cents is not None for s in lost)
     if not shrinkage_complete:
@@ -528,40 +1082,43 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime) -> Pnl:
     machine, closet, inventory_complete = _inventory(counted)
     if not inventory_complete:
         notes.append("some units on hand have no known cost, so inventory at cost leaves them out")
-    return Pnl(start, end, sold, units, units_costed, cost, sum(s.units for s in lost), shrinkage, shrinkage_complete,
-               receipts, fees, visits, -_sum(recorded, "tokens"), _sum(recorded, "adjustment"),
-               _sum(recorded, "capital"), -_sum(recorded, "tax_remitted"),
-               machine, closet, inventory_complete, tuple(notes))
+    return Pnl(start, end, sold, units, cost.units_costed, cost.cost_of_sales_cents, sum(s.units for s in lost),
+               shrinkage, shrinkage_complete, receipts, fees, visits, -_sum(recorded, "tokens"),
+               _sum(recorded, "adjustment"), _sum(recorded, "capital"), -_sum(recorded, "tax_remitted"),
+               machine, closet, inventory_complete, tuple(notes),
+               cost.units_estimated, cost.estimated_cost_of_sales_cents,
+               cost.unattributed_stock_cents, cost.unattributed_stock_provisional)
 
 
-def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> list[WeekPnl]:
+def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime,
+                polls_since: datetime | None = None) -> list[WeekPnl]:
     """`pnl()` split into weeks: one row for every week the window touches, quiet weeks included.
 
     Each line is booked to the week of the moment it happened, read the same
-    way `pnl()` reads it, so each column of the weeks sums to `pnl()`'s figure.
+    way `pnl()` reads it, so each column of the weeks sums to `pnl()`'s figure
+    over the same `start`, `end` and `polls_since`. The weeks are those from
+    `start`'s week, the true start, whatever `polls_since` is.
     """
     tz = ZoneInfo(TIMEZONE)
+    since = start if polls_since is None else polls_since
 
     def week(moment: datetime) -> date:
         return week_of(moment.astimezone(tz))
 
-    sold = {w.week: w for w in takings(conn, start, end).by_week}
+    sold = {w.week: w for w in takings(conn, since, end).by_week}
     units: dict[date, int] = defaultdict(int)
-    for r in rises_between(_counter_rows(conn, "lifetime_units", end), start, end)[2]:
+    for r in rises_between(_counter_rows(conn, "lifetime_units", end), since, end)[2]:
         units[week(r.at)] += r.amount
     counted = stock.stock(conn, until=end)
-    costed: dict[date, int] = defaultdict(int)
-    cost: dict[date, Fraction] = defaultdict(Fraction)
+    weeks_sales: dict[date, list[stock.SaleCost]] = defaultdict(list)
     for s in counted.sales:
-        if start < s.at <= end:
-            if _has_cost(s):
-                costed[week(s.at)] += s.costed_units
-            cost[week(s.at)] += _sale_cost(s)
+        if since < s.at <= end:
+            weeks_sales[week(s.at)].append(s)
     lost_units: dict[date, int] = defaultdict(int)
     lost_cost: dict[date, Fraction] = defaultdict(Fraction)
     lost_unknown: set[date] = set()
     for s in counted.shrinkage:
-        if start < s.at <= end:
+        if since < s.at <= end:
             lost_units[week(s.at)] += s.units
             if s.cost_cents is None:
                 lost_unknown.add(week(s.at))
@@ -587,9 +1144,12 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
     day, last = week(start), week(end)
     while day <= last:
         w = sold.get(day)
-        out.append(WeekPnl(day, w.takings_cents if w else 0, w.tax_cents if w else 0, units[day], costed[day],
-                           cost[day], lost_units[day], lost_cost[day], day not in lost_unknown, fees[day],
-                           visits[day], tokens[day], adjustments[day]))
+        cost = summarize_sales(weeks_sales[day])
+        out.append(WeekPnl(day, w.takings_cents if w else 0, w.tax_cents if w else 0, units[day], cost.units_costed,
+                           cost.cost_of_sales_cents, lost_units[day], lost_cost[day], day not in lost_unknown,
+                           fees[day], visits[day], tokens[day], adjustments[day],
+                           cost.units_estimated, cost.estimated_cost_of_sales_cents,
+                           cost.unattributed_stock_cents, cost.unattributed_stock_provisional))
         day += timedelta(days=7)
     return out
 
@@ -626,19 +1186,24 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
     visit timed before the opening brought test purchases and its fee is left
     out (`stock.receipts_count_from`).
     """
+    lo = stock.receipts_count_from(conn, start)
+    rows = [(at, cents) for _, at, cents in visit_times(conn) if at is not None and lo <= at <= end]
+    return sorted(rows, key=lambda row: row[0])
+
+
+def visit_times(conn: psycopg.Connection, lines: list[dict] | None = None) -> list[tuple[str, datetime | None, int]]:
+    """(request_id, when, fee) for every fulfilled off-cycle request, on the visit clock `_visit_rows` uses.
+
+    When is the request's first line on the receipt clock (`stock.request_times`), or its `fulfilled_at`
+    with no lines; None when it has neither, and then no window counts it. `lines` is
+    `stock.receipt_lines(conn)` when the caller has read it already."""
     fee = config.get_value(conn, "midweek_fee_cents", DEFAULT_MIDWEEK_FEE_CENTS)
     if not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
         fee = DEFAULT_MIDWEEK_FEE_CENTS
-    times = stock.request_times(stock.receipt_lines(conn))
-    lo = stock.receipts_count_from(conn, start)
-    rows = []
-    for request_id, fulfilled_at, cents in conn.execute(
-            "select request_id, fulfilled_at, coalesce(visit_fee_cents, %s) from purchase_requests"
-            " where off_cycle and status = 'fulfilled'", (fee,)):
-        at = times.get(request_id, fulfilled_at)
-        if at is not None and lo <= at <= end:
-            rows.append((at, int(cents)))
-    return sorted(rows, key=lambda row: row[0])
+    times = stock.request_times(stock.receipt_lines(conn) if lines is None else lines)
+    return [(request_id, times.get(request_id, fulfilled_at), int(cents)) for request_id, fulfilled_at, cents in
+            conn.execute("select request_id, fulfilled_at, coalesce(visit_fee_cents, %s) from purchase_requests"
+                         " where off_cycle and status = 'fulfilled' order by request_id", (fee,))]
 
 
 def _inventory(counted: stock.Stock) -> tuple[Fraction | None, Fraction | None, bool]:
@@ -679,10 +1244,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vending.ledger", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="action", required=True)
     opener = sub.add_parser("open", help="record the opening capital, once")
-    opener.add_argument("--amount", required=True, help="dollars, such as 600.00")
+    opener.add_argument("--amount", help="dollars, such as 600.00 (with --recover, default 600.00)")
     opener.add_argument("--by", required=True, help="your name, for the log")
     opener.add_argument("--at", type=datetime.fromisoformat, help="when the run started (ISO 8601; default now)")
     opener.add_argument("--detail", default="opening capital", help="default: opening capital")
+    opener.add_argument("--recover", action="store_true",
+                        help="the fill went in first: work out the time and record the opening in one step "
+                             "(docs/ledger-reset.md); a preview unless --yes")
+    opener.add_argument("--fill", metavar="REQUEST_ID", help="with --recover: the fill's request ID")
+    opener.add_argument("--yes", action="store_true", help="with --recover: record it; without, only preview")
     capital = sub.add_parser("capital", help="record a top-up after the opening (not profit)")
     capital.add_argument("--amount", required=True, help="dollars, such as 100.00")
     capital.add_argument("--detail", required=True, help="where it came from, in a sentence")
@@ -708,9 +1278,28 @@ def main(argv: list[str] | None = None) -> int:
     adjust.add_argument("--by", required=True)
     adjust.add_argument("--reference")
     adjust.add_argument("--at", type=datetime.fromisoformat)
+    reset = sub.add_parser("reset-test-opening",
+                           help="move the test opening out of the books before the real one (#215); a dry run "
+                                "unless --yes")
+    reset.add_argument("--by", required=True, help="your name, for the log")
+    reset.add_argument("--yes", action="store_true", help="make the change; without it, only say what would change")
+    safe = sub.add_parser("safe-opening",
+                          help="read only: when a late real opening may be dated, if the fill went in first "
+                               "(docs/ledger-reset.md)")
+    safe.add_argument("--fill", required=True, metavar="REQUEST_ID", help="the fill's request ID")
     sub.add_parser("show", help="the balance now")
-    sub.add_parser("entries", help="every entry, oldest first")
+    sub.add_parser("entries", help="every entry, oldest first, then any archived ones")
     args = parser.parse_args(argv)
+    if args.action == "open":
+        if args.recover:
+            if not args.fill:
+                parser.error("open --recover needs --fill REQUEST_ID")
+            if args.at is not None:
+                parser.error("open --recover works out the time itself: leave out --at")
+        elif args.amount is None:
+            parser.error("open needs --amount, such as 600.00")
+        elif args.fill or args.yes:
+            parser.error("--fill and --yes go with --recover")
 
     with db.connect() as conn:
         behind = db.pending(conn)
@@ -720,7 +1309,9 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 2
         try:
-            if args.action == "open":
+            if args.action == "open" and args.recover:
+                return _recover(conn, args.fill, args.by, args.amount or "600.00", args.detail, args.yes)
+            elif args.action == "open":
                 entry = record(conn, "opening", dollars_to_cents(args.amount), args.detail, args.by,
                                _aware(args.at))
                 print(f"Opened with {money(entry.amount_cents)} at {entry.at.isoformat()}, recorded by {entry.recorded_by}.")
@@ -739,12 +1330,20 @@ def main(argv: list[str] | None = None) -> int:
                 entry = record(conn, "adjustment", dollars_to_cents(args.amount), args.detail, args.by,
                                _aware(args.at), args.reference)
                 print(f"Adjusted by {money(entry.amount_cents)}: {entry.detail}.")
+            elif args.action == "reset-test-opening":
+                return _reset(conn, args.by, args.yes)
+            elif args.action == "safe-opening":
+                return _safe(conn, args.fill)
             elif args.action == "show":
                 return _show(conn)
             else:
                 for e in entries(conn):
-                    print(f"{e.id:>4}  {e.at:%Y-%m-%d %H:%M}  {e.kind:12}  {money(e.amount_cents):>10}  {e.detail}"
-                          + (f"  [{e.reference}]" if e.reference else "") + f"  by {e.recorded_by}")
+                    print(_entry_line(e))
+                gone = archived(conn)
+                if gone:
+                    print("Archived, not in the books:")
+                    for e, when, who in gone:
+                        print(f"{_entry_line(e)}  (archived {_eastern(when)} by {who})")
                 return 0
         except (LedgerError, SlotsNotRecorded) as error:
             # SlotsNotRecorded: the balance counts our slots' sales, so `show` needs the assignment
@@ -759,13 +1358,104 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _entry_line(e: Entry) -> str:
+    """One entry for `entries` and the reset: its time in Eastern, like every date the CLI prints."""
+    return (f"{e.id:>4}  {e.at.astimezone(EASTERN):%Y-%m-%d %H:%M}  {e.kind:12}  {money(e.amount_cents):>10}  {e.detail}"
+            + (f"  [{e.reference}]" if e.reference else "") + f"  by {e.recorded_by}")
+
+
+def _reset(conn: psycopg.Connection, by: str, yes: bool) -> int:
+    """`reset-test-opening`: say what would change, then change it only with --yes. Times shown in Eastern."""
+    plan = plan_reset(conn)         # LedgerError when it would refuse; main prints it
+    o = plan.opening
+    since = f"{o.at.astimezone(EASTERN):%Y-%m-%d}"
+    if not yes:
+        print("Dry run: nothing was changed. With --yes this moves one entry out of the books, into "
+              "ledger_entries_archive:")
+    else:
+        reset_test_opening(conn, by)
+        print("Moved one entry out of the books, into ledger_entries_archive:")
+    print(f"  {_entry_line(o)}")
+    print(f"Nothing else moves. Record the real opening now (step 4, without --at), and these, dated from {since} "
+          f"to {_eastern(plan.now)}, fall before it:")
+    tokens = plan.later_entries.get("tokens")
+    print(f"  model calls since {since}: {tokens[0] if tokens else 0} entries, "
+          f"{money(-tokens[1] if tokens else 0)} spent. Development spend: on the dev-spend page, not in the balance")
+    print(f"  receipts since {since}: {plan.receipts[0]} lines, {money(plan.receipts[1])} paid. "
+          "Test purchases: not in the balance, the P&L or stock")
+    print(f"  midweek visits since {since}: {plan.visits[0]}, {money(plan.visits[1])} in fees. "
+          "Not in the balance or the P&L")
+    for kind, (count, total) in sorted(plan.later_entries.items()):
+        if kind != "tokens":
+            print(f"  {kind} entries since {since}: {count}, {money(total)}. Not in the balance; "
+                  "`ledger show` names them. Re-record any that belong in the competition books")
+    if plan.after_now:
+        one = plan.after_now == 1
+        print(f"  {plan.after_now} {'entry or receipt line is' if one else 'entries or receipt lines are'} dated "
+              f"after {_eastern(plan.now)}, so {'it falls' if one else 'they fall'} after an opening recorded now "
+              "and still count. Not listed above")
+    if yes:
+        print("The ledger has no opening now. Record the real one next: "
+              "python -m vending.ledger open --amount 600.00 --by NAME")
+    else:
+        print(f"To make the change: python -m vending.ledger reset-test-opening --by {by.strip() or 'NAME'} --yes")
+    return 0
+
+
+def _interval(s: SafeOpening) -> bool:
+    """Print the interval `safe_opening` found, in Eastern. False, with the reason on stderr, if it is empty."""
+    print(f"Fill request {s.fill_id}: sent {_at(s.fill_sent)}, {s.fill_status}.")
+    print(f"The latest test-period record: {s.lower_what}, at {_at(s.lower)}.")
+    print(f"The earliest moment the fill counts from: {s.upper_what}, at {_at(s.upper)}.")
+    if s.suggested is None:
+        print(_no_time(s) + ".", file=sys.stderr)
+        return False
+    print(f"The opening must be after {_at(s.lower)} and at or before {_at(s.upper)}.")
+    return True
+
+
+def _safe(conn: psycopg.Connection, fill_id: str) -> int:
+    """`safe-opening`: the interval and a suggested time, in Eastern, then the `open --recover` command.
+    1 when no time works."""
+    s = safe_opening(conn, fill_id)         # LedgerError when it refuses; main prints it
+    if not _interval(s):
+        return 1
+    print(f"Suggested opening: {_at(s.suggested)}. Don't type it into open --at: anything recorded before the "
+          "opening moves it. Record it with this, which works the time out again and records it in one step "
+          "(run it without --yes first to preview):")
+    print(f"  python -m vending.ledger open --recover --fill {s.fill_id} --by NAME --yes")
+    print("Then check Key dates (Fill request sent: done) and python -m vending.ledger show.")
+    return 0
+
+
+def _recover(conn: psycopg.Connection, fill_id: str, by: str, amount: str, detail: str, yes: bool) -> int:
+    """`open --recover`: preview the opening without --yes; with it, work it out again and record it."""
+    cents = dollars_to_cents(amount)
+    if not yes:
+        s = safe_opening(conn, fill_id)     # LedgerError when it refuses; main prints it
+        if not _interval(s):
+            return 1
+        print(f"Preview: nothing was recorded. With --yes this records an opening of {money(cents)} at "
+              f"{_at(s.suggested)}, by {by.strip() or 'NAME'}, working the time out again first: a record made "
+              "in between moves it later, or stops it.")
+        print(f"To record it: python -m vending.ledger open --recover --fill {fill_id} --by {by.strip() or 'NAME'} "
+              "--yes")
+        return 0
+    s, entry = recover_opening(conn, fill_id, by, cents, detail)    # LedgerError when it refuses; main prints it
+    _interval(s)
+    print(f"Opened with {money(entry.amount_cents)} at {_at(entry.at)}, recorded by {entry.recorded_by}.")
+    print("Then check Key dates (Fill request sent: done) and python -m vending.ledger show.")
+    return 0
+
+
 def _show(conn: psycopg.Connection) -> int:
     b = balance(conn)
     if b is None:
         print(OPEN_HINT)
         return 1
     rows = [
-        ("Opening capital", b.opening_cents, b.opening_at.strftime("%Y-%m-%d")),
+        # Eastern, like the runbook: an opening at 20:00 on Sun 29 Nov is 01:00 UTC on Mon 30 Nov.
+        ("Opening capital", b.opening_cents, _eastern(b.opening_at)),
         ("Capital added", b.capital_cents, ""),
         ("Takings (tax included)", b.takings.cents, f"{len(b.takings.by_week)} weeks"),
         ("Receipts", -b.receipts_cents, f"{b.receipt_lines} lines"),

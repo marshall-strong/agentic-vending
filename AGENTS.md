@@ -7,5 +7,7 @@ Read [`docs/integrity.md`](docs/integrity.md) before working in this repo. In sh
 
 Our slots are the inventory server's assignment, stored by `python -m vending.slots record` and read through `vending.slots.our_slots`. It may change until the competition starts on 3 Dec 2026. Never hard-code a list of selections, and never describe our slots as particular columns.
 
+Check [`docs/assumptions.md`](docs/assumptions.md) before you call something unknown: a row marked Confirmed is settled. Unsold stock at the end of the run counts at what we paid (A5, confirmed by David), so leftover stock is not a loss, a risk or an open question.
+
 If Docker hangs, run `scripts/docker_recover.ps1` rather than restarting things by hand. For
 throwaway containers, use the label and random port in [`docs/docker-recovery.md`](docs/docker-recovery.md).

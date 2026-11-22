@@ -166,7 +166,9 @@ def test_the_poll_does_carry_the_sentinels(machine, assignment):
     ("get_pnl", {"start": "2026-11-30", "end": "2026-12-05"}, None),
     ("get_account_balance", {}, None),
 ])
-def test_the_agents_tools(machine, assignment, tool, arguments, rows):
+def test_the_agents_tools(machine, assignment, tool, arguments, rows, monkeypatch):
+    # get_pnl stops a window at now; these polls may be later than the real date the tests run on.
+    monkeypatch.setattr(pnl, "_now", lambda conn: datetime(2026, 12, 6, 17, 0, tzinfo=timezone.utc))
     if arguments.get("slots") == "first":   # one of ours, whichever the assignment is
         arguments = {**arguments, "slots": [assignment[0]]}
     result = call(tool, arguments)
@@ -310,7 +312,7 @@ def test_the_bridge_script_with_the_stored_assignment(machine, assignment, scrip
     clean(err)
     lines = out.splitlines()
     assert {line.split("*")[1] for line in lines if line.startswith("PA1*")} == set(assignment)
-    assert set(lines) == ({"ID4*2", "EA2*DO*7*107", f"PA2*{OURS_AFTER}*{OUR_PRICE * OURS_AFTER}*0*0*0*0"}
+    assert set(lines) == ({"ID4*2", "EA2*DO*7*107", f"PA2*{OURS_AFTER}*{OUR_PRICE * OURS_AFTER}"}
                           | {f"PA1*{s}*{OUR_PRICE}" for s in assignment})
     assert "no selection is printed" not in err
 

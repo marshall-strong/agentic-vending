@@ -164,7 +164,7 @@ def _team_problem(team: Any) -> str | None:
 def parse(answer: Any) -> Assignment:
     """Our assignment from a `GET /api/v1/slots` answer. Refuses anything it can't trust, or another team's."""
     if not isinstance(answer, dict):
-        raise BadAssignment(f"the answer isn't a JSON object: {str(answer)[:200]}")
+        raise BadAssignment(f"the answer isn't a JSON object (it is a {type(answer).__name__})")
     device, team, slots = answer.get("device_id"), answer.get("team"), answer.get("slots")
     if not isinstance(device, str) or not device.strip():
         raise BadAssignment("the answer names no device_id")
@@ -201,6 +201,15 @@ def clock(conn: psycopg.Connection) -> datetime:
 def stored(conn: psycopg.Connection) -> Assignment | None:
     row = conn.execute("select team, device_id, slots, last_checked_at from slot_assignment where id = 1").fetchone()
     return None if row is None else Assignment(row[0], row[1], tuple(row[2]), row[3])
+
+
+def assigned_at(conn: psycopg.Connection) -> datetime | None:
+    """When the stored assignment was first read from the server (`first_read_at`), or None with none stored.
+
+    `record` sets it when the assignment changes, so a run that started before it may have read other slots
+    (`vending.agent.last_notes`)."""
+    row = conn.execute("select first_read_at from slot_assignment where id = 1").fetchone()
+    return None if row is None else row[0]
 
 
 def _usable(found: Assignment | None) -> Assignment:
