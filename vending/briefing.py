@@ -355,13 +355,16 @@ def _requests(conn, b: Briefing) -> None:
         request_id=x.request_id, checked_at=None if x.last_checked is None else datetime.fromisoformat(x.last_checked),
         age_hours=_age(b.computed_at, datetime.fromisoformat(x.last_checked or x.submitted_at)),
         stale=x.request_id in r.not_checked_recently) for x in r.data]
-    b.requests.unresolved_submission_count = conn.execute(
-        "select count(*) from purchase_submissions where status in ('sending', 'unknown')").fetchone()[0]
+    unresolved = conn.execute("select id, status from purchase_submissions where status in ('sending', 'unknown')"
+                              " order by id").fetchall()
+    b.requests.unresolved_submission_count = len(unresolved)
     if r.not_checked_recently:
         _alert(b, "requests_stale", f"{len(r.not_checked_recently)} pending checks exceed 6h", "get_purchase_requests")
     if b.requests.unresolved_submission_count:
-        _alert(b, "submission_unresolved", f"{b.requests.unresolved_submission_count} submissions unresolved; do not resend",
-               "preview_desired_state")
+        named = ", ".join(f"{row} ({status})" for row, status in unresolved)
+        _alert(b, "submission_unresolved", f"ORDERS BLOCKED: submission {named} may already be on the bridge, so "
+               "no purchase request can be sent; do not resend. A person finds out whether the bridge filed it, then "
+               "runs `python -m vending.submissions resolve`", "preview_desired_state")
 
 
 def build(conn: psycopg.Connection, now: datetime | None = None) -> Briefing:
