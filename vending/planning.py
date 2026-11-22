@@ -90,6 +90,7 @@ def planner_config(conn: psycopg.Connection, *, stale_wildcard_unset: bool = Fal
         wildcard_purchase_cap_cents=_limit(conn, "wildcard_purchase_cap_cents", planner.AGREED_WILDCARD_CAP_CENTS),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
+        spendable_floor_cents=_limit(conn, "spendable_floor_cents", planner.SPENDABLE_FLOOR_CENTS),
         halted=config.is_halted(conn),
     )
 

@@ -19,6 +19,7 @@ from vending.planner import (
     BACK_STOCK,
     PURCHASE,
     RESTOCK,
+    SPENDABLE_FLOOR_CENTS,
     SWITCH,
     CatalogProduct,
     ClosetStock,
@@ -381,7 +382,66 @@ class Costs(unittest.TestCase):
 
     def test_balance_check_uses_max_plus_fee(self):
         self.assertIn("insufficient_balance", codes(plan(restock_15(), off_cycle=True, balance=3699)))
-        self.assertTrue(plan(restock_15(), off_cycle=True, balance=3700).ok)
+        # Max plus fee is 37.00, and the $53.00 spendable floor must be left after it.
+        self.assertTrue(plan(restock_15(), off_cycle=True, balance=3700 + SPENDABLE_FLOOR_CENTS).ok)
+
+    def test_the_spendable_floor_holds_after_the_worst_case(self):
+        """Kevin, 19 Nov: a restock may spend down to the $53.00 floor (one midweek fee plus a week of model
+        spend), never under it; at exactly the floor it passes."""
+        self.assertEqual(SPENDABLE_FLOOR_CENTS, 5300)
+        at_floor = plan(restock_15(), balance=1200 + 5300)
+        self.assertTrue(at_floor.ok)
+        self.assertEqual(at_floor.cost.balance_left_at_max_cents, 5300)
+        short = plan(restock_15(), balance=1200 + 5299)
+        self.assertEqual(codes(short), ["below_spendable_floor"])
+        message = short.refusals[0].message
+        self.assertIn("$53.00 spendable floor", message)
+        self.assertIn("cut at least $0.01", message)
+        self.assertIn("slot 15 $12.00", message)
+        self.assertIsNone(short.plan_hash)
+
+    def test_the_floor_never_blocks_a_plan_that_spends_nothing(self):
+        """Sol, round 2: the floor limits what a plan spends. A closet-only load costs $0, so it passes even with
+        spendable already under the floor; any purchase that would leave spendable under it is refused."""
+        free = plan(restock_15(), closet=[ClosetStock(MTDEW, 9, 50)], balance=5299)
+        self.assertTrue(free.ok, free.refusals)
+        self.assertEqual(free.cost.max_cents, 0)
+        penny = Sourcing(MTDEW, PurchaseOption("Walmart", 24, "0.01"))
+        self.assertEqual(plan(restock_15(), sourcing=[penny], balance=5301).cost.max_cents, 1)
+        self.assertTrue(plan(restock_15(), sourcing=[penny], balance=5301).ok)
+        self.assertEqual(codes(plan(restock_15(), sourcing=[penny], balance=5300)), ["below_spendable_floor"])
+
+    def test_both_cash_refusals_give_the_same_recipe(self):
+        """Sol, round 2: insufficient_balance gets the cash-short recipe too, not just below_spendable_floor."""
+        short = plan(restock_15(), balance=1199)
+        self.assertEqual(codes(short), ["insufficient_balance"])
+        floor = plan(restock_15(), balance=1200)
+        self.assertEqual(codes(floor), ["below_spendable_floor"])
+        self.assertIn("cut at least $0.01", short.refusals[0].message)
+        for p in (short, floor):
+            message = p.refusals[0].message
+            self.assertIn("most margin per class day first", message)
+            self.assertIn("give a slot a smaller explicit fill_to, or keep it if nothing fits", message)
+            self.assertIn("slot 15 $12.00", message)
+            self.assertIn("then preview again", message)
+
+    def test_a_cash_short_first_fill_never_offers_keep(self):
+        """On the first fill every slot has no receipts and needs a line, so the recipe is cheaper products or packs,
+        or a smaller fill_to, never keep."""
+        unknown = {"15": SlotState("15", None, None, 0, None, contents_known=False)}
+        p = plan(restock_15(), slots=unknown, balance=1199)
+        self.assertEqual(codes(p), ["insufficient_balance"])
+        message = p.refusals[0].message
+        self.assertIn("slot 15 has no receipts yet (a first fill): give it a cheaper product or pack, or a smaller "
+                      "fill_to, but never keep it or leave it out", message)
+
+    def test_the_floor_is_a_setting(self):
+        self.assertTrue(plan(restock_15(), balance=1200, config=replace(CONFIG, spendable_floor_cents=0)).ok)
+
+    def test_the_floor_is_in_the_plan_hash(self):
+        """A floor changed between preview and submit changes the plan, so submit's hash check catches it."""
+        self.assertNotEqual(plan(restock_15()).plan_hash,
+                            plan(restock_15(), config=replace(CONFIG, spendable_floor_cents=6000)).plan_hash)
 
 
 class PricingGate(unittest.TestCase):
@@ -632,7 +692,8 @@ class Refusals(unittest.TestCase):
 
     def test_insufficient_balance(self):
         self.assertEqual(codes(plan(restock_15(), balance=1199)), ["insufficient_balance"])
-        self.assertTrue(plan(restock_15(), balance=1200).ok)
+        self.assertEqual(codes(plan(restock_15(), balance=1200)), ["below_spendable_floor"])
+        self.assertTrue(plan(restock_15(), balance=1200 + SPENDABLE_FLOOR_CENTS).ok)
 
     def test_empty_slot(self):
         self.assertEqual(codes(plan(DesiredSlot("15", product=None, sale_price="2.50"))), ["empty_slot"])
