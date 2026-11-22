@@ -14,15 +14,19 @@ want to send the first ones by hand from 30 Nov. So it is off by default, like t
 finds the books settled. Early morning is when they are: no visit happens overnight, the overnight
 rounds have synced yesterday's receipts, and David's Saturday 23:59 tax calculation is in by Sunday
 morning. The check is as of the newest good poll of ours taken before the current hour began: the
-bridge folds polls into its books on the hour, so that poll is already folded in. It stops at 22:00 so
-a send with no answer can't run past midnight into the next day's check.
+bridge folds polls into its books on the hour, so that poll is already folded in. The window is
+enforced again at the send itself, under its reservation lock, with the clock of that moment, so a
+job that runs long cannot send after 22:00, or under yesterday's date.
 
 **Never twice a day.** Before it sends, the job asks the database whether today's check is used or may
 be (`tracking.blocking`): any send that day, by the worker or a person, that the bridge answered, or
-that got no usable answer. `send(..., once_a_day=True)` checks again under the send's lock, and before
-the competition start too. All of it is in `tracking_checks`, so a worker restart changes nothing. A
-send the bridge refused before checking (for example `409 not_reconciled_yet`) leaves the day open, so
-the next round tries again, at most `MAX_TRIES` times a day.
+that got no usable answer. `send(..., once_a_day=True)` checks the day again under the send's lock.
+All of it is in `tracking_checks`, so a worker restart changes nothing. A send the bridge refused
+before checking (for example `409 not_reconciled_yet`) leaves the day open, so the next round tries
+again. A refusal that settles on its own (`not_reconciled_yet`, `tracking_not_started`) backs off:
+an hour after the first, doubling to four, at most `MAX_TRANSIENT` a day. Any other refusal or a
+send with no answer stops after `MAX_TRIES` tries, counted under the lock, so two replicas cannot
+together exceed it. However it retries, one successful send a day is the most there ever is.
 
 **Skips.** No ledger opening yet, or no poll of ours since it: the job logs a line and exits 0. The
 manual command refuses the same way (`tracking.CantCompute`). After the opening, figures that can't be
@@ -49,7 +53,10 @@ MODE_SETTING = "TRACKING_DAILY"
 AT_SETTING = "TRACKING_DAILY_AT"
 DEFAULT_AT = time(6, 0)
 LAST_SEND = time(22, 0)          # no send from this time on, Eastern
-MAX_TRIES = 3                    # sends by the worker in one Eastern day
+MAX_TRIES = 3                    # tries a day that don't settle on their own
+MAX_TRANSIENT = 8                # transient refusals a day, hard cap (the backoff bounds it lower)
+BACKOFF = timedelta(hours=1)     # after the first transient refusal, before the next try
+BACKOFF_CAP = timedelta(hours=4) # the backoff doubles from `BACKOFF` up to this
 WORKER = "worker (daily)"        # `sent_by` on the worker's sends
 STALE_POLL = timedelta(hours=6)  # an older newest poll means the history sync has stopped
 CHECKS_SHOWN = 7
@@ -93,10 +100,17 @@ def settled_poll(conn: psycopg.Connection, now: datetime, opened_at: datetime) -
                         " limit 1", (DEVICE_ID, hour, opened_at)).fetchone()
 
 
-def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None, now: datetime | None = None,
+def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
+        now: datetime | Callable[[], datetime] | None = None,
         log: Callable[[str], None] = print) -> int:
     """Send today's check if it is due and not done. 0: sent, or nothing to do; 1: not sent and it should
-    have been; 2: a setting is wrong; 3: sent, but it may have used the day's check with no verdicts."""
+    have been; 2: a setting is wrong; 3: sent, but it may have used the day's check with no verdicts.
+
+    `now` pins the clock for the job's own checks (default the database clock). The send itself is
+    stamped and re-checked with the clock of each moment (`vending.tracking.send`): the window and
+    the Eastern day under its reservation lock, and the answer with its own time, so a job that runs
+    long cannot send on the facts of when it started. A callable `now` is asked once for the job's
+    checks and again for each stamp of the send (a test's way to move the clock mid-send)."""
     try:
         if not enabled():
             log(f"tracking_daily: off. Set {MODE_SETTING}=on to send one check a day.")
@@ -105,7 +119,12 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None, now: 
     except settings.SettingsError as error:
         log(f"tracking_daily: {error}")
         return 2
-    now = tracking.clock(conn) if now is None else now
+    if now is None:
+        now = lambda: tracking.clock(conn)       # each stamp is the clock of its moment
+    if callable(now):
+        stamp, now = now, now()
+    else:
+        stamp = lambda: now
     local = now.astimezone(EASTERN)
     if not start <= local.time() < LAST_SEND:
         log(f"tracking_daily: not due; it sends from {start:%H:%M} to {LAST_SEND:%H:%M} Eastern.")
@@ -115,12 +134,16 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None, now: 
     if done:
         log(f"tracking_daily: today's check ({day}) is used or may be (#{done[0][0]}). Nothing sent.")
         return 0
-    tries = conn.execute("select count(*) from tracking_checks where eastern_day = %s and sent_by = %s",
-                         (day, WORKER)).fetchone()[0]
+    tries, transient, last_transient = tries_today(conn, day)
     if tries >= MAX_TRIES:
-        log(f"tracking_daily: the bridge refused {tries} checks today, so no more until tomorrow. "
+        log(f"tracking_daily: {tries} tries today that don't settle on their own, so no more until tomorrow. "
             "See: python -m vending.tracking show")
         return 1
+    wait = _backoff(transient)
+    if transient >= MAX_TRANSIENT or (transient and now < last_transient + wait):
+        log(f"tracking_daily: the books aren't ready yet ({transient} transient refusals today); backing off "
+            f"until {(last_transient + wait).astimezone(EASTERN):%H:%M} Eastern.")
+        return 0
     opened = ledger.opening(conn)
     if opened is None or opened.at > now:
         log("tracking_daily: skipped, the ledger has no opening yet. " + ledger.OPEN_HINT)
@@ -140,10 +163,17 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None, now: 
         log(f"tracking_daily: not sent. {error}")
         return 1
     try:
-        outcome = tracking.send(conn, (bridge or _bridge)(), figures, WORKER, now=now, once_a_day=True)
+        outcome = tracking.send(conn, (bridge or _bridge)(), figures, WORKER, now=stamp, once_a_day=True,
+                                window=(start, LAST_SEND), daily_tries=(WORKER, MAX_TRIES, MAX_TRANSIENT))
     except tracking.AlreadyChecked as error:
         log(f"tracking_daily: {error}")
         return 0
+    except tracking.WindowClosed as error:
+        log(f"tracking_daily: {error}")
+        return 1
+    except tracking.TooManyTries as error:
+        log(f"tracking_daily: {error}. See: python -m vending.tracking show")
+        return 1
     except settings.SettingsError as error:
         log(f"tracking_daily: {error}")
         return 2
@@ -174,11 +204,44 @@ def _bridge():
     return Bridge()
 
 
+def _backoff(transient: int) -> timedelta:
+    """How long after the newest transient refusal the next try waits: an hour after the first,
+    doubling to a four hour cap."""
+    return min(BACKOFF * 2 ** (transient - 1), BACKOFF_CAP)
+
+
+def tries_today(conn: psycopg.Connection, day) -> tuple[int, int, datetime | None]:
+    """(tries, transient, last_transient_at) of the worker's attempts on the Eastern day `day`.
+    `tries` counts the sends and the refusals that don't settle on their own, toward `MAX_TRIES`;
+    `transient` counts the refusals that settle on their own (`tracking.TRANSIENT_REFUSALS`), toward
+    `MAX_TRANSIENT`, and `last_transient_at` is when the newest one went out (the backoff waits after it)."""
+    rows = conn.execute("select sent_at, used_check, error_type from tracking_checks"
+                        " where eastern_day = %s and sent_by = %s order by sent_at, id", (day, WORKER)).fetchall()
+    transient = [(sent, used, error) for sent, used, error in rows
+                 if used is False and error in tracking.TRANSIENT_REFUSALS]
+    return len(rows) - len(transient), len(transient), transient[-1][0] if transient else None
+
+
 def _verdicts(results: dict) -> str:
     return ", ".join(f"{k} {results[k]}" for k in tracking.RESULTS)
 
 
 # --- The latest verdicts: dashboard, briefing, incident log ---------------------------------------
+
+def _check_row(row) -> dict:
+    """A `tracking_checks` row as the panel and the briefing read it: our own words and the four
+    verdicts, never the bridge's text."""
+    id_, sent, by, as_of_time, status, error_type, used, results, checked = row
+    verdicts = ({k: results[k] for k in tracking.RESULTS if results.get(k) in tracking.VERDICTS}
+                if isinstance(results, dict) else None)
+    if verdicts is not None and len(verdicts) != len(tracking.RESULTS):
+        verdicts = None
+    return {"id": id_, "sent_at": sent, "by": by, "as_of_time": as_of_time,
+            "checked_at": tracking._time(checked) if verdicts else None,
+            "verdicts": verdicts,
+            "outside": [k for k in tracking.RESULTS if verdicts and verdicts[k] == "outside"],
+            "said": None if verdicts else tracking.said(status, error_type), "used_check": used}
+
 
 def latest(conn: psycopg.Connection, now: datetime, limit: int = CHECKS_SHOWN) -> list[dict]:
     """The newest sends up to `now`, newest first: when, by whom, as of which poll, and the verdicts when
@@ -186,18 +249,18 @@ def latest(conn: psycopg.Connection, now: datetime, limit: int = CHECKS_SHOWN) -
     rows = conn.execute(
         "select id, sent_at, sent_by, as_of_time, status, error_type, used_check, results, answer->>'checked_at'"
         " from tracking_checks where sent_at <= %s order by sent_at desc, id desc limit %s", (now, limit)).fetchall()
-    out = []
-    for id_, sent, by, as_of_time, status, error_type, used, results, checked in rows:
-        verdicts = ({k: results[k] for k in tracking.RESULTS if results.get(k) in tracking.VERDICTS}
-                    if isinstance(results, dict) else None)
-        if verdicts is not None and len(verdicts) != len(tracking.RESULTS):
-            verdicts = None
-        out.append({"id": id_, "sent_at": sent, "by": by, "as_of_time": as_of_time,
-                    "checked_at": tracking._time(checked) if verdicts else None,
-                    "verdicts": verdicts,
-                    "outside": [k for k in tracking.RESULTS if verdicts and verdicts[k] == "outside"],
-                    "said": None if verdicts else tracking.said(status, error_type), "used_check": used})
-    return out
+    return [_check_row(row) for row in rows]
+
+
+def latest_answered(conn: psycopg.Connection, now: datetime) -> dict | None:
+    """The newest send up to `now` that the bridge answered with verdicts, or None: the same shape as a
+    `latest` row. Queried for itself, so refusals after it cannot hide an `outside` verdict from the
+    briefing and Needs attention (`newest_answered` looks only in the newest `CHECKS_SHOWN` sends)."""
+    row = conn.execute(
+        "select id, sent_at, sent_by, as_of_time, status, error_type, used_check, results, answer->>'checked_at'"
+        " from tracking_checks where results is not null and sent_at <= %s"
+        " order by sent_at desc, id desc limit 1", (now,)).fetchone()
+    return None if row is None else _check_row(row)
 
 
 def panel(conn: psycopg.Connection, now: datetime) -> dict:
@@ -207,7 +270,7 @@ def panel(conn: psycopg.Connection, now: datetime) -> dict:
     except settings.SettingsError:
         on, at, wrong = False, None, True
     return {"on": on, "at": None if at is None else at.strftime("%H:%M"), "wrong_setting": bool(wrong),
-            "checks": latest(conn, now)}
+            "checks": latest(conn, now), "answered": latest_answered(conn, now)}
 
 
 def newest_answered(checks: list[dict]) -> dict | None:
@@ -215,8 +278,10 @@ def newest_answered(checks: list[dict]) -> dict | None:
 
 
 def attention(data: dict) -> list[tuple[str, str]]:
-    """(level, text) for the dashboard's Needs attention: the newest answered check read outside."""
-    found = newest_answered(data["checks"])
+    """(level, text) for the dashboard's Needs attention: the latest answered check read outside.
+    The panel carries it as `answered` (`latest_answered`), not the newest answered one among the
+    last `CHECKS_SHOWN` sends, so refusals after an `outside` check cannot hide it."""
+    found = data.get("answered") or newest_answered(data["checks"])
     if found is None or not found["outside"]:
         return []
     names = ", ".join(NAMES[k] for k in found["outside"])

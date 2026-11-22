@@ -44,8 +44,11 @@ books. It is **off until the team turns it on**: it spends the day's one check a
 | `TRACKING_DAILY_AT` | `06:00` | The first Eastern time of day it may send (HH:MM, before 22:00). It sends in the first round from then that finds the books settled, and never from 22:00 |
 
 Turn it on: `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group
---set-env-vars TRACKING_DAILY=on`. Turn it off the same way with `off`. It never sends twice in an Eastern
-day, by the worker or a person, even after a restart: every send is in `tracking_checks`. With no ledger
+--set-env-vars TRACKING_DAILY=on`. Turn it off the same way with `off`. From the competition start, it never
+sends twice in an Eastern day, by the worker or a person, even after a restart: every send is in `tracking_checks`.
+Before the start the course allows unlimited checks for testing, so a person may send again by hand; the
+worker still sends at most once a day. A sync that didn't finish holds the day's check back until the next
+round, so it never reads books the round's syncs never brought in. With no ledger
 opening yet it logs a line and skips. The verdicts show on the dashboard (Tracking check), an `outside` one
 in the incident log and the agent's briefing.
 

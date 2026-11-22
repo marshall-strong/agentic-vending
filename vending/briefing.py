@@ -322,15 +322,18 @@ def _inventory(conn, b: Briefing, ours: tuple[str, ...]) -> None:
 
 
 def _tracking(conn, b: Briefing) -> None:
-    """The newest answered tracking check; an alert for each figure it read outside."""
+    """The newest answered tracking check, however many refusals follow it; an alert for each figure
+    it read outside. `latest_answered` queries the answered check for itself, so refusals after it
+    cannot hide an `outside` verdict; the later sends are counted separately."""
     from vending import tracking_daily
 
-    checks = tracking_daily.latest(conn, b.computed_at)
-    found = tracking_daily.newest_answered(checks)
+    found = tracking_daily.latest_answered(conn, b.computed_at)
     if found is None:
         return
+    later = conn.execute("select count(*) from tracking_checks where (sent_at, id) > (%s, %s) and sent_at <= %s",
+                         (found["sent_at"], found["id"], b.computed_at)).fetchone()[0]
     b.tracking = TrackingCheck(id=found["id"], as_of_time=found["as_of_time"], checked_at=found["checked_at"],
-                               results=found["verdicts"], unanswered_since=checks.index(found))
+                               results=found["verdicts"], unanswered_since=later)
     for figure in found["outside"]:
         _alert(b, f"books_outside_{figure}", f"tracking check #{found['id']} as of {_stamp(found['as_of_time'])}: "
                f"bridge's {figure} differs by more than its tolerance", tracking_daily.LOOKUPS[figure])

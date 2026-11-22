@@ -2569,7 +2569,8 @@
    "on": false,
    "at": "06:00",
    "wrong_setting": false,
-   "checks": []
+   "checks": [],
+   "answered": null
   }
  },
  "purchase_requests": {

@@ -4,6 +4,7 @@ shows: the dashboard, the incident log and the agent's briefing. No network: the
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, time, timedelta, timezone
 
 import pytest
@@ -154,6 +155,48 @@ def test_a_person_who_sent_today_already_blocks_the_worker(conn):
     assert bridge.sent == []
 
 
+def test_the_cutoff_is_enforced_again_when_the_send_is_ready(conn):
+    """A job that starts inside the window but is only ready to send after 22:00 Eastern does not send.
+    The window and the day are re-checked under the send's lock, with the clock of that moment."""
+    books(conn)
+    poll(conn, "p3", "2026-12-05T01:30:00+00:00")     # 20:30 Eastern, so the newest poll isn't stale
+    stamps = iter([utc("2026-12-05T02:59:50+00:00"),      # 21:59:50 Eastern: due, and the window is open
+                   utc("2026-12-05T03:00:00+00:00"),      # 22:00:02 Eastern: the reservation, 12 s later
+                   utc("2026-12-05T03:10:00+00:00")])     # 22:10 Eastern: the send is only ready now
+    bridge = FakeBridge(answer())
+    code, lines = run(conn, bridge, now=lambda: next(stamps))
+    assert (code, bridge.sent, sends(conn)) == (1, [], [])
+    assert "window" in lines[-1]
+
+
+def test_the_answer_is_stamped_when_it_is_stored(conn):
+    """The reservation and the answer carry their own times: a job that runs long does not record the
+    answer under the time it started."""
+    books(conn)
+    stamps = iter([NOW, NOW + timedelta(minutes=2), NOW + timedelta(minutes=4)])
+    run(conn, FakeBridge(answer()), now=lambda: next(stamps))
+    sent_at, answered_at = conn.execute("select sent_at, answered_at from tracking_checks").fetchone()
+    assert (sent_at, answered_at) == (NOW + timedelta(minutes=2), NOW + timedelta(minutes=4))
+
+
+def test_a_reply_lost_after_midnight_blocks_the_next_morning(conn):
+    """A job ready at 21:59:55 Eastern whose reply is lost at 00:01 records the attempt under Friday,
+    with the real answer time, so the bridge may have checked it on Saturday: no second send."""
+    books(conn)
+    poll(conn, "p3", "2026-12-05T01:30:00+00:00")     # 20:30 Eastern, so the newest poll isn't stale
+    stamps = iter([utc("2026-12-05T02:59:50+00:00"), utc("2026-12-05T02:59:55+00:00"),
+                   utc("2026-12-05T05:01:00+00:00")])
+    bridge = FakeBridge(BridgeNoAnswer("timed out"))
+    assert run(conn, bridge, now=lambda: next(stamps))[0] == 3
+    [(_, by, as_of, status, used, day)] = sends(conn)
+    assert (str(day), status, used) == ("2026-12-04", None, None)
+    sent_at, answered_at = conn.execute("select sent_at, answered_at from tracking_checks").fetchone()
+    assert (sent_at, answered_at) == (utc("2026-12-05T02:59:55+00:00"), utc("2026-12-05T05:01:00+00:00"))
+    assert run(conn, bridge, utc("2026-12-05T11:05:00+00:00"))[0] == 0    # Sat 06:05 Eastern
+    assert len(bridge.sent) == 1 and len(sends(conn)) == 1
+    assert "used or may be" in run(conn, bridge, utc("2026-12-05T11:05:00+00:00"))[1][-1]
+
+
 # --- Skips and failures -----------------------------------------------------------------------------
 
 def test_with_no_ledger_opening_it_skips_quietly(conn):
@@ -210,13 +253,75 @@ def test_a_send_left_unanswered_by_a_crash_blocks_the_day(conn):
     assert run(conn, bridge)[0] == 0 and bridge.sent == []
 
 
-def test_a_refusal_before_the_check_is_tried_again_next_round_at_most_three_times(conn):
+def test_non_transient_refusals_stop_at_three(conn):
+    """A refusal that will not settle on its own is retried next round, at most MAX_TRIES a day."""
     books(conn)
-    bridge = FakeBridge(*[refused(409, "not_reconciled_yet")] * 3)
-    codes = [run(conn, bridge, NOW + timedelta(hours=h))[0] for h in range(4)]
-    assert codes == [0, 0, 0, 1]
+    bridge = FakeBridge(*[refused(422, "invalid_coil")] * 3)
+    codes = [run(conn, bridge, NOW + timedelta(hours=h))[0] for h in range(5)]
+    assert codes == [1, 1, 1, 1, 1]
     assert len(bridge.sent) == 3
     assert [used for _, _, _, _, used, _ in sends(conn)] == [False] * 3
+    assert "no more until tomorrow" in run(conn, bridge, NOW + timedelta(hours=5))[1][-1]
+
+
+def test_two_replicas_racing_cannot_exceed_max_tries(schema_url):
+    """Two replicas pass the pre-check together (two tries each) and race to reserve: the count is
+    taken again inside the reservation's transaction, under its lock, so three attempts go out."""
+    barrier = threading.Barrier(2)
+    bridge = FakeBridge(*[refused(422, "invalid_coil")] * 3)
+    with open_in(*schema_url) as conn:
+        books(conn)
+        run(conn, bridge)
+        run(conn, bridge)                      # two refusals already stored from earlier rounds
+    codes, lines = [], []
+
+    def replica():
+        with open_in(*schema_url) as conn:
+            def gated():                       # both replicas pass every pre-check before either sends
+                barrier.wait(10)
+                return bridge
+            codes.append(tracking_daily.run(conn, gated, now=NOW + timedelta(hours=1), log=lines.append))
+
+    threads = [threading.Thread(target=replica) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+    with open_in(*schema_url) as conn:
+        rows = sends(conn)
+    assert sorted(codes) == [1, 1]
+    assert len(bridge.sent) == 3 and len(rows) == 3
+    assert [used for *_, used, _ in rows] == [False] * 3
+    assert sum("no more until tomorrow" in line for line in lines) == 1
+
+
+def test_transient_refusals_back_off_but_do_not_forfeit_the_day(conn):
+    """`tracking_not_started` settles at the competition start, so early refusals are retried on a
+    backoff across the send window instead of using up the three tries that a real refusal needs."""
+    books(conn)
+    bridge = FakeBridge(*[refused(409, "tracking_not_started")] * 6)
+    # A fresh poll each hour, as the syncs bring them in, so the newest one isn't stale:
+    # p4 at 12:00 Eastern for the 13:05 try, p5 at 16:00 for 17:05, p6 at 20:00 for 21:05.
+    poll(conn, "p4", "2026-12-04T17:00:00+00:00")
+    poll(conn, "p5", "2026-12-04T21:00:00+00:00")
+    poll(conn, "p6", "2026-12-05T01:00:00+00:00")
+    # 06:05, 07:05 (1 h later), 09:05 (2 h), 13:05, 17:05 and 21:05 (4 h) Eastern.
+    for moment in (NOW, NOW + timedelta(hours=1), NOW + timedelta(hours=3), NOW + timedelta(hours=7),
+                   NOW + timedelta(hours=11), NOW + timedelta(hours=15)):
+        assert run(conn, bridge, moment)[0] == 0, moment
+    assert len(bridge.sent) == 6
+    assert [used for _, _, _, _, used, _ in sends(conn)] == [False] * 6
+
+
+def test_a_transient_refusal_waits_out_its_backoff(conn):
+    books(conn)
+    bridge = FakeBridge(refused(409, "tracking_not_started"), refused(409, "tracking_not_started"))
+    assert run(conn, bridge, NOW)[0] == 0 and len(bridge.sent) == 1
+    first = list(bridge.sent)
+    code, lines = run(conn, bridge, NOW + timedelta(minutes=30))   # 06:35: the 1 h backoff is not over
+    assert (code, bridge.sent) == (0, first)
+    assert "backing off" in lines[-1]
+    assert run(conn, bridge, NOW + timedelta(hours=1))[0] == 0 and len(bridge.sent) == 2
 
 
 def test_a_refusal_that_will_not_settle_on_its_own_fails_the_job(conn):
@@ -315,3 +420,56 @@ def test_the_briefing_says_when_no_check_has_been_answered(conn):
     b = briefing.build(conn, BRIEF_NOW)
     assert b.tracking is None and not [a for a in b.alerts if a.code.startswith("books_outside")]
     assert "Tracking check (bridge's books vs ours): none answered yet." in briefing.render(b)
+
+
+def test_the_briefing_keeps_the_latest_answered_check_past_seven_refusals(conn):
+    """The newest answered check is queried for itself, not looked for among the 7 newest sends:
+    refusals after it cannot hide an outside verdict from the briefing."""
+    from tests.test_briefing import NOW as BRIEF_NOW, sample
+    from vending import briefing
+
+    sample(conn)
+    answered = BRIEF_NOW - timedelta(hours=3)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-12', 'worker (daily)', 'poll-3', %s, '{}', %s, 200, %s, true, %s)",
+        (answered, answered, answered,
+         Jsonb({"checked_at": answered.isoformat()}),
+         Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    for minute in (170, 145, 120, 95, 70, 45, 20):
+        at = BRIEF_NOW - timedelta(minutes=minute)
+        conn.execute(
+            "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+            " answered_at, status, error_type, used_check)"
+            " values (%s, '2026-11-12', 'kevin', 'poll-3', %s, '{}', %s, 409, 'not_reconciled_yet', false)",
+            (at, answered, at))
+    b = briefing.build(conn, BRIEF_NOW)
+    assert b.tracking is not None and b.tracking.id > 0 and b.tracking.results["cash"] == "outside"
+    assert b.tracking.unanswered_since == 7
+    assert [a.lookup for a in b.alerts if a.code == "books_outside_cash"] == ["get_account_balance"]
+    assert "cash OUTSIDE" in briefing.render(b)
+
+
+def test_an_outside_verdict_survives_seven_later_refusals(conn):
+    """Needs attention reads the latest answered check, not the newest answered one among the last
+    7 sends: after one `cash: outside` and 7 refusals, the warning is still shown."""
+    from vending import dashboard
+
+    books(conn)
+    run(conn, FakeBridge(answer(outside=("cash",))))
+    for hour in range(1, 8):
+        at = NOW + timedelta(hours=hour)
+        conn.execute(
+            "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+            " answered_at, status, error_type, used_check)"
+            " values (%s, '2026-12-04', 'kevin', 'p1', %s, '{}', %s, 409, 'not_reconciled_yet', false)",
+            (at, SETTLED, at))
+    later = NOW + timedelta(hours=8)
+    found = tracking_daily.latest_answered(conn, later)
+    assert found is not None and found["verdicts"]["cash"] == "outside"
+    panel = tracking_daily.panel(conn, later)
+    [(level, text)] = tracking_daily.attention(panel)
+    assert level == "bad" and "cash" in text
+    snap, _ = dashboard._snapshot(conn, later)
+    assert any("tracking check" in a["text"] for a in dashboard.attention(snap))

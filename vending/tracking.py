@@ -65,7 +65,7 @@ import math
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from fractions import Fraction
 from typing import Any
 
@@ -97,6 +97,10 @@ VERDICTS = ("within", "outside")
 
 # Statuses that mean the bridge refused before checking, so the day's check is still there.
 REFUSED_BEFORE_CHECK = (400, 401, 403, 404, 409, 422)
+
+# Refusals that settle on their own (the poll isn't folded in yet, or the books haven't begun), so
+# the worker retries them on a backoff instead of spending its tries (`tracking_daily.tries_today`).
+TRANSIENT_REFUSALS = ("not_reconciled_yet", "tracking_not_started")
 
 # A 200's fields, all required by the spec (`TrackingCheckResult`).
 ANSWER_FIELDS = ("as_of", "as_of_time", "checked_at", "results", "next_check_from")
@@ -137,6 +141,16 @@ class CantCompute(RuntimeError):
 
 class AlreadyChecked(RuntimeError):
     """Today's check is used, or may be, so a second send is refused."""
+
+
+class WindowClosed(RuntimeError):
+    """The caller's send window had closed by the time the send was ready, so nothing was sent
+    (`tracking_daily` passes its window; nothing is recorded either)."""
+
+
+class TooManyTries(RuntimeError):
+    """The caller's bounded tries for this Eastern day are spent (`tracking_daily`); nothing was
+    sent. Counted under the reservation's lock, so two replicas cannot both pass the check."""
 
 
 @dataclass(frozen=True)
@@ -328,12 +342,21 @@ def blocking(conn: psycopg.Connection, day: date) -> list[tuple[int, int | None,
 
 
 def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
-         now: datetime | Callable[[], datetime] | None = None, once_a_day: bool = False) -> Outcome:
+         now: datetime | Callable[[], datetime] | None = None, once_a_day: bool = False,
+         window: tuple[time, time] | None = None,
+         daily_tries: tuple[str, int, int] | None = None) -> Outcome:
     """Send `found` once, never retried, storing the request first and the answer after.
 
-    `now` is the time for both (default the database clock); a callable is asked for each.
-    Raises `AlreadyChecked` from `daily_from()` on, when today's check is used or may be. With
-    `once_a_day` (the worker's daily send, `vending.tracking_daily`) it does so before then too."""
+    `now` stamps the reservation (default the database clock at that moment); a callable is asked
+    again for the answer, so a send that runs long records the answer's actual time. Raises
+    `AlreadyChecked` from `daily_from()` on, when today's check is used or may be. With
+    `once_a_day` (the worker's daily send, `vending.tracking_daily`) it does so before then too.
+
+    Everything is re-checked under the send's advisory lock, with the clock of that moment, so a
+    caller that started a while ago cannot send on stale facts: `window` (Eastern start and cutoff)
+    raises `WindowClosed` when the moment to send has passed; `daily_tries` (`sent_by`, the limit on
+    tries that don't settle on their own, the limit on transient refusals) raises `TooManyTries`
+    when the day's tries are spent. Both before anything is recorded."""
     if not by or not by.strip():
         raise ValueError("a send needs a name, for the record")
     fixed = now
@@ -343,7 +366,13 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
     with conn.transaction():
         conn.execute("select pg_advisory_xact_lock(%s)", (TRACKING_LOCK,))
         moment = stamp()
+        local = moment.astimezone(EASTERN)
+        if window is not None and not window[0] <= local.time() < window[1]:
+            raise WindowClosed(f"the send window ({window[0]:%H:%M}-{window[1]:%H:%M} Eastern) closed while the "
+                               f"check was being prepared; it was ready at {local:%H:%M}, so nothing was sent")
         day = eastern_day(moment)
+        if daily_tries is not None:
+            _check_tries(conn, day, daily_tries)
         if once_a_day or moment >= daily_from():
             earlier = blocking(conn, day)
             if earlier:
@@ -392,6 +421,23 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
     else:
         used = None                        # a 5xx or a status the spec doesn't name
     return _answered(conn, stamp, row_id, status, answer, error_type, used, found.as_of)
+
+
+def _check_tries(conn: psycopg.Connection, day: date, daily_tries: tuple[str, int, int]) -> None:
+    """`TooManyTries` when the day's tries are spent: `blocking` already refuses a day whose check is
+    used or may be, so what is left to bound is tries that never block anything. A transient refusal
+    (`TRANSIENT_REFUSALS`) settles on its own, so it has its own, larger bound."""
+    by, tries_limit, transient_limit = daily_tries
+    rows = conn.execute("select used_check, error_type from tracking_checks"
+                        " where eastern_day = %s and sent_by = %s", (day, by)).fetchall()
+    transient = [row for row in rows if row[0] is False and row[1] in TRANSIENT_REFUSALS]
+    if len(transient) >= transient_limit:
+        raise TooManyTries(f"{by} has had {len(transient)} transient refusals today ({day}, Eastern), up to its "
+                           f"limit of {transient_limit}, so no more until tomorrow")
+    tries = len(rows) - len(transient)
+    if tries >= tries_limit:
+        raise TooManyTries(f"{by} has made {tries} tries today ({day}, Eastern) that don't settle on their own, "
+                           f"up to its limit of {tries_limit}, so no more until tomorrow")
 
 
 def _results(answer: Any, as_of: str) -> dict[str, str] | None:

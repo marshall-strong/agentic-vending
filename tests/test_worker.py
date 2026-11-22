@@ -152,6 +152,49 @@ def test_a_job_that_overruns_is_timed_out_and_skipped_until_it_ends():
     assert len(calls) == 2
 
 
+def test_tracking_daily_skips_when_its_sync_failed_this_round():
+    """The daily check reads the polls and receipts the round's syncs bring in: a sync that failed
+    would leave it reading stale books and spending the day's check, so it skips (worker.NEEDS)."""
+    calls = []
+    jobs = [("sync_history", lambda: 2), ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2), ("skipped", None)]
+    assert "sync_history" in results[1].error
+
+
+def test_tracking_daily_runs_when_its_syncs_passed():
+    calls = []
+    jobs = [("sync_history", lambda: 0), ("sync_requests", lambda: 0),
+            ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == [1] and [(r.outcome, r.exit_code) for r in results] == [("finished", 0)] * 3
+
+
+def test_tracking_daily_skips_when_its_sync_is_still_running():
+    release = threading.Event()
+    calls = []
+
+    def hangs():
+        release.wait(5)
+        return 0
+    jobs = [("sync_history", hangs), ("tracking_daily", lambda: calls.append(1) or 0)]
+    running = {}
+    worker.run_round(jobs[:1], log=lambda _: None, timeout=0.05, running=running)
+    second = worker.run_round(jobs, log=lambda _: None, timeout=5, running=running, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in second] == [("still running", None), ("skipped", None)]
+    release.set()
+    running["sync_history"].join(5)
+
+
+def test_the_gated_job_is_skipped_through_main_too():
+    calls = []
+    jobs = [("sync_history", lambda: 1), ("tracking_daily", lambda: calls.append(1) or 0)]
+    assert worker.main(["--once", "--port", "0"], jobs=jobs, log=lambda _: None) == 1
+    assert calls == []
+
+
 def test_timeout_must_be_positive():
     with pytest.raises(SystemExit):
         worker.main(["--timeout", "0", "--port", "0"], jobs=[], log=lambda _: None)
