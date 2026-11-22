@@ -1,0 +1,5531 @@
+{
+ "schema": "vending-day1/projection/v1",
+ "money": "integer cents in *_cents fields; float dollar fields are kept for older readers",
+ "plan": "round7/plan7.json",
+ "packs": [
+  {
+   "sku": "ARIZONA-GREEN_TEA-16CAN",
+   "real_sku": null,
+   "name": "AriZona Green Tea with Ginseng and Honey",
+   "size": "16 oz can",
+   "category": "tea",
+   "units_per_pack": 12,
+   "expected_cents": 789,
+   "max_cents": 950,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "ARIZONA-ICED_LEMON-16BOT",
+   "real_sku": null,
+   "name": "Arizona Iced Tea with Lemon Flavor 16 oz bottle",
+   "size": "16 oz bottle",
+   "category": "tea",
+   "units_per_pack": 12,
+   "expected_cents": 819,
+   "max_cents": 950,
+   "column_capacity": 7,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "BUBLY-BLACKBERRY-12CAN",
+   "real_sku": null,
+   "name": "Bubly Sparkling Water Blackberry 12 oz can",
+   "size": "12 oz can",
+   "category": "sparkling",
+   "units_per_pack": 8,
+   "expected_cents": 427,
+   "max_cents": 500,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "BUBLY-CHERRY-12CAN",
+   "real_sku": null,
+   "name": "Bubly Sparkling Water Cherry 12 oz can",
+   "size": "12 oz can",
+   "category": "sparkling",
+   "units_per_pack": 8,
+   "expected_cents": 427,
+   "max_cents": 500,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "BUBLY-GRAPEFRUIT-12CAN",
+   "real_sku": null,
+   "name": "Bubly Sparkling Water Grapefruit 12 oz can",
+   "size": "12 oz can",
+   "category": "sparkling",
+   "units_per_pack": 8,
+   "expected_cents": 427,
+   "max_cents": 500,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "BUBLY-STRAWBERRY-12CAN",
+   "real_sku": null,
+   "name": "Bubly Sparkling Water Strawberry 12 oz can",
+   "size": "12 oz can",
+   "category": "sparkling",
+   "units_per_pack": 8,
+   "expected_cents": 427,
+   "max_cents": 500,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "CELSIUS-ARCTIC_VIBE-12CAN",
+   "real_sku": null,
+   "name": "Celsius Sparkling Arctic Vibe",
+   "size": "12 oz can",
+   "category": "energy",
+   "units_per_pack": 12,
+   "expected_cents": 1998,
+   "max_cents": 2300,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "CELSIUS-SPARKLING_KIWI-12CAN",
+   "real_sku": null,
+   "name": "Celsius Sparkling Kiwi Guava",
+   "size": "12 oz can",
+   "category": "energy",
+   "units_per_pack": 12,
+   "expected_cents": 1998,
+   "max_cents": 2300,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+   "real_sku": null,
+   "name": "Celsius Sparkling Orange 12 oz can",
+   "size": "12 oz can",
+   "category": "energy",
+   "units_per_pack": 12,
+   "expected_cents": 2157,
+   "max_cents": 2500,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "CELSIUS-TROPICAL_VIBE-12CAN",
+   "real_sku": null,
+   "name": "Celsius Sparkling Tropical Vibe",
+   "size": "12 oz can",
+   "category": "energy",
+   "units_per_pack": 12,
+   "expected_cents": 1998,
+   "max_cents": 2300,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "GATORADE-COOL_BLUE-20BOT",
+   "real_sku": null,
+   "name": "Gatorade Thirst Quencher",
+   "size": "20 oz bottle",
+   "category": "sports",
+   "units_per_pack": 8,
+   "expected_cents": 747,
+   "max_cents": 900,
+   "column_capacity": 7,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "HINT-GEORGIA_PEACH-16BOT",
+   "real_sku": null,
+   "name": "Hint Georgia Peach 16 oz bottle",
+   "size": "16 oz bottle",
+   "category": "water",
+   "units_per_pack": 12,
+   "expected_cents": 1346,
+   "max_cents": 1550,
+   "column_capacity": 7,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "HINT-GRAPE-16BOT",
+   "real_sku": null,
+   "name": "Hint Grape 16 oz bottle",
+   "size": "16 oz bottle",
+   "category": "water",
+   "units_per_pack": 12,
+   "expected_cents": 1346,
+   "max_cents": 1550,
+   "column_capacity": 7,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "POWERADE-MOUNTAIN_BLUE-20BOT",
+   "real_sku": null,
+   "name": "Powerade Sports Drink",
+   "size": "20 oz bottle",
+   "category": "sports",
+   "units_per_pack": 8,
+   "expected_cents": 648,
+   "max_cents": 750,
+   "column_capacity": 7,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "REDBULL-ORIGINAL-8_4CAN",
+   "real_sku": null,
+   "name": "Red Bull Original 8.4 oz can",
+   "size": "8.4 oz can",
+   "category": "energy",
+   "units_per_pack": 24,
+   "expected_cents": 3499,
+   "max_cents": 4050,
+   "column_capacity": 11,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "REDBULL-SUGARFRE-8_4CAN",
+   "real_sku": null,
+   "name": "Red Bull Sugarfree 8.4 oz can",
+   "size": "8.4 oz can",
+   "category": "energy",
+   "units_per_pack": 24,
+   "expected_cents": 3499,
+   "max_cents": 4050,
+   "column_capacity": 11,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "REDBULL-YE_TROPICAL-8_4CAN",
+   "real_sku": null,
+   "name": "Red Bull Yellow Edition Tropical",
+   "size": "8.4 oz can",
+   "category": "energy",
+   "units_per_pack": 24,
+   "expected_cents": 4248,
+   "max_cents": 4900,
+   "column_capacity": 11,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "ROCKSTAR-ORIGINAL-16CAN",
+   "real_sku": null,
+   "name": "Rockstar Energy",
+   "size": "16 oz can",
+   "category": "energy",
+   "units_per_pack": 12,
+   "expected_cents": 2268,
+   "max_cents": 2650,
+   "column_capacity": 8,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "SNAPPLE-APPLE-16BOT",
+   "real_sku": null,
+   "name": "Snapple Apple",
+   "size": "16 oz bottle",
+   "category": "juice",
+   "units_per_pack": 12,
+   "expected_cents": 1224,
+   "max_cents": 1450,
+   "column_capacity": 7,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  },
+  {
+   "sku": "SNAPPLE-PEACH-16BOT",
+   "real_sku": null,
+   "name": "Snapple Peach Tea",
+   "size": "16 oz bottle",
+   "category": "tea",
+   "units_per_pack": 12,
+   "expected_cents": 1224,
+   "max_cents": 1450,
+   "column_capacity": 7,
+   "capacity_assumed": false,
+   "store": "Amazon"
+  }
+ ],
+ "fill_expected_cents": 31516,
+ "fill_most_cents": 36600,
+ "window": "2026-12-03 to 2027-01-29 (calendar file ends 31 Jan)",
+ "slots": [
+  {
+   "slot": 12,
+   "sku": "CELSIUS-ARCTIC_VIBE-12CAN",
+   "name": "Celsius Sparkling Arctic Vibe",
+   "size": "12 oz can",
+   "cat": "energy",
+   "fill": 8,
+   "price": 4.1,
+   "floor": 2.1,
+   "unit_exp": 1.665,
+   "unit_max": 1.9166666666666667,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 14,
+   "sku": "REDBULL-SUGARFRE-8_4CAN",
+   "name": "Red Bull Sugarfree 8.4 oz can",
+   "size": "8.4 oz can",
+   "cat": "energy",
+   "fill": 11,
+   "price": 4.1,
+   "floor": 1.85,
+   "unit_exp": 1.4579166666666667,
+   "unit_max": 1.6875,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 16,
+   "sku": "CELSIUS-TROPICAL_VIBE-12CAN",
+   "name": "Celsius Sparkling Tropical Vibe",
+   "size": "12 oz can",
+   "cat": "energy",
+   "fill": 8,
+   "price": 4.1,
+   "floor": 2.1,
+   "unit_exp": 1.665,
+   "unit_max": 1.9166666666666667,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 18,
+   "sku": "REDBULL-ORIGINAL-8_4CAN",
+   "name": "Red Bull Original 8.4 oz can",
+   "size": "8.4 oz can",
+   "cat": "energy",
+   "fill": 11,
+   "price": 4.1,
+   "floor": 1.85,
+   "unit_exp": 1.4579166666666667,
+   "unit_max": 1.6875,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 21,
+   "sku": "ROCKSTAR-ORIGINAL-16CAN",
+   "name": "Rockstar Energy",
+   "size": "16 oz can",
+   "cat": "energy",
+   "fill": 8,
+   "price": 4.1,
+   "floor": 2.4,
+   "unit_exp": 1.89,
+   "unit_max": 2.2083333333333335,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 23,
+   "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+   "name": "Celsius Sparkling Orange 12 oz can",
+   "size": "12 oz can",
+   "cat": "energy",
+   "fill": 8,
+   "price": 4.1,
+   "floor": 2.25,
+   "unit_exp": 1.7975,
+   "unit_max": 2.0833333333333335,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 25,
+   "sku": "REDBULL-YE_TROPICAL-8_4CAN",
+   "name": "Red Bull Yellow Edition Tropical",
+   "size": "8.4 oz can",
+   "cat": "energy",
+   "fill": 11,
+   "price": 4.1,
+   "floor": 2.25,
+   "unit_exp": 1.7699999999999998,
+   "unit_max": 2.0416666666666665,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 27,
+   "sku": "CELSIUS-SPARKLING_KIWI-12CAN",
+   "name": "Celsius Sparkling Kiwi Guava",
+   "size": "12 oz can",
+   "cat": "energy",
+   "fill": 8,
+   "price": 4.1,
+   "floor": 2.1,
+   "unit_exp": 1.665,
+   "unit_max": 1.9166666666666667,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 32,
+   "sku": "HINT-GRAPE-16BOT",
+   "name": "Hint Grape 16 oz bottle",
+   "size": "16 oz bottle",
+   "cat": "water",
+   "fill": 7,
+   "price": 2.7,
+   "floor": 1.4,
+   "unit_exp": 1.1216666666666668,
+   "unit_max": 1.2916666666666667,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 34,
+   "sku": "SNAPPLE-PEACH-16BOT",
+   "name": "Snapple Peach Tea",
+   "size": "16 oz bottle",
+   "cat": "tea",
+   "fill": 7,
+   "price": 2.35,
+   "floor": 1.35,
+   "unit_exp": 1.02,
+   "unit_max": 1.2083333333333333,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 36,
+   "sku": "GATORADE-COOL_BLUE-20BOT",
+   "name": "Gatorade Thirst Quencher",
+   "size": "20 oz bottle",
+   "cat": "sports",
+   "fill": 7,
+   "price": 3.2,
+   "floor": 1.25,
+   "unit_exp": 0.93375,
+   "unit_max": 1.125,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 38,
+   "sku": "POWERADE-MOUNTAIN_BLUE-20BOT",
+   "name": "Powerade Sports Drink",
+   "size": "20 oz bottle",
+   "cat": "sports",
+   "fill": 7,
+   "price": 3.2,
+   "floor": 1.05,
+   "unit_exp": 0.81,
+   "unit_max": 0.9375,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 41,
+   "sku": "ARIZONA-GREEN_TEA-16CAN",
+   "name": "AriZona Green Tea with Ginseng and Honey",
+   "size": "16 oz can",
+   "cat": "tea",
+   "fill": 8,
+   "price": 2.35,
+   "floor": 0.9,
+   "unit_exp": 0.6575,
+   "unit_max": 0.7916666666666666,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 43,
+   "sku": "ARIZONA-ICED_LEMON-16BOT",
+   "name": "Arizona Iced Tea with Lemon Flavor 16 oz bottle",
+   "size": "16 oz bottle",
+   "cat": "tea",
+   "fill": 7,
+   "price": 2.35,
+   "floor": 0.9,
+   "unit_exp": 0.6825,
+   "unit_max": 0.7916666666666666,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 45,
+   "sku": "SNAPPLE-APPLE-16BOT",
+   "name": "Snapple Apple",
+   "size": "16 oz bottle",
+   "cat": "juice",
+   "fill": 7,
+   "price": 3.15,
+   "floor": 1.35,
+   "unit_exp": 1.02,
+   "unit_max": 1.2083333333333333,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 47,
+   "sku": "HINT-GEORGIA_PEACH-16BOT",
+   "name": "Hint Georgia Peach 16 oz bottle",
+   "size": "16 oz bottle",
+   "cat": "water",
+   "fill": 7,
+   "price": 2.7,
+   "floor": 1.4,
+   "unit_exp": 1.1216666666666668,
+   "unit_max": 1.2916666666666667,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 52,
+   "sku": "BUBLY-CHERRY-12CAN",
+   "name": "Bubly Sparkling Water Cherry 12 oz can",
+   "size": "12 oz can",
+   "cat": "sparkling",
+   "fill": 8,
+   "price": 1.65,
+   "floor": 0.7,
+   "unit_exp": 0.53375,
+   "unit_max": 0.625,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 54,
+   "sku": "BUBLY-STRAWBERRY-12CAN",
+   "name": "Bubly Sparkling Water Strawberry 12 oz can",
+   "size": "12 oz can",
+   "cat": "sparkling",
+   "fill": 8,
+   "price": 1.65,
+   "floor": 0.7,
+   "unit_exp": 0.53375,
+   "unit_max": 0.625,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 56,
+   "sku": "BUBLY-GRAPEFRUIT-12CAN",
+   "name": "Bubly Sparkling Water Grapefruit 12 oz can",
+   "size": "12 oz can",
+   "cat": "sparkling",
+   "fill": 8,
+   "price": 1.65,
+   "floor": 0.7,
+   "unit_exp": 0.53375,
+   "unit_max": 0.625,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  },
+  {
+   "slot": 58,
+   "sku": "BUBLY-BLACKBERRY-12CAN",
+   "name": "Bubly Sparkling Water Blackberry 12 oz can",
+   "size": "12 oz can",
+   "cat": "sparkling",
+   "fill": 8,
+   "price": 1.65,
+   "floor": 0.7,
+   "unit_exp": 0.53375,
+   "unit_max": 0.625,
+   "dup": 0,
+   "cat_past": 0,
+   "interloper": false,
+   "assumed_cap": false,
+   "orderable_now": true,
+   "store": "Amazon"
+  }
+ ],
+ "purchase": [
+  {
+   "sku": "CELSIUS-ARCTIC_VIBE-12CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 12,
+   "closet": 4,
+   "expected": 19.98,
+   "most": 23.0
+  },
+  {
+   "sku": "REDBULL-SUGARFRE-8_4CAN",
+   "units": 11,
+   "packs": 1,
+   "bought": 24,
+   "closet": 13,
+   "expected": 34.99,
+   "most": 40.5
+  },
+  {
+   "sku": "CELSIUS-TROPICAL_VIBE-12CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 12,
+   "closet": 4,
+   "expected": 19.98,
+   "most": 23.0
+  },
+  {
+   "sku": "REDBULL-ORIGINAL-8_4CAN",
+   "units": 11,
+   "packs": 1,
+   "bought": 24,
+   "closet": 13,
+   "expected": 34.99,
+   "most": 40.5
+  },
+  {
+   "sku": "ROCKSTAR-ORIGINAL-16CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 12,
+   "closet": 4,
+   "expected": 22.68,
+   "most": 26.5
+  },
+  {
+   "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 12,
+   "closet": 4,
+   "expected": 21.57,
+   "most": 25.0
+  },
+  {
+   "sku": "REDBULL-YE_TROPICAL-8_4CAN",
+   "units": 11,
+   "packs": 1,
+   "bought": 24,
+   "closet": 13,
+   "expected": 42.48,
+   "most": 49.0
+  },
+  {
+   "sku": "CELSIUS-SPARKLING_KIWI-12CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 12,
+   "closet": 4,
+   "expected": 19.98,
+   "most": 23.0
+  },
+  {
+   "sku": "HINT-GRAPE-16BOT",
+   "units": 7,
+   "packs": 1,
+   "bought": 12,
+   "closet": 5,
+   "expected": 13.46,
+   "most": 15.5
+  },
+  {
+   "sku": "SNAPPLE-PEACH-16BOT",
+   "units": 7,
+   "packs": 1,
+   "bought": 12,
+   "closet": 5,
+   "expected": 12.24,
+   "most": 14.5
+  },
+  {
+   "sku": "GATORADE-COOL_BLUE-20BOT",
+   "units": 7,
+   "packs": 1,
+   "bought": 8,
+   "closet": 1,
+   "expected": 7.47,
+   "most": 9.0
+  },
+  {
+   "sku": "POWERADE-MOUNTAIN_BLUE-20BOT",
+   "units": 7,
+   "packs": 1,
+   "bought": 8,
+   "closet": 1,
+   "expected": 6.48,
+   "most": 7.5
+  },
+  {
+   "sku": "ARIZONA-GREEN_TEA-16CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 12,
+   "closet": 4,
+   "expected": 7.89,
+   "most": 9.5
+  },
+  {
+   "sku": "ARIZONA-ICED_LEMON-16BOT",
+   "units": 7,
+   "packs": 1,
+   "bought": 12,
+   "closet": 5,
+   "expected": 8.19,
+   "most": 9.5
+  },
+  {
+   "sku": "SNAPPLE-APPLE-16BOT",
+   "units": 7,
+   "packs": 1,
+   "bought": 12,
+   "closet": 5,
+   "expected": 12.24,
+   "most": 14.5
+  },
+  {
+   "sku": "HINT-GEORGIA_PEACH-16BOT",
+   "units": 7,
+   "packs": 1,
+   "bought": 12,
+   "closet": 5,
+   "expected": 13.46,
+   "most": 15.5
+  },
+  {
+   "sku": "BUBLY-CHERRY-12CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 8,
+   "closet": 0,
+   "expected": 4.27,
+   "most": 5.0
+  },
+  {
+   "sku": "BUBLY-STRAWBERRY-12CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 8,
+   "closet": 0,
+   "expected": 4.27,
+   "most": 5.0
+  },
+  {
+   "sku": "BUBLY-GRAPEFRUIT-12CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 8,
+   "closet": 0,
+   "expected": 4.27,
+   "most": 5.0
+  },
+  {
+   "sku": "BUBLY-BLACKBERRY-12CAN",
+   "units": 8,
+   "packs": 1,
+   "bought": 8,
+   "closet": 0,
+   "expected": 4.27,
+   "most": 5.0
+  }
+ ],
+ "fill_expected": 315.16,
+ "fill_most": 366.0,
+ "under_cap": true,
+ "problems": [],
+ "needs_hand_count": [],
+ "needs_new_source": [],
+ "assumptions": {
+  "TIER_RATE": {
+   "energy": 1.354,
+   "soda20": 1.701,
+   "sodacan": 0.767,
+   "sparkling": 0.722,
+   "water": 1.0,
+   "juice": 1.0,
+   "protein": 0.722,
+   "coffee": 0.767,
+   "tea": 0.767,
+   "sports": 0.767
+  },
+  "REF_PRICE": {
+   "energy": 4.09,
+   "soda20": 2.35,
+   "sodacan": 1.5,
+   "sparkling": 1.62,
+   "water": 2.67,
+   "juice": 3.15,
+   "protein": 3.68,
+   "coffee": 3.31,
+   "tea": 2.33,
+   "sports": 3.21
+  },
+  "ELASTICITY_UP": -2.0,
+  "ELASTICITY_DOWN": -0.5,
+  "CLAMP": [
+   0.1,
+   1.6
+  ],
+  "CAT_FREE": {
+   "energy": 9
+  },
+  "CAT_FREE_DEFAULT": 4,
+  "CAT_DECAY": 0.6,
+  "SCENARIOS": {
+   "low": {
+    "demand": 0.6,
+    "interloper_haircut": 0.3,
+    "overlap_extra": 0.3
+   },
+   "base": {
+    "demand": 1.0,
+    "interloper_haircut": 0.15,
+    "overlap_extra": 0.15
+   },
+   "high": {
+    "demand": 1.25,
+    "interloper_haircut": 0.05,
+    "overlap_extra": 0.05
+   }
+  },
+  "DUPLICATES": "capacity only, never demand (round 7, #230): a product's demand is modelled once; its slots pool their stock and split its sales by capacity, so a second slot adds sales only when the product's demand between Friday refills is more than one slot holds. Replaces DUP_DECAY=0.75 (rounds 2-6)",
+  "CATEGORY_COUNT": "CAT_FREE/CAT_DECAY count distinct products in a category, not slots (round 7)",
+  "FIRST_RESTOCK": "2026-12-04",
+  "refill": "to fill_to every Friday ~3 PM; half of Friday's demand before",
+  "profit": "units sold x (price/1.08 - expected unit cost); unsold stock at cost; minus $1/week model spend; no midweek visits"
+ },
+ "scenarios": {
+  "low": {
+   "totals": {
+    "units_sold": 281.8,
+    "gross_profit_cents": 50761,
+    "model_spend_cents": 900,
+    "profit_cents": 49861,
+    "week1_gp_cents": 7688
+   },
+   "per_slot": [
+    {
+     "slot": 12,
+     "sku": "CELSIUS-ARCTIC_VIBE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.7,
+       "gp_cents": 362
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.7,
+       "gp_cents": 362
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.13,
+       "gp_cents": 241
+      }
+     ],
+     "units_per_class_day": 0.566,
+     "class_days_to_sellout": 14.1,
+     "sellout_date": null,
+     "margin_cents": 213,
+     "gross_profit_cents": 3980,
+     "rate_per_class_day": 0.566,
+     "class_days_of_cover": 14.1,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 18.7,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 39.8,
+     "week1_units": 2.8,
+     "week1_gp": 6.03,
+     "week2_units": 2.8,
+     "week2_gp": 6.03,
+     "peak_week_units": 2.83,
+     "peak_cycle_units": 2.83,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.566,
+     "product_peak_cycle_units": 2.83
+    },
+    {
+     "slot": 14,
+     "sku": "REDBULL-SUGARFRE-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.7,
+       "gp_cents": 397
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.7,
+       "gp_cents": 397
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.13,
+       "gp_cents": 265
+      }
+     ],
+     "units_per_class_day": 0.566,
+     "class_days_to_sellout": 19.4,
+     "sellout_date": null,
+     "margin_cents": 234,
+     "gross_profit_cents": 4367,
+     "rate_per_class_day": 0.566,
+     "class_days_of_cover": 19.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 18.7,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.34,
+     "gross_profit": 43.67,
+     "week1_units": 2.8,
+     "week1_gp": 6.62,
+     "week2_units": 2.8,
+     "week2_gp": 6.62,
+     "peak_week_units": 2.83,
+     "peak_cycle_units": 2.83,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 0.566,
+     "product_peak_cycle_units": 2.83
+    },
+    {
+     "slot": 16,
+     "sku": "CELSIUS-TROPICAL_VIBE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.7,
+       "gp_cents": 362
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.7,
+       "gp_cents": 362
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.13,
+       "gp_cents": 241
+      }
+     ],
+     "units_per_class_day": 0.566,
+     "class_days_to_sellout": 14.1,
+     "sellout_date": null,
+     "margin_cents": 213,
+     "gross_profit_cents": 3980,
+     "rate_per_class_day": 0.566,
+     "class_days_of_cover": 14.1,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 18.7,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 39.8,
+     "week1_units": 2.8,
+     "week1_gp": 6.03,
+     "week2_units": 2.8,
+     "week2_gp": 6.03,
+     "peak_week_units": 2.83,
+     "peak_cycle_units": 2.83,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.566,
+     "product_peak_cycle_units": 2.83
+    },
+    {
+     "slot": 18,
+     "sku": "REDBULL-ORIGINAL-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.7,
+       "gp_cents": 397
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.7,
+       "gp_cents": 397
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.83,
+       "gp_cents": 662
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.13,
+       "gp_cents": 265
+      }
+     ],
+     "units_per_class_day": 0.566,
+     "class_days_to_sellout": 19.4,
+     "sellout_date": null,
+     "margin_cents": 234,
+     "gross_profit_cents": 4367,
+     "rate_per_class_day": 0.566,
+     "class_days_of_cover": 19.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 18.7,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.34,
+     "gross_profit": 43.67,
+     "week1_units": 2.8,
+     "week1_gp": 6.62,
+     "week2_units": 2.8,
+     "week2_gp": 6.62,
+     "peak_week_units": 2.83,
+     "peak_cycle_units": 2.83,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 0.566,
+     "product_peak_cycle_units": 2.83
+    },
+    {
+     "slot": 21,
+     "sku": "ROCKSTAR-ORIGINAL-16CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.83,
+       "gp_cents": 539
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.83,
+       "gp_cents": 539
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.7,
+       "gp_cents": 324
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.7,
+       "gp_cents": 324
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.83,
+       "gp_cents": 539
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.83,
+       "gp_cents": 539
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.83,
+       "gp_cents": 539
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.13,
+       "gp_cents": 216
+      }
+     ],
+     "units_per_class_day": 0.566,
+     "class_days_to_sellout": 14.1,
+     "sellout_date": null,
+     "margin_cents": 191,
+     "gross_profit_cents": 3560,
+     "rate_per_class_day": 0.566,
+     "class_days_of_cover": 14.1,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 18.7,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.91,
+     "gross_profit": 35.6,
+     "week1_units": 2.8,
+     "week1_gp": 5.39,
+     "week2_units": 2.8,
+     "week2_gp": 5.39,
+     "peak_week_units": 2.83,
+     "peak_cycle_units": 2.83,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.566,
+     "product_peak_cycle_units": 2.83
+    },
+    {
+     "slot": 23,
+     "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.83,
+       "gp_cents": 566
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.83,
+       "gp_cents": 566
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.7,
+       "gp_cents": 339
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.7,
+       "gp_cents": 339
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.83,
+       "gp_cents": 566
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.83,
+       "gp_cents": 566
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.83,
+       "gp_cents": 566
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.13,
+       "gp_cents": 226
+      }
+     ],
+     "units_per_class_day": 0.566,
+     "class_days_to_sellout": 14.1,
+     "sellout_date": null,
+     "margin_cents": 200,
+     "gross_profit_cents": 3733,
+     "rate_per_class_day": 0.566,
+     "class_days_of_cover": 14.1,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 18.7,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.0,
+     "gross_profit": 37.33,
+     "week1_units": 2.8,
+     "week1_gp": 5.66,
+     "week2_units": 2.8,
+     "week2_gp": 5.66,
+     "peak_week_units": 2.83,
+     "peak_cycle_units": 2.83,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.566,
+     "product_peak_cycle_units": 2.83
+    },
+    {
+     "slot": 25,
+     "sku": "REDBULL-YE_TROPICAL-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.83,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.83,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.7,
+       "gp_cents": 344
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.7,
+       "gp_cents": 344
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.83,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.83,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.83,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.13,
+       "gp_cents": 229
+      }
+     ],
+     "units_per_class_day": 0.566,
+     "class_days_to_sellout": 19.4,
+     "sellout_date": null,
+     "margin_cents": 203,
+     "gross_profit_cents": 3784,
+     "rate_per_class_day": 0.566,
+     "class_days_of_cover": 19.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 18.7,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.03,
+     "gross_profit": 37.84,
+     "week1_units": 2.8,
+     "week1_gp": 5.73,
+     "week2_units": 2.8,
+     "week2_gp": 5.73,
+     "peak_week_units": 2.83,
+     "peak_cycle_units": 2.83,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 0.566,
+     "product_peak_cycle_units": 2.83
+    },
+    {
+     "slot": 27,
+     "sku": "CELSIUS-SPARKLING_KIWI-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.7,
+       "gp_cents": 362
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.7,
+       "gp_cents": 362
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.83,
+       "gp_cents": 603
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.13,
+       "gp_cents": 241
+      }
+     ],
+     "units_per_class_day": 0.566,
+     "class_days_to_sellout": 14.1,
+     "sellout_date": null,
+     "margin_cents": 213,
+     "gross_profit_cents": 3980,
+     "rate_per_class_day": 0.566,
+     "class_days_of_cover": 14.1,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 18.7,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 39.8,
+     "week1_units": 2.8,
+     "week1_gp": 6.03,
+     "week2_units": 2.8,
+     "week2_gp": 6.03,
+     "peak_week_units": 2.83,
+     "peak_cycle_units": 2.83,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.566,
+     "product_peak_cycle_units": 2.83
+    },
+    {
+     "slot": 32,
+     "sku": "HINT-GRAPE-16BOT",
+     "price_cents": 270,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.23,
+       "gp_cents": 170
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.23,
+       "gp_cents": 170
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.82,
+       "gp_cents": 113
+      }
+     ],
+     "units_per_class_day": 0.411,
+     "class_days_to_sellout": 17.0,
+     "sellout_date": null,
+     "margin_cents": 138,
+     "gross_profit_cents": 1868,
+     "rate_per_class_day": 0.411,
+     "class_days_of_cover": 17.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 13.6,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.38,
+     "gross_profit": 18.68,
+     "week1_units": 2.1,
+     "week1_gp": 2.83,
+     "week2_units": 2.1,
+     "week2_gp": 2.83,
+     "peak_week_units": 2.05,
+     "peak_cycle_units": 2.05,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.411,
+     "product_peak_cycle_units": 2.05
+    },
+    {
+     "slot": 34,
+     "sku": "SNAPPLE-PEACH-16BOT",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.58,
+       "gp_cents": 183
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.58,
+       "gp_cents": 183
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.95,
+       "gp_cents": 110
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.95,
+       "gp_cents": 110
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.58,
+       "gp_cents": 183
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.58,
+       "gp_cents": 183
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.58,
+       "gp_cents": 183
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.63,
+       "gp_cents": 73
+      }
+     ],
+     "units_per_class_day": 0.317,
+     "class_days_to_sellout": 22.1,
+     "sellout_date": null,
+     "margin_cents": 116,
+     "gross_profit_cents": 1208,
+     "rate_per_class_day": 0.317,
+     "class_days_of_cover": 22.1,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 10.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.16,
+     "gross_profit": 12.08,
+     "week1_units": 1.6,
+     "week1_gp": 1.83,
+     "week2_units": 1.6,
+     "week2_gp": 1.83,
+     "peak_week_units": 1.58,
+     "peak_cycle_units": 1.58,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.317,
+     "product_peak_cycle_units": 1.58
+    },
+    {
+     "slot": 36,
+     "sku": "GATORADE-COOL_BLUE-20BOT",
+     "price_cents": 320,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.61,
+       "gp_cents": 327
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.61,
+       "gp_cents": 327
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.97,
+       "gp_cents": 196
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.97,
+       "gp_cents": 196
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.61,
+       "gp_cents": 327
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.61,
+       "gp_cents": 327
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.61,
+       "gp_cents": 327
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.65,
+       "gp_cents": 131
+      }
+     ],
+     "units_per_class_day": 0.323,
+     "class_days_to_sellout": 21.7,
+     "sellout_date": null,
+     "margin_cents": 203,
+     "gross_profit_cents": 2161,
+     "rate_per_class_day": 0.323,
+     "class_days_of_cover": 21.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 10.6,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.03,
+     "gross_profit": 21.61,
+     "week1_units": 1.6,
+     "week1_gp": 3.27,
+     "week2_units": 1.6,
+     "week2_gp": 3.27,
+     "peak_week_units": 1.61,
+     "peak_cycle_units": 1.61,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.323,
+     "product_peak_cycle_units": 1.61
+    },
+    {
+     "slot": 38,
+     "sku": "POWERADE-MOUNTAIN_BLUE-20BOT",
+     "price_cents": 320,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.61,
+       "gp_cents": 347
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.61,
+       "gp_cents": 347
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.97,
+       "gp_cents": 208
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.97,
+       "gp_cents": 208
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.61,
+       "gp_cents": 347
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.61,
+       "gp_cents": 347
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.61,
+       "gp_cents": 347
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.65,
+       "gp_cents": 139
+      }
+     ],
+     "units_per_class_day": 0.323,
+     "class_days_to_sellout": 21.7,
+     "sellout_date": null,
+     "margin_cents": 215,
+     "gross_profit_cents": 2292,
+     "rate_per_class_day": 0.323,
+     "class_days_of_cover": 21.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 10.6,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.15,
+     "gross_profit": 22.92,
+     "week1_units": 1.6,
+     "week1_gp": 3.47,
+     "week2_units": 1.6,
+     "week2_gp": 3.47,
+     "peak_week_units": 1.61,
+     "peak_cycle_units": 1.61,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.323,
+     "product_peak_cycle_units": 1.61
+    },
+    {
+     "slot": 41,
+     "sku": "ARIZONA-GREEN_TEA-16CAN",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.58,
+       "gp_cents": 240
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.58,
+       "gp_cents": 240
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.95,
+       "gp_cents": 144
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.95,
+       "gp_cents": 144
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.58,
+       "gp_cents": 240
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.58,
+       "gp_cents": 240
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.58,
+       "gp_cents": 240
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.63,
+       "gp_cents": 96
+      }
+     ],
+     "units_per_class_day": 0.317,
+     "class_days_to_sellout": 25.3,
+     "sellout_date": null,
+     "margin_cents": 152,
+     "gross_profit_cents": 1587,
+     "rate_per_class_day": 0.317,
+     "class_days_of_cover": 25.3,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 10.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.52,
+     "gross_profit": 15.87,
+     "week1_units": 1.6,
+     "week1_gp": 2.4,
+     "week2_units": 1.6,
+     "week2_gp": 2.4,
+     "peak_week_units": 1.58,
+     "peak_cycle_units": 1.58,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.317,
+     "product_peak_cycle_units": 1.58
+    },
+    {
+     "slot": 43,
+     "sku": "ARIZONA-ICED_LEMON-16BOT",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.58,
+       "gp_cents": 236
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.58,
+       "gp_cents": 236
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.95,
+       "gp_cents": 142
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.95,
+       "gp_cents": 142
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.58,
+       "gp_cents": 236
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.58,
+       "gp_cents": 236
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.58,
+       "gp_cents": 236
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.63,
+       "gp_cents": 95
+      }
+     ],
+     "units_per_class_day": 0.317,
+     "class_days_to_sellout": 22.1,
+     "sellout_date": null,
+     "margin_cents": 149,
+     "gross_profit_cents": 1561,
+     "rate_per_class_day": 0.317,
+     "class_days_of_cover": 22.1,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 10.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.49,
+     "gross_profit": 15.61,
+     "week1_units": 1.6,
+     "week1_gp": 2.36,
+     "week2_units": 1.6,
+     "week2_gp": 2.36,
+     "peak_week_units": 1.58,
+     "peak_cycle_units": 1.58,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.317,
+     "product_peak_cycle_units": 1.58
+    },
+    {
+     "slot": 45,
+     "sku": "SNAPPLE-APPLE-16BOT",
+     "price_cents": 315,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.1,
+       "gp_cents": 398
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.1,
+       "gp_cents": 398
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.26,
+       "gp_cents": 239
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.26,
+       "gp_cents": 239
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.1,
+       "gp_cents": 398
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.1,
+       "gp_cents": 398
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.1,
+       "gp_cents": 398
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.84,
+       "gp_cents": 159
+      }
+     ],
+     "units_per_class_day": 0.42,
+     "class_days_to_sellout": 16.7,
+     "sellout_date": null,
+     "margin_cents": 190,
+     "gross_profit_cents": 2629,
+     "rate_per_class_day": 0.42,
+     "class_days_of_cover": 16.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 13.9,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.9,
+     "gross_profit": 26.29,
+     "week1_units": 2.1,
+     "week1_gp": 3.98,
+     "week2_units": 2.1,
+     "week2_gp": 3.98,
+     "peak_week_units": 2.1,
+     "peak_cycle_units": 2.1,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.42,
+     "product_peak_cycle_units": 2.1
+    },
+    {
+     "slot": 47,
+     "sku": "HINT-GEORGIA_PEACH-16BOT",
+     "price_cents": 270,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.23,
+       "gp_cents": 170
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.23,
+       "gp_cents": 170
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.05,
+       "gp_cents": 283
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.82,
+       "gp_cents": 113
+      }
+     ],
+     "units_per_class_day": 0.411,
+     "class_days_to_sellout": 17.0,
+     "sellout_date": null,
+     "margin_cents": 138,
+     "gross_profit_cents": 1868,
+     "rate_per_class_day": 0.411,
+     "class_days_of_cover": 17.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 13.6,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.38,
+     "gross_profit": 18.68,
+     "week1_units": 2.1,
+     "week1_gp": 2.83,
+     "week2_units": 2.1,
+     "week2_gp": 2.83,
+     "peak_week_units": 2.05,
+     "peak_cycle_units": 2.05,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.411,
+     "product_peak_cycle_units": 2.05
+    },
+    {
+     "slot": 52,
+     "sku": "BUBLY-CHERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.88,
+       "gp_cents": 87
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.88,
+       "gp_cents": 87
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.58,
+       "gp_cents": 58
+      }
+     ],
+     "units_per_class_day": 0.292,
+     "class_days_to_sellout": 27.4,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 959,
+     "rate_per_class_day": 0.292,
+     "class_days_of_cover": 27.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 9.6,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 9.59,
+     "week1_units": 1.5,
+     "week1_gp": 1.45,
+     "week2_units": 1.5,
+     "week2_gp": 1.45,
+     "peak_week_units": 1.46,
+     "peak_cycle_units": 1.46,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.292,
+     "product_peak_cycle_units": 1.46
+    },
+    {
+     "slot": 54,
+     "sku": "BUBLY-STRAWBERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.88,
+       "gp_cents": 87
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.88,
+       "gp_cents": 87
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.58,
+       "gp_cents": 58
+      }
+     ],
+     "units_per_class_day": 0.292,
+     "class_days_to_sellout": 27.4,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 959,
+     "rate_per_class_day": 0.292,
+     "class_days_of_cover": 27.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 9.6,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 9.59,
+     "week1_units": 1.5,
+     "week1_gp": 1.45,
+     "week2_units": 1.5,
+     "week2_gp": 1.45,
+     "peak_week_units": 1.46,
+     "peak_cycle_units": 1.46,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.292,
+     "product_peak_cycle_units": 1.46
+    },
+    {
+     "slot": 56,
+     "sku": "BUBLY-GRAPEFRUIT-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.88,
+       "gp_cents": 87
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.88,
+       "gp_cents": 87
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.58,
+       "gp_cents": 58
+      }
+     ],
+     "units_per_class_day": 0.292,
+     "class_days_to_sellout": 27.4,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 959,
+     "rate_per_class_day": 0.292,
+     "class_days_of_cover": 27.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 9.6,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 9.59,
+     "week1_units": 1.5,
+     "week1_gp": 1.45,
+     "week2_units": 1.5,
+     "week2_gp": 1.45,
+     "peak_week_units": 1.46,
+     "peak_cycle_units": 1.46,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.292,
+     "product_peak_cycle_units": 1.46
+    },
+    {
+     "slot": 58,
+     "sku": "BUBLY-BLACKBERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 0.88,
+       "gp_cents": 87
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 0.88,
+       "gp_cents": 87
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 1.46,
+       "gp_cents": 145
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 0.58,
+       "gp_cents": 58
+      }
+     ],
+     "units_per_class_day": 0.292,
+     "class_days_to_sellout": 27.4,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 959,
+     "rate_per_class_day": 0.292,
+     "class_days_of_cover": 27.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 9.6,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 9.59,
+     "week1_units": 1.5,
+     "week1_gp": 1.45,
+     "week2_units": 1.5,
+     "week2_gp": 1.45,
+     "peak_week_units": 1.46,
+     "peak_cycle_units": 1.46,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.292,
+     "product_peak_cycle_units": 1.46
+    }
+   ],
+   "weekly_gp": {
+    "1": 76.91,
+    "2": 76.91,
+    "3": 46.15,
+    "4": 0.0,
+    "5": 46.15,
+    "6": 76.91,
+    "7": 76.91,
+    "8": 76.91,
+    "9": 30.76
+   },
+   "units_sold": 281.8,
+   "units_lost": 0.0,
+   "gross_profit": 507.61,
+   "model_spend": 9.0,
+   "profit": 498.61,
+   "week1_gp": 76.88,
+   "week2_gp": 76.88,
+   "slots_selling_out_week1": []
+  },
+  "base": {
+   "totals": {
+    "units_sold": 569.6,
+    "gross_profit_cents": 102731,
+    "model_spend_cents": 900,
+    "profit_cents": 101831,
+    "week1_gp_cents": 15565
+   },
+   "per_slot": [
+    {
+     "slot": 12,
+     "sku": "CELSIUS-ARCTIC_VIBE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.44,
+       "gp_cents": 732
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.44,
+       "gp_cents": 732
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.29,
+       "gp_cents": 488
+      }
+     ],
+     "units_per_class_day": 1.145,
+     "class_days_to_sellout": 7.0,
+     "sellout_date": null,
+     "margin_cents": 213,
+     "gross_profit_cents": 8055,
+     "rate_per_class_day": 1.145,
+     "class_days_of_cover": 7.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 37.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 80.55,
+     "week1_units": 5.7,
+     "week1_gp": 12.2,
+     "week2_units": 5.7,
+     "week2_gp": 12.2,
+     "peak_week_units": 5.73,
+     "peak_cycle_units": 5.73,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.145,
+     "product_peak_cycle_units": 5.73
+    },
+    {
+     "slot": 14,
+     "sku": "REDBULL-SUGARFRE-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.44,
+       "gp_cents": 803
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.44,
+       "gp_cents": 803
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.29,
+       "gp_cents": 536
+      }
+     ],
+     "units_per_class_day": 1.145,
+     "class_days_to_sellout": 9.6,
+     "sellout_date": null,
+     "margin_cents": 234,
+     "gross_profit_cents": 8838,
+     "rate_per_class_day": 1.145,
+     "class_days_of_cover": 9.6,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 37.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.34,
+     "gross_profit": 88.38,
+     "week1_units": 5.7,
+     "week1_gp": 13.39,
+     "week2_units": 5.7,
+     "week2_gp": 13.39,
+     "peak_week_units": 5.73,
+     "peak_cycle_units": 5.73,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 1.145,
+     "product_peak_cycle_units": 5.73
+    },
+    {
+     "slot": 16,
+     "sku": "CELSIUS-TROPICAL_VIBE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.44,
+       "gp_cents": 732
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.44,
+       "gp_cents": 732
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.29,
+       "gp_cents": 488
+      }
+     ],
+     "units_per_class_day": 1.145,
+     "class_days_to_sellout": 7.0,
+     "sellout_date": null,
+     "margin_cents": 213,
+     "gross_profit_cents": 8055,
+     "rate_per_class_day": 1.145,
+     "class_days_of_cover": 7.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 37.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 80.55,
+     "week1_units": 5.7,
+     "week1_gp": 12.2,
+     "week2_units": 5.7,
+     "week2_gp": 12.2,
+     "peak_week_units": 5.73,
+     "peak_cycle_units": 5.73,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.145,
+     "product_peak_cycle_units": 5.73
+    },
+    {
+     "slot": 18,
+     "sku": "REDBULL-ORIGINAL-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.44,
+       "gp_cents": 803
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.44,
+       "gp_cents": 803
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.73,
+       "gp_cents": 1339
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.29,
+       "gp_cents": 536
+      }
+     ],
+     "units_per_class_day": 1.145,
+     "class_days_to_sellout": 9.6,
+     "sellout_date": null,
+     "margin_cents": 234,
+     "gross_profit_cents": 8838,
+     "rate_per_class_day": 1.145,
+     "class_days_of_cover": 9.6,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 37.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.34,
+     "gross_profit": 88.38,
+     "week1_units": 5.7,
+     "week1_gp": 13.39,
+     "week2_units": 5.7,
+     "week2_gp": 13.39,
+     "peak_week_units": 5.73,
+     "peak_cycle_units": 5.73,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 1.145,
+     "product_peak_cycle_units": 5.73
+    },
+    {
+     "slot": 21,
+     "sku": "ROCKSTAR-ORIGINAL-16CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.73,
+       "gp_cents": 1092
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.73,
+       "gp_cents": 1092
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.44,
+       "gp_cents": 655
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.44,
+       "gp_cents": 655
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.73,
+       "gp_cents": 1092
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.73,
+       "gp_cents": 1092
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.73,
+       "gp_cents": 1092
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.29,
+       "gp_cents": 437
+      }
+     ],
+     "units_per_class_day": 1.145,
+     "class_days_to_sellout": 7.0,
+     "sellout_date": null,
+     "margin_cents": 191,
+     "gross_profit_cents": 7205,
+     "rate_per_class_day": 1.145,
+     "class_days_of_cover": 7.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 37.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.91,
+     "gross_profit": 72.05,
+     "week1_units": 5.7,
+     "week1_gp": 10.92,
+     "week2_units": 5.7,
+     "week2_gp": 10.92,
+     "peak_week_units": 5.73,
+     "peak_cycle_units": 5.73,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.145,
+     "product_peak_cycle_units": 5.73
+    },
+    {
+     "slot": 23,
+     "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.73,
+       "gp_cents": 1145
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.73,
+       "gp_cents": 1145
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.44,
+       "gp_cents": 687
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.44,
+       "gp_cents": 687
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.73,
+       "gp_cents": 1145
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.73,
+       "gp_cents": 1145
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.73,
+       "gp_cents": 1145
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.29,
+       "gp_cents": 458
+      }
+     ],
+     "units_per_class_day": 1.145,
+     "class_days_to_sellout": 7.0,
+     "sellout_date": null,
+     "margin_cents": 200,
+     "gross_profit_cents": 7554,
+     "rate_per_class_day": 1.145,
+     "class_days_of_cover": 7.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 37.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.0,
+     "gross_profit": 75.54,
+     "week1_units": 5.7,
+     "week1_gp": 11.45,
+     "week2_units": 5.7,
+     "week2_gp": 11.45,
+     "peak_week_units": 5.73,
+     "peak_cycle_units": 5.73,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.145,
+     "product_peak_cycle_units": 5.73
+    },
+    {
+     "slot": 25,
+     "sku": "REDBULL-YE_TROPICAL-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.73,
+       "gp_cents": 1160
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.73,
+       "gp_cents": 1160
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.44,
+       "gp_cents": 696
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.44,
+       "gp_cents": 696
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.73,
+       "gp_cents": 1160
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.73,
+       "gp_cents": 1160
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.73,
+       "gp_cents": 1160
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.29,
+       "gp_cents": 464
+      }
+     ],
+     "units_per_class_day": 1.145,
+     "class_days_to_sellout": 9.6,
+     "sellout_date": null,
+     "margin_cents": 203,
+     "gross_profit_cents": 7658,
+     "rate_per_class_day": 1.145,
+     "class_days_of_cover": 9.6,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 37.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.03,
+     "gross_profit": 76.58,
+     "week1_units": 5.7,
+     "week1_gp": 11.6,
+     "week2_units": 5.7,
+     "week2_gp": 11.6,
+     "peak_week_units": 5.73,
+     "peak_cycle_units": 5.73,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 1.145,
+     "product_peak_cycle_units": 5.73
+    },
+    {
+     "slot": 27,
+     "sku": "CELSIUS-SPARKLING_KIWI-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.44,
+       "gp_cents": 732
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.44,
+       "gp_cents": 732
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.73,
+       "gp_cents": 1220
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.29,
+       "gp_cents": 488
+      }
+     ],
+     "units_per_class_day": 1.145,
+     "class_days_to_sellout": 7.0,
+     "sellout_date": null,
+     "margin_cents": 213,
+     "gross_profit_cents": 8055,
+     "rate_per_class_day": 1.145,
+     "class_days_of_cover": 7.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 37.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 80.55,
+     "week1_units": 5.7,
+     "week1_gp": 12.2,
+     "week2_units": 5.7,
+     "week2_gp": 12.2,
+     "peak_week_units": 5.73,
+     "peak_cycle_units": 5.73,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.145,
+     "product_peak_cycle_units": 5.73
+    },
+    {
+     "slot": 32,
+     "sku": "HINT-GRAPE-16BOT",
+     "price_cents": 270,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.49,
+       "gp_cents": 344
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.49,
+       "gp_cents": 344
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.66,
+       "gp_cents": 229
+      }
+     ],
+     "units_per_class_day": 0.831,
+     "class_days_to_sellout": 8.4,
+     "sellout_date": null,
+     "margin_cents": 138,
+     "gross_profit_cents": 3781,
+     "rate_per_class_day": 0.831,
+     "class_days_of_cover": 8.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 27.4,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.38,
+     "gross_profit": 37.81,
+     "week1_units": 4.2,
+     "week1_gp": 5.73,
+     "week2_units": 4.2,
+     "week2_gp": 5.73,
+     "peak_week_units": 4.16,
+     "peak_cycle_units": 4.16,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.831,
+     "product_peak_cycle_units": 4.16
+    },
+    {
+     "slot": 34,
+     "sku": "SNAPPLE-PEACH-16BOT",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 3.2,
+       "gp_cents": 370
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 3.2,
+       "gp_cents": 370
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.92,
+       "gp_cents": 222
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.92,
+       "gp_cents": 222
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 3.2,
+       "gp_cents": 370
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 3.2,
+       "gp_cents": 370
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 3.2,
+       "gp_cents": 370
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.28,
+       "gp_cents": 148
+      }
+     ],
+     "units_per_class_day": 0.641,
+     "class_days_to_sellout": 10.9,
+     "sellout_date": null,
+     "margin_cents": 116,
+     "gross_profit_cents": 2445,
+     "rate_per_class_day": 0.641,
+     "class_days_of_cover": 10.9,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 21.1,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.16,
+     "gross_profit": 24.45,
+     "week1_units": 3.2,
+     "week1_gp": 3.7,
+     "week2_units": 3.2,
+     "week2_gp": 3.7,
+     "peak_week_units": 3.2,
+     "peak_cycle_units": 3.2,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.641,
+     "product_peak_cycle_units": 3.2
+    },
+    {
+     "slot": 36,
+     "sku": "GATORADE-COOL_BLUE-20BOT",
+     "price_cents": 320,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 3.26,
+       "gp_cents": 663
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 3.26,
+       "gp_cents": 663
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.96,
+       "gp_cents": 398
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.96,
+       "gp_cents": 398
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 3.26,
+       "gp_cents": 663
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 3.26,
+       "gp_cents": 663
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 3.26,
+       "gp_cents": 663
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.31,
+       "gp_cents": 265
+      }
+     ],
+     "units_per_class_day": 0.653,
+     "class_days_to_sellout": 10.7,
+     "sellout_date": null,
+     "margin_cents": 203,
+     "gross_profit_cents": 4373,
+     "rate_per_class_day": 0.653,
+     "class_days_of_cover": 10.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 21.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.03,
+     "gross_profit": 43.73,
+     "week1_units": 3.3,
+     "week1_gp": 6.63,
+     "week2_units": 3.3,
+     "week2_gp": 6.63,
+     "peak_week_units": 3.26,
+     "peak_cycle_units": 3.26,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.653,
+     "product_peak_cycle_units": 3.26
+    },
+    {
+     "slot": 38,
+     "sku": "POWERADE-MOUNTAIN_BLUE-20BOT",
+     "price_cents": 320,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 3.26,
+       "gp_cents": 703
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 3.26,
+       "gp_cents": 703
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.96,
+       "gp_cents": 422
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.96,
+       "gp_cents": 422
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 3.26,
+       "gp_cents": 703
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 3.26,
+       "gp_cents": 703
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 3.26,
+       "gp_cents": 703
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.31,
+       "gp_cents": 281
+      }
+     ],
+     "units_per_class_day": 0.653,
+     "class_days_to_sellout": 10.7,
+     "sellout_date": null,
+     "margin_cents": 215,
+     "gross_profit_cents": 4639,
+     "rate_per_class_day": 0.653,
+     "class_days_of_cover": 10.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 21.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.15,
+     "gross_profit": 46.39,
+     "week1_units": 3.3,
+     "week1_gp": 7.03,
+     "week2_units": 3.3,
+     "week2_gp": 7.03,
+     "peak_week_units": 3.26,
+     "peak_cycle_units": 3.26,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.653,
+     "product_peak_cycle_units": 3.26
+    },
+    {
+     "slot": 41,
+     "sku": "ARIZONA-GREEN_TEA-16CAN",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 3.2,
+       "gp_cents": 487
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 3.2,
+       "gp_cents": 487
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.92,
+       "gp_cents": 292
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.92,
+       "gp_cents": 292
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 3.2,
+       "gp_cents": 487
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 3.2,
+       "gp_cents": 487
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 3.2,
+       "gp_cents": 487
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.28,
+       "gp_cents": 195
+      }
+     ],
+     "units_per_class_day": 0.641,
+     "class_days_to_sellout": 12.5,
+     "sellout_date": null,
+     "margin_cents": 152,
+     "gross_profit_cents": 3211,
+     "rate_per_class_day": 0.641,
+     "class_days_of_cover": 12.5,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 21.1,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.52,
+     "gross_profit": 32.11,
+     "week1_units": 3.2,
+     "week1_gp": 4.87,
+     "week2_units": 3.2,
+     "week2_gp": 4.87,
+     "peak_week_units": 3.2,
+     "peak_cycle_units": 3.2,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.641,
+     "product_peak_cycle_units": 3.2
+    },
+    {
+     "slot": 43,
+     "sku": "ARIZONA-ICED_LEMON-16BOT",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 3.2,
+       "gp_cents": 479
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 3.2,
+       "gp_cents": 479
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.92,
+       "gp_cents": 287
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.92,
+       "gp_cents": 287
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 3.2,
+       "gp_cents": 479
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 3.2,
+       "gp_cents": 479
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 3.2,
+       "gp_cents": 479
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.28,
+       "gp_cents": 191
+      }
+     ],
+     "units_per_class_day": 0.641,
+     "class_days_to_sellout": 10.9,
+     "sellout_date": null,
+     "margin_cents": 149,
+     "gross_profit_cents": 3159,
+     "rate_per_class_day": 0.641,
+     "class_days_of_cover": 10.9,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 21.1,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.49,
+     "gross_profit": 31.59,
+     "week1_units": 3.2,
+     "week1_gp": 4.79,
+     "week2_units": 3.2,
+     "week2_gp": 4.79,
+     "peak_week_units": 3.2,
+     "peak_cycle_units": 3.2,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.641,
+     "product_peak_cycle_units": 3.2
+    },
+    {
+     "slot": 45,
+     "sku": "SNAPPLE-APPLE-16BOT",
+     "price_cents": 315,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.25,
+       "gp_cents": 806
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.25,
+       "gp_cents": 806
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.55,
+       "gp_cents": 484
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.55,
+       "gp_cents": 484
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.25,
+       "gp_cents": 806
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.25,
+       "gp_cents": 806
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.25,
+       "gp_cents": 806
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.7,
+       "gp_cents": 322
+      }
+     ],
+     "units_per_class_day": 0.85,
+     "class_days_to_sellout": 8.2,
+     "sellout_date": null,
+     "margin_cents": 190,
+     "gross_profit_cents": 5320,
+     "rate_per_class_day": 0.85,
+     "class_days_of_cover": 8.2,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 28.1,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.9,
+     "gross_profit": 53.2,
+     "week1_units": 4.2,
+     "week1_gp": 8.06,
+     "week2_units": 4.2,
+     "week2_gp": 8.06,
+     "peak_week_units": 4.25,
+     "peak_cycle_units": 4.25,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.85,
+     "product_peak_cycle_units": 4.25
+    },
+    {
+     "slot": 47,
+     "sku": "HINT-GEORGIA_PEACH-16BOT",
+     "price_cents": 270,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.49,
+       "gp_cents": 344
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.49,
+       "gp_cents": 344
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.16,
+       "gp_cents": 573
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.66,
+       "gp_cents": 229
+      }
+     ],
+     "units_per_class_day": 0.831,
+     "class_days_to_sellout": 8.4,
+     "sellout_date": null,
+     "margin_cents": 138,
+     "gross_profit_cents": 3781,
+     "rate_per_class_day": 0.831,
+     "class_days_of_cover": 8.4,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 27.4,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.38,
+     "gross_profit": 37.81,
+     "week1_units": 4.2,
+     "week1_gp": 5.73,
+     "week2_units": 4.2,
+     "week2_gp": 5.73,
+     "peak_week_units": 4.16,
+     "peak_cycle_units": 4.16,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.831,
+     "product_peak_cycle_units": 4.16
+    },
+    {
+     "slot": 52,
+     "sku": "BUBLY-CHERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.77,
+       "gp_cents": 176
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.77,
+       "gp_cents": 176
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.18,
+       "gp_cents": 118
+      }
+     ],
+     "units_per_class_day": 0.592,
+     "class_days_to_sellout": 13.5,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 1941,
+     "rate_per_class_day": 0.592,
+     "class_days_of_cover": 13.5,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 19.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 19.41,
+     "week1_units": 3.0,
+     "week1_gp": 2.94,
+     "week2_units": 3.0,
+     "week2_gp": 2.94,
+     "peak_week_units": 2.96,
+     "peak_cycle_units": 2.96,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.592,
+     "product_peak_cycle_units": 2.96
+    },
+    {
+     "slot": 54,
+     "sku": "BUBLY-STRAWBERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.77,
+       "gp_cents": 176
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.77,
+       "gp_cents": 176
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.18,
+       "gp_cents": 118
+      }
+     ],
+     "units_per_class_day": 0.592,
+     "class_days_to_sellout": 13.5,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 1941,
+     "rate_per_class_day": 0.592,
+     "class_days_of_cover": 13.5,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 19.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 19.41,
+     "week1_units": 3.0,
+     "week1_gp": 2.94,
+     "week2_units": 3.0,
+     "week2_gp": 2.94,
+     "peak_week_units": 2.96,
+     "peak_cycle_units": 2.96,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.592,
+     "product_peak_cycle_units": 2.96
+    },
+    {
+     "slot": 56,
+     "sku": "BUBLY-GRAPEFRUIT-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.77,
+       "gp_cents": 176
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.77,
+       "gp_cents": 176
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.18,
+       "gp_cents": 118
+      }
+     ],
+     "units_per_class_day": 0.592,
+     "class_days_to_sellout": 13.5,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 1941,
+     "rate_per_class_day": 0.592,
+     "class_days_of_cover": 13.5,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 19.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 19.41,
+     "week1_units": 3.0,
+     "week1_gp": 2.94,
+     "week2_units": 3.0,
+     "week2_gp": 2.94,
+     "peak_week_units": 2.96,
+     "peak_cycle_units": 2.96,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.592,
+     "product_peak_cycle_units": 2.96
+    },
+    {
+     "slot": 58,
+     "sku": "BUBLY-BLACKBERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 1.77,
+       "gp_cents": 176
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 1.77,
+       "gp_cents": 176
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 2.96,
+       "gp_cents": 294
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.18,
+       "gp_cents": 118
+      }
+     ],
+     "units_per_class_day": 0.592,
+     "class_days_to_sellout": 13.5,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 1941,
+     "rate_per_class_day": 0.592,
+     "class_days_of_cover": 13.5,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 19.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 19.41,
+     "week1_units": 3.0,
+     "week1_gp": 2.94,
+     "week2_units": 3.0,
+     "week2_gp": 2.94,
+     "peak_week_units": 2.96,
+     "peak_cycle_units": 2.96,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.592,
+     "product_peak_cycle_units": 2.96
+    }
+   ],
+   "weekly_gp": {
+    "1": 155.65,
+    "2": 155.65,
+    "3": 93.39,
+    "4": 0.0,
+    "5": 93.39,
+    "6": 155.65,
+    "7": 155.65,
+    "8": 155.65,
+    "9": 62.26
+   },
+   "units_sold": 569.6,
+   "units_lost": 0.0,
+   "gross_profit": 1027.31,
+   "model_spend": 9.0,
+   "profit": 1018.31,
+   "week1_gp": 155.65,
+   "week2_gp": 155.65,
+   "slots_selling_out_week1": []
+  },
+  "high": {
+   "totals": {
+    "units_sold": 796.1,
+    "gross_profit_cents": 143517,
+    "model_spend_cents": 900,
+    "profit_cents": 142617,
+    "week1_gp_cents": 21746
+   },
+   "per_slot": [
+    {
+     "slot": 12,
+     "sku": "CELSIUS-ARCTIC_VIBE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 4.8,
+       "gp_cents": 1023
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 4.8,
+       "gp_cents": 1023
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 3.2,
+       "gp_cents": 682
+      }
+     ],
+     "units_per_class_day": 1.6,
+     "class_days_to_sellout": 5.0,
+     "sellout_date": "2026-12-11",
+     "margin_cents": 213,
+     "gross_profit_cents": 11253,
+     "rate_per_class_day": 1.6,
+     "class_days_of_cover": 5.0,
+     "first_sellout": "2026-12-11",
+     "sellout_days": 5,
+     "units_sold": 52.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 112.53,
+     "week1_units": 8.0,
+     "week1_gp": 17.05,
+     "week2_units": 8.0,
+     "week2_gp": 17.05,
+     "peak_week_units": 8.0,
+     "peak_cycle_units": 8.0,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.6,
+     "product_peak_cycle_units": 8.0
+    },
+    {
+     "slot": 14,
+     "sku": "REDBULL-SUGARFRE-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 4.8,
+       "gp_cents": 1122
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 4.8,
+       "gp_cents": 1122
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 3.2,
+       "gp_cents": 748
+      }
+     ],
+     "units_per_class_day": 1.6,
+     "class_days_to_sellout": 6.9,
+     "sellout_date": null,
+     "margin_cents": 234,
+     "gross_profit_cents": 12347,
+     "rate_per_class_day": 1.6,
+     "class_days_of_cover": 6.9,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 52.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.34,
+     "gross_profit": 123.47,
+     "week1_units": 8.0,
+     "week1_gp": 18.71,
+     "week2_units": 8.0,
+     "week2_gp": 18.71,
+     "peak_week_units": 8.0,
+     "peak_cycle_units": 8.0,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 1.6,
+     "product_peak_cycle_units": 8.0
+    },
+    {
+     "slot": 16,
+     "sku": "CELSIUS-TROPICAL_VIBE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 4.8,
+       "gp_cents": 1023
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 4.8,
+       "gp_cents": 1023
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 3.2,
+       "gp_cents": 682
+      }
+     ],
+     "units_per_class_day": 1.6,
+     "class_days_to_sellout": 5.0,
+     "sellout_date": "2026-12-11",
+     "margin_cents": 213,
+     "gross_profit_cents": 11253,
+     "rate_per_class_day": 1.6,
+     "class_days_of_cover": 5.0,
+     "first_sellout": "2026-12-11",
+     "sellout_days": 5,
+     "units_sold": 52.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 112.53,
+     "week1_units": 8.0,
+     "week1_gp": 17.05,
+     "week2_units": 8.0,
+     "week2_gp": 17.05,
+     "peak_week_units": 8.0,
+     "peak_cycle_units": 8.0,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.6,
+     "product_peak_cycle_units": 8.0
+    },
+    {
+     "slot": 18,
+     "sku": "REDBULL-ORIGINAL-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 4.8,
+       "gp_cents": 1122
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 4.8,
+       "gp_cents": 1122
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 8.0,
+       "gp_cents": 1871
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 3.2,
+       "gp_cents": 748
+      }
+     ],
+     "units_per_class_day": 1.6,
+     "class_days_to_sellout": 6.9,
+     "sellout_date": null,
+     "margin_cents": 234,
+     "gross_profit_cents": 12347,
+     "rate_per_class_day": 1.6,
+     "class_days_of_cover": 6.9,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 52.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.34,
+     "gross_profit": 123.47,
+     "week1_units": 8.0,
+     "week1_gp": 18.71,
+     "week2_units": 8.0,
+     "week2_gp": 18.71,
+     "peak_week_units": 8.0,
+     "peak_cycle_units": 8.0,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 1.6,
+     "product_peak_cycle_units": 8.0
+    },
+    {
+     "slot": 21,
+     "sku": "ROCKSTAR-ORIGINAL-16CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 8.0,
+       "gp_cents": 1525
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 8.0,
+       "gp_cents": 1525
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 4.8,
+       "gp_cents": 915
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 4.8,
+       "gp_cents": 915
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 8.0,
+       "gp_cents": 1525
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 8.0,
+       "gp_cents": 1525
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 8.0,
+       "gp_cents": 1525
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 3.2,
+       "gp_cents": 610
+      }
+     ],
+     "units_per_class_day": 1.6,
+     "class_days_to_sellout": 5.0,
+     "sellout_date": "2026-12-11",
+     "margin_cents": 191,
+     "gross_profit_cents": 10065,
+     "rate_per_class_day": 1.6,
+     "class_days_of_cover": 5.0,
+     "first_sellout": "2026-12-11",
+     "sellout_days": 5,
+     "units_sold": 52.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.91,
+     "gross_profit": 100.65,
+     "week1_units": 8.0,
+     "week1_gp": 15.25,
+     "week2_units": 8.0,
+     "week2_gp": 15.25,
+     "peak_week_units": 8.0,
+     "peak_cycle_units": 8.0,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.6,
+     "product_peak_cycle_units": 8.0
+    },
+    {
+     "slot": 23,
+     "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 8.0,
+       "gp_cents": 1599
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 8.0,
+       "gp_cents": 1599
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 4.8,
+       "gp_cents": 959
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 4.8,
+       "gp_cents": 959
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 8.0,
+       "gp_cents": 1599
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 8.0,
+       "gp_cents": 1599
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 8.0,
+       "gp_cents": 1599
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 3.2,
+       "gp_cents": 640
+      }
+     ],
+     "units_per_class_day": 1.6,
+     "class_days_to_sellout": 5.0,
+     "sellout_date": "2026-12-11",
+     "margin_cents": 200,
+     "gross_profit_cents": 10554,
+     "rate_per_class_day": 1.6,
+     "class_days_of_cover": 5.0,
+     "first_sellout": "2026-12-11",
+     "sellout_days": 5,
+     "units_sold": 52.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.0,
+     "gross_profit": 105.54,
+     "week1_units": 8.0,
+     "week1_gp": 15.99,
+     "week2_units": 8.0,
+     "week2_gp": 15.99,
+     "peak_week_units": 8.0,
+     "peak_cycle_units": 8.0,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.6,
+     "product_peak_cycle_units": 8.0
+    },
+    {
+     "slot": 25,
+     "sku": "REDBULL-YE_TROPICAL-8_4CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 8.0,
+       "gp_cents": 1621
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 8.0,
+       "gp_cents": 1621
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 4.8,
+       "gp_cents": 973
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 4.8,
+       "gp_cents": 973
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 8.0,
+       "gp_cents": 1621
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 8.0,
+       "gp_cents": 1621
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 8.0,
+       "gp_cents": 1621
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 3.2,
+       "gp_cents": 648
+      }
+     ],
+     "units_per_class_day": 1.6,
+     "class_days_to_sellout": 6.9,
+     "sellout_date": null,
+     "margin_cents": 203,
+     "gross_profit_cents": 10699,
+     "rate_per_class_day": 1.6,
+     "class_days_of_cover": 6.9,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 52.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.03,
+     "gross_profit": 106.99,
+     "week1_units": 8.0,
+     "week1_gp": 16.21,
+     "week2_units": 8.0,
+     "week2_gp": 16.21,
+     "peak_week_units": 8.0,
+     "peak_cycle_units": 8.0,
+     "capacity": 11,
+     "product_slots": 1,
+     "product_capacity": 11,
+     "product_units_per_class_day": 1.6,
+     "product_peak_cycle_units": 8.0
+    },
+    {
+     "slot": 27,
+     "sku": "CELSIUS-SPARKLING_KIWI-12CAN",
+     "price_cents": 410,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 4.8,
+       "gp_cents": 1023
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 4.8,
+       "gp_cents": 1023
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 8.0,
+       "gp_cents": 1705
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 3.2,
+       "gp_cents": 682
+      }
+     ],
+     "units_per_class_day": 1.6,
+     "class_days_to_sellout": 5.0,
+     "sellout_date": "2026-12-11",
+     "margin_cents": 213,
+     "gross_profit_cents": 11253,
+     "rate_per_class_day": 1.6,
+     "class_days_of_cover": 5.0,
+     "first_sellout": "2026-12-11",
+     "sellout_days": 5,
+     "units_sold": 52.8,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.13,
+     "gross_profit": 112.53,
+     "week1_units": 8.0,
+     "week1_gp": 17.05,
+     "week2_units": 8.0,
+     "week2_gp": 17.05,
+     "peak_week_units": 8.0,
+     "peak_cycle_units": 8.0,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 1.6,
+     "product_peak_cycle_units": 8.0
+    },
+    {
+     "slot": 32,
+     "sku": "HINT-GRAPE-16BOT",
+     "price_cents": 270,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.48,
+       "gp_cents": 480
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.48,
+       "gp_cents": 480
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.32,
+       "gp_cents": 320
+      }
+     ],
+     "units_per_class_day": 1.161,
+     "class_days_to_sellout": 6.0,
+     "sellout_date": null,
+     "margin_cents": 138,
+     "gross_profit_cents": 5282,
+     "rate_per_class_day": 1.161,
+     "class_days_of_cover": 6.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 38.3,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.38,
+     "gross_profit": 52.82,
+     "week1_units": 5.8,
+     "week1_gp": 8.0,
+     "week2_units": 5.8,
+     "week2_gp": 8.0,
+     "peak_week_units": 5.81,
+     "peak_cycle_units": 5.81,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 1.161,
+     "product_peak_cycle_units": 5.81
+    },
+    {
+     "slot": 34,
+     "sku": "SNAPPLE-PEACH-16BOT",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.48,
+       "gp_cents": 517
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.48,
+       "gp_cents": 517
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.69,
+       "gp_cents": 310
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.69,
+       "gp_cents": 310
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.48,
+       "gp_cents": 517
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.48,
+       "gp_cents": 517
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.48,
+       "gp_cents": 517
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.79,
+       "gp_cents": 207
+      }
+     ],
+     "units_per_class_day": 0.895,
+     "class_days_to_sellout": 7.8,
+     "sellout_date": null,
+     "margin_cents": 116,
+     "gross_profit_cents": 3415,
+     "rate_per_class_day": 0.895,
+     "class_days_of_cover": 7.8,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 29.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.16,
+     "gross_profit": 34.15,
+     "week1_units": 4.5,
+     "week1_gp": 5.17,
+     "week2_units": 4.5,
+     "week2_gp": 5.17,
+     "peak_week_units": 4.48,
+     "peak_cycle_units": 4.48,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.895,
+     "product_peak_cycle_units": 4.48
+    },
+    {
+     "slot": 36,
+     "sku": "GATORADE-COOL_BLUE-20BOT",
+     "price_cents": 320,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.56,
+       "gp_cents": 926
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.56,
+       "gp_cents": 926
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.74,
+       "gp_cents": 555
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.74,
+       "gp_cents": 555
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.56,
+       "gp_cents": 926
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.56,
+       "gp_cents": 926
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.56,
+       "gp_cents": 926
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.82,
+       "gp_cents": 370
+      }
+     ],
+     "units_per_class_day": 0.912,
+     "class_days_to_sellout": 7.7,
+     "sellout_date": null,
+     "margin_cents": 203,
+     "gross_profit_cents": 6109,
+     "rate_per_class_day": 0.912,
+     "class_days_of_cover": 7.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 30.1,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.03,
+     "gross_profit": 61.09,
+     "week1_units": 4.6,
+     "week1_gp": 9.26,
+     "week2_units": 4.6,
+     "week2_gp": 9.26,
+     "peak_week_units": 4.56,
+     "peak_cycle_units": 4.56,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.912,
+     "product_peak_cycle_units": 4.56
+    },
+    {
+     "slot": 38,
+     "sku": "POWERADE-MOUNTAIN_BLUE-20BOT",
+     "price_cents": 320,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.56,
+       "gp_cents": 982
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.56,
+       "gp_cents": 982
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.74,
+       "gp_cents": 589
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.74,
+       "gp_cents": 589
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.56,
+       "gp_cents": 982
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.56,
+       "gp_cents": 982
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.56,
+       "gp_cents": 982
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.82,
+       "gp_cents": 393
+      }
+     ],
+     "units_per_class_day": 0.912,
+     "class_days_to_sellout": 7.7,
+     "sellout_date": null,
+     "margin_cents": 215,
+     "gross_profit_cents": 6481,
+     "rate_per_class_day": 0.912,
+     "class_days_of_cover": 7.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 30.1,
+     "units_lost": 0.0,
+     "margin_per_unit": 2.15,
+     "gross_profit": 64.81,
+     "week1_units": 4.6,
+     "week1_gp": 9.82,
+     "week2_units": 4.6,
+     "week2_gp": 9.82,
+     "peak_week_units": 4.56,
+     "peak_cycle_units": 4.56,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.912,
+     "product_peak_cycle_units": 4.56
+    },
+    {
+     "slot": 41,
+     "sku": "ARIZONA-GREEN_TEA-16CAN",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.48,
+       "gp_cents": 680
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.48,
+       "gp_cents": 680
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.69,
+       "gp_cents": 408
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.69,
+       "gp_cents": 408
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.48,
+       "gp_cents": 680
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.48,
+       "gp_cents": 680
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.48,
+       "gp_cents": 680
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.79,
+       "gp_cents": 272
+      }
+     ],
+     "units_per_class_day": 0.895,
+     "class_days_to_sellout": 8.9,
+     "sellout_date": null,
+     "margin_cents": 152,
+     "gross_profit_cents": 4487,
+     "rate_per_class_day": 0.895,
+     "class_days_of_cover": 8.9,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 29.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.52,
+     "gross_profit": 44.87,
+     "week1_units": 4.5,
+     "week1_gp": 6.8,
+     "week2_units": 4.5,
+     "week2_gp": 6.8,
+     "peak_week_units": 4.48,
+     "peak_cycle_units": 4.48,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.895,
+     "product_peak_cycle_units": 4.48
+    },
+    {
+     "slot": 43,
+     "sku": "ARIZONA-ICED_LEMON-16BOT",
+     "price_cents": 235,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.48,
+       "gp_cents": 669
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.48,
+       "gp_cents": 669
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.69,
+       "gp_cents": 401
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.69,
+       "gp_cents": 401
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.48,
+       "gp_cents": 669
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.48,
+       "gp_cents": 669
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.48,
+       "gp_cents": 669
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.79,
+       "gp_cents": 267
+      }
+     ],
+     "units_per_class_day": 0.895,
+     "class_days_to_sellout": 7.8,
+     "sellout_date": null,
+     "margin_cents": 149,
+     "gross_profit_cents": 4413,
+     "rate_per_class_day": 0.895,
+     "class_days_of_cover": 7.8,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 29.5,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.49,
+     "gross_profit": 44.13,
+     "week1_units": 4.5,
+     "week1_gp": 6.69,
+     "week2_units": 4.5,
+     "week2_gp": 6.69,
+     "peak_week_units": 4.48,
+     "peak_cycle_units": 4.48,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 0.895,
+     "product_peak_cycle_units": 4.48
+    },
+    {
+     "slot": 45,
+     "sku": "SNAPPLE-APPLE-16BOT",
+     "price_cents": 315,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.94,
+       "gp_cents": 1126
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.94,
+       "gp_cents": 1126
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.56,
+       "gp_cents": 676
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.56,
+       "gp_cents": 676
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.94,
+       "gp_cents": 1126
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.94,
+       "gp_cents": 1126
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.94,
+       "gp_cents": 1126
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.38,
+       "gp_cents": 450
+      }
+     ],
+     "units_per_class_day": 1.188,
+     "class_days_to_sellout": 5.9,
+     "sellout_date": null,
+     "margin_cents": 190,
+     "gross_profit_cents": 7433,
+     "rate_per_class_day": 1.188,
+     "class_days_of_cover": 5.9,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 39.2,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.9,
+     "gross_profit": 74.33,
+     "week1_units": 5.9,
+     "week1_gp": 11.26,
+     "week2_units": 5.9,
+     "week2_gp": 11.26,
+     "peak_week_units": 5.94,
+     "peak_cycle_units": 5.94,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 1.188,
+     "product_peak_cycle_units": 5.94
+    },
+    {
+     "slot": 47,
+     "sku": "HINT-GEORGIA_PEACH-16BOT",
+     "price_cents": 270,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 3.48,
+       "gp_cents": 480
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 3.48,
+       "gp_cents": 480
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 5.81,
+       "gp_cents": 800
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 2.32,
+       "gp_cents": 320
+      }
+     ],
+     "units_per_class_day": 1.161,
+     "class_days_to_sellout": 6.0,
+     "sellout_date": null,
+     "margin_cents": 138,
+     "gross_profit_cents": 5282,
+     "rate_per_class_day": 1.161,
+     "class_days_of_cover": 6.0,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 38.3,
+     "units_lost": 0.0,
+     "margin_per_unit": 1.38,
+     "gross_profit": 52.82,
+     "week1_units": 5.8,
+     "week1_gp": 8.0,
+     "week2_units": 5.8,
+     "week2_gp": 8.0,
+     "peak_week_units": 5.81,
+     "peak_cycle_units": 5.81,
+     "capacity": 7,
+     "product_slots": 1,
+     "product_capacity": 7,
+     "product_units_per_class_day": 1.161,
+     "product_peak_cycle_units": 5.81
+    },
+    {
+     "slot": 52,
+     "sku": "BUBLY-CHERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.48,
+       "gp_cents": 246
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.48,
+       "gp_cents": 246
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.65,
+       "gp_cents": 164
+      }
+     ],
+     "units_per_class_day": 0.826,
+     "class_days_to_sellout": 9.7,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 2711,
+     "rate_per_class_day": 0.826,
+     "class_days_of_cover": 9.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 27.3,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 27.11,
+     "week1_units": 4.1,
+     "week1_gp": 4.11,
+     "week2_units": 4.1,
+     "week2_gp": 4.11,
+     "peak_week_units": 4.13,
+     "peak_cycle_units": 4.13,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.826,
+     "product_peak_cycle_units": 4.13
+    },
+    {
+     "slot": 54,
+     "sku": "BUBLY-STRAWBERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.48,
+       "gp_cents": 246
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.48,
+       "gp_cents": 246
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.65,
+       "gp_cents": 164
+      }
+     ],
+     "units_per_class_day": 0.826,
+     "class_days_to_sellout": 9.7,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 2711,
+     "rate_per_class_day": 0.826,
+     "class_days_of_cover": 9.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 27.3,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 27.11,
+     "week1_units": 4.1,
+     "week1_gp": 4.11,
+     "week2_units": 4.1,
+     "week2_gp": 4.11,
+     "peak_week_units": 4.13,
+     "peak_cycle_units": 4.13,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.826,
+     "product_peak_cycle_units": 4.13
+    },
+    {
+     "slot": 56,
+     "sku": "BUBLY-GRAPEFRUIT-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.48,
+       "gp_cents": 246
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.48,
+       "gp_cents": 246
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.65,
+       "gp_cents": 164
+      }
+     ],
+     "units_per_class_day": 0.826,
+     "class_days_to_sellout": 9.7,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 2711,
+     "rate_per_class_day": 0.826,
+     "class_days_of_cover": 9.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 27.3,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 27.11,
+     "week1_units": 4.1,
+     "week1_gp": 4.11,
+     "week2_units": 4.1,
+     "week2_gp": 4.11,
+     "peak_week_units": 4.13,
+     "peak_cycle_units": 4.13,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.826,
+     "product_peak_cycle_units": 4.13
+    },
+    {
+     "slot": 58,
+     "sku": "BUBLY-BLACKBERRY-12CAN",
+     "price_cents": 165,
+     "weekly": [
+      {
+       "week_start": "2026-12-03",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2026-12-10",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2026-12-17",
+       "units": 2.48,
+       "gp_cents": 246
+      },
+      {
+       "week_start": "2026-12-24",
+       "units": 0.0,
+       "gp_cents": 0
+      },
+      {
+       "week_start": "2026-12-31",
+       "units": 2.48,
+       "gp_cents": 246
+      },
+      {
+       "week_start": "2027-01-07",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-14",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-21",
+       "units": 4.13,
+       "gp_cents": 411
+      },
+      {
+       "week_start": "2027-01-28",
+       "units": 1.65,
+       "gp_cents": 164
+      }
+     ],
+     "units_per_class_day": 0.826,
+     "class_days_to_sellout": 9.7,
+     "sellout_date": null,
+     "margin_cents": 99,
+     "gross_profit_cents": 2711,
+     "rate_per_class_day": 0.826,
+     "class_days_of_cover": 9.7,
+     "first_sellout": null,
+     "sellout_days": 0,
+     "units_sold": 27.3,
+     "units_lost": 0.0,
+     "margin_per_unit": 0.99,
+     "gross_profit": 27.11,
+     "week1_units": 4.1,
+     "week1_gp": 4.11,
+     "week2_units": 4.1,
+     "week2_gp": 4.11,
+     "peak_week_units": 4.13,
+     "peak_cycle_units": 4.13,
+     "capacity": 8,
+     "product_slots": 1,
+     "product_capacity": 8,
+     "product_units_per_class_day": 0.826,
+     "product_peak_cycle_units": 4.13
+    }
+   ],
+   "weekly_gp": {
+    "1": 217.45,
+    "2": 217.45,
+    "3": 130.47,
+    "4": 0.0,
+    "5": 130.47,
+    "6": 217.45,
+    "7": 217.45,
+    "8": 217.45,
+    "9": 86.98
+   },
+   "units_sold": 796.1,
+   "units_lost": 0.0,
+   "gross_profit": 1435.17,
+   "model_spend": 9.0,
+   "profit": 1426.17,
+   "week1_gp": 217.46,
+   "week2_gp": 217.46,
+   "slots_selling_out_week1": []
+  }
+ }
+}

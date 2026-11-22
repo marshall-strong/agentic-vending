@@ -1,0 +1,4 @@
+# Outputs a round's scripts write that aren't part of its record (README.md, "Data").
+round7/projection6_rescored.json
+round7/team_catalog_*.json
+*.log
