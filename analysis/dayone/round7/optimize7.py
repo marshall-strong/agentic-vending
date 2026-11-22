@@ -3,7 +3,7 @@
     python analysis/dayone/round7/optimize7.py analysis/dayone/round7/catalog7.json analysis/dayone/round7/opt7.json [--seed PLAN.json ...]
 
 Same maths as optimize6.py (per SKU, the 5-cent price from the floor to $6.50 that maximises margin x demand;
-greedy fill then single-slot swaps; most-we-pay fill at or under $366; scored by project.py's base gross profit).
+greedy fill then single-slot swaps; most-we-pay fill at or under the cap (--cap-cents; plan 7 ran at $366, plan 7b at $400); scored by project.py's base gross profit).
 What changed (Kevin, 22 Nov, #230):
 - project.py now credits a duplicate slot with capacity only, never demand. There is no rule against duplicates:
   the optimiser may still double a product, and it would only gain by it if that product sells out between refills.
@@ -42,7 +42,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("catalog"); ap.add_argument("out")
     ap.add_argument("--seed", nargs="*", default=[], help="plan JSONs (day_one lists) to start swaps from")
+    ap.add_argument("--cap-cents", type=int, default=CAP_CENTS,
+                    help="most-we-pay fill cap (plan 7: 36600; plan 7b: 40000, Kevin 22 Nov)")
     a = ap.parse_args()
+    cap_cents = a.cap_cents
     sys.path.insert(0, P.DEFAULT_REPO)
     from vending.pricing import pack_floor_cents
     cat = {p["sku"]: p for p in json.load(open(a.catalog, encoding="utf-8"))["products"]}
@@ -55,7 +58,7 @@ def main() -> None:
     def full(skus: list[str]) -> tuple[float, dict]:
         plan = {"day_one": [dict(slot=SLOTS[i], sku=s, units=cat[s]["cap"], price=price[s]) for i, s in enumerate(skus)]}
         r = P.project(plan, cat, cal, "", repo)
-        ok = not r["problems"] and round(r["fill_most"] * 100) <= CAP_CENTS
+        ok = not r["problems"] and round(r["fill_most"] * 100) <= cap_cents
         return (r["scenarios"]["base"]["gross_profit"] if ok else -1e9), r
 
     def score(skus: list[str]) -> tuple[float, None]:
@@ -167,7 +170,7 @@ def main() -> None:
     _, r = full(chosen)
     json.dump({"skus": chosen, "test_sku": test, "test_category": test_cat, "price": {s: price[s] for s in set(chosen)},
                "base_gp": round(v, 2), "low_gp": r["scenarios"]["low"]["gross_profit"], "high_gp": r["scenarios"]["high"]["gross_profit"],
-               "fill_most": r["fill_most"], "fill_expected": r["fill_expected"],
+               "fill_most": r["fill_most"], "fill_expected": r["fill_expected"], "cap_cents": cap_cents,
                "free_plan": {"skus": free, "base_gp": round(free_v, 2), "distinct": len(set(free))},
                "test_by_category": by_cat, "brand_swaps": swaps, "log": log},
               open(a.out, "w", encoding="utf-8"), indent=1)

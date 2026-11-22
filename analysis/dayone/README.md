@@ -2,7 +2,7 @@
 
 These scripts project and pick the day-one fill: which drink goes in each of our 20 slots, at what price, with what it costs and what it may earn. They are planning aids. The `vending` package does not import them, and the agent does not use them. They used to live in a personal folder. They moved here with #231 so the team can see and change the model behind each plan round (#230).
 
-Round 7 is the current round. Read [`round7/compare7.md`](round7/compare7.md) first: it compares plan 7 with plan 6 and explains the changes.
+Round 7 is the current round, and **plan 7b is the picked plan** in the team database. Plan 7b is round 7 re-run at the $400 cap. Read [`round7/compare7.md`](round7/compare7.md) first: it compares plan 7 with plan 6, then plan 7 with plan 7b ("7 vs 7b").
 
 ## Files
 
@@ -13,10 +13,13 @@ Round 7 is the current round. Read [`round7/compare7.md`](round7/compare7.md) fi
 | `round6/plan6.json`, `round6/projection6.json` | Plan 6 (picked 21 Nov) and its projection under the old duplicate rule. Round 7 reads our slots and the allowed wildcard spots from plan 6, and `compare7.py` compares against it. |
 | `round7/build_catalog7.py` | Builds `catalog7.json` from a team DB snapshot (see "Data"). |
 | `round7/catalog7.json` | Round 7's priced catalog: 83 live products, 57 of them plannable. |
-| `round7/optimize7.py` | Round 7's product mix: the optimiser plus the test slot and the brand lean. It writes `opt7.json`. |
-| `round7/place7.py` | Puts the mix on our slots by fall position data. It writes `plan7.json`, using the one-line reasons in `why7.json`. |
-| `round7/compare7.py` | Prints the tables in `compare7.md`. It also writes `projection6_rescored.json`, which is not committed. |
-| `round7/plan7.json`, `round7/projection7.json`, `round7/compare7.md` | Round 7's record. |
+| `round7/optimize7.py` | Round 7's product mix: the optimiser plus the test slot and the brand lean. It writes `opt7.json` (plan 7, `--cap-cents 36600`) or `opt7b.json` (plan 7b, the default $400 cap). |
+| `round7/place7.py` | Puts the mix on our slots by fall position data. It writes `plan7.json` or `plan7b.json`, using the one-line reasons in `why7.json` or `why7b.json`, and projects the plan at the cap its `opt` file records. |
+| `round7/compare7.py` | Prints the tables in `compare7.md`'s plan 6 sections. It also writes `projection6_rescored.json`, which is not committed. |
+| `round7/compare7b.py` | Prints the tables in `compare7.md`'s "7 vs 7b" section. The prose around them was written by hand. |
+| `round7/plan7.json`, `round7/projection7.json` | Plan 7, at the $366 cap. |
+| `round7/plan7b.json`, `round7/projection7b.json` | Plan 7b, at the $400 cap: the picked plan. |
+| `round7/compare7.md` | Round 7's write-up. |
 
 ## What the model assumes
 
@@ -42,24 +45,29 @@ Every rate is an assumption, and `project.py` writes each one into the projectio
   - Profit is units sold x (price / 1.08 - expected unit cost), minus $1 a week of model spend.
   - Unsold stock counts at cost (A5, confirmed), so it is neither profit nor loss.
 - **Scenarios.** Demand is x0.6 (low), x1.0 (base) or x1.25 (high), with the haircuts above.
-- **The $366 cap.**
-  - The optimisers keep the fill's most-we-pay cost at or under $366.00 (`project.FILL_CAP`), the cap for all 20 slots that #113 proposed.
-  - `docs/opening-capital-plan.md` has since split it into $360.00 for 19 regular slots plus the wildcard's own $82.00 line (#110). The dashboard still compares fills with $366 (`vending.plan_rounds.FILL_CAP_CENTS`).
-  - Which figure the model should use is open: see #231. The cap shapes the mix. Plan 7's fill comes to exactly $366.00.
+- **The $400 cap.**
+  - The optimisers keep the fill's most-we-pay cost at or under $400.00 for all 20 slots (`project.FILL_CAP`).
+  - Kevin raised it on 22 Nov from the $366.00 that #113 proposed (`docs/opening-capital-plan.md`).
+  - The cap shapes the mix. Plan 7 used $366, and its fill comes to exactly $366.00. Plan 7b uses $400, and its fill comes to $399.00 most and $343.50 expected.
+  - `project.py --cap` and `optimize7.py --cap-cents` take another figure, for example to re-run plan 7.
+  - The dashboard's reference line (`vending.plan_rounds.FILL_CAP_CENTS`) is changed in a separate PR.
 
 ## Run a round
 
-Run everything from the repo root, with the repo's Python environment. The scripts find the repo, the calendar and round 6 by themselves. Round 7 again:
+Run everything from the repo root, with the repo's Python environment. The scripts find the repo, the calendar and round 6 by themselves. Plan 7b again:
 
 ```
 python analysis/dayone/round7/build_catalog7.py      # needs the team snapshot (Data, below)
-python analysis/dayone/round7/optimize7.py analysis/dayone/round7/catalog7.json analysis/dayone/round7/opt7.json
-python analysis/dayone/round7/place7.py analysis/dayone/round7/catalog7.json analysis/dayone/round7/opt7.json \
-    analysis/dayone/round7/why7.json analysis/dayone/round7/plan7.json
-python analysis/dayone/project.py analysis/dayone/round7/plan7.json analysis/dayone/round7/catalog7.json \
-    analysis/dayone/round7/projection7.json
-python analysis/dayone/round7/compare7.py            # prints the tables for compare7.md
+python analysis/dayone/round7/optimize7.py analysis/dayone/round7/catalog7.json analysis/dayone/round7/opt7b.json
+python analysis/dayone/round7/place7.py analysis/dayone/round7/catalog7.json analysis/dayone/round7/opt7b.json \
+    analysis/dayone/round7/why7b.json analysis/dayone/round7/plan7b.json
+python analysis/dayone/project.py analysis/dayone/round7/plan7b.json analysis/dayone/round7/catalog7.json \
+    analysis/dayone/round7/projection7b.json
+python analysis/dayone/round7/compare7.py            # prints the tables for compare7.md's plan 6 sections
+python analysis/dayone/round7/compare7b.py           # prints the tables for its "7 vs 7b" section
 ```
+
+For plan 7, use `opt7.json`, `why7.json` and `plan7.json`, with `--cap-cents 36600` for `optimize7.py` and `--cap 366` for `project.py`.
 
 - `place7.py` reads the fall export (`analysis/data/fall40/`, or the folder in `FALL40_DIR`).
 - To score a plan you edited by hand, run only `project.py`.
@@ -68,12 +76,12 @@ python analysis/dayone/round7/compare7.py            # prints the tables for com
 ## Load a round for the dashboard
 
 ```
-python -m vending.plan_store load analysis/dayone --round 7 --by NAME
+python -m vending.plan_store load analysis/dayone --round 7b --by NAME
 python -m vending.plan_store list
 python -m vending.plan_store pick ID --by NAME
 ```
 
-- `load` finds `roundN/planN.json` and `projectionN.json` under the folder (`vending.plan_rounds.discover`).
+- `load` finds `roundN/planN.json` and `projectionN.json` under the folder (`vending.plan_rounds.discover`). A letter after the number is part of the round's ID: `plan7b.json` is round `7b`.
 - It checks the round against our current assignment from the inventory server (`vending.slots.our_slots`) and refuses a plan that names any other selection.
 - It recomputes every floor, price, capacity and the fill cost itself. It reads the projection's demand figures as they are.
 - It stores both files in `first_fill_plans`. `pick` marks the plan the dashboard shows.
@@ -85,7 +93,8 @@ Only the files a round needs, and only small ones, are committed.
 
 - **Committed.**
   - `catalog7.json`: the round's input, as built.
-  - Plans 6 and 7 with their projections, and `compare7.md`.
+  - `opt7.json`, `opt7b.json`, `why7.json` and `why7b.json`: what `place7.py` reads.
+  - Plans 6, 7 and 7b with their projections, and `compare7.md`.
 - **Not committed: the fall export.**
   - `place7.py` reads `sales_events.csv` from the fall export. That export holds per-selection sales for all 40 selections, from polls before the fall cut only, which `docs/integrity.md` allows.
   - `analysis/` doesn't commit per-selection fall figures, so make the export locally: `python analysis/export_sales.py --fall-all analysis/data/fall40`. `data/` is git-ignored.

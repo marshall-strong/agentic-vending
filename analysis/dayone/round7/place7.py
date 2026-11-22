@@ -71,12 +71,13 @@ def main() -> None:
         row = dict(slot=slot, sku=sku, units=cat[sku]["cap"], price=price[sku], price_cents=round(price[sku] * 100),
                    why=why["why"].get(sku, ""))
         if sku == test:
-            row.update(role="test", role_reason=why["test_reason"])
+            row.update(role="test", role_reason=why["test_reason"].replace("{test_slot}", str(test_pos)))
         rows.append(row)
     checks = [c.replace("{test_slot}", str(test_pos)).replace("{wild_spots}", ", ".join(str(s) for s in sorted(wild)))
               for c in why["checks"]]
     plan = {"note": why["note"], "day_one": rows, "catalog_requests": why["catalog_requests"], "checks": checks}
-    res = P.project(plan, cat, cal, "round7/plan7.json", repo)
+    # opt7.json predates the cap option: plan 7 was made at $366.
+    res = P.project(plan, cat, cal, "round7/" + Path(out_path).name, repo, opt.get("cap_cents", 36_600) / 100)
     plan["expect"] = round(res["scenarios"]["base"]["gross_profit"])
     json.dump(plan, open(out_path, "w", encoding="utf-8"), indent=1)
     for r in rows:

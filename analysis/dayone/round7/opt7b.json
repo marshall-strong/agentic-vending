@@ -1,0 +1,125 @@
+{
+ "skus": [
+  "CELSIUS-ARCTIC_VIBE-12CAN",
+  "REDBULL-SUGARFRE-8_4CAN",
+  "CELSIUS-TROPICAL_VIBE-12CAN",
+  "REDBULL-ORIGINAL-8_4CAN",
+  "ROCKSTAR-ORIGINAL-16CAN",
+  "CELSIUS-SPARKLING_ORANGE-12CAN",
+  "REDBULL-YE_TROPICAL-8_4CAN",
+  "CELSIUS-SPARKLING_KIWI-12CAN",
+  "C4_PERF-COSMIC-16CAN",
+  "SNAPPLE-KIWI-16BOT",
+  "GATORADE-COOL_BLUE-20BOT",
+  "POWERADE-MOUNTAIN_BLUE-20BOT",
+  "SNAPPLE-FRUIT_PUNCH-16BOT",
+  "ARIZONA-GREEN_TEA-16CAN",
+  "SNAPPLE-APPLE-16BOT",
+  "ARIZONA-ICED_LEMON-16BOT",
+  "BUBLY-STRAWBERRY-12CAN",
+  "BUBLY-GRAPEFRUIT-12CAN",
+  "BUBLY-BLACKBERRY-12CAN",
+  "HINT-GEORGIA_PEACH-16BOT"
+ ],
+ "test_sku": "HINT-GEORGIA_PEACH-16BOT",
+ "test_category": "water",
+ "price": {
+  "GATORADE-COOL_BLUE-20BOT": 3.2,
+  "CELSIUS-SPARKLING_ORANGE-12CAN": 4.1,
+  "POWERADE-MOUNTAIN_BLUE-20BOT": 3.2,
+  "BUBLY-BLACKBERRY-12CAN": 1.65,
+  "REDBULL-YE_TROPICAL-8_4CAN": 4.1,
+  "REDBULL-ORIGINAL-8_4CAN": 4.1,
+  "C4_PERF-COSMIC-16CAN": 4.25,
+  "REDBULL-SUGARFRE-8_4CAN": 4.1,
+  "CELSIUS-ARCTIC_VIBE-12CAN": 4.1,
+  "CELSIUS-SPARKLING_KIWI-12CAN": 4.1,
+  "HINT-GEORGIA_PEACH-16BOT": 2.7,
+  "CELSIUS-TROPICAL_VIBE-12CAN": 4.1,
+  "SNAPPLE-FRUIT_PUNCH-16BOT": 3.4,
+  "BUBLY-GRAPEFRUIT-12CAN": 1.65,
+  "ARIZONA-GREEN_TEA-16CAN": 2.35,
+  "SNAPPLE-APPLE-16BOT": 3.15,
+  "ROCKSTAR-ORIGINAL-16CAN": 4.1,
+  "SNAPPLE-KIWI-16BOT": 3.15,
+  "BUBLY-STRAWBERRY-12CAN": 1.65,
+  "ARIZONA-ICED_LEMON-16BOT": 2.35
+ },
+ "base_gp": 1097.66,
+ "low_gp": 542.37,
+ "high_gp": 1533.46,
+ "fill_most": 399.0,
+ "fill_expected": 343.5,
+ "cap_cents": 40000,
+ "free_plan": {
+  "skus": [
+   "CELSIUS-ARCTIC_VIBE-12CAN",
+   "REDBULL-SUGARFRE-8_4CAN",
+   "CELSIUS-TROPICAL_VIBE-12CAN",
+   "REDBULL-ORIGINAL-8_4CAN",
+   "ROCKSTAR-ORIGINAL-16CAN",
+   "CELSIUS-SPARKLING_ORANGE-12CAN",
+   "REDBULL-YE_TROPICAL-8_4CAN",
+   "CELSIUS-SPARKLING_KIWI-12CAN",
+   "C4_PERF-COSMIC-16CAN",
+   "SNAPPLE-KIWI-16BOT",
+   "GATORADE-COOL_BLUE-20BOT",
+   "POWERADE-MOUNTAIN_BLUE-20BOT",
+   "SNAPPLE-FRUIT_PUNCH-16BOT",
+   "ARIZONA-GREEN_TEA-16CAN",
+   "SNAPPLE-APPLE-16BOT",
+   "HINT-GEORGIA_PEACH-16BOT",
+   "ARIZONA-ICED_LEMON-16BOT",
+   "BUBLY-STRAWBERRY-12CAN",
+   "BUBLY-GRAPEFRUIT-12CAN",
+   "BUBLY-BLACKBERRY-12CAN"
+  ],
+  "base_gp": 1097.66,
+  "distinct": 20
+ },
+ "test_by_category": {
+  "energy": {
+   "test": "REDBULL-ORIGINAL-8_4CAN",
+   "base_gp": 697.86
+  },
+  "juice": {
+   "test": "SNAPPLE-APPLE-16BOT",
+   "base_gp": 1075.61
+  },
+  "sodacan": {
+   "test": "COCA-ORIGINAL-12CAN",
+   "base_gp": 1025.74
+  },
+  "sparkling": {
+   "test": "BUBLY-BLACKBERRY-12CAN",
+   "base_gp": 1074.69
+  },
+  "sports": {
+   "test": "POWERADE-MOUNTAIN_BLUE-20BOT",
+   "base_gp": 1073.34
+  },
+  "tea": {
+   "test": "ARIZONA-GREEN_TEA-16CAN",
+   "base_gp": 1085.48
+  },
+  "water": {
+   "test": "HINT-GEORGIA_PEACH-16BOT",
+   "base_gp": 1097.66
+  }
+ },
+ "brand_swaps": [],
+ "log": [
+  "free start round7/plan7.json: polished $1097.66",
+  "free start round6/plan6.json: polished $1070.95",
+  "free (no test slot): base GP $1097.66, 20 distinct, 42s",
+  "test energy: REDBULL-ORIGINAL-8_4CAN -> base GP $697.86 (7s)",
+  "test juice: SNAPPLE-APPLE-16BOT -> base GP $1075.61 (10s)",
+  "test protein: only 18 regular slots fit under the cap with PREMIER-CHOCOLAT-11CAR",
+  "test soda20: only 17 regular slots fit under the cap with MOUNTAIN-ORIGINAL-20BOT",
+  "test sodacan: COCA-ORIGINAL-12CAN -> base GP $1025.74 (9s)",
+  "test sparkling: BUBLY-BLACKBERRY-12CAN -> base GP $1074.69 (9s)",
+  "test sports: POWERADE-MOUNTAIN_BLUE-20BOT -> base GP $1073.34 (9s)",
+  "test tea: ARIZONA-GREEN_TEA-16CAN -> base GP $1085.48 (10s)",
+  "test water: HINT-GEORGIA_PEACH-16BOT -> base GP $1097.66 (12s)"
+ ]
+}

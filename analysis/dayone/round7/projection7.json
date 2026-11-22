@@ -813,6 +813,7 @@
  ],
  "fill_expected": 315.16,
  "fill_most": 366.0,
+ "fill_cap": 366,
  "under_cap": true,
  "problems": [],
  "needs_hand_count": [],

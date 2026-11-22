@@ -60,10 +60,10 @@ def most(p: dict) -> float:
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_REPO = str(REPO)
 CALENDAR = REPO / "analysis" / "golisano_calendar_2026_27.json"
-# The day-one fill's most-we-pay cap, for all 20 slots: the figure proposed in #113 (docs/opening-capital-plan.md).
-# That doc now splits it as $360 for 19 regular slots plus the wildcard's own $82 line (#110); see README.md.
-FILL_CAP = 366.00
-FILL_CAP_CENTS = 36_600
+# The day-one fill's most-we-pay cap, for all 20 slots: $400, raised by Kevin on 22 Nov from the $366 that #113
+# proposed (docs/opening-capital-plan.md). Plan 7 was made at $366 and plan 7b at $400; see README.md.
+FILL_CAP = 400.00
+FILL_CAP_CENTS = 40_000
 
 
 def load_calendar(path: Path | str = CALENDAR) -> dict[str, bool]:
@@ -77,7 +77,8 @@ def slots_from(plan_path: Path | str) -> list[int]:
     return sorted(int(d["slot"]) for d in json.load(open(plan_path, encoding="utf-8"))["day_one"])
 
 
-def project(plan: dict, cat: dict, cal: dict, plan_name: str = "", repo: str = DEFAULT_REPO) -> dict:
+def project(plan: dict, cat: dict, cal: dict, plan_name: str = "", repo: str = DEFAULT_REPO,
+            cap: float = FILL_CAP) -> dict:
     """Project a plan in memory. cat: sku -> product; cal: ISO date -> is a class day."""
     if repo not in sys.path:
         sys.path.insert(0, repo)
@@ -193,7 +194,7 @@ def project(plan: dict, cat: dict, cal: dict, plan_name: str = "", repo: str = D
                   capacity_assumed=bool(p.get("capacity_assumed")), store=p["store"]) for p in cat.values() if p["sku"] in need]
     res = dict(schema="vending-day1/projection/v1", money="integer cents in *_cents fields; float dollar fields are kept for older readers",
                plan=a.plan, packs=packs, fill_expected_cents=round(fill_exp * 100), fill_most_cents=round(fill_most * 100), window=f"{START} to {END} (calendar file ends 31 Jan)", slots=slots, purchase=buy,
-               fill_expected=fill_exp, fill_most=fill_most, under_cap=fill_most <= FILL_CAP, problems=problems,
+               fill_expected=fill_exp, fill_most=fill_most, fill_cap=cap, under_cap=fill_most <= cap, problems=problems,
                needs_hand_count=sorted({s["sku"] for s in slots if s["assumed_cap"]}),
                needs_new_source=sorted({s["sku"] for s in slots if not s["orderable_now"]}),
                assumptions=dict(TIER_RATE=TIER_RATE, REF_PRICE=REF_PRICE, ELASTICITY_UP=ELASTICITY_UP, ELASTICITY_DOWN=ELASTICITY_DOWN, CLAMP=CLAMP, CAT_FREE=CAT_FREE, CAT_FREE_DEFAULT=CAT_FREE_DEFAULT, CAT_DECAY=CAT_DECAY,
@@ -213,15 +214,16 @@ def main() -> None:
     ap.add_argument("plan"); ap.add_argument("catalog"); ap.add_argument("out")
     ap.add_argument("--repo", default=DEFAULT_REPO)
     ap.add_argument("--calendar", default=str(CALENDAR))
+    ap.add_argument("--cap", type=float, default=FILL_CAP, help="most-we-pay fill cap in dollars (plan 7 used 366)")
     a = ap.parse_args()
     cat = {p["sku"]: p for p in json.load(open(a.catalog, encoding="utf-8"))["products"]}
     plan = json.load(open(a.plan, encoding="utf-8"))
     cal = load_calendar(a.calendar)
-    res = project(plan, cat, cal, a.plan, a.repo)
+    res = project(plan, cat, cal, a.plan, a.repo, a.cap)
     out_sc, fill_exp, fill_most, problems = res["scenarios"], res["fill_expected"], res["fill_most"], res["problems"]
     json.dump(res, open(a.out, "w", encoding="utf-8"), indent=1)
     b = out_sc["base"]
-    print(f"fill ${fill_exp:.2f} expected / ${fill_most:.2f} most (cap ${FILL_CAP:.0f}: {'ok' if fill_most <= FILL_CAP else 'OVER'}); problems: {problems or 'none'}")
+    print(f"fill ${fill_exp:.2f} expected / ${fill_most:.2f} most (cap ${a.cap:.0f}: {'ok' if fill_most <= a.cap else 'OVER'}); problems: {problems or 'none'}")
     for n, sc in out_sc.items():
         print(f"{n:5s}: units {sc['units_sold']:7.1f} lost {sc['units_lost']:6.1f}  GP ${sc['gross_profit']:8.2f}  profit ${sc['profit']:8.2f}  "
               f"wk1 ${sc['week1_gp']:6.2f} wk2 ${sc['week2_gp']:6.2f}  sell out in wk1: {len(sc['slots_selling_out_week1'])}")

@@ -171,3 +171,92 @@ Kept from plan 6 and still without a sourcing row: CELSIUS-ARCTIC_VIBE-12CAN, CE
 - **Round 6 reproduced.** project_v4.py, run on plan 6 against the current repo's `vending.pricing` and `vending.capacity`, gives round 6's figures exactly ($557.47 / $1,137.43 / $1,592.64; fill $308.09 / $357.50).
 - **Round reader.** The repo's own round reader (`vending.plan_rounds.discover` and `read_round`, used offline, with no database) reads round 7 with no warnings and 20 slots.
 - **Not done.** `plan_store` was not run.
+
+## 7 vs 7b: the fill cap raised from $366 to $400
+
+Plan 7b is round 7 re-run with a $400 most-we-pay cap (Kevin, 22 Nov). Everything else is the same: the duplicate rule, the test slot, the brand lean, the catalog file and the $53 spendable floor.
+
+### Verdict: the extra $34 is worth it. Plan 7b is better.
+
+- **Profit is up in every scenario:**
+
+  | Scenario | Change |
+  |---|---|
+  | Low | +$34.76 |
+  | Base | +$70.35 |
+  | High | +$98.29 |
+
+- **The extra spend is small.** The fill costs $28.34 more expected and $33.00 more at most. Leftover stock counts at cost (A5), so no extra money is at risk. Spendable after the fill is still $201 in the worst case, against the $53 floor.
+- **What the money bought.** Out: Hint Grape, Snapple Peach Tea and bubly Cherry. In: C4 and two Snapple juices (Kiwi Strawberry and Fruit Punch). One bubly was replaced, by a mix of a new brand (C4) and more Snapple, not one-for-one. No soda or protein drink got in: under the model they still earn less per dollar of pack than these drinks.
+- **Brands and categories.** Brands go from 9 to 10. Energy reaches its limit of 9 drinks (CAT_FREE). Snapple goes from 2 to 3 flavours. That runs against the brand lean, but no new-brand swap came within the $5 tolerance.
+- **The cap is still nearly full.** The fill's most-we-pay cost is $399.00 against $400, so a price rise of more than $1 when the prices are checked again breaks the cap. Re-run 7b if that happens.
+- **Test slot.** It moves to slot 34, Hint Georgia Peach, the only water. Its place in the placement order fell on a wildcard spot, and 34 is the next spot that isn't one. Slot 34 sold least of our shelf 3–4 slots in the fall, so a test drink there starts at a disadvantage. Read its weekly sales with that in mind, or let the agent move the test slot later.
+- **Code changes for 7b:**
+  - `optimize7.py --cap-cents 40000`, and `project.py --cap 400`. In the repo (#231) the default is now $400 (`project.FILL_CAP`); plan 7 needs `--cap-cents 36600` and `--cap 366`.
+  - `project.py` now writes the cap it was checked against as `fill_cap`.
+  - Plan 7 rebuilt unchanged with the new code: plan7.json is identical and projection7.json's scenarios are identical.
+  - The repo's round reader, used offline, reads 7b with no warnings and 20 slots.
+
+### Each slot's drink
+
+| Slot | Plan 7 ($366) | Base GP | Plan 7b ($400) | Base GP |
+|---|---|---|---|---|
+| 12 | Celsius Sparkling Arctic Vibe 12 oz can | $80.55 | Celsius Sparkling Tropical Vibe 12 oz can | $80.55 |
+| 14 | Red Bull Sugarfree 8.4 oz can | $88.38 | Red Bull Original 8.4 oz can | $88.38 |
+| 16 | Celsius Sparkling Tropical Vibe 12 oz can | $80.55 | Celsius Sparkling Arctic Vibe 12 oz can | $80.55 |
+| 18 | Red Bull Original 8.4 oz can | $88.38 | Red Bull Sugarfree 8.4 oz can | $88.38 |
+| 21 | Rockstar Energy 16 oz can | $72.05 | Rockstar Energy 16 oz can | $72.05 |
+| 23 | Celsius Sparkling Orange 12 oz can | $75.54 | Celsius Sparkling Orange 12 oz can | $75.54 |
+| 25 | Red Bull Yellow Edition Tropical 8.4 oz can | $76.58 | Red Bull Yellow Edition Tropical 8.4 oz can | $76.58 |
+| 27 | Celsius Sparkling Kiwi Guava 12 oz can | $80.55 | Celsius Sparkling Kiwi Guava 12 oz can | $80.55 |
+| 32 | Hint Grape 16 oz bottle | $37.81 | Gatorade Thirst Quencher 20 oz bottle | $43.73 |
+| 34 | Snapple Peach Tea 16 oz bottle | $24.45 | Hint Georgia Peach 16 oz bottle **(test)** | $37.81 |
+| 36 | Gatorade Thirst Quencher 20 oz bottle | $43.73 | Powerade Sports Drink 20 oz bottle | $46.39 |
+| 38 | Powerade Sports Drink 20 oz bottle | $46.39 | C4 Performance Energy Cosmic Rainbow 16 oz can | $69.56 |
+| 41 | AriZona Green Tea with Ginseng and Honey 16 oz can | $32.11 | Snapple Fruit Punch 16 oz bottle | $38.00 |
+| 43 | Arizona Iced Tea with Lemon Flavor 16 oz bottle | $31.59 | AriZona Green Tea with Ginseng and Honey 16 oz can | $32.11 |
+| 45 | Snapple Apple 16 oz bottle **(test)** | $53.20 | Snapple Apple 16 oz bottle | $53.20 |
+| 47 | Hint Georgia Peach 16 oz bottle | $37.81 | Snapple Kiwi Strawberry 16 oz bottle | $44.46 |
+| 52 | Bubly Sparkling Water Cherry 12 oz can | $19.41 | Bubly Sparkling Water Strawberry 12 oz can | $19.41 |
+| 54 | Bubly Sparkling Water Strawberry 12 oz can | $19.41 | Bubly Sparkling Water Blackberry 12 oz can | $19.41 |
+| 56 | Bubly Sparkling Water Grapefruit 12 oz can | $19.41 | Bubly Sparkling Water Grapefruit 12 oz can | $19.41 |
+| 58 | Bubly Sparkling Water Blackberry 12 oz can | $19.41 | Arizona Iced Tea with Lemon Flavor 16 oz bottle | $31.59 |
+
+Out in 7b: Bubly Sparkling Water Cherry 12 oz can, Hint Grape 16 oz bottle, Snapple Peach Tea 16 oz bottle.  
+In for 7b: C4 Performance Energy Cosmic Rainbow 16 oz can, Snapple Fruit Punch 16 oz bottle, Snapple Kiwi Strawberry 16 oz bottle.  
+The rest are the same drinks; most moved slot because placement ranks drinks by value.
+
+### Brands
+
+| Brand | Plan 7 | Plan 7b |
+|---|---|---|
+| Celsius | 4 | 4 |
+| bubly | 4 | 3 |
+| Red Bull | 3 | 3 |
+| Snapple | 2 | 3 |
+| Arizona | 2 | 2 |
+| Hint | 2 | 1 |
+| Gatorade | 1 | 1 |
+| Powerade | 1 | 1 |
+| Rockstar | 1 | 1 |
+| C4 | 0 | 1 |
+| **Brands** | **9** | **10** |
+
+Categories: energy 8 → 9; juice 1 → 3; sparkling 4 → 3; sports 2 → 2; tea 3 → 2; water 2 → 1.
+
+### Money
+
+| | Plan 7 ($366) | Plan 7b ($400) | Change |
+|---|---|---|---|
+| Fill cost, expected | $315.16 | $343.50 | +$28.34 |
+| Fill cost, most we pay | $366.00 | $399.00 | +$33.00 |
+| Spendable after the fill, worst case ($600 less most we pay; floor $53) | $234.00 | $201.00 | −$33.00 |
+| Projected profit, low | $498.61 | $533.37 | +$34.76 |
+| Projected profit, base | $1,018.31 | $1,088.66 | +$70.35 |
+| Projected profit, high | $1,426.17 | $1,524.46 | +$98.29 |
+| Closet stock after the fill (units, valued at cost) | 90 | 94 | +4 |
+
+### Drinks in 7b that need a checked-price sourcing row
+
+14 drinks: AriZona Green Tea with Ginseng and Honey 16 oz can, Bubly Sparkling Water Blackberry 12 oz can, Bubly Sparkling Water Grapefruit 12 oz can, Bubly Sparkling Water Strawberry 12 oz can, C4 Performance Energy Cosmic Rainbow 16 oz can (new in 7b), Celsius Sparkling Arctic Vibe 12 oz can, Celsius Sparkling Kiwi Guava 12 oz can, Celsius Sparkling Tropical Vibe 12 oz can, Gatorade Thirst Quencher 20 oz bottle, Powerade Sports Drink 20 oz bottle, Red Bull Yellow Edition Tropical 8.4 oz can, Rockstar Energy 16 oz can, Snapple Apple 16 oz bottle, Snapple Kiwi Strawberry 16 oz bottle (new in 7b).  
+Snapple Fruit Punch, new in 7b, already has one (Amazon, 15 Nov). Plan 7's list was also 14; 7b drops bubly Cherry and Snapple Peach Tea from it and adds C4 and Snapple Kiwi Strawberry.
