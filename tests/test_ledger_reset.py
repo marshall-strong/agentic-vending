@@ -26,6 +26,24 @@ REAL_OPENED = datetime(2026, 11, 29, 21, 0, tzinfo=timezone.utc)
 AFTER = datetime(2026, 12, 2, 12, 0, tzinfo=timezone.utc)
 
 
+# The database refuses an archive insert that commits from the cutoff on (migration 022). The cutoff is the
+# real one, 00:00 Eastern on Mon 30 Nov, unless the test-only config row moves it. These tests run on any
+# date, so each database test moves it far ahead, and the cutoff tests move it close.
+CUTOFF_KEY = "ledger_reset_closes_for_tests"
+
+
+def set_cutoff(conn, closes):
+    conn.execute("insert into config (key, value, updated_by) values (%s, to_jsonb(%s::text), 'test')"
+                 " on conflict (key) do update set value = excluded.value", (CUTOFF_KEY, closes.isoformat()))
+
+
+@pytest.fixture(autouse=True)
+def _far_cutoff(request):
+    if "schema_url" in request.fixturenames:
+        with open_in(*request.getfixturevalue("schema_url")) as c:
+            set_cutoff(c, datetime(2100, 1, 1, tzinfo=timezone.utc))
+
+
 def seed(conn):
     """The team ledger as it stands: a test opening, run 2's spend, a test receipt, sales on the counters."""
     ledger.record(conn, "opening", 60000, TEST_DETAIL, "marshall", TEST_OPENED)
@@ -284,3 +302,59 @@ def test_show_dates_the_opening_in_eastern(schema_url, monkeypatch, capsys):
     assert ledger.main(["show"]) == 0
     line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("Opening capital"))
     assert "2026-11-29" in line and "2026-11-30" not in line and "Eastern" in line
+
+
+# --- Sol review, round 3 -----------------------------------------------------------------------
+
+def test_the_database_cutoff_defaults_to_midnight_eastern_on_30_nov(conn):
+    """Finding 1: the cutoff the database enforces is RESET_CLOSES unless the test-only row moves it."""
+    conn.execute("delete from config where key = %s", (CUTOFF_KEY,))
+    assert conn.execute("select ledger_reset_closes()").fetchone()[0] == RESET_CLOSES
+    set_cutoff(conn, REAL_OPENED)
+    assert conn.execute("select ledger_reset_closes()").fetchone()[0] == REAL_OPENED
+
+
+def test_a_reset_that_pauses_past_the_cutoff_after_its_last_clock_read_does_not_commit(conn, monkeypatch):
+    """Finding 1 (blocker): the reset reads the clock after its last write, then pauses before the commit.
+    The cutoff passes in the pause. The database refuses the commit, so nothing moves."""
+    seed(conn)
+    set_cutoff(conn, conn.execute("select clock_timestamp() + interval '1.5 seconds'").fetchone()[0])
+    reads = []
+
+    def clock(c):                                # Python sees a time before the window closes, every read
+        reads.append(1)
+        if len(reads) == 2:                      # the last read, after the last write: then the pause
+            time.sleep(2)
+        return RESET_CLOSES - timedelta(minutes=1)
+
+    monkeypatch.setattr(ledger, "db_now", clock)
+    with pytest.raises(LedgerError, match="window closed"):
+        ledger.reset_test_opening(conn, "kevin")
+    assert len(reads) == 2
+    assert ledger.opening(conn).detail == TEST_DETAIL and ledger.archived(conn) == []
+    assert conn.execute("select count(*) from action_log where tool = 'ledger.reset_test_opening'").fetchone() == (0,)
+
+
+def test_a_reset_inside_a_transaction_committed_after_the_cutoff_does_not_commit(conn, schema_url):
+    """Finding 1 (blocker): the reset runs inside a caller's transaction, which commits after the cutoff."""
+    seed(conn)
+    set_cutoff(conn, conn.execute("select clock_timestamp() + interval '1.5 seconds'").fetchone()[0])
+    outer = open_in(*schema_url)
+    try:
+        outer.autocommit = False
+        outer.execute("select 1")                # an open transaction: the reset's own block is a savepoint
+        assert ledger.reset_test_opening(outer, "kevin", RESET_AT).id == 1
+        time.sleep(2)
+        with pytest.raises(psycopg.Error, match="window closed"):
+            outer.commit()
+    finally:
+        outer.close()
+    assert ledger.opening(conn).detail == TEST_DETAIL and ledger.archived(conn) == []
+    assert conn.execute("select count(*) from action_log where tool = 'ledger.reset_test_opening'").fetchone() == (0,)
+
+
+def test_a_reset_before_the_database_cutoff_commits(conn):
+    seed(conn)
+    set_cutoff(conn, conn.execute("select clock_timestamp() + interval '1 minute'").fetchone()[0])
+    assert ledger.reset_test_opening(conn, "kevin", RESET_AT).id == 1
+    assert ledger.opening(conn) is None and len(ledger.archived(conn)) == 1
