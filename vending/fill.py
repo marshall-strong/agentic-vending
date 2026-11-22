@@ -26,8 +26,11 @@ and nothing sent:
   request the person never saw. Check its price (`sourcing set SKU --alternate`) or remove it;
 - `stale_price`: a primary or alternate row for a product in the plan was checked more than a week ago
   (`sourcing.Option.is_stale`). The planner only warns; the fill sends both to the stocker, so it refuses;
-- `settings_busy` (submit only): someone is changing `config` (the halt switch or a `config set`) as the submit
-  starts, so it refuses rather than wait, which could deadlock with the halt (see `hold_inputs`);
+- `settings_busy`, `receipts_busy`, `inputs_busy` (submit only): someone is changing `config` (the halt switch
+  or a `config set`), the receipt sync is storing receipts, or someone is changing another input (the pick, the
+  slot assignment, the sourcing table, our catalog copy or the ledger) as the submit starts. Nothing is saved or
+  sent; try again in a minute. The submit never waits for a lock while it holds the halt row, so a `halt on`
+  can't queue behind it (see `hold_inputs`);
 - `test_opening`: the ledger's opening is the 11 Nov test opening (#215): that entry itself
   (`ledger.is_test_opening`: entry 1, dated 11 Nov in Eastern time, with its exact detail), or any opening dated
   on or before 11 Nov. Not the fall cut, which can move;
@@ -69,11 +72,20 @@ The submit holds the pick, the slot assignment, the sourcing table, our catalog
 copy, the ledger, `config` and the receipt sync's lock for its whole transaction
 (`hold_inputs`): a `plan_store pick`, a new assignment, a `sourcing set`, a
 re-dated opening, a `config set` or a receipt read back by the sync waits until
-the send is over, a few seconds plus the POST.
+the send is over, a few seconds plus the POST. It takes them all at once, before
+it saves anything, and without waiting: if any is busy it refuses instead.
+
+The submit's transaction is READ COMMITTED (the write gate sets it and checks it),
+so a fill that waited on the halt row for another reads what that one committed.
+Right before the POST, the duplicate checks (`fill_already_sent`,
+`submission_unresolved`) run again on the side connection, which reads what is
+committed now.
 
 Once the attempt is saved, right before the POST, it runs the whole preview
 again (`_final_check`): the planner over the current rows, every guard, the
-deviations and the balance. The pick and our slots must be the ones it planned
+deviations and the balance. It then reads the clock once more, and checks the
+deadline, the quotes' age and the cash at that reading: a quote can turn a week
+old, or a ledger entry dated a little later come due, while the planner runs. The pick and our slots must be the ones it planned
 (`pick_changed`), the hash the approved one (`plan_changed`) and the request
 body byte for byte the one about to be sent (`request_changed`). Any refusal
 marks the saved attempt `not_filed`, and nothing is sent.
@@ -97,6 +109,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -132,6 +145,8 @@ DEVIATION = "pick_deviation"
 REQUEST_CHANGED = "request_changed"
 CANNOT_PLAN = "cannot_plan"
 SETTINGS_BUSY = "settings_busy"
+RECEIPTS_BUSY = "receipts_busy"
+INPUTS_BUSY = "inputs_busy"
 STALE_PRICE = "stale_price"
 PURPOSE = "fill"            # `purchase_submissions.purpose` for the fill's attempts
 
@@ -231,6 +246,19 @@ def checks(conn: psycopg.Connection, pick: Picked, ours: tuple[str, ...],
         refusals.extend(_unpriced(sourcing.options_for(conn, skus), pick.round))
     opened = ledger.opening(conn)
     refusals.extend(_test_opening(opened))
+    return [*refusals, *duplicates(conn, except_row, opened)]
+
+
+_UNREAD = object()
+
+
+def duplicates(conn: psycopg.Connection, except_row: int | None = None, opened=_UNREAD) -> list[Refusal]:
+    """`fill_already_sent` and `submission_unresolved`: a fill, or a request since the opening, that the bridge
+    didn't reject, or a submission still open. The submit runs these again on its side connection right before
+    the POST (round 5, finding 3). `opened`: the opening already read, or read here when not given."""
+    if opened is _UNREAD:
+        opened = ledger.opening(conn)
+    refusals = []
     if sent := _sent(conn, opened.at if opened is not None else None):
         named = ", ".join(f"{rid} ({status})" for rid, status in sent)
         refusals.append(Refusal(ALREADY_SENT, (
@@ -498,10 +526,12 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
             return _unique(found)
 
         def before_post(side: psycopg.Connection, row: int, body: dict) -> list[Refusal]:
-            # After the attempt is saved, right before the POST: the whole preview again, on this transaction,
-            # which still holds every lock `hold_inputs` took (round 3, finding 1).
-            return _final_check(conn, bridge, pick, ours, expected, row, body, now, late=late,
-                                accept_deviations=accept_deviations)
+            # After the attempt is saved, right before the POST: the duplicate checks on the side connection,
+            # which reads what is committed now (round 5, finding 3), then the whole preview again, on this
+            # transaction, which still holds every lock `hold_inputs` took (round 3, finding 1).
+            return _unique([*duplicates(side, row),
+                            *_final_check(conn, bridge, pick, ours, expected, row, body, now, late=late,
+                                          accept_deviations=accept_deviations)])
 
         return submit_tool.submit_desired_state(desired, bridge, connect, now, pool=True, before_send=before_send,
                                                 before_post=before_post, purpose=PURPOSE,
@@ -517,31 +547,45 @@ def hold_inputs(conn: psycopg.Connection) -> None:
     Held from the first check through the POST and the settle: a few seconds of local reads, plus the POST,
     which the bridge client bounds by its timeout. While they are held, these wait for the send to end: a pick
     (`plan_store pick`), a new slot assignment (`slots record`), a `sourcing set`, a catalog sync, a ledger entry
-    (the opening, a model call's cost), a `config set` (a price ceiling) and the receipt sync's `store`, which
-    takes the same advisory lock (`purchase_requests.RECEIPTS_LOCK`). The fill is run once, by a person, so a
-    sync that waits a few seconds costs nothing. Of the locks this waits for, the receipt lock is taken first;
-    nothing that takes it waits on the tables locked after it.
+    (the opening, a model call's cost), a `config set` (a price ceiling), a `halt on` and the receipt sync's
+    `store`, which takes the same advisory lock (`purchase_requests.RECEIPTS_LOCK`). The fill is run once, by a
+    person, so a sync that waits a few seconds costs nothing.
+
+    The submit itself never waits for any of them (round 5, finding 1). The write gate already holds the halt
+    row, so a wait here would hold the halt gate while it waited: a `halt on` started then would queue behind the
+    fill, and the fill would post once the lock it waited for was free (round 4 was the same with `config`). So
+    every lock is taken at once, before anything is saved, without waiting (`NOWAIT`, and
+    `pg_try_advisory_xact_lock` for the receipt lock). If any is busy, the submit refuses (`settings_busy`,
+    `receipts_busy` or `inputs_busy`), the transaction rolls back, nothing is saved or sent, and whatever was
+    waiting on the halt row goes through. A halt started after these locks waits for the send.
 
     The side connection that saves and settles the attempt writes only `purchase_submissions` and
-    `purchase_requests`. Neither is locked here, so it never waits on this transaction.
-
-    `config` is locked first, and without waiting (round 4, finding 1). The write gate already holds the halt
-    row, so a `halt on` started before this waits on that row while holding a lock on `config`. Waiting for
-    `config` here would close a deadlock, and Postgres cancelled the halt, not the fill. So if anyone is changing
-    `config` (the halt switch or a `config set`), the fill refuses (`settings_busy`) before anything is saved,
-    and the halt goes through once this transaction ends. A halt started after this lock waits for the send."""
-    try:
-        conn.execute("lock table config in share mode nowait")
-    except psycopg.errors.LockNotAvailable:
-        raise Refused([Refusal(SETTINGS_BUSY, (
-            "someone is changing settings or the halt switch right now, so nothing was saved or sent; check the "
-            "halt switch (python -m vending.halt status) and try again"))]) from None
-    conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (purchase_requests.RECEIPTS_LOCK,))
-    conn.execute("lock table first_fill_plans in share mode")
-    conn.execute("select 1 from slot_assignment where id = 1 for share")
+    `purchase_requests`. Neither is locked here, so it never waits on this transaction."""
+    _nowait(conn, "lock table config in share mode nowait", SETTINGS_BUSY,
+            "someone is changing settings or the halt switch right now")
+    if not conn.execute("select pg_try_advisory_xact_lock(hashtext(%s))",
+                        (purchase_requests.RECEIPTS_LOCK,)).fetchone()[0]:
+        raise Refused([_busy(RECEIPTS_BUSY, "the receipt sync is storing receipts right now")])
     # What the checks read is what the planner reads (round 2, finding 1), and what the last check reads is what
     # is sent (round 3, finding 1).
-    conn.execute("lock table sourcing_options, catalog_products, ledger_entries in share mode")
+    busy = "someone is changing the pick, our slots, the sourcing table, our catalog copy or the ledger right now"
+    _nowait(conn, "lock table first_fill_plans in share mode nowait", INPUTS_BUSY, busy)
+    _nowait(conn, "select 1 from slot_assignment where id = 1 for share nowait", INPUTS_BUSY, busy)
+    _nowait(conn, "lock table sourcing_options, catalog_products, ledger_entries in share mode nowait",
+            INPUTS_BUSY, busy)
+
+
+def _nowait(conn: psycopg.Connection, sql: str, code: str, why: str) -> None:
+    try:
+        conn.execute(sql)
+    except psycopg.errors.LockNotAvailable:
+        raise Refused([_busy(code, why)]) from None
+
+
+def _busy(code: str, why: str) -> Refusal:
+    return Refusal(code, (
+        f"{why}, so nothing was saved or sent; try again in a minute. If a halt was turned on, check it first "
+        "(python -m vending.halt status)"))
 
 
 def _final_check(conn: psycopg.Connection, bridge: Callable[[], Bridge], pick: Picked, ours: tuple[str, ...],
@@ -552,7 +596,11 @@ def _final_check(conn: psycopg.Connection, bridge: Callable[[], Bridge], pick: P
     The planner runs over the current rows with every guard, the deviations and the balance. Then the plan must
     still be the one approved: the same pick and our slots, the same approval hash, and a request body
     byte-identical to `body`, the one about to be sent. The submit's own saved attempt (`row`) is left out of
-    the open-submission check. Any refusal settles the attempt `not_filed`, and nothing is sent."""
+    the open-submission check. Any refusal settles the attempt `not_filed`, and nothing is sent.
+
+    The preview reads the clock before it gathers. So the clock is read once more at the end, the last reading
+    before the POST, and the deadline, the quotes' age and the cash are checked at that reading (`_at_the_post`,
+    round 5, finding 2)."""
     try:
         p = preview(conn, bridge(), now, except_row=row)
     except NoPick:
@@ -578,8 +626,28 @@ def _final_check(conn: psycopg.Connection, bridge: Callable[[], Bridge], pick: P
             found.append(Refusal(DEVIATION, (
                 f"the request doesn't buy what the pick buys: {'; '.join(p.deviations)}. To send it as planned, "
                 "run the same command with --accept-deviations; or load and pick a revised plan.")))
-    found.extend(_deadline(conn, now, late))
+    at = now or ledger.db_now(conn)     # the final clock reading, right before the POST
+    if p is not None and p.plan is not None and p.gathered is not None:
+        found.extend(_at_the_post(conn, p, at))
+    found.extend(_late(at, late))
     return _unique(found)
+
+
+def _at_the_post(conn: psycopg.Connection, p: Preview, at: datetime) -> list[Refusal]:
+    """The quotes' age and the cash at `at`, the final clock reading: a quote that turned a week old, or a ledger
+    entry (a debit) dated between the preview's clock reading and `at`, refuses the send."""
+    skus = {s.sku for s in p.picked.round.slots.values() if s.sku}
+    fresh = [o for o in p.gathered.sourcing_rows if o.sku in skus and not o.is_stale(p.gathered.now)]
+    found = _stale(fresh, p.picked.round, at)
+    cost = p.plan.cost
+    balance = ledger.balance(conn, at)
+    cash = math.floor(balance.cash_without_takings_cents) if balance is not None else 0
+    if cost is not None and cost.max_cents > cash:
+        found.append(Refusal("insufficient_balance", (
+            f"at {at.astimezone(EASTERN):%H:%M:%S} ET, right before the send, the spendable balance (without "
+            f"takings) is {_usd(cash)}, below the request's max cost {_usd(cost.max_cents)}: a ledger entry came "
+            "due while the plan was checked. Nothing was sent. Preview again and submit what it shows.")))
+    return found
 
 
 def _before_send(conn: psycopg.Connection, plan: planner.Plan, pick: Picked, ours: tuple[str, ...], expected: str,
@@ -602,7 +670,11 @@ def _before_send(conn: psycopg.Connection, plan: planner.Plan, pick: Picked, our
 
 def _deadline(conn: psycopg.Connection, now: datetime | None, late: bool) -> list[Refusal]:
     """A refusal once the fill request's deadline has passed, unless `late`. The clock is read now, not reused."""
-    at = now or ledger.db_now(conn)
+    return _late(now or ledger.db_now(conn), late)
+
+
+def _late(at: datetime, late: bool) -> list[Refusal]:
+    """A refusal if `at` is past the fill request's deadline, unless `late`."""
     if late or at < fill_deadline():
         return []
     return [Refusal(PAST_DEADLINE, (

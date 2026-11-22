@@ -77,11 +77,23 @@ the ledger, `config` and the receipt sync's lock. A `plan_store pick`, a new slo
 receipt sync waits until the send is over. That is a few seconds, plus the POST. The checks also run
 again on the exact rows and opening the planner was given.
 
-The send locks `config` first, and does not wait for it. If someone is turning the halt switch on or
-off, or running `config set`, at that moment, the command refuses with `settings_busy` before it saves
-anything, and the halt goes through. Waiting there could deadlock with the halt, and Postgres then
-cancelled the halt, not the send. Check `python -m vending.halt status` and run the send again. A halt
-started after the send has its lock waits until the send is over.
+The send takes all of those locks at once, before it saves anything, and never waits for one. It
+already holds the halt switch's row, so waiting for a lock would leave a `halt on` started then
+queued behind the send, and the send would post once the lock came free. So if any input is busy,
+the command refuses before it saves anything, and nothing is sent:
+
+- `settings_busy`: someone is turning the halt switch on or off, or running `config set`;
+- `receipts_busy`: the receipt sync is storing receipts;
+- `inputs_busy`: someone is changing the pick, the slot assignment, the sourcing table, our catalog
+  copy or the ledger.
+
+Check `python -m vending.halt status` and run the send again in a minute. A halt started after the
+send has its locks waits until the send is over.
+
+The send's transaction is READ COMMITTED (the write gate sets it and checks it). So a second send that
+waited for the first reads what the first committed, and refuses with `fill_already_sent`. Right
+before the POST, that check and the open-submission check also run again on the connection that saved
+the attempt, which reads what is committed at that moment.
 
 The balance the send checks is not quite the ledger's spendable cash. It leaves out takings, the sales
 worked out from the machine's polls, because a history backfill can change those after the last check.
@@ -96,6 +108,11 @@ balance. The pick and our slots must be the ones it planned (`pick_changed`), th
 one (`plan_changed`), and the request body byte for byte the one about to be sent
 (`request_changed`). Any refusal marks the attempt never filed, and nothing is sent. So a price
 ceiling lowered, or less cash after a receipt, since the preview stops the send.
+
+That check reads the clock before it runs the planner. So it reads the clock once more at the end, the
+last reading before the POST, and checks the deadline, each quote's age and the cash at that reading.
+A quote that turns a week old (`stale_price`), or a ledger entry dated a few moments later that comes
+due (`insufficient_balance`), while the planner runs stops the send.
 
 The deadline is checked in that last check too. It comes from the Key dates panel (`vending.key_dates.FILL_REQUEST`). From
 00:00 ET Mon 30 Nov the command refuses with `fill_deadline`, unless you add `--late`. A send that

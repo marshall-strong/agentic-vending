@@ -1023,3 +1023,217 @@ def test_a_body_changed_after_the_save_is_refused_by_the_byte_check_alone(db, fa
     assert codes(db) == ["request_changed"] and "request_changed" in err
     [(status, detail)] = db.execute("select status, detail from purchase_submissions").fetchall()
     assert status == "not_filed" and detail.startswith("nothing sent: ")
+
+
+# --- Sol review, round 5 --------------------------------------------------------------------------
+
+def _wait_until(check, what: str, seconds: float = 20) -> None:
+    import time
+
+    deadline = time.monotonic() + seconds
+    while not check():
+        assert time.monotonic() < deadline, what
+        time.sleep(0.05)
+
+
+def _bounded(schema_url, pids: list[int] | None = None, isolation=None):  # noqa: F811
+    """Connections for a fill under test: a lock wait gives up after 10 s, so a fill that waits fails the test
+    instead of hanging it. `pids` collects their backend IDs, the main connection's first."""
+    def connect():
+        c = open_in(*schema_url)
+        c.execute("set lock_timeout = '10s'")
+        if isolation is not None:
+            c.isolation_level = isolation
+        if pids is not None:
+            pids.append(c.info.backend_pid)
+        return c
+    return connect
+
+
+def _blocked_or_done(db, pids: list[int], thread) -> bool:  # noqa: F811
+    """True once `thread` has ended, or the backend in `pids` waits on a lock."""
+    if not thread.is_alive():
+        return True
+    return bool(pids) and db.execute("select cardinality(pg_blocking_pids(%s)) > 0", (pids[0],)).fetchone()[0]
+
+
+def test_a_halt_started_while_the_receipt_sync_holds_its_lock_wins(db, fake, schema_url, capsys):  # noqa: F811
+    """Round 5, major 1, Sol's case: the receipt sync holds its lock; the fill started and waited for it while
+    holding the halt row and `config`; a `halt on` then queued behind the fill, and once the sync let go the
+    fill posted before the halt committed. The fill now takes every lock without waiting and refuses
+    (`receipts_busy`) before it saves anything, so the halt goes through and nothing is sent."""
+    import threading
+
+    from vending import config
+    from vending.purchase_requests import RECEIPTS_LOCK
+
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    fill_pids: list[int] = []
+    connect = _bounded(schema_url, fill_pids)
+    result, halt = {}, {}
+    sender = threading.Thread(target=lambda: result.update(code=fill.main(
+        ["--submit", "--hash", plan_hash, "--by", "Test Submitter"], bridge=fake.client, connect=connect, now=NOW)))
+    with open_in(*schema_url) as sync, open_in(*schema_url) as halter:
+        halter_pid = halter.info.backend_pid
+
+        def turn_halt_on():
+            try:
+                set_halted(halter, True, "Test Halter")
+                halt["error"] = None
+            except psycopg.Error as error:
+                halt["error"] = type(error).__name__
+
+        halting = threading.Thread(target=turn_halt_on)
+        try:
+            with sync.transaction():
+                sync.execute("select pg_advisory_xact_lock(hashtext(%s))", (RECEIPTS_LOCK,))
+                sender.start()
+                _wait_until(lambda: _blocked_or_done(db, fill_pids, sender), "the fill neither waited nor ended")
+                halting.start()
+                _wait_until(lambda: _blocked_or_done(db, [halter_pid], halting), "the halt neither waited nor ended")
+            # The sync's lock is released here.
+        finally:
+            for t in (sender, halting):
+                if t.ident is not None:
+                    t.join(30)
+    err = capsys.readouterr().err
+    assert halt == {"error": None} and config.is_halted(db)
+    assert (result.get("code"), len(fake.posts)) == (1, 0)
+    assert "receipts_busy" in err and codes(db) == ["receipts_busy"]
+    assert db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("busy", ["first_fill_plans", "sourcing_options", "slot_assignment"])
+def test_a_busy_input_is_refused_at_once_with_nothing_saved(db, fake, schema_url, capsys, busy):  # noqa: F811
+    """Round 5, major 1: a writer holding any input the fill locks makes it refuse at once (`inputs_busy`)
+    rather than wait while it holds the halt row."""
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    with open_in(*schema_url) as writer, writer.transaction():
+        if busy == "slot_assignment":
+            writer.execute("select 1 from slot_assignment where id = 1 for update")
+        else:
+            writer.execute(f"lock table {busy} in row exclusive mode")
+        rc = fill.main(["--submit", "--hash", plan_hash, "--by", "Test Submitter"], bridge=fake.client,
+                       connect=_bounded(schema_url), now=NOW)
+    err = capsys.readouterr().err
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert "inputs_busy" in err and codes(db) == ["inputs_busy"]
+    assert db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
+
+
+def _late_clock(monkeypatch, later: datetime) -> None:
+    """The database clock reads NOW until the attempt is saved; the final check's gather then takes long enough
+    that the clock reads `later` once it is done."""
+    from vending import planning, submissions
+
+    clock = {"t": NOW, "saved": False}
+    monkeypatch.setattr(ledger, "db_now", lambda conn: clock["t"])
+    real_save, real_gather = submissions.save_sending, planning.gather
+
+    def saved(*args, **kwargs):
+        row = real_save(*args, **kwargs)
+        clock["saved"] = True
+        return row
+
+    def gathered(*args, **kwargs):
+        found = real_gather(*args, **kwargs)
+        if clock["saved"]:
+            clock["t"] = later
+        return found
+
+    monkeypatch.setattr(submissions, "save_sending", saved)
+    monkeypatch.setattr(planning, "gather", gathered)
+
+
+@pytest.mark.parametrize("what", ["quote", "debit"])
+def test_the_last_clock_reading_rechecks_quote_age_and_cash(db, fake, schema_url, capsys, monkeypatch, what):  # noqa: F811
+    """Round 5, minor 2: the final check read the clock before it gathered. A quote that turned 7 days old,
+    or a scheduled debit that came due, during the gather still posted. Quote age and cash are now checked
+    again at the clock reading taken just before the POST, the one the deadline uses."""
+    from datetime import timedelta
+
+    seed(db, fake)
+    later = NOW + timedelta(hours=1)          # 21:00 ET Sun 29 Nov: still before the deadline
+    if what == "quote":
+        sourcing.set_option(db, option("COKE20", checked_at=NOW - timedelta(days=7) + timedelta(minutes=30)), NOW)
+    else:
+        ledger.record(db, "adjustment", -59000, "scheduled debit", "Test Treasurer", NOW + timedelta(minutes=30))
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash
+    _late_clock(monkeypatch, later)
+    rc = fill.main(["--submit", "--hash", plan_hash, "--by", "Test Submitter"], bridge=fake.client,
+                   connect=_bounded(schema_url), now=None)
+    err = capsys.readouterr().err
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert ("stale_price" if what == "quote" else "insufficient_balance") in err
+    [(status, detail)] = db.execute("select status, detail from purchase_submissions").fetchall()
+    assert status == "not_filed" and detail.startswith("nothing sent: ")
+
+
+def _repeatable_read(schema_url, pids: list[int] | None = None):  # noqa: F811
+    return _bounded(schema_url, pids, psycopg.IsolationLevel.REPEATABLE_READ)
+
+
+def test_the_fills_transaction_is_read_committed_whatever_the_default(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Round 5, minor 3: the fill's transaction took the connection's isolation level. It is now set to READ
+    COMMITTED explicitly, and checked."""
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    real_hold, seen = fill.hold_inputs, []
+
+    def noted(conn):
+        seen.append(conn.execute("select current_setting('transaction_isolation')").fetchone()[0])
+        real_hold(conn)
+
+    monkeypatch.setattr(fill, "hold_inputs", noted)
+    rc = fill.main(["--submit", "--hash", plan_hash, "--by", "Test Submitter"], bridge=fake.client,
+                   connect=_repeatable_read(schema_url), now=NOW)
+    assert (rc, len(fake.posts), seen) == (0, 1, ["read committed"])
+
+
+@pytest.mark.parametrize("layer", ["gate", "side"])
+def test_two_fills_at_once_send_one_request(db, fake, schema_url, capsys, monkeypatch, layer):  # noqa: F811
+    """Round 5, minor 3: under REPEATABLE READ, a second fill that started before the first saved its attempt
+    waited on the halt row with the snapshot it took then, so it missed the first's attempt and posted again.
+    Now the gate's transaction is READ COMMITTED, and the duplicate checks run again on the fresh side
+    connection before the POST. `side` turns the first off, to show the second alone stops it."""
+    import threading
+
+    from vending import submissions, write_gate
+
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    if layer == "side":
+        monkeypatch.setattr(write_gate, "_read_committed", lambda conn, outer: None)
+    real_save, saving, go = submissions.save_sending, threading.Event(), threading.Event()
+
+    def first_waits(*args, **kwargs):
+        if not saving.is_set():         # the first fill: about to save its attempt
+            saving.set()
+            assert go.wait(30)
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(submissions, "save_sending", first_waits)
+    argv = ["--submit", "--hash", plan_hash, "--by", "Test Submitter"]
+    first, second, pids = {}, {}, []
+    a = threading.Thread(target=lambda: first.update(code=fill.main(
+        argv, bridge=fake.client, connect=_repeatable_read(schema_url), now=NOW)))
+    b = threading.Thread(target=lambda: second.update(code=fill.main(
+        argv, bridge=fake.client, connect=_repeatable_read(schema_url, pids), now=NOW)))
+    a.start()
+    try:
+        assert saving.wait(30)
+        b.start()
+        _wait_until(lambda: _blocked_or_done(db, pids, b), "the second fill neither waited nor ended")
+    finally:
+        go.set()
+        a.join(30)
+        if b.ident is not None:
+            b.join(30)
+    err = capsys.readouterr().err
+    assert (first, second, len(fake.posts)) == ({"code": 0}, {"code": 1}, 1)
+    assert "fill_already_sent" in err
+    rows = db.execute("select status from purchase_submissions order by id").fetchall()
+    assert rows == ([("accepted",)] if layer == "gate" else [("accepted",), ("not_filed",)])

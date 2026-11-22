@@ -2,8 +2,8 @@
 
     result = run_write(conn, "submit_desired_state", arguments, action)
 
-In one transaction it checks the halt flag (holding a lock on it), runs
-`action(conn)`, and logs the attempt to `action_log`. The write and its log row
+In one READ COMMITTED transaction it checks the halt flag (holding a lock on
+it), runs `action(conn)`, and logs the attempt to `action_log`. The write and its log row
 commit together or not at all. A refusal or a crash rolls the write back and is
 then logged on its own, so every attempt leaves a row, including refused ones.
 
@@ -28,6 +28,8 @@ import psycopg
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
+from psycopg.pq import TransactionStatus
+
 from vending.config import is_halted
 from vending.pricing import Refusal
 
@@ -48,8 +50,10 @@ HALTED = Refusal("halted", "the halt switch is on; nothing can be written until 
 def run_write(conn: psycopg.Connection, tool: str, arguments: dict[str, Any],
               action: Callable[[psycopg.Connection], T]) -> T:
     """Run one write behind the halt check, logged. Raises `Refused` on a refusal."""
+    outer = conn.info.transaction_status == TransactionStatus.IDLE
     try:
         with conn.transaction():
+            _read_committed(conn, outer)
             if is_halted(conn, lock=True):
                 raise Refused([HALTED])
             result = action(conn)
@@ -62,6 +66,22 @@ def run_write(conn: psycopg.Connection, tool: str, arguments: dict[str, Any],
     except Exception as error:
         _log_after(conn, tool, arguments, "failed", f"{type(error).__name__}: {error}")
         raise
+
+
+def _read_committed(conn: psycopg.Connection, outer: bool) -> None:
+    """Make the write's transaction READ COMMITTED, and check it is.
+
+    The halt lock relies on it: a write that waited for the halt row must read what
+    was committed while it waited (a `halt on`, or another write's saved attempt),
+    not a snapshot from before. Under REPEATABLE READ, a second fill that waited for
+    the first kept its old snapshot and missed the first's request (Sol, round 5).
+    `outer`: the gate began this transaction, so the level can still be set; inside
+    a caller's transaction it can only be checked."""
+    if outer:
+        conn.execute("set transaction isolation level read committed")
+    level = conn.execute("select current_setting('transaction_isolation')").fetchone()[0]
+    if level != "read committed":
+        raise RuntimeError(f"a write must run READ COMMITTED, and this transaction is {level}")
 
 
 def _log_after(conn: psycopg.Connection, tool: str, arguments: dict[str, Any], outcome: str, detail: str) -> None:
