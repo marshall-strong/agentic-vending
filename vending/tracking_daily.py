@@ -182,6 +182,11 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     except tracking.StaleFigures as error:
         log(f"tracking_daily: {error}")
         return 1
+    except tracking.LockBusy as error:
+        # The lock is taken without waiting, so a replica stuck holding it cannot strand this one:
+        # skip the round, and the next round tries again.
+        log(f"tracking_daily: {error} The next round tries again.")
+        return 0
     except tracking.BackingOff as error:
         log(f"tracking_daily: {error}.")
         return 0

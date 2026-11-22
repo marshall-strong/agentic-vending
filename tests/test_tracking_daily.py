@@ -198,9 +198,9 @@ def test_fridays_figures_are_not_sent_on_saturday_morning(conn):
 
 def test_two_replicas_racing_cannot_bypass_the_backoff(schema_url):
     """Two replicas pass their quiet checks together, before either has stored a transient refusal,
-    and race to reserve. The backoff after the first one's refusal is counted again inside the
-    reservation's transaction, under its lock, with two database connections, so only one post goes
-    out and the other waits out the hour."""
+    and race to reserve. The reservation's lock is taken without waiting, so exactly one of them
+    sends; the other skips its round with a log line and tries again next round (two database
+    connections, released together by a barrier)."""
     barrier = threading.Barrier(2)
     bridges = [FakeBridge(refused(409, "tracking_not_started")), FakeBridge(refused(409, "tracking_not_started"))]
     with open_in(*schema_url) as setup:
@@ -224,7 +224,38 @@ def test_two_replicas_racing_cannot_bypass_the_backoff(schema_url):
     assert sorted(codes) == [0, 0]
     assert len(bridges[0].sent) + len(bridges[1].sent) == 1 and len(rows) == 1
     assert rows[0][2] == "p1" and rows[0][4] is False
-    assert sum("backing off" in line or "still being recorded" in line for line in lines) == 1
+    assert sum("holds the reservation" in line for line in lines) == 1
+    assert not any("backing off" in line or "still being recorded" in line for line in lines)
+
+
+def test_a_stuck_holder_of_the_reservation_lock_skips_the_round(schema_url):
+    """A holder that never releases the reservation's lock must not strand every other replica's
+    round: the send tries the lock without waiting, the round is skipped with a log line, and the
+    next round tries again. The holder below is a plain transaction on its own connection."""
+    import psycopg
+
+    from vending import db as vendordb
+
+    with open_in(*schema_url) as setup:
+        books(setup)
+    holder = psycopg.connect(schema_url[0], options=vendordb.session_options(
+        schema_url[0], f"-c search_path={schema_url[1]}"))
+    holder.execute("select pg_advisory_xact_lock(%s)", (tracking.TRACKING_LOCK,))
+    codes, lines = [], []
+
+    def replica():
+        with open_in(*schema_url) as conn:
+            codes.append(tracking_daily.run(conn, lambda: FakeBridge(answer()), now=NOW, log=lines.append))
+
+    thread = threading.Thread(target=replica, daemon=True)
+    thread.start()
+    thread.join(30)
+    holder.rollback()
+    holder.close()
+    with open_in(*schema_url) as conn:
+        assert sends(conn) == []
+    assert codes == [0]
+    assert any("holds the reservation" in line for line in lines)
 
 
 def test_the_answer_is_stamped_when_it_is_stored(conn):
@@ -323,8 +354,9 @@ def test_non_transient_refusals_stop_at_three(conn):
 
 
 def test_two_replicas_racing_cannot_exceed_max_tries(schema_url):
-    """Two replicas pass the pre-check together (two tries each) and race to reserve: the count is
-    taken again inside the reservation's transaction, under its lock, so three attempts go out."""
+    """Two replicas pass the pre-check together (two tries each) and race to reserve: the lock goes
+    to one of them without waiting, it makes the day's third and last try, and the other skips its
+    round (LockBusy) instead of queueing behind the holder."""
     barrier = threading.Barrier(2)
     bridge = FakeBridge(*[refused(422, "invalid_coil")] * 3)
     with open_in(*schema_url) as conn:
@@ -347,10 +379,10 @@ def test_two_replicas_racing_cannot_exceed_max_tries(schema_url):
         thread.join(30)
     with open_in(*schema_url) as conn:
         rows = sends(conn)
-    assert sorted(codes) == [1, 1]
+    assert sorted(codes) == [0, 1]
     assert len(bridge.sent) == 3 and len(rows) == 3
     assert [used for *_, used, _ in rows] == [False] * 3
-    assert sum("no more until tomorrow" in line for line in lines) == 1
+    assert sum("holds the reservation" in line for line in lines) == 1
 
 
 def test_transient_refusals_back_off_but_do_not_forfeit_the_day(conn):

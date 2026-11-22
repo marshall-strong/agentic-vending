@@ -160,6 +160,13 @@ class StaleFigures(RuntimeError):
     spend the day's check on out-of-date books."""
 
 
+class LockBusy(RuntimeError):
+    """Another send holds the reservation's lock at that moment, so nothing was sent and nothing
+    was recorded. The lock is taken without waiting (`pg_try_advisory_xact_lock`): a replica stuck
+    holding it must not strand every other replica's round behind it. The caller skips this round
+    (`tracking_daily` logs a line) and the next round tries again."""
+
+
 class BackingOff(RuntimeError):
     """A transient refusal today is still within its backoff, so the next try waits; nothing was
     sent. The wait is counted under the reservation's lock, so a replica that passed its own checks
@@ -387,9 +394,11 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
     raises `WindowClosed` when the moment to send has passed; `stale` raises `StaleFigures` when the
     poll the figures are as of is older than the limit at that moment; `daily_tries` raises
     `TooManyTries` when the day's tries are spent and `BackingOff` while the newest transient
-    refusal is still within its backoff. All before anything is recorded. The lock is the
-    transaction's, so it releases when the reservation commits and the request goes out; a second
-    replica that acquires it after that sees the reservation (`blocking`) and refuses."""
+    refusal is still within its backoff. All before anything is recorded. The lock is taken without
+    waiting (`pg_try_advisory_xact_lock`): a second replica that finds it held raises `LockBusy` and
+    skips its round, so a stuck holder cannot strand the others, and one that acquires it after the
+    reservation committed sees the reservation (`blocking`) and refuses. The lock is the
+    transaction's, so it releases when the reservation commits and the request goes out."""
     if not by or not by.strip():
         raise ValueError("a send needs a name, for the record")
     fixed = now
@@ -397,7 +406,11 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
                                      else (lambda: clock(conn)))
     body = found.body()
     with conn.transaction():
-        conn.execute("select pg_advisory_xact_lock(%s)", (TRACKING_LOCK,))
+        # Taken without waiting: a holder stuck since an earlier round must not strand every other
+        # replica's round behind it (LockBusy), and the replica that gets it first has it outright.
+        reserved = conn.execute("select pg_try_advisory_xact_lock(%s)", (TRACKING_LOCK,)).fetchone()[0]
+        if not reserved:
+            raise LockBusy("another send holds the reservation's lock; nothing was sent")
         moment = stamp()
         local = moment.astimezone(EASTERN)
         if window is not None and not window[0] <= local.time() < window[1]:
@@ -648,7 +661,7 @@ def main(argv: list[str] | None = None, bridge: Callable[[], Any] = Bridge) -> i
             return 0
         try:
             outcome = send(conn, bridge(), found, args.by)
-        except (AlreadyChecked, settings.SettingsError) as error:
+        except (AlreadyChecked, LockBusy, settings.SettingsError) as error:
             print(error, file=sys.stderr)
             return 1
         except psycopg.Error as error:
