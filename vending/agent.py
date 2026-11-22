@@ -30,7 +30,13 @@ One run:
 2. It starts our MCP server (`python -m vending.server`, `VENDING_TOOLS=built`) over stdio and
    offers the model the tools the server lists. A dry run hides every write tool. A live run
    refuses to start while `submit_desired_state` isn't built, sends only the plan its last preview
-   accepted (with that preview's plan hash), and sends at most once.
+   accepted (with that preview's plan hash), and sends at most once. Two replies prove no byte of the
+   request left, and only they allow one more submit, after a fresh preview: our own `plan_changed`
+   refusal (no submission number: nothing was sent) and `not_filed` (connecting to the bridge failed).
+   No reply to a POST does, even one shaped like a refusal. Before the model starts, a live run
+   settles a submission whose POST got a validated `201` but was never settled
+   (`vending.submissions.check`); any other open one blocks orders until a person runs
+   `python -m vending.submissions resolve`.
 3. The system prompt is the rules card (`docs/agent/rules-card.md`, read once at the start; a run
    without it fails before any model request) followed by `SYSTEM`. Nothing in it changes between
    requests, so it is read from cache. The model gets the time, the week's rhythm and its own
@@ -69,7 +75,7 @@ import anyio
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending import agent_runs, db, run_lease, settings
+from vending import agent_runs, db, ledger, run_lease, settings, slots
 from vending.config import is_halted
 from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError, NotHeld
 from vending.tools.project_rules import RULES_DIR
@@ -162,7 +168,10 @@ class Outcome:
     answer: dict | None = None
     plan: dict | None = None            # the last plan that previewed ok, or the one submitted
     request_id: str | None = None       # set once a submit succeeded: the run is `submitted` from then on
-    submit_sent: bool = False           # a submit reached the server, whatever came back: never send another
+    submit_sent: bool = False           # a submit may have reached the bridge: never send another
+    submits: int = 0                    # submit calls sent to the server, at most MAX_SUBMITS
+    submit_refused: bool = False        # a submit came back proving nothing left (`_nothing_left`)
+    needs_preview: bool = False         # ...and no preview has succeeded since, so a retry must wait
     unresolved: str | None = None       # a submit whose result is unknown: money may have been spent
     turn: int = 0                       # the model response being worked through
     plan_turn: int | None = None        # the response whose preview set `plan`: a submit must come later
@@ -170,8 +179,18 @@ class Outcome:
     recorded: bool = True               # False when its ending couldn't be written to agent_runs, even on retry
 
 
-UNRESOLVED = ("SUBMISSION UNRESOLVED: the bridge may have accepted it. Check `python -m vending.submissions list` "
-              "before anyone submits again. ")
+# The first submit, and one retry after a reply proving no byte of the request left.
+MAX_SUBMITS = 2
+# The only refusal from before the POST that allows the retry: our own preview's hash moved.
+RETRY_CODES = frozenset({"plan_changed"})
+# The submit reply's `status` when connecting to the bridge failed (`vending.tools.submit`): nothing left.
+NOT_CONNECTED = "not_filed"
+RETRY_HINT = ("\n\nNothing was sent, so this run may submit once more: preview again, read it, then submit "
+              "the plan it accepts.")
+NO_RETRY_HINT = "\n\nNothing was sent. This run has used its one retry, so it can't submit again."
+
+UNRESOLVED = ("SUBMISSION UNRESOLVED: the bridge may have accepted it. A person must settle it with "
+              "`python -m vending.submissions resolve` before anyone submits again. ")
 
 
 class LeaseLost(Exception):
@@ -269,15 +288,31 @@ def recorded_plan(plan: dict | None, answer: dict | None) -> dict | None:
 
 
 def last_notes(conn: psycopg.Connection, *, live: bool) -> str:
-    """The notes from the latest finished run, labelled with where they came from.
+    """The notes from the latest finished run since the real ledger opening and our current slot assignment,
+    labelled with where they came from.
 
     A live run reads only live runs' notes, so a dry run's "would submit" is never taken as done.
+    Notes carry over only from a run that started at or after both the real opening (`ledger.real_opening`)
+    and the moment our slots (the server's assignment) were first read (`slots.assigned_at`). A run before
+    either may name slots that aren't ours (#216). The assignment's time matters even after the opening:
+    an opening backdated in a recovery could fall before the assignment (Sol review of #222, round 4,
+    finding 3). With no real opening (none yet, or only the 11 Nov test one) or no stored assignment, no
+    notes carry over.
     """
+    opened = ledger.real_opening(conn)
+    if opened is None:
+        return ("(No notes: the real ledger opening isn't recorded yet, so earlier runs' notes are left out. "
+                "They may name slots that aren't ours.)")
+    assigned = slots.assigned_at(conn)
+    if assigned is None:
+        return ("(No notes: our slot assignment isn't recorded, so earlier runs' notes are left out. "
+                "They may name slots that aren't ours.)")
     modes = ["live"] if live else ["live", "dry-run"]
-    row = conn.execute("select mode, started_at, notes from agent_runs where mode = any(%s) and notes is not null"
-                       " and status <> 'running' order by started_at desc, id desc limit 1", (modes,)).fetchone()
+    row = conn.execute("select mode, started_at, notes from agent_runs"
+                       " where mode = any(%s) and notes is not null and status <> 'running' and started_at >= %s"
+                       " order by started_at desc, id desc limit 1", (modes, max(opened.at, assigned))).fetchone()
     if not row:
-        return "(No notes yet: this is the first run.)"
+        return "(No notes yet: this is the first run since the ledger opening and our current slot assignment.)"
     mode, started, notes = row
     kind = "the live run" if mode == "live" else "a dry run (nothing it planned was sent)"
     return f"(From {kind} on {started.astimezone(EASTERN):%A %d %B %H:%M} Eastern.)\n{notes}"
@@ -411,7 +446,7 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
         decision, reason = out.answer.get("decision"), out.answer.get("reason", "")
         if out.request_id is not None:
             out.status, out.detail = "submitted", reason
-        elif out.submit_sent:
+        elif out.submit_sent or out.submit_refused:
             out.status = "failed"       # the detail already says why
         elif decision == "submit" and live:
             out.status, out.detail = "failed", "It said submit but never called submit_desired_state."
@@ -436,6 +471,11 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
     if name == SUBMIT:
         if out.submit_sent:
             return "Not sent: you already submitted once this run.", True
+        if out.submits >= MAX_SUBMITS:
+            return "Not sent: this run has used its one retry after a refused submit.", True
+        if out.needs_preview:
+            return ("Not sent: your last submit was refused. Preview again, then submit the plan it accepts "
+                    "in a later turn."), True
         previewed = {k: v for k, v in (out.plan or {}).items() if k != "plan_hash"}
         if out.plan is None or not _same_plan(arguments.get("desired"), previewed):
             return ("Not sent: submit exactly the plan your last preview_desired_state accepted "
@@ -448,7 +488,8 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
         if not await anyio.to_thread.run_sync(owned):   # the last check before money can be spent
             out.status, out.detail = "failed", LOST_LEASE_SUBMIT
             raise LeaseLost
-        out.submit_sent = True                    # set before sending: whatever happens next, never send again
+        out.submit_sent = True                    # set before sending: cleared only by a reply proving nothing left
+        out.submits += 1
         try:
             result = await call_tool(name, arguments)
         except BaseException as error:            # the server died or we were stopped mid-send: it may have gone
@@ -462,6 +503,7 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
         if reply and reply.get("ok") and not failed and isinstance(arguments.get("desired"), dict):
             out.plan = {**arguments["desired"], "plan_hash": reply.get("plan_hash")}
             out.plan_turn = out.turn
+            out.needs_preview = False
     if name == SUBMIT:
         reply = reply or {}
         if not failed and reply.get("request_id"):
@@ -473,16 +515,53 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
             out.detail = UNRESOLVED + out.unresolved
         elif failed:
             out.detail = f"submit_desired_state was refused, nothing was bought: {text[:300]}"
+            if _nothing_left(reply):
+                # Provably nothing left: one more try, after a new preview.
+                out.submit_sent, out.submit_refused, out.needs_preview = False, True, True
+                text += RETRY_HINT if out.submits < MAX_SUBMITS else NO_RETRY_HINT
         else:
             out.unresolved = text[:500]
             out.detail = UNRESOLVED + "It reported success with no request id: " + out.unresolved
     return text, failed
 
 
+def _nothing_left(reply: dict) -> bool:
+    """Whether a failed submit's reply proves no byte of the request left: our own `plan_changed` and nothing
+    else, from before any submission row was saved, or `not_filed` (connecting failed). Nothing else does,
+    a reply to the POST shaped like the bridge's refusal included."""
+    codes = {r.get("code") for r in reply.get("refusals") or [] if isinstance(r, dict)}
+    if reply.get("submission") is None and reply.get("status") is None:
+        return bool(codes) and codes <= RETRY_CODES
+    return reply.get("status") == NOT_CONNECTED and isinstance(reply.get("submission"), int)
+
+
 def server_env() -> dict[str, str]:
     """The server's environment: ours without any model key, which it never needs."""
     env = {k: v for k, v in os.environ.items() if k.upper() not in MODEL_KEY_VARS}
     return {**env, "VENDING_TOOLS": "built"}
+
+
+def check_submissions(connect: Callable[[], psycopg.Connection], bridge: Callable[[], Any] | None,
+                      record_step: Callable[..., None]) -> None:
+    """Before a live run's model loop: settle what the bridge can answer for (`submissions.check`).
+
+    It never sends anything, and when in doubt a row stays open, so the submit tool still refuses
+    `submission_unresolved`. A run with something to report records it as its first step.
+    """
+    from vending import submissions
+    from vending.bridge import Bridge
+    from vending.halt import WAIT_NOTICE_MS
+
+    try:
+        with connect() as conn:
+            checked = submissions.check(conn, bridge or Bridge, lock_timeout_ms=WAIT_NOTICE_MS)
+        if not checked:
+            return
+        metadata: dict[str, Any] = {"source": "startup", "submissions": [vars(c) for c in checked]}
+        failed = any(c.status in submissions.OPEN for c in checked)
+    except Exception as error:     # the rows stay as they were; the submit tool still guards them
+        metadata, failed = {"source": "startup", "error": f"{type(error).__name__}: {error}"[:500]}, True
+    record_step(1, "tool_result", json.dumps(metadata, sort_keys=True), tool="check_submissions", is_error=failed)
 
 
 def _record_submit(connect: Callable[[], psycopg.Connection], run_id: int, out: Outcome) -> None:
@@ -528,14 +607,18 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
               now: Callable[[], datetime] | None = None, open_tools: Callable | None = None,
               max_turns: int = MAX_TURNS, rules_card: Path | None = None,
               deadline: float = RUN_DEADLINE,
-              authorize: Callable[[psycopg.Connection], str | None] | None = None) -> tuple[int | None, Outcome]:
+              authorize: Callable[[psycopg.Connection], str | None] | None = None,
+              bridge: Callable[[], Any] | None = None) -> tuple[int | None, Outcome]:
     """One weekly run, recorded in `agent_runs`. Returns (run id, outcome).
 
     Holds the run lease throughout (`vending.run_lease`). If another run holds it, this one is recorded
     as `skipped` and nothing else happens. `authorize(conn)`, if given, runs once the lease is free and
     before it is taken, in the same transaction: a reason it returns means the run doesn't start, and
     comes back as a `skipped` outcome with no run id and no `agent_runs` row. A run whose start can't be
-    recorded has no run id either. Past `deadline` seconds the run stops and is recorded as `failed`."""
+    recorded has no run id either. Past `deadline` seconds the run stops and is recorded as `failed`.
+
+    `bridge` builds the client a live run's submission check reads with (`vending.bridge.Bridge` by default).
+    The check runs inside the lease, before the model starts."""
     connect = _bounded(connect, DB_TIMEOUT)
     with connect() as conn:
         taken = run_lease.take(conn, deadline=deadline, authorize=authorize)
@@ -557,7 +640,8 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
             try:
                 return await _run_owned(live=live, model=model, effort=effort, connect=connect, client=client,
                                         now=now, open_tools=open_tools, max_turns=max_turns, rules_card=rules_card,
-                                        deadline=deadline, token=taken.token, harnesses=harnesses)
+                                        deadline=deadline, token=taken.token, harnesses=harnesses,
+                                        bridge=bridge)
             finally:
                 beats.cancel_scope.cancel()
     finally:
@@ -582,7 +666,8 @@ def _give_back(connect: Callable[[], psycopg.Connection], token: Any) -> None:
 async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[], psycopg.Connection],
                      client: Any, now: Callable[[], datetime] | None, open_tools: Callable | None,
                      max_turns: int, rules_card: Path | None, deadline: float,
-                     token: Any, harnesses: list) -> tuple[int | None, Outcome]:
+                     token: Any, harnesses: list,
+                     bridge: Callable[[], Any] | None = None) -> tuple[int | None, Outcome]:
     import time
 
     stop_at = time.monotonic() + deadline     # the harness sends nothing past it
@@ -634,6 +719,8 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                                   hold_margin=LEASE_MARGIN.total_seconds(), request_deadline=REQUEST_DEADLINE,
                                   stop_at=stop_at)
                 harnesses.append(harness)
+                if live:    # inside the lease, so no other run's submit overlaps the check
+                    await anyio.to_thread.run_sync(lambda: check_submissions(connect, bridge, record_step))
                 async with (open_tools or _open_server)() as (listed, call_tool):
                     if live and SUBMIT not in {t.name for t in listed}:
                         out.detail = ("submit_desired_state isn't built on this server, so a live run can't "
