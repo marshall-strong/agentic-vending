@@ -54,6 +54,8 @@ def run_write(conn: psycopg.Connection, tool: str, arguments: dict[str, Any],
     try:
         with conn.transaction():
             _read_committed(conn, outer)
+            # A halt already on refuses the write. A `halt on` started after this waits for the write's
+            # transaction to end, so it cannot stop a write already past here (see docs/plan-page.md).
             if is_halted(conn, lock=True):
                 raise Refused([HALTED])
             result = action(conn)

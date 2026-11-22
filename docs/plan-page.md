@@ -87,8 +87,12 @@ the command refuses before it saves anything, and nothing is sent:
 - `inputs_busy`: someone is changing the pick, the slot assignment, the sourcing table, our catalog
   copy or the ledger.
 
-Check `python -m vending.halt status` and run the send again in a minute. A halt started after the
-send has its locks waits until the send is over.
+Check `python -m vending.halt status` and run the send again in a minute. If the halt switch is
+already on when the send starts, it refuses (`halted`) and nothing is saved or sent.
+
+Known limit: a `halt on` started in the few seconds while a send holds its locks waits until that send
+is over, so it can't stop that one send. That is by design. The person running the fill is the
+operator; the halt switch is for the unattended agent.
 
 The send's transaction is READ COMMITTED (the write gate sets it and checks it). So a second send that
 waited for the first reads what the first committed, and refuses with `fill_already_sent`. Right
@@ -109,10 +113,11 @@ one (`plan_changed`), and the request body byte for byte the one about to be sen
 (`request_changed`). Any refusal marks the attempt never filed, and nothing is sent. So a price
 ceiling lowered, or less cash after a receipt, since the preview stops the send.
 
-That check reads the clock before it runs the planner. So it reads the clock once more at the end, the
-last reading before the POST, and checks the deadline, each quote's age and the cash at that reading.
-A quote that turns a week old (`stale_price`), or a ledger entry dated a few moments later that comes
-due (`insufficient_balance`), while the planner runs stops the send.
+That check reads the clock before it runs the planner. So it reads the clock again at the end, after
+its last ledger read, as the last reading before the POST, and checks the deadline, each quote's age
+and the cash at that reading. A quote that turns a week old (`stale_price`), or a ledger entry dated a
+few moments later that comes due (`insufficient_balance`, or `ledger_entry_due` when it comes due
+during that last ledger read), while the check runs stops the send.
 
 The deadline is checked in that last check too. It comes from the Key dates panel (`vending.key_dates.FILL_REQUEST`). From
 00:00 ET Mon 30 Nov the command refuses with `fill_deadline`, unless you add `--late`. A send that

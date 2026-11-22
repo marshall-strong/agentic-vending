@@ -148,6 +148,7 @@ SETTINGS_BUSY = "settings_busy"
 RECEIPTS_BUSY = "receipts_busy"
 INPUTS_BUSY = "inputs_busy"
 STALE_PRICE = "stale_price"
+LEDGER_ENTRY_DUE = "ledger_entry_due"
 PURPOSE = "fill"            # `purchase_submissions.purpose` for the fill's attempts
 
 
@@ -559,6 +560,10 @@ def hold_inputs(conn: psycopg.Connection) -> None:
     `receipts_busy` or `inputs_busy`), the transaction rolls back, nothing is saved or sent, and whatever was
     waiting on the halt row goes through. A halt started after these locks waits for the send.
 
+    Known limit (round 6, finding 2): so a `halt on` issued in the few seconds while a fill holds these locks
+    can't stop that one send. By design: the person running the fill is the operator, and the halt is for the
+    unattended agent. A halt already on when the fill starts refuses it (`run_write`'s check, `halted`).
+
     The side connection that saves and settles the attempt writes only `purchase_submissions` and
     `purchase_requests`. Neither is locked here, so it never waits on this transaction."""
     _nowait(conn, "lock table config in share mode nowait", SETTINGS_BUSY,
@@ -598,9 +603,9 @@ def _final_check(conn: psycopg.Connection, bridge: Callable[[], Bridge], pick: P
     byte-identical to `body`, the one about to be sent. The submit's own saved attempt (`row`) is left out of
     the open-submission check. Any refusal settles the attempt `not_filed`, and nothing is sent.
 
-    The preview reads the clock before it gathers. So the clock is read once more at the end, the last reading
-    before the POST, and the deadline, the quotes' age and the cash are checked at that reading (`_at_the_post`,
-    round 5, finding 2)."""
+    The preview reads the clock before it gathers. So the clock is read again at the end, after the last ledger
+    read, the last reading before the POST, and the deadline, the quotes' age and the cash are checked at that
+    reading (`_at_the_post`, round 5, finding 2; round 6, finding 1)."""
     try:
         p = preview(conn, bridge(), now, except_row=row)
     except NoPick:
@@ -626,27 +631,41 @@ def _final_check(conn: psycopg.Connection, bridge: Callable[[], Bridge], pick: P
             found.append(Refusal(DEVIATION, (
                 f"the request doesn't buy what the pick buys: {'; '.join(p.deviations)}. To send it as planned, "
                 "run the same command with --accept-deviations; or load and pick a revised plan.")))
-    at = now or ledger.db_now(conn)     # the final clock reading, right before the POST
     if p is not None and p.plan is not None and p.gathered is not None:
-        found.extend(_at_the_post(conn, p, at))
-    found.extend(_late(at, late))
+        found.extend(_at_the_post(conn, p, now, late))
+    else:
+        found.extend(_late(now or ledger.db_now(conn), late))
     return _unique(found)
 
 
-def _at_the_post(conn: psycopg.Connection, p: Preview, at: datetime) -> list[Refusal]:
-    """The quotes' age and the cash at `at`, the final clock reading: a quote that turned a week old, or a ledger
-    entry (a debit) dated between the preview's clock reading and `at`, refuses the send."""
-    skus = {s.sku for s in p.picked.round.slots.values() if s.sku}
-    fresh = [o for o in p.gathered.sourcing_rows if o.sku in skus and not o.is_stale(p.gathered.now)]
-    found = _stale(fresh, p.picked.round, at)
+def _at_the_post(conn: psycopg.Connection, p: Preview, now: datetime | None, late: bool) -> list[Refusal]:
+    """The deadline, the quotes' age and the cash at the final clock reading, taken after the ledger is read.
+
+    The ledger is read at one clock reading (`at`), along with when its next entry after `at` falls. Then the
+    clock is read once more (`last`), with no other read after it before the POST (round 6, finding 1): the
+    deadline and the quotes' age are checked at `last`, and a ledger entry dated after `at` but by `last` (a
+    debit that came due during the read) refuses the send. The ledger can't gain an entry meanwhile:
+    `hold_inputs` holds it."""
+    at = now or ledger.db_now(conn)
     cost = p.plan.cost
     balance = ledger.balance(conn, at)
+    due = conn.execute("select min(at) from ledger_entries where at > %s", (at,)).fetchone()[0]
+    last = now or ledger.db_now(conn)   # the final clock reading, right before the POST
+    skus = {s.sku for s in p.picked.round.slots.values() if s.sku}
+    fresh = [o for o in p.gathered.sourcing_rows if o.sku in skus and not o.is_stale(p.gathered.now)]
+    found = _stale(fresh, p.picked.round, last)
     cash = math.floor(balance.cash_without_takings_cents) if balance is not None else 0
     if cost is not None and cost.max_cents > cash:
         found.append(Refusal("insufficient_balance", (
             f"at {at.astimezone(EASTERN):%H:%M:%S} ET, right before the send, the spendable balance (without "
             f"takings) is {_usd(cash)}, below the request's max cost {_usd(cost.max_cents)}: a ledger entry came "
             "due while the plan was checked. Nothing was sent. Preview again and submit what it shows.")))
+    if due is not None and due <= last:
+        found.append(Refusal(LEDGER_ENTRY_DUE, (
+            f"a ledger entry dated {due.astimezone(EASTERN):%H:%M:%S} ET came due while the balance was read, "
+            "right before the send, so the balance checked is not the balance now. Nothing was sent. Preview "
+            "again and submit what it shows.")))
+    found.extend(_late(last, late))
     return found
 
 

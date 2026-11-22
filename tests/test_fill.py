@@ -1172,6 +1172,73 @@ def test_the_last_clock_reading_rechecks_quote_age_and_cash(db, fake, schema_url
     assert status == "not_filed" and detail.startswith("nothing sent: ")
 
 
+def _clock_crosses_during_the_ledger_read(monkeypatch, later: datetime) -> None:
+    """The database clock reads NOW until the final check's own ledger read (in `_at_the_post`, after the attempt
+    is saved); that read takes long enough that the clock reads `later` once it is done."""
+    from vending import submissions
+
+    import sys
+
+    clock = {"t": NOW, "saved": False}
+    monkeypatch.setattr(ledger, "db_now", lambda conn: clock["t"])
+    real_save, real_balance = submissions.save_sending, ledger.balance
+
+    def saved(*args, **kwargs):
+        row = real_save(*args, **kwargs)
+        clock["saved"] = True
+        return row
+
+    def balanced(*args, **kwargs):
+        found = real_balance(*args, **kwargs)
+        if clock["saved"] and sys._getframe(1).f_code.co_name == "_at_the_post":   # the final check's own read
+            clock["t"] = later
+        return found
+
+    monkeypatch.setattr(submissions, "save_sending", saved)
+    monkeypatch.setattr(ledger, "balance", balanced)
+
+
+@pytest.mark.parametrize("what", ["deadline", "quote", "debit"])
+def test_the_final_clock_reading_is_taken_after_the_ledger_read(db, fake, schema_url, capsys, monkeypatch, what):  # noqa: F811
+    """Round 6, finding 1: the final clock reading came before `ledger.balance()`. The deadline, a quote's
+    week or a scheduled debit could cross during that read and the fill still posted. The last reading is now
+    taken after the ledger read, right before the POST, and all three are checked at it."""
+    from datetime import timedelta
+
+    seed(db, fake)
+    if what == "deadline":
+        later = fill.fill_deadline() + timedelta(minutes=1)
+    else:
+        later = NOW + timedelta(hours=1)          # 21:00 ET Sun 29 Nov: still before the deadline
+    if what == "quote":
+        sourcing.set_option(db, option("COKE20", checked_at=NOW - timedelta(days=7) + timedelta(minutes=30)), NOW)
+    elif what == "debit":
+        ledger.record(db, "adjustment", -59000, "scheduled debit", "Test Treasurer", NOW + timedelta(minutes=30))
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash
+    _clock_crosses_during_the_ledger_read(monkeypatch, later)
+    rc = fill.main(["--submit", "--hash", plan_hash, "--by", "Test Submitter"], bridge=fake.client,
+                   connect=_bounded(schema_url), now=None)
+    err = capsys.readouterr().err
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert {"deadline": "fill_deadline", "quote": "stale_price", "debit": "ledger_entry_due"}[what] in err
+    [(status, detail)] = db.execute("select status, detail from purchase_submissions").fetchall()
+    assert status == "not_filed" and detail.startswith("nothing sent: ")
+
+
+def test_the_fill_refuses_at_the_start_if_the_halt_is_already_on(db, fake, schema_url, capsys):  # noqa: F811
+    """Round 6, finding 2: a halt that is on before the fill starts stops it before anything is saved or sent."""
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    set_halted(db, True, "Test Halter")
+    rc = fill.main(["--submit", "--hash", plan_hash, "--by", "Test Submitter"], bridge=fake.client,
+                   connect=_bounded(schema_url), now=NOW)
+    err = capsys.readouterr().err
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert "halted" in err
+    assert db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
+
+
 def _repeatable_read(schema_url, pids: list[int] | None = None):  # noqa: F811
     return _bounded(schema_url, pids, psycopg.IsolationLevel.REPEATABLE_READ)
 
