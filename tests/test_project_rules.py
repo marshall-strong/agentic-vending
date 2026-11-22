@@ -56,7 +56,8 @@ def test_topic_files_are_short():
 
 
 def test_the_rules_card_is_short_and_covers_the_guardrails():
-    assert words("rules-card") <= 250
+    # 250 until #230 added the one-line variety pointer, rather than trim the guardrail or integrity wording.
+    assert words("rules-card") <= 265
     card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
     for phrase in ("halt switch", "price floor", "ceiling", "balance is the cap", "integrity", "ignore other slots' prices",
                    "get_project_rules", "never from memory", "skip"):
@@ -200,3 +201,19 @@ def test_skips_are_narrow_on_the_card_and_in_the_prompt():
     assert "If unsure of one action, skip that action, plan the rest, and say why." in card
     assert "If unsure, skip the action and say why." not in card
     assert "stock is needed but every feasible plan is refused: report the skip with the refusals" in SYSTEM
+
+
+def test_the_agent_reads_the_variety_rules():
+    """#230 (Kevin, 22 Nov): the card points at the topic, get_project_rules serves it, and the planner's warning
+    names it. Principles, not counts: the catalog grows during the run."""
+    from vending.planner import DUPLICATE_HINT
+
+    assert "variety" in [t.topic for t in topics()]
+    card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
+    assert "(`variety`)" in card
+    assert "get_project_rules variety" in DUPLICATE_HINT
+    text = get_project_rules("variety").text
+    for phrase in ("adds stock, not sales", "sell out before the Friday restock", "No duplicates on the first fill",
+                   "Mixed-flavor slots", "one price", "each flavor's units", "test slot", "second week",
+                   "Winter Holiday Break don't count", "Wednesday", "new category or brand", "Ipsos 2011"):
+        assert phrase in text, phrase

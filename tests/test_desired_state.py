@@ -366,6 +366,16 @@ def test_preview_describes_unknown_capacity_without_an_underfill_warning(db, fak
     assert not any("spaces empty" in w for w in reply.warnings)
 
 
+def test_preview_warns_when_two_slots_get_the_same_drink(db, fake):  # noqa: F811
+    """#230 (Kevin, 22 Nov): a second slot of one drink adds stock, not sales; the agent sees it, nothing is refused."""
+    ready(db)
+    stocked(db)
+    reply = preview_desired_state(
+        db, desired(restock_15(), {**restock_15(), "slot": "16"}, sourcing=[coke_sourcing()]), fake.client(), NOW)
+    assert reply.success and reply.ok, reply.refusals
+    assert any("slot 15 and slot 16 both get COKE20" in w and "adds stock, not sales" in w for w in reply.warnings),         reply.warnings
+
+
 def test_a_restock_plans_one_purchase_line_priced_against_its_floor(db, fake):  # noqa: F811
     ready(db, capacity=15)
     stocked(db)

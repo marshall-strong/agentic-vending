@@ -726,6 +726,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
         refusals.extend(check_price(s.price_cents, floor, config.ceiling_for(s.slot), s.slot))
     refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle, warnings))
+    warnings.extend(_duplicates(slots, config))
 
     # 8. The plan, with every refusal found.
     # Only slots with a source get a line. A slot that couldn't be stocked is
@@ -856,6 +857,35 @@ def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, o
                 f"{w.product} goes on trial in the wildcard, slot {w.slot}, so slot {', '.join(into)} can't switch "
                 "to it; the wildcard's product is in no other slot"), w.slot))
     return refusals
+
+
+# --- Variety ------------------------------------------------------------------
+# A second slot of the same drink adds stock, not sales: it earns its place only
+# when one slot would sell out before the Friday restock (Kevin, 22 Nov; #230).
+# The plan may still do it, so it is a warning, never a refusal. Slots no receipt
+# describes are left out (we can't say what they hold), and so is the wildcard,
+# whose own rules (`_check_wildcard`) keep its product out of every other slot.
+
+DUPLICATE_HINT = ("a second slot adds stock, not sales: keep it only if one slot would sell out before Friday "
+                  "(get_project_rules variety)")
+
+
+def _duplicates(slots: list[_Slot], config: Config) -> list[str]:
+    """One warning per drink that two or more of our regular slots hold after this visit."""
+    by_product: dict[str, list[str]] = defaultdict(list)
+    for s in slots:
+        if s.slot != config.wildcard_slot and s.product and not (s.state.unsure and not s.changes_product):
+            by_product[s.product].append(s.slot)
+    warnings = []
+    for product, where in by_product.items():
+        if len(where) < 2:
+            continue
+        if len(where) == 2:
+            who = f"slot {where[0]} and slot {where[1]} both get"
+        else:
+            who = f"slots {', '.join(where[:-1])} and {where[-1]} all get"
+        warnings.append(f"{who} {product}; {DUPLICATE_HINT}")
+    return warnings
 
 
 def _check_promotion(w: _Slot, into: list[str], current: CurrentState, off_cycle: bool) -> list[Refusal]:

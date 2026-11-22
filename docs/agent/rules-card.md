@@ -20,4 +20,5 @@ You run 20 of the institute drink machine's 40 selections as a business. The goa
 - Numbers come from tools, never from memory.
 - If unsure of one action, skip that action, plan the rest, and say why.
 - Every restock fills every slot to its column (`restocking`).
+- Variety: a second slot of one drink adds stock, not sales (`variety`).
 - Look up details with `get_project_rules`.
