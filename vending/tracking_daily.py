@@ -10,17 +10,25 @@ code as the manual command, so the request and the answer go in `tracking_checks
 `on`: it sends. A check goes to the course's bridge and spends the day's one check, and the team may
 want to send the first ones by hand from 30 Nov. So it is off by default, like the agent schedule.
 
-**When.** From `TRACKING_DAILY_AT` (default 06:00 Eastern) until 22:00 Eastern, in the first round that
+**When.** From `TRACKING_DAILY_AT` (default 06:00 Eastern) until 21:00 Eastern, in the first round that
 finds the books settled. Early morning is when they are: no visit happens overnight, the overnight
 rounds have synced yesterday's receipts, and David's Saturday 23:59 tax calculation is in by Sunday
 morning. The check is as of the newest good poll of ours taken before the current hour began: the
 bridge folds polls into its books on the hour, so that poll is already folded in. The send's facts
-are decided again at the send itself, under its reservation lock, with the clock of that moment, so
-a job that runs long cannot send on the facts of when it started: not after 22:00, not under
-yesterday's date, not as of a poll that has aged past `STALE_POLL` (six hours), and not while
-another replica's transient refusal is still backing off. The figures are computed before the lock,
-in one repeatable-read transaction of their own; the lock checks their poll's age, reserves, and
-releases for the request.
+are decided at the send itself, under its reservation lock, with the clock of that moment, so
+a job that runs long cannot send on the facts of when it started: not after the 21:00 dispatch
+deadline, not under yesterday's date, and not while another replica holds the reservation lock or
+another's transient refusal is still backing off. The poll is picked and the figures are computed
+under that lock too, in the reservation's own transaction: the books of that moment, so a ledger
+correction or a newer poll committed meanwhile is in them, and a job that starts the evening
+before cannot send the previous evening's figures under the new day's date.
+
+**One request a night.** The request is never started later than 21:00 Eastern: by then it is given
+up by the client within seconds, hours before midnight, so the bridge cannot check it on the next
+day (`tracking.DISPATCH_DEADLINE`). A request from the previous day that is still unanswered may
+still reach the bridge after midnight, so while it has no answer it blocks the new day's check
+until the morning window opens at 06:00 (`tracking.MORNING_FROM`): one request reaches the bridge
+for that night, not two.
 
 **Never twice a day.** Before it sends, the job asks the database whether today's check is used or may
 be (`tracking.blocking`): any send that day, by the worker or a person, that the bridge answered, or
@@ -57,7 +65,10 @@ from vending.start import EASTERN
 MODE_SETTING = "TRACKING_DAILY"
 AT_SETTING = "TRACKING_DAILY_AT"
 DEFAULT_AT = time(6, 0)
-LAST_SEND = time(22, 0)          # no send from this time on, Eastern
+# No send from this time on, Eastern: the dispatch deadline (`tracking.DISPATCH_DEADLINE`). A request
+# started by 21:00 is given up by the client within seconds, over three hours before midnight, so the
+# bridge cannot check it on the next Eastern day; the send re-checks it under its lock.
+LAST_SEND = tracking.DISPATCH_DEADLINE
 MAX_TRIES = 3                    # tries a day that don't settle on their own
 MAX_TRANSIENT = 8                # transient refusals a day, hard cap (the backoff bounds it lower)
 BACKOFF = timedelta(hours=1)     # after the first transient refusal, before the next try
@@ -142,7 +153,7 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
         log(f"tracking_daily: not due; it sends from {start:%H:%M} to {LAST_SEND:%H:%M} Eastern.")
         return 0
     day = local.date()
-    done = tracking.blocking(conn, day)
+    done = tracking.blocking(conn, day, now)
     if done:
         log(f"tracking_daily: today's check ({day}) is used or may be (#{done[0][0]}). Nothing sent.")
         return 0

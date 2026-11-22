@@ -105,9 +105,9 @@ def test_a_worker_restart_never_sends_twice_in_one_day(schema_url):
     with open_in(*schema_url) as conn:
         books(conn)
     bridge = FakeBridge(answer(), answer())
-    later = [NOW, NOW + timedelta(hours=1), NOW + timedelta(hours=9), utc("2026-12-05T02:55:00+00:00")]
+    later = [NOW, NOW + timedelta(hours=1), NOW + timedelta(hours=9), utc("2026-12-05T01:55:00+00:00")]
     codes = []
-    for moment in later:            # 06:05, 07:05, 15:05 and 21:55 Eastern on Fri 4 Dec
+    for moment in later:            # 06:05, 07:05, 15:05 and 20:55 Eastern on Fri 4 Dec
         with open_in(*schema_url) as conn:
             codes.append(run(conn, bridge, moment))
     assert [c for c, _ in codes] == [0, 0, 0, 0]
@@ -127,9 +127,10 @@ def test_the_next_day_it_sends_again(conn):
 
 
 @pytest.mark.parametrize("moment", ["2026-12-04T10:55:00+00:00",      # 05:55 Eastern
+                                    "2026-12-05T02:00:00+00:00",      # 21:00 Eastern: the dispatch deadline
                                     "2026-12-05T03:00:00+00:00",      # 22:00 Eastern
                                     "2026-12-05T04:59:00+00:00"])     # 23:59 Eastern
-def test_it_sends_only_from_six_to_ten_pm_eastern(conn, moment):
+def test_it_sends_only_from_six_to_the_deadline_eastern(conn, moment):
     books(conn)
     bridge = FakeBridge()
     code, lines = run(conn, bridge, utc(moment))
@@ -156,13 +157,13 @@ def test_a_person_who_sent_today_already_blocks_the_worker(conn):
 
 
 def test_the_cutoff_is_enforced_again_when_the_send_is_ready(conn):
-    """A job that starts inside the window but is only ready to send after 22:00 Eastern does not send.
-    The window and the day are re-checked under the send's lock, with the clock of that moment."""
+    """A job that starts inside the window but is only ready to send at the dispatch deadline does not
+    send. The window and the day are re-checked under the send's lock, with the clock of that moment."""
     books(conn)
-    poll(conn, "p3", "2026-12-05T01:30:00+00:00")     # 20:30 Eastern, so the newest poll isn't stale
-    stamps = iter([utc("2026-12-05T02:59:50+00:00"),      # 21:59:50 Eastern: due, and the window is open
-                   utc("2026-12-05T03:00:00+00:00"),      # 22:00:02 Eastern: the reservation, 12 s later
-                   utc("2026-12-05T03:10:00+00:00")])     # 22:10 Eastern: the send is only ready now
+    poll(conn, "p3", "2026-12-05T00:30:00+00:00")     # 19:30 Eastern, so the newest poll isn't stale
+    stamps = iter([utc("2026-12-05T01:59:50+00:00"),      # 20:59:50 Eastern: due, and the window is open
+                   utc("2026-12-05T02:00:00+00:00"),      # 21:00 Eastern: the reservation, 10 s later
+                   utc("2026-12-05T02:10:00+00:00")])     # 21:10 Eastern: the send is only ready now
     bridge = FakeBridge(answer())
     code, lines = run(conn, bridge, now=lambda: next(stamps))
     assert (code, bridge.sent, sends(conn)) == (1, [], [])
@@ -186,8 +187,8 @@ def test_fridays_figures_are_not_sent_on_saturday_morning(conn):
     and the poll's age are decided again under the send's lock, with the clock of that moment, so
     Friday's poll cannot spend Saturday's check."""
     books(conn)
-    poll(conn, "p3", "2026-12-05T01:30:00+00:00")     # 20:30 Eastern Friday, fresh that evening
-    stamps = iter([utc("2026-12-05T02:55:00+00:00"),       # 21:55 Eastern Friday: due, the poll is fresh
+    poll(conn, "p3", "2026-12-05T00:30:00+00:00")     # 19:30 Eastern Friday, fresh that evening
+    stamps = iter([utc("2026-12-05T01:55:00+00:00"),       # 20:55 Eastern Friday: due, the poll is fresh
                    utc("2026-12-06T11:05:00+00:00"),       # 06:05 Eastern Saturday: the reservation
                    utc("2026-12-06T11:15:00+00:00")])
     bridge = FakeBridge(answer("p3"))
@@ -269,21 +270,57 @@ def test_the_answer_is_stamped_when_it_is_stored(conn):
 
 
 def test_a_reply_lost_after_midnight_blocks_the_next_morning(conn):
-    """A job ready at 21:59:55 Eastern whose reply is lost at 00:01 records the attempt under Friday,
-    with the real answer time, so the bridge may have checked it on Saturday: no second send."""
+    """A job ready at 20:59:55 Eastern - inside the window, before the 21:00 dispatch deadline -
+    whose reply is lost at 00:01 records the attempt under Friday, with the real answer time, so
+    the bridge may have checked it on Saturday: no second send."""
     books(conn)
-    poll(conn, "p3", "2026-12-05T01:30:00+00:00")     # 20:30 Eastern, so the newest poll isn't stale
-    stamps = iter([utc("2026-12-05T02:59:50+00:00"), utc("2026-12-05T02:59:55+00:00"),
+    poll(conn, "p3", "2026-12-05T00:30:00+00:00")     # 19:30 Eastern, so the newest poll isn't stale
+    stamps = iter([utc("2026-12-05T01:59:50+00:00"), utc("2026-12-05T01:59:55+00:00"),
                    utc("2026-12-05T05:01:00+00:00")])
     bridge = FakeBridge(BridgeNoAnswer("timed out"))
     assert run(conn, bridge, now=lambda: next(stamps))[0] == 3
     [(_, by, as_of, status, used, day)] = sends(conn)
     assert (str(day), status, used) == ("2026-12-04", None, None)
     sent_at, answered_at = conn.execute("select sent_at, answered_at from tracking_checks").fetchone()
-    assert (sent_at, answered_at) == (utc("2026-12-05T02:59:55+00:00"), utc("2026-12-05T05:01:00+00:00"))
+    assert (sent_at, answered_at) == (utc("2026-12-05T01:59:55+00:00"), utc("2026-12-05T05:01:00+00:00"))
     assert run(conn, bridge, utc("2026-12-05T11:05:00+00:00"))[0] == 0    # Sat 06:05 Eastern
     assert len(bridge.sent) == 1 and len(sends(conn)) == 1
     assert "used or may be" in run(conn, bridge, utc("2026-12-05T11:05:00+00:00"))[1][-1]
+
+
+def test_a_request_held_past_midnight_means_one_post_for_the_night(conn, monkeypatch):
+    """A send started before the dispatch deadline whose request is held past midnight - the reply
+    never comes, the row stays without an answer - may still be checked by the bridge after
+    midnight, on the next Eastern day. Until the morning window opens (06:00 Eastern) such a row
+    blocks the next day's check, so one request reaches the bridge for that night, not two. After
+    06:00 the next day's check goes out: a request started by 21:00 and given up by the client
+    within seconds is hours old by then, and the bridge no longer reads it."""
+    monkeypatch.setenv(tracking_daily.AT_SETTING, "00:00")
+    books(conn)
+    poll(conn, "p3", "2026-12-05T00:30:00+00:00")     # 19:30 Eastern Friday, fresh at 20:59
+    stamps = iter([utc("2026-12-05T01:59:50+00:00"), utc("2026-12-05T01:59:55+00:00"),
+                   utc("2026-12-05T02:00:15+00:00")])
+
+    class Held(FakeBridge):
+        def check_books(self, body):        # the request is on the wire; the bridge holds it: no answer
+            raise BridgeNoAnswer("timed out")
+
+    run(conn, Held(), now=lambda: next(stamps))   # the client gives up after 20 s, before midnight
+    [row] = sends(conn)
+    assert (row[2], row[3], row[4]) == ("p3", None, None)
+    # Saturday 00:05 Eastern: the held request may reach the bridge after midnight, so no second send.
+    bridge = FakeBridge()
+    code, lines = run(conn, bridge, utc("2026-12-05T05:05:00+00:00"))
+    assert (code, bridge.sent) == (0, [])
+    assert "used or may be" in lines[-1]
+    saturday = utc("2026-12-05T05:05:00+00:00").astimezone(EASTERN).date()
+    assert tracking.blocking(conn, saturday, now=utc("2026-12-05T05:05:00+00:00")) != []
+    assert tracking.blocking(conn, saturday, now=utc("2026-12-05T11:05:00+00:00")) == []
+    # Saturday 06:05 Eastern: the morning window opens; the day's check goes out.
+    poll(conn, "p6", "2026-12-05T10:00:00+00:00")     # 05:00 Eastern Saturday
+    bridge = FakeBridge(answer("p6", checked_at=utc("2026-12-05T11:10:00+00:00")))
+    code, lines = run(conn, bridge, utc("2026-12-05T11:05:00+00:00"))
+    assert code == 0 and [b["as_of"] for b in bridge.sent] == ["p6"]
 
 
 # --- Skips and failures -----------------------------------------------------------------------------
@@ -389,18 +426,18 @@ def test_transient_refusals_back_off_but_do_not_forfeit_the_day(conn):
     """`tracking_not_started` settles at the competition start, so early refusals are retried on a
     backoff across the send window instead of using up the three tries that a real refusal needs."""
     books(conn)
-    bridge = FakeBridge(*[refused(409, "tracking_not_started")] * 6)
-    # A fresh poll each hour, as the syncs bring them in, so the newest one isn't stale:
-    # p4 at 12:00 Eastern for the 13:05 try, p5 at 16:00 for 17:05, p6 at 20:00 for 21:05.
-    poll(conn, "p4", "2026-12-04T17:00:00+00:00")
+    bridge = FakeBridge(*[refused(409, "tracking_not_started")] * 5)
+    # A fresh poll each stretch, as the syncs bring them in, so the newest one isn't stale:
+    # p4 at 11:00 Eastern for the 13:05 try, p5 at 16:00 for 17:05.
+    poll(conn, "p4", "2026-12-04T16:00:00+00:00")
     poll(conn, "p5", "2026-12-04T21:00:00+00:00")
-    poll(conn, "p6", "2026-12-05T01:00:00+00:00")
-    # 06:05, 07:05 (1 h later), 09:05 (2 h), 13:05, 17:05 and 21:05 (4 h) Eastern.
+    # 06:05, 07:05 (1 h later), 09:05 (2 h), 13:05 (4 h) and 17:05 (4 h) Eastern: each round waits out
+    # the backoff and stays inside the window, before the 21:00 dispatch deadline.
     for moment in (NOW, NOW + timedelta(hours=1), NOW + timedelta(hours=3), NOW + timedelta(hours=7),
-                   NOW + timedelta(hours=11), NOW + timedelta(hours=15)):
+                   NOW + timedelta(hours=11)):
         assert run(conn, bridge, moment)[0] == 0, moment
-    assert len(bridge.sent) == 6
-    assert [used for _, _, _, _, used, _ in sends(conn)] == [False] * 6
+    assert len(bridge.sent) == 5
+    assert [used for _, _, _, _, used, _ in sends(conn)] == [False] * 5
 
 
 def test_a_transient_refusal_waits_out_its_backoff(conn):

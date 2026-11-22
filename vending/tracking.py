@@ -35,6 +35,17 @@ refused here unless every earlier send that day was refused without using the ch
 usable answer (a timeout, a 5xx) may have used it, so it blocks the rest of the day too. Every send
 is stored in `tracking_checks` (migration 021) before it goes, then its answer.
 
+**One request a night.** The request itself is never started later than 21:00 Eastern
+(`DISPATCH_DEADLINE`, raising `DispatchClosed`): started by then it is given up by the client within
+seconds - the timeout in `vending.bridge` - over three hours before midnight, so the bridge cannot
+check it on the next Eastern day, and every stored send belongs to at most the Eastern days up to
+midnight. The daily job's window ends at the same hour (`tracking_daily.LAST_SEND`). A request from
+the previous day that is still unanswered - the process froze with the request on the wire - may
+still reach the bridge after midnight and be checked on the new day, so while it has no answer it
+blocks the new day's check until 06:00 Eastern (`MORNING_FROM`, `blocking`): the morning window
+opens then, and by it the request is hours past its start. The held-past-midnight case is also why
+`days_used` keeps a lost reply blocking the day after its send.
+
 **Whose day.** The bridge counts a check on the Eastern day it checks it, which can be the day after
 we sent it (reserved 23:59:59, checked 00:00:01). So an answered check counts on the day of the
 bridge's `checked_at` (and the day before its `next_check_from`), not the day we sent it. A send
@@ -92,6 +103,20 @@ TRACKING_LOCK = 4_200_021
 # behind by a crash stops blocking the days that follow.
 IN_FLIGHT = timedelta(hours=1)
 
+# The request is never started later than this, Eastern. A request started by 21:00 is given up by
+# the client within seconds (the 20 second timeout in `vending.bridge`), over three hours before
+# midnight, so the bridge cannot check it on the next Eastern day. Past the deadline a send is
+# refused (`DispatchClosed`) and nothing is recorded: the reservation is left unused. This is also
+# the end of the daily job's window (`tracking_daily.LAST_SEND`).
+DISPATCH_DEADLINE = time(21, 0)
+
+# The morning hour the daily send window opens again, Eastern. A reservation from the previous day
+# with no answer yet may still reach the bridge after midnight - the request sat on a stalled reader
+# - and be checked then, which would spend the new day's check before our first send of the morning.
+# So while it has no answer it blocks the new day's check until this hour (`blocking`); after it, a
+# request is hours past its start and the bridge no longer reads one.
+MORNING_FROM = time(6, 0)
+
 RESULTS = ("cash", "sales_tax_owed", "coil", "back_stock")
 VERDICTS = ("within", "outside")
 
@@ -146,6 +171,13 @@ class AlreadyChecked(RuntimeError):
 class WindowClosed(RuntimeError):
     """The caller's send window had closed by the time the send was ready, so nothing was sent
     (`tracking_daily` passes its window; nothing is recorded either)."""
+
+
+class DispatchClosed(RuntimeError):
+    """Past the 21:00 Eastern dispatch deadline, so the request was not started and nothing was
+    recorded. A request started by the deadline is given up by the client within seconds, over
+    three hours before midnight, so the bridge cannot check it on the next Eastern day; one started
+    later could be. See `DISPATCH_DEADLINE`."""
 
 
 class TooManyTries(RuntimeError):
@@ -368,14 +400,31 @@ def days_used(sent_at: datetime, answered_at: datetime | None, status: int | Non
     return days
 
 
-def blocking(conn: psycopg.Connection, day: date) -> list[tuple[int, int | None, bool | None]]:
-    """(id, status, used_check) of each send that used `day`'s check, or may have (`days_used`)."""
+def blocking(conn: psycopg.Connection, day: date, now: datetime | None = None) -> list[tuple[int, int | None, bool | None]]:
+    """(id, status, used_check) of each send that used `day`'s check, or may have (`days_used`).
+
+    With `now`, a reservation from the previous day that still has no answer also blocks the
+    morning: the held request may still reach the bridge after midnight and be checked on `day`,
+    which would spend the day's check before our first send. The block holds until the morning
+    window opens (`MORNING_FROM`, 06:00 Eastern); after it a request is hours past its start -
+    none is started later than 21:00 (`DISPATCH_DEADLINE`) - and the bridge no longer reads one,
+    so the block lifts and the day's check goes out."""
     rows = conn.execute("select id, sent_at, answered_at, status, used_check, answer, next_check_from"
                         " from tracking_checks where used_check is distinct from false"
                         " and eastern_day between %s and %s order by id",
                         (day - timedelta(days=2), day)).fetchall()
-    return [(i, status, used) for i, sent, answered, status, used, answer, next_from in rows
-            if day in days_used(sent, answered, status, used, answer, next_from)]
+    found = [(i, status, used) for i, sent, answered, status, used, answer, next_from in rows
+             if day in days_used(sent, answered, status, used, answer, next_from)]
+    if now is not None:
+        local = now.astimezone(EASTERN)
+        if local.date() == day and local.time() < MORNING_FROM:
+            seen = {entry[0] for entry in found}
+            found += [(i, status, used) for i, status, used in
+                      conn.execute("select id, status, used_check from tracking_checks"
+                                   " where eastern_day = %s and used_check is null order by id",
+                                   (day - timedelta(days=1),))
+                      if i not in seen]
+    return found
 
 
 def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
@@ -391,7 +440,8 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
 
     Everything is re-checked under the send's advisory lock, with the clock of that moment, so a
     caller that started a while ago cannot send on stale facts: `window` (Eastern start and cutoff)
-    raises `WindowClosed` when the moment to send has passed; `stale` raises `StaleFigures` when the
+    raises `WindowClosed` when the moment to send has passed, and no request is started after the
+    21:00 Eastern dispatch deadline (`DispatchClosed`); `stale` raises `StaleFigures` when the
     poll the figures are as of is older than the limit at that moment; `daily_tries` raises
     `TooManyTries` when the day's tries are spent and `BackingOff` while the newest transient
     refusal is still within its backoff. All before anything is recorded. The lock is taken without
@@ -416,6 +466,12 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
         if window is not None and not window[0] <= local.time() < window[1]:
             raise WindowClosed(f"the send window ({window[0]:%H:%M}-{window[1]:%H:%M} Eastern) closed while the "
                                f"check was being prepared; it was ready at {local:%H:%M}, so nothing was sent")
+        if local.time() >= DISPATCH_DEADLINE:
+            raise DispatchClosed(
+                f"past the {DISPATCH_DEADLINE:%H:%M} Eastern dispatch deadline ({local:%H:%M} now): a request "
+                "started by the deadline is given up by the client within seconds, hours before midnight, but "
+                "one started now could still be checked by the bridge after midnight. Nothing was sent, and "
+                "nothing is recorded")
         day = eastern_day(moment)
         if stale is not None and moment - found.as_of_time > stale:
             raise StaleFigures(
@@ -425,7 +481,7 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
         if daily_tries is not None:
             _check_tries(conn, day, moment, daily_tries)
         if once_a_day or moment >= daily_from():
-            earlier = blocking(conn, day)
+            earlier = blocking(conn, day, moment)
             if earlier:
                 said = "; ".join(f"#{i}: " + ("no usable answer, so it may have used it" if s is None
                                               else f"{s}" + ("" if used else ", may have used it"))
@@ -661,7 +717,7 @@ def main(argv: list[str] | None = None, bridge: Callable[[], Any] = Bridge) -> i
             return 0
         try:
             outcome = send(conn, bridge(), found, args.by)
-        except (AlreadyChecked, LockBusy, settings.SettingsError) as error:
+        except (AlreadyChecked, DispatchClosed, LockBusy, settings.SettingsError) as error:
             print(error, file=sys.stderr)
             return 1
         except psycopg.Error as error:
