@@ -122,3 +122,30 @@ def test_cli_check_says_what_it_settled_and_what_still_needs_a_person(conn, sche
     submissions.resolve(conn, blocked, None, "kevin")
     assert submissions.main(["check"]) == 0
     assert "Nothing to settle" in capsys.readouterr().out
+
+
+def test_a_request_id_already_ours_never_settles_another_row(conn):
+    """#217: the bridge naming a request we already hold (another submission's, or a request recorded) doesn't
+    make it this attempt's. Settling the row onto it would leave no new pending request, and the next run would
+    send the same order again, so the row stays open for a person, even when the bridge confirms the ID."""
+    ours(conn, "pr-old")
+    id = row(conn, response={"id": "pr-old"})
+    bridge = Lookup({"pr-old": {"id": "pr-old", "status": "pending"}})
+    [checked] = submissions.check(conn, bridge)
+    assert checked.status == "unknown" and "IdTaken" in checked.why
+    assert state(conn, id) == ("unknown", None, None)
+    with pytest.raises(submissions.IdTaken, match="submission 1 already holds"):
+        submissions.resolve(conn, id, "pr-old", "kevin")
+    assert submissions.unresolved(conn).code == "submission_unresolved"
+
+
+def test_save_answer_keeps_the_id_on_a_row_still_sending_and_never_settles_it(conn):
+    id = row(conn, status="sending")
+    submissions.save_answer(conn, id, {"id": "pr-7", "status": "pending"})
+    assert state(conn, id) == ("sending", None, None)
+    assert submissions.known_request_id(None, conn.execute(
+        "select response from purchase_submissions where id = %s", (id,)).fetchone()[0]) == "pr-7"
+    # A row already settled is left as it is.
+    done = row(conn, status="refused")
+    submissions.save_answer(conn, done, {"id": "pr-8"})
+    assert conn.execute("select response from purchase_submissions where id = %s", (done,)).fetchone() == (None,)

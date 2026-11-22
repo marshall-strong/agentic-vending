@@ -322,19 +322,25 @@ side connection opened before anything is sent:
    requests.
 2. It POSTs `/api/v1/purchase-requests` once, never retried: a retry after a lost answer could order
    twice.
-3. It settles the row on that same connection: `accepted` (and the request goes into
-   `purchase_requests` in the same transaction, so `python -m vending.sync_requests` reads it back
-   from then on), `refused` (only a status the route documents as a refusal: `403`, `422` or
-   `429`; the reply carries the bridge's reason, such as `422 invalid_lines`), `not_filed` (it
-   failed inside the connect, so it never left), or `unknown` (anything else: a timeout, a send
-   error once connected, a redirect, a `5xx` or another `4xx`, whose body is kept in `detail`, or a
-   cut-off answer). The POST follows no redirect: urllib would follow a `303` with a GET, and that
+3. It keeps the bridge's answer on the row (`response`) the moment it is read, before anything
+   else, so a request ID the bridge sent survives a settle that fails, and the next run's check
+   can look it up.
+4. It settles the row on that same connection: `accepted` (only the documented `201` with a new
+   pending request, under an ID no other submission or recorded request holds; the request goes
+   into `purchase_requests` in the same transaction, so `python -m vending.sync_requests` reads it
+   back from then on), `refused` (only a status the route documents as a refusal, `403`, `422` or
+   `429`, with its whole body in the documented shape and nothing in it naming a request; the reply
+   carries the bridge's reason, such as `422 invalid_lines`), `not_filed` (it failed inside the
+   connect, so it never left), or `unknown` (anything else: a timeout, a send error once
+   connected, a redirect, a `5xx` or another `4xx`, whose body is kept in `detail`, a cut-off,
+   empty or off-schema body, a refusal naming a request, a `200`, or an ID we already hold). The POST follows no redirect: urllib would follow a `303` with a GET, and that
    GET's `404` would pass for a refusal.
 
 If the bridge accepted the request but storing that fails anyway (the database dropped between the
 POST and the settle), the answer is written to the server's stderr as a `LOST ANSWER` line and the
 error the agent sees names the request ID and the `resolve` command, so the ID is never only in
-memory. The row stays `sending`.
+memory. The row stays `sending`, with the answer already in `response`, so the next live run's
+check looks the ID up and settles it.
 
 While any row is `sending` or `unknown`, the request may or may not exist on the bridge, so both
 tools refuse (`submission_unresolved`) until a person settles it. With the request ID (from the

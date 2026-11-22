@@ -53,6 +53,9 @@ RETRIES = 4
 # The tracking check (`check_books`), and how much of an error answer it keeps: enough for a list of items.
 TRACKING_PATH = "/api/v1/tracking/check"
 TRACKING_ERROR_BYTES = 8192
+# How much of a purchase POST's error answer `post_answer` keeps: the bridge's whole refusal, every line's problem included. A
+# refusal longer than this is cut off, and `submit_desired_state` never reads a cut-off answer as a refusal.
+POST_ERROR_BYTES = 65536
 
 
 class LiveRead(NamedTuple):
@@ -119,11 +122,14 @@ class BridgeError(RuntimeError):
 
 
 class BridgeAnswered(BridgeError):
-    """An HTTP error status from a single, unretried call (`products`, `post`)."""
+    """An HTTP error status from a single, unretried call (`products`, `post`).
 
-    def __init__(self, status: int, detail: str):
+    `complete` is True only when `detail` is the whole body the bridge sent, read to its end and valid UTF-8:
+    never when it was cut off, longer than the call keeps, or unreadable."""
+
+    def __init__(self, status: int, detail: str, *, complete: bool = False):
         super().__init__(f"{status}: {detail}")
-        self.status, self.detail = status, detail
+        self.status, self.detail, self.complete = status, detail, complete
 
 
 class BridgeNoAnswer(BridgeError):
@@ -192,6 +198,15 @@ class Bridge:
         """
         return json.loads(self._once("POST", path, body, keep_body=True, redirects=False))
 
+    def post_answer(self, path: str, body: dict) -> tuple[int | None, Any]:
+        """`post`, with the success status the answer came with (None if the reply gave none):
+        `submit_desired_state` accepts a purchase request only on the `201` the bridge documents. An error
+        answer keeps up to `POST_ERROR_BYTES` of its body, and says whether that was all of it."""
+        answered: dict[str, Any] = {}
+        data = self._once("POST", path, body, keep_body=True, kept_bytes=POST_ERROR_BYTES, redirects=False,
+                          answered=answered)
+        return answered.get("status"), json.loads(data)
+
     def check_books(self, body: dict) -> dict:
         """Our books as of one poll (`POST /api/v1/tracking/check`), once, never retried: the bridge
         allows one check a day, and a retry after a lost answer could be refused as the day's second.
@@ -231,10 +246,12 @@ class Bridge:
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
               timeout: float | None = None, headers_out: dict[str, str] | None = None,
-              keep_body: bool = False, kept_bytes: int = 300, redirects: bool = True) -> bytes:
+              keep_body: bool = False, kept_bytes: int = 300, redirects: bool = True,
+              answered: dict[str, Any] | None = None) -> bytes:
         """One try. `keep_body` puts the first `kept_bytes` of an error answer in `BridgeAnswered.detail`:
         only for `post` and `check_books`, whose answers concern our own request. Any other answer can hold
-        a poll, so only its status is kept. `redirects=False` raises a redirect as `BridgeAnswered`."""
+        a poll, so only its status is kept. `redirects=False` raises a redirect as `BridgeAnswered`. `answered`
+        gets the success status, as `status`."""
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -247,13 +264,21 @@ class Bridge:
             with opener(request, timeout=timeout or TIMEOUT_SECONDS) as response:
                 status = getattr(response, "status", None)
                 data = response.read()
+                if answered is not None:
+                    answered["status"] = status
                 if headers_out is not None:    # names lower-cased: HTTP header names have no case
                     headers_out.update({k.lower(): v for k, v in response.headers.items()})
         except urllib.error.HTTPError as error:
             # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
-            detail = (_start_of_body(error, kept_bytes).decode(errors="replace") if keep_body
-                      else status_phrase(error.code))
-            raise BridgeAnswered(error.code, detail) from None
+            if keep_body:
+                start, complete = _start_of_body(error, kept_bytes)
+                try:
+                    detail = start.decode()
+                except UnicodeDecodeError:
+                    detail, complete = start.decode(errors="replace"), False
+            else:
+                detail, complete = status_phrase(error.code), False
+            raise BridgeAnswered(error.code, detail, complete=complete) from None
         except urllib.error.URLError as error:
             # urllib raises URLError only while connecting or sending. Only a failure raised inside connect
             # proves the bridge got nothing; any error once connected may come after it read the request.
@@ -436,12 +461,20 @@ def _before_connected(reason: object) -> bool:
     return False
 
 
-def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
-    """The start of an error response, for the message. It can be cut off too."""
+def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> tuple[bytes, bool]:
+    """The start of an error response, at most `size` bytes, and whether that is all of it: False when the
+    body runs on past `size`, is shorter than its `Content-Length` says, or reading it failed. A read with a
+    limit doesn't raise when the connection ends early; it just returns less, so the length is checked here."""
     try:
-        return error.read(size)
-    except (OSError, http.client.HTTPException):
-        return b""
+        data = error.read(size + 1)
+    except (OSError, http.client.HTTPException, AttributeError):    # AttributeError: an error with no body
+        return b"", False
+    declared = error.headers.get("Content-Length") if error.headers else None
+    try:
+        whole = declared is None or int(declared) == len(data)
+    except ValueError:
+        whole = False
+    return data[:size], whole and len(data) <= size
 
 
 def _retry_after(error: urllib.error.HTTPError) -> float | None:

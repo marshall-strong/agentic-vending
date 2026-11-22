@@ -117,19 +117,21 @@ def test_not_ready_is_a_failure_not_a_refusal(db, fake):  # noqa: F811
 
 def test_a_4xx_from_the_bridge_is_refused_with_its_reason(db, fake):  # noqa: F811
     prepared(db)
-    fake.answer = (422, {"detail": {"error_type": "invalid_lines", "problems": ["alternate_same_as_primary"]}})
+    fake.answer = (422, {"error": "invalid lines", "error_type": "invalid_lines", "items": [
+        {"index": 0, "slot": "15", "choice": "alternate", "sku": "COKE20", "error_type": "alternate_same_as_primary",
+         "reason": "the alternate is the primary"}]})
     reply = submit()
     assert not reply["success"] and "422" in reply["message"] and "alternate_same_as_primary" in reply["message"]
     assert db.execute("select status from purchase_submissions").fetchall() == [("refused",)]
     assert db.execute("select count(*) from purchase_requests where status = 'pending'").fetchone() == (0,)
     # Certainly not filed, so a corrected plan may be sent.
-    fake.answer = (201, {"id": "pr-2", "status": "pending"})
+    fake.answer = (201, {"id": "pr-2", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
     assert submit()["success"] and len(fake.posts) == 2
 
 
 def test_too_many_open_requests_is_a_refusal(db, fake):  # noqa: F811
     prepared(db)
-    fake.answer = (429, {"detail": "too_many_open_requests"})
+    fake.answer = (429, {"error": "too many open requests", "error_type": "too_many_open_requests"})
     reply = submit()
     assert codes(reply) == ["too_many_open_requests"]
     # It came back from the bridge, after the POST, so it carries the submission number: the agent's sign
@@ -146,7 +148,7 @@ def test_no_usable_answer_blocks_every_submit_until_a_person_settles_it(db, fake
     assert not reply["success"] and reply["status"] == "unknown" and "resolve 1" in reply["message"]
     assert db.execute("select status from purchase_submissions").fetchall() == [("unknown",)]
     assert db.execute("select count(*) from purchase_requests where status = 'pending'").fetchone() == (0,)
-    fake.answer = (201, {"id": "pr-9", "status": "pending"})
+    fake.answer = (201, {"id": "pr-9", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
     blocked = submit()
     assert codes(blocked) == ["submission_unresolved"] and len(fake.posts) == 1
     # The person finds it on the bridge: now it is a pending request like any other.
@@ -162,7 +164,7 @@ def test_a_submission_the_bridge_never_filed_can_be_sent_again(db, fake):  # noq
     submit()
     submissions.resolve(db, 1, None, "kevin")
     assert db.execute("select status, resolved_by from purchase_submissions").fetchall() == [("not_filed", "kevin")]
-    fake.answer = (201, {"id": "pr-2", "status": "pending"})
+    fake.answer = (201, {"id": "pr-2", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
     assert submit()["success"] and len(fake.posts) == 2
     assert db.execute("select tool from action_log where tool = 'submissions.resolve'").fetchall() == [("submissions.resolve",)]
 
@@ -263,13 +265,18 @@ def test_a_plan_refused_for_other_reasons_is_not_also_called_changed(db, fake): 
     assert reply["refusals"] and "plan_changed" not in codes(reply)
 
 
-@pytest.mark.parametrize(("status", "settled"), [(422, "refused"), (503, "unknown")])
-def test_an_error_answer_cut_off_part_way_is_still_that_answer(db, fake, status, settled):  # noqa: F811
+@pytest.mark.parametrize("status", [403, 422, 429, 503])
+def test_an_error_answer_cut_off_part_way_is_unknown_and_blocks_the_next_submit(db, fake, status):  # noqa: F811
+    """A refusal's status alone isn't the bridge's refusal: its body may name a request, and a cut-off body
+    can't be read. So even a cut-off 422 is `unknown`, and nothing more is sent until it is settled.
+    `tests/test_submit_runs.py` runs the same through two live agent runs."""
     prepared(db)
     fake.answer, fake.cut = (status, {}), True
     reply = submit()
-    assert not reply["success"] and str(status) in reply["message"]
-    assert db.execute("select status from purchase_submissions").fetchall() == [(settled,)]
+    assert not reply["success"] and reply["status"] == "unknown" and str(status) in reply["message"]
+    assert db.execute("select status from purchase_submissions").fetchall() == [("unknown",)]
+    fake.cut = False
+    assert codes(submit(preview().get("plan_hash"))) == ["submission_unresolved"] and len(fake.posts) == 1
 
 
 def test_preview_refuses_too_while_a_submission_is_unresolved(db, fake):  # noqa: F811
@@ -323,8 +330,8 @@ def test_unreachable_bridge_is_not_filed(db, fake, monkeypatch):  # noqa: F811
     real = fake.client()
 
     class HalfDead(Bridge):
-        def post(self, path, body):
-            return Bridge("http://127.0.0.1:9", "test-key").post(path, body)
+        def post_answer(self, path, body):
+            return Bridge("http://127.0.0.1:9", "test-key").post_answer(path, body)
 
     monkeypatch.setattr(server, "bridge", lambda: HalfDead(real.base_url, "test-key"))
     reply = submit()

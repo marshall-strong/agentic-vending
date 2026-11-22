@@ -375,3 +375,27 @@ def test_a_refused_connection_proves_nothing_left(sleeps, monkeypatch):
         url = server.url
     with pytest.raises(BridgeUnreachable, match="Tailscale"):
         Bridge(base_url=url, api_key=KEY).post("/api/v1/purchase-requests", {"lines": []})
+
+
+# --- A purchase POST's answer: its status, and whether an error body is whole (#217) -----------------
+
+
+def test_post_answer_gives_the_success_status(bridge):
+    client = bridge({"POST /api/v1/purchase-requests": Answer(status=200, body=b'{"id": "r1"}')})
+    assert client.post_answer("/api/v1/purchase-requests", {"lines": []}) == (200, {"id": "r1"})
+
+
+@pytest.mark.parametrize("answer, complete", [
+    pytest.param(Answer(status=422, body=b'{"error": "x", "error_type": "invalid_lines"}'), True, id="whole"),
+    pytest.param(Answer(status=422, body=b'{"error": "x", "err', content_length=200), False, id="cut off"),
+    pytest.param(Answer(status=429, body=b"x" * (bridge_module.POST_ERROR_BYTES + 1)), False, id="too long"),
+    pytest.param(Answer(status=403, body=b'{"error": "\xff"}'), False, id="not UTF-8"),
+])
+def test_a_post_error_says_whether_its_body_is_whole(bridge, answer, complete):
+    from vending.bridge import BridgeAnswered
+
+    client = bridge({"POST /api/v1/purchase-requests": answer})
+    with pytest.raises(BridgeAnswered) as raised:
+        client.post_answer("/api/v1/purchase-requests", {"lines": []})
+    assert raised.value.status == answer.status and raised.value.complete is complete
+    assert len(raised.value.detail) <= bridge_module.POST_ERROR_BYTES

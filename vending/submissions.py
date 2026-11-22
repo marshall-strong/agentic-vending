@@ -5,8 +5,9 @@
     python -m vending.submissions resolve 7 --request-id pr_abc123 --by kevin   # the bridge filed it
     python -m vending.submissions resolve 7 --not-filed --by kevin              # it never did
 
-`submit_desired_state` commits a `sending` row here before it POSTs, and
-settles it after, on the same connection. A row left `sending` (a crash in
+`submit_desired_state` commits a `sending` row here before it POSTs, keeps
+the bridge's answer on it the moment it arrives (`save_answer`), and settles
+it after, on the same connection. A row left `sending` (a crash in
 between) or `unknown` (sent, but no usable answer) may or may not exist on the
 bridge, and both the tool and `preview_desired_state` refuse
 (`submission_unresolved`) until a person settles it.
@@ -14,7 +15,10 @@ bridge, and both the tool and `preview_desired_state` refuse
 `check` settles what the bridge can answer by itself, and a live agent run does
 the same before it starts. It looks up an open row only by a request ID the row
 already holds (in `request_id`, or as `id` in the stored `response`), and only
-an answer naming that request settles it, as `accepted`. Anything else leaves
+an answer naming that request settles it, as `accepted`. A request ID is only
+ever bound to one attempt: one that another submission or a request we already
+recorded holds (`IdTaken`) settles nothing, by `settle`, `check` or
+`resolve`, since that request is not this attempt's. Anything else leaves
 the row open, a `404` included: the bridge has no answer that means "never
 filed", and another request reading fine doesn't show this one would. A lost
 reply (the POST arrived, no answer came back) leaves no ID, and the bridge has
@@ -67,6 +71,27 @@ RESOLVE_HINT = ("a person must run python -m vending.submissions check; if it ca
 AUTO_BY = "auto-check"     # `resolved_by` for a row `check` settled from the bridge's own answer
 
 
+class IdTaken(ValueError):
+    """The request ID is already another submission's, or a request we recorded: it can't be this attempt's."""
+
+    def __init__(self, row: int, request_id: str, holder: str):
+        super().__init__(
+            f"the bridge named request {request_id} for submission {row}, but {holder} already holds that ID, so "
+            "it isn't this attempt's request")
+        self.row, self.request_id = row, request_id
+
+
+def id_taken(conn: psycopg.Connection, row: int, request_id: str) -> None:
+    """Raise `IdTaken` if `request_id` is bound to anything but submission `row`."""
+    other = conn.execute("select id from purchase_submissions where request_id = %s and id <> %s limit 1",
+                         (request_id, row)).fetchone()
+    if other is not None:
+        raise IdTaken(row, request_id, f"submission {other[0]}")
+    known = conn.execute("select status from purchase_requests where request_id = %s", (request_id,)).fetchone()
+    if known is not None:
+        raise IdTaken(row, request_id, f"our recorded request ({known[0]})")
+
+
 class AlreadySettled(RuntimeError):
     """`settle` found its row no longer `sending`: something else settled it while the request was in flight."""
 
@@ -96,6 +121,16 @@ def save_sending(side: psycopg.Connection, plan_hash: str, body: dict,
     return row
 
 
+def save_answer(side: psycopg.Connection, row: int, answer: object) -> None:
+    """Keep the bridge's answer to the POST on a row still `sending`, before anything else is done with it.
+
+    It commits at once (`side` is autocommit), on its own, so a request ID the bridge sent is on the row even
+    if settling fails after: `check` reads it from `response` and looks it up. It never settles the row.
+    """
+    side.execute("update purchase_submissions set response = %s where id = %s and status = 'sending'",
+                 (None if answer is None else Jsonb(answer), row))
+
+
 def settle(side: psycopg.Connection, row: int, status: str, *, request_id: str | None = None,
            response: object = None, detail: str | None = None, submitted_at: datetime | None = None) -> None:
     """Record how a submission ended, on the connection that saved it.
@@ -105,6 +140,7 @@ def settle(side: psycopg.Connection, row: int, status: str, *, request_id: str |
 
     Only a row still `sending` is settled. Anything else raises `AlreadySettled`
     and leaves the row as it is, so a person's `resolve` is never overwritten.
+    `accepted` under an ID already bound elsewhere raises `IdTaken` and changes nothing.
     """
     with side.transaction():
         current, by, body, plan_hash, fee = side.execute(
@@ -112,6 +148,8 @@ def settle(side: psycopg.Connection, row: int, status: str, *, request_id: str |
             " where id = %s for update", (row,)).fetchone()
         if current != "sending":
             raise AlreadySettled(row, current, by)
+        if status == "accepted":
+            id_taken(side, row, request_id)
         side.execute(
             "update purchase_submissions set status = %s, request_id = %s, response = %s, detail = %s"
             " where id = %s and status = 'sending'",
@@ -167,6 +205,7 @@ def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str
             raise ValueError(f"Submission {row} is {status}, not sending or unknown; nothing to settle.")
         if request_id:
             request_id = request_id.strip()
+            id_taken(conn, row, request_id)     # an IdTaken is a ValueError: `check` leaves the row open
             conn.execute("update purchase_submissions set status = 'accepted', request_id = %s, resolved_by = %s,"
                          " resolved_at = now() where id = %s", (request_id, who.strip(), row))
             record(conn, request_id, at, bool(body.get("off_cycle")), body, plan_hash=plan_hash, visit_fee_cents=fee)

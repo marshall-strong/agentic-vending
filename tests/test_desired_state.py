@@ -50,6 +50,9 @@ class FakeBridge:
         self.other_gets: list[str] = []  # GETs of anything but the catalog (a followed redirect, say)
         self.received = threading.Event()  # set once a POST has arrived
         self.hold: threading.Event | None = None  # if set, a POST isn't answered until this is
+        self.raw: bytes | None = None  # answer the POST (with `answer`'s status) with exactly these bytes as its body
+        self.lookups: dict[str, dict] = {}  # what `GET /api/v1/purchase-requests/{id}` answers, by ID; others are 404
+        self.looked_up: list[str] = []  # every ID asked for that way (in `other_gets` too)
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -65,6 +68,16 @@ class FakeBridge:
                 self.wfile.write(data)
 
             def do_GET(self):
+                prefix = "/api/v1/purchase-requests/"
+                if self.path.startswith(prefix):
+                    asked = self.path[len(prefix):]
+                    fake.looked_up.append(asked)
+                    fake.other_gets.append(self.path)
+                    if asked in fake.lookups:
+                        self._reply(200, fake.lookups[asked])
+                    else:
+                        self._reply(404, {"detail": "Not Found"})
+                    return
                 if self.path != "/api/v1/products":
                     fake.other_gets.append(self.path)
                     self._reply(404, {"detail": "Not Found"})
@@ -88,6 +101,12 @@ class FakeBridge:
                     self.send_header("Location", fake.redirect)
                     self.send_header("Content-Length", "0")
                     self.end_headers()
+                    return
+                if fake.raw is not None:
+                    self.send_response(fake.answer[0])
+                    self.send_header("Content-Length", str(len(fake.raw)))
+                    self.end_headers()
+                    self.wfile.write(fake.raw)
                     return
                 if fake.cut:
                     data = b'{"id": "pr-1", "status": "pen'

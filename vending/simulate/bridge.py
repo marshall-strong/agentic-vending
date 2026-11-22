@@ -145,14 +145,26 @@ class SimBridge:
             return {"id": request_id, "status": "pending"}
         raise BridgeAnswered(404, f"no route {path}")
 
+    def post_answer(self, path: str, body: dict) -> tuple[int, dict]:
+        """`post`, with the status the real bridge sends: `201` for a filed purchase request, `200` otherwise."""
+        answer = self.post(path, body)
+        return (201 if path == "/api/v1/purchase-requests" else 200), answer
+
     def _purchase(self, body: dict) -> dict:
+        # Refusals carry the bridge's documented body (`PurchaseRequestError`), whole: anything else is `unknown`.
         if any(r.status == "pending" for r in self.requests.values()):
             self.refused.append({"at": self.now().isoformat(), "status": 429, "body": body})
-            raise BridgeAnswered(429, '{"error": "too_many_open_requests"}')
+            raise BridgeAnswered(429, json.dumps({"error": "too many open requests",
+                                                  "error_type": "too_many_open_requests"}), complete=True)
         problems = self._check(body)
         if problems:
             self.refused.append({"at": self.now().isoformat(), "status": 422, "problems": problems, "body": body})
-            raise BridgeAnswered(422, str({"error": "invalid_lines", "problems": problems}))
+            lines = body.get("lines") or []
+            items = [{"index": p["line"], "slot": str(lines[p["line"]].get("slot")), "choice": None,
+                      "sku": p.get("sku"), "error_type": p["error_type"], "reason": p["error_type"].replace("_", " ")}
+                     for p in problems]
+            raise BridgeAnswered(422, json.dumps({"error": "invalid lines", "error_type": "invalid_lines",
+                                                  "items": items}), complete=True)
         request_id = f"pr_sim_{len(self.requests) + 1:03d}"
         self.requests[request_id] = Filed(request_id, body, self.now())
         return {"id": request_id, "status": "pending", "created_at": _iso(self.now())}

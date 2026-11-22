@@ -353,21 +353,33 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
     planner's codes: `plan_changed` (the lines, their worst-case cost or the visit fee changed
     since the preview: preview again) and `submission_unresolved`.
   - Something a person must fix first: `success: false`, "Can't submit yet:" and what to do.
-  - The bridge says too many requests are open (`429`): refused `too_many_open_requests`; wait for
-    earlier ones to be decided.
+  - The bridge says too many requests are open (`429 too_many_open_requests`, or
+    `submissions_locked` after two refusals for funds today): refused with that code; wait.
   - The bridge refuses the request (`403` or `422`, the other statuses the route documents):
     `success: false`, `status: refused`, with the bridge's reason; nothing was ordered.
+  - A refusal counts only in full: a status the route documents as one (`403`, `422`, `429`), its
+    whole body read, in the documented shape (`PurchaseRequestError` with an `error_type` that status
+    documents, or FastAPI's validation error for a `422`), and nothing in it naming a request (only
+    `insufficient_funds` carries the `id` it was kept as rejected under). A body cut off, empty, not
+    JSON, out of that shape or naming a request is `unknown`, whatever the status.
+  - Accepted only on the documented `201` whose body is a new pending request
+    (`PurchaseRequestPending`: `id`, `status: pending`, `created_at`), under an ID no other
+    submission or recorded request holds. A `200`, a missing field, `status: rejected` or an ID we
+    already hold is `unknown`.
   - Bridge unreachable (the error was raised inside the connect): `success: false`,
     `status: not_filed`, "nothing was sent"; the record is `not_filed`.
   - Sent but no usable answer (a timeout, a send error once connected, a redirect, a `5xx`, any
-    other `4xx`, or an answer with no request ID): the record is
+    other `4xx`, a refusal or acceptance not in full, as above): the record is
     `unknown`, the agent is told not to submit again, and every later preview and submit refuses
     `submission_unresolved` until the row is settled. `python -m vending.submissions check` (which
     a live agent run also does first) settles it only if the row holds a request ID the bridge can
     answer for; otherwise a person checks the bridge and runs `python -m vending.submissions resolve`.
-  - Accepted, but storing the answer fails (the database dropped mid-call): the request ID is
-    written to the server's error log as a `LOST ANSWER` line, and the error the agent sees names
-    the ID and the `resolve` command. The record stays `sending`, which blocks further submits.
+  - Accepted, but storing the answer fails (the database dropped mid-call): the bridge's answer,
+    with its request ID, was already kept on the row before anything else, so the next run's check
+    looks it up and settles it. The ID is also written to the server's error log as a `LOST ANSWER`
+    line, and the error the agent sees names the ID and the `resolve` command. The record stays
+    `sending`, which blocks further submits until then. A reply lost whole (no ID at all) still
+    needs a person.
   - The POST is never retried, and never redirected: a retry after a lost answer could order twice.
     A refusal from before the POST has no `submission` number; any reply to a POST has one. The
     agent tries once more only after the first kind (#217).

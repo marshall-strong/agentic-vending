@@ -750,7 +750,9 @@ def test_a_retry_waits_for_a_new_preview_in_an_earlier_turn(connect, conn):
 ], ids=["bridge 4xx", "not filed", "429 refusal"])
 def test_a_reply_from_after_the_post_never_allows_a_retry(connect, conn, first):
     """Only a refusal from before the POST (no submission number) allows the retry. Once a POST went out,
-    even a reply saying nothing was ordered ends the run's submits: when in doubt, never send twice."""
+    even a reply saying nothing was ordered ends the run's submits: when in doubt, never send twice. This is the
+    same-run latch; `tests/test_submit_runs.py` sends each kind of answer through two live runs against the
+    real server and a loopback bridge, and counts the POSTs across both."""
     client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("submit"))
     tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [first, SENT])
     run_id, out = go(connect, client, tools, live=True)
