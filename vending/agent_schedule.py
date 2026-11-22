@@ -437,7 +437,8 @@ class Scheduler:
         if self.not_before is not None and now < self.not_before:
             return self.not_before
         if self.thread is not None and self.thread.is_alive() and self.running is not None:
-            return self.running.started + STUCK_AFTER + timedelta(seconds=1)
+            # Already past it (a round of the worker ran long): now, never a time in the past.
+            return max(now, self.running.started + STUCK_AFTER + timedelta(seconds=1))
         if self.unfinished is not None or not self.loaded \
                 or any(d not in self.known for d, _ in due_times(self.sched, now)):
             return now
@@ -595,21 +596,25 @@ class Scheduler:
 
     def _authorize(self, claim: Claim, refused: dict):
         """What the agent runs in the transaction that takes the run lease (`run_lease.take`), once the lease is
-        free and before anything is paid for. By the database's clock, the latest start hasn't passed; the
-        database's mode, read with its row locked `for share`, isn't off; and the row still says `running`.
-        Then it records the start (`started_at`) in that same transaction. So an `off` committed meanwhile
-        either stops the run, or waits until the start is recorded and is ordered after it."""
+        free and before anything is paid for. It takes its locks first: the database's mode row `for share`,
+        and this time's row `for update`. Only then does it read the database's clock, once: so a wait on
+        either lock can't carry a start past its latest start. The row must still say `running`, unstarted;
+        the latest start must not have passed by that reading; and the mode must not be off. Then it records
+        that same reading as the start (`started_at`), in that same transaction. So an `off` committed
+        meanwhile either stops the run, or waits until the start is recorded and is ordered after it."""
         def authorize(conn) -> str | None:
-            if self.db_clock(conn) >= claim.latest:
+            mode = lower(self.mode, database_mode(conn, lock=True))
+            mine = conn.execute("select from agent_schedule where due_at = %s and outcome = 'running'"
+                                " and started_at is null for update", (claim.due,)).fetchone() is not None
+            now = self.db_clock(conn)
+            if not mine:
+                refused["ending"], refused["keep"] = ("skipped", NOT_CLAIMED), True
+            elif now >= claim.latest:
                 refused["ending"] = ("missed", LATE_AT_START.format(latest=_eastern(claim.latest)))
+            elif mode == "off":
+                refused["ending"] = ("skipped", CHANGED.format(mode=mode))
             else:
-                mode = lower(self.mode, database_mode(conn, lock=True))
-                if mode == "off":
-                    refused["ending"] = ("skipped", CHANGED.format(mode=mode))
-                elif conn.execute("update agent_schedule set started_at = clock_timestamp() where due_at = %s"
-                                  " and outcome = 'running' and started_at is null returning due_at",
-                                  (claim.due,)).fetchone() is None:
-                    refused["ending"], refused["keep"] = ("skipped", NOT_CLAIMED), True
+                conn.execute("update agent_schedule set started_at = %s where due_at = %s", (now, claim.due))
             return refused["ending"][1] if "ending" in refused else None
         return authorize
 

@@ -649,7 +649,9 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
                 wake = due if reads is None else min(due, reads.next_due(now))
                 if ticks is not None:
                     wake = min(wake, ticks.next_due(now))
-                sleep((wake - now).total_seconds())
+                # Never negative: a wake time already past (a supervisor's deadline crossed during a long
+                # round) means now.
+                sleep(max(0.0, (wake - now).total_seconds()))
                 if wake >= due:
                     break
                 if reads is not None:

@@ -984,3 +984,98 @@ def test_a_run_whose_lease_ends_before_a_request_could_finish_sends_nothing(conn
     _, out = go(connect, client, Tools())
     assert client.sent == [] and calls(conn) == {}
     assert out.status == "failed" and run_lease.NEAR_END in out.detail
+
+
+# --- Sol review, round 4: a model request has a hard end, and the run's deadline is checked before paying ---
+
+def test_a_model_request_that_never_ends_is_abandoned_while_the_lease_is_held(connect, conn, monkeypatch):
+    """Round 4, finding 1: the SDK's timeout bounds each wait for bytes, not the whole request, so a reply that
+    kept trickling in outlasted the lease and a second run could start beside it. The harness now gives a
+    request a hard end, inside the lease, and keeps the lease while the abandoned request's thread goes on."""
+    import time
+
+    monkeypatch.setattr(agent, "REQUEST_DEADLINE", 0.5)
+    release, started = threading.Event(), threading.Event()
+
+    class Trickling(Script):
+        def create(self, **body):
+            started.set()
+            release.wait(30)        # bytes keep coming, so no I/O timeout ever fires
+            return super().create(**body)
+    try:
+        began = time.monotonic()
+        run_id, out = go(connect, Trickling(answer()), Tools())
+        assert time.monotonic() - began < 10
+        assert started.is_set()
+        assert out.status == "failed" and "abandoned" in out.detail
+        # It may have run: kept at its worst case.
+        assert conn.execute("select status, cost_usd = worst_case_usd from model_calls").fetchone() == ("error", True)
+        # Still in flight, so the lease wasn't given back, and no other run starts beside it.
+        assert conn.execute("select token is not null and expires_at > now() from agent_run_lease").fetchone()[0]
+        second = Script(answer())
+        _, other = go(connect, second, Tools())
+        assert other.status == "skipped" and second.sent == []
+    finally:
+        release.set()
+
+
+def test_a_request_is_sent_only_if_its_hard_end_falls_inside_the_lease(connect, conn, monkeypatch):
+    """Round 4, finding 1: the lease is checked again just before the request goes. Here the reservation itself
+    was slow, so the lease the reservation renewed would end before the request's hard end."""
+    import time
+    from datetime import timedelta
+
+    from vending import run_lease
+
+    monkeypatch.setattr(agent, "LEASE_MARGIN", timedelta(seconds=2))
+    monkeypatch.setattr(agent, "REQUEST_DEADLINE", 1.5)
+    real = run_lease.hold
+
+    def slow_hold(c, token, margin):
+        why = real(c, token, margin)
+        time.sleep(0.8)
+        return why
+    monkeypatch.setattr(run_lease, "hold", slow_hold)
+    client = Script(answer())
+    _, out = go(connect, client, Tools())
+    assert client.sent == []
+    from vending import harness
+
+    assert out.status == "failed" and harness.NEAR_END in out.detail
+    # Reserved, then let go at $0: nothing was sent.
+    assert conn.execute("select status, cost_usd from model_calls").fetchone() == ("refused", 0)
+
+
+def test_counting_past_the_run_deadline_sends_and_reserves_nothing(connect, conn):
+    """Round 4, finding 4: the run's deadline can't interrupt the thread that counts tokens, so a slow count
+    went on to reserve and send a paid request after the deadline."""
+    import time
+
+    class SlowCount(Script):
+        def count_tokens(self, **body):
+            time.sleep(1.25)
+            return super().count_tokens(**body)
+    client = SlowCount(answer())
+    run_id, out = go(connect, client, Tools(), deadline=1)
+    assert out.status == "failed"
+    assert client.sent == [] and calls(conn) == {}
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_reservation_that_ends_past_the_run_deadline_sends_nothing(connect, conn, monkeypatch):
+    """Round 4, finding 4: the deadline is checked again right before the request goes."""
+    import time
+
+    from vending import run_lease
+
+    real = run_lease.hold
+
+    def slow_hold(c, token, margin):
+        why = real(c, token, margin)
+        time.sleep(1.25)
+        return why
+    monkeypatch.setattr(run_lease, "hold", slow_hold)
+    client = Script(answer())
+    _, out = go(connect, client, Tools(), deadline=1)
+    assert out.status == "failed" and client.sent == []
+    assert conn.execute("select status, cost_usd from model_calls").fetchone() == ("refused", 0)

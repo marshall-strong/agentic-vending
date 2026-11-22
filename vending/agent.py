@@ -19,10 +19,14 @@ One run:
    (always a dry run) passes `authorize`, which runs in the transaction that takes the lease, once
    it is free and before anything is paid for (`vending.agent_schedule`). The run's ending is
    written to `agent_runs` with `FINISH_RETRIES` more tries if it fails. The whole run has a
-   deadline (`RUN_DEADLINE`): past it, the run stops and is `failed`. A model request already sent
-   finishes first (each has `REQUEST_TIMEOUT`), an MCP request has `TOOL_TIMEOUT`, and every
-   database call of the run has `DB_TIMEOUT` (statement and lock), so nothing can hold the run, or
-   the lease, for ever.
+   deadline (`RUN_DEADLINE`): past it, the run stops and is `failed`, and the harness sends no more
+   requests (it checks the deadline after counting a request's tokens and again just before
+   sending). A model request already sent ends first: the harness gives it at most
+   `REQUEST_DEADLINE` by the wall clock, and sends it only if the lease outlasts that. A request it
+   gave up on keeps its worst case, and while its thread may still be going the run doesn't give
+   the lease back (it expires by itself), so no other run's request can overlap it. An MCP request
+   has `TOOL_TIMEOUT`, and every database call of the run has `DB_TIMEOUT` (statement and lock), so
+   nothing can hold the run, or the lease, for ever.
 2. It starts our MCP server (`python -m vending.server`, `VENDING_TOOLS=built`) over stdio and
    offers the model the tools the server lists. A dry run hides every write tool. A live run
    refuses to start while `submit_desired_state` isn't built, sends only the plan its last preview
@@ -74,7 +78,10 @@ DEFAULT_MODEL = "claude-opus-5-5"   # pending a team decision
 DEFAULT_EFFORT = "medium"
 MAX_TOKENS = 16_000
 MAX_TURNS = 15                      # tool rounds; on the last one the model must answer
-REQUEST_TIMEOUT = 300.0             # seconds for one model request; the SDK's default is 10 minutes
+REQUEST_TIMEOUT = 300.0             # the SDK's timeout: seconds for each wait for bytes (its default is 10 minutes)
+# Seconds one model request may take in all, send to answer, by the wall clock. The harness enforces it (the
+# SDK's timeout doesn't: a reply that keeps trickling in resets it), then gives up on the request.
+REQUEST_DEADLINE = REQUEST_TIMEOUT
 TOOL_TIMEOUT = timedelta(minutes=2)  # one MCP request (a tool call, the tool list); the SDK waits for ever
 RUN_DEADLINE = 60 * 60.0            # seconds for a whole run; a placeholder, like the caps (#129)
 # Seconds any one database statement of a run may take, or wait for a lock, before it fails: the start,
@@ -88,8 +95,9 @@ LOST_LEASE_SUBMIT = ("Stopped before submit_desired_state: this run no longer ho
 # Seconds between tries at recording a run's ending in agent_runs, after the first try fails.
 FINISH_RETRIES = (2.0, 10.0, 30.0)
 # How long the run lease must still last when a paid model request is reserved: longer than the request can
-# take, plus its bookkeeping. The harness checks it in the reservation's transaction (`run_lease.hold`).
-LEASE_MARGIN = timedelta(seconds=REQUEST_TIMEOUT + DB_TIMEOUT)
+# take (`REQUEST_DEADLINE`), plus the reservation's commit and the request's bookkeeping. The harness checks it
+# in the reservation's transaction (`run_lease.hold`), and again just before the request is sent.
+LEASE_MARGIN = timedelta(seconds=REQUEST_DEADLINE + 2 * DB_TIMEOUT)
 NOT_RECORDED = "The run couldn't be recorded in agent_runs ({error}), so it stopped before anything was sent."
 # Never passed on to the server: the key the agent pays with, and what the SDK would pick up by itself.
 MODEL_KEY_VARS = frozenset({DEFAULT_KEY_ENV, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
@@ -542,28 +550,42 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
     if taken.took_over is not None:
         print(f"agent run {taken.took_over} stopped renewing the run lease; recorded it as stopped and took over",
               file=sys.stderr, flush=True)
+    harnesses: list = []     # the run's harness, once it has one
     try:
         async with anyio.create_task_group() as beats:
             beats.start_soon(_heartbeat, connect, taken.token)
             try:
                 return await _run_owned(live=live, model=model, effort=effort, connect=connect, client=client,
                                         now=now, open_tools=open_tools, max_turns=max_turns, rules_card=rules_card,
-                                        deadline=deadline, token=taken.token)
+                                        deadline=deadline, token=taken.token, harnesses=harnesses)
             finally:
                 beats.cancel_scope.cancel()
     finally:
-        try:
-            with connect() as conn:
-                run_lease.give_back(conn, taken.token)
-        except Exception as error:      # noqa: BLE001 - it expires by itself (`run_lease.TTL`)
-            print(f"the run lease couldn't be given back ({type(error).__name__}); it expires by itself",
-                  file=sys.stderr, flush=True)
+        if any(h.in_flight() for h in harnesses):
+            # A request the harness gave up on may still be going: keep the lease, so no other run's request
+            # overlaps it. It expires by itself (`run_lease.TTL` after the last renewal).
+            print("a model request this run gave up on may still be going, so the run lease is kept until it "
+                  "expires", file=sys.stderr, flush=True)
+        else:
+            _give_back(connect, taken.token)
+
+
+def _give_back(connect: Callable[[], psycopg.Connection], token: Any) -> None:
+    try:
+        with connect() as conn:
+            run_lease.give_back(conn, token)
+    except Exception as error:      # noqa: BLE001 - it expires by itself (`run_lease.TTL`)
+        print(f"the run lease couldn't be given back ({type(error).__name__}); it expires by itself",
+              file=sys.stderr, flush=True)
 
 
 async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[], psycopg.Connection],
                      client: Any, now: Callable[[], datetime] | None, open_tools: Callable | None,
                      max_turns: int, rules_card: Path | None, deadline: float,
-                     token: Any) -> tuple[int | None, Outcome]:
+                     token: Any, harnesses: list) -> tuple[int | None, Outcome]:
+    import time
+
+    stop_at = time.monotonic() + deadline     # the harness sends nothing past it
     now = now or (lambda: datetime.now(timezone.utc))
     run_id = None
     harness = None
@@ -608,7 +630,10 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                 # Each paid request checks the lease in the transaction that reserves its budget, so a run
                 # taken over meanwhile reserves and sends nothing (`run_lease.hold`).
                 harness = Harness(client, connect, purpose="live" if live else "test", by="agent",
-                                  hold=lambda c: run_lease.hold(c, token, LEASE_MARGIN))
+                                  hold=lambda c: run_lease.hold(c, token, LEASE_MARGIN),
+                                  hold_margin=LEASE_MARGIN.total_seconds(), request_deadline=REQUEST_DEADLINE,
+                                  stop_at=stop_at)
+                harnesses.append(harness)
                 async with (open_tools or _open_server)() as (listed, call_tool):
                     if live and SUBMIT not in {t.name for t in listed}:
                         out.detail = ("submit_desired_state isn't built on this server, so a live run can't "

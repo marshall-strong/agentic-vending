@@ -1019,3 +1019,69 @@ def test_an_agent_run_whose_ending_wasnt_recorded_stays_in_needs_attention(schem
     assert len(stuck) == 1 and f"agent run {run_id}" in stuck[0] and "still says running" in stuck[0]
     agent_runs.finish(conn, run_id, "failed", detail="fixed by hand", cost_usd=Decimal(0))
     assert not [1 for level, _ in attention(conn, at(WED + timedelta(days=21), 15)) if level == "bad"]
+
+
+# --- Sol review, round 4 ---------------------------------------------------------------------------
+
+def test_a_start_held_up_by_a_lock_past_its_latest_start_doesnt_start(schema_url, conn, allowed):
+    """Round 4, finding 2: the database's clock was read before `for share` waited on a lock, so a start held up
+    past its latest start still went ahead. Now the locks come first, then one reading of the clock."""
+    now = agent_schedule.database_now(conn)
+    due, latest = now - timedelta(minutes=1), now + timedelta(seconds=1.5)
+    assert agent_schedule.record(conn, due, latest, "dry-run", "running",
+                                 clock=lambda: agent_schedule.database_now(conn)) == ("dry-run", "running")
+    locked, done = threading.Event(), threading.Event()
+
+    def hold_config():
+        with open_in(*schema_url) as other, other.transaction():
+            other.execute("select from config where key = %s for update", (agent_schedule.DB_MODE_KEY,))
+            locked.set()
+            done.wait(2.5)
+    holder = threading.Thread(target=hold_config, daemon=True)
+    holder.start()
+    assert locked.wait(10)
+    sched = scheduler(schema_url, FakeAgent(schema_url), db_clock=agent_schedule.database_now)
+    refused: dict = {}
+    claim = agent_schedule.Claim(due, latest, "dry-run", "")
+    with open_in(*schema_url) as c, c.transaction():
+        why = sched._authorize(claim, refused)(c)
+    holder.join(10)
+    assert why is not None and refused["ending"][0] == "missed"
+    assert conn.execute("select started_at from agent_schedule where due_at = %s", (due,)).fetchone()[0] is None
+
+
+def test_the_main_loop_survives_crossing_the_supervisors_deadline_during_a_round(schema_url, conn, allowed):
+    """Round 4, finding 3: an hourly round ran past the stuck run's supervisor deadline, so the wake time was in
+    the past and the sleep negative (-299 s), which raised and ended the worker."""
+    gate = threading.Event()
+    agent = FakeAgent(schema_url, gate=gate)
+    agent.gate_timeout = 30
+    clock = Clock(at(WED, 13, 50), at(WED, 14) + agent_schedule.STUCK_AFTER + timedelta(minutes=30))
+    rounds = []
+
+    def slow_round():
+        rounds.append(clock())
+        if len(rounds) > 1:
+            clock.now += timedelta(minutes=20)      # each later round takes 20 minutes
+        return 0
+    sched = scheduler(schema_url, agent, clock=clock, background=True)
+    try:
+        assert worker.main(["--every", "60", "--at-minute", "5", "--port", "0"], jobs=[("a", slow_round)],
+                           sleep=clock.sleep, log=lambda _: None, clock=clock, scheduler=sched) == 0
+        deadline = at(WED, 14) + agent_schedule.STUCK_AFTER
+        assert any(r < deadline < r + timedelta(minutes=20) for r in rounds), "no round crossed the deadline"
+        [(_, _, outcome, _, detail)] = rows(conn)
+        assert (outcome, detail) == ("failed", agent_schedule.ABANDONED)
+    finally:
+        gate.set()
+
+
+def test_an_overdue_supervisor_deadline_is_now_not_the_past(schema_url, allowed):
+    gate = threading.Event()
+    sched = scheduler(schema_url, FakeAgent(schema_url, gate=gate), background=True)
+    try:
+        tick(sched, at(WED, 14))
+        late = at(WED, 14) + agent_schedule.STUCK_AFTER + timedelta(minutes=5)
+        assert sched.next_due(late) == late
+    finally:
+        gate.set()
