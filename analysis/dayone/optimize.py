@@ -1,11 +1,13 @@
 """Best day-one plan under project.py's model:
 
-    python analysis/dayone/optimize.py <catalog.json> <out_plan.json> --slots-from PLAN.json [--exclude SKU ...] [--only-orderable]
+    python analysis/dayone/optimize.py <catalog.json> <out_plan.json> --slots-from PLAN.json [--exclude SKU ...] [--only-checked]
 
 Prices: per SKU, the 5-cent price from the floor to $6.50 that maximises margin x demand multiplier.
 Slots: our slots as PLAN.json placed them (no list is typed here), filled greedily by marginal base gross
 profit, then single-slot swaps until no gain, always keeping the most-we-pay fill at or under the cap
-(project.FILL_CAP). A planning aid, not package code. Round 7 imports best_price from here.
+(project.FILL_CAP). Every slot gets a different drink (day one: Kevin, 22 Nov, #230). Only products with a price
+estimate are candidates; --only-checked keeps those with a checked-price sourcing row. A planning aid, not package
+code. Round 7 imports best_price and candidates from here.
 """
 from __future__ import annotations
 import argparse, json, math, sys
@@ -27,9 +29,16 @@ def best_price(p: dict, floor_cents: int) -> float:
     return best[1]
 
 
+def candidates(cat: dict, exclude=(), only_checked: bool = False) -> list[str]:
+    """SKUs an optimiser may place, in catalog order: a counted capacity, a price estimate (an unpriced pack would
+    look free) and not left out on purpose (plannable), and with only_checked a checked-price sourcing row too."""
+    return [s for s, p in cat.items() if p.get("cap") and not p.get("capacity_assumed") and s not in exclude
+            and P.priced(p) and p.get("plannable", True) and (not only_checked or P.checked_source(p))]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(); ap.add_argument("catalog"); ap.add_argument("out")
-    ap.add_argument("--exclude", nargs="*", default=[]); ap.add_argument("--only-orderable", action="store_true")
+    ap.add_argument("--exclude", nargs="*", default=[]); ap.add_argument("--only-checked", action="store_true")
     ap.add_argument("--slots-from", required=True, help="a plan JSON for our current slots (its day_one list)")
     ap.add_argument("--quiet", action="store_true"); ap.add_argument("--seed", nargs="*", default=[], help="plan JSONs to start swaps from")
     a = ap.parse_args()
@@ -38,14 +47,13 @@ def main() -> None:
     SLOTS = P.slots_from(a.slots_from)
     cat = {p["sku"]: p for p in json.load(open(a.catalog, encoding="utf-8"))["products"]}
     cal = P.load_calendar()
-    pool = [s for s, p in cat.items() if p.get("cap") and not p.get("capacity_assumed") and s not in a.exclude
-            and (not a.only_orderable or p.get("orderable_now", True))]
+    pool = candidates(cat, a.exclude, a.only_checked)
     price = {s: best_price(cat[s], pack_floor_cents(round(P.most(cat[s]) * 100), cat[s]["pack"])) for s in pool}
 
     def score(skus: list[str]) -> tuple[float, dict]:
         plan = {"day_one": [dict(slot=int(SLOTS[i]), sku=s, units=cat[s]["cap"], price=price[s]) for i, s in enumerate(skus)]}
         r = P.project(plan, cat, cal)
-        if r["problems"] or round(r["fill_most"] * 100) > CAP_CENTS:
+        if r["problems"] or round(r["fill_most"] * 100) > CAP_CENTS or len(set(skus)) < len(skus):
             return -1e9, r
         return r["scenarios"]["base"]["gross_profit"], r
 
@@ -76,6 +84,9 @@ def main() -> None:
         if len(sk) == len(SLOTS):
             starts.append(sk)
     chosen = max((polish(list(x)) for x in starts), key=lambda t: t[1])[0]
+    if len(chosen) < len(SLOTS):
+        sys.exit(f"Only {len(chosen)} different drinks fit under the ${CAP_CENTS / 100:.2f} cap for {len(SLOTS)} slots. "
+                 "Raise the cap or add cheaper products; no plan was written.")
     v, r = score(chosen)
     plan = {"day_one": [dict(slot=int(SLOTS[i]), sku=s, units=cat[s]["cap"], price=price[s], price_cents=round(price[s] * 100)) for i, s in enumerate(chosen)],
             "source": "optimize.py", "base_gp": round(v, 2), "low_gp": r["scenarios"]["low"]["gross_profit"],

@@ -13,14 +13,14 @@ These are Kevin's rules of 22 Nov (#230). They are principles, not counts: the c
 - All flavors in the slot share one price.
 - The request's note lists each flavor's units for that slot.
 - The slot's sales count as demand for the mix. The buyer still chooses whether to buy from that slot, but its counter can't tell the flavors apart, so you lose per-flavor data there.
-- Your plan can't express one yet: `preview_desired_state` takes one product per slot, and you can't write the request's note. So plan the slot as one flavor, and propose the mix in the `update`: the slot, each flavor and its units, the shared price, and why. The team decides how to send it.
+- Your plan can't express one: it takes one product per slot, and you can't write the request's note. Plan the slot as one flavor this week. In the `update`, propose the mix for a later visit or a request the team arranges: the slot, each flavor's units, the shared price, and why. You write the `update` after you submit, so it can't change this week's request.
 
 **Testing new drinks.**
 
-- One regular slot always rotates new drinks, besides the wildcard (`wildcard`). You may open a second test slot, and you may swap any weak slot (`restocking`, "Slow sellers").
-- Check every week. Drop a test drink early only if it clearly trails the slots around it in sales per in-stock class day. Otherwise give it a second week.
-- Weeks in the Winter Holiday Break don't count as test weeks: the machine sells nothing then (class days are in `restocking`).
-- Requests are due Wednesday for the Friday restock (Amazon items by Wednesday 23:59), so each decision rests on about three class days of the new drink's sales. Treat a small difference as unclear, not as a loss.
+- A new drink normally reaches a regular slot through the wildcard's trial and promotion (`wildcard`). The exceptions: one regular test slot always rotates new drinks at a regular price, you may open a second, and you may swap a weak slot (`restocking`, "Slow sellers") to a new drink. The wildcard's current product still goes nowhere else except by promotion.
+- Check weekly. Drop a test drink early only if it clearly trails the slots around it in sales per in-stock class day. Otherwise give it a second week.
+- Winter Holiday Break weeks don't count: the machine sells nothing then (class days: `restocking`).
+- A plan buying from Amazon is due Wednesday 23:59; one buying only in-store, Thursday 23:59. So a decision rests on three or four class days of sales: treat a small difference as unclear, not a loss.
 
 **When you add a drink, lean toward a new category or brand** over another flavor of a brand we already stock. Close line extensions take most of their sales from the flavors next to them (Ipsos 2011, https://www.ipsos.com/en-us/are-you-confident-your-line-extension-will-pay-out). A flavor is still fine when our sales support it, for example when that line's slots sell out, or the flavor is a known best seller where the category is thin.
 

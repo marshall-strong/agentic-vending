@@ -2,7 +2,8 @@
 
     python analysis/dayone/round7/compare7.py > analysis/dayone/round7/compare7_tables.md
 
-Also writes round7/projection6_rescored.json (plan 6 under the new project.py) so the re-score can be checked.
+Also writes projection6_rescored.json (plan 6 under the new project.py) so the re-score can be checked. The plans and
+projections it reads and writes map our slots to products, so they live in the git-ignored local folder (README.md).
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import project as P  # noqa: E402
 
-R6, R7 = HERE.parent / "round6", HERE
+R6, R7 = P.LOCAL / "round6", P.LOCAL / "round7"   # the real round files: git-ignored
 
 
 def load(p: Path) -> dict:
@@ -23,8 +24,8 @@ def load(p: Path) -> dict:
 
 
 # Round 6's catalog6.json is byte for byte the same as catalog7.json (same team snapshot, same script), so it isn't kept.
-cat6 = {p["sku"]: p for p in load(R7 / "catalog7.json")["products"]}
-cat7 = {p["sku"]: p for p in load(R7 / "catalog7.json")["products"]}
+cat6 = {p["sku"]: p for p in load(HERE / "catalog7.json")["products"]}
+cat7 = {p["sku"]: p for p in load(HERE / "catalog7.json")["products"]}
 cal = P.load_calendar()
 repo = os.environ.get("VENDING_REPO", P.DEFAULT_REPO)
 plan6, proj6, plan7, proj7 = load(R6 / "plan6.json"), load(R6 / "projection6.json"), load(R7 / "plan7.json"), load(R7 / "projection7.json")

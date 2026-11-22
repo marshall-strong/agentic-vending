@@ -1,4 +1,4 @@
-# Outputs a round's scripts write that aren't part of its record (README.md, "Data").
-round7/projection6_rescored.json
-round7/team_catalog_*.json
+# Real round files: plans, projections and inputs that map our slots to products. The repo is public
+# and our assignment is private (docs/integrity.md), so they never go in git (README.md, "Where the real files live").
+local/
 *.log

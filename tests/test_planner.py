@@ -1150,6 +1150,24 @@ class TestVariety(unittest.TestCase):
         self.assertTrue(p.ok, p.refusals)
         self.assertEqual(doubles(p), [])
 
+    def test_a_pooled_purchase_for_two_slots_is_warned_of_once(self):
+        # The day-one fill pools (vending.fill): one pack buys for both slots, and the warning still names them.
+        mtdew = [DesiredSlot(s, product=MTDEW, sale_price="2.50", fill_to=10) for s in ("16", "18")]
+        by_slot = {d.slot: d for d in mtdew}
+        pooled = DesiredState(tuple(by_slot.get(s, DesiredSlot(s, keep=True)) for s in TEST_SLOTS), pool=True)
+        p = plan_restock(current(slots=varied()), pooled, CONFIG, TUESDAY)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertIsNotNone(p.note)
+        [warning] = doubles(p)
+        self.assertIn("slot 16 and slot 18 both get MTDEW-20OZ", warning)
+
+    def test_switching_away_from_a_duplicate_clears_the_warning(self):
+        both = varied(**{"15": SlotState("15", MTDEW, 250, 4, 50), "16": SlotState("16", MTDEW, 250, 4, 50)})
+        self.assertEqual(len(doubles(plan(restock_15(), slots=both))), 1)
+        p = plan(DesiredSlot("16", product=PICKLE, sale_price="3.00", fill_to=6), slots=both)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(doubles(p), [])
+
     def test_slots_no_receipt_describes_are_not_counted(self):
         unknown = {s: SlotState(s, None, 200, 0, None, contents_known=False) for s in ("25", "26")}
         p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10), slots=varied(**unknown))

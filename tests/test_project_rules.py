@@ -215,5 +215,9 @@ def test_the_agent_reads_the_variety_rules():
     text = get_project_rules("variety").text
     for phrase in ("adds stock, not sales", "sell out before the Friday restock", "No duplicates on the first fill",
                    "Mixed-flavor slots", "one price", "each flavor's units", "test slot", "second week",
-                   "Winter Holiday Break don't count", "Wednesday", "new category or brand", "Ipsos 2011"):
+                   "Winter Holiday Break weeks don't count", "Wednesday 23:59", "Thursday 23:59",
+                   "through the wildcard's trial and promotion", "after you submit, so it can't change",
+                   "new category or brand", "Ipsos 2011"):
         assert phrase in text, phrase
+    # The wildcard topic points at the exception (#231 review): a new drink normally comes in through the wildcard.
+    assert "(exception: `variety`)" in get_project_rules("wildcard").text

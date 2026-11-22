@@ -7,10 +7,16 @@ Price sources, in order:
      15 Nov bubly check.
 Most-we-pay without a sourcing row: the projection's rule, expected x 1.15 rounded up to 50 cents.
 A product with no price, or a package size with no column figure, is kept but not plannable.
+
+Three flags per product, kept apart (#231 review):
+  priced          it has a price estimate, from any of the sources above;
+  checked_source  it has a checked-price sourcing row, which the fill needs to buy it (an estimate is not one);
+  plannable       priced, with a column figure, and not left out on purpose: the optimisers' candidates.
+
     python analysis/dayone/round7/build_catalog7.py
 
-It needs the team DB snapshot round7/team_catalog_2026-11-20.json, which is not committed: README.md says how to
-make one. catalog7.json, its output, is committed as round 7's input.
+It needs the team DB snapshot team_catalog_2026-11-20.json in the git-ignored local folder (README.md says how to
+make one). catalog7.json, its output, holds no slot and is committed as round 7's input.
 """
 import json
 import re
@@ -18,10 +24,13 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[2]))
+sys.path.insert(0, str(HERE.parent))
+import project as P  # noqa: E402
+
+sys.path.insert(0, P.DEFAULT_REPO)
 from vending.capacity import for_product  # noqa: E402
 
-SNAPSHOT = HERE / "team_catalog_2026-11-20.json"
+SNAPSHOT = P.LOCAL / "team_catalog_2026-11-20.json"
 if not SNAPSHOT.exists():
     sys.exit(f"{SNAPSHOT} is missing: it is a read-only snapshot of the team DB, not committed (README.md, 'Data').")
 snap = json.load(open(SNAPSHOT, encoding="utf-8"))
@@ -99,12 +108,16 @@ for c in snap["catalog"]:
     reason = LEAVE_OUT.get(sku) or (None if price else source) or (None if cap else f"no column figure for '{size}'")
     out.append(dict(sku=sku, name=c["name"], size=size, cat=category(sku, size), cap=cap, capacity_assumed=cap is None,
                     pack=pack or 1, price=price or 0.0, max=mx, store=store, src=source,
-                    request=(r["id"] if r else None), orderable_now=reason is None, not_plannable=reason,
+                    request=(r["id"] if r else None), priced=bool(price), checked_source=s is not None,
+                    plannable=reason is None, not_plannable=reason,
                     interloper=sku in INTERLOPER, in_catalog=True))
 json.dump({"about": "Real team catalog on 20 Nov 2026 (83 live products), priced; see build_catalog6.py for sources.",
            "products": out}, open(HERE / "catalog7.json", "w", encoding="utf-8"), indent=1)
-ok = [p for p in out if p["orderable_now"]]
-print(len(ok), "plannable of", len(out))
+ok = [p for p in out if p["plannable"]]
+print(f"{len(ok)} plannable of {len(out)}; {sum(p['priced'] for p in out)} with a price estimate; "
+      f"{sum(p['checked_source'] for p in out)} with a checked sourcing row")
 for p in out:
-    if not p["orderable_now"]:
+    if not p["plannable"]:
         print("  not plannable:", p["sku"], "-", p["not_plannable"])
+unchecked = [p["sku"] for p in ok if not p["checked_source"]]
+print(f"{len(unchecked)} plannable products have only an estimate, no checked sourcing row:", ", ".join(unchecked))

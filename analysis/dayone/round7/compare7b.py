@@ -12,10 +12,15 @@ import sys as _sys
 _sys.stdout.reconfigure(encoding="utf-8")   # the tables use arrows and minus signs; a Windows console would refuse them
 
 HERE = Path(__file__).resolve().parent
+_sys.path.insert(0, str(HERE.parent))
+import project as P  # noqa: E402
 
 
 def load(name: str) -> dict:
-    return json.load(open(HERE / name, encoding="utf-8"))
+    """catalog7.json is committed here; the plans and projections map our slots to products, so they are read from
+    the git-ignored local folder (README.md)."""
+    folder = HERE if name.startswith("catalog") else P.LOCAL / "round7"
+    return json.load(open(folder / name, encoding="utf-8"))
 
 
 cat = {p["sku"]: p for p in load("catalog7.json")["products"]}

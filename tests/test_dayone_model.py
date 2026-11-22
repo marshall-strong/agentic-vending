@@ -1,77 +1,198 @@
-"""The day-one plan model in analysis/dayone (#230, #231): it runs from the repo and reproduces round 7's record.
+"""The day-one plan model in analysis/dayone (#230, #231), on a synthetic catalog and the tests' made-up assignment.
 
-No database. Our slots come from the plan files, as the round scripts read them; nothing here lists them."""
+No database and no real plan: the real round files map our slots to products, and our assignment is private
+(docs/integrity.md), so they live outside git (analysis/dayone/README.md). Every SKU, price and slot here is made up."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import TEST_SLOTS
 from vending import plan_rounds
 
 DAYONE = Path(__file__).resolve().parent.parent / "analysis" / "dayone"
 
 
-def load(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
-def model():
-    spec = importlib.util.spec_from_file_location("dayone_project", DAYONE / "project.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+@pytest.fixture
+def P():
+    return module("dayone_project", DAYONE / "project.py")
 
 
-def test_the_cap_is_kevins_400():
+def product(sku, cat="tea", size="16 oz can", pack=12, price=9.00, checked=True, priced=True, interloper=False):
+    """A made-up catalog product in catalog7.json's shape. `price` is dollars per pack (expected)."""
+    caps = {"16 oz can": 8, "12 oz can": 8, "20 oz bottle": 7, "8.4 oz can": 11}
+    return dict(sku=sku, name=sku.title(), size=size, cat=cat, cap=caps[size], capacity_assumed=False, pack=pack,
+                price=price if priced else 0.0, max=None, store="Costco", priced=priced, checked_source=checked,
+                plannable=priced, interloper=interloper)
+
+
+def catalog(*products) -> dict:
+    return {p["sku"]: p for p in products}
+
+
+def plan(*rows) -> dict:
+    """rows: (sku, price) or (sku, price, slot); slots default to the tests' assignment, in order."""
+    out = []
+    for i, row in enumerate(rows):
+        sku, price, *slot = row
+        out.append(dict(slot=int(slot[0] if slot else TEST_SLOTS[i]), sku=sku, units=None, price=price))
+    return {"day_one": out}
+
+
+def filled(p: dict, cat: dict) -> dict:
+    for row in p["day_one"]:
+        row["units"] = cat[row["sku"]]["cap"]
+    return p
+
+
+def test_the_cap_is_kevins_400(P):
     """Kevin, 22 Nov: the day-one fill's most-we-pay cap is $400, up from #113's proposed $366."""
-    P = model()
     assert (P.FILL_CAP, P.FILL_CAP_CENTS) == (400.00, 40_000)
 
 
-@pytest.mark.parametrize("plan, cap, base_profit, expected, most", [
-    ("7", 366, 1018.31, 315.16, 366.00),     # round 7 at #113's cap
-    ("7b", 400, 1088.66, 343.50, 399.00),    # the same round at Kevin's $400: the picked plan
-])
-def test_a_plan_scores_as_its_recorded_projection(plan, cap, base_profit, expected, most):
-    P = model()
-    catalog = {p["sku"]: p for p in load(DAYONE / "round7" / "catalog7.json")["products"]}
-    recorded = load(DAYONE / "round7" / f"projection{plan}.json")
-    scored = P.project(load(DAYONE / "round7" / f"plan{plan}.json"), catalog, P.load_calendar(), "test", cap=cap)
-    assert scored["problems"] == [] and scored["under_cap"] and recorded["fill_cap"] == cap
-    assert scored["scenarios"]["base"]["profit"] == recorded["scenarios"]["base"]["profit"] == base_profit
-    assert json.loads(json.dumps(scored["scenarios"])) == recorded["scenarios"]   # as written: week keys become text
-    assert (scored["fill_expected"], scored["fill_most"]) == (recorded["fill_expected"], recorded["fill_most"]) == (expected, most)
+# --- Duplicates and rounding (finding 5) -------------------------------------------------------------------------
+
+@pytest.mark.parametrize("price", [2.30, 2.95, 3.45, 4.10, 5.25, 6.50])
+def test_a_second_slot_of_one_drink_adds_no_demand_to_the_totals(P, price):
+    """Kevin, 22 Nov: a duplicate adds capacity only. With nothing selling out, the totals are the same with one slot
+    or two, to the cent: they add the product's sales before rounding, not each slot's rounded share."""
+    cat = catalog(product("TEA-A"))
+    one = P.project(filled(plan(("TEA-A", price)), cat), cat, P.load_calendar())
+    two = P.project(filled(plan(("TEA-A", price), ("TEA-A", price)), cat), cat, P.load_calendar())
+    for name in P.SCENARIOS:
+        a, b = one["scenarios"][name], two["scenarios"][name]
+        assert a["units_lost"] == b["units_lost"] == 0, name
+        for key in ("units_sold", "gross_profit", "profit", "week1_gp"):
+            assert a[key] == b[key], (name, key)
+        assert a["totals"] == b["totals"], name
 
 
-def test_plan_7b_has_20_distinct_drinks_and_10_brands():
-    skus = [d["sku"] for d in load(DAYONE / "round7" / "plan7b.json")["day_one"]]
-    assert len(skus) == len(set(skus)) == 20
-    assert len({s.split("-")[0].split("_")[0] for s in skus}) == 10
+def test_a_slot_that_runs_out_exactly_records_its_sellout(P, monkeypatch):
+    """Demand of exactly 2 a class day: after a Friday refill and Friday's second half, a 7-unit slot holds 6, and
+    Monday to Wednesday empty it exactly. Thursday finds it empty. That is a sellout, though no sale came up short
+    while units were left."""
+    monkeypatch.setattr(P, "TIER_RATE", {**P.TIER_RATE, "tea": 2.0})
+    monkeypatch.setattr(P, "REF_PRICE", {**P.REF_PRICE, "tea": 3.00})
+    monkeypatch.setattr(P, "SCENARIOS", {"low": (1.0, 0.0, 0.0), "base": (1.0, 0.0, 0.0), "high": (1.0, 0.0, 0.0)})
+    cat = catalog(product("TEA-A", size="20 oz bottle"))
+    base = P.project(filled(plan(("TEA-A", 3.00)), cat), cat, P.load_calendar())["scenarios"]["base"]
+    [slot] = base["per_slot"]
+    assert slot["units_lost"] > 0
+    assert slot["first_sellout"] == slot["sellout_date"] == "2026-12-09"     # Wednesday, its last unit sold
+    assert slot["sellout_days"] >= 2                                         # Wednesday, then Thursday's lost sales
 
 
-def test_a_second_slot_of_one_drink_adds_no_demand():
-    """Kevin, 22 Nov: a duplicate adds capacity only. Plan 7 with one slot copied onto another sells no more of
-    that drink in the base case, where nothing sells out between Friday refills."""
-    P = model()
-    catalog = {p["sku"]: p for p in load(DAYONE / "round7" / "catalog7.json")["products"]}
-    plan = load(DAYONE / "round7" / "plan7.json")
-    first, second = plan["day_one"][0], plan["day_one"][1]
-    doubled = {"day_one": [first, {**first, "slot": second["slot"]}]}
-    single = {"day_one": [first]}
-    base = lambda p: P.project(p, catalog, P.load_calendar())["scenarios"]["base"]["units_sold"]  # noqa: E731
-    assert base(doubled) == base(single)
+# --- Category limits (finding 3) ----------------------------------------------------------------------------------
+
+def test_the_category_limit_doesnt_depend_on_the_plans_order(P):
+    """Five teas against a limit of four: the penalty falls on a product chosen the same way whatever the order."""
+    cat = catalog(*(product(f"TEA-{c}", price=p) for c, p in zip("ABCDE", (6.0, 7.0, 8.0, 9.0, 10.0))))
+    rows = [(f"TEA-{c}", 2.50) for c in "ABCDE"]
+    forward = P.project(filled(plan(*rows), cat), cat, P.load_calendar())
+    backward = P.project(filled(plan(*reversed(rows)), cat), cat, P.load_calendar())
+    for name in P.SCENARIOS:
+        assert forward["scenarios"][name]["profit"] == backward["scenarios"][name]["profit"], name
+    past = {s["sku"]: s["cat_past"] for s in forward["slots"]}
+    assert past == {s["sku"]: s["cat_past"] for s in backward["slots"]}
+    assert sum(1 for v in past.values() if v) == 1
 
 
-def test_the_round_reader_reads_rounds_6_7_and_7b_for_the_slots_they_were_made_for():
-    ours = tuple(str(s) for s in model().slots_from(DAYONE / "round6" / "plan6.json"))
-    found = {rid: (plan, projection) for rid, plan, projection in plan_rounds.discover(DAYONE)}
-    assert set(found) == {"6", "7", "7b"}
-    for rid, (plan, projection) in found.items():
-        checked, _, _ = plan_rounds.read_round(rid, plan, projection, ours)
-        assert len(checked.slots) == 20 and not checked.warnings, rid
-    for plan in ("plan7.json", "plan7b.json"):
-        assert ours == tuple(str(s) for s in model().slots_from(DAYONE / "round7" / plan)), plan
+# --- Prices and sourcing (finding 2) ------------------------------------------------------------------------------
+
+def test_an_unpriced_product_is_a_problem_and_a_checked_row_decides_needs_new_source(P):
+    cat = catalog(product("TEA-A"), product("TEA-B", checked=False), product("TEA-C", priced=False, checked=False))
+    res = P.project(filled(plan(("TEA-A", 2.50), ("TEA-B", 2.50), ("TEA-C", 2.50)), cat), cat, P.load_calendar())
+    assert any("TEA-C" in p and "no price" in p for p in res["problems"]), res["problems"]
+    assert res["needs_new_source"] == ["TEA-B", "TEA-C"]
+
+
+def test_the_optimisers_never_consider_an_unpriced_product():
+    opt = module("optimize", DAYONE / "optimize.py")
+    left_out = {**product("TEA-OUT"), "plannable": False}       # priced, but left out on purpose (a duplicate SKU)
+    cat = catalog(product("TEA-A"), product("TEA-FREE", priced=False, checked=False), product("TEA-B", checked=False),
+                  left_out)
+    assert opt.candidates(cat) == ["TEA-A", "TEA-B"]
+    assert opt.candidates(cat, only_checked=True) == ["TEA-A"]
+
+
+# --- Day one: distinct drinks (finding 4) -------------------------------------------------------------------------
+
+def opt7():
+    module("dayone_project", DAYONE / "project.py")
+    sys.modules["project"] = sys.modules["dayone_project"]
+    module("optimize", DAYONE / "optimize.py")
+    return module("dayone_optimize7", DAYONE / "round7" / "optimize7.py")
+
+
+# One 24-pack of NRG-A fills two 11-can slots, so a second slot of it costs nothing more. NRG-B earns the most as a
+# second drink, but after A and B ($57.50 most) no third pack fits under $60, so a loose search doubles A. Two cheap
+# sodas with A ($43.50) are the mix of different drinks that fits.
+SPREAD = (product("NRG-A", cat="energy", size="8.4 oz can", pack=24, price=30.00),
+          product("NRG-B", cat="energy", size="16 oz can", pack=12, price=20.00),
+          product("SODA-C", cat="sodacan", size="12 oz can", pack=8, price=3.50),
+          product("SODA-D", cat="sodacan", size="12 oz can", pack=8, price=3.50))
+
+
+def test_the_day_one_mix_has_no_duplicates_even_where_a_double_scores_higher():
+    o = opt7()
+    cat = catalog(*SPREAD)
+    slots = [int(s) for s in TEST_SLOTS[:3]]
+    loose = o.optimise(cat, slots, 6_000, distinct=False, test_slot=False, say=lambda m: None)
+    assert sorted(loose["skus"]) == ["NRG-A", "NRG-A", "NRG-B"], "the case should tempt a loose search to double up"
+    strict = o.optimise(cat, slots, 6_000, test_slot=False, say=lambda m: None)
+    assert sorted(strict["skus"]) == ["NRG-A", "SODA-C", "SODA-D"] and strict["fill_most"] <= 60.00
+
+
+def test_a_cap_no_distinct_mix_fits_under_is_reported_plainly():
+    o = opt7()
+    cat = catalog(*SPREAD)
+    with pytest.raises(o.NoMix, match=r"3 different drinks.*\$20\.00"):
+        o.optimise(cat, [int(s) for s in TEST_SLOTS[:3]], 2_000, test_slot=False, say=lambda m: None)
+
+
+# --- Fall data stops at the cut (finding 1) -----------------------------------------------------------------------
+
+def test_placement_refuses_fall_rows_from_the_cut_on(tmp_path):
+    sys.path.insert(0, str(DAYONE.parent))
+    module("dayone_project", DAYONE / "project.py")
+    sys.modules["project"] = sys.modules["dayone_project"]
+    place = module("dayone_place7", DAYONE / "round7" / "place7.py")
+    slots = [int(s) for s in TEST_SLOTS[:2]]
+    header = "slot,row,col,at_eastern,units,cents\n"
+    early = f"{slots[0]},1,5,2026-10-01T12:00:00-04:00,3,600\n{slots[1]},1,6,2026-10-02T12:00:00-04:00,1,200\n"
+    (tmp_path / "sales_events.csv").write_text(header + early, encoding="utf-8")
+    assert place.positions(slots, tmp_path) == [slots[0], slots[1]]
+    late = f"{slots[1]},1,6,2026-12-05T12:00:00-05:00,9,1800\n"
+    (tmp_path / "sales_events.csv").write_text(header + early + late, encoding="utf-8")
+    with pytest.raises(SystemExit, match="fall cut"):
+        place.positions(slots, tmp_path)
+
+
+# --- The round reader (how plan_store loads a round) ----------------------------------------------------------------
+
+def test_the_round_reader_reads_a_projected_round(tmp_path, P):
+    """A made-up 20-drink round, projected by project.py, reads back through vending.plan_rounds as plan_store
+    would load it, with no warnings."""
+    cat = catalog(*(product(f"TEA-{i:02d}", price=9.00 + i / 4) for i in range(20)))
+    p = filled(plan(*((f"TEA-{i:02d}", 2.50) for i in range(20))), cat)
+    folder = tmp_path / "round9"
+    folder.mkdir()
+    (folder / "plan9.json").write_text(json.dumps(p), encoding="utf-8")
+    (folder / "projection9.json").write_text(json.dumps(P.project(p, cat, P.load_calendar(), "plan9.json")),
+                                             encoding="utf-8")
+    [(rid, plan_file, projection_file)] = plan_rounds.discover(tmp_path)
+    checked, _, _ = plan_rounds.read_round(rid, plan_file, projection_file, TEST_SLOTS)
+    assert rid == "9" and len(checked.slots) == 20 and not checked.warnings
