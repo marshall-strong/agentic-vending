@@ -509,40 +509,50 @@ def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None =
     The clock is read again after the last write, inside the transaction. A write can wait on a lock that
     another connection holds (`LOCK TABLE action_log`), and if 00:00 Eastern on Mon 30 Nov passes while it
     waits, the reset raises the same "window closed" `LedgerError` and everything rolls back (Sol review,
-    round 2, finding 1). Only the commit itself comes after that last read. `now`, for tests, fixes both
-    readings; without it both are the database clock (`db_now`).
+    round 2, finding 1). `now`, for tests, fixes both readings; without it both are the database clock (`db_now`).
+
+    The database checks the window again at commit (migration 022's deferred trigger on
+    `ledger_entries_archive`), because a pause after the last read, or a caller's transaction that commits
+    later, could still commit after the cutoff (Sol review, round 3, finding 1). When this call commits, that
+    refusal is a `LedgerError`. Inside a caller's transaction, the caller's commit raises it instead, and
+    nothing is committed.
     """
     if not by.strip():
         raise LedgerError("a reset needs the name of who ran it (--by)")
-    with conn.transaction():
-        conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (RESET_LOCK,))
-        row = conn.execute("select id, at, kind, amount_cents, detail, reference, recorded_by from ledger_entries"
-                           " where kind = 'opening' for update").fetchone()
-        opened = None if row is None else Entry(row[0], row[1], row[2], Fraction(row[3]), row[4], row[5], row[6])
-        def clock() -> datetime:
-            return now if now is not None else db_now(conn)
+    try:
+        with conn.transaction():
+            conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (RESET_LOCK,))
+            row = conn.execute("select id, at, kind, amount_cents, detail, reference, recorded_by from ledger_entries"
+                               " where kind = 'opening' for update").fetchone()
+            opened = None if row is None else Entry(row[0], row[1], row[2], Fraction(row[3]), row[4], row[5], row[6])
+            def clock() -> datetime:
+                return now if now is not None else db_now(conn)
 
-        why = reset_refusal(opened, clock(), already=_already_reset(conn))
-        if why:
-            raise LedgerError(why)
-        conn.execute(
-            "insert into ledger_entries_archive (id, at, kind, amount_cents, detail, reference, recorded_by,"
-            " recorded_at, archived_by, reason)"
-            " select id, at, kind, amount_cents, detail, reference, recorded_by, recorded_at, %s, %s"
-            " from ledger_entries where id = %s",
-            (by.strip(), ARCHIVE_REASON, opened.id))
-        conn.execute("delete from ledger_entries where id = %s", (opened.id,))
-        conn.execute(
-            "insert into action_log (kind, tool, arguments, outcome, detail) values ('write', %s, %s, 'done', %s)",
-            ("ledger.reset_test_opening", Jsonb({"entry": opened.id, "amount": money(opened.amount_cents),
-                                                 "at": opened.at.isoformat(), "detail": opened.detail}),
-             f"test opening {money(opened.amount_cents)} of {opened.at.astimezone(EASTERN):%Y-%m-%d} (entry "
-             f"{opened.id}) moved to "
-             f"ledger_entries_archive by {by.strip()}"))
-        # After the last write: a write that waited past the window must not commit.
-        late = reset_refusal(opened, clock())
-        if late:
-            raise LedgerError(late)
+            why = reset_refusal(opened, clock(), already=_already_reset(conn))
+            if why:
+                raise LedgerError(why)
+            conn.execute(
+                "insert into ledger_entries_archive (id, at, kind, amount_cents, detail, reference, recorded_by,"
+                " recorded_at, archived_by, reason)"
+                " select id, at, kind, amount_cents, detail, reference, recorded_by, recorded_at, %s, %s"
+                " from ledger_entries where id = %s",
+                (by.strip(), ARCHIVE_REASON, opened.id))
+            conn.execute("delete from ledger_entries where id = %s", (opened.id,))
+            conn.execute(
+                "insert into action_log (kind, tool, arguments, outcome, detail) values ('write', %s, %s, 'done', %s)",
+                ("ledger.reset_test_opening", Jsonb({"entry": opened.id, "amount": money(opened.amount_cents),
+                                                     "at": opened.at.isoformat(), "detail": opened.detail}),
+                 f"test opening {money(opened.amount_cents)} of {opened.at.astimezone(EASTERN):%Y-%m-%d} (entry "
+                 f"{opened.id}) moved to "
+                 f"ledger_entries_archive by {by.strip()}"))
+            # After the last write: a write that waited past the window must not commit.
+            late = reset_refusal(opened, clock())
+            if late:
+                raise LedgerError(late)
+    except psycopg.errors.RaiseException as error:      # the database's check at commit
+        if "reset window closed" not in (error.diag.message_primary or ""):
+            raise
+        raise LedgerError(error.diag.message_primary) from None
     return opened
 
 

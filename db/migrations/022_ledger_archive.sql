@@ -23,3 +23,35 @@ create table ledger_entries_archive (
     archived_by   text        not null,
     reason        text        not null
 );
+
+-- The reset closes at 00:00 Eastern on Mon 30 Nov (`vending.ledger.RESET_CLOSES`), when staff can stock
+-- the day-one fill. The reset checks the clock in Python, but a pause after its last check, or a caller's
+-- transaction that commits later, could still commit after the cutoff. So the database checks too, at
+-- commit: a deferred constraint trigger refuses an archive row whose transaction commits at or after the
+-- cutoff. It reads `clock_timestamp()`, the time at commit, not `now()`, the transaction's start.
+--
+-- The config row `ledger_reset_closes_for_tests` moves the cutoff, for tests only
+-- (tests/test_ledger_reset.py). `python -m vending.config set` refuses it: it isn't a known setting.
+
+create function ledger_reset_closes() returns timestamptz language sql stable as $$
+    select coalesce((select (value #>> '{}')::timestamptz from config where key = 'ledger_reset_closes_for_tests'),
+                    timestamptz '2026-11-30 00:00:00 America/New_York')
+$$;
+
+create function ledger_entries_archive_before_cutoff() returns trigger language plpgsql as $$
+declare
+    closes timestamptz := ledger_reset_closes();
+begin
+    if clock_timestamp() >= closes then
+        raise exception 'the reset window closed at % Eastern (Mon 30 Nov, when the day-one fill can be stocked), '
+                        'so the reset was not committed. Nothing was changed. See docs/ledger-reset.md, '
+                        '''If the window closed''',
+                        to_char(closes at time zone 'America/New_York', 'YYYY-MM-DD HH24:MI');
+    end if;
+    return null;
+end
+$$;
+
+create constraint trigger ledger_entries_archive_before_cutoff
+    after insert on ledger_entries_archive deferrable initially deferred
+    for each row execute function ledger_entries_archive_before_cutoff();
