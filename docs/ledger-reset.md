@@ -122,22 +122,52 @@ depends on how far the steps got:
 
 - **Step 3 ran, but step 4 didn't, and the fill request went in:** record the real opening with a
   time in the past. The opening's time decides what counts. Key dates counts the fill request by when
-  it was sent, and stock and spend count its receipt by the receipt's time. So choose a time:
+  it was sent, stock and spend count its receipt by the receipt's time, and the balance counts every
+  ledger entry dated at or after the opening. So the opening has to fall in one interval:
   - after the 20 Nov redraw: when our slots (the server's assignment) were first read, the
     `first_read_at` of `slot_assignment`,
-  - after the test activity: the last test purchase request and its receipt, and
-  - at or before the fill request was sent, which also puts it before the fill's receipt.
+  - strictly after the latest test-period ledger entry of any kind and the last test receipt's
+    effective time, and
+  - at or before the fill request's `submitted_at`, which also puts it before the fill's receipt.
 
-  Read the times on the [DB explorer](db-explorer.md) (read only, times in Eastern):
-  `first_read_at` in the `slot_assignment` table, and the requests' `submitted_at` in
-  `purchase_requests`. For example, if the last test purchase was on 28 Nov and the fill request went
-  in at 20:00 on Sun 29 Nov, use 19:00. Don't use a time after the request: an opening at 23:00 leaves
-  the 20:00 fill out of Key dates. Don't use a time before the redraw, such as 18 Nov: that counts
-  pre-redraw test activity in the books. Give the time with its offset (a time without one is read
-  as UTC):
+  Any kind: any row still in `ledger_entries`, a model call or an adjustment included — not just the
+  last test purchase. Until the real opening is recorded, every row there is test-period, including
+  a call the live run made after the reset. A receipt's effective time is its request's door close,
+  else the line's `resolved_at`; a test midweek visit's fee counts from the same clock, so one bound
+  covers both.
+
+  Read the ends of the interval on the [DB explorer](db-explorer.md) (read only, times in Eastern):
+  `first_read_at` in `slot_assignment` and the requests' `submitted_at` in `purchase_requests`,
+  plus, in psql or the explorer's SQL box:
+
+  ```sql
+  -- The latest test-period ledger entry, any kind.
+  select kind, at at time zone 'America/New_York' as at_eastern, detail
+    from ledger_entries order by at desc limit 5;
+
+  -- When each fulfilled receipt counts from (door close, else the line's resolution; a visit's fee
+  -- counts from the same clock). Leave out the fill's own row.
+  select r.request_id, r.off_cycle,
+         greatest(max(coalesce(r.door_closed_at, l.resolved_at)), r.fulfilled_at)
+           at time zone 'America/New_York' as counts_from_eastern
+    from purchase_requests r join purchase_lines l using (request_id)
+   where r.status = 'fulfilled'
+   group by r.request_id, r.fulfilled_at, r.off_cycle
+   order by counts_from_eastern desc limit 5;
+  ```
+
+  Pick a time strictly after the latest time those queries return (the fill's own row excepted) and
+  after `first_read_at`, and at or before the fill's `submitted_at`. For example, if the latest
+  test-period entry is a model call at 19:30 Eastern on Sun 29 Nov and the fill went in at 20:00,
+  use 19:45. An opening at 19:00 would put that call in the real books as $0.25 of token spend, and
+  an opening at 23:00 would leave the 20:00 fill out of Key dates. Don't use a time before the
+  redraw, such as 18 Nov: that counts pre-redraw test activity in the books. If no time meets all
+  of this — the latest test entry stands after the fill went in, say — the interval is empty. Stop:
+  don't record the one-time opening; ask the team. Give the time with its offset (a time without one
+  is read as UTC):
 
   ```
-  python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T19:00:00-05:00
+  python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T19:45:00-05:00
   ```
 
   Then check that the opening is at or before the fill request, and that the books hold the fill's
@@ -160,8 +190,13 @@ depends on how far the steps got:
       order by submitted_at;
      ```
 
-     The fill request is the first one that isn't off-cycle and was sent at or after the opening.
-     Its `sent_eastern` must be at or after `opening_eastern`. If it is before, ask the team.
+     Verify the fill by its own `request_id`, the one the fill went in under: its `sent_eastern` must
+     be at or after `opening_eastern`. If it is before, ask the team. If you have to infer which
+     request is the fill, use the same rule as Key dates: the first request in the list that was sent
+     at or after the opening and before the start (00:00 Eastern on Thu 3 Dec); the query already
+     leaves rejected ones out. A request sent at or after the start is a restock, never the fill. If
+     the rule finds no fill — the Sunday fill rejected, say, so the first request standing is a
+     Thursday restock — don't count the restock as the fill: ask the team.
   2. The fill's receipt total, once its status is `fulfilled` (put its `request_id` in):
 
      ```sql

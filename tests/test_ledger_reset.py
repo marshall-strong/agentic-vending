@@ -13,9 +13,10 @@ psycopg = pytest.importorskip("psycopg")
 
 from tests.conftest import open_in, store_poll  # noqa: E402
 from tests.test_ledger import deliver  # noqa: E402
-from vending import dev_spend, ledger, money_panel, money_series, stock  # noqa: E402
+from vending import dev_spend, key_dates, ledger, money_panel, money_series, stock  # noqa: E402
 from vending.ledger import LedgerError, RESET_CLOSES, reset_refusal  # noqa: E402
-from vending.start import START  # noqa: E402
+from vending.purchase_requests import record as record_request  # noqa: E402
+from vending.start import EASTERN, START  # noqa: E402
 from vending.tools.account_balance import get_account_balance  # noqa: E402
 from vending.tools.pnl import get_pnl  # noqa: E402
 
@@ -433,3 +434,69 @@ def test_the_dry_run_says_which_entries_fall_before_the_opening_recorded_now(sch
     assert "adjustment entries" not in out and "Re-record" not in out
     assert "1 entry or receipt line is dated after 2026-11-29 15:00 Eastern" in out
     assert "falls after an opening recorded now" in out
+
+
+# --- Sol review, round 5 -----------------------------------------------------------------------
+
+def test_a_recovery_opening_must_come_after_the_test_ledger_entries(conn):
+    """Round 5, finding 1: the recovery opening must clear the test period's ledger entries too, not just
+    the last test purchase and its receipt. A live run's model call at 19:30 Eastern on Sun 29 Nov, after
+    the reset and before the 20:00 fill, lands in the real books under the old 19:00 choice. The
+    documented choice — strictly after the latest test-period entry and the last test receipt's time,
+    and at or before the fill's submission — keeps token spend at 0."""
+    seed(conn)
+    ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "live run turn",
+                         at=datetime(2026, 11, 29, 19, 30, tzinfo=EASTERN))
+    record_request(conn, "FILL", datetime(2026, 11, 29, 20, 0, tzinfo=EASTERN), False, {})
+
+    def open_at(when):
+        conn.execute("delete from ledger_entries where kind = 'opening'")
+        ledger.record(conn, "opening", 60000, "opening capital", "kevin", when)
+        return ledger.balance(conn, AFTER)
+
+    # The old runbook's example: 19:00, after the last test purchase (28 Nov) and its receipt (12 Nov).
+    old = open_at(datetime(2026, 11, 29, 19, 0, tzinfo=EASTERN))
+    assert (old.receipts_cents, old.visits) == (0, 0) and old.takings.cents == 0
+    assert old.token_spend_cents == Fraction(25)          # the 19:30 live call is in the real books
+    assert old.balance_cents == 60000 - 25                # and it comes off the $600
+
+    # The documented rule: strictly after the latest test-period entry (the 19:30 call) and the last
+    # test receipt (12 Nov), at or before the fill's submission (20:00).
+    documented_at = datetime(2026, 11, 29, 19, 45, tzinfo=EASTERN)
+    documented = open_at(documented_at)
+    (fill_sent,) = conn.execute(
+        "select submitted_at from purchase_requests where request_id = 'FILL'").fetchone()
+    assert documented_at < fill_sent
+    assert documented.token_spend_cents == 0              # the call is development spend now
+    assert (documented.receipts_cents, documented.receipt_lines, documented.visits) == (0, 0, 0)
+    assert documented.balance_cents == 60000
+    assert any("3 model-call entries totalling 0.73" in n and "development spend" in n
+               for n in documented.notes)
+
+
+def test_a_rejected_sunday_fill_leaves_no_fill_for_the_post_launch_check(conn):
+    """Round 5, finding 2: after the start, the runbook's check must not mistake the first restock for the
+    fill. The Sunday fill was rejected; the first request standing is Thursday's restock, sent after the
+    start. The documented rule — the first non-rejected request submitted at or after the opening and
+    before the start — picks no fill, like Key dates on the same records."""
+    opening = datetime(2026, 11, 29, 19, 45, tzinfo=EASTERN)
+    ledger.record(conn, "opening", 60000, "opening capital", "kevin", opening)
+    record_request(conn, "FILL", datetime(2026, 11, 29, 20, 0, tzinfo=EASTERN), False, {})
+    conn.execute("update purchase_requests set status = 'rejected' where request_id = 'FILL'")
+    record_request(conn, "WEEK1", datetime(2026, 12, 3, 10, 0, tzinfo=EASTERN), False, {})
+
+    # The check's list, from the runbook's query: the rejected Sunday fill is already left out.
+    requests = conn.execute(
+        "select request_id, submitted_at, off_cycle from purchase_requests"
+        " where status <> 'rejected' order by submitted_at").fetchall()
+    assert [r[0] for r in requests] == ["WEEK1"]
+
+    # The documented inference, Key dates' rule: sent at or after the opening, and before the start.
+    assert next((r for r in requests if r[1] >= opening and r[1] < START), None) is None
+    # The old wording ("the first one that isn't off-cycle and was sent at or after the opening")
+    # would have named the restock:
+    old_rule = next((r for r in requests if not r[2] and r[1] >= opening), None)
+    assert old_rule is not None and old_rule[0] == "WEEK1"
+    # Key dates, whose rule the doc now states, picks no fill on the same records.
+    assert key_dates._fill({"requests": [{"request_id": r[0], "submitted_at": r[1]}
+                                         for r in requests]}) is None
