@@ -940,6 +940,10 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
                               if purchases["ok"] else purchases),
         "catalog_requests": catalog,
         "catalog_counts": _catalog_counts(catalog),
+        # Open purchase submissions: while any is left, no purchase request can be sent.
+        "submissions": _panel(lambda: _rows(
+            conn, "select id, at, status from purchase_submissions where status in ('sending', 'unknown')"
+                  " order by id")),
     }
     try:
         lock = lock_at()
@@ -1056,6 +1060,16 @@ def attention(snap: dict) -> list[dict]:
     if (failing := _failing_syncs(snap.get("syncs"), now)) is not None:
         add("bad", failing)
 
+    open_submissions = snap.get("submissions") or {"ok": True, "data": []}
+    if open_submissions["ok"] and open_submissions["data"]:
+        first = open_submissions["data"][0]
+        named = ", ".join(f"{r['id']} ({r['status']}, {_span(now - r['at'])} ago)" for r in open_submissions["data"])
+        add("bad", f"Orders are blocked: purchase submission {named} may already be on the bridge, so the agent "
+                   "can't send another request until a person settles it. Find out whether the bridge filed it "
+                   "(ask the instructors if no request ID is known), then run "
+                   f"`python -m vending.submissions resolve {first['id']} "
+                   "--request-id ID --by NAME` or `--not-filed --by NAME`.")
+
     catalog = snap["catalog_requests"]
     if catalog["ok"]:
         for r in catalog["data"]:
@@ -1099,7 +1113,8 @@ def attention(snap: dict) -> list[dict]:
 
     for key, name in (("plan", "Plan"), ("runs", "Runs"), ("activity", "Tool calls"), ("sales", "Sales"),
                       ("stock", "Stock"), ("purchase_requests", "Purchase requests"),
-                      ("catalog_requests", "Catalog requests"), ("money", "Money"),
+                      ("catalog_requests", "Catalog requests"), ("submissions", "Purchase submissions"),
+                      ("money", "Money"),
                       ("leaderboards", "Leaderboards"), ("report_cards", "Report card"),
                       ("incidents", "Incident log")):
         if key in snap and not snap[key]["ok"]:
