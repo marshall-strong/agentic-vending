@@ -228,6 +228,9 @@ send the same Eastern day unless the earlier one was refused without using the c
 bridge's: a send reserved at 23:59:59 and checked at 00:00:01 uses the new day's check. The module's
 docstring has the details. The simulated bridge answers the same route (`vending/simulate/bridge.py`).
 
+The worker can send it once a day (`vending/tracking_daily.py`, #218), off until the team sets
+`TRACKING_DAILY=on`: see [`deploy.md`](deploy.md). It uses the same code and the same guard.
+
 **Why `scripts/bridge.py` doesn't send it.** That script only reads: it can't submit a purchase request,
 and it writes nothing to our database. A tracking check spends the day's one check, and its answer
 belongs in `tracking_checks` beside what we sent, behind the once-a-day guard. A send from the script

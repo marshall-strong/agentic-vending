@@ -87,6 +87,17 @@ def _slot(value: Any) -> str | None:
     return None
 
 
+# What the worker's scheduled agent runs do (`vending.agent_schedule`). The lower of this and the container's
+# `AGENT_SCHEDULE_MODE` wins, so both must say so before the worker runs the agent.
+SCHEDULE_MODES = ("off", "dry-run", "live")
+
+
+def _schedule_mode(value: Any) -> str | None:
+    if value not in SCHEDULE_MODES:
+        return f"must be off, dry-run or live, not {json.dumps(value)}"
+    return None
+
+
 # Set once, never changed: the wildcard is a fixed slot.
 WRITE_ONCE = frozenset({"wildcard_slot"})
 
@@ -125,10 +136,14 @@ KNOWN: dict[str, Setting] = {
                                            "maximum (default and most 8200)", _cap),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
+    "spendable_floor_cents": Setting("spendable every request must leave at its worst case: a midweek fee plus a "
+                                     "week of model spend (default 5300)", lambda v: _whole(v, 0, 60000, "cents")),
     "model_run_cap_cents": Setting("most one agent cycle or replay may spend on model calls (default 100)",
                                    lambda v: _whole(v, 1, 60000, "cents")),
     "model_daily_cap_cents": Setting("most live model calls may spend in one Eastern day (default 400)",
                                      lambda v: _whole(v, 1, 60000, "cents")),
+    "agent_schedule_mode": Setting("what the worker's scheduled agent runs do: off, dry-run or live; the lower of "
+                                   "this and the container's AGENT_SCHEDULE_MODE wins (default off)", _schedule_mode),
     "model_test_daily_cap_cents": Setting("most test calls (replays, sweeps) may spend in one Eastern day "
                                           "(default 2000)", lambda v: _whole(v, 1, 60000, "cents")),
 }

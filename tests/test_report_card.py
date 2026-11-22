@@ -624,10 +624,10 @@ def test_a_failed_sync_round_and_an_outside_tracking_check_are_incidents(conn, p
     snap = dashboard.snapshot(page_conn, NOW)
     rows = snap["incidents"]["data"]["rows"]
     kinds = [r["kind"] for r in rows]
-    assert "sync_failed" in kinds and "tracking_outside" in kinds
+    assert "sync_failed" in kinds and "books_outside" in kinds
     sync_row = next(r for r in rows if r["kind"] == "sync_failed")
     assert sync_row["what"] == "Sync round" and "`sync_history` exit 3" in sync_row["note"]
-    tracking_row = next(r for r in rows if r["kind"] == "tracking_outside")
+    tracking_row = next(r for r in rows if r["kind"] == "books_outside")
     assert "cash" in tracking_row["note"] and SECRET not in tracking_row["note"]
     assert SECRET not in dashboard.to_json(snap["incidents"]) and SECRET not in dashboard.render(snap)
 
@@ -884,6 +884,6 @@ def test_a_check_is_windowed_by_when_it_was_answered(conn, page_conn, opened):
     snap = dashboard.snapshot(page_conn, NOW)
     [alert] = snap["alerts"]
     assert alert["kind"] == "tracking_outside" and alert["at"] == answered
-    row, = [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "tracking_outside"]
+    row, = [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "books_outside"]
     assert row["at"] == answered and "cash" in row["note"]
     assert snap["incidents"]["data"]["total"] == 1

@@ -52,14 +52,17 @@ $Port = 8080
 # What the Dockerfile copies into the image; keep in step with its COPY lines. An untracked
 # file anywhere else can't reach the image, so it doesn't block a deploy.
 $ImagePaths = @("requirements.txt", "vending", "db", "docs/agent", "docker")
-# .env setting -> Container App secret name. No Anthropic key: nothing in the image calls the model
-# yet, so a key would only sit in a running container. The change that runs the agent loop here
-# adds it, under the name the agent reads.
+# .env setting -> Container App secret name.
 $Secrets = [ordered]@{ "DATABASE_URL" = "database-url"; "DEX_API_KEY" = "dex-api-key"; "TS_AUTHKEY" = "ts-authkey" }
 # Settings a deploy works without. -SetSecrets loads each one that .env has, and the container gets
 # the env var only when the app has the secret. READONLY_DATABASE_URL is the public pages' own
 # login (/dashboard, /db); without it they answer "not set up yet" and everything else runs.
-$OptionalSecrets = [ordered]@{ "READONLY_DATABASE_URL" = "readonly-database-url" }
+# VENDING_ANTHROPIC_API_KEY is the model key, under the name the agent reads (never ANTHROPIC_API_KEY).
+# Only scheduled agent runs use it, and they are off unless AGENT_SCHEDULE_MODE and the database's
+# agent_schedule_mode both turn them on (vending/agent_schedule.py, docs/agent.md). Without it a
+# scheduled run fails before any model request, and the dashboard says so.
+$OptionalSecrets = [ordered]@{ "READONLY_DATABASE_URL" = "readonly-database-url";
+                               "VENDING_ANTHROPIC_API_KEY" = "vending-anthropic-api-key" }
 # Env vars an earlier deploy set that this one doesn't. --set-env-vars only adds, so the update
 # removes these by name, and only when the app has them: az warns on stderr about a name the app
 # doesn't have, which Windows PowerShell 5.1 can turn into an error.

@@ -111,6 +111,19 @@ def test_a_fresh_database_shows_halted_and_empty_panels(page_conn):
     assert "No plan yet" in dashboard.render(snap)
 
 
+def test_an_open_submission_says_orders_are_blocked_and_what_to_run(conn, page_conn):
+    conn.execute("insert into purchase_submissions (at, plan_hash, body, status, detail) values"
+                 " (now() - interval '3 hours', 'h', '{}', 'unknown', 'TimeoutError: <raw bridge text>')")
+    snap = dashboard.snapshot(page_conn)
+    [blocked] = [a for a in snap["attention"] if "Orders are blocked" in a["text"]]
+    assert blocked["level"] == "bad" and "(unknown, 3 h ago)" in blocked["text"]
+    assert "python -m vending.submissions resolve " in blocked["text"] and "raw bridge text" not in blocked["text"]
+    page = dashboard.render(snap)
+    assert "Orders are blocked" in page and "<code>python -m vending.submissions resolve " in page
+    conn.execute("update purchase_submissions set status = 'not_filed'")
+    assert not any("Orders are blocked" in a["text"] for a in dashboard.snapshot(page_conn)["attention"])
+
+
 def test_plan_compares_with_the_run_before(conn, page_conn, open_ledger):
     first = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, first, "skipped", plan=plan(
@@ -1923,7 +1936,7 @@ def test_a_tracking_check_outside_shows_the_banner_and_an_incident(conn, page_co
     assert "Tracking check outside" in page and "cash" in page
     assert SECRET not in page and SECRET not in dashboard.to_json(snap)
     row, = snap["incidents"]["data"]["rows"]
-    assert row["kind"] == "tracking_outside" and "cash" in row["note"] and SECRET not in row["note"]
+    assert row["kind"] == "books_outside" and "cash" in row["note"] and SECRET not in row["note"]
     assert snap["incidents"]["data"]["total"] == 1
     # The next check coming back all within clears the banner.
     conn.execute(
@@ -2037,10 +2050,10 @@ def test_tracking_results_are_read_through_the_allowlist(conn, page_conn, open_l
     [alert] = snap["alerts"]
     assert alert["kind"] == "tracking_outside"
     assert alert["text"].startswith("The bridge's tracking check said cash outside")
-    assert snap["tracking"]["ok"]
-    assert snap["tracking"]["data"]["results"] == {"cash": "outside", "coil": "within"}
+    assert snap["tracking_alert"]["ok"]
+    assert snap["tracking_alert"]["data"]["results"] == {"cash": "outside", "coil": "within"}
     # The log survives the array and reads the same check through the same allowlist.
-    row, = [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "tracking_outside"]
+    row, = [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "books_outside"]
     assert "cash" in row["note"] and "smuggled" not in row["note"]
     assert snap["incidents"]["data"]["total"] == 1
     assert "smuggled" not in dashboard.to_json(snap)

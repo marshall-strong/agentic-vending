@@ -13,7 +13,8 @@ so the container joins it with Tailscale in userspace mode.
 `Dockerfile` builds one image with the package and the Tailscale binaries. Its default command
 is `python -m vending.worker`: every hour, at 5 minutes past (UTC), it runs `python -m vending.sync_history`,
 `python -m vending.sync_requests`, `python -m vending.sync_catalog` and
-`python -m vending.sync_product_requests` (which catalog requests were approved or rejected),
+`python -m vending.sync_product_requests` (which catalog requests were approved or rejected) and
+`python -m vending.tracking_daily` (the day's tracking check, only when turned on: see below),
 each with a 30-minute
 limit (`JOB_TIMEOUT_MINUTES`), and it answers `GET /health` on port 8080 with the last round's
 outcome per job (a `503` means the last round failed). Its root, `GET /`, is the same status as a
@@ -32,6 +33,24 @@ the last one, at whatever minute the container had started, so a poll could wait
 `SYNC_AT_MINUTE` changes the minute (`off` brings back an hour from the last round), and
 `SYNC_EVERY_MINUTES` the gap. With a minute set, the gap must divide 60 or be a multiple of it
 (15 gives :05, :20, :35 and :50).
+
+**The daily tracking check** (`vending/tracking_daily.py`, #218). The last job of each round sends our books
+to the bridge's tracking check once a day, from 06:00 Eastern, as of the newest poll already in the bridge's
+books. It is **off until the team turns it on**: it spends the day's one check at the course's bridge.
+
+| Setting | Default | |
+|---|---|---|
+| `TRACKING_DAILY` | `off` | `on` sends one check a day; `off` (or unset) sends none. Any other value fails the job |
+| `TRACKING_DAILY_AT` | `06:00` | The first Eastern time of day it may send (HH:MM, before 22:00). It sends in the first round from then that finds the books settled, and never from 22:00 |
+
+Turn it on: `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group
+--set-env-vars TRACKING_DAILY=on`. Turn it off the same way with `off`. From the competition start, it never
+sends twice in an Eastern day, by the worker or a person, even after a restart: every send is in `tracking_checks`.
+Before the start the course allows unlimited checks for testing, so a person may send again by hand; the
+worker still sends at most once a day. A sync that didn't finish holds the day's check back until the next
+round, so it never reads books the round's syncs never brought in. With no ledger
+opening yet it logs a line and skips. The verdicts show on the dashboard (Tracking check), an `outside` one
+in the incident log and the agent's briefing.
 
 **Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
 worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a
@@ -123,12 +142,26 @@ entrypoint keeps retrying every minute in the background. `tailscaled`'s own log
 fails); it is cut to its last 500 lines whenever it passes 1 MB, so an always-on replica's log
 can't fill the disk.
 
-**The agent loop does not run yet.** When the harness exists it starts `python -m vending.server`
-over stdio from the same image, with `VENDING_TOOLS=built` so only working tools are offered.
-Until then the container gets **no Anthropic key**, since nothing in it calls the model; the change
-that runs the agent loop here adds the secret to `$Secrets` in the deploy script, under the name the
-agent reads (`VENDING_ANTHROPIC_API_KEY`, per the README). The deploy of `c1505c2` on 11 Nov, from
-the script before this change, did set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
+**The agent runs here only when the schedule is on** (`vending/agent_schedule.py`, #213). It is
+off unless both the app's `AGENT_SCHEDULE_MODE` env var and the database's `agent_schedule_mode`
+setting turn it on. Scheduled runs are dry runs only: live scheduling is not enabled in this version;
+it needs a later change approved by the team, so `live` in either setting is run as `dry-run`. Then it
+starts `vending.agent.run` as a dry run at the times in `AGENT_SCHEDULE`, which starts `python -m vending.server` over stdio from the same image,
+with `VENDING_TOOLS=built` so only working tools are offered. [`docs/agent.md`](agent.md) has the
+settings, and a dry run to try on Azure before the first scheduled run. The container gets the model
+key as `VENDING_ANTHROPIC_API_KEY` (the name the agent reads, per the README), from the optional
+`vending-anthropic-api-key` secret in `$OptionalSecrets`. A deploy works without it, as it does
+without the read-only login: the script notes it is missing and goes on, and a scheduled run without
+it fails before any model request, which the dashboard shows. To add it, put
+`VENDING_ANTHROPIC_API_KEY` in `.env` and run with `-SetSecrets`. The schedule settings are not in
+the script. Set them on the app:
+`az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=dry-run`.
+A later deploy keeps them, because `--set-env-vars` only adds. To turn the runs off, change
+the database's setting (`python -m vending.config set agent_schedule_mode off --by <name>`, a bare
+word, so it works in every shell, Windows PowerShell 5.1 too): it reaches every replica at the next
+scheduled time, an old one still running during a deploy too, and a run that has been claimed but
+not started yet.
+The deploy of `c1505c2` on 11 Nov, from an older script, set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
 adds, so the script now passes `--remove-env-vars` for it when the app still has it (the list is
 `$Retired`). The `anthropic-api-key` secret itself stays in the app, unused by any variable; to
 delete it:
@@ -141,6 +174,11 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 ```
 python -m vending.db migrate
 ```
+
+Apply migration 025 (`purchase_submissions.purpose`, for `python -m vending.fill`) while no submit
+runs: the agent paused (`python -m vending.halt on --by NAME`) and no fill being sent. It waits at
+most 2 seconds for its lock. If a submit holds the table, it fails with "lock timeout" and changes
+nothing; run it again once the submit is over.
 
 Apply migration 020 before deploying the dashboard that reads the first-fill plan. Use the same
 owner login that ran `python -m vending.pages grant` so the page login inherits read access.
