@@ -665,9 +665,129 @@ def test_safe_opening_refuses_what_it_cannot_settle(conn):
         ledger.safe_opening(conn, "FILL")
 
 
-def test_safe_opening_then_open_counts_the_fill_and_no_test_spend(schema_url, monkeypatch, capsys):
-    """The recovery through the CLI: `safe-opening --fill`, then `open --at` with the time it printed.
-    The books then hold the fill's receipt and no test spend, and Key dates counts the fill."""
+def test_safe_opening_caps_the_opening_at_the_fills_receipt(conn):
+    """Final check, finding 2: the fill is stocked at once. Its receipt counts from the door-close minute,
+    20:00:00, but the request was sent at 20:00:35. A test-period model call at 20:00:10 leaves only
+    20:00:35, which drops the fill's receipt from the books: no time works, so it refuses."""
+    after_the_reset(conn, fill=False)
+    sent = FILL_SENT + timedelta(seconds=35)
+    deliver_at(conn, "FILL", sent, et(29, 20, 20), door_opened_at=et(29, 19, 58), door_closed_at=FILL_SENT)
+    ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "live run turn",
+                         at=FILL_SENT + timedelta(seconds=10))
+    s = ledger.safe_opening(conn, "FILL")
+    assert (s.upper, s.upper_what) == (FILL_SENT, "receipt line 0 of request FILL")
+    assert s.suggested is None
+    with pytest.raises(LedgerError, match="No time works"):
+        ledger.recover_opening(conn, "FILL", "kevin")
+    assert ledger.opening(conn) is None
+
+
+def test_safe_opening_puts_the_opening_at_or_before_the_fills_receipt(conn):
+    """Finding 2, the case with a time: the fill's receipt is timed by its resolved_at, 19:59:30, before
+    the request's 20:00:35 (the two come from different clocks). The latest test record is at 19:59:10.
+    The next whole minute, 20:00, would drop the receipt, so the opening goes at the receipt itself and
+    the receipt counts in the books after recovery."""
+    after_the_reset(conn, fill=False)
+    deliver_at(conn, "TEST", et(28, 10), et(29, 17))                             # a same-day test purchase
+    deliver_at(conn, "FILL", FILL_SENT + timedelta(seconds=35), et(29, 19, 59) + timedelta(seconds=30))
+    ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "live run turn",
+                         at=et(29, 19, 59) + timedelta(seconds=10))
+    s = ledger.safe_opening(conn, "FILL")
+    assert s.upper == et(29, 19, 59) + timedelta(seconds=30)
+    assert s.suggested == s.upper
+    _, entry = ledger.recover_opening(conn, "FILL", "kevin")
+    assert entry.at == s.upper
+    b = ledger.balance(conn, AFTER)
+    assert (b.receipts_cents, b.receipt_lines, b.token_spend_cents) == (1237, 1, 0)     # the fill's receipt only
+    fill, check = fill_check(conn, b.opening_at)
+    assert fill["request_id"] == "FILL" and check["status"] == "done"
+
+
+def test_safe_opening_caps_a_pending_fill_at_the_minute_it_was_sent(conn):
+    """A fill not stocked yet: its door close will be to the minute, so it can be 20:00:00 for a request
+    sent at 20:00:35. The opening can't go after 20:00:00."""
+    after_the_reset(conn, fill=False)
+    record_request(conn, "FILL", FILL_SENT + timedelta(seconds=35), False, BODY)
+    ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "live run turn",
+                         at=FILL_SENT + timedelta(seconds=10))
+    s = ledger.safe_opening(conn, "FILL")
+    assert s.upper == FILL_SENT and s.suggested is None
+
+
+def test_open_recover_rechecks_a_model_call_recorded_after_the_preview(conn):
+    """Final check, finding 1: the preview suggests 19:31. A model call is recorded at 19:45:10 before
+    `open --recover`. The recover recomputes under its lock and picks 19:46, so the call is development
+    spend. A call recorded after the fill went in leaves no time: it refuses and records nothing."""
+    after_the_reset(conn)
+    ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "turn 1", at=et(29, 19, 30))
+    assert ledger.safe_opening(conn, "FILL").suggested == et(29, 19, 31)
+    ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "turn 2",
+                         at=et(29, 19, 45) + timedelta(seconds=10))
+    s, entry = ledger.recover_opening(conn, "FILL", "kevin")
+    assert entry.at == s.suggested == et(29, 19, 46)
+    b = ledger.balance(conn, AFTER)
+    assert (b.opening_at, b.token_spend_cents, b.balance_cents) == (et(29, 19, 46), 0, 60000)
+    assert conn.execute("select count(*) from action_log where tool = 'ledger.opening'"
+                        " and detail like '%%recorded by kevin%%'").fetchone() == (1,)
+
+    conn.execute("delete from ledger_entries where kind = 'opening'")
+    ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "turn 3", at=et(29, 20, 30))
+    with pytest.raises(LedgerError, match="No time works"):
+        ledger.recover_opening(conn, "FILL", "kevin")
+    assert ledger.opening(conn) is None
+
+
+def test_open_recover_waits_for_a_model_call_being_written_and_counts_it(conn, schema_url):
+    """The recover's lock: a model call is being written (its transaction is open) when `open --recover`
+    starts. The recover waits for it, then sees it, so the opening can't go before a call it didn't see."""
+    after_the_reset(conn)
+    writer = open_in(*schema_url)
+    writer.autocommit = False
+    writer.execute("select 1")                  # a transaction the call is written in, left open
+    ledger.record_tokens(writer, "0.25", "claude-sonnet-5-5", 4000, 400, "in flight",
+                         at=et(29, 19, 50) + timedelta(seconds=5))
+    result = {}
+
+    def recover():
+        with open_in(*schema_url) as c:
+            try:
+                result["entry"] = ledger.recover_opening(c, "FILL", "kevin")[1]
+            except LedgerError as error:
+                result["error"] = str(error)
+
+    worker = threading.Thread(target=recover)
+    try:
+        worker.start()
+        for _ in range(200):                     # until the recover waits on the writer
+            if conn.execute("select count(*) from pg_stat_activity where wait_event_type = 'Lock'"
+                            " and query ilike '%%lock table%%'").fetchone()[0]:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("the recover never waited on the model call's transaction")
+        writer.commit()
+    finally:
+        writer.close()
+        worker.join(30)
+    assert "error" not in result and result["entry"].at == et(29, 19, 51)
+    assert ledger.balance(conn, AFTER).token_spend_cents == 0
+
+
+def test_open_recover_refuses_inside_a_callers_transaction(conn, schema_url):
+    after_the_reset(conn)
+    with open_in(*schema_url) as c, c.transaction():
+        with pytest.raises(LedgerError, match="its own transaction"):
+            ledger.recover_opening(c, "FILL", "kevin")
+    with pytest.raises(LedgerError, match="needs the name"):
+        ledger.recover_opening(conn, "FILL", " ")
+    assert ledger.opening(conn) is None
+
+
+def test_open_recover_counts_the_fill_and_no_test_spend(schema_url, monkeypatch, capsys):
+    """The recovery through the CLI: `safe-opening --fill` previews and prints the `open --recover`
+    command; a model call is recorded between the two steps; `open --recover` without --yes previews,
+    then with --yes recomputes and records. The books then hold the fill's same-day receipt and no test
+    spend, and Key dates counts the fill."""
     from vending import db as db_module
 
     monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
@@ -675,24 +795,53 @@ def test_safe_opening_then_open_counts_the_fill_and_no_test_spend(schema_url, mo
         after_the_reset(conn, fill=False)
         deliver_at(conn, "TEST", et(28, 10), et(29, 17))                         # a test purchase on Sunday
         ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "live run turn", at=et(29, 19, 30))
-        deliver_at(conn, "FILL", FILL_SENT, et(30, 15))                         # stocked on Monday
+        deliver_at(conn, "FILL", FILL_SENT, et(29, 21, 15),                    # stocked the same evening
+                   door_opened_at=et(29, 21, 0), door_closed_at=et(29, 21, 10))
     assert ledger.main(["safe-opening", "--fill", "FILL"]) == 0
     out = capsys.readouterr().out
     assert "Suggested opening: Sun 29 Nov 2026 19:31:00 Eastern" in out
+    assert "--at 20" not in out                                                 # no time to copy
     [command] = [line.strip() for line in out.splitlines() if "ledger open" in line]
-    assert command == "python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T19:31:00-05:00"
-    assert ledger.main(["open", "--amount", "600.00", "--by", "kevin", "--at", command.split("--at ")[1]]) == 0
-    capsys.readouterr()
+    assert command == "python -m vending.ledger open --recover --fill FILL --by NAME --yes"
+    with open_in(*schema_url) as conn:                                          # a write between the steps
+        ledger.record_tokens(conn, "0.25", "claude-sonnet-5-5", 4000, 400, "late turn",
+                             at=et(29, 19, 40) + timedelta(seconds=20))
+    assert ledger.main(["open", "--recover", "--fill", "FILL", "--by", "kevin"]) == 0
+    out = capsys.readouterr().out
+    assert "Preview: nothing was recorded" in out and "Sun 29 Nov 2026 19:41:00 Eastern" in out
+    with open_in(*schema_url) as conn:
+        assert ledger.opening(conn) is None
+    assert ledger.main(["open", "--recover", "--fill", "FILL", "--by", "kevin", "--yes"]) == 0
+    assert "Opened with 600.00 at Sun 29 Nov 2026 19:41:00 Eastern" in capsys.readouterr().out
     with open_in(*schema_url) as conn:
         b = ledger.balance(conn, AFTER)
-        assert b.opening_at == et(29, 19, 31)
+        assert b.opening_at == et(29, 19, 41)
         assert (b.token_spend_cents, b.visit_fees_cents) == (0, 0)
-        assert (b.receipts_cents, b.receipt_lines) == (1237, 1)                 # the fill's receipt only
+        assert (b.receipts_cents, b.receipt_lines) == (1237, 1)                 # the fill's same-day receipt only
         assert b.balance_cents == 60000 - 1237
         fill, check = fill_check(conn, b.opening_at)
         assert fill["request_id"] == "FILL" and check["status"] == "done"
     monkeypatch.setattr(ledger, "db_now", lambda conn: AFTER)
     assert ledger.main(["show"]) == 0
     assert "Token spend" in capsys.readouterr().out
-    assert ledger.main(["safe-opening", "--fill", "FILL"]) == 1                 # it is recorded now
+    assert ledger.main(["open", "--recover", "--fill", "FILL", "--by", "kevin", "--yes"]) == 1   # recorded now
     assert "already has an opening" in capsys.readouterr().err
+
+
+def test_open_needs_an_amount_unless_it_recovers(schema_url, monkeypatch, capsys):
+    from vending import db as db_module
+
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    with pytest.raises(SystemExit):
+        ledger.main(["open", "--by", "kevin"])
+    assert "--amount" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        ledger.main(["open", "--recover", "--fill", "FILL", "--by", "kevin", "--at", "2026-11-29T19:00:00-05:00"])
+    assert "--at" in capsys.readouterr().err
+
+
+def test_the_recover_takes_the_harness_lock():
+    """`recover_opening` can't import the harness (it imports the ledger), so the key is copied: keep it equal."""
+    from vending import harness
+
+    assert ledger.HARNESS_LOCK == harness.LOCK_KEY
