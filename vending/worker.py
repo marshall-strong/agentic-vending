@@ -577,12 +577,30 @@ def _stop(signum, frame):
     raise Stopped
 
 
+def wait_or_wake(event: threading.Event, seconds: float) -> bool:
+    """Sleep `seconds`, or less: True as soon as `event` is set (a scheduled agent run's thread ended). In steps of
+    a second at most, so Ctrl+C still stops the worker promptly where a lock's wait can't be interrupted (Windows)."""
+    end = time.monotonic() + seconds
+    while (left := end - time.monotonic()) > 0:
+        if event.wait(min(left, 1.0)):
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
-         sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
-         reads=None, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), scheduler=None) -> int:
+         sleep: Callable[[float], None] | None = None, log: Callable[[str], None] = print,
+         reads=None, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), scheduler=None,
+         wait: Callable[[threading.Event, float], bool] | None = None) -> int:
     """`reads` is the visit reader (`vending.visit_polls.Reader`) and `scheduler` the scheduled agent runs
     (`vending.agent_schedule.Scheduler`). Left out, the real worker, started with no `jobs`, builds each from
-    the settings; a test that passes `jobs` gets neither, so it can't read the machine or start the agent."""
+    the settings; a test that passes `jobs` gets neither, so it can't read the machine or start the agent.
+
+    `sleep` waits between rounds (left out, real time). With scheduled runs on, `wait(event, seconds)` waits instead
+    and returns True early when `event` is set: a run's thread ended, so the next time is worked out again. Left
+    out, `wait_or_wake` in real time, or `sleep` (never woken early) when a test passes its own `sleep`."""
+    if wait is None:
+        wait = wait_or_wake if sleep is None else (lambda event, seconds: sleep(seconds) or False)
+    sleep = sleep or time.sleep
     parser = argparse.ArgumentParser(prog="python -m vending.worker", description=__doc__.splitlines()[0])
     parser.add_argument("--once", action="store_true", help="one round, then exit with the worst exit code")
     parser.add_argument("--every", type=float, default=float(os.environ.get("SYNC_EVERY_MINUTES") or 60),
@@ -620,6 +638,8 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         scheduler = agent_schedule.default_scheduler(log)
     # `Invalid` only reports a wrong setting on /health; it has no times to run.
     ticks = scheduler if hasattr(scheduler, "tick") else None
+    # Set when a scheduled run's thread ends, to wake the loop before the next sync (`Scheduler.run_ended`).
+    ended = getattr(ticks, "run_ended", None)
     jobs = default_jobs() if jobs is None else jobs
     state = State(schedule=scheduler)
     running: dict[str, threading.Thread] = {}
@@ -651,7 +671,16 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
                     wake = min(wake, ticks.next_due(now))
                 # Never negative: a wake time already past (a supervisor's deadline crossed during a long
                 # round) means now.
-                sleep(max(0.0, (wake - now).total_seconds()))
+                seconds = max(0.0, (wake - now).total_seconds())
+                if ended is None:
+                    sleep(seconds)
+                elif wait(ended, seconds):
+                    # A scheduled run ended: work out the next wake again, as its end may bring a time due
+                    # before the next sync (a second window that day). Cleared first, so a run that ends
+                    # meanwhile still wakes the next wait.
+                    ended.clear()
+                    now = clock()
+                    continue
                 if wake >= due:
                     break
                 if reads is not None:

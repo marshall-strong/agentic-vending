@@ -1085,3 +1085,118 @@ def test_an_overdue_supervisor_deadline_is_now_not_the_past(schema_url, allowed)
         assert sched.next_due(late) == late
     finally:
         gate.set()
+
+
+# --- Sol review, round 5 ---------------------------------------------------------------------------
+
+def until(check, seconds=10):
+    """Wait in real time for a background thread to get somewhere."""
+    end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    while not check():
+        if datetime.now(timezone.utc) > end:
+            return False
+        threading.Event().wait(0.01)
+    return True
+
+
+TWO_WINDOWS = Schedule("dry-run", (Entry(2, time(14), time(14, 10)), Entry(2, time(14, 20), time(14, 30))),
+                       date(2026, 12, 2))
+
+
+def test_a_run_that_ends_wakes_the_loop_so_a_second_window_that_day_runs(schema_url, conn, allowed):
+    """Round 5, finding 1: with 2:00-2:10 and 2:20-2:30, the first run ended during the sleep after the 2:05 sync,
+    but the loop slept on to the 3:05 sync, so 2:20 was recorded missed. A run's end now wakes the loop."""
+    gate = threading.Event()
+    clock = Clock(at(WED, 13, 50), at(WED, 15, 30))
+    agent = FakeAgent(schema_url, clock, gate=gate)
+    logged = []
+    sched = scheduler(schema_url, agent, TWO_WINDOWS, clock=clock, background=True, log=logged.append)
+    woken = []
+
+    def wait(event, seconds):
+        """The loop's wait on the fake clock. A run's thread goes on in real time, so it is let reach its gate (or
+        its end) before the clock moves; the first run is let go during the wait after the 2:05 sync."""
+        run = sched.thread
+        if run is not None and run.is_alive():
+            if gate.is_set():
+                run.join(10)
+            else:
+                assert until(lambda: agent.calls), "the run never reached its gate"
+        if event.is_set():
+            return True
+        if clock.now >= at(WED, 14, 5) and not gate.is_set():
+            gate.set()
+            assert event.wait(10), "the run's end didn't wake the loop"
+            clock.now += timedelta(minutes=2)       # it ended at 2:07
+            woken.append(clock.now)
+            return True
+        clock.sleep(seconds)
+        return False
+    try:
+        assert worker.main(["--every", "60", "--at-minute", "5", "--port", "0"], jobs=[("a", lambda: 0)],
+                           sleep=clock.sleep, wait=wait, log=logged.append, clock=clock, scheduler=sched) == 0
+    finally:
+        gate.set()
+        if sched.thread is not None:
+            sched.thread.join(10)
+    assert woken == [at(WED, 14, 7)]
+    assert [when for when, _ in agent.calls] == [at(WED, 14), at(WED, 14, 20)]
+    assert [(due, outcome) for due, _, outcome, _, _ in rows(conn)] == [(at(WED, 14), "skipped"),
+                                                                         (at(WED, 14, 20), "skipped")]
+
+
+def test_a_thread_that_has_woken_the_loop_is_not_a_run_still_going(schema_url, conn, allowed):
+    """A run's thread wakes the loop, then ends a moment later. Woken in that moment, `next_due` must not read the
+    still-alive thread as a run going on and sleep to the supervisor's deadline."""
+    gate = threading.Event()
+    sched = scheduler(schema_url, FakeAgent(schema_url, gate=gate), TWO_WINDOWS, background=True)
+    tick(sched, at(WED, 14))
+    gate.set()
+    assert sched.run_ended.wait(10)
+    sched.thread.join(10)
+    sched.thread = SimpleNamespace(is_alive=lambda: True)      # as it is in the moment before it ends
+    assert sched.next_due(at(WED, 14, 7)) == at(WED, 14, 20)
+
+
+def test_the_real_wait_returns_as_soon_as_a_run_ends():
+    event = threading.Event()
+    threading.Timer(0.2, event.set).start()
+    started = datetime.now(timezone.utc)
+    assert worker.wait_or_wake(event, 30) is True
+    assert datetime.now(timezone.utc) - started < timedelta(seconds=5)
+    assert worker.wait_or_wake(threading.Event(), 0.05) is False
+
+
+def test_a_row_left_running_under_a_live_lease_is_swept_when_the_lease_expires(schema_url, conn, allowed):
+    """Round 5, finding 2: a worker restarted before its old run's lease expired; the row isn't swept then (the
+    run may still be going), and next_due said next week, so it stayed `running` for a week."""
+    from vending import run_lease
+
+    conn.execute("insert into agent_schedule (due_at, latest_at, mode) values (%s, %s, 'dry-run')",
+                 (at(WED, 14), at(WED, 22)))
+    held = run_lease.take(conn, deadline=3600)
+    conn.execute("update agent_run_lease set expires_at = clock_timestamp() + interval '3 minutes'")
+    sched = scheduler(schema_url, FakeAgent(schema_url))
+    tick(sched, at(WED, 14, 20))
+    assert rows(conn)[0][2] == "running"
+    wake = sched.next_due(at(WED, 14, 20))
+    assert at(WED, 14, 23) <= wake <= at(WED, 14, 23) + agent_schedule.SWEEP_MARGIN + timedelta(seconds=5)
+    # The old run's lease expires: the next tick sweeps the row, and then nothing is due till next week.
+    conn.execute("update agent_run_lease set expires_at = clock_timestamp() - interval '1 second'")
+    tick(sched, wake)
+    [(_, _, outcome, _, detail)] = rows(conn)
+    assert (outcome, detail) == ("failed", agent_schedule.STOPPED)
+    assert sched.next_due(wake) == at(WED + timedelta(days=7), 14)
+    run_lease.give_back(conn, held.token)
+
+
+def test_two_windows_with_the_same_start_are_one_run_with_the_later_cutoff(schema_url, conn, allowed):
+    """Round 5, finding 3: `wed 14:00-14:30, wed 14:00-15:00` recorded 14:00 as missed, then couldn't claim it."""
+    same = Schedule("dry-run", (Entry(2, time(14), time(14, 30)), Entry(2, time(14), time(15))), date(2026, 12, 2))
+    assert agent_schedule.due_times(same, at(WED, 14, 40)) == [(at(WED, 14), at(WED, 15))]
+    agent = FakeAgent(schema_url)
+    tick(scheduler(schema_url, agent, same), at(WED, 14, 40))
+    assert len(agent.calls) == 1
+    [(due, _, outcome, _, _)] = rows(conn)
+    assert (due, outcome) == (at(WED, 14), "skipped")
+    assert conn.execute("select latest_at from agent_schedule").fetchone()[0] == at(WED, 15)

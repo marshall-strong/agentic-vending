@@ -56,9 +56,12 @@ keyed by the time, so it runs at most once whatever restarts or replicas there a
   (`ABANDONED`) and the worker's lock is given back, so the schedule goes on. `next_due` wakes the
   worker's loop for that deadline. If its thread ends later, it doesn't overwrite that. A thread that
   can't be started is a `failed` row too. Every database statement of the scheduler has `DB_TIMEOUT`
-  (statement and lock).
+  (statement and lock). When a run's thread ends, it wakes the worker's loop (`Scheduler.run_ended`), so a
+  second time due that day, before the next sync, isn't missed.
 - A row left `running` by a worker that stopped mid-run is marked `failed` by the next worker that
-  takes the lock, once no agent run holds the run lease. It is never run again.
+  takes the lock, once no agent run holds the run lease. While a lease holds it, `next_due` wakes the worker
+  just after the lease expires (`SWEEP_MARGIN`) to try again. It is never run again.
+- Two entries with the same start are one time, with the later latest start.
 
 `/health` shows what this worker runs (`dry-run`), its `AGENT_SCHEDULE_MODE`, that live scheduling
 isn't enabled, the next time and the last scheduled run's outcome (never its detail, which can hold an
@@ -106,6 +109,8 @@ LOOKBACK = timedelta(days=7)
 LATE_AFTER = timedelta(minutes=10)
 # The wait before trying again after the database failed or another worker held the lock.
 RETRY = timedelta(minutes=1)
+# After a row left `running` under a live run lease, how long past the lease's expiry to come back and sweep it.
+SWEEP_MARGIN = timedelta(seconds=30)
 # A row still `running` this long after it was claimed is stuck: past the agent's deadline
 # (`vending.agent.RUN_DEADLINE`, 1 hour) and the most its run lease can last past it (`run_lease.GRACE`).
 # The worker lets go of a run that hasn't ended by then. A test keeps them in step.
@@ -227,18 +232,20 @@ def _instant(day: date, clock: time) -> datetime:
 
 
 def times_between(sched: Schedule, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
-    """(due, latest start) of each time in the schedule due from `start` to `end`, both included, oldest first."""
+    """(due, latest start) of each time in the schedule due from `start` to `end`, both included, oldest first.
+    Entries that start at the same instant (`wed 14:00-14:30, wed 14:00-15:00`) are one time, with the later
+    latest start: a time has one row, so two would record each other as missed."""
     day = max(start.astimezone(EASTERN).date() - timedelta(days=1), sched.first_day)
     last = end.astimezone(EASTERN).date() + timedelta(days=1)
-    found = set()
+    found: dict[datetime, datetime] = {}
     while day <= last:
         for e in sched.entries:
             if day.weekday() == e.weekday:
                 due = _instant(day, e.due)
                 if start <= due <= end:
-                    found.add((due, max(due, _instant(day, e.latest))))
+                    found[due] = max(found.get(due, due), _instant(day, e.latest))
         day += timedelta(days=1)
-    return sorted(found)
+    return sorted(found.items())
 
 
 def due_times(sched: Schedule, now: datetime) -> list[tuple[datetime, datetime]]:
@@ -356,6 +363,7 @@ class Running:
         self.thread = None
         self.ended = False          # its ending is decided: by the thread, or by the worker letting it go
         self.abandoned = False
+        self.over = False           # its thread has given everything back and is about to end
         self._guard = threading.Lock()
         self._released = False
 
@@ -418,6 +426,12 @@ class Scheduler:
         self.loaded = False                     # whether the rows were read since the worker started
         self.last: dict | None = None
         self.unfinished: Ending | None = None   # a run's ending whose write failed: written before anything else
+        # When to come back and sweep a row left `running` while an agent run held the run lease (by this
+        # worker's clock), or None when there is no such row.
+        self.sweep_at: datetime | None = None
+        # Set when a run's thread ends, so the worker's loop wakes and asks `next_due` again: a second time that
+        # day may be due before the next sync. The loop clears it.
+        self.run_ended = threading.Event()
 
     @property
     def mode(self) -> str:
@@ -433,16 +447,20 @@ class Scheduler:
     def next_due(self, now: datetime) -> datetime:
         """When the worker's loop should call `tick` next. While a run goes on, its supervisor's deadline (just
         past `STUCK_AFTER`), so a stuck run is let go; else now when a time is due with no row yet (or the rows
-        haven't been read, or an ending is still to be written); else the next time."""
+        haven't been read, or an ending is still to be written); else the next time, or sooner the expiry of a run
+        lease that kept a row left `running` from being swept."""
         if self.not_before is not None and now < self.not_before:
             return self.not_before
-        if self.thread is not None and self.thread.is_alive() and self.running is not None:
+        if self._going():
             # Already past it (a round of the worker ran long): now, never a time in the past.
             return max(now, self.running.started + STUCK_AFTER + timedelta(seconds=1))
         if self.unfinished is not None or not self.loaded \
                 or any(d not in self.known for d, _ in due_times(self.sched, now)):
             return now
-        return next_time(self.sched, now)
+        upcoming = next_time(self.sched, now)
+        if self.sweep_at is not None:
+            return max(now, min(upcoming, self.sweep_at))
+        return upcoming
 
     def public(self) -> dict:
         """What `/health` shows: what this worker runs, its setting, that live scheduling isn't enabled, the next
@@ -454,7 +472,7 @@ class Scheduler:
         """Record what is due, and start the run if one may start. Never raises."""
         if self.not_before is not None and now < self.not_before:
             return
-        if self.thread is not None and self.thread.is_alive():
+        if self._going():
             if self.running is None or now - self.running.started <= STUCK_AFTER or not self._abandon():
                 self.not_before = now + RETRY
                 return
@@ -468,6 +486,12 @@ class Scheduler:
 
             self.not_before = now + RETRY
             self.log(f"agent schedule: {_describe(error)}; trying again in a minute")
+
+    def _going(self) -> bool:
+        """Whether a run's thread is still going. Not once it has given back the lock: its thread may still be
+        alive a moment after waking the loop (`run_ended`), and that must not read as a run still going."""
+        return (self.thread is not None and self.thread.is_alive()
+                and (self.running is None or not self.running.over))
 
     def _abandon(self) -> bool:
         """Let go of a run that hasn't ended `STUCK_AFTER` after it started: record it as failed and give
@@ -543,6 +567,15 @@ class Scheduler:
                              (STOPPED,)).fetchall()
         for (due,) in swept:
             self.log(f"agent schedule: the run due {_eastern(due)} was cut off when a worker stopped; recorded as failed")
+        # A row still `running` now (this worker has no run going: `tick` doesn't come here while one does) waits
+        # for the run lease that kept it: come back just after the lease expires, not next week.
+        left = conn.execute("select (select max(expires_at) from agent_run_lease where token is not null)"
+                            " - clock_timestamp() where exists (select from agent_schedule where outcome = 'running')"
+                            ).fetchone()
+        if left is None or left[0] is None:
+            self.sweep_at = None
+        else:
+            self.sweep_at = self.clock() + max(left[0], timedelta(0)) + SWEEP_MARGIN
         # The database's clock, read after the locks: a worker's clock that runs slow or fast never decides.
         now = self.db_clock(conn)
         due = due_times(self.sched, now)
@@ -658,6 +691,8 @@ class Scheduler:
                          "trying again in a minute")
         finally:
             running.let_go()
+            running.over = True
+            self.run_ended.set()
 
 
 class Invalid:
