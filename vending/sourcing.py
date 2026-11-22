@@ -29,7 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
@@ -44,6 +44,8 @@ if TYPE_CHECKING:
 
 RANKS = ("primary", "alternate")
 STALE_AFTER = timedelta(days=7)
+# `checked_by` on a price taken from a purchase receipt (`vending.receipt_prices`), not seen by a person.
+RECEIPT_BY = "receipt"
 # The team's rule of thumb (price list, 11 Nov): max = price + 15%, rounded up to 50 cents.
 DEFAULT_MARKUP = Decimal("1.15")
 MAX_ROUNDING_CENTS = 50
@@ -78,6 +80,11 @@ class Option:
     def is_stale(self, now: datetime) -> bool:
         return now - self.checked_at > STALE_AFTER
 
+    @property
+    def from_receipt(self) -> bool:
+        """The price is what the worker paid on a receipt (`vending.receipt_prices`), not one a person saw."""
+        return self.checked_by == RECEIPT_BY
+
 
 def cents(text: str, what: str) -> int:
     """Exact cents from a dollar amount like "34.99". Refuses anything inexact or not positive."""
@@ -88,6 +95,12 @@ def cents(text: str, what: str) -> int:
     if value <= 0:
         raise SourcingError(f"{what} must be above $0.00, not {text!r}")
     return value
+
+
+def day(moment: datetime) -> str:
+    """The Eastern date of `moment`, like 2026-11-27. Connections return UTC, so 11:30 PM ET would read as the
+    next day without this."""
+    return f"{moment.astimezone(EASTERN):%Y-%m-%d}"
 
 
 def default_max(expected_cents: int) -> int:
@@ -131,7 +144,9 @@ def problems(o: Option, now: datetime) -> list[str]:
         found.append(f"units per pack must be 1 to {planner.MAX_UNITS_PER_PACK}, not {o.units_per_pack}")
     if not 0 < o.max_cents <= planner.MAX_PRICE_PER_PACK_CENTS:
         found.append(f"max must be above $0.00 and at most ${planner.MAX_PRICE_PER_PACK_CENTS // 100}.00 a pack")
-    if o.expected_cents is not None and o.expected_cents > o.max_cents:
+    if o.expected_cents is not None and o.expected_cents <= 0:
+        found.append("price must be above $0.00")
+    elif o.expected_cents is not None and o.expected_cents > o.max_cents:
         found.append(f"max {_money(o.max_cents)} is below the price {_money(o.expected_cents)}, "
                      "so the worker couldn't buy it")
     if o.pack_description is not None and not 1 <= len(o.pack_description) <= planner.MAX_PACK_DESCRIPTION:
@@ -139,7 +154,7 @@ def problems(o: Option, now: datetime) -> list[str]:
     if not o.checked_by.strip():
         found.append("--by needs your name")
     if o.checked_at > now + timedelta(minutes=5):
-        found.append(f"checked {o.checked_at:%Y-%m-%d} is in the future")
+        found.append(f"checked {day(o.checked_at)} is in the future")
     return found
 
 
@@ -222,6 +237,84 @@ def set_option(conn: psycopg.Connection, o: Option, now: datetime | None = None)
              f"sourcing {o.sku} {o.rank} {outcome}: {describe(o)}"
              + (f" (was {describe(before)})" if before else ""))
     return outcome
+
+
+def import_rows(conn: psycopg.Connection, rows: list[Option], now: datetime | None = None) -> list[str]:
+    """Add or replace these rows, all or nothing. Returns each row's "added" or "replaced", in order.
+
+    Every SKU in the file, and every existing row of it, is locked first (`lock_skus`), as a receipt refresh
+    locks them. Writing them in the file's order instead could hold one row a refresh or another import wants
+    while waiting on another that one holds, even a row neither has inserted yet."""
+    unknown = sorted({o.sku for o in rows} - in_catalog(conn, [o.sku for o in rows]))
+    if unknown:
+        raise SourcingError(f"nothing imported. Not in our catalog copy, or delisted: {', '.join(unknown)}")
+    with conn.transaction():
+        lock_skus(conn, {o.sku for o in rows})
+        return [set_option(conn, o, now) for o in rows]
+
+
+def lock_skus(conn: psycopg.Connection, skus: set[str]) -> None:
+    """Lock every row of these SKUs in one statement, in (sku, rank) order, until the caller's transaction ends.
+
+    Everything that writes several rows at once (`import_rows`, `vending.receipt_prices.apply`) locks them this
+    way before touching any, so two of them wait for each other instead of deadlocking.
+
+    A SKU with no row yet has nothing to lock, and two imports inserting the same new rows in opposite orders
+    would each wait on the other's insert. So each SKU first takes a transaction advisory lock, one key per SKU,
+    taken in key order: two SKUs whose keys collide share one lock, and the order is still the same for all."""
+    if skus:
+        keys = [key for (key,) in conn.execute(
+            "select distinct hashtext('sourcing:' || sku) as key from unnest(%s::text[]) as sku order by key",
+            (sorted(skus),)).fetchall()]
+        for key in keys:
+            conn.execute("select pg_advisory_xact_lock(%s)", (key,))
+        conn.execute("select 1 from sourcing_options where sku = any(%s) order by sku, rank for update",
+                     (sorted(skus),))
+
+
+def locked_row(conn: psycopg.Connection, sku: str, rank: str) -> Option | None:
+    """One row as it stands now, locked until the caller's transaction ends, so nobody changes it between
+    the caller's checks and its `set_price`. Call it inside `conn.transaction()`."""
+    return _row(conn, sku, rank, lock=True)
+
+
+def set_price(conn: psycopg.Connection, before: Option, expected_cents: int | None, checked_at: datetime,
+              checked_by: str, note: str | None, by: str, now: datetime | None = None,
+              dry_run: bool = False) -> Option:
+    """Change only a row's price and where it came from (`expected_cents`, `checked_at`, `checked_by`,
+    `note`), logged in `action_log` like `set_option`. The store, pack, max, link and description stay.
+
+    `before` is the row as the caller checked it, best read with `locked_row` in the same transaction.
+    The write happens only if the row still matches `before` in every column, so a change a person made
+    meanwhile is never undone; then it raises `SourcingError`. `dry_run` runs every check and writes nothing.
+    Returns the row as it is (or would be) after.
+    """
+    now = now or datetime.now(timezone.utc)
+    new = replace(before, expected_cents=expected_cents, checked_at=checked_at, checked_by=checked_by, note=note)
+    found = problems(new, now)
+    if not in_catalog(conn, [new.sku]):
+        found.append("not in our catalog copy, or delisted")
+    if found:
+        raise SourcingError(f"{new.sku} {new.rank}: " + "; ".join(found))
+    if dry_run:
+        return new
+    with conn.transaction():
+        changed = conn.execute(
+            "update sourcing_options set expected_cents = %s, checked_at = %s, checked_by = %s, note = %s,"
+            " updated_at = now()"
+            " where sku = %s and rank = %s and store = %s and units_per_pack = %s and max_cents = %s"
+            " and url is not distinct from %s and pack_description is not distinct from %s"
+            " and expected_cents is not distinct from %s and checked_at = %s and checked_by = %s"
+            " and note is not distinct from %s",
+            (new.expected_cents, new.checked_at, new.checked_by.strip(), new.note, before.sku, before.rank,
+             before.store, before.units_per_pack, before.max_cents, before.url, before.pack_description,
+             before.expected_cents, before.checked_at, before.checked_by, before.note)).rowcount
+        if changed != 1:
+            raise SourcingError(f"{before.sku} {before.rank}: changed since it was read; left as it is")
+        _log(conn, "sourcing.set", by,
+             {"sku": new.sku, "rank": new.rank, "new": _jsonable(new), "old": _jsonable(before)},
+             f"sourcing {new.sku} {new.rank} replaced: {describe(new)} (was {describe(before)})")
+    return new
 
 
 def remove(conn: psycopg.Connection, sku: str, rank: str, by: str) -> None:
@@ -316,12 +409,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"removed: {args.sku} {rank}")
             elif args.action == "import":
                 rows = read_csv(args.file, args.by, now)
-                unknown = sorted({o.sku for o in rows} - in_catalog(conn, [o.sku for o in rows]))
-                if unknown:
-                    raise SourcingError(f"{args.file}: nothing imported. Not in our catalog copy, or delisted: "
-                                        f"{', '.join(unknown)}")
-                with conn.transaction():   # all or nothing
-                    outcomes = [set_option(conn, o, now) for o in rows]
+                try:
+                    outcomes = import_rows(conn, rows, now)
+                except SourcingError as error:
+                    raise SourcingError(f"{args.file}: {error}") from None
                 print(f"imported {len(rows)} rows from {args.file}: {outcomes.count('added')} added, "
                       f"{outcomes.count('replaced')} replaced")
             else:
@@ -342,8 +433,9 @@ def _show(conn: psycopg.Connection, now: datetime) -> int:
         per_unit = f", {_money(int(unit.to_integral_value(rounding=ROUND_CEILING)))} a unit" if unit else ""
         age = (now - o.checked_at).days
         stale = "  STALE" if o.is_stale(now) else ""
-        print(f"{o.sku:40} {o.rank:9} {describe(o)}{per_unit}; checked {o.checked_at:%Y-%m-%d} "
-              f"({age} days ago) by {o.checked_by}{stale}")
+        source = f"from {o.note or 'a receipt'}" if o.from_receipt else f"by {o.checked_by}"
+        print(f"{o.sku:40} {o.rank:9} {describe(o)}{per_unit}; checked {day(o.checked_at)} "
+              f"({age} days ago) {source}{stale}")
         if o.url:
             print(f"{'':40} {'':9} {o.url}")
     return 0
@@ -354,6 +446,8 @@ def _from_fields(f: dict[str, str], by: str, now: datetime) -> Option:
     sku = f.get("sku", "")
     if not sku:
         raise SourcingError("sku is empty")
+    if by.strip().lower() == RECEIPT_BY:
+        raise SourcingError(f"--by {RECEIPT_BY} is kept for prices taken from receipts; give your name")
     try:
         units = int(f.get("units_per_pack", ""))
     except ValueError:
@@ -378,10 +472,11 @@ def _purchase_option(o: Option) -> planner.PurchaseOption:
                                   pack_description=o.pack_description)
 
 
-def _row(conn: psycopg.Connection, sku: str, rank: str) -> Option | None:
+def _row(conn: psycopg.Connection, sku: str, rank: str, lock: bool = False) -> Option | None:
     row = conn.execute(
         "select sku, rank, store, units_per_pack, expected_cents, max_cents, url, pack_description,"
-        " checked_at, checked_by, note from sourcing_options where sku = %s and rank = %s", (sku, rank)).fetchone()
+        " checked_at, checked_by, note from sourcing_options where sku = %s and rank = %s"
+        + (" for update" if lock else ""), (sku, rank)).fetchone()
     return None if row is None else Option(*row)
 
 
