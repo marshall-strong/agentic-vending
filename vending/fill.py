@@ -24,6 +24,10 @@ and nothing sent:
 - `no_checked_price`: a product with no sourcing row, or a primary or alternate row with no checked price.
   The request sends the alternate too, so an unchecked one is refused, not dropped: dropping it would send a
   request the person never saw. Check its price (`sourcing set SKU --alternate`) or remove it;
+- `stale_price`: a primary or alternate row for a product in the plan was checked more than a week ago
+  (`sourcing.Option.is_stale`). The planner only warns; the fill sends both to the stocker, so it refuses;
+- `settings_busy` (submit only): someone is changing `config` (the halt switch or a `config set`) as the submit
+  starts, so it refuses rather than wait, which could deadlock with the halt (see `hold_inputs`);
 - `test_opening`: the ledger's opening is the 11 Nov test opening (#215): that entry itself
   (`ledger.is_test_opening`: entry 1, dated 11 Nov in Eastern time, with its exact detail), or any opening dated
   on or before 11 Nov. Not the fall cut, which can move;
@@ -56,7 +60,9 @@ The submit needs `--hash`, the hash the preview printed, and refuses
 request (its lines, the worst-case cost and the visit fee), the picked plan's ID
 and our slots (the server's assignment), so a hash from one plan or assignment
 never sends another (`approval_hash`). It does not cover spendable cash or the
-price ceiling: those are checked again at the send, as below. Who submitted it,
+price ceiling: those are checked again at the send, as below. The cash it checks
+leaves out takings from the polls (`count_takings=False`, `planning.gather`), so
+a history backfill after the last check can't change it (round 4, finding 2). Who submitted it,
 and the plan's ID, go in `action_log` (tool `fill.submit`) with the submit's reply.
 
 The submit holds the pick, the slot assignment, the sourcing table, our catalog
@@ -125,6 +131,8 @@ INPUTS_CHANGED = "inputs_changed"
 DEVIATION = "pick_deviation"
 REQUEST_CHANGED = "request_changed"
 CANNOT_PLAN = "cannot_plan"
+SETTINGS_BUSY = "settings_busy"
+STALE_PRICE = "stale_price"
 PURPOSE = "fill"            # `purchase_submissions.purpose` for the fill's attempts
 
 
@@ -238,8 +246,26 @@ def input_refusals(checked: plan_rounds.Round, gathered: planning.Gathered) -> l
     """The checked-price and opening guards, run on what the planner was actually given: its sourcing rows and
     the opening its balance counted from. Re-reading the tables instead could pass rows the planner never used."""
     skus = {s.sku for s in checked.slots.values() if s.sku}
-    return [*_unpriced([o for o in gathered.sourcing_rows if o.sku in skus], checked),
-            *_test_opening(gathered.opening)]
+    rows = [o for o in gathered.sourcing_rows if o.sku in skus]
+    return [*_unpriced(rows, checked), *_stale(rows, checked, gathered.now), *_test_opening(gathered.opening)]
+
+
+def _stale(options: Sequence[sourcing.Option], checked: plan_rounds.Round, now: datetime) -> list[Refusal]:
+    """A refusal per primary or alternate row checked more than a week before `now` (`Option.is_stale`). The
+    planner only warns about these; the fill sends both choices to the stocker as the day-one purchase, so each
+    must be a price checked within the week (round 4, finding 3)."""
+    found = []
+    for o in options:
+        if o.expected_cents is None or not o.is_stale(now):
+            continue    # no checked price at all is `no_checked_price`'s
+        used = sorted(s.slot for s in checked.slots.values() if s.sku == o.sku)
+        found.append(Refusal(STALE_PRICE, (
+            f"{o.sku}'s {o.rank} price ({o.store}) was checked {o.checked_at:%Y-%m-%d}, {(now - o.checked_at).days} "
+            f"days ago, and the request would send it for slot{'s' if len(used) > 1 else ''} {', '.join(used)}; "
+            f"check it again and record it (python -m vending.sourcing set {o.sku}"
+            f"{' --alternate' if o.rank == 'alternate' else ''} --store ... --pack N --price P --by NAME)"),
+            used[0] if len(used) == 1 else None))
+    return found
 
 
 def _inputs_changed(conn: psycopg.Connection, gathered: planning.Gathered) -> list[Refusal]:
@@ -406,7 +432,7 @@ def preview(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
     if pick.round is None:
         return Preview(pick, None, None, tuple(own), tuple(deadline), ours=ours, late=late)
     try:
-        plan, gathered = planning.plan(conn, desired_state(pick.round), bridge, now, pool=True)
+        plan, gathered = planning.plan(conn, desired_state(pick.round), bridge, now, pool=True, count_takings=False)
     except planning.NotReady as blocked:
         return Preview(pick, None, None, tuple(own), tuple(deadline), blocked=str(blocked), ours=ours, late=late)
     own = _unique([*own, *input_refusals(pick.round, gathered)])
@@ -453,7 +479,7 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
         desired = desired_state(pick.round)
         if own:
             try:
-                plan, _ = planning.plan(conn, desired, bridge(), now, pool=True)
+                plan, _ = planning.plan(conn, desired, bridge(), now, pool=True, count_takings=False)
             except planning.NotReady:
                 raise Refused([*own, *_deadline(conn, now, late)]) from None
             raise Refused([*_merge(own, plan.refusals), *_deadline(conn, now, late)])
@@ -478,7 +504,8 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
                                 accept_deviations=accept_deviations)
 
         return submit_tool.submit_desired_state(desired, bridge, connect, now, pool=True, before_send=before_send,
-                                                before_post=before_post, purpose=PURPOSE)(conn)
+                                                before_post=before_post, purpose=PURPOSE,
+                                                count_takings=False)(conn)
 
     # The gate logs `arguments` after the action has filled in the plan's ID.
     return run_write(conn, TOOL, arguments, action)
@@ -492,21 +519,29 @@ def hold_inputs(conn: psycopg.Connection) -> None:
     (`plan_store pick`), a new slot assignment (`slots record`), a `sourcing set`, a catalog sync, a ledger entry
     (the opening, a model call's cost), a `config set` (a price ceiling) and the receipt sync's `store`, which
     takes the same advisory lock (`purchase_requests.RECEIPTS_LOCK`). The fill is run once, by a person, so a
-    sync that waits a few seconds costs nothing. The receipt lock is taken first; nothing that takes it waits on
-    the tables locked after it.
+    sync that waits a few seconds costs nothing. Of the locks this waits for, the receipt lock is taken first;
+    nothing that takes it waits on the tables locked after it.
 
     The side connection that saves and settles the attempt writes only `purchase_submissions` and
     `purchase_requests`. Neither is locked here, so it never waits on this transaction.
 
-    The write gate already holds the halt row. A halt turned on in the same instant this runs can meet the
-    config lock in a deadlock; Postgres then cancels one of the two. These locks come before anything is saved,
-    so if it cancels the fill, nothing was saved or sent."""
+    `config` is locked first, and without waiting (round 4, finding 1). The write gate already holds the halt
+    row, so a `halt on` started before this waits on that row while holding a lock on `config`. Waiting for
+    `config` here would close a deadlock, and Postgres cancelled the halt, not the fill. So if anyone is changing
+    `config` (the halt switch or a `config set`), the fill refuses (`settings_busy`) before anything is saved,
+    and the halt goes through once this transaction ends. A halt started after this lock waits for the send."""
+    try:
+        conn.execute("lock table config in share mode nowait")
+    except psycopg.errors.LockNotAvailable:
+        raise Refused([Refusal(SETTINGS_BUSY, (
+            "someone is changing settings or the halt switch right now, so nothing was saved or sent; check the "
+            "halt switch (python -m vending.halt status) and try again"))]) from None
     conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (purchase_requests.RECEIPTS_LOCK,))
     conn.execute("lock table first_fill_plans in share mode")
     conn.execute("select 1 from slot_assignment where id = 1 for share")
     # What the checks read is what the planner reads (round 2, finding 1), and what the last check reads is what
     # is sent (round 3, finding 1).
-    conn.execute("lock table sourcing_options, catalog_products, ledger_entries, config in share mode")
+    conn.execute("lock table sourcing_options, catalog_products, ledger_entries in share mode")
 
 
 def _final_check(conn: psycopg.Connection, bridge: Callable[[], Bridge], pick: Picked, ours: tuple[str, ...],

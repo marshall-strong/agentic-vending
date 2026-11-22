@@ -77,6 +77,19 @@ the ledger, `config` and the receipt sync's lock. A `plan_store pick`, a new slo
 receipt sync waits until the send is over. That is a few seconds, plus the POST. The checks also run
 again on the exact rows and opening the planner was given.
 
+The send locks `config` first, and does not wait for it. If someone is turning the halt switch on or
+off, or running `config set`, at that moment, the command refuses with `settings_busy` before it saves
+anything, and the halt goes through. Waiting there could deadlock with the halt, and Postgres then
+cancelled the halt, not the send. Check `python -m vending.halt status` and run the send again. A halt
+started after the send has its lock waits until the send is over.
+
+The balance the send checks is not quite the ledger's spendable cash. It leaves out takings, the sales
+worked out from the machine's polls, because a history backfill can change those after the last check.
+It is the opening and any later capital, plus or minus adjustments, less receipts, visit fees, model
+calls and tax remitted (`ledger.Balance.cash_without_takings_cents`). That is never more than the
+spendable cash. Before the machine opens there are no takings, so on Sun 29 Nov it is the same figure.
+The preview's "Spendable" line shows this number, and a note says how much of the takings it left out.
+
 Once the attempt is saved in `purchase_submissions`, right before the POST, the command runs the whole
 preview again: the planner over the current rows, every guard, the differences from the pick and the
 balance. The pick and our slots must be the ones it planned (`pick_changed`), the hash the approved
@@ -115,6 +128,9 @@ It refuses, with every reason and nothing sent, when:
 - a product's alternate has no checked price (`no_checked_price`). The request sends the alternate
   too, so the command refuses rather than drop it. Check its price or remove it
   (`python -m vending.sourcing remove SKU --alternate --by NAME`);
+- a product's primary or alternate price was checked more than a week ago (`stale_price`). The agent's
+  planner only warns about an old price, but the fill sends both choices to the stocker, so each must be
+  checked again (`python -m vending.sourcing set SKU [--alternate] ... --by NAME`);
 - the ledger has no opening, an opening dated after now, or the 11 Nov test opening (`test_opening`,
   #215). The test opening is told by its ledger entry (entry 1, dated 11 Nov in Eastern time, with its
   exact detail; `ledger.is_test_opening`, as in #222), or by any opening dated on or before 11 Nov. It

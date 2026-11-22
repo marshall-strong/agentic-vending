@@ -41,14 +41,14 @@ def option(sku, rank="primary", **over) -> sourcing.Option:
     base = {"COKE20": dict(store="Costco", units_per_pack=12, expected_cents=1237, max_cents=1300, url=None),
             "PICKLE": dict(store="Amazon", units_per_pack=24, expected_cents=1800, max_cents=2100,
                            url="https://www.amazon.com/dp/B000TEST")}[sku]
-    return sourcing.Option(sku=sku, rank=rank, **{**base, **over}, pack_description=None, checked_at=CHECKED,
+    return sourcing.Option(sku=sku, rank=rank, **{"checked_at": CHECKED, **base, **over}, pack_description=None,
                            checked_by="Test Checker")
 
 
-def seed(conn, fake, *, opened=OPENED, prices=("COKE20", "PICKLE")) -> int:  # noqa: F811
+def seed(conn, fake, *, opened=OPENED, prices=("COKE20", "PICKLE"), capital=60000) -> int:  # noqa: F811
     """A picked plan, our catalog copy, checked prices for `prices`, the real opening and the halt switch off."""
     if opened is not None:
-        ledger.record(conn, "opening", 60000, "opening capital", "Test Treasurer", opened)
+        ledger.record(conn, "opening", capital, "opening capital", "Test Treasurer", opened)
     set_halted(conn, False, "test")
     catalog_sync(conn, fake.client(), now=NOW, log=lambda _: None)
     for sku in prices:
@@ -876,3 +876,150 @@ def test_migration_025_gives_up_fast_rather_than_queue_behind_a_submit(schema_ur
         assert conn.execute("select count(*) from information_schema.columns where table_name ="
                             " 'purchase_submissions' and column_name = 'purpose' and table_schema = current_schema()"
                             ).fetchone() == (1,)
+
+
+# --- Sol review, round 4 --------------------------------------------------------------------------
+
+def test_a_halt_turned_on_during_the_submit_wins_and_nothing_is_sent(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Round 4, blocker 1: the write gate holds the halt row, so a `halt on` started then waits for it, holding a
+    lock on `config`. The fill's SHARE lock on `config` then closed a deadlock; Postgres cancelled the halt, the
+    flag stayed off and the fill posted. The fill now takes that lock without waiting, before it saves anything,
+    and refuses instead: the halt goes through and nothing is sent."""
+    import threading
+    import time
+
+    from vending import config
+
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    real_hold = fill.hold_inputs
+    halt: dict = {}
+    halter = open_in(*schema_url)
+    pid = halter.info.backend_pid
+
+    def turn_halt_on():
+        try:
+            set_halted(halter, True, "Test Halter")
+            halt["error"] = None
+        except psycopg.Error as error:
+            halt["error"] = type(error).__name__
+
+    thread = threading.Thread(target=turn_halt_on)
+
+    def halt_waiting_then_hold(conn):
+        thread.start()
+        deadline = time.monotonic() + 20
+        while not db.execute("select cardinality(pg_blocking_pids(%s)) > 0", (pid,)).fetchone()[0]:
+            assert time.monotonic() < deadline, "the halt never waited on the submit"
+            time.sleep(0.05)
+        real_hold(conn)
+
+    monkeypatch.setattr(fill, "hold_inputs", halt_waiting_then_hold)
+    try:
+        rc = run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter")
+    finally:
+        thread.join(30)
+        halter.close()
+    err = capsys.readouterr().err
+    assert halt == {"error": None} and config.is_halted(db)
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert "settings_busy" in err and codes(db) == ["settings_busy"]
+    assert db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
+
+
+def _takings_since_the_opening(conn):
+    """37 Coca-Colas sold at $2.50 since the opening: $92.50 of takings, by the polls."""
+    from tests.conftest import store_poll
+
+    store_poll(conn, "before", "2026-11-28T16:00:00+00:00", {COKE[0]: (250, 100)})
+    store_poll(conn, "after", "2026-11-29T12:00:00+00:00", {COKE[0]: (250, 137)})
+
+
+def test_the_fills_balance_gate_does_not_count_takings_from_the_polls(db, fake, schema_url, capsys):  # noqa: F811
+    """Round 4, major 2: the fill's balance gate counted takings worked out from the polls, which a history
+    backfill can change after the last check. It now counts only the opening, capital and adjustments less
+    receipts, visit fees, model calls and tax remitted. $100.00 of capital plus $92.50 of takings no longer
+    covers a $162.00 request."""
+    import math
+
+    seed(db, fake, capital=10000)
+    _takings_since_the_opening(db)
+    with open_in(*schema_url) as conn:
+        assert math.floor(ledger.balance(conn, NOW).spendable_cents) > 16200   # the ledger itself counts them
+        p = fill.preview(conn, fake.client(), NOW)
+    assert p.plan.cost.balance_cents == 10000
+    assert "insufficient_balance" in [r.code for r in p.refusals] and p.approval is None
+    rc = run(schema_url, fake, "--submit", "--hash", "0" * 64, "--by", "Test Submitter")
+    err = capsys.readouterr().err
+    assert (rc, len(fake.posts)) == (1, 0) and "insufficient_balance" in err
+
+
+def test_a_poll_backfilled_after_the_final_check_does_not_move_the_gate(db, fake, schema_url, capsys,  # noqa: F811
+                                                                       monkeypatch):
+    """Round 4, major 2: Sol's backfill, committed after the final check and before the POST. A poll just before
+    the opening that already reads the 37 sales moves the takings since the opening from $92.50 to nothing. The
+    fill's gate never counted them, so it reads the same before and after."""
+    seed(db, fake)
+    _takings_since_the_opening(db)
+    with open_in(*schema_url) as conn:
+        before = fill.preview(conn, fake.client(), NOW)
+    assert before.ok and before.plan.cost.balance_cents == 60000
+    real_final = fill._final_check
+
+    def checked_then_backfilled(*args, **kwargs):
+        found = real_final(*args, **kwargs)
+        from tests.conftest import store_poll
+
+        with open_in(*schema_url) as other:
+            store_poll(other, "backfill", "2026-11-28T16:59:00+00:00", {COKE[0]: (250, 137)})
+        return found
+
+    monkeypatch.setattr(fill, "_final_check", checked_then_backfilled)
+    assert run(schema_url, fake, "--submit", "--hash", before.approval, "--by", "Test Submitter") == 0
+    assert len(fake.posts) == 1
+    with open_in(*schema_url) as conn:
+        assert ledger.balance(conn, NOW).takings.cents == 0      # the backfill did move the ledger's takings
+        after = fill.preview(conn, fake.client(), NOW)
+    assert after.plan.cost.balance_cents == before.plan.cost.balance_cents == 60000
+
+
+def test_quotes_older_than_a_week_are_refused(db, fake, schema_url, capsys):  # noqa: F811
+    """Round 4, major 3: a quote over a week old was only a warning, so the fill posted on 9-day-old primary and
+    alternate prices. Each choice the stocker may use must have been checked within the week."""
+    from datetime import timedelta
+
+    seed(db, fake)
+    old = NOW - timedelta(days=9)
+    sourcing.set_option(db, option("COKE20", checked_at=old), NOW)
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", checked_at=old), NOW)
+    out, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash is None and out.count("stale_price: ") == 2
+    rc = run(schema_url, fake, "--submit", "--hash", plan_hash or "0" * 64, "--by", "Test Submitter")
+    capsys.readouterr()
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert "stale_price" in codes(db)
+
+
+def test_a_body_changed_after_the_save_is_refused_by_the_byte_check_alone(db, fake, schema_url, capsys,  # noqa: F811
+                                                                         monkeypatch):
+    """Round 4, minor 4: the earlier body test changed the pick, so other guards refused it too. Here the pick,
+    the plan and its hash stay as approved, and only the body about to be sent changes after the real save:
+    the byte comparison is the one refusal."""
+    from vending import submissions
+
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    real_save = submissions.save_sending
+
+    def saved_then_body_changed(side, saved_hash, body, *args, **kwargs):
+        row = real_save(side, saved_hash, body, *args, **kwargs)
+        body["lines"][0]["primary"]["packs"] += 1
+        return row
+
+    monkeypatch.setattr(submissions, "save_sending", saved_then_body_changed)
+    rc = run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter")
+    err = capsys.readouterr().err
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert codes(db) == ["request_changed"] and "request_changed" in err
+    [(status, detail)] = db.execute("select status, detail from purchase_submissions").fetchall()
+    assert status == "not_filed" and detail.startswith("nothing sent: ")

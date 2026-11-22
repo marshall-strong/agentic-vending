@@ -186,6 +186,15 @@ class Balance:
     def spendable_cents(self) -> Fraction:
         return self.balance_cents - self.tax_owed_cents
 
+    @property
+    def cash_without_takings_cents(self) -> Fraction:
+        """The spendable balance with no takings: opening and later capital, plus or minus adjustments, less
+        receipts, visit fees, model calls and tax remitted. Never above `spendable_cents` (takings less their
+        tax are never negative), and read from no poll, so a history backfill can't move it. The day-one fill
+        checks its request against this (`vending.fill`, round 4 of Sol's review)."""
+        return (self.opening_cents + self.capital_cents + self.adjustments_cents - self.receipts_cents
+                - self.visit_fees_cents - self.token_spend_cents - self.tax_remitted_cents)
+
 
 @dataclass(frozen=True)
 class Pnl:
