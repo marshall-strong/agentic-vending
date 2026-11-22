@@ -52,6 +52,13 @@ database clock again, still inside the transaction. A write can wait on a lock a
 holds. If 00:00 Eastern on Mon 30 Nov passes while it waits, the reset refuses with the same
 "window closed" message and nothing changes.
 
+The database checks the window too, at commit (migration 022). A pause after the last clock read, or
+a caller's transaction that commits later, can't commit the reset after 00:00 Eastern on Mon 30 Nov:
+the commit fails with "the reset window closed", and nothing changes.
+
+**The agent's notes** count from the real opening too. Until it is recorded, no run's notes carry
+over to the next run. After it, only notes from runs since the opening do (`docs/agent.md`).
+
 ## The steps
 
 1. **Migrate**, so the archive table exists. Use the owner login, as for any migration:
@@ -106,16 +113,26 @@ Then the fill request can go in.
 From 00:00 Eastern on Mon 30 Nov the command refuses. Don't edit the database by hand. What to do
 depends on how far the steps got:
 
-- **Step 3 ran, but step 4 didn't, and the fill's receipt is in:** record the real opening dated
-  before the receipt, so the fill counts. Give the time with its offset (a time without one is read
-  as UTC):
+- **Step 3 ran, but step 4 didn't, and the fill request went in:** record the real opening with a
+  time in the past. The opening's time decides what counts. Key dates counts the fill request by when
+  it was sent, and stock and spend count its receipt by the receipt's time. So choose a time:
+  - after the test activity: the last test purchase request and its receipt, and
+  - at or before the fill request was sent, which also puts it before the fill's receipt.
+
+  Find the fill request's `submitted_at` in `purchase_requests`, on the
+  [DB explorer](db-explorer.md) (read only, times in Eastern). For example, if the last test
+  purchase was on 28 Nov and the fill request went in at 20:00 on Sun 29 Nov, use 19:00. Don't use
+  a time after the request: an opening at 23:00 leaves the 20:00 fill out of Key dates. Give the
+  time with its offset (a time without one is read as UTC):
 
   ```
-  python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T23:00:00-05:00
+  python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T19:00:00-05:00
   ```
 
-  Then do step 5. The opening's date decides which receipts, visits and model calls count, so check
-  that `ledger show` lists the fill's receipt.
+  Then check:
+  - The dashboard's Key dates panel shows **Fill request sent** as done, with the fill's time. If it
+    says "no purchase request since the opening", the opening is after the request. Ask the team.
+  - Step 5. Once the receipt is in, `ledger show` lists the fill's receipt.
 - **Step 3 never ran:** the 11 Nov test opening is still the opening, so the books count from
   11 Nov. Run 2's model spend is in the balance, and the 12 Nov test receipt is in purchases and
   stock. Ask the team before anything else. A fix then is a person's decision, recorded in the

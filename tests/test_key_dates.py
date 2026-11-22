@@ -334,6 +334,27 @@ def test_with_only_the_test_opening_no_request_counts_for_the_fill_or_the_restoc
     assert check(r["first_restock_request"], "restock_request")["status"] != "done"
 
 
+def test_a_recovery_opening_must_come_before_the_fill_request(conn, page_conn, monkeypatch):
+    """Sol review of #222, round 3, finding 4: the window closed before step 4 (docs/ledger-reset.md). The fill
+    request went in at 20:00 on Sun 29 Nov. Key dates counts the fill by when it was submitted, so an opening
+    dated 23:00 hides it. One dated after the test activity and at or before the submission shows it."""
+    monkeypatch.setattr(dashboard, "lock_at", lambda: LOCK)
+    _request(conn, "TEST-28NOV", et(11, 28, 11))         # the last test purchase
+    _request(conn, "FILL", et(11, 29, 20))
+
+    def fill_check(opened_at):
+        conn.execute("delete from ledger_entries where kind = 'opening'")
+        ledger.record(conn, "opening", 60000, "opening capital", "kevin", at=opened_at)
+        snap = dashboard.snapshot(page_conn, et(11, 30, 9))
+        r = {x["key"]: x for x in snap["key_dates"]["data"]["rows"]}
+        return check(r["fill_request"], "fill_request")
+
+    hidden = fill_check(et(11, 29, 23))                  # the old runbook's example
+    assert hidden["status"] != "done" and "no purchase request since the opening" in hidden["text"]
+    shown = fill_check(et(11, 29, 19))                   # after the test purchase, before the fill
+    assert shown["status"] == "done" and shown["text"].startswith("sent Sun 29 Nov, 20:00")
+
+
 def test_after_a_rejected_fill_the_first_restock_still_counts(conn, page_conn, monkeypatch):
     # The Sunday fill was rejected, so the first request standing is Thursday's restock. A request from
     # the start on is never the fill, so it counts as this week's restock and the fill isn't done.
