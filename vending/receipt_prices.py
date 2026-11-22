@@ -19,20 +19,26 @@ drink give one price.
 The price goes into every row with the same SKU, store and pack size, primary or alternate, with
 `checked_at` set to when the worker resolved the line and `checked_by` set to `receipt`. For
 Amazon the listing must match too: the link the request asked for and the row's link must name the
-same ASIN (or, without one, be the same link). A receipt from an old listing never prices its
+same ASIN, read only from a product path (`/dp/ASIN`, `/gp/product/ASIN`) on an amazon.com host;
+any other link must be exactly the row's link. A receipt from an old listing never prices its
 replacement. The note names the request. Only the price, `checked_at`, `checked_by` and the note
-change: the row's store, pack, link, description and max stay as they were. Each row is locked
-while it is checked and written (`vending.sourcing.locked_row` and `set_price`), so a change a
-person makes at the same time is never undone. `action_log` keeps the values each change replaced.
+change: the row's store, pack, link, description and max stay as they were. `action_log` keeps the
+values each change replaced.
 
-The purchase request is locked for the whole of `apply`, so a sync storing a newer revision of its
-receipt waits until `apply` is done; `apply` never writes from a revision that is no longer stored.
+**Locks.** The purchase request is locked for the whole of `apply`, so a sync storing a newer
+revision of its receipt waits until `apply` is done; `apply` never writes from a revision that is
+no longer stored. Every sourcing row of the receipt's SKUs is then locked at once, in (sku, rank)
+order, before any is checked. Two applies whose receipts list the same products in a different
+order lock them in the same order, so they wait for each other instead of deadlocking. Each write
+also checks the row still matches what was read (`vending.sourcing.set_price`), so a change a
+person makes at the same time is never undone.
 
 **Skipped, with the reason logged** (never guessed):
 - a line the worker loaded from the closet or couldn't buy (nothing was paid);
 - a substitution: the receipt's SKU isn't the one we asked for in that choice;
 - a missing SKU, store, pack size or amount; zero packs; a pack size or units that don't add up;
 - an amount that can't be a pack price: above the most any row may hold, or under half a cent;
+- an Amazon line whose requested link isn't text;
 - no sourcing row for that SKU, store and pack size (and Amazon listing) (a person adds one first:
   we don't invent a store link or a max);
 - a pack price above the row's max (a person raises the max: the worker may pay only up to it);
@@ -42,16 +48,16 @@ receipt waits until `apply` is done; `apply` never writes from a revision that i
 
 **Kept, quietly:** a row checked after the receipt (a newer hand price wins), and a row this
 receipt already set to this price. So re-reading a receipt changes nothing, and an older receipt
-read after a newer one does nothing. A corrected receipt (same request, new amount) replaces the
-price it set.
+read after a newer one does nothing.
 
-**Taken back.** A corrected receipt can stop giving a price it gave before: the line is now
-unavailable, a substitution, or above the max. The bridge can also withdraw a fill (a rejection
-newer than the receipt, `vending.purchase_requests.store`). Then each row still priced from that
-request gets the price it would have without it: the newest price another fulfilled receipt gives
-for that row as its receipt stands now, if it is newer than the last hand price; otherwise that
-hand price, from `action_log` (the row as a person left it before receipts priced it). With
-neither, the price becomes unknown (the planner then plans with the max) until a person checks it.
+**Corrections.** A corrected receipt (same request, newer revision) replaces the price it set, but
+only while its line is still newer than the row's last hand check. If the correction moves the
+line's time back to or before that check, the hand price (from `action_log`) is put back.
+
+**Never taken back.** Only fulfilled receipts are read. A fulfilled receipt is never undone here: a
+later rejection is kept out by `vending.purchase_requests.store`, with a warning, and the prices it
+set stay. If a correction stops giving a price it gave before (the line is now unavailable or a
+substitution), the row keeps that price and `apply` says so; a person checks it.
 """
 
 from __future__ import annotations
@@ -60,9 +66,10 @@ import argparse
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from vending import planner, sourcing
 
@@ -72,8 +79,8 @@ if TYPE_CHECKING:
 BOUGHT = ("primary", "alternate")
 # The most a pack may cost in any sourcing row, in dollars. A line above it can't be a price we keep.
 MOST_PER_PACK = Decimal(planner.MAX_PRICE_PER_PACK_CENTS) / 100
-# An Amazon product link names its listing by ASIN: /dp/B0..., /gp/product/B0..., and similar.
-_ASIN = re.compile(r"/(?:dp|gp/product|gp/aw/d|o/ASIN)/([A-Z0-9]{10})(?=[/?#]|$)", re.IGNORECASE)
+# The path of an Amazon product page, which names its listing by ASIN: /dp/B0..., /Name/dp/B0..., /gp/product/B0...
+_AMAZON_PRODUCT = re.compile(r"(?:/[^/]+)?/(?:dp|gp/product)/([A-Z0-9]{10})(?:/.*)?", re.IGNORECASE)
 
 
 @dataclass
@@ -101,7 +108,7 @@ class _Paid:
 
 
 class _Rows:
-    """The sourcing rows as `apply` sees them, each locked until its write.
+    """The sourcing rows as `apply` sees them, locked until its transaction ends.
 
     For a dry run it also remembers the writes it would have made, so `apply_all --dry-run` checks each
     receipt against the rows as the receipts before it would have left them, as the real run does."""
@@ -110,6 +117,13 @@ class _Rows:
         self.dry_run = dry_run
         self.written: dict[tuple[str, str], sourcing.Option] = {}
         self.hand: dict[tuple[str, str], sourcing.Option] = {}    # a hand row a dry-run write replaced
+
+    @staticmethod
+    def lock(conn: psycopg.Connection, skus: set[str]) -> None:
+        """Lock every row of these SKUs in one statement, in (sku, rank) order, before any is checked."""
+        if skus:
+            conn.execute("select 1 from sourcing_options where sku = any(%s) order by sku, rank for update",
+                         (sorted(skus),))
 
     def locked(self, conn: psycopg.Connection, sku: str, rank: str) -> sourcing.Option | None:
         return self.written.get((sku, rank)) or sourcing.locked_row(conn, sku, rank)
@@ -123,13 +137,18 @@ class _Rows:
             self.written[(o.sku, o.rank)] = new
         return new
 
-    def priced_by(self, conn: psycopg.Connection, request_id: str) -> list[tuple[str, str]]:
-        """Rows that may still be priced from `request_id`. The caller checks each again, locked."""
+    def still_from(self, conn: psycopg.Connection, request_id: str) -> dict[tuple[str, str], int | None]:
+        """Rows whose price is still from `request_id`, with that price. Read only: nothing is locked."""
         prefix = _prefix(request_id)
-        stored = conn.execute(
-            "select sku, rank from sourcing_options where checked_by = %s and left(note, %s) = %s",
-            (sourcing.RECEIPT_BY, len(prefix), prefix)).fetchall()
-        return sorted({*map(tuple, stored), *self.written})
+        found = {(sku, rank): cents for sku, rank, cents in conn.execute(
+            "select sku, rank, expected_cents from sourcing_options where checked_by = %s and left(note, %s) = %s",
+            (sourcing.RECEIPT_BY, len(prefix), prefix))}
+        for key, o in self.written.items():
+            if from_this_receipt(o, request_id):
+                found[key] = o.expected_cents
+            else:
+                found.pop(key, None)
+        return found
 
 
 def note_for(request_id: str, paid: _Paid) -> str:
@@ -142,21 +161,32 @@ def from_this_receipt(o: sourcing.Option, request_id: str) -> bool:
     return o.from_receipt and (o.note or "").startswith(_prefix(request_id))
 
 
-def listing(url: str | None) -> tuple[str, str] | None:
-    """Which Amazon listing a link names: its ASIN when it has one, else the link as stored."""
-    if not url:
+def listing(url: object) -> tuple[str, str] | None:
+    """Which Amazon listing a link names: its ASIN when it is an amazon.com product page, else the link as stored.
+
+    The ASIN is read only from the path of an http(s) link on amazon.com or one of its subdomains, so a search
+    link (`/s?k=/dp/B0...`) or another site's `/dp/` path is compared as the whole link."""
+    if not isinstance(url, str) or not url.strip():
         return None
-    found = _ASIN.search(url)
-    return ("asin", found.group(1).upper()) if found else ("url", url.strip())
+    text = url.strip()
+    try:
+        parts = urlsplit(text)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return ("url", text)
+    if parts.scheme.lower() in ("http", "https") and (host == "amazon.com" or host.endswith(".amazon.com")):
+        found = _AMAZON_PRODUCT.fullmatch(parts.path)
+        if found:
+            return ("asin", found.group(1).upper())
+    return ("url", text)
 
 
 def apply(conn: psycopg.Connection, request_id: str, now: datetime | None = None, dry_run: bool = False,
           rows: _Rows | None = None) -> Applied:
-    """Refresh sourcing prices from one request's stored receipt lines. Safe to call again.
+    """Refresh sourcing prices from one fulfilled request's stored receipt lines. Safe to call again.
 
-    A fulfilled request prices rows; a rejected one (a withdrawn fill) only takes back the prices it set. A dry
-    run makes the same checks and writes nothing, so it says what the write would do. `rows` carries a dry run's
-    writes from one request to the next (`apply_all`)."""
+    A dry run makes the same checks and writes nothing, so it says what the write would do. `rows` carries a dry
+    run's writes from one request to the next (`apply_all`)."""
     now = now or datetime.now(timezone.utc)
     rows = rows or _Rows(dry_run)
     result = Applied()
@@ -164,22 +194,27 @@ def apply(conn: psycopg.Connection, request_id: str, now: datetime | None = None
         # Locked until this apply ends, so a newer revision of the receipt can't be stored while it runs.
         status = conn.execute("select status from purchase_requests where request_id = %s for update",
                               (request_id,)).fetchone()
-        if status is None or status[0] not in ("fulfilled", "rejected"):
+        if status is None or status[0] != "fulfilled":
             return result
-        confirmed: set[tuple[str, str]] = set()     # (sku, rank) rows this receipt still prices
-        if status[0] == "fulfilled":
-            for paid in _paid_groups(conn, request_id, result).values():
-                _apply_group(conn, request_id, paid, now, rows, result, confirmed)
-        _take_back(conn, request_id, now, rows, result, confirmed)
+        groups = list(_paid_groups(conn, request_id, result).values())
+        rows.lock(conn, {paid.sku for paid in groups})
+        seen: set[tuple[str, str]] = set()     # (sku, rank) rows this receipt checked
+        for paid in groups:
+            _apply_group(conn, request_id, paid, now, rows, result, seen)
+        for (sku, rank), cents in sorted(rows.still_from(conn, request_id).items()):
+            if (sku, rank) not in seen:
+                result.skipped.append(
+                    f"{sku} {rank}: still {_price_of(cents)} from {request_id}, but its receipt as stored now gives "
+                    "no price for that row; left as it is. A person can check it (python -m vending.sourcing set)")
     return result
 
 
 def apply_all(conn: psycopg.Connection, now: datetime | None = None, dry_run: bool = False,
               log=print) -> Applied:
-    """`apply` for every fulfilled or withdrawn request, oldest first, logging each sentence."""
+    """`apply` for every fulfilled request, oldest first, logging each sentence."""
     total, rows = Applied(), _Rows(dry_run)
     for (request_id,) in conn.execute(
-            "select request_id from purchase_requests where status in ('fulfilled', 'rejected')"
+            "select request_id from purchase_requests where status = 'fulfilled'"
             " order by fulfilled_at nulls first, request_id").fetchall():
         one = apply(conn, request_id, now, dry_run, rows)
         for kind in ("updated", "kept", "skipped"):
@@ -213,7 +248,14 @@ def _paid_groups(conn: psycopg.Connection, request_id: str, result: Applied) -> 
         if why:
             result.skipped.append(f"{request_id} line {line_no}: no price taken: {why}")
             continue
-        named = listing(asked[outcome].get("url")) if store == "Amazon" else None
+        named = None
+        if store == "Amazon":
+            url = asked[outcome].get("url")
+            if url is not None and not isinstance(url, str):
+                result.skipped.append(f"{request_id} line {line_no}: no price taken: the request's Amazon link is "
+                                      f"{url!r}, not a link")
+                continue
+            named = listing(url)
         paid = groups.setdefault((sku, store, units_per_pack, named), _Paid(sku, store, units_per_pack, named))
         paid.packs += packs
         paid.total += total
@@ -263,7 +305,7 @@ def _cents(paid: _Paid) -> int:
 
 
 def _apply_group(conn: psycopg.Connection, request_id: str, paid: _Paid, now: datetime, rows: _Rows,
-                 result: Applied, confirmed: set[tuple[str, str]]) -> None:
+                 result: Applied, seen: set[tuple[str, str]]) -> None:
     lines = ", ".join(str(n) for n in paid.lines)
     cents = _cents(paid)
     if cents <= 0:
@@ -278,22 +320,25 @@ def _apply_group(conn: psycopg.Connection, request_id: str, paid: _Paid, now: da
             f"{request_id}: paid {_money(cents)} a pack for {where}, but the sourcing table has no row for that "
             f"{what}; add one with python -m vending.sourcing set {paid.sku} ... --by NAME")
         return
-    for seen in candidates:
-        # Every check below is on the row as it stands, locked until the write, never on `seen`.
+    for candidate in candidates:
+        seen.add((candidate.sku, candidate.rank))
+        # Every check below is on the row as it stands, locked since `apply` began, never on `candidate`.
         with conn.transaction():
-            o = rows.locked(conn, seen.sku, seen.rank)
+            o = rows.locked(conn, candidate.sku, candidate.rank)
             if o is None or not _matches(o, paid):
-                result.kept.append(f"{seen.sku} {seen.rank}: changed while {request_id} was read; left as it is")
+                result.kept.append(f"{candidate.sku} {candidate.rank}: changed while {request_id} was read; "
+                                   "left as it is")
                 continue
             mine = from_this_receipt(o, request_id)
             if mine and o.checked_at == paid.at and o.expected_cents == cents:
-                confirmed.add((o.sku, o.rank))
                 result.kept.append(f"{o.sku} {o.rank}: already {_money(cents)} from {request_id}")
                 continue
             # A price this request set is replaced by its correction. Any other wins if it's newer.
             if not mine and o.checked_at >= paid.at:
                 result.kept.append(f"{o.sku} {o.rank}: kept {_price(o)} checked {sourcing.day(o.checked_at)}"
                                    f" by {o.checked_by}, newer than {request_id}")
+                continue
+            if mine and paid.at < o.checked_at and _put_back_hand(conn, request_id, o, paid, now, rows, result):
                 continue
             if cents > o.max_cents:
                 result.skipped.append(
@@ -305,64 +350,27 @@ def _apply_group(conn: psycopg.Connection, request_id: str, paid: _Paid, now: da
             except sourcing.SourcingError as error:
                 result.skipped.append(f"{request_id}: {where}: no price taken: {error}")
                 continue
-            confirmed.add((o.sku, o.rank))
             result.updated.append(f"{o.sku} {o.rank}: {_money(cents)} a pack from {request_id} "
                                   f"(was {_price(o)}, checked {sourcing.day(o.checked_at)})")
 
 
-def _take_back(conn: psycopg.Connection, request_id: str, now: datetime, rows: _Rows, result: Applied,
-               confirmed: set[tuple[str, str]]) -> None:
-    """Rows still priced from this request that its receipt, as now stored, no longer prices."""
-    for sku, rank in rows.priced_by(conn, request_id):
-        if (sku, rank) in confirmed:
-            continue
-        with conn.transaction():
-            o = rows.locked(conn, sku, rank)
-            if o is None or not from_this_receipt(o, request_id):
-                continue
-            instead = _without(conn, o, request_id, now, rows)
-            if instead is not None:
-                cents, at, by, note = instead
-                source = f"from {note.split(':')[0]}" if by == sourcing.RECEIPT_BY else f"by {by}"
-                said = f"put back {_price_of(cents)} checked {sourcing.day(at)} {source}"
-            else:
-                cents, at, by, note = None, o.checked_at, sourcing.RECEIPT_BY, \
-                    f"receipt {request_id} taken back: price unknown until a person checks it"
-                said = "price unknown until a person checks it (python -m vending.sourcing set)"
-            try:
-                rows.set_price(conn, o, cents, at, by, note, now)
-            except sourcing.SourcingError as error:
-                result.skipped.append(f"{request_id}: {sku} {rank}: its receipt no longer gives "
-                                      f"{_price(o)}, but it can't be taken back: {error}")
-                continue
-            result.updated.append(f"{sku} {rank}: the receipt of {request_id} no longer gives {_price(o)}; {said}")
-
-
-def _without(conn: psycopg.Connection, o: sourcing.Option, request_id: str, now: datetime, rows: _Rows) \
-        -> tuple[int | None, datetime, str, str | None] | None:
-    """The row's price if `request_id` had never priced it: (cents, checked_at, checked_by, note), or None.
-
-    That is the newest price another fulfilled receipt gives this row as that receipt is stored now, when it is
-    newer than the last hand price; otherwise the last hand price. Receipts are recomputed, never read from
-    `action_log`, so a receipt corrected since it last priced the row gives its corrected price."""
+def _put_back_hand(conn: psycopg.Connection, request_id: str, o: sourcing.Option, paid: _Paid, now: datetime,
+                   rows: _Rows, result: Applied) -> bool:
+    """A correction moved this receipt's time back. If the row's last hand check is now as new or newer, put
+    that hand price back and return True; otherwise False, and the correction applies as usual."""
     hand = _hand_price(conn, o, rows)
-    best: tuple[datetime, int, str] | None = None
-    for (other,) in conn.execute(
-            "select r.request_id from purchase_requests r"
-            " where r.status = 'fulfilled' and r.request_id <> %s"
-            " and exists (select 1 from purchase_lines l where l.request_id = r.request_id and l.sku = %s)"
-            " order by r.fulfilled_at nulls first, r.request_id", (request_id, o.sku)).fetchall():
-        for paid in _paid_groups(conn, other, Applied()).values():
-            cents = _cents(paid) if _matches(o, paid) else 0
-            if not 0 < cents <= o.max_cents or paid.at > now + timedelta(minutes=5):
-                continue
-            if hand is not None and paid.at <= hand[1]:
-                continue        # the hand price is newer: this receipt never priced the row
-            if best is None or paid.at > best[0]:     # ties go to the first applied, as in `apply_all`
-                best = (paid.at, cents, note_for(other, paid))
-    if best is not None:
-        return best[1], best[0], sourcing.RECEIPT_BY, best[2]
-    return hand
+    if hand is None or hand[1] < paid.at:
+        return False
+    cents, at, by, note = hand
+    try:
+        rows.set_price(conn, o, cents, at, by, note, now)
+    except sourcing.SourcingError as error:
+        result.skipped.append(f"{o.sku} {o.rank}: the corrected receipt of {request_id} is dated before {by}'s "
+                              f"check of {_price_of(cents)}, but that price can't be put back: {error}")
+        return True
+    result.updated.append(f"{o.sku} {o.rank}: put back {_price_of(cents)} checked {sourcing.day(at)} by {by}, "
+                          f"newer than the corrected receipt of {request_id} (was {_price(o)})")
+    return True
 
 
 def _hand_price(conn: psycopg.Connection, o: sourcing.Option, rows: _Rows) \

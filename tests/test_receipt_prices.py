@@ -254,52 +254,8 @@ def test_a_late_older_answer_does_not_undo_a_corrected_price(coke):
     sync(coke, FakeBridge({"r1": late}), now=NOW, log=said.append)
     assert row(coke).expected_cents == 1299
     assert any("older than the one stored" in line for line in said), said
-
-
-def test_a_correction_that_withdraws_the_purchase_puts_back_the_price_before_it(coke):
-    """Review finding 3: the only purchase line becomes unavailable. The price that receipt set must not stay."""
-    checked = NOW - timedelta(days=9)
-    table_row(coke, checked)
-    fill(coke)
-    receipt_prices.apply(coke, "r1", NOW)
-    store(coke, "r1", fulfilled("r1", receipt(total_paid="11.99")), NOW)     # a correction first
-    receipt_prices.apply(coke, "r1", NOW)
-    assert row(coke).expected_cents == 1199
-    store(coke, "r1", fulfilled("r1", receipt(outcome="unavailable", packs_bought=0, units_bought=0,
-                                              total_paid=None)), NOW)
-    dry = receipt_prices.apply(coke, "r1", NOW, dry_run=True)
-    assert row(coke).expected_cents == 1199
-    applied = receipt_prices.apply(coke, "r1", NOW)
-    assert applied == dry and len(applied.updated) == 1 and "put back $11.49" in applied.updated[0], applied
-    o = row(coke)
-    assert (o.expected_cents, o.checked_at, o.checked_by, o.note) == (1149, checked, "Kevin", "15 Nov check")
-    assert receipt_prices.apply(coke, "r1", NOW) == receipt_prices.Applied()        # and it stays put back
-
-
-def test_a_withdrawn_receipt_puts_back_an_earlier_receipts_price(coke):
-    table_row(coke, NOW - timedelta(days=9))
-    fill(coke, "r0", receipt(total_paid="12.10", resolved_at="2026-11-05T16:00:00Z"))
-    fill(coke, "r1")
-    receipt_prices.apply(coke, "r0", NOW)
-    receipt_prices.apply(coke, "r1", NOW)
-    store(coke, "r1", fulfilled("r1", receipt(sku="PEPSI20")), NOW)     # now a substitution: no COKE20 price
-    receipt_prices.apply(coke, "r1", NOW)
-    o = row(coke)
-    assert (o.expected_cents, o.checked_by) == (1210, "receipt") and o.note.startswith("receipt r0:")
-
-
-def test_a_withdrawn_receipt_with_no_earlier_price_on_record_leaves_the_price_unknown(coke):
-    table_row(coke, NOW - timedelta(days=9))
-    fill(coke)
-    # A receipt price with no action_log entry behind it, so there is nothing to put back.
-    coke.execute("update sourcing_options set expected_cents = 1237, checked_at = %s, checked_by = 'receipt',"
-                 " note = 'receipt r1: paid $12.37 for 1 pack (line 0)'", (RESOLVED,))
-    store(coke, "r1", fulfilled("r1", receipt(outcome="unavailable", packs_bought=0, units_bought=0,
-                                              total_paid=None)), NOW)
-    applied = receipt_prices.apply(coke, "r1", NOW)
-    o = row(coke)
-    assert o.expected_cents is None and o.max_cents == 1350 and "price unknown" in applied.updated[0], applied
-    assert not o.note.startswith("receipt r1:")
+    sync(coke, FakeBridge({"r1": late}), now=NOW + timedelta(hours=1), log=said.append)
+    assert sum("older than the one stored" in line for line in said) == 1, said      # named once
 
 
 @pytest.mark.parametrize("amount", ["1e30", "0.001", "1e1000000", "1e-20000"],
@@ -326,14 +282,14 @@ def test_a_database_error_while_pricing_one_receipt_is_isolated_and_both_receipt
     table_row(coke, NOW - timedelta(days=9))
     submit(coke, "r1", days_ago=3)
     submit(coke, "r2", days_ago=2)
-    real = receipt_prices._take_back
+    real = receipt_prices._apply_group
 
     def failing(conn, request_id, *rest):
         real(conn, request_id, *rest)
         if request_id == "r1":
             conn.execute("select 1 / 0")          # after r1's price was written: it must be rolled back
 
-    monkeypatch.setattr(receipt_prices, "_take_back", failing)
+    monkeypatch.setattr(receipt_prices, "_apply_group", failing)
     said: list[str] = []
     report = sync(coke, FakeBridge({
         "r1": fulfilled("r1", receipt(total_paid="12.10", resolved_at="2026-11-06T16:00:00Z")),
@@ -437,41 +393,6 @@ def test_a_paused_apply_does_not_put_back_a_price_a_later_sync_corrected(coke, s
     assert o.expected_cents == 1299 and o.note.startswith("receipt r1: paid $12.99"), o
 
 
-def test_a_withdrawn_receipt_puts_back_the_earlier_receipt_as_it_now_stands(coke):
-    """Round 2, finding 3: r0's $12.10 is corrected to $11.95 while r1's newer $12.37 owns the row. Withdrawing r1
-    must give $11.95, from r0's receipt as stored now, not the $12.10 in action_log."""
-    table_row(coke, NOW - timedelta(days=9))
-    fill(coke, "r0", receipt(total_paid="12.10", resolved_at="2026-11-05T16:00:00Z"))
-    fill(coke, "r1")
-    receipt_prices.apply(coke, "r0", NOW)
-    receipt_prices.apply(coke, "r1", NOW)
-    store(coke, "r0", fulfilled("r0", receipt(total_paid="11.95", resolved_at="2026-11-05T16:00:00Z"),
-                                updated_at="2026-11-08T09:00:00Z"), NOW)
-    assert receipt_prices.apply(coke, "r0", NOW).updated == []          # r1 is newer and keeps the row
-    store(coke, "r1", fulfilled("r1", receipt(outcome="unavailable", packs_bought=0, units_bought=0, total_paid=None),
-                                updated_at="2026-11-08T10:00:00Z"), NOW)
-    applied = receipt_prices.apply(coke, "r1", NOW)
-    o = row(coke)
-    assert (o.expected_cents, o.checked_at, o.checked_by) == (1195, datetime(2026, 11, 5, 16, tzinfo=timezone.utc),
-                                                              "receipt"), applied
-    assert o.note.startswith("receipt r0: paid $11.95") and "put back $11.95" in applied.updated[0]
-    assert receipt_prices.apply(coke, "r0", NOW).updated == []          # and r0 agrees: nothing to change
-
-
-def test_a_withdrawn_receipt_puts_back_a_hand_price_newer_than_an_earlier_receipt(coke):
-    """The hand price was checked after r0, so r0 never priced the row. Withdrawing r1 gives the hand price."""
-    checked = datetime(2026, 11, 6, 12, tzinfo=timezone.utc)
-    table_row(coke, checked)
-    fill(coke, "r0", receipt(total_paid="12.10", resolved_at="2026-11-05T16:00:00Z"))
-    fill(coke, "r1")
-    receipt_prices.apply(coke, "r0", NOW)
-    receipt_prices.apply(coke, "r1", NOW)
-    store(coke, "r1", fulfilled("r1", receipt(sku="PEPSI20"), updated_at="2026-11-08T10:00:00Z"), NOW)
-    receipt_prices.apply(coke, "r1", NOW)
-    o = row(coke)
-    assert (o.expected_cents, o.checked_at, o.checked_by, o.note) == (1149, checked, "Kevin", "15 Nov check")
-
-
 LISTING_A = "https://www.amazon.com/dp/B000000AAA"
 LISTING_B = "https://www.amazon.com/dp/B000000BBB"
 
@@ -488,7 +409,15 @@ def amazon_fill(conn, request_id="r1", url=LISTING_A):
     (LISTING_A, False),
     (LISTING_B, True),
     ("https://www.amazon.com/Coca-Cola-Bottles/dp/B000000BBB?th=1", True),
-], ids=["another listing", "this listing", "this listing, another link"])
+    ("https://www.amazon.com/gp/product/B000000BBB/ref=ppx", True),
+    # Round 3, finding 6: an ASIN only from a product path on an amazon.com host.
+    ("https://www.amazon.com/s?k=/dp/B000000BBB", False),
+    ("https://www.amazon.com/s?k=x#/dp/B000000BBB", False),
+    ("https://example.com/dp/B000000BBB", False),
+    ("https://www.amazon.com.example.com/dp/B000000BBB", False),
+    ("https://www.amazon.com@example.com/dp/B000000BBB", False),
+], ids=["another listing", "this listing", "this listing, another link", "this listing, gp/product",
+        "a search link", "a fragment", "another site", "a lookalike host", "a host after userinfo"])
 def test_an_amazon_receipt_prices_only_its_own_listing(coke, bought, takes):
     """Round 2, finding 4: the row now holds replacement listing B at a $13.49 hand price. A receipt from old listing
     A must not put its price on B. The listing is the ASIN when both links have one, else the link as stored."""
@@ -531,41 +460,6 @@ def test_an_amazon_listing_switched_while_a_receipt_is_applied_is_kept(coke, sch
     assert (o.url, o.expected_cents, o.note) == (LISTING_B, 1349, "new listing")
 
 
-def test_an_unversioned_rejection_after_a_fill_keeps_the_receipt_and_its_price(coke):
-    """Round 2, finding 5: the bridge documents rejection only before fulfillment. A rejected answer with no newer
-    updated_at must not hide the loaded units or the price; it is kept as fulfilled, with a warning."""
-    table_row(coke, NOW - timedelta(days=9))
-    submit(coke, "r1")
-    said: list[str] = []
-    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt())}), now=NOW, log=said.append)
-    rejected = {**pending("r1"), "status": "rejected", "decision_note": "duplicate"}
-    report = sync(coke, FakeBridge({"r1": rejected}), now=NOW + timedelta(hours=1), log=said.append)
-    assert report.fulfilled == 1 and report.rejected == 0
-    assert coke.execute("select status from purchase_requests").fetchone() == ("fulfilled",)
-    assert coke.execute("select count(*) from purchase_lines").fetchone() == (1,)
-    assert row(coke).expected_cents == 1237
-    assert any("rejected" in line and "kept the fulfilled receipt" in line for line in said), said
-
-
-def test_a_versioned_withdrawal_after_a_fill_takes_its_prices_back(coke):
-    """Round 2, finding 5: a rejection with a newer updated_at is the bridge withdrawing the fill. It is stored, and
-    the price the receipt set goes back to the one before it."""
-    checked = NOW - timedelta(days=9)
-    table_row(coke, checked)
-    submit(coke, "r1")
-    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt())}), now=NOW, log=quietly)
-    assert row(coke).expected_cents == 1237
-    withdrawn = {**pending("r1"), "status": "rejected", "decision_note": "withdrawn",
-                 "updated_at": "2026-11-08T10:00:00Z"}
-    said: list[str] = []
-    report = sync(coke, FakeBridge({"r1": withdrawn}), now=NOW + timedelta(hours=1), log=said.append)
-    assert report.rejected == 1 and report.price_failures == 0
-    assert coke.execute("select status from purchase_requests").fetchone() == ("rejected",)
-    o = row(coke)
-    assert (o.expected_cents, o.checked_at, o.checked_by) == (1149, checked, "Kevin"), said
-    assert receipt_prices.apply_all(coke, NOW, log=quietly).updated == []
-
-
 def test_apply_all_dry_run_simulates_each_receipt_on_the_one_before(coke):
     """Round 2, finding 7: r0 (newer, $12.99) then r1 (older, $12.37), then r2 ($12.50, newest). Each dry-run step
     must see the rows as the steps before left them: the same sentences as the real run."""
@@ -579,3 +473,170 @@ def test_apply_all_dry_run_simulates_each_receipt_on_the_one_before(coke):
     assert dry == real, (dry, real)
     assert len(real.updated) == 2 and "(was $12.99" in real.updated[1]
 
+
+# Sol review, round 3. A fulfilled receipt is never undone automatically; a person checks any later rejection.
+
+def stocked(conn):
+    """What the stock count reads for r1: its status, and its lines' units bought and loaded."""
+    status = conn.execute("select status from purchase_requests where request_id = 'r1'").fetchone()[0]
+    lines = conn.execute("select line_no, units_bought, units_loaded, total_paid from purchase_lines"
+                         " where request_id = 'r1' order by line_no").fetchall()
+    return status, lines
+
+
+@pytest.mark.parametrize("updated_at", [None, "2026-11-08T10:00:00Z"], ids=["unversioned", "versioned"])
+def test_a_rejection_after_a_fill_keeps_the_receipt_its_stock_and_its_price(coke, updated_at):
+    """Round 3, findings 1, 2, 3, 5 and 9 (by design): the bridge documents rejection only before fulfillment. A
+    rejected answer after a fill, versioned or not, is never stored over the receipt and takes back no price. A
+    person checks with the instructors; the warning comes once per answer, not on every hourly read."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt())}), now=NOW, log=said.append)
+    before, price, logs = stocked(coke), row(coke), len(logged(coke))
+    rejected = {**pending("r1"), "status": "rejected", "decision_note": "withdrawn"}
+    if updated_at:
+        rejected["updated_at"] = updated_at
+    for hours in (1, 2, 3):
+        report = sync(coke, FakeBridge({"r1": rejected}), now=NOW + timedelta(hours=hours), log=said.append)
+        assert (report.fulfilled, report.rejected, report.price_failures) == (1, 0, 0)
+    assert stocked(coke) == before and before[0] == "fulfilled"
+    assert row(coke) == price and price.expected_cents == 1237 and len(logged(coke)) == logs
+    warned = [line for line in said if "now says rejected" in line]
+    assert len(warned) == 1 and "check with the instructors" in warned[0], said
+    assert "Kept the receipt, its stock and its prices" in warned[0]
+    # A different answer is a new warning; apply_all reads fulfilled receipts only and changes nothing.
+    sync(coke, FakeBridge({"r1": {**rejected, "decision_note": "duplicate"}}), now=NOW + timedelta(hours=4),
+         log=said.append)
+    assert sum("now says rejected" in line for line in said) == 2
+    assert receipt_prices.apply_all(coke, NOW, log=quietly).updated == []
+
+
+def test_a_receipt_with_no_updated_at_after_a_versioned_one_is_ignored_once(coke):
+    """A fulfilled answer with no updated_at can't be dated against the stored, versioned receipt. It is ignored,
+    the stored lines stay, and it is named once."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    said: list[str] = []
+    versioned = fulfilled("r1", receipt(total_paid="12.99"), updated_at="2026-11-08T10:00:00Z")
+    sync(coke, FakeBridge({"r1": versioned}), now=NOW, log=said.append)
+    before, price = stocked(coke), row(coke)
+    unversioned = fulfilled("r1", receipt(total_paid="12.37", units_loaded=4), updated_at=None)
+    for hours in (1, 2):
+        sync(coke, FakeBridge({"r1": unversioned}), now=NOW + timedelta(hours=hours), log=said.append)
+    assert stocked(coke) == before and row(coke) == price and price.expected_cents == 1299
+    warned = [line for line in said if "no updated_at" in line]
+    assert warned == ["r1: the bridge sent a receipt with no updated_at, but the stored one last changed "
+                      "2026-11-08 05:00 ET; kept the stored receipt"], said
+
+
+def test_a_correction_that_no_longer_gives_a_price_leaves_the_price_and_says_so(coke):
+    """A correction makes the only purchase line unavailable. The fill's new lines are stored (the stock follows the
+    bridge), but no price is taken back: the row keeps $12.37 and a person is told once."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt())}), now=NOW, log=said.append)
+    price, logs = row(coke), len(logged(coke))
+    gone = fulfilled("r1", receipt(outcome="unavailable", packs_bought=0, units_bought=0, units_loaded=0,
+                                   total_paid=None), updated_at="2026-11-08T10:00:00Z")
+    for hours in (1, 2):
+        sync(coke, FakeBridge({"r1": gone}), now=NOW + timedelta(hours=hours), log=said.append)
+    assert row(coke) == price and len(logged(coke)) == logs
+    assert stocked(coke)[1] == [(0, 0, 0, None)]
+    left = [line for line in said if "left as it is" in line]
+    assert left == ["COKE20 primary: still $12.37 from r1, but its receipt as stored now gives no price for that "
+                    "row; left as it is. A person can check it (python -m vending.sourcing set)"], said
+
+
+@pytest.mark.parametrize("resolved, expected, by", [
+    ("2026-11-05T16:00:00Z", 1149, "Kevin"),          # before the hand check: the hand price comes back
+    ("2026-11-06T12:00:00Z", 1149, "Kevin"),          # at the same moment: the hand check still wins
+    ("2026-11-06T18:00:00Z", 1195, "receipt"),        # still after it: the correction applies
+], ids=["before the hand check", "at the hand check", "after the hand check"])
+def test_a_correction_dated_before_the_last_hand_check_puts_the_hand_price_back(coke, resolved, expected, by):
+    """Round 3, finding 4: Kevin checked $11.49 on 6 Nov. The receipt (7 Nov, $12.37) replaced it. A correction
+    moves the line to 5 Nov and $11.95. The hand check is now the newer price, so $11.95 must not be written."""
+    checked = datetime(2026, 11, 6, 12, tzinfo=timezone.utc)
+    table_row(coke, checked)
+    fill(coke)
+    receipt_prices.apply(coke, "r1", NOW)
+    assert row(coke).expected_cents == 1237
+    store(coke, "r1", fulfilled("r1", receipt(total_paid="11.95", resolved_at=resolved),
+                                updated_at="2026-11-08T10:00:00Z"), NOW)
+    dry = receipt_prices.apply(coke, "r1", NOW, dry_run=True)
+    applied = receipt_prices.apply(coke, "r1", NOW)
+    assert dry == applied and len(applied.updated) == 1, applied
+    o = row(coke)
+    assert (o.expected_cents, o.checked_by) == (expected, by), applied
+    if by == "Kevin":
+        assert (o.checked_at, o.note) == (checked, "15 Nov check")
+        assert "put back $11.49" in applied.updated[0]
+    assert receipt_prices.apply(coke, "r1", NOW).updated == []          # and it stays
+
+
+def test_an_amazon_link_that_is_not_text_skips_that_line_and_the_batch_goes_on(coke):
+    """Round 3, finding 7: an echoed `url: 42` raised TypeError and stopped the sync. Now that line gives no price,
+    with a reason, and the next request is still read and priced."""
+    table_row(coke, NOW - timedelta(days=9), store="Amazon", url=LISTING_A, most=1500)
+    submit(coke, "r1", days_ago=3)
+    submit(coke, "r2", days_ago=2)
+    bad = fulfilled("r1", receipt(store="Amazon"))
+    bad["lines"][0]["primary"] = {**BODY["lines"][0]["primary"], "store": "Amazon", "url": 42}
+    good = fulfilled("r2", receipt(store="Amazon", total_paid="12.99", resolved_at="2026-11-08T16:00:00Z"))
+    good["lines"][0]["primary"] = {**BODY["lines"][0]["primary"], "store": "Amazon", "url": LISTING_A}
+    said: list[str] = []
+    report = sync(coke, FakeBridge({"r1": bad, "r2": good}), now=NOW, log=said.append)
+    assert (report.checked, report.fulfilled, report.failed, report.price_failures) == (2, 2, 0, 0), said
+    assert "r1 line 0: no price taken: the request's Amazon link is 42, not a link" in said
+    assert row(coke).expected_cents == 1299
+
+
+def test_two_receipts_with_products_in_opposite_order_do_not_deadlock(coke, schema_url, monkeypatch):
+    """Round 3, finding 8: r1 lists COKE20 then PEPSI20, r2 PEPSI20 then COKE20. Locking each row as it was reached
+    let r1 hold COKE20 while r2 held PEPSI20, each waiting for the other. Now all rows are locked up front in one
+    order, so the second apply waits and then applies."""
+    table_row(coke, NOW - timedelta(days=9))
+    table_row(coke, NOW - timedelta(days=9), sku="PEPSI20")
+    coke_line = receipt()
+    pepsi_line = receipt(sku="PEPSI20", total_paid="12.10")
+    pepsi_ask = {**BODY["lines"][0]["primary"], "sku": "PEPSI20"}
+    for request_id, first, second in (("r1", coke_line, pepsi_line), ("r2", pepsi_line, coke_line)):
+        submit(coke, request_id)
+        answer = fulfilled(request_id, first, second)
+        for line, got in zip(answer["lines"], (first, second)):
+            line["primary"] = pepsi_ask if got["sku"] == "PEPSI20" else BODY["lines"][0]["primary"]
+        store(coke, request_id, answer, NOW)
+    holding, errors = threading.Event(), []
+    real = sourcing.locked_row
+
+    def slow(conn, sku, rank):
+        found = real(conn, sku, rank)
+        if threading.current_thread().name == "first" and not holding.is_set():
+            holding.set()
+            time.sleep(2)            # long enough for the other apply to take what it can, and Postgres to see a cycle
+        return found
+
+    monkeypatch.setattr(sourcing, "locked_row", slow)
+
+    def run(conn, request_id):
+        def work():
+            try:
+                receipt_prices.apply(conn, request_id, NOW)
+            except BaseException as error:  # noqa: BLE001 - reported below
+                errors.append(error)
+        return work
+
+    with open_in(*schema_url) as other:
+        first = threading.Thread(target=run(coke, "r1"), name="first")
+        first.start()
+        assert holding.wait(30)
+        second = threading.Thread(target=run(other, "r2"), name="second")
+        second.start()
+        first.join(60)
+        second.join(60)
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == [], errors
+    for sku in ("COKE20", "PEPSI20"):
+        o = sourcing._row(coke, sku, "primary")
+        assert o.from_receipt and o.note.startswith(("receipt r1:", "receipt r2:")), o

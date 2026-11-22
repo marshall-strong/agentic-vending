@@ -12,9 +12,12 @@ nothing here ever goes through a float.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -27,6 +30,9 @@ RECEIPT_COLUMNS = (
     "slot_reassigned", "resolved_at",
 )
 _MONEY = {"total_paid", "unit_cost_paid"}
+EASTERN = ZoneInfo("America/New_York")
+# `action_log` tool of an answer `store` kept out. One row per request and answer, so each is named once.
+IGNORED_TOOL = "purchase_requests.ignored"
 # No receipt comes near a billion dollars, or needs more than 10 decimal places (`unit_cost_paid` has four).
 # Past these, Postgres `numeric` can't hold some finite Decimals (1e999999, 1e-20000), and the money readers,
 # which round to the cent, raise for an amount past Decimal's 28 digits. Both are checked on the digits and
@@ -76,19 +82,21 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     That includes door times with close before open (`door_times`). Once a request is
     `fulfilled` or `rejected`, a `pending` answer is ignored and the stored status returned.
 
-    An answer whose `updated_at` is older than the stored one is ignored too, with a warning: a slow read
-    can arrive after the bridge corrected the receipt, and it must not put the old receipt back. The check
-    is part of the same UPDATE, so two reads that race can't both win.
+    An answer whose `updated_at` is older than the stored one is ignored too: a slow read can arrive after
+    the bridge corrected the receipt, and it must not put the old receipt back. So is a fulfilled answer
+    with no `updated_at` once we hold a receipt that has one. The check is part of the same UPDATE, so two
+    reads that race can't both win.
 
     An amount that can't be real (1e30 dollars, or more than 10 decimal places) is stored as unknown, with a
     warning, and the rest of the receipt is kept: the fill happened, and the stock count needs its lines.
     `last_response` keeps the answer as the bridge gave it. The warning comes once per revision of the
     receipt, not on every hourly re-read of it.
 
-    The bridge documents rejection only before fulfillment. So a `rejected` answer after a fulfilled one is
-    kept out, with a warning, unless its `updated_at` is newer than the stored receipt's: then it is the
-    bridge withdrawing the fill, and it is stored (its lines stay, but every reader counts only fulfilled
-    requests). `vending.receipt_prices.apply` then takes back the prices that receipt set.
+    A fulfilled receipt is never undone here. The bridge documents rejection only before fulfillment
+    (`docs/dex-bridge.md`), so a `rejected` answer after a fulfilled one, with or without a newer
+    `updated_at`, is kept out: the receipt, its stock and the prices it set stay, and a person checks with
+    the instructors. Each answer kept out is named once (one `action_log` row per request and answer), not
+    on every hourly re-read.
     """
     if response.get("id") not in (None, request_id):
         raise ValueError(f"asked for {request_id}, the bridge answered about {response.get('id')}")
@@ -112,37 +120,43 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
         updated = conn.execute(
             """
             update purchase_requests
-               set status = %s, decision_note = %s, total_paid = %s, fulfilled_at = %s,
-                   updated_at = %s, last_checked = %s, last_response = %s,
-                   door_opened_at = %s, door_closed_at = %s
-             where request_id = %s and not (%s = 'pending' and status <> 'pending')
-               and not (%s = 'rejected' and status = 'fulfilled'
-                        and (%s::timestamptz is null or updated_at is null or %s <= updated_at))
-               and (%s::timestamptz is null or updated_at is null or updated_at <= %s)
+               set status = %(status)s, decision_note = %(note)s, total_paid = %(total)s,
+                   fulfilled_at = %(fulfilled)s, updated_at = %(changed)s, last_checked = %(checked)s,
+                   last_response = %(response)s, door_opened_at = %(opened)s, door_closed_at = %(closed)s
+             where request_id = %(id)s
+               and not (%(status)s = 'pending' and status <> 'pending')
+               and not (%(status)s = 'rejected' and status = 'fulfilled')
+               and not (%(changed)s::timestamptz is null and status = 'fulfilled' and updated_at is not null)
+               and (%(changed)s::timestamptz is null or updated_at is null or updated_at <= %(changed)s)
             """,
-            (status, response.get("decision_note"), total_paid,
-             _when(response.get("fulfilled_at")), changed_at,
-             checked_at, Jsonb(response), opened, closed, request_id, status,
-             status, changed_at, changed_at, changed_at, changed_at),
+            {"status": status, "note": response.get("decision_note"), "total": total_paid,
+             "fulfilled": _when(response.get("fulfilled_at")), "changed": changed_at, "checked": checked_at,
+             "response": Jsonb(response), "opened": opened, "closed": closed, "id": request_id},
         ).rowcount
         if not updated:
-            stored = conn.execute("select status, updated_at from purchase_requests where request_id = %s",
-                                  (request_id,)).fetchone()
+            # Locked, so two syncs keeping out the same answer name it once between them.
+            stored = conn.execute("select status, updated_at from purchase_requests where request_id = %s"
+                                  " for update", (request_id,)).fetchone()
             if stored is None:
                 raise ValueError(f"{request_id} is not in purchase_requests; record it when it is submitted")
             # A request only ever leaves `pending`. A `pending` answer that arrives after a final one
             # (a slow read that outlived its timeout) is stale, so it must not clear the receipt or door times.
             if status == "pending" and stored[0] != "pending":
                 return Stored(stored[0])
+            if not _first_time_kept_out(conn, request_id, response):
+                return Stored(stored[0])
             if status == "rejected" and stored[0] == "fulfilled":
-                said = f"updated_at {changed_at.isoformat()}" if changed_at else "no updated_at"
-                return Stored(stored[0], warnings=(
-                    f"{request_id}: the bridge now says rejected ({said}), but not later than the stored receipt; "
-                    "kept the fulfilled receipt. The bridge rejects a request only before it is filled, so a "
-                    "person should ask about it",))
-            return Stored(stored[0], warnings=(
-                f"{request_id}: the bridge's answer last changed {changed_at.isoformat()}, older than the one "
-                f"stored ({stored[1].isoformat()}); kept the stored receipt",))
+                said = f"last changed {_eastern(changed_at)}" if changed_at else "no updated_at"
+                warning = (f"{request_id}: the bridge now says rejected ({said}), after we stored its fulfilled "
+                           "receipt. Kept the receipt, its stock and its prices. The bridge rejects a request only "
+                           "before it is filled, so a person should check with the instructors")
+            elif changed_at is None:
+                warning = (f"{request_id}: the bridge sent a receipt with no updated_at, but the stored one last "
+                           f"changed {_eastern(stored[1])}; kept the stored receipt")
+            else:
+                warning = (f"{request_id}: the bridge's answer last changed {_eastern(changed_at)}, older than the "
+                           f"one stored ({_eastern(stored[1])}); kept the stored receipt")
+            return Stored(stored[0], warnings=(warning,))
         if status != "fulfilled":
             return Stored(status, warnings=warnings)
         before = conn.execute(
@@ -160,6 +174,28 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
                 losses,
             )
     return Stored(status, max(len(losses) - before, 0), warnings)
+
+
+def _first_time_kept_out(conn: psycopg.Connection, request_id: str, response: dict) -> bool:
+    """Record that `store` kept this answer out. False when the same answer was kept out before.
+
+    The caller holds the request's row lock, so two reads of one answer can't both see it as new."""
+    digest = hashlib.sha256(json.dumps(response, sort_keys=True, separators=(",", ":"), default=str)
+                            .encode()).hexdigest()
+    seen = conn.execute(
+        "select 1 from action_log where tool = %s and arguments->>'request_id' = %s"
+        " and arguments->>'answer_sha256' = %s limit 1", (IGNORED_TOOL, request_id, digest)).fetchone()
+    if seen:
+        return False
+    conn.execute(
+        "insert into action_log (kind, tool, arguments, outcome, detail) values ('read', %s, %s, 'done', %s)",
+        (IGNORED_TOOL, Jsonb({"request_id": request_id, "answer_sha256": digest}),
+         f"{request_id}: an answer from the bridge was kept out; the stored receipt stays"))
+    return True
+
+
+def _eastern(moment: datetime) -> str:
+    return f"{moment.astimezone(EASTERN):%Y-%m-%d %H:%M} ET"
 
 
 def _same_revision(conn: psycopg.Connection, request_id: str, status: str, changed_at: datetime | None,

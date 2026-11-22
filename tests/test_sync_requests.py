@@ -249,8 +249,10 @@ def test_an_older_answer_does_not_replace_a_newer_receipt(conn):
     store(conn, "r1", fulfilled("r1", receipt(total_paid="12.99"), updated_at="2026-11-08T10:00:00Z"), NOW)
     stale = store(conn, "r1", fulfilled("r1", receipt(total_paid="12.37")), NOW + timedelta(minutes=5))
     assert stale.status == "fulfilled" and stale.new_losses == 0
-    assert stale.warnings == ("r1: the bridge's answer last changed 2026-11-07T16:30:00+00:00, older than the one "
-                              "stored (2026-11-08T10:00:00+00:00); kept the stored receipt",)
+    assert stale.warnings == ("r1: the bridge's answer last changed 2026-11-07 11:30 ET, older than the one "
+                              "stored (2026-11-08 05:00 ET); kept the stored receipt",)
+    # The same stale answer read again is still kept out, and not named again.
+    assert store(conn, "r1", fulfilled("r1", receipt(total_paid="12.37")), NOW + timedelta(hours=1)).warnings == ()
     assert conn.execute("select total_paid from purchase_lines").fetchone() == (Decimal("12.99"),)
     assert conn.execute("select updated_at, last_response->'lines'->0->'receipt'->>'total_paid'"
                         " from purchase_requests").fetchone() == (datetime(2026, 11, 8, 10, tzinfo=timezone.utc), "12.99")

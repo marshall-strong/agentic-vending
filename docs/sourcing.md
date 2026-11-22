@@ -76,20 +76,29 @@ no web access is needed, and the price is never older than our last purchase of 
   together first.
 - **Which row.** Every row with the same SKU, store and pack size, primary or alternate. For
   Amazon the listing must match too: the link the request asked for and the row's link name the
-  same ASIN (or, with no ASIN, are the same link). So a receipt from an old listing never prices
-  the listing that replaced it. Its price and `checked` date change: the date is when the worker
+  same ASIN. The ASIN is read only from a product page path (`/dp/ASIN`, `/gp/product/ASIN`) on an
+  amazon.com address. Any other link must be exactly the row's link. So a receipt from an old
+  listing never prices the listing that replaced it. A request whose Amazon link isn't text gives
+  no price for that line, and the sync goes on. Its price and `checked` date change: the date is when the worker
   resolved the line. `checked_by` becomes `receipt`, and the note names the request. The store,
   pack, link, description and max stay. `action_log` keeps the values it replaced, as for `set`.
 - **A newer price wins.** A row checked after the receipt keeps its price. Reading the same
-  receipt again changes nothing. A corrected receipt replaces the price it set. While a receipt is
-  applied, its request is locked, so a newer revision of that receipt waits and is applied after.
-- **Taken back.** If a corrected receipt no longer gives a price it set (the line became
-  unavailable, a substitution or above the max), or the bridge withdraws the fill (a rejection
-  newer than the receipt), the row gets the price it would have without that receipt: the newest
-  price another receipt gives as that receipt stands now, if it is newer than the last hand price;
-  otherwise that hand price; otherwise no price until a person checks it.
-- **A rejection after a fill** with no newer `updated_at` is not stored. The bridge rejects a
-  request only before it is filled, so the receipt stays and the sync logs a warning.
+  receipt again changes nothing.
+- **Corrections.** A corrected receipt (a newer revision from the bridge) replaces the price it
+  set, but only while its line is still newer than the row's last hand check. If the correction
+  moves the line's time back to or before that check, the hand price comes back.
+- **A fill is never undone automatically.** The bridge describes rejection only before a request
+  is filled. So a rejected answer for a request we hold as fulfilled, with or without a newer
+  `updated_at`, is not stored. The receipt, its stock and its prices stay. The sync logs one
+  warning for each such answer, telling a person to check with the instructors. A fulfilled
+  answer with no `updated_at` (or an older one), after we hold a receipt that has one, is ignored
+  the same way, with one warning.
+- **A price a correction stops giving** (the line became unavailable or a substitution) is not
+  taken back. The row keeps it, and the sync says so once, so a person can check it.
+- **Locks.** While a receipt is applied, its request is locked, so a newer revision of that
+  receipt waits and is applied after. All the sourcing rows of the receipt's drinks are locked
+  at once, in one fixed order, so two receipts that list the same drinks in a different order
+  wait for each other instead of deadlocking. A change a person makes at the same time is kept.
 - **Skipped, and the reason logged:** a line loaded from the closet or not bought, a
   substitution (the receipt's SKU isn't the one we asked for), a missing amount or pack size,
   zero packs, units that don't add up, a pack price above the row's max (a person raises the max),

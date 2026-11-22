@@ -12,10 +12,11 @@ request's stored receipts, so reading again never counts a loss twice.
 
 After each fulfilled read, `vending.receipt_prices.apply` refreshes our sourcing
 prices from what the receipt shows was paid (#202). It is idempotent, so the
-re-reads change nothing. A fill the bridge withdraws (a rejection with a newer
-`updated_at`) has its prices taken back the same way. It runs here, in the same
-round, so prices are fresh as soon as the receipt is stored; a failure there is
-logged and counted, and the receipt itself is kept.
+re-reads change nothing. It runs here, in the same round, so prices are fresh as
+soon as the receipt is stored; a failure there is logged and counted, and the
+receipt itself is kept. A fulfilled receipt is never undone: a later rejection is
+kept out with a warning (`vending.purchase_requests.store`), and a person checks
+it with the instructors.
 
 A request the bridge can't return, or answers with something we can't use (or
 that the database refuses), is logged and counted and the run carries on with
@@ -118,9 +119,6 @@ def sync(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
             # changes its receipt (a correction can bring a new reason), not on every re-read.
             quiet = before is not None and receipt_prices.priced_lines(conn, request_id) == before
             _refresh_prices(conn, request_id, now, report, log, quiet=quiet)
-        elif stored.status == "rejected" and before is not None:
-            # The bridge withdrew a fill: the prices its receipt set are taken back.
-            _refresh_prices(conn, request_id, now, report, log)
     return report
 
 
