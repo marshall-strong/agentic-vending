@@ -430,6 +430,27 @@ def test_notes_from_runs_before_the_real_opening_are_dropped_and_later_ones_kept
     assert "New notes." in client.sent[0]["messages"][0]["content"]
 
 
+def test_notes_from_before_the_slot_assignment_are_dropped_even_after_a_backdated_opening(connect, conn):
+    """Sol review of #222, round 4, finding 3: a recovery opening backdated before the redraw (18 Nov) must not
+    bring back a 19 Nov run's notes. Notes count from the later of the real opening and when our slots (the
+    server's assignment) were first read (`slot_assignment.first_read_at`)."""
+    conn.execute("update slot_assignment set first_read_at = %s", (datetime(2026, 11, 20, 17, tzinfo=timezone.utc),))
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    conn.execute("update agent_runs set started_at = %s", (datetime(2026, 11, 19, 17, tzinfo=timezone.utc),))
+    open_books(conn, datetime(2026, 11, 18, 17, tzinfo=timezone.utc))
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "first run since the ledger opening" in opening
+
+
+def test_no_notes_carry_over_without_a_stored_slot_assignment(conn):
+    """Finding 3: with no assignment stored, nothing says which runs read the current one, so no notes carry."""
+    open_books(conn, datetime(2026, 11, 18, 17, tzinfo=timezone.utc))
+    conn.execute("delete from slot_assignment")
+    assert "slot assignment isn't recorded" in agent.last_notes(conn, live=False)
+
+
 def test_the_server_never_gets_the_model_key(monkeypatch):
     for name in ("ANTHROPIC_API_KEY", "VENDING_ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.setenv(name, "not-a-real-key")

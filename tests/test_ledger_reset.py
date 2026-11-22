@@ -26,22 +26,36 @@ REAL_OPENED = datetime(2026, 11, 29, 21, 0, tzinfo=timezone.utc)
 AFTER = datetime(2026, 12, 2, 12, 0, tzinfo=timezone.utc)
 
 
-# The database refuses an archive insert that commits from the cutoff on (migration 022). The cutoff is the
-# real one, 00:00 Eastern on Mon 30 Nov, unless the test-only config row moves it. These tests run on any
-# date, so each database test moves it far ahead, and the cutoff tests move it close.
-CUTOFF_KEY = "ledger_reset_closes_for_tests"
+# The database refuses an archive insert that commits from the cutoff on (migration 022). The shipped cutoff is
+# fixed, 00:00 Eastern on Mon 30 Nov, with nothing a role can write to move it (Sol review of #222, round 4,
+# finding 2). These tests run on any date, so each database test replaces the function in its own disposable
+# schema with a far cutoff, the cutoff tests with a close one, and the fixture puts the shipped one back after.
+CUTOFF_FUNCTION = "ledger_reset_closes()"
 
 
 def set_cutoff(conn, closes):
-    conn.execute("insert into config (key, value, updated_by) values (%s, to_jsonb(%s::text), 'test')"
-                 " on conflict (key) do update set value = excluded.value", (CUTOFF_KEY, closes.isoformat()))
+    """Replace the database's cutoff in this test's schema only (the connection's search_path)."""
+    conn.execute(f"create or replace function ledger_reset_closes() returns timestamptz language sql stable"
+                 f" as $$ select timestamptz '{closes.isoformat()}' $$")
+
+
+def shipped_cutoff(conn):
+    """The function as migration 022 made it, to put back."""
+    return conn.execute("select pg_get_functiondef(%s::regprocedure)", (CUTOFF_FUNCTION,)).fetchone()[0]
 
 
 @pytest.fixture(autouse=True)
 def _far_cutoff(request):
-    if "schema_url" in request.fixturenames:
-        with open_in(*request.getfixturevalue("schema_url")) as c:
-            set_cutoff(c, datetime(2100, 1, 1, tzinfo=timezone.utc))
+    if "schema_url" not in request.fixturenames:
+        yield None
+        return
+    url = request.getfixturevalue("schema_url")
+    with open_in(*url) as c:
+        shipped = shipped_cutoff(c)
+        set_cutoff(c, datetime(2100, 1, 1, tzinfo=timezone.utc))
+    yield shipped
+    with open_in(*url) as c:      # the pool may hand this schema to another test
+        c.execute(shipped)
 
 
 def seed(conn):
@@ -306,12 +320,15 @@ def test_show_dates_the_opening_in_eastern(schema_url, monkeypatch, capsys):
 
 # --- Sol review, round 3 -----------------------------------------------------------------------
 
-def test_the_database_cutoff_defaults_to_midnight_eastern_on_30_nov(conn):
-    """Finding 1: the cutoff the database enforces is RESET_CLOSES unless the test-only row moves it."""
-    conn.execute("delete from config where key = %s", (CUTOFF_KEY,))
+def test_the_database_cutoff_is_fixed_at_midnight_eastern_on_30_nov(conn, _far_cutoff):
+    """Round 3, finding 1, and round 4, finding 2: the database enforces RESET_CLOSES, and no config row moves
+    it. The cutoff the shipped migration makes reads nothing but its own text."""
+    conn.execute(_far_cutoff)                    # the shipped function, as migration 022 made it
     assert conn.execute("select ledger_reset_closes()").fetchone()[0] == RESET_CLOSES
-    set_cutoff(conn, REAL_OPENED)
-    assert conn.execute("select ledger_reset_closes()").fetchone()[0] == REAL_OPENED
+    conn.execute("insert into config (key, value, updated_by) values ('ledger_reset_closes_for_tests',"
+                 " to_jsonb('2100-01-01T00:00:00+00:00'::text), 'test')")
+    assert conn.execute("select ledger_reset_closes()").fetchone()[0] == RESET_CLOSES
+    assert "config" not in _far_cutoff
 
 
 def test_a_reset_that_pauses_past_the_cutoff_after_its_last_clock_read_does_not_commit(conn, monkeypatch):
@@ -335,22 +352,48 @@ def test_a_reset_that_pauses_past_the_cutoff_after_its_last_clock_read_does_not_
     assert conn.execute("select count(*) from action_log where tool = 'ledger.reset_test_opening'").fetchone() == (0,)
 
 
-def test_a_reset_inside_a_transaction_committed_after_the_cutoff_does_not_commit(conn, schema_url):
-    """Finding 1 (blocker): the reset runs inside a caller's transaction, which commits after the cutoff."""
+def test_a_reset_inside_a_callers_transaction_refuses(conn, schema_url):
+    """Round 3, finding 1, and round 4, finding 1 (blocker): the reset owns its transaction. Inside a caller's,
+    it refuses before it reads or writes anything, so a caller can't run it (or `SET CONSTRAINTS ALL IMMEDIATE`
+    with it) before midnight and commit after."""
     seed(conn)
-    set_cutoff(conn, conn.execute("select clock_timestamp() + interval '1.5 seconds'").fetchone()[0])
-    outer = open_in(*schema_url)
-    try:
-        outer.autocommit = False
-        outer.execute("select 1")                # an open transaction: the reset's own block is a savepoint
-        assert ledger.reset_test_opening(outer, "kevin", RESET_AT).id == 1
-        time.sleep(2)
-        with pytest.raises(psycopg.Error, match="window closed"):
+    for begin in ("select 1", "set constraints all immediate"):
+        outer = open_in(*schema_url)
+        try:
+            outer.autocommit = False
+            outer.execute(begin)                 # an open transaction
+            with pytest.raises(LedgerError, match="own transaction"):
+                ledger.reset_test_opening(outer, "kevin", RESET_AT)
             outer.commit()
-    finally:
-        outer.close()
+        finally:
+            outer.close()
     assert ledger.opening(conn).detail == TEST_DETAIL and ledger.archived(conn) == []
     assert conn.execute("select count(*) from action_log where tool = 'ledger.reset_test_opening'").fetchone() == (0,)
+
+
+def test_a_reset_after_an_outer_begin_refuses_and_archives_nothing(conn, schema_url):
+    """Round 4, finding 1, Sol's regression: BEGIN on an autocommit connection, then the reset."""
+    seed(conn)
+    with open_in(*schema_url) as outer:
+        outer.execute("begin")
+        outer.execute("set constraints all immediate")
+        with pytest.raises(LedgerError, match="own transaction"):
+            ledger.reset_test_opening(outer, "kevin", RESET_AT)
+        outer.execute("commit")
+    assert ledger.opening(conn).detail == TEST_DETAIL and ledger.archived(conn) == []
+
+
+def test_the_reset_commits_its_own_transaction_on_an_idle_connection(schema_url):
+    """Round 4, finding 1: on a connection that isn't autocommit but has no open transaction, the reset opens and
+    commits its own, so the move is committed when it returns."""
+    with open_in(*schema_url) as c:
+        seed(c)
+    with open_in(*schema_url) as c:
+        c.autocommit = False
+        assert ledger.reset_test_opening(c, "kevin", RESET_AT).id == 1
+        assert c.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    with open_in(*schema_url) as c:
+        assert ledger.opening(c) is None and len(ledger.archived(c)) == 1
 
 
 def test_a_reset_before_the_database_cutoff_commits(conn):
@@ -358,3 +401,35 @@ def test_a_reset_before_the_database_cutoff_commits(conn):
     set_cutoff(conn, conn.execute("select clock_timestamp() + interval '1 minute'").fetchone()[0])
     assert ledger.reset_test_opening(conn, "kevin", RESET_AT).id == 1
     assert ledger.opening(conn) is None and len(ledger.archived(conn)) == 1
+
+
+# --- Sol review, round 4 -----------------------------------------------------------------------
+
+def test_the_dry_run_is_bounded_by_its_own_clock(conn):
+    """Finding 5: an entry or receipt dated after the dry run's clock doesn't fall before an opening recorded
+    then, so the plan doesn't list it as falling before it; it counts it apart."""
+    seed(conn)
+    ledger.record(conn, "adjustment", -350, "bottle deposit", "kevin", RESET_AT + timedelta(hours=2))
+    deliver(conn, "pr_late", resolved_at=(RESET_AT + timedelta(hours=3)).isoformat())
+    plan = ledger.plan_reset(conn, RESET_AT)
+    assert plan.later_entries == {"tokens": (2, Fraction(-48))}
+    assert plan.receipts == (1, 1237)
+    assert plan.after_now == 2
+
+
+def test_the_dry_run_says_which_entries_fall_before_the_opening_recorded_now(schema_url, monkeypatch, capsys):
+    """Finding 5: the dry run names its clock, lists only what falls before an opening recorded then, and says
+    plainly that anything dated later is left out, rather than suggesting it be re-recorded."""
+    from vending import db as db_module
+
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(ledger, "db_now", lambda conn: RESET_AT)
+    with open_in(*schema_url) as conn:
+        seed(conn)
+        ledger.record(conn, "adjustment", -350, "bottle deposit", "kevin", RESET_AT + timedelta(hours=2))
+    assert ledger.main(["reset-test-opening", "--by", "kevin"]) == 0
+    out = capsys.readouterr().out
+    assert "2026-11-29 15:00 Eastern" in out                        # the dry run's clock
+    assert "adjustment entries" not in out and "Re-record" not in out
+    assert "1 entry or receipt line is dated after 2026-11-29 15:00 Eastern" in out
+    assert "falls after an opening recorded now" in out
