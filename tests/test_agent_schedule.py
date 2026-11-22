@@ -197,14 +197,15 @@ def test_the_dashboard_line_follows_the_outcome():
                                        "`python -m vending.agent_schedule` says why.")
     assert line("skipped", "off", run_id=None)[1].startswith(
         "The scheduled run due Wed 02 Dec, 2:00 PM ET skipped: `agent_schedule_mode` is off in the database.")
-    assert line("submitted", "live")[1].startswith("The scheduled live run")
+    assert line("submitted") is None            # a scheduled run is a dry run: it never submits
+    assert line("skipped", agent_status="running")[0] == "bad"
     assert line("running") == ("info", "The scheduled dry run due Wed 02 Dec, 2:00 PM ET is running now (agent run 7).")
     assert line("<b>") is None
 
 
 def test_a_run_stuck_at_running_is_bad_on_the_dashboard():
     claimed = at(WED, 14)
-    row = {"due_at": claimed, "mode": "live", "outcome": "running", "run_id": None, "claimed_at": claimed}
+    row = {"due_at": claimed, "mode": "dry-run", "outcome": "running", "run_id": None, "claimed_at": claimed}
     assert dashboard._scheduled_line(row, claimed + timedelta(minutes=30))[0] == "info"
     level, text = dashboard._scheduled_line(row, claimed + agent_schedule.STUCK_AFTER + timedelta(minutes=1))
     assert level == "bad" and "running" in text and "stopped mid-run" in text
@@ -215,7 +216,8 @@ def test_the_home_page_shows_the_schedule_only_when_it_is_on():
         "mode": "dry-run", "next_at": at(WED, 14).isoformat(),
         "last": {"due_at": at(WED - timedelta(days=7), 14).isoformat(), "outcome": "<b>", "mode": "dry-run"}}}
     page = html.unescape(worker.home_page(shown))
-    assert "Scheduled agent run" in page and "at most dry runs; next Wed 02 Dec, 2:00 PM ET" in page
+    assert "Scheduled agent run" in page
+    assert "dry runs only (live scheduling is not enabled in this version); next Wed 02 Dec, 2:00 PM ET" in page
     assert "unknown, due Wed 25 Nov, 2:00 PM ET" in page      # an outcome it doesn't know isn't echoed
     del shown["agent_schedule"]
     assert "Scheduled agent run" not in worker.home_page(shown)
@@ -264,8 +266,8 @@ class FakeAgent:
         self.calls = []
 
     def __call__(self, live, authorize=None):
-        if authorize is not None:       # as the real one does, once it holds the run lease
-            with open_in(*self.url) as c:
+        if authorize is not None:       # as the real one does, in the transaction that takes the run lease
+            with open_in(*self.url) as c, c.transaction():
                 refused = authorize(c)
             if refused is not None:
                 return None, SimpleNamespace(status="skipped", detail=refused)
@@ -283,9 +285,12 @@ class FakeAgent:
 
 
 def scheduler(schema_url, agent, sched=DRY, clock=None, **kw):
+    """A scheduler on the test schema. The fake clock stands in for the database's clock too, unless a test
+    passes its own `db_clock`."""
+    clock = clock or Clock(at(WED, 0))
     return Scheduler(sched, run_agent=agent, connect=kw.pop("connect", lambda: open_in(*schema_url)),
                      log=kw.pop("log", lambda _: None), background=kw.pop("background", False),
-                     clock=clock or Clock(at(WED, 0)), **kw)
+                     clock=clock, db_clock=kw.pop("db_clock", lambda c: clock()), **kw)
 
 
 def tick(sched, when):
@@ -304,8 +309,8 @@ def db_mode(conn, value):
 
 @pytest.fixture
 def allowed(conn):
-    """The database lets the worker run what its own setting says (`live` is the highest)."""
-    db_mode(conn, "live")
+    """The database lets the worker run dry runs, the most a scheduled run is in this version."""
+    db_mode(conn, "dry-run")
 
 
 def attention(conn, now, syncs=None):
@@ -336,7 +341,7 @@ def test_the_database_setting_turned_off_stops_the_runs(schema_url, conn):
 
 def test_an_old_live_replica_runs_only_what_the_database_allows(schema_url, conn):
     """Finding 1: during a deploy the old revision still says `live`. The database says `dry-run`, so it
-    runs a dry run, whatever its own setting."""
+    runs a dry run, whatever its own setting (and `live` would be a dry run anyway, in this version)."""
     db_mode(conn, "dry-run")
     agent = FakeAgent(schema_url)
     old = scheduler(schema_url, agent, LIVE)
@@ -506,15 +511,22 @@ def test_a_running_row_is_left_alone_while_an_agent_run_holds_the_lease(schema_u
     run_lease.give_back(conn, held.token)
 
 
-@pytest.mark.parametrize("status", ["skipped", "halted", "failed", "submitted"])
+@pytest.mark.parametrize("status", ["skipped", "halted", "failed"])
 def test_each_ending_of_the_agent_is_recorded(schema_url, conn, allowed, status):
     agent = FakeAgent(schema_url, status=status, detail=f"why it {status}")
     sched = scheduler(schema_url, agent, LIVE)
     tick(sched, at(WED, 14))
-    assert agent.calls == [(None, True)]
+    assert agent.calls == [(None, False)]
     [(_, mode, outcome, run_id, detail)] = rows(conn)
-    assert (mode, outcome, detail) == ("live", status, f"why it {status}") and run_id is not None
+    assert (mode, outcome, detail) == ("dry-run", status, f"why it {status}") and run_id is not None
     assert sched.public()["last"]["outcome"] == status
+
+
+def test_a_dry_run_that_says_it_submitted_is_recorded_as_failed(schema_url, conn, allowed):
+    """A scheduled run is a dry run and can't submit: an agent that says it did is a failure to look at."""
+    tick(scheduler(schema_url, FakeAgent(schema_url, status="submitted", detail="sent")), at(WED, 14))
+    [(_, _, outcome, _, detail)] = rows(conn)
+    assert outcome == "failed" and "unknown status 'submitted'" in detail
 
 
 def test_an_entry_point_that_raises_is_a_failed_run_and_the_worker_goes_on(schema_url, conn, allowed):
@@ -668,6 +680,7 @@ def _real_entry_point(schema_url):
 
 @pytest.mark.parametrize("change, called, stored", [
     ("dry-run", [False], ("dry-run", "skipped")),
+    ("live", [False], ("dry-run", "skipped")),
     ("off", [], ("off", "skipped")),
     (None, [], ("off", "skipped")),
 ])
@@ -681,16 +694,17 @@ def test_a_mode_change_committed_just_before_the_claim_is_what_runs(schema_url, 
     assert rows(conn)[0][1:3] == stored
 
 
-@pytest.mark.parametrize("change", ["dry-run", "off", None])
+@pytest.mark.parametrize("change", ["off", None])
 def test_a_mode_change_after_the_claim_stops_the_run_before_anything_is_paid_for(schema_url, conn, allowed,
                                                                                 monkeypatch, change):
-    """Round 2, blocker 1: the agent checks again once it holds the run lease, before any model request."""
+    """Round 2, blocker 1: the agent checks again in the transaction that takes the run lease, before any
+    model request. (Round 3: a run is a dry run whatever the settings, so only `off` lowers it now.)"""
     from vending.config import set_halted
     set_halted(conn, False, "test")
     _around_the_claim(monkeypatch, after=lambda: _set_from_another_connection(schema_url, change))
     tick(scheduler(schema_url, _real_entry_point(schema_url), LIVE), at(WED, 14))
     [(_, mode, outcome, run_id, detail)] = rows(conn)
-    assert (mode, outcome, run_id) == ("live", "skipped", None)
+    assert (mode, outcome, run_id) == ("dry-run", "skipped", None)
     assert detail.startswith("Not started: agent_schedule_mode changed")
     assert conn.execute("select count(*) from agent_runs").fetchone()[0] == 0
 
@@ -847,3 +861,161 @@ def test_a_database_setting_of_the_wrong_type_is_off_and_shown(schema_url, conn,
     assert agent.calls == [] and not any("trying again" in line for line in logged)
     assert rows(conn)[0][1:3] == ("off", "skipped")
     assert ("bad", agent_schedule.INVALID_IN_DB) in attention(conn, at(WED, 15))
+
+
+# --- Sol review, round 3 -------------------------------------------------------------------------------
+# Scheduled runs are dry runs only in this version (finding 1 is removed by that). The rest change something
+# from a second connection, or fake the clocks, between two steps of a scheduled run.
+
+def test_live_in_both_settings_is_still_a_dry_run_with_no_write_tools(schema_url, conn, allowed):
+    """Round 3, finding 1 (removed): a scheduled run is never live. With both settings `live`, the agent is
+    called with live=False, and the model is offered no write tool: no purchase, no catalog request."""
+    import anyio
+
+    from tests.test_agent import LIVE_TOOLS, Script, Tools, answer
+    from vending import agent
+    from vending.config import set_halted
+
+    set_halted(conn, False, "test")
+    db_mode(conn, "live")
+    client, tools, called = Script(answer()), Tools(LIVE_TOOLS), []
+
+    def entry(live, authorize=None):
+        called.append(live)
+        return anyio.run(lambda: agent.run(live=live, connect=lambda: open_in(*schema_url), client=client,
+                                           open_tools=tools.opener(), authorize=authorize))
+    sched = scheduler(schema_url, entry, LIVE)
+    tick(sched, at(WED, 14))
+    assert called == [False]
+    offered = {t["name"] for t in client.sent[0]["tools"]}
+    assert offered and not offered & agent.WRITE_TOOLS
+    assert {"submit_desired_state", "request_catalog_product"} <= agent.WRITE_TOOLS
+    [(_, mode, outcome, run_id, _)] = rows(conn)
+    assert (mode, outcome) == ("dry-run", "skipped")
+    assert conn.execute("select mode from agent_runs where id = %s", (run_id,)).fetchone()[0] == "dry-run"
+    # /health, the home page and the dashboard say live scheduling isn't enabled.
+    shown = worker.State(schedule=sched).public()
+    assert shown["agent_schedule"]["mode"] == "dry-run" and shown["agent_schedule"]["setting"] == "live"
+    assert shown["agent_schedule"]["note"] == agent_schedule.LIVE_NOT_ENABLED
+    assert "live scheduling is not enabled in this version" in html.unescape(worker.home_page(shown))
+    assert ("info", agent_schedule.LIVE_NOT_ENABLED) in attention(conn, at(WED, 15), syncs=shown)
+    assert ("info", agent_schedule.LIVE_NOT_ENABLED) in attention(conn, at(WED, 15))     # from the database's
+    db_mode(conn, "dry-run")
+    assert ("info", agent_schedule.LIVE_NOT_ENABLED) not in attention(conn, at(WED, 15))
+
+
+def test_the_default_entry_point_refuses_a_live_run():
+    with pytest.raises(ValueError, match="live scheduling is not enabled"):
+        agent_schedule.default_run_agent(True)
+
+
+def test_the_table_never_holds_a_live_scheduled_run(conn):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("insert into agent_schedule (due_at, latest_at, mode) values (%s, %s, 'live')",
+                     (at(WED, 14), at(WED, 22)))
+
+
+def test_off_committed_while_the_run_is_being_authorized_waits_for_the_start(schema_url, conn, allowed,
+                                                                           monkeypatch):
+    """Round 3, blocker 3: `off` committed after the mode was read and before the lease was installed still
+    started a run. The mode is read under a row lock in the lease's transaction, so `off` waits for the
+    authorized start to be recorded, and is ordered after it."""
+    from vending.config import set_halted
+
+    set_halted(conn, False, "test")
+    real, setter = agent_schedule.database_mode, {}
+
+    def read_then_turn_off(c, **kw):
+        mode = real(c, **kw)
+        if "thread" not in setter:
+            def turn_off():
+                with open_in(*schema_url) as other:
+                    db_mode(other, "off")
+                    setter["started_at"] = other.execute("select started_at from agent_schedule").fetchone()[0]
+            setter["thread"] = threading.Thread(target=turn_off, daemon=True)
+            setter["thread"].start()
+            setter["thread"].join(1.0)
+            setter["blocked"] = setter["thread"].is_alive()
+        return mode
+    monkeypatch.setattr(agent_schedule, "database_mode", read_then_turn_off)
+    tick(scheduler(schema_url, _real_entry_point(schema_url)), at(WED, 14))
+    setter["thread"].join(10)
+    assert setter["blocked"], "off was committed between the mode's read and the run's start"
+    assert setter["started_at"] is not None       # the start was recorded before off landed
+    assert agent_schedule.database_mode(conn) == "off"
+
+
+def test_a_worker_clock_that_runs_slow_never_starts_a_run_past_its_cutoff(schema_url, conn, allowed):
+    """Round 3, major 4: the worker's clock says 9:05 AM two days ago, inside a run's window; the database's
+    says now. The final checks read the database's clock, so the time is `missed`."""
+    agent = FakeAgent(schema_url)
+    day = (conn.execute("select clock_timestamp()").fetchone()[0].astimezone(ET) - timedelta(days=2)).date()
+    past = Schedule("dry-run", (Entry(day.weekday(), time(9), time(10)),), day - timedelta(days=7))
+    window = datetime.combine(day, time(), ET)
+    slow = Clock(at(window, 9, 5))      # two days slow: inside the window by its own reading
+    sched = Scheduler(past, run_agent=agent, connect=lambda: open_in(*schema_url), log=lambda _: None,
+                      background=False, clock=slow)          # the database's own clock: no db_clock given
+    sched.tick(slow())
+    assert agent.calls == []
+    [(due, _, outcome, run_id, _)] = rows(conn)
+    assert (due, outcome, run_id) == (at(window, 9), "missed", None)
+
+
+def test_a_worker_clock_that_runs_fast_never_starts_a_run_early(schema_url, conn, allowed):
+    agent = FakeAgent(schema_url)
+    fast = Clock(at(WED, 14, 5))
+    sched = scheduler(schema_url, agent, clock=fast, db_clock=lambda c: at(WED, 13, 58))
+    sched.tick(fast())
+    assert agent.calls == [] and rows(conn) == []
+    assert sched.next_due(fast()) > fast()          # waits for the database's clock, never spins
+    sched.db_clock = lambda c: at(WED, 14, 0)
+    tick(sched, sched.next_due(fast()))
+    assert len(agent.calls) == 1
+
+
+def test_the_main_loop_lets_go_of_a_stuck_run(schema_url, conn, allowed):
+    """Round 3, major 5: next_due() said next week while a run was going, so the loop never reached the
+    supervisor's deadline. Through the worker's own loop, with no other round due."""
+    gate = threading.Event()
+    agent = FakeAgent(schema_url, gate=gate)
+    agent.gate_timeout = 30
+    clock = Clock(at(WED, 13, 50), at(WED, 14) + agent_schedule.STUCK_AFTER + timedelta(minutes=5))
+    sched = scheduler(schema_url, agent, clock=clock, background=True)
+    try:
+        assert worker.main(["--every", "1440", "--at-minute", "off", "--port", "0"], jobs=[("a", lambda: 0)],
+                           sleep=clock.sleep, log=lambda _: None, clock=clock, scheduler=sched) == 0
+        [(_, _, outcome, _, detail)] = rows(conn)
+        assert (outcome, detail) == ("failed", agent_schedule.ABANDONED)
+    finally:
+        gate.set()
+
+
+def test_the_schedulers_database_calls_have_time_limits(schema_url):
+    sched = scheduler(schema_url, FakeAgent(schema_url))
+    with sched.connect() as c:
+        limit = f"{agent_schedule.DB_TIMEOUT:g}s"
+        assert c.execute("select current_setting('statement_timeout'), current_setting('lock_timeout')"
+                         ).fetchone() == (limit, limit)
+
+
+def test_an_agent_run_whose_ending_wasnt_recorded_stays_in_needs_attention(schema_url, conn, allowed):
+    """Round 3, major 6: the agent's ending write failed, so agent_runs said `running` while the schedule said
+    `skipped`, and newer rows hid it. The line stays, however old, until the agent's row has an ending."""
+    class Unrecorded(FakeAgent):
+        def __call__(self, live, authorize=None):
+            with open_in(*self.url) as c:
+                run_id = agent_runs.start(c, mode="dry-run", model="fake")
+            self.calls.append(live)
+            return run_id, SimpleNamespace(status="skipped", detail="its ending couldn't be recorded")
+    sched = scheduler(schema_url, Unrecorded(schema_url))
+    tick(sched, at(WED, 14))
+    [(_, _, outcome, run_id, _)] = rows(conn)
+    assert outcome == "skipped"
+    for week in range(1, 4):            # newer, quiet runs; the old one is past the week's look-back
+        sched.run_agent = FakeAgent(schema_url)
+        tick(sched, at(WED + timedelta(days=7 * week), 14))
+    lines = attention(conn, at(WED + timedelta(days=21), 15))
+    stuck = [text for level, text in lines if level == "bad"]
+    assert len(stuck) == 1 and f"agent run {run_id}" in stuck[0] and "still says running" in stuck[0]
+    agent_runs.finish(conn, run_id, "failed", detail="fixed by hand", cost_usd=Decimal(0))
+    assert not [1 for level, _ in attention(conn, at(WED + timedelta(days=21), 15)) if level == "bad"]

@@ -125,8 +125,9 @@ can't fill the disk.
 
 **The agent runs here only when the schedule is on** (`vending/agent_schedule.py`, #213). It is
 off unless both the app's `AGENT_SCHEDULE_MODE` env var and the database's `agent_schedule_mode`
-setting turn it on; the worker runs the lower of the two. Then it starts `vending.agent.run` at the
-times in `AGENT_SCHEDULE`, which starts `python -m vending.server` over stdio from the same image,
+setting turn it on. Scheduled runs are dry runs only: live scheduling is not enabled in this version;
+it needs a later change approved by the team, so `live` in either setting is run as `dry-run`. Then it
+starts `vending.agent.run` as a dry run at the times in `AGENT_SCHEDULE`, which starts `python -m vending.server` over stdio from the same image,
 with `VENDING_TOOLS=built` so only working tools are offered. [`docs/agent.md`](agent.md) has the
 settings, and a dry run to try on Azure before the first scheduled run. The container gets the model
 key as `VENDING_ANTHROPIC_API_KEY` (the name the agent reads, per the README), from the optional
@@ -136,7 +137,7 @@ it fails before any model request, which the dashboard shows. To add it, put
 `VENDING_ANTHROPIC_API_KEY` in `.env` and run with `-SetSecrets`. The schedule settings are not in
 the script. Set them on the app:
 `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=dry-run`.
-A later deploy keeps them, because `--set-env-vars` only adds. To turn the runs down or off, change
+A later deploy keeps them, because `--set-env-vars` only adds. To turn the runs off, change
 the database's setting (`python -m vending.config set agent_schedule_mode off --by <name>`, a bare
 word, so it works in every shell, Windows PowerShell 5.1 too): it reaches every replica at the next
 scheduled time, an old one still running during a deploy too, and a run that has been claimed but

@@ -10,10 +10,15 @@ One run:
    Only one run goes at a time, in any mode, from any machine on the same database: a run holds
    the run lease (`vending.run_lease`, a row in the database) from start to end. A dropped or
    killed connection never frees it; the run renews it while it goes, and checks it still holds
-   it before every model request and before a purchase request is sent. A run that lost it stops
-   there and is `failed`. A run that finds it taken is recorded as `skipped` at once, and its
-   detail names the other run. A scheduled run passes `authorize`, which is checked once the
-   lease is free and before anything is paid for (`vending.agent_schedule`). The whole run has a
+   it before every model request and before a purchase request is sent. Each paid model request
+   checks it again in the transaction that reserves its budget (`run_lease.hold`, through the
+   harness's `hold`): it renews it under the row's lock, and goes only if the lease then outlasts
+   the request (`LEASE_MARGIN`). A takeover locks the same row, so the two never interleave. A run
+   that lost it stops there and is `failed`, and reserves and sends nothing. A run that finds it
+   taken is recorded as `skipped` at once, and its detail names the other run. A scheduled run
+   (always a dry run) passes `authorize`, which runs in the transaction that takes the lease, once
+   it is free and before anything is paid for (`vending.agent_schedule`). The run's ending is
+   written to `agent_runs` with `FINISH_RETRIES` more tries if it fails. The whole run has a
    deadline (`RUN_DEADLINE`): past it, the run stops and is `failed`. A model request already sent
    finishes first (each has `REQUEST_TIMEOUT`), an MCP request has `TOOL_TIMEOUT`, and every
    database call of the run has `DB_TIMEOUT` (statement and lock), so nothing can hold the run, or
@@ -62,7 +67,7 @@ from psycopg.types.json import Jsonb
 
 from vending import agent_runs, db, run_lease, settings
 from vending.config import is_halted
-from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError
+from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError, NotHeld
 from vending.tools.project_rules import RULES_DIR
 
 DEFAULT_MODEL = "claude-opus-5-5"   # pending a team decision
@@ -80,6 +85,11 @@ LOST_LEASE = ("Stopped before turn {turn}: this run no longer holds the run leas
               "run took it over), so it sent no more model requests.")
 LOST_LEASE_SUBMIT = ("Stopped before submit_desired_state: this run no longer holds the run lease (it expired "
                      "or another run took it over), so nothing was sent and nothing was bought.")
+# Seconds between tries at recording a run's ending in agent_runs, after the first try fails.
+FINISH_RETRIES = (2.0, 10.0, 30.0)
+# How long the run lease must still last when a paid model request is reserved: longer than the request can
+# take, plus its bookkeeping. The harness checks it in the reservation's transaction (`run_lease.hold`).
+LEASE_MARGIN = timedelta(seconds=REQUEST_TIMEOUT + DB_TIMEOUT)
 NOT_RECORDED = "The run couldn't be recorded in agent_runs ({error}), so it stopped before anything was sent."
 # Never passed on to the server: the key the agent pays with, and what the SDK would pick up by itself.
 MODEL_KEY_VARS = frozenset({DEFAULT_KEY_ENV, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
@@ -149,6 +159,7 @@ class Outcome:
     turn: int = 0                       # the model response being worked through
     plan_turn: int | None = None        # the response whose preview set `plan`: a submit must come later
     tool_calls: list[str] = field(default_factory=list)
+    recorded: bool = True               # False when its ending couldn't be written to agent_runs, even on retry
 
 
 UNRESOLVED = ("SUBMISSION UNRESOLVED: the bridge may have accepted it. Check `python -m vending.submissions list` "
@@ -338,6 +349,11 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
         try:
             response = await anyio.to_thread.run_sync(
                 lambda: harness.call(request, label=f"{label} turn {turn + 1}".strip()))
+        except NotHeld as error:            # the lease check at the reservation said no: nothing reserved or sent
+            out.status = "failed"
+            out.detail = (LOST_LEASE.format(turn=turn + 1) if run_lease.LOST in str(error)
+                          else f"Stopped on turn {turn + 1}: {error}")
+            return
         except HarnessError as error:      # CapReached included: nothing more can be paid for
             out.status, out.detail = "failed", f"Stopped on turn {turn + 1}: {error}"
             return
@@ -479,20 +495,7 @@ def _settle(out: Outcome) -> None:
 
 def _bounded(connect: Callable[[], psycopg.Connection], seconds: float) -> Callable[[], psycopg.Connection]:
     """`connect`, with a statement and lock timeout of `seconds` on each connection it opens."""
-    ms = str(max(1, int(seconds * 1000)))
-
-    def opened() -> psycopg.Connection:
-        conn = connect()
-        try:
-            conn.execute("select set_config('statement_timeout', %s, false), set_config('lock_timeout', %s, false)",
-                         (ms, ms))
-            if not conn.autocommit:
-                conn.commit()
-        except BaseException:
-            conn.close()
-            raise
-        return conn
-    return opened
+    return db.with_timeouts(connect, seconds)
 
 
 def _renew(connect: Callable[[], psycopg.Connection], token: Any) -> bool:
@@ -602,7 +605,10 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                 if client is None:
                     client = model_client()
                 # Only a live run spends the competition's money; a dry run is test spend, under the test cap.
-                harness = Harness(client, connect, purpose="live" if live else "test", by="agent")
+                # Each paid request checks the lease in the transaction that reserves its budget, so a run
+                # taken over meanwhile reserves and sends nothing (`run_lease.hold`).
+                harness = Harness(client, connect, purpose="live" if live else "test", by="agent",
+                                  hold=lambda c: run_lease.hold(c, token, LEASE_MARGIN))
                 async with (open_tools or _open_server)() as (listed, call_tool):
                     if live and SUBMIT not in {t.name for t in listed}:
                         out.detail = ("submit_desired_state isn't built on this server, so a live run can't "
@@ -627,20 +633,40 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
         if run_id is None:
             out.status, out.detail = "failed", NOT_RECORDED.format(error=out.detail or "no reason given")
         else:
-            answer = out.answer or {}
-            try:
-                with connect() as conn:
-                    agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer),
-                                      update=answer.get("update"),
-                                      notes=answer.get("notes"), detail=out.detail,
-                                      cost_usd=harness.spent if harness is not None else Decimal(0),
-                                      request_id=out.request_id)
-            except Exception as error:      # noqa: BLE001 - bounded by DB_TIMEOUT: say so rather than hang
-                out.detail = (f"{out.detail} Its ending couldn't be recorded ({type(error).__name__}); "
-                              "agent_runs may still say running.").strip()
-                print(f"agent run {run_id}: its ending couldn't be recorded ({type(error).__name__})",
-                      file=sys.stderr, flush=True)
+            _record_ending(connect, run_id, out, harness)
     return run_id, out
+
+
+def _record_ending(connect: Callable[[], psycopg.Connection], run_id: int, out: Outcome, harness: Any) -> None:
+    """Write the run's ending to agent_runs, trying again after each of `FINISH_RETRIES`. If it never lands,
+    `out.recorded` is False and the detail says so; the schedule's row keeps it in Needs attention until
+    agent_runs has an ending (`vending.dashboard`). A blocking sleep: the run has nothing else to do now."""
+    import time
+
+    answer = out.answer or {}
+    error = None
+    for wait in (0.0, *FINISH_RETRIES):
+        if wait:
+            time.sleep(wait)
+        try:
+            with connect() as conn:
+                agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer),
+                                  update=answer.get("update"),
+                                  notes=answer.get("notes"), detail=out.detail,
+                                  cost_usd=harness.spent if harness is not None else Decimal(0),
+                                  request_id=out.request_id)
+            return
+        except ValueError:      # it already has an ending: the run that took over the lease recorded it
+            out.detail = (f"{out.detail} Its agent_runs row already had an ending, recorded by the run that "
+                          "took over its lease.").strip()
+            return
+        except Exception as caught:      # noqa: BLE001 - each try is bounded by DB_TIMEOUT
+            error = caught
+            print(f"agent run {run_id}: its ending couldn't be recorded ({type(caught).__name__})",
+                  file=sys.stderr, flush=True)
+    out.recorded = False
+    out.detail = (f"{out.detail} Its ending couldn't be recorded ({type(error).__name__}, "
+                  f"{1 + len(FINISH_RETRIES)} tries); agent_runs may still say running.").strip()
 
 
 def _open_server():

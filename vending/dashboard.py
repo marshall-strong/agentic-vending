@@ -870,13 +870,17 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
 
 # The worker's scheduled agent runs (`vending.agent_schedule`), read from the table, not the worker's /health,
 # so turning the schedule off hides none. Two reads, so neither crowds out the other: the newest row, however
-# old, and every failed, missed or halted row of the last week, with any still `running`. No `detail`: a
-# failed one's can hold an error. And the database's `agent_schedule_mode`, to say when it isn't a mode.
-SCHEDULED_COLUMNS = "due_at, mode, claimed_at, outcome, run_id"
-SCHEDULED_LATEST_SQL = f"select {SCHEDULED_COLUMNS} from agent_schedule order by due_at desc limit 1"
-SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS} from agent_schedule"
-                           " where (due_at > %s and outcome in ('failed', 'missed', 'halted')) or outcome = 'running'"
-                           " order by due_at desc limit 50")
+# old, and every failed, missed or halted row of the last week, with any still `running`, and, however old, any
+# whose agent run still says `running` in agent_runs after the schedule recorded its ending (that ending
+# couldn't be written there). No `detail`: a failed one's can hold an error. And the database's
+# `agent_schedule_mode`, to say when it isn't a mode, or says `live` (run as dry-run).
+SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.status as agent_status"
+                     " from agent_schedule s left join agent_runs r on r.id = s.run_id")
+SCHEDULED_LATEST_SQL = f"select {SCHEDULED_COLUMNS} order by s.due_at desc limit 1"
+SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS}"
+                           " where (s.due_at > %s and s.outcome in ('failed', 'missed', 'halted'))"
+                           " or s.outcome = 'running' or (s.outcome <> 'running' and r.status = 'running')"
+                           " order by s.due_at desc limit 50")
 SCHEDULED_SETTING_SQL = "select value from config where key = %s"
 # Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
 CATALOG_REQUESTS_SQL = ("select id, requested_at, name, size, status, sku, decision_note"
@@ -1155,13 +1159,14 @@ def _scheduled(conn: psycopg.Connection, now: datetime) -> dict:
     setting = _rows(conn, SCHEDULED_SETTING_SQL, (agent_schedule.DB_MODE_KEY,))
     return {"latest": latest[0] if latest else None,
             "incidents": _rows(conn, SCHEDULED_INCIDENTS_SQL, (now - agent_schedule.LOOKBACK,)),
-            "setting_ok": not setting or agent_schedule.valid_database_mode(setting[0]["value"])}
+            "setting_ok": not setting or agent_schedule.valid_database_mode(setting[0]["value"]),
+            "setting_live": bool(setting) and setting[0]["value"] == "live"}
 
 
 # How Needs attention reads a scheduled agent run (`vending.agent_schedule`), by its outcome.
 SCHEDULED = {"failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started in its window"),
              "halted": ("warn", "was halted: the halt switch was on"), "skipped": ("info", "skipped"),
-             "submitted": ("info", "submitted a purchase request"), "running": ("info", "is running now")}
+             "running": ("info", "is running now")}
 # Each of these stays in Needs attention for a week (`agent_schedule.LOOKBACK`), whatever ran after it.
 SCHEDULED_PROBLEMS = ("failed", "missed", "halted")
 
@@ -1178,6 +1183,9 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
                               "the worker probably stopped mid-run")
     if outcome == "skipped" and row.get("mode") == "off":
         what = f"skipped: `{agent_schedule.DB_MODE_KEY}` is off in the database"
+    if outcome != "running" and row.get("agent_status") == "running":
+        level, what = "bad", (f"ended {outcome}, but its agent run still says running in agent_runs: its ending "
+                              "couldn't be recorded there. Record it by hand once you know how it ended")
     try:
         due = _eastern(row["due_at"])
         when = f" due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
@@ -1203,9 +1211,13 @@ def _scheduled_runs(panel: dict | None, syncs: dict | None, now: datetime) -> li
     if isinstance(schedule, dict) and schedule.get("mode") == "invalid":
         out.append(("bad", "Scheduled agent runs are off because a setting is wrong (`AGENT_SCHEDULE_MODE`, "
                            "`AGENT_SCHEDULE` or `AGENT_SCHEDULE_FROM`). The container's log says which."))
+    data = panel.get("data") if panel is not None and panel.get("ok") else None
+    # Either setting says live: say that it runs as a dry run in this version.
+    if (isinstance(schedule, dict) and schedule.get("setting") == "live") or \
+            (isinstance(data, dict) and data.get("setting_live")):
+        out.append(("info", agent_schedule.LIVE_NOT_ENABLED))
     if panel is None:
         return out
-    data = panel.get("data") if panel.get("ok") else None
     if not isinstance(data, dict):
         out.append(("warn", SCHEDULE_UNAVAILABLE))
         return out

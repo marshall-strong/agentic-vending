@@ -4,6 +4,12 @@ Every agent run, by hand or scheduled, takes the lease before it does anything e
 back at its end (`vending.agent.run`). Two runs never overlap, in any mode, from any machine on the
 same database.
 
+Before each paid model request, the harness checks the lease in the same transaction that reserves the
+request's budget (`hold`, through `vending.harness.Harness`'s `hold`). It renews the lease there, under
+the row's lock, and refuses unless the lease then lasts longer than a model request can take. A takeover
+(`take`) locks the same row, so the two never interleave: a run that was taken over reserves nothing and
+sends nothing, and a run that reserved keeps its lease until its request has ended.
+
 It is a row, not a session lock, so a dropped or killed database connection never frees it while
 the run goes on. The run renews it every `HEARTBEAT` seconds, on a fresh connection each time, and
 checks it still holds it before each model request and before a purchase request is sent. A run
@@ -33,6 +39,10 @@ HEARTBEAT = 60.0        # seconds between renewals while a run goes on
 GRACE = timedelta(minutes=10)
 EXPIRED = ("Stopped: its run lease expired at {at} without being renewed (its process stopped or "
            "lost the database), so the next run took it over.")
+
+
+LOST = "this run no longer holds the run lease (it expired or another run took it over)"
+NEAR_END = "this run's lease ends before a model request could finish (the run is at its deadline)"
 
 
 @dataclass(frozen=True)
@@ -94,6 +104,19 @@ def renew(conn: psycopg.Connection, token: uuid.UUID) -> bool:
     taken over, or it expired (an expired lease is never renewed, since another run may be taking it)."""
     return conn.execute("update agent_run_lease set renewed_at = now(), expires_at = least(now() + %s, hard_until)"
                         " where token = %s and expires_at > now() returning one", (TTL, token)).fetchone() is not None
+
+
+def hold(conn: psycopg.Connection, token: uuid.UUID, margin: timedelta) -> str | None:
+    """For the harness, inside the transaction that reserves a paid request's budget: renew the lease under
+    its row lock, and return why the request may not go (None when it may). It may go only while this run
+    holds an unexpired lease that, renewed, lasts at least `margin` more: longer than the request can take."""
+    row = conn.execute("update agent_run_lease set renewed_at = clock_timestamp(),"
+                       " expires_at = least(clock_timestamp() + %s, hard_until)"
+                       " where token = %s and expires_at > clock_timestamp()"
+                       " returning expires_at >= clock_timestamp() + %s", (TTL, token, margin)).fetchone()
+    if row is None:
+        return LOST
+    return None if row[0] else NEAR_END
 
 
 def give_back(conn: psycopg.Connection, token: uuid.UUID) -> None:

@@ -732,6 +732,9 @@ def test_the_deadline_outlasts_a_model_request():
     assert run_lease.TTL.total_seconds() > 3 * run_lease.HEARTBEAT
     # A request already sent at the deadline finishes within the lease's grace.
     assert run_lease.GRACE.total_seconds() >= agent.REQUEST_TIMEOUT + 2 * agent.DB_TIMEOUT
+    # The lease a paid request needs (round 3) fits in one renewal, and in the grace past the deadline.
+    assert agent.LEASE_MARGIN.total_seconds() >= agent.REQUEST_TIMEOUT
+    assert agent.LEASE_MARGIN <= run_lease.TTL and agent.LEASE_MARGIN <= run_lease.GRACE
     # The worker lets go of a run, and the dashboard calls it stuck, only once its lease can't be held any more.
     assert agent_schedule.STUCK_AFTER.total_seconds() >= agent.RUN_DEADLINE + run_lease.GRACE.total_seconds()
     assert _span(agent_schedule.STUCK_AFTER) in agent_schedule.ABANDONED
@@ -892,3 +895,92 @@ def test_every_database_call_of_a_run_has_a_time_limit(connect, schema_url):
     with bounded() as c:
         assert c.execute("select current_setting('statement_timeout'), current_setting('lock_timeout')").fetchone() \
             == ("1500ms", "1500ms")
+
+
+# --- Sol review, round 3: ownership is checked where money is reserved, and the ending is retried ---------
+
+def test_a_run_taken_over_after_its_lease_check_reserves_and_sends_nothing(connect, conn):
+    """Round 3, blocker 2: the lease was checked before the tokens were counted and the budget reserved, so a
+    run taken over in between still sent a paid request. Now the check is in the reservation's transaction."""
+    from vending import run_lease
+
+    class TakenOverWhileCounting(Script):
+        def count_tokens(self, **body):
+            # The run's lease lapses and another run takes it over, after the turn's own check.
+            conn.execute("update agent_run_lease set expires_at = now() - interval '1 second'")
+            assert isinstance(run_lease.take(conn, deadline=60), run_lease.Lease)
+            return super().count_tokens(**body)
+    client = TakenOverWhileCounting(answer())
+    run_id, out = go(connect, client, Tools())
+    assert client.sent == [], "a run that lost its lease sent a paid request"
+    assert calls(conn) == {}, "a run that lost its lease reserved money"
+    assert out.status == "failed" and out.detail.startswith(agent.LOST_LEASE.format(turn=1))
+    # The run that took over recorded this one's ending; this one doesn't retry against it.
+    assert out.recorded and "tries" not in out.detail
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_paid_request_is_sent_only_with_the_lease_held_for_longer_than_it_can_take(connect, conn, schema_url):
+    """Round 3, blocker 2: a lease 30 s from expiry at dispatch could be taken over mid-request. The reservation
+    renews it under its row lock, in its own transaction, so it outlasts the request."""
+    from tests.conftest import open_in
+
+    seen = {}
+
+    class NearlyExpired(Script):
+        def count_tokens(self, **body):
+            conn.execute("update agent_run_lease set expires_at = clock_timestamp() + interval '30 seconds'")
+            return super().count_tokens(**body)
+
+        def create(self, **body):
+            with open_in(*schema_url) as other:
+                seen["left"] = other.execute("select expires_at - clock_timestamp() from agent_run_lease").fetchone()[0]
+            return super().create(**body)
+    go(connect, NearlyExpired(answer()), Tools())
+    assert seen["left"].total_seconds() >= agent.REQUEST_TIMEOUT
+
+
+def test_an_ending_that_couldnt_be_recorded_is_tried_again(connect, conn, monkeypatch):
+    """Round 3, major 6: one failed agent_runs.finish() left the run `running` for good."""
+    from vending import agent_runs
+
+    monkeypatch.setattr(agent, "FINISH_RETRIES", (0, 0, 0))
+    real, tries = agent_runs.finish, []
+
+    def flaky(*a, **k):
+        tries.append(1)
+        if len(tries) < 3:
+            raise psycopg.OperationalError("connection lost")
+        return real(*a, **k)
+    monkeypatch.setattr(agent_runs, "finish", flaky)
+    run_id, out = go(connect, Script(answer()), Tools())
+    assert len(tries) == 3 and out.status == "skipped" and out.recorded
+    assert stored(conn, run_id)[1] == "skipped"
+
+
+def test_an_ending_that_never_lands_says_so(connect, conn, monkeypatch):
+    from vending import agent_runs
+
+    monkeypatch.setattr(agent, "FINISH_RETRIES", (0, 0))
+
+    def down(*a, **k):
+        raise psycopg.OperationalError("connection lost")
+    monkeypatch.setattr(agent_runs, "finish", down)
+    run_id, out = go(connect, Script(answer()), Tools())
+    assert not out.recorded and "agent_runs may still say running" in out.detail
+    assert conn.execute("select status from agent_runs where id = %s", (run_id,)).fetchone()[0] == "running"
+
+
+def test_a_run_whose_lease_ends_before_a_request_could_finish_sends_nothing(connect, conn):
+    """Round 3, blocker 2: at the lease's hard limit, a request reserved now could outlive the lease."""
+    from vending import run_lease
+
+    class AtTheLimit(Script):
+        def count_tokens(self, **body):
+            conn.execute("update agent_run_lease set hard_until = clock_timestamp() + interval '1 minute',"
+                         " expires_at = least(expires_at, clock_timestamp() + interval '1 minute')")
+            return super().count_tokens(**body)
+    client = AtTheLimit(answer())
+    _, out = go(connect, client, Tools())
+    assert client.sent == [] and calls(conn) == {}
+    assert out.status == "failed" and run_lease.NEAR_END in out.detail

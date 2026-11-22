@@ -22,7 +22,9 @@ it answers**:
    in Eastern time), and the worst case is written as a `pending` row (and, for
    a live call, a ledger estimate). If the minimum output won't fit, nothing is
    sent and `CapReached` says why. If the row can't be written, nothing is sent
-   either: spend we can't record isn't spent.
+   either: spend we can't record isn't spent. A harness given `hold` (the
+   agent's run lease, `vending.run_lease.hold`) checks it first, in the same
+   transaction: if it says no, nothing is reserved or sent and `NotHeld` says why.
 3. The request is sent once; the client's own retries are turned off, because
    each could bill again.
 4. The answer's `usage` is priced from `model_prices.json` (at the model that
@@ -138,6 +140,10 @@ def check_client(client: Any, key_env: str) -> None:
 
 class CapReached(HarnessError):
     """Not sent: the worst case doesn't fit under what's left of a cap. Nothing was spent."""
+
+
+class NotHeld(HarnessError):
+    """Not sent: `hold` said the caller may not spend now (the agent lost its run lease). Nothing was reserved."""
 
 
 @dataclass(frozen=True)
@@ -295,7 +301,8 @@ class Harness:
                  run_cap_usd: Decimal | None = None, daily_cap_usd: Decimal | None = None,
                  prices: PriceTable | None = None, min_tokens: int = DEFAULT_MIN_TOKENS,
                  now: Callable[[], datetime] | None = None, by: str = "harness",
-                 key_env: str = DEFAULT_KEY_ENV, run_id: str | None = None):
+                 key_env: str = DEFAULT_KEY_ENV, run_id: str | None = None,
+                 hold: Callable[[psycopg.Connection], str | None] | None = None):
         if purpose not in PURPOSES:
             raise HarnessError(f"purpose must be one of {', '.join(PURPOSES)}, not {purpose!r}")
         if key_env.upper().startswith("ANTHROPIC_"):
@@ -309,6 +316,8 @@ class Harness:
         self.prices = prices or load_prices()
         self.min_tokens = min_tokens
         self.now = now      # None: the database clock, read under the lock (a test may pass a fixed one)
+        # Checked in the reservation's transaction, before anything is reserved: why not to spend, or None.
+        self.hold = hold
         daily_key, daily_default = DAILY_CAPS[purpose]
         with connect() as conn:
             self.run_cap = run_cap_usd if run_cap_usd is not None else Decimal(
@@ -412,6 +421,8 @@ class Harness:
             with self.connect() as conn, conn.transaction():
                 conn.execute(f"set local lock_timeout = '{LOCK_TIMEOUT}'")
                 conn.execute("select pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+                if self.hold is not None and (why := self.hold(conn)) is not None:
+                    raise NotHeld(f"not sent: {why}. Nothing was reserved or spent.")
                 now = self.now() if self.now else ledger.db_now(conn)
                 left_today = self.daily_cap - spent_since(conn, day_start(now), self.purpose)
                 allowed = min(self.run_cap - self.spent, left_today)
@@ -436,7 +447,7 @@ class Harness:
                     " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s) returning id",
                     (now, self.purpose, label, self.run_id, model, effort, self.key_env, max_tokens,
                      worst, worst, entry, self.by, self.host)).fetchone()[0]
-        except CapReached:
+        except (CapReached, NotHeld):
             raise
         except Exception as error:
             raise HarnessError(f"couldn't write the worst-case estimate ({type(error).__name__}: "

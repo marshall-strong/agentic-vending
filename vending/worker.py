@@ -60,10 +60,11 @@ never fails the round or /health. A read that runs past the round's time delays 
 
 The agent (the model loop) runs here only when `AGENT_SCHEDULE_MODE` is `dry-run` or `live` and the
 database's `agent_schedule_mode` says so too (`vending.agent_schedule`; with either unset, it never runs).
-Then, at the times in `AGENT_SCHEDULE` (Eastern), the loop starts `vending.agent.run` in a background
-thread, which starts `python -m vending.server` over stdio from the same image. Like the visit reads, a
-scheduled run is not a job of the round and never fails it. `/health` and `/` then also show this worker's
-`AGENT_SCHEDULE_MODE`, the next time and the last scheduled run's outcome.
+Then, at the times in `AGENT_SCHEDULE` (Eastern), the loop starts `vending.agent.run` as a dry run in a
+background thread, which starts `python -m vending.server` over stdio from the same image. Scheduled runs
+are dry runs only: live scheduling is not enabled in this version; it needs a later change approved by the
+team. Like the visit reads, a scheduled run is not a job of the round and never fails it. `/health` and `/`
+then also show that, this worker's `AGENT_SCHEDULE_MODE`, the next time and the last scheduled run's outcome.
 
 `GET /dashboard/demo/simulations` shows simulated seasons from committed files
 (`vending.simulate.demo`), behind the same password. It never opens a database
@@ -223,9 +224,10 @@ def _eastern(moment: str | None) -> str:
     return f"{local:%a %d %b}, {local.hour % 12 or 12}:{local:%M %p} ET"
 
 
-SCHEDULE_OUTCOMES = ("running", "submitted", "skipped", "halted", "failed", "missed")
-# This worker's AGENT_SCHEDULE_MODE is the most it runs; the database's `agent_schedule_mode` must say so too.
-SCHEDULE_MODES = {"dry-run": "at most dry runs", "live": "at most live runs",
+SCHEDULE_OUTCOMES = ("running", "skipped", "halted", "failed", "missed")
+# What this worker runs: dry runs at most (live scheduling is not enabled in this version); the database's
+# `agent_schedule_mode` must say so too.
+SCHEDULE_MODES = {"dry-run": "dry runs only (live scheduling is not enabled in this version)",
                   "invalid": "off: a setting is wrong (see the log)"}
 
 
