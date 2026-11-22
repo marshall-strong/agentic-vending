@@ -27,9 +27,12 @@ RECEIPT_COLUMNS = (
     "slot_reassigned", "resolved_at",
 )
 _MONEY = {"total_paid", "unit_cost_paid"}
-# No receipt comes near a billion dollars. Postgres `numeric` can't hold some finite Decimals (1e999999),
-# and the money readers round to the cent, which raises for an amount past Decimal's 28 digits.
-_TOO_MUCH = Decimal(10) ** 9
+# No receipt comes near a billion dollars, or needs more than 10 decimal places (`unit_cost_paid` has four).
+# Past these, Postgres `numeric` can't hold some finite Decimals (1e999999, 1e-20000), and the money readers,
+# which round to the cent, raise for an amount past Decimal's 28 digits. Both are checked on the digits and
+# exponent alone (`_money`), never by Decimal arithmetic, which overflows on 1e1000000.
+_MOST_WHOLE_DIGITS = 9
+_MOST_PLACES = 10
 
 
 class _NotReal(ValueError):
@@ -77,9 +80,15 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     can arrive after the bridge corrected the receipt, and it must not put the old receipt back. The check
     is part of the same UPDATE, so two reads that race can't both win.
 
-    An amount that can't be real (1e30 dollars) is stored as unknown, with a warning, and the rest of the
-    receipt is kept: the fill happened, and the stock count needs its lines. `last_response` keeps the
-    answer as the bridge gave it.
+    An amount that can't be real (1e30 dollars, or more than 10 decimal places) is stored as unknown, with a
+    warning, and the rest of the receipt is kept: the fill happened, and the stock count needs its lines.
+    `last_response` keeps the answer as the bridge gave it. The warning comes once per revision of the
+    receipt, not on every hourly re-read of it.
+
+    The bridge documents rejection only before fulfillment. So a `rejected` answer after a fulfilled one is
+    kept out, with a warning, unless its `updated_at` is newer than the stored receipt's: then it is the
+    bridge withdrawing the fill, and it is stored (its lines stay, but every reader counts only fulfilled
+    requests). `vending.receipt_prices.apply` then takes back the prices that receipt set.
     """
     if response.get("id") not in (None, request_id):
         raise ValueError(f"asked for {request_id}, the bridge answered about {response.get('id')}")
@@ -94,8 +103,10 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
         raise ValueError(f"unexpected answer for {request_id}: status {response.get('status')!r} and no lines")
     opened, closed = door_times(request_id, response)
     total_paid = _kept_money(response.get("total_paid"), f"{request_id}: total_paid", unreal)
-    warnings = tuple(unreal) + (() if opened is not None else tuple(_door_time_warnings(request_id, response)))
     changed_at = _when(response.get("updated_at"))
+    if unreal and _same_revision(conn, request_id, status, changed_at, response):
+        unreal = []      # named when this revision was first read
+    warnings = tuple(unreal) + (() if opened is not None else tuple(_door_time_warnings(request_id, response)))
 
     with conn.transaction():
         updated = conn.execute(
@@ -105,11 +116,14 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
                    updated_at = %s, last_checked = %s, last_response = %s,
                    door_opened_at = %s, door_closed_at = %s
              where request_id = %s and not (%s = 'pending' and status <> 'pending')
+               and not (%s = 'rejected' and status = 'fulfilled'
+                        and (%s::timestamptz is null or updated_at is null or %s <= updated_at))
                and (%s::timestamptz is null or updated_at is null or updated_at <= %s)
             """,
             (status, response.get("decision_note"), total_paid,
              _when(response.get("fulfilled_at")), changed_at,
-             checked_at, Jsonb(response), opened, closed, request_id, status, changed_at, changed_at),
+             checked_at, Jsonb(response), opened, closed, request_id, status,
+             status, changed_at, changed_at, changed_at, changed_at),
         ).rowcount
         if not updated:
             stored = conn.execute("select status, updated_at from purchase_requests where request_id = %s",
@@ -120,6 +134,12 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
             # (a slow read that outlived its timeout) is stale, so it must not clear the receipt or door times.
             if status == "pending" and stored[0] != "pending":
                 return Stored(stored[0])
+            if status == "rejected" and stored[0] == "fulfilled":
+                said = f"updated_at {changed_at.isoformat()}" if changed_at else "no updated_at"
+                return Stored(stored[0], warnings=(
+                    f"{request_id}: the bridge now says rejected ({said}), but not later than the stored receipt; "
+                    "kept the fulfilled receipt. The bridge rejects a request only before it is filled, so a "
+                    "person should ask about it",))
             return Stored(stored[0], warnings=(
                 f"{request_id}: the bridge's answer last changed {changed_at.isoformat()}, older than the one "
                 f"stored ({stored[1].isoformat()}); kept the stored receipt",))
@@ -140,6 +160,16 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
                 losses,
             )
     return Stored(status, max(len(losses) - before, 0), warnings)
+
+
+def _same_revision(conn: psycopg.Connection, request_id: str, status: str, changed_at: datetime | None,
+                   response: dict) -> bool:
+    """Whether this answer is the revision already stored: the same status and `updated_at`, or the same answer."""
+    stored = conn.execute("select status, updated_at, last_response from purchase_requests where request_id = %s",
+                          (request_id,)).fetchone()
+    if stored is None or stored[0] != status or stored[2] is None:
+        return False
+    return (changed_at is not None and stored[1] == changed_at) or stored[2] == response
 
 
 def door_times(request_id: str, response: dict) -> tuple[datetime | None, datetime | None]:
@@ -241,9 +271,20 @@ def _money(value: str | int | None) -> Decimal | None:
         amount = Decimal(str(value))
     except InvalidOperation:
         raise ValueError(f"not an amount: {value!r}") from None
-    if not amount.is_finite() or abs(amount) >= _TOO_MUCH:
+    if not amount.is_finite():
         raise _NotReal(f"not an amount: {value!r}")
-    return amount
+    # Read the digits and exponent directly: no Decimal arithmetic, so no context can overflow or round.
+    sign, digits, exponent = amount.as_tuple()
+    if not any(digits):
+        return amount if -_MOST_PLACES <= exponent <= 0 else Decimal(0)     # 0.00 stays 0.00; 0e-20000 is 0
+    digits = list(digits)
+    while exponent < 0 and digits[-1] == 0:      # 12.3700 has two places, not four
+        digits.pop()
+        exponent += 1
+    if len(digits) + exponent > _MOST_WHOLE_DIGITS or exponent < -_MOST_PLACES:
+        raise _NotReal(f"not an amount: {value!r}")
+    # Kept as given (12.30 stays 12.30), unless only trailing zeros put it past the places numeric may hold.
+    return amount if amount.as_tuple().exponent >= -_MOST_PLACES else Decimal((sign, tuple(digits), exponent))
 
 
 def _when(value: str | None) -> datetime | None:

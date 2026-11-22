@@ -266,7 +266,8 @@ def test_a_float_amount_is_refused(conn):
         store(conn, "r1", fulfilled("r1", receipt(total_paid=12.37)), NOW)
 
 
-@pytest.mark.parametrize("amount", ["1e999999", "1e30", "-1e9", "NaN", "Infinity"])
+@pytest.mark.parametrize("amount", ["1e999999", "1e30", "-1e9", "NaN", "Infinity", "1e1000000", "1e-20000",
+                                    "1.0000000000001"])
 def test_an_amount_that_cant_be_real_is_stored_as_unknown_and_the_sync_goes_on(conn, amount):
     """Postgres can't hold 1e999999 as numeric, and the money readers can't round 1e30 to the cent. Neither
     may stop the sync, and the fill still counts: its lines are kept, with that amount unknown."""
@@ -283,6 +284,48 @@ def test_an_amount_that_cant_be_real_is_stored_as_unknown_and_the_sync_goes_on(c
         assert any(line.startswith(what) and "can't be a real amount" in line for line in said), said
     assert conn.execute("select last_response->>'total_paid' from purchase_requests where request_id = 'r1'"
                         ).fetchone() == (amount,)
+
+
+@pytest.mark.parametrize("amount, kept", [
+    ("12.370000000000000000000000000000", Decimal("12.37")),
+    ("1237E-2", Decimal("12.37")),
+    ("0.0001", Decimal("0.0001")),
+    ("999999999.99", Decimal("999999999.99")),
+])
+def test_an_exact_amount_is_stored_as_given(conn, amount, kept):
+    """The limits on size and decimal places leave real amounts alone, trailing zeros and exponents included."""
+    submit(conn, "r1")
+    assert store(conn, "r1", fulfilled("r1", receipt(total_paid=amount)), NOW).warnings == ()
+    assert conn.execute("select total_paid from purchase_lines").fetchone() == (kept,)
+
+
+def test_an_unreal_amount_is_named_once_per_receipt_revision(conn):
+    """Round 2, finding 6: the hourly re-read of the same receipt doesn't repeat the warning. A new revision of the
+    receipt (a later loss moves updated_at) is read afresh, so it names the amount again."""
+    submit(conn, "r1")
+    said = []
+    answer = fulfilled("r1", receipt(), total_paid="1e30")
+    sync(conn, FakeBridge({"r1": answer}), NOW, log=said.append)
+    sync(conn, FakeBridge({"r1": answer}), NOW + timedelta(hours=1), log=said.append)
+    assert sum("can't be a real amount" in line for line in said) == 1, said
+    newer = fulfilled("r1", receipt(later_losses=[later(1)]), total_paid="1e30", fulfilled_at="2026-11-07T16:30:00Z",
+                      updated_at="2026-11-08T10:00:00Z")
+    sync(conn, FakeBridge({"r1": newer}), NOW + timedelta(hours=2), log=said.append)
+    assert sum("can't be a real amount" in line for line in said) == 2, said
+
+
+def test_a_database_error_in_one_answer_does_not_stop_the_others(conn):
+    """Round 2, finding 1: a value Postgres refuses (here a count that isn't a number) fails that request only. Its
+    write is rolled back to a savepoint, and the requests after it are still stored."""
+    submit(conn, "r1", days_ago=3)
+    submit(conn, "r2")
+    said = []
+    report = sync(conn, FakeBridge({"r1": fulfilled("r1", receipt(units_loaded="eight")),
+                                    "r2": fulfilled("r2", receipt())}), NOW, log=said.append)
+    assert (report.failed, report.fulfilled) == (1, 1)
+    statuses = dict(conn.execute("select request_id, status from purchase_requests").fetchall())
+    assert statuses == {"r1": "pending", "r2": "fulfilled"}
+    assert any(line.startswith("r1: ") and "kept what we had" in line for line in said), said
 
 
 def test_an_amount_that_isnt_a_number_still_refuses_the_answer(conn):

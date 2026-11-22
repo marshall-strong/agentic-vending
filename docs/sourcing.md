@@ -74,23 +74,34 @@ no web access is needed, and the price is never older than our last purchase of 
   to the cent. Purchases are tax-exempt and the bottle deposit is not a concern (David, 12 Nov), so
   that is the shelf price. Lines of one request for the same drink, store and pack size are added
   together first.
-- **Which row.** Every row with the same SKU, store and pack size, primary or alternate. Its price
-  and `checked` date change: the date is when the worker resolved the line. `checked_by` becomes
-  `receipt`, and the note names the request. The store, pack, link, description and max stay.
-  `action_log` keeps the values it replaced, as for `set`.
+- **Which row.** Every row with the same SKU, store and pack size, primary or alternate. For
+  Amazon the listing must match too: the link the request asked for and the row's link name the
+  same ASIN (or, with no ASIN, are the same link). So a receipt from an old listing never prices
+  the listing that replaced it. Its price and `checked` date change: the date is when the worker
+  resolved the line. `checked_by` becomes `receipt`, and the note names the request. The store,
+  pack, link, description and max stay. `action_log` keeps the values it replaced, as for `set`.
 - **A newer price wins.** A row checked after the receipt keeps its price. Reading the same
-  receipt again changes nothing. A corrected receipt replaces the price it set.
+  receipt again changes nothing. A corrected receipt replaces the price it set. While a receipt is
+  applied, its request is locked, so a newer revision of that receipt waits and is applied after.
+- **Taken back.** If a corrected receipt no longer gives a price it set (the line became
+  unavailable, a substitution or above the max), or the bridge withdraws the fill (a rejection
+  newer than the receipt), the row gets the price it would have without that receipt: the newest
+  price another receipt gives as that receipt stands now, if it is newer than the last hand price;
+  otherwise that hand price; otherwise no price until a person checks it.
+- **A rejection after a fill** with no newer `updated_at` is not stored. The bridge rejects a
+  request only before it is filled, so the receipt stays and the sync logs a warning.
 - **Skipped, and the reason logged:** a line loaded from the closet or not bought, a
   substitution (the receipt's SKU isn't the one we asked for), a missing amount or pack size,
   zero packs, units that don't add up, a pack price above the row's max (a person raises the max),
   and a drink bought at a store or pack size the table has no row for. The sync logs the reasons
   when it first finds the request fulfilled, and again when a corrected receipt changes its lines.
   A re-read that changes nothing logs nothing.
-- **An amount that can't be real** (a billion dollars or more, or not a finite number) is stored
-  as unknown, with a warning in the sync log. The rest of the receipt is kept, so the fill still
-  counts for stock. That line gives no price.
+- **An amount that can't be real** (a billion dollars or more, more than 10 decimal places, or
+  not a finite number) is stored as unknown, with a warning in the sync log once per revision of
+  the receipt. The rest of the receipt is kept, so the fill still counts for stock. That line
+  gives no price. A value the database refuses fails that request only; the sync goes on.
 - `python -m vending.receipt_prices` applies every receipt already stored (add `--dry-run` to
-  see what would change). The sync runs it for each fulfilled request on its own.
+  see what would change; it plays each receipt on the rows as the ones before it left them). The sync runs it for each fulfilled request on its own.
 
 `python -m vending.sourcing` shows such a row as `from receipt ...`, and the dashboard's Pricing
 panel labels a cost taken from it **expected · receipt**. Nobody may set `--by receipt` by hand.

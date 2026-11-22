@@ -12,14 +12,16 @@ request's stored receipts, so reading again never counts a loss twice.
 
 After each fulfilled read, `vending.receipt_prices.apply` refreshes our sourcing
 prices from what the receipt shows was paid (#202). It is idempotent, so the
-re-reads change nothing. It runs here, in the same round, so prices are fresh as
-soon as the receipt is stored; a failure there is logged and counted, and the
-receipt itself is kept.
+re-reads change nothing. A fill the bridge withdraws (a rejection with a newer
+`updated_at`) has its prices taken back the same way. It runs here, in the same
+round, so prices are fresh as soon as the receipt is stored; a failure there is
+logged and counted, and the receipt itself is kept.
 
-A request the bridge can't return, or answers with something we can't use, is
-logged and counted and the run carries on with the rest. A run that is still
-rate limited after the bridge client's retries stops there and leaves the rest
-for next time, since every further call would only add to the load. An
+A request the bridge can't return, or answers with something we can't use (or
+that the database refuses), is logged and counted and the run carries on with
+the rest. A run that is still rate limited after the bridge client's retries
+stops there and leaves the rest for next time, since every further call would
+only add to the load. An
 unreachable bridge or a rejected key stops the run, as in `sync_history`.
 
 It never migrates. On a database that is behind it refuses to run (exit 2) and
@@ -98,6 +100,12 @@ def sync(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
             report.failed += 1
             log(f"{request_id}: {error}; kept what we had")
             continue
+        except (psycopg.DataError, psycopg.IntegrityError) as error:
+            # A value Postgres refuses. `store` writes in one transaction (a savepoint inside a caller's), so
+            # all of this answer is rolled back and the next request is read as usual.
+            report.failed += 1
+            log(f"{request_id}: the database refused the answer ({type(error).__name__}); kept what we had")
+            continue
         report.checked += 1
         setattr(report, stored.status, getattr(report, stored.status) + 1)
         report.new_losses += stored.new_losses
@@ -110,6 +118,9 @@ def sync(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
             # changes its receipt (a correction can bring a new reason), not on every re-read.
             quiet = before is not None and receipt_prices.priced_lines(conn, request_id) == before
             _refresh_prices(conn, request_id, now, report, log, quiet=quiet)
+        elif stored.status == "rejected" and before is not None:
+            # The bridge withdrew a fill: the prices its receipt set are taken back.
+            _refresh_prices(conn, request_id, now, report, log)
     return report
 
 
