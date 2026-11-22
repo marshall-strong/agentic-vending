@@ -58,7 +58,7 @@ import os
 import re
 import sys
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from fractions import Fraction
 from functools import partial
@@ -72,8 +72,8 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import (capacity, db, leaderboards, machine_art, money_panel, plan_rounds, report_card, settings,
-                     slot_counts, visits)
+from vending import (capacity, db, leaderboards, machine_art, midweek_wake, money_panel, plan_rounds, report_card,
+                     settings, slot_counts, visits)
 from vending import agent_runs, key_dates, pricing_panel
 from vending import stock as stock_mod
 from vending import planner
@@ -940,6 +940,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
                               if purchases["ok"] else purchases),
         "catalog_requests": catalog,
         "catalog_counts": _catalog_counts(catalog),
+        "midweek_wakeup": _panel(lambda: _guarded(conn, lambda: midweek_wake.current(conn, now))),
     }
     try:
         lock = lock_at()
@@ -1087,6 +1088,12 @@ def attention(snap: dict) -> list[dict]:
     pricing = snap.get("pricing")
     if pricing and pricing["ok"] and pricing["data"].get("wildcard_stale"):
         add("warn", pricing_panel.WILDCARD_STALE)
+    wake = snap.get("midweek_wakeup")
+    if wake and wake.get("ok") and wake["data"]:
+        r = wake["data"]
+        add("info" if r["requested_at"] else "warn", "Midweek wake-up: " + r["reason"]
+            + (" A midweek run was requested." if r["requested_at"]
+               else " A midweek run has not been requested yet."))
     if pricing and pricing["ok"]:
         for r in pricing["data"]["rows"]:
             if r["legal"] is False:
@@ -1143,6 +1150,8 @@ def verdict(items: list[dict]) -> str:
 def to_json(value: Any) -> str:
     def default(v: Any) -> Any:
         if isinstance(v, datetime):
+            return v.isoformat()
+        if isinstance(v, date):          # a plain date (the wake-up's week start); datetime is above
             return v.isoformat()
         if isinstance(v, Decimal):
             return str(v)    # money stays exact text, as the tools send it

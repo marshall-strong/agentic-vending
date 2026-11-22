@@ -85,7 +85,7 @@ The fix is product choice, not visits: high-capacity packages, or two columns fo
 
 Plan on **2 class days saved** for a Monday-morning request, **1** for Tuesday, none after Tuesday (Proposed).
 
-**Class days saved.** Visits land after 1 PM (said of Friday, #106 row 14; midweek is our inference, R5). Monday's request filled Tuesday saves 3 days at best; visits "may take longer than 24 hours", so plan on Wednesday: 2. Tuesday's, filled Thursday: 1. Thursday's: 0.
+**Class days saved.** Visits land after 1 PM (said of Friday, #106 row 14; midweek is our inference, R5). Monday's request filled Tuesday saves 3 days at best; visits "may take longer than 24 hours", so plan on Wednesday: 2. Tuesday's, filled Thursday: 1. Thursday's: 0. `vending.midweek_wake` (MIDWEEK_WAKE=on, #219) applies this rule to the stored facts after each sync round and records a wake-up when a visit would pay, so the agent's next run sees it without re-deciding.
 
 **Margin per unit** = shelf price ÷ 1.08 − unit cost, at run 2's most-we-pay pack prices (`docs/sample-directive.md`), so worst case. The table rounds; the arithmetic uses unrounded values.
 

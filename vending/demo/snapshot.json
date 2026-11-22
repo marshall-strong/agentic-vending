@@ -2746,6 +2746,29 @@
    "unsettled": 0
   }
  },
+ "midweek_wakeup": {
+  "ok": true,
+  "data": {
+   "id": 1,
+   "week_start": {
+    "$date": "2026-12-05"
+   },
+   "decided_at": {
+    "$datetime": "2026-12-07T15:05:00+00:00"
+   },
+   "reason": "Slots 16, 17 and 25 are projected to sell out before Friday's restock (16: empty now; 17: 0.8 class days of stock at 1.4 a class day; 25: empty now). A midweek visit requested now plans on Wednesday afternoon and would save $31.02 before Friday, more than the $25.00 fee (docs/restock-policy.md, section 2).",
+   "slots": [
+    "16",
+    "17",
+    "25"
+   ],
+   "saved_margin_cents": 3102,
+   "requested_at": {
+    "$datetime": "2026-12-07T15:05:00+00:00"
+   },
+   "requested_by": "midweek_wake"
+  }
+ },
  "key_dates": {
   "ok": true,
   "data": {
@@ -3698,6 +3721,10 @@
   {
    "level": "warn",
    "text": "Tool calls in the last 24 hours: 1 refused and 1 failed. See Tool calls below."
+  },
+  {
+   "level": "info",
+   "text": "Midweek wake-up: Slots 16, 17 and 25 are projected to sell out before Friday's restock (16: empty now; 17: 0.8 class days of stock at 1.4 a class day; 25: empty now). A midweek visit requested now plans on Wednesday afternoon and would save $31.02 before Friday, more than the $25.00 fee (docs/restock-policy.md, section 2). A midweek run was requested."
   }
  ],
  "demo": true

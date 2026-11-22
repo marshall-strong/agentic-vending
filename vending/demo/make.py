@@ -533,6 +533,22 @@ def seed_ledger(conn) -> None:
         ledger.record_tokens(conn, cost, MODEL, 40000, 2500, f"demo_run_{key}", at=at)
 
 
+def seed_midweek_wake(conn) -> None:
+    """This week's wake-up (#219), decided Monday 7 Dec after the sync round, requested then too.
+
+    Made-up slots from SELECTIONS. The reason is the shape `vending.midweek_wake.decide`
+    writes: which slots, their projection, the saved margin against the fee, the rule."""
+    conn.execute(
+        "insert into midweek_wakeups (week_start, decided_at, reason, slots, saved_margin_cents,"
+        " requested_at, requested_by) values (%s, %s, %s, %s, %s, %s, %s)",
+        (_utc(5, 0).date(), _utc(7, 15, 5),
+         "Slots 16, 17 and 25 are projected to sell out before Friday's restock (16: empty now; "
+         "17: 0.8 class days of stock at 1.4 a class day; 25: empty now). A midweek visit requested "
+         "now plans on Wednesday afternoon and would save $31.02 before Friday, more than the $25.00 "
+         "fee (docs/restock-policy.md, section 2).",
+         ["16", "17", "25"], 3102, _utc(7, 15, 5), "midweek_wake"))
+
+
 def seed_visits(conn) -> None:
     """The Visitors tile: made-up counts. A browser is a made-up id, as the counter's cookie would be."""
     conn.execute("update page_visit_totals set browsers = 5, sign_ins = 9, visits = 31, since = %s", (_utc(2, 16),))
@@ -560,6 +576,7 @@ def seed(conn) -> None:
     ids = seed_runs(conn)
     seed_steps(conn, ids)
     seed_counts(conn)
+    seed_midweek_wake(conn)
     seed_visits(conn)
     config.set_halted(conn, False, "kevin")
     conn.execute("update config set updated_at = %s where key = 'halted'", (_utc(2, 14),))
