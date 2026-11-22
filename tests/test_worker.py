@@ -215,14 +215,17 @@ def test_timeout_must_be_positive():
 
 
 def test_the_default_jobs_never_migrate(monkeypatch):
-    """On a database that is behind, every scheduled sync refuses (exit 2) and none migrates.
+    """On a database that is behind, every scheduled job refuses (exit 2) and none migrates.
 
     In production the worker runs these against the shared Azure database at every
     start and every hour, so a sync that migrated would change its schema on deploy.
+    The wake job refuses the same way when it is on; here it is switched on so this covers
+    it too.
     """
     pytest.importorskip("psycopg")
     from vending import db
 
+    monkeypatch.setenv("MIDWEEK_WAKE", "on")
     migrated = []
     monkeypatch.setattr(db, "connect", lambda: nullcontext(object()))
     monkeypatch.setattr(db, "pending", lambda conn: ["999_not_yet_applied.sql"])
@@ -230,9 +233,11 @@ def test_the_default_jobs_never_migrate(monkeypatch):
     monkeypatch.setenv("TRACKING_DAILY", "on")     # off, the daily check never opens the database
     results = worker.run_round(worker.default_jobs(), log=lambda _: None)
     assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog",
-                                        "sync_product_requests", "tracking_daily"]
+                                        "sync_product_requests", "midweek_wake", "tracking_daily"]
     assert migrated == []
-    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 6
+    # Without the worker's NEEDS every job runs, so the wake job refuses the database that is behind
+    # too; that it waits for a slot check that passed is tested in test_midweek_wake.
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 7
 
 
 # --- The home page at / (#54) -----------------------------------------------------

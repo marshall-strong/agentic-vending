@@ -92,6 +92,10 @@ SWITCH = "switch"
 PURCHASE = "purchase"
 BACK_STOCK = "back_stock"
 
+# The floor part for units already in a slot that stay there (`FloorPart.source`). Every other part
+# is a cost of units this visit loads: the closet's lots drawn, or a purchase option's max per unit.
+ON_HAND = "on hand"
+
 # A price as the agent or the database hands it over. See `to_cents`.
 Price = str | Decimal | int
 
@@ -426,10 +430,16 @@ class FloorPart:
 
 @dataclass(frozen=True)
 class SlotFloor:
-    """A slot's floor and the arithmetic behind it, so the agent can see why."""
+    """A slot's floor and the arithmetic behind it, so the agent can see why.
+
+    `units_loaded_cost_unknown` counts the units this visit loads from closet lots of
+    unknown cost: only the lots the allocation actually draws, so a later lot of the same
+    product that stays unused never makes the known draws unknown. Those units leave no part.
+    """
     slot: str
     floor_cents: int
     parts: tuple[FloorPart, ...]
+    units_loaded_cost_unknown: int = 0
 
 
 @dataclass(frozen=True)
@@ -504,6 +514,7 @@ class _Slot:
     need: int = 0
     changes_product: bool = False
     from_back_stock: int = 0
+    unknown_cost_drawn: int = 0     # closet units drawn from lots of unknown cost
     shortfall: int = 0
     purchase: Purchase | None = None
     parts: list[FloorPart] = field(default_factory=list)
@@ -586,7 +597,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         if s.staying and (s.need or s.price_changed):
             # Units staying in the slot sell at its new price too, so each cost among them sets a floor.
             for units, cost in s.state.layers or ((s.staying, s.state.unit_cost),):
-                _add_part(s, "on hand", cost, config, warnings, units)
+                _add_part(s, ON_HAND, cost, config, warnings, units)
         if not s.need:
             continue
         if check := capacity.fill_check(s.fill_to, capacities[s.product]):
@@ -607,6 +618,8 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             if take:
                 lot.units -= take
                 remaining -= take
+                if lot.unit_cost is None:
+                    s.unknown_cost_drawn += take
                 _add_part(s, "back stock", lot.unit_cost, config, warnings, take)
         s.from_back_stock = s.need
 
@@ -723,7 +736,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 f"one unit and there is no price-change route yet; load at least one unit "
                 f"or keep the old price"), s.slot))
         floor = slot_floor_cents([p.floor_cents for p in s.parts]) if s.parts else 0
-        floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
+        floors.append(SlotFloor(s.slot, floor, tuple(s.parts), s.unknown_cost_drawn))
         refusals.extend(check_price(s.price_cents, floor, config.ceiling_for(s.slot), s.slot))
     refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle, warnings))
 

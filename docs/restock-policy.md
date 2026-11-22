@@ -91,13 +91,19 @@ The fix is product choice, not visits: high-capacity packages, or two columns fo
 
 **Rule.** Ask for a midweek visit only when the margin it saves before Friday is more than $25 (no substitution between our slots, R9):
 
-> saved margin = sum over empty slots of (rate per class day × class days saved × margin per unit)
+> saved margin = sum over at-risk slots of (units the visit saves × margin per unit), the units saved being the slot's shortfall between the visit's landing and Friday's restock, capped at what the planner's plan for the visit loads into it (whole packs, up to a column, `docs/capacity.md`)
 
 Plan on **2 class days saved** for a Monday-morning request, **1** for Tuesday, none after Tuesday (Proposed).
 
 **Class days saved.** Visits land after 1 PM (said of Friday, #106 row 14; midweek is our inference, R5). Monday's request filled Tuesday saves 3 days at best; visits "may take longer than 24 hours", so plan on Wednesday: 2. Tuesday's, filled Thursday: 1. Thursday's: 0.
 
-**Margin per unit** = shelf price ÷ 1.08 − unit cost, at run 2's most-we-pay pack prices (`docs/sample-directive.md`), so worst case. The table rounds; the arithmetic uses unrounded values.
+**The check in code.** `vending.midweek_wake` (MIDWEEK_WAKE=on, #219) applies this rule after each sync round and records a wake-up when a visit would pay, so the agent's next run sees it without re-deciding. It reuses the planner rather than redoing its sums:
+
+- **At risk:** demand before the landing is the rest of today (the hourly shares in `vending.demand`: a 7:30 AM check still has 99% of Monday to sell) plus the class days through the landing; a slot is at risk when what is left at the landing falls short of the class days after it. Units lost before the landing are lost either way and count nothing.
+- **The visit:** an off-cycle desired state restocks each at-risk slot with its product and shelf price, filled to its column, every other slot kept, and goes through the planner on the preview's path (no submit, no bridge call). That gives whole packs, the configured fee, the closet drawn only for the same product with its oldest layers first, and every gate. Any refusal (the halt switch, an open request, the balance, anything infeasible) records nothing, and the week stays open for a later round.
+- **The bar** is the planner's visit fee. Units the visit loads that don't sell by Friday keep their cost (A5), so the purchase is not a cost of the visit; the planner's balance gate checks it can be paid for (rule 4). The check doesn't raise the bar for a cash-short week (below); it only refuses a visit the spendable balance can't cover with the spendable floor left (rule 4).
+
+**Margin per unit** = shelf price ÷ 1.08 − the planner's unit cost for what the visit loads, at the most we pay: each purchase option's max price per unit, or the closet lots of the same product it draws, the dearest of them (the costs behind the planner's floor, less the units that stay in the slot). The table uses run 2's most-we-pay pack prices (`docs/sample-directive.md`), so worst case. The table rounds; the arithmetic uses unrounded values.
 
 | Product (run 2) | Unit cost at most | Price | Price ex tax | Margin | Break-even units (25 ÷ margin, rounded up) |
 |---|---|---|---|---|---|

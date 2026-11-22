@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from pydantic import BaseModel, Field
 
-from vending import ledger, slots as assignment, stock
+from vending import ledger, midweek_wake, slots as assignment, stock
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.tools import catalog, machine_state, purchase_requests
 
@@ -114,6 +114,16 @@ class Requests(BaseModel):
     turnaround: list[Turnaround] = Field(default_factory=list)
 
 
+class MidweekWakeup(BaseModel):
+    """This week's wake-up row (`vending.midweek_wake`): why the agent was woken midweek."""
+    week_start: date                      # the Saturday that starts the Saturday-to-Friday week
+    decided_at: datetime
+    reason: str
+    slots: list[str]
+    saved_margin: str                     # the sales a midweek visit would save, exact dollars text
+    requested: bool                       # a midweek run has been asked for (`request_midweek_run`)
+
+
 class TrackingCheck(BaseModel):
     """The newest tracking check the bridge answered with verdicts (`vending.tracking_daily.latest`).
 
@@ -146,6 +156,7 @@ class Briefing(BaseModel):
     closet_value_at_cost: str | None = None
     closet_unavailable: str | None = None
     requests: Requests = Field(default_factory=Requests)
+    midweek_wakeup: MidweekWakeup | None = None
     stock_warning_count: int = 0
     tracking: TrackingCheck | None = None
 
@@ -321,6 +332,16 @@ def _inventory(conn, b: Briefing, ours: tuple[str, ...]) -> None:
         _alert(b, "counts_stale", f"{weak} counts exceed 7d", "get_machine_state")
 
 
+def _midweek(conn, b: Briefing) -> None:
+    """This week's wake-up, when there is one (`vending.midweek_wake`): why the run was woken."""
+    row = midweek_wake.current(conn, b.computed_at)
+    if row is not None:
+        b.midweek_wakeup = MidweekWakeup(
+            week_start=row["week_start"], decided_at=row["decided_at"], reason=row["reason"],
+            slots=list(row["slots"]), saved_margin=ledger.money(row["saved_margin_cents"]),
+            requested=row["requested_at"] is not None)
+
+
 def _tracking(conn, b: Briefing) -> None:
     """The newest answered tracking check, however many refusals follow it; an alert for each figure
     it read outside. `latest_answered` queries the answered check for itself, so refusals after it
@@ -421,6 +442,7 @@ def build(conn: psycopg.Connection, now: datetime | None = None) -> Briefing:
             b.slot_assignment_version = hashlib.sha256(json.dumps([DEVICE_ID, ours]).encode()).hexdigest()[:16]
             _section(conn, b, "money", "get_pnl", lambda: _money(conn, b, ours))
             _section(conn, b, "inventory", "get_machine_state", lambda: _inventory(conn, b, ours))
+            _section(conn, b, "midweek_wakeup", "python -m vending.db migrate", lambda: _midweek(conn, b))
             if not b.slots:
                 b.slots = [Slot(slot=s, flags=["source unavailable"]) for s in ours]
                 b.closet_unavailable = "inventory source unavailable"
@@ -475,6 +497,10 @@ def render(b: Briefing) -> str:
     lines += [f"Alert {a.code}: {a.evidence} -> {a.lookup}" for a in b.alerts]
     if not b.alerts:
         lines.append("Alerts: none.")
+    if b.midweek_wakeup:
+        w = b.midweek_wakeup
+        lines.append(f"Midweek wake-up: {w.reason} A midweek run "
+                     + ("was requested." if w.requested else "has not been requested yet."))
     lines += ["", "Money ($, ex-tax; Saturday-Friday Eastern):",
               "|Period (days)|Revenue|Known COS|Known loss|Fees|Live API|Gross|Net|",
               "|---|---:|---:|---:|---:|---:|---:|---:|"]

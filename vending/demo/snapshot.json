@@ -2771,6 +2771,29 @@
    "unsettled": 0
   }
  },
+ "midweek_wakeup": {
+  "ok": true,
+  "data": {
+   "id": 1,
+   "week_start": {
+    "$date": "2026-12-05"
+   },
+   "decided_at": {
+    "$datetime": "2026-12-07T15:05:00+00:00"
+   },
+   "reason": "Slots 16, 17 and 25 are projected to sell out before Friday's restock (16: empty now; 17: 1 on hand at 1.4 a class day; 25: empty now). A midweek visit requested now plans on Wednesday afternoon; the planner prices it at up to $85.84 with the $25.00 fee, and the sales it would save before Friday are worth $31.02 in margin at the most we pay, more than the fee (docs/restock-policy.md, section 2).",
+   "slots": [
+    "16",
+    "17",
+    "25"
+   ],
+   "saved_margin_cents": 3102,
+   "requested_at": {
+    "$datetime": "2026-12-07T15:05:00+00:00"
+   },
+   "requested_by": "midweek_wake"
+  }
+ },
  "scheduled_runs": {
   "ok": true,
   "data": {
@@ -3759,6 +3782,10 @@
   {
    "level": "warn",
    "text": "Tool calls in the last 24 hours: 1 refused and 1 failed. See Tool calls below."
+  },
+  {
+   "level": "info",
+   "text": "Midweek wake-up: Slots 16, 17 and 25 are projected to sell out before Friday's restock (16: empty now; 17: 1 on hand at 1.4 a class day; 25: empty now). A midweek visit requested now plans on Wednesday afternoon; the planner prices it at up to $85.84 with the $25.00 fee, and the sales it would save before Friday are worth $31.02 in margin at the most we pay, more than the fee (docs/restock-policy.md, section 2). A midweek run was requested."
   }
  ],
  "alerts": [],
