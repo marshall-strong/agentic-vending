@@ -90,15 +90,30 @@ no web access is needed, and the price is never older than our last purchase of 
 - **A fill is never undone automatically.** The bridge describes rejection only before a request
   is filled. So a rejected answer for a request we hold as fulfilled, with or without a newer
   `updated_at`, is not stored. The receipt, its stock and its prices stay. The sync logs one
-  warning for each such answer, telling a person to check with the instructors. A fulfilled
-  answer with no `updated_at` (or an older one), after we hold a receipt that has one, is ignored
-  the same way, with one warning.
+  warning for each such answer, telling a person to check with the instructors. The answer's own
+  `status` decides: a rejected answer that carries an empty `lines` list is still a rejection. A
+  fulfilled answer that lists no lines never replaces the stored lines. A fulfilled answer with no
+  `updated_at` (or an older one), after we hold a receipt that has one, is ignored the same way,
+  with one warning.
+- **Same `updated_at`, different answer.** An answer with the same status and `updated_at` as the
+  stored one is the same revision. It is stored again if it is the same answer, or the same answer
+  with more `later_losses` (the bridge adds those to a filled request, and its spec doesn't say
+  they change `updated_at`). Any other difference is kept out with one warning: we can't tell
+  which answer is newer, so the stored one stays and a person checks it against the bridge.
+- **Each answer kept out is recorded once** in `action_log` (tool `purchase_requests.ignored`),
+  with the reason and the warning itself, so the warning is on record even if the sync's own log
+  is lost.
+- **A malformed answer** (a time that is a number, `lines` that isn't a list, a receipt that isn't
+  an object, a count that isn't a whole number) fails that request only, with its reason logged.
+  The stored receipt stays and the sync reads the next request.
 - **A price a correction stops giving** (the line became unavailable or a substitution) is not
   taken back. The row keeps it, and the sync says so once, so a person can check it.
 - **Locks.** While a receipt is applied, its request is locked, so a newer revision of that
   receipt waits and is applied after. All the sourcing rows of the receipt's drinks are locked
   at once, in one fixed order, so two receipts that list the same drinks in a different order
-  wait for each other instead of deadlocking. A change a person makes at the same time is kept.
+  wait for each other instead of deadlocking. `python -m vending.sourcing import` locks every row
+  of its file's drinks the same way before it writes any, so an import and a receipt wait for each
+  other too. A change a person makes at the same time is kept.
 - **Skipped, and the reason logged:** a line loaded from the closet or not bought, a
   substitution (the receipt's SKU isn't the one we asked for), a missing amount or pack size,
   zero packs, units that don't add up, a pack price above the row's max (a person raises the max),

@@ -239,6 +239,30 @@ def set_option(conn: psycopg.Connection, o: Option, now: datetime | None = None)
     return outcome
 
 
+def import_rows(conn: psycopg.Connection, rows: list[Option], now: datetime | None = None) -> list[str]:
+    """Add or replace these rows, all or nothing. Returns each row's "added" or "replaced", in order.
+
+    Every existing row of the file's SKUs is locked first, in (sku, rank) order (`lock_skus`), as a receipt
+    refresh locks them. Writing them in the file's order instead could hold one row a refresh wants while
+    waiting on another the refresh holds."""
+    unknown = sorted({o.sku for o in rows} - in_catalog(conn, [o.sku for o in rows]))
+    if unknown:
+        raise SourcingError(f"nothing imported. Not in our catalog copy, or delisted: {', '.join(unknown)}")
+    with conn.transaction():
+        lock_skus(conn, {o.sku for o in rows})
+        return [set_option(conn, o, now) for o in rows]
+
+
+def lock_skus(conn: psycopg.Connection, skus: set[str]) -> None:
+    """Lock every row of these SKUs in one statement, in (sku, rank) order, until the caller's transaction ends.
+
+    Everything that writes several rows at once (`import_rows`, `vending.receipt_prices.apply`) locks them this
+    way before touching any, so two of them wait for each other instead of deadlocking."""
+    if skus:
+        conn.execute("select 1 from sourcing_options where sku = any(%s) order by sku, rank for update",
+                     (sorted(skus),))
+
+
 def locked_row(conn: psycopg.Connection, sku: str, rank: str) -> Option | None:
     """One row as it stands now, locked until the caller's transaction ends, so nobody changes it between
     the caller's checks and its `set_price`. Call it inside `conn.transaction()`."""
@@ -376,12 +400,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"removed: {args.sku} {rank}")
             elif args.action == "import":
                 rows = read_csv(args.file, args.by, now)
-                unknown = sorted({o.sku for o in rows} - in_catalog(conn, [o.sku for o in rows]))
-                if unknown:
-                    raise SourcingError(f"{args.file}: nothing imported. Not in our catalog copy, or delisted: "
-                                        f"{', '.join(unknown)}")
-                with conn.transaction():   # all or nothing
-                    outcomes = [set_option(conn, o, now) for o in rows]
+                try:
+                    outcomes = import_rows(conn, rows, now)
+                except SourcingError as error:
+                    raise SourcingError(f"{args.file}: {error}") from None
                 print(f"imported {len(rows)} rows from {args.file}: {outcomes.count('added')} added, "
                       f"{outcomes.count('replaced')} replaced")
             else:

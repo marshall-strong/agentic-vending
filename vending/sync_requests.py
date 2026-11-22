@@ -16,7 +16,10 @@ re-reads change nothing. It runs here, in the same round, so prices are fresh as
 soon as the receipt is stored; a failure there is logged and counted, and the
 receipt itself is kept. A fulfilled receipt is never undone: a later rejection is
 kept out with a warning (`vending.purchase_requests.store`), and a person checks
-it with the instructors.
+it with the instructors. Each answer kept out is recorded once in `action_log`
+with its reason and warning, before the warning is logged here, so a lost log
+line loses nothing. An answer of the wrong shape (a time that is a number, say)
+fails that request only.
 
 A request the bridge can't return, or answers with something we can't use (or
 that the database refuses), is logged and counted and the run carries on with

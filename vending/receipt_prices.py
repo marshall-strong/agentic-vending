@@ -28,8 +28,9 @@ values each change replaced.
 **Locks.** The purchase request is locked for the whole of `apply`, so a sync storing a newer
 revision of its receipt waits until `apply` is done; `apply` never writes from a revision that is
 no longer stored. Every sourcing row of the receipt's SKUs is then locked at once, in (sku, rank)
-order, before any is checked. Two applies whose receipts list the same products in a different
-order lock them in the same order, so they wait for each other instead of deadlocking. Each write
+order, before any is checked (`vending.sourcing.lock_skus`). Two applies whose receipts list the
+same products in a different order lock them in the same order, so they wait for each other
+instead of deadlocking; `python -m vending.sourcing import` locks its rows the same way. Each write
 also checks the row still matches what was read (`vending.sourcing.set_price`), so a change a
 person makes at the same time is never undone.
 
@@ -118,13 +119,6 @@ class _Rows:
         self.written: dict[tuple[str, str], sourcing.Option] = {}
         self.hand: dict[tuple[str, str], sourcing.Option] = {}    # a hand row a dry-run write replaced
 
-    @staticmethod
-    def lock(conn: psycopg.Connection, skus: set[str]) -> None:
-        """Lock every row of these SKUs in one statement, in (sku, rank) order, before any is checked."""
-        if skus:
-            conn.execute("select 1 from sourcing_options where sku = any(%s) order by sku, rank for update",
-                         (sorted(skus),))
-
     def locked(self, conn: psycopg.Connection, sku: str, rank: str) -> sourcing.Option | None:
         return self.written.get((sku, rank)) or sourcing.locked_row(conn, sku, rank)
 
@@ -197,7 +191,7 @@ def apply(conn: psycopg.Connection, request_id: str, now: datetime | None = None
         if status is None or status[0] != "fulfilled":
             return result
         groups = list(_paid_groups(conn, request_id, result).values())
-        rows.lock(conn, {paid.sku for paid in groups})
+        sourcing.lock_skus(conn, {paid.sku for paid in groups})
         seen: set[tuple[str, str]] = set()     # (sku, rank) rows this receipt checked
         for paid in groups:
             _apply_group(conn, request_id, paid, now, rows, result, seen)

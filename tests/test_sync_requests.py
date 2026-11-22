@@ -256,8 +256,14 @@ def test_an_older_answer_does_not_replace_a_newer_receipt(conn):
     assert conn.execute("select total_paid from purchase_lines").fetchone() == (Decimal("12.99"),)
     assert conn.execute("select updated_at, last_response->'lines'->0->'receipt'->>'total_paid'"
                         " from purchase_requests").fetchone() == (datetime(2026, 11, 8, 10, tzinfo=timezone.utc), "12.99")
-    # The same revision read again, or a newer one, is still stored.
-    assert store(conn, "r1", fulfilled("r1", receipt(total_paid="12.98"), updated_at="2026-11-08T10:00:00Z"),
+    # The same revision read again is stored. A different answer with the same updated_at is kept out
+    # (Sol round 4, finding 2): we can't tell which is newer. A newer revision is stored.
+    assert store(conn, "r1", fulfilled("r1", receipt(total_paid="12.99"), updated_at="2026-11-08T10:00:00Z"),
+                 NOW).warnings == ()
+    clash = store(conn, "r1", fulfilled("r1", receipt(total_paid="12.98"), updated_at="2026-11-08T10:00:00Z"), NOW)
+    assert "same updated_at" in clash.warnings[0]
+    assert conn.execute("select total_paid from purchase_lines").fetchone() == (Decimal("12.99"),)
+    assert store(conn, "r1", fulfilled("r1", receipt(total_paid="12.98"), updated_at="2026-11-08T11:00:00Z"),
                  NOW).warnings == ()
     assert conn.execute("select total_paid from purchase_lines").fetchone() == (Decimal("12.98"),)
 

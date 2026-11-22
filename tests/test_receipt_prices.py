@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("psycopg")
 
 from tests.conftest import conn, open_in  # noqa: E402,F401 - migrated schema with a server assignment
-from tests.test_sync_requests import BODY, FakeBridge, fulfilled, pending, receipt, submit  # noqa: E402
+from tests.test_sync_requests import BODY, FakeBridge, fulfilled, later, pending, receipt, submit  # noqa: E402
 from vending import receipt_prices, sourcing  # noqa: E402
 from vending.purchase_requests import store  # noqa: E402
 from vending.sync_requests import sync  # noqa: E402
@@ -122,7 +122,7 @@ def test_a_corrected_receipt_replaces_the_price_it_set(coke):
     table_row(coke, NOW - timedelta(days=9))
     fill(coke)
     receipt_prices.apply(coke, "r1", NOW)
-    store(coke, "r1", fulfilled("r1", receipt(total_paid="11.99")), NOW)
+    store(coke, "r1", fulfilled("r1", receipt(total_paid="11.99"), updated_at="2026-11-08T10:00:00Z"), NOW)
     assert len(receipt_prices.apply(coke, "r1", NOW).updated) == 1
     assert row(coke).expected_cents == 1199
 
@@ -640,3 +640,167 @@ def test_two_receipts_with_products_in_opposite_order_do_not_deadlock(coke, sche
     for sku in ("COKE20", "PEPSI20"):
         o = sourcing._row(coke, sku, "primary")
         assert o.from_receipt and o.note.startswith(("receipt r1:", "receipt r2:")), o
+
+
+# Sol review, round 4.
+
+def kept_out_rows(conn):
+    """The `action_log` rows `store` writes for answers it kept out: (reason, detail)."""
+    return conn.execute("select arguments->>'reason', detail from action_log where tool = 'purchase_requests.ignored'"
+                        " order by id").fetchall()
+
+
+def test_a_rejection_with_an_empty_lines_list_does_not_wipe_a_fill(coke):
+    """Round 4, finding 1: `{"status": "rejected", "lines": []}` with a newer updated_at was read as fulfilled
+    because `lines` was checked before the status, and it deleted an 8-unit fill's lines with no warning. The
+    explicit status wins, and a fulfilled answer with no lines never replaces stored lines either."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt())}), now=NOW, log=said.append)
+    before, price = stocked(coke), row(coke)
+    assert before[1][0][2] == 8
+    rejected = {**pending("r1"), "status": "rejected", "decision_note": "withdrawn", "lines": [],
+                "updated_at": "2026-11-08T10:00:00Z"}
+    empty = {**fulfilled("r1", fulfilled_at="2026-11-08T11:00:00Z"), "lines": []}
+    for hours in (1, 2):
+        for answer in (rejected, empty):
+            report = sync(coke, FakeBridge({"r1": answer}), now=NOW + timedelta(hours=hours), log=said.append)
+            assert (report.fulfilled, report.failed) == (1, 0), said
+    assert stocked(coke) == before and row(coke) == price
+    assert sum("now says rejected" in line for line in said) == 1, said
+    assert sum("lists no lines" in line for line in said) == 1, said
+
+
+def test_a_delayed_answer_with_the_same_updated_at_does_not_roll_back_a_correction(coke, schema_url):
+    """Round 4, finding 2: the corrected receipt ($12.99, 7 loaded) is stored through one connection. A delayed read
+    of the old one ($12.37, 8 loaded) carrying the same updated_at arrives through another. It must not roll the
+    price back or the stock up: the stored revision stays, and the difference is named once."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    same = "2026-11-08T10:00:00Z"
+    corrected = fulfilled("r1", receipt(total_paid="12.99", units_loaded=7), updated_at=same)
+    old = fulfilled("r1", receipt(total_paid="12.37"), updated_at=same)
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": corrected}), now=NOW, log=said.append)
+    with open_in(*schema_url) as other:
+        for hours in (1, 2):
+            sync(other, FakeBridge({"r1": old}), now=NOW + timedelta(hours=hours), log=said.append)
+    assert (row(coke).expected_cents, stocked(coke)[1][0][2]) == (1299, 7)
+    assert sum("same updated_at" in line for line in said) == 1, said
+    # A replay of the stored revision is no change and no warning; later losses on it are still picked up.
+    grown = fulfilled("r1", receipt(total_paid="12.99", units_loaded=7, later_losses=[later(1)]), updated_at=same)
+    sync(coke, FakeBridge({"r1": corrected}), now=NOW + timedelta(hours=3), log=said.append)
+    sync(coke, FakeBridge({"r1": grown}), now=NOW + timedelta(hours=4), log=said.append)
+    assert coke.execute("select count(*) from purchase_line_losses").fetchone()[0] == 1
+    assert (row(coke).expected_cents, stocked(coke)[1][0][2]) == (1299, 7)
+    assert sum("same updated_at" in line for line in said) == 1, said
+
+
+def test_a_sourcing_import_and_a_receipt_refresh_do_not_deadlock(coke, schema_url, monkeypatch):
+    """Round 4, finding 3: an import that writes PEPSI20 and then COKE20 held PEPSI20 while the refresh held COKE20
+    and wanted PEPSI20. The import now locks every row it touches up front, in the refresh's (sku, rank) order."""
+    table_row(coke, NOW - timedelta(days=9))
+    table_row(coke, NOW - timedelta(days=9), sku="PEPSI20")
+    submit(coke, "r1")
+    answer = fulfilled("r1", receipt(), receipt(sku="PEPSI20", total_paid="12.10"))
+    answer["lines"][1]["primary"] = {**BODY["lines"][0]["primary"], "sku": "PEPSI20"}
+    store(coke, "r1", answer, NOW)
+    imported = [sourcing.Option(sku=sku, rank="primary", store="Costco", units_per_pack=12, expected_cents=1199,
+                                max_cents=1400, url=None, pack_description=None, checked_at=NOW - timedelta(days=8),
+                                checked_by="Meaghan", note="import") for sku in ("PEPSI20", "COKE20")]
+    holding, errors = threading.Event(), []
+    real = sourcing.set_option
+
+    def slow(conn, o, now=None):
+        outcome = real(conn, o, now)
+        if threading.current_thread().name == "import" and not holding.is_set():
+            holding.set()
+            time.sleep(2)            # long enough for the refresh to take what it can, and Postgres to see a cycle
+        return outcome
+
+    monkeypatch.setattr(sourcing, "set_option", slow)
+
+    def run(work):
+        def go():
+            try:
+                work()
+            except BaseException as error:  # noqa: BLE001 - reported below
+                errors.append(error)
+        return go
+
+    with open_in(*schema_url) as other:
+        importer = threading.Thread(target=run(lambda: sourcing.import_rows(coke, imported, NOW)), name="import")
+        importer.start()
+        assert holding.wait(30)
+        refresh = threading.Thread(target=run(lambda: receipt_prices.apply(other, "r1", NOW)), name="refresh")
+        refresh.start()
+        importer.join(60)
+        refresh.join(60)
+    assert not importer.is_alive() and not refresh.is_alive()
+    assert errors == [], errors
+    for sku in ("COKE20", "PEPSI20"):
+        o = sourcing._row(coke, sku, "primary")
+        assert o.from_receipt and o.note.startswith("receipt r1:"), o     # the receipt (7 Nov) is newer than 1 Nov
+
+
+def _malformed(kind):
+    answer = fulfilled("r1", receipt())
+    line, got = answer["lines"][0], answer["lines"][0]["receipt"]
+    if kind == "updated_at":
+        answer["updated_at"] = 7
+    elif kind == "fulfilled_at":
+        answer["fulfilled_at"] = 7
+    elif kind == "status":
+        answer["status"] = 7
+    elif kind == "lines":
+        answer["lines"] = "all of them"
+    elif kind == "line":
+        answer["lines"] = [5]
+    elif kind == "receipt":
+        line["receipt"] = ["primary"]
+    elif kind == "later_losses":
+        got["later_losses"] = {"units": 1}
+    elif kind == "loss":
+        got["later_losses"] = [3]
+    elif kind == "resolved_at":
+        got["resolved_at"] = 7
+    elif kind == "recorded_at":
+        got["later_losses"] = [{**later(1), "recorded_at": 7}]
+    elif kind == "units_loaded":
+        got["units_loaded"] = {"coil": 8}
+    elif kind == "decision_note":
+        answer["decision_note"] = ["no"]
+    elif kind == "answer":
+        return ["not", "an", "answer"]
+    return answer
+
+
+@pytest.mark.parametrize("kind", ["updated_at", "fulfilled_at", "status", "lines", "line", "receipt", "later_losses",
+                                  "loss", "resolved_at", "recorded_at", "units_loaded", "decision_note", "answer"])
+def test_a_malformed_answer_fails_that_request_and_the_next_is_still_read(coke, kind):
+    """Round 4, finding 4: `updated_at: 7` raised TypeError outside the per-request handling and stopped the run.
+    Types are checked where the answer comes in: a malformed answer is that request's validation error."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1", days_ago=3)
+    submit(coke, "r2", days_ago=2)
+    good = fulfilled("r2", receipt(total_paid="12.99", resolved_at="2026-11-08T16:00:00Z"))
+    said: list[str] = []
+    report = sync(coke, FakeBridge({"r1": _malformed(kind), "r2": good}), now=NOW, log=said.append)
+    assert (report.checked, report.failed, report.fulfilled) == (1, 1, 1), said
+    assert any(line.startswith("r1: ") and "kept what we had" in line for line in said), said
+    assert coke.execute("select status from purchase_requests where request_id = 'r1'").fetchone()[0] == "pending"
+    assert row(coke).expected_cents == 1299
+
+
+def test_the_kept_out_row_holds_the_reason_and_the_warning(coke):
+    """Round 4, finding 5: the warning was only logged after the dedupe row committed, so a failed log lost it for
+    good. The row itself now holds the reason and the warning a person acts on."""
+    submit(coke, "r1")
+    store(coke, "r1", fulfilled("r1", receipt()), NOW)
+    rejected = {**pending("r1"), "status": "rejected", "decision_note": "withdrawn"}
+    warned = store(coke, "r1", rejected, NOW).warnings
+    assert store(coke, "r1", rejected, NOW).warnings == ()
+    late = fulfilled("r1", receipt(total_paid="12.00"), fulfilled_at="2026-11-01T10:00:00Z")
+    late_warned = store(coke, "r1", late, NOW).warnings
+    assert kept_out_rows(coke) == [("rejected_after_fill", warned[0]), ("older", late_warned[0])]
