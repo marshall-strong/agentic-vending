@@ -289,7 +289,9 @@ tool answers `success: false` with the command to run. Delisted products count a
 catalog, and so do products the bridge marks inactive. A copy last synced over 36 hours ago (the
 same limit as `get_catalog`) is still used, with a `STALE` note saying to run
 `python -m vending.sync_catalog`. Only when we hold no listed product (the sync has never run) is
-the catalog read live from the bridge (`GET /api/v1/products`), with a note saying so. In that
+the catalog read live from the bridge (`GET /api/v1/products`), with a note saying so. That read
+has a total deadline (`CATALOG_DEADLINE_SECONDS`, 30 s) and a size cap, because submit makes it
+while holding the halt lock: a slow answer can't hold the lock past the deadline. In that
 case an empty or reshaped reply also answers `success: false` (it would otherwise read as "every
 product unapproved"), and the halt switch is checked before the bridge is read, so halted with the
 bridge down says to stop, not to check Tailscale. A poll older
@@ -323,13 +325,17 @@ side connection opened before anything is sent:
 2. It POSTs `/api/v1/purchase-requests` once (`Bridge.post_answer`), never retried and never
    redirected: a retry after a lost answer could order twice. The whole exchange has a total
    deadline (`PURCHASE_DEADLINE_SECONDS`, 30 s) and the answer a size cap (`PURCHASE_ANSWER_BYTES`,
-   64 KB); reaching either is no answer.
+   64 KB); reaching either is no answer. It goes through `http_proxy` (or `https_proxy`) unless
+   `no_proxy` names the host, as every other bridge call does through urllib: on Azure the bridge is
+   reachable only through Tailscale's proxy (`docker/entrypoint.sh`). Through the proxy, only failing
+   to connect to the proxy is `not_filed`; anything after, the proxy's own `502` included, is `unknown`.
 3. It keeps the bridge's answer on the row (`response`) the moment it is read, before anything
    else, with `created_id` set only for a validated `201`, so that ID survives a settle that fails
    and the next run's check can look it up.
 4. It settles the row on that same connection, one of three ways. `accepted`: only the documented
    `201`, whole (a body read in full whose `Content-Length` is one number equal to its size, or whose
-   chunks are framed exactly, ending in the blank line; `application/json`, not encoded,
+   chunks are framed exactly, ending in the blank line, under one `Transfer-Encoding: chunked` and no
+   `Content-Length`; `application/json`, not encoded,
    strict JSON with no repeated key, the `PurchaseRequestPending` shape with `status: pending`),
    under an ID no other submission or recorded request holds; the request goes into
    `purchase_requests` in the same transaction, so `python -m vending.sync_requests` reads it back
@@ -361,7 +367,10 @@ python -m vending.submissions check                                         # a 
 ```
 
 Resolving with a request ID also records it in `purchase_requests`. An empty `--request-id` (or only
-spaces) is refused and the row stays open: only `--not-filed` marks a row never filed. Both paths carry the midweek
+spaces) is refused and the row stays open: only `--not-filed` marks a row never filed. A row that
+holds `created_id` (the bridge's validated `201`, shown by `list` as "accepted as ID") was filed:
+`--not-filed` is refused and says to use `--request-id` with that ID, and any other ID is refused
+too, telling the person to check with the instructors. Both paths carry the midweek
 visit fee the plan quoted for an off-cycle request (`visit_fee_cents`, saved on the `sending` row
 before the POST), so the ledger charges what was agreed then even if `config.midweek_fee_cents`
 changes later. Every change is logged with the `--by` name.

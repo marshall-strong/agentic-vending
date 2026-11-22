@@ -147,6 +147,17 @@ def test_a_request_id_already_ours_never_settles_another_row(conn):
     with pytest.raises(submissions.IdTaken, match="submission 1 already holds"):
         submissions.resolve(conn, id, "pr-old", "kevin")
     assert submissions.unresolved(conn).code == "submission_unresolved"
+    # Not this attempt's 201, so `--not-filed` isn't refused for it (Sol round 5): a person checks and settles.
+    assert submissions.resolve(conn, id, None, "kevin").startswith(f"Submission {id} marked never filed")
+
+
+def test_a_request_id_another_row_was_accepted_under_cant_settle_this_one(conn):
+    """A row whose POST got a validated 201 for pr-1 (`created_id`, never settled) holds pr-1: another row
+    can't be resolved onto it, so the request is never bound to two attempts."""
+    accepted, other = row(conn, created_id="pr-1"), row(conn, status="unknown")
+    with pytest.raises(submissions.IdTaken, match=f"submission {accepted} already holds"):
+        submissions.resolve(conn, other, "pr-1", "kevin")
+    assert state(conn, other) == ("unknown", None, None)
 
 
 def test_save_answer_keeps_the_answer_and_created_id_on_a_row_still_sending_and_never_settles_it(conn):
@@ -177,3 +188,37 @@ def test_a_lookup_whose_status_isnt_a_string_leaves_that_row_open_and_checks_the
     assert (first.row, first.status) == (odd, "sending") and "no documented status" in first.why
     assert (second.row, second.status) == (good, "accepted")
     assert state(conn, odd) == ("sending", None, None) and bridge.asked == ["pr-odd", "pr-good"]
+
+
+def test_a_row_the_bridge_accepted_cant_be_marked_never_filed(conn):
+    """Sol round 5, finding 3: a row holding `created_id` got the bridge's validated `201`, so it was filed.
+    `--not-filed` would unblock the next submit and order the same plan twice; it is refused, naming the ID."""
+    id = row(conn, created_id="pr-1")
+    with pytest.raises(ValueError, match="accepted request pr-1.*--request-id pr-1"):
+        submissions.resolve(conn, id, None, "kevin")
+    assert state(conn, id) == ("sending", None, None)
+    assert conn.execute("select count(*) from action_log where tool = 'submissions.resolve'").fetchone() == (0,)
+
+
+def test_a_request_id_that_isnt_the_one_the_bridge_accepted_is_refused(conn):
+    """The bridge accepted pr-1 for this row; a person naming pr-2 is told to check with the instructors."""
+    id = row(conn, status="unknown", created_id="pr-1")
+    with pytest.raises(ValueError, match="accepted request pr-1 for submission [0-9]+, not pr-2.*instructors"):
+        submissions.resolve(conn, id, "pr-2", "kevin")
+    assert state(conn, id) == ("unknown", None, None)
+    assert submissions.resolve(conn, id, "pr-1", "kevin").startswith(f"Submission {id} recorded as filed under pr-1")
+
+
+def test_cli_list_shows_the_request_id_the_bridge_accepted(conn, schema_url, monkeypatch, capsys):
+    from tests.conftest import open_in
+    from vending import db as db_module
+
+    accepted, blocked = row(conn, created_id="pr-1"), row(conn, status="unknown")
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    assert submissions.main(["list"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "accepted as pr-1" in lines[0] and lines[0].startswith(f"{accepted}  ")
+    assert "accepted as" not in lines[1] and lines[1].startswith(f"{blocked}  ")
+    assert submissions.main(["resolve", str(accepted), "--not-filed", "--by", "kevin"]) == 1
+    assert "--request-id pr-1" in capsys.readouterr().err
+    assert state(conn, accepted) == ("sending", None, None)

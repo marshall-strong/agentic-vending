@@ -56,6 +56,7 @@ class FakeBridge:
         self.headers: dict[str, str] = {}  # more headers sent with `raw`
         self.chunked = False         # send `raw` chunked (one chunk), not with a Content-Length
         self.drip = 0.0              # send `raw` a byte at a time, this many seconds apart
+        self.catalog_drip = 0.0      # send the catalog's body a byte at a time, this many seconds apart
         self.lookups: dict[str, dict] = {}  # what `GET /api/v1/purchase-requests/{id}` answers, by ID; others are 404
         self.looked_up: list[str] = []  # every ID asked for that way (in `other_gets` too)
         fake = self
@@ -89,6 +90,22 @@ class FakeBridge:
                     return
                 assert self.headers["X-API-Key"] == "test-key"
                 fake.gets += 1
+                if fake.catalog_drip:
+                    data = json.dumps({"products": CATALOG}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.flush()
+                    for byte in data:
+                        if fake.stopping.wait(fake.catalog_drip):
+                            return
+                        try:
+                            self.wfile.write(bytes([byte]))
+                            self.wfile.flush()
+                        except OSError:
+                            return
+                    return
                 self._reply(fake.catalog_status, {"products": CATALOG} if fake.catalog_body is None else fake.catalog_body)
 
             def do_POST(self):

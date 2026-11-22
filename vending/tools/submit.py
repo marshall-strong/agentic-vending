@@ -194,6 +194,8 @@ def _send(client: Bridge, plan: planner.Plan, body: dict, row: int, side: psycop
     try:
         submissions.settle(side, row, "accepted", request_id=request_id, response=answer.body, submitted_at=now)
     except submissions.IdTaken as taken:
+        # Not this attempt's request after all, so not an acceptance: the row keeps the answer and no `created_id`.
+        submissions.save_answer(side, row, answer.body)
         return _unknown(side, row, plan, str(taken), answer.body)
     except Exception as error:
         _keep(row, request_id, answer.body, error)

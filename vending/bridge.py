@@ -27,6 +27,7 @@ answer is about our own books.
 
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import re
@@ -63,6 +64,10 @@ PURCHASE_DEADLINE_SECONDS = 30
 PURCHASE_ANSWER_BYTES = 65536
 # How much of an answer `PostAnswer.text` keeps, for the record and the message.
 PURCHASE_TEXT_CHARS = 500
+# The catalog (`products`), read by write tools while they hold the halt lock: the longest the whole read may
+# take, and the most it reads. Either ends it as `BridgeNoAnswer`, so a slow answer can't hold the lock.
+CATALOG_DEADLINE_SECONDS = 30
+CATALOG_ANSWER_BYTES = 4 * 1024 * 1024
 
 
 class LiveRead(NamedTuple):
@@ -185,8 +190,20 @@ class Bridge:
 
         Always a list. A reply of another shape comes back as an empty list, so
         `vending.planning` and the catalog sync can refuse it instead of crashing on it.
+
+        The whole read must end within `CATALOG_DEADLINE_SECONDS` (a total, not a gap between bytes) and
+        `CATALOG_ANSWER_BYTES`, else `BridgeNoAnswer`: the write tools read it while they hold the halt lock.
+        Raises `BridgeUnreachable` if connecting failed, `BridgeAnswered` for any status but `2xx` (only its
+        status: the body isn't quoted), and `BridgeNotJson` for a body that isn't JSON.
         """
-        body = json.loads(self._once("GET", "/api/v1/products"))
+        response, data = self._exchange("GET", "/api/v1/products", None, {"Accept": "application/json"},
+                                        deadline=CATALOG_DEADLINE_SECONDS, cap=CATALOG_ANSWER_BYTES)
+        if not 200 <= response.status < 300:
+            raise BridgeAnswered(response.status, status_phrase(response.status))
+        try:
+            body = json.loads(data)
+        except ValueError:      # its message can name a byte of the answer
+            raise BridgeNotJson(response.status, len(data)) from None
         products = body.get("products") if isinstance(body, dict) else body
         return products if isinstance(products, list) else []
 
@@ -207,6 +224,8 @@ class Bridge:
 
         Raises `BridgeUnreachable` only when connecting failed (the name didn't resolve, the connection was
         refused, TCP or TLS failed or timed out): nothing of the request had been written, so nothing left.
+        Through a proxy, that is the connection to the proxy (and, for `https`, its tunnel): anything after,
+        the proxy's own error answer included, may have reached the bridge.
         Raises `BridgeNoAnswer` for anything once connected that isn't a whole answer: an error while writing
         or reading, a body cut off or badly framed, an answer longer than `PURCHASE_ANSWER_BYTES`, or no whole
         answer within `PURCHASE_DEADLINE_SECONDS` of starting to send (a total, not a gap between bytes).
@@ -214,12 +233,27 @@ class Bridge:
         settles a request only on the documented `201`.
 
         It uses `http.client` directly, not urllib, so no redirect is followed and connecting is its own step.
+        It honors `http_proxy`, `https_proxy` and `no_proxy` as urllib does for the rest of this client
+        (`_route`): on Azure the bridge is reachable only through Tailscale's proxy (`docker/entrypoint.sh`).
         """
+        response, data = self._exchange(
+            "POST", path, json.dumps(body).encode(),
+            {"Content-Type": "application/json", "Accept": "application/json", "Accept-Encoding": "identity"},
+            deadline=PURCHASE_DEADLINE_SECONDS, cap=PURCHASE_ANSWER_BYTES, strict=True)
+        parsed, problem = _framing(response, data) or _strict_json(response, data)
+        return PostAnswer(response.status, parsed, problem, _printable(data[:PURCHASE_TEXT_CHARS]))
+
+    def _exchange(self, method: str, path: str, body: bytes | None, headers: dict[str, str], *,
+                  deadline: float, cap: int, strict: bool = False) -> tuple[http.client.HTTPResponse, bytes]:
+        """One request, never retried or redirected, and its whole answer within `deadline` seconds and `cap`
+        bytes: (the response, its body). Raises as `post_answer` says; `strict` reads a chunked body with
+        exact framing (`_StrictResponse`). A message never quotes the answer."""
         url = urllib.parse.urlsplit(self.base_url + path)
-        target = (url.path or "/") + (f"?{url.query}" if url.query else "")
-        kind = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
-        conn = kind(url.hostname, url.port, timeout=TIMEOUT_SECONDS)
-        conn.response_class = _StrictResponse
+        conn, target, more = _route(url)
+        if strict:
+            conn.response_class = _StrictResponse
+        # Only a POST can have run on the bridge; a GET that broke just has no answer.
+        maybe = ": it may have arrived" if method == "POST" else ""
         try:
             conn.connect()
         except OSError as error:      # a bad name, a refused connection, a TCP or TLS failure or timeout
@@ -239,25 +273,21 @@ class Bridge:
             except OSError:
                 pass
 
-        timer = threading.Timer(PURCHASE_DEADLINE_SECONDS, cut)
+        timer = threading.Timer(deadline, cut)
         timer.daemon = True
         timer.start()
         response = None
         try:
-            conn.request("POST", target, body=json.dumps(body).encode(),
-                         headers={"X-API-Key": self.api_key, "Content-Type": "application/json",
-                                  "Accept": "application/json", "Accept-Encoding": "identity"})
+            conn.request(method, target, body=body, headers={"X-API-Key": self.api_key, **more, **headers})
             response = conn.getresponse()
-            data = _read_capped(response, PURCHASE_ANSWER_BYTES)
+            data = _read_capped(response, cap)
         except _TooLong:
-            raise BridgeNoAnswer(f"its {response.status} answer ran past {PURCHASE_ANSWER_BYTES} bytes: "
-                                 "it may have arrived") from None
+            raise BridgeNoAnswer(f"its {response.status} answer ran past {cap} bytes{maybe}") from None
         except (OSError, http.client.HTTPException, ValueError) as error:
             started = "" if response is None else f" (a {response.status} answer had started)"
             if expired.is_set():
-                raise BridgeNoAnswer(f"no whole answer within {PURCHASE_DEADLINE_SECONDS:g} s{started}: "
-                                     "it may have arrived") from None
-            raise BridgeNoAnswer(f"{type(error).__name__} once connected{started}: it may have arrived") from None
+                raise BridgeNoAnswer(f"no whole answer within {deadline:g} s{started}{maybe}") from None
+            raise BridgeNoAnswer(f"{type(error).__name__} once connected{started}{maybe}") from None
         finally:
             timer.cancel()
             if response is not None:
@@ -265,9 +295,8 @@ class Bridge:
             conn.close()
             sock.close()
         if expired.is_set():          # a read the deadline ended can look like the end of the answer
-            raise BridgeNoAnswer(f"no whole answer within {PURCHASE_DEADLINE_SECONDS:g} s: it may have arrived")
-        parsed, problem = _framing(response, data) or _strict_json(response, data)
-        return PostAnswer(response.status, parsed, problem, _printable(data[:PURCHASE_TEXT_CHARS]))
+            raise BridgeNoAnswer(f"no whole answer within {deadline:g} s{maybe}")
+        return response, data
 
     def check_books(self, body: dict) -> dict:
         """Our books as of one poll (`POST /api/v1/tracking/check`), once, never retried: the bridge
@@ -521,6 +550,30 @@ def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
         return b""
 
 
+def _route(url: urllib.parse.SplitResult) -> tuple[http.client.HTTPConnection, str, dict[str, str]]:
+    """The connection for `url`, the request target, and any header the proxy needs, chosen as urllib's
+    `ProxyHandler` chooses for the rest of this client: the proxy `getproxies()` names for the scheme
+    (`http_proxy`, `https_proxy`), unless `proxy_bypass` (`no_proxy`) says this host goes direct. Through the
+    proxy, `http` is sent in absolute form (`POST http://host/path`), `https` through a `CONNECT` tunnel, and a
+    proxy URL with a user and password adds `Proxy-Authorization`, as urllib does. Nothing is connected yet."""
+    host = url.netloc.rpartition("@")[2]
+    target = (url.path or "/") + (f"?{url.query}" if url.query else "")
+    kind = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
+    proxy = urllib.request.getproxies().get(url.scheme)
+    if not proxy or urllib.request.proxy_bypass(host):
+        return kind(url.hostname, url.port, timeout=TIMEOUT_SECONDS), target, {}
+    _, user, password, proxy_host = urllib.request._parse_proxy(proxy)
+    auth = {}
+    if user and password:
+        pair = f"{urllib.parse.unquote(user)}:{urllib.parse.unquote(password)}"
+        auth["Proxy-Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode("ascii")
+    conn = kind(proxy_host, timeout=TIMEOUT_SECONDS)
+    if url.scheme == "https":
+        conn.set_tunnel(host, headers=auth)
+        return conn, target, {}
+    return conn, f"{url.scheme}://{host}{target}", auth
+
+
 class PostAnswer(NamedTuple):
     """A purchase POST's whole answer (`Bridge.post_answer`). `body` is the parsed JSON, or None. `problem` is
     "" only when the answer has a `Content-Length` equal to its size or is chunked, framed exactly (`_framing`),
@@ -576,10 +629,17 @@ class _StrictResponse(http.client.HTTPResponse):
 
 
 def _framing(response: http.client.HTTPResponse, data: bytes) -> tuple[None, str] | None:
-    """(None, why) if the body's length isn't shown exactly; None if it is. A chunked body was checked as it was
+    """(None, why) if the body's length isn't shown exactly; None if it is. A body with `Transfer-Encoding` must
+    have exactly one, `chunked`, and no `Content-Length`: `http.client` reads `chunked` and ignores a length
+    beside it, and reads any other coding by its length or to the close. A chunked body was checked as it was
     read (`_StrictResponse`). Otherwise `Content-Length` must be one plain number equal to the bytes read:
     `http.client` treats a length it can't read (`invalid`, `-1`, two values) as none and reads to the close."""
-    if response.chunked:
+    codings = response.headers.get_all("Transfer-Encoding") or []
+    if codings:
+        if len(codings) != 1 or codings[0].strip().lower() != "chunked":
+            return None, f"its Transfer-Encoding {', '.join(codings)[:40]!r} isn't plain chunked"
+        if response.getheader("Content-Length") is not None:
+            return None, "it has both Transfer-Encoding and Content-Length, so its length is ambiguous"
         return None
     length = response.getheader("Content-Length")
     if length is None:

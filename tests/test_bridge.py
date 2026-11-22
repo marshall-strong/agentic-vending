@@ -2,11 +2,14 @@
 Retries are instant because `time.sleep` is patched, and nothing here goes near
 the real bridge. The two tests at the end fake the network at `urlopen` instead."""
 
+import http.client
 import io
 import json
+import socket
 import threading
 import time
 import urllib.error
+import urllib.parse
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -570,3 +573,160 @@ def test_an_error_once_connected_is_no_answer(bridge, monkeypatch):
     monkeypatch.setattr(http.client.HTTPConnection, "send", send)
     with pytest.raises(bridge_module.BridgeNoAnswer, match="ConnectionRefusedError once connected"):
         client.post_answer(PURCHASES, {"lines": []})
+
+
+@pytest.mark.parametrize("headers", [
+    pytest.param(CHUNKED + (("Content-Length", "999"),), id="chunked and a Content-Length"),
+    pytest.param((("Content-Type", "application/json"), ("Transfer-Encoding", "gzip, chunked")), id="gzip, chunked"),
+    pytest.param((("Content-Type", "application/json"), ("Transfer-Encoding", "chunked, chunked")),
+                 id="chunked twice"),
+    pytest.param(CHUNKED + (("Transfer-Encoding", "chunked"),), id="two Transfer-Encoding headers"),
+])
+def test_a_201_whose_transfer_coding_isnt_plain_chunked_is_not_plain_json(bridge, headers):
+    """Sol round 5, finding 5: `http.client` reads a body as chunked when `Transfer-Encoding` is `chunked` and
+    ignores any `Content-Length` beside it, and reads another coding by its length or to the close. Either
+    way the length is ambiguous, so the answer isn't the documented acceptance."""
+    body = f"{len(CREATED):x}".encode() + CRLF + CREATED + CRLF + b"0" + CRLF + CRLF
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=headers, length=False, body=body))})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and got.body is None and "Transfer-Encoding" in got.problem
+
+
+def test_a_201_with_another_transfer_coding_and_a_content_length_is_not_plain_json(bridge):
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=(("Content-Type", "application/json"),
+                                                                      ("Transfer-Encoding", "identity"))))})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and got.body is None and "Transfer-Encoding" in got.problem
+
+
+# --- A purchase POST through the proxy (`http_proxy`), as on Azure (docker/entrypoint.sh) ----------------
+
+HOP_BY_HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "upgrade"}
+
+
+class ProxyHandler(BaseHTTPRequestHandler):
+    """A forward proxy on this machine: takes an absolute-form request and sends it on to `server.origin`
+    (the fake bridge), whatever host it names, as Tailscale's proxy sends ours to the bridge. `server.fail`
+    makes it read the request and hang up instead."""
+
+    def do_POST(self):
+        self.server.lines.append(self.requestline)
+        self.server.hosts.append(self.headers.get("Host"))
+        data = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.close_connection = True
+        if self.server.fail:
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
+        target = urllib.parse.urlsplit(self.path)
+        upstream = http.client.HTTPConnection("127.0.0.1", self.server.origin, timeout=10)
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_BY_HOP | {"host"}}
+        upstream.request(self.command, target.path, body=data or None, headers=headers)
+        answer = upstream.getresponse()
+        body = answer.read()
+        self.send_response(answer.status)
+        for name, value in answer.getheaders():
+            if name.lower() not in HOP_BY_HOP | {"content-length"}:
+                self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        upstream.close()
+
+    do_GET = do_POST
+
+    def log_message(self, *args):
+        pass
+
+
+@contextmanager
+def proxy(origin_port, fail=False):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    server.origin, server.fail, server.lines, server.hosts = origin_port, fail, [], []
+    server.url = f"http://127.0.0.1:{server.server_port}"
+    thread = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def closed_port():
+    """A loopback port nothing listens on: the bridge's address, which only the proxy can reach."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def proxied(monkeypatch):
+    """`proxied(url)` sets `http_proxy` to `url` and `no_proxy` to nothing. The entrypoint adds localhost to
+    no_proxy; here the fake bridge is on loopback too, so it is left out."""
+    for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY",
+                 "all_proxy", "ALL_PROXY", "REQUEST_METHOD"):
+        monkeypatch.delenv(name, raising=False)
+
+    def use(url, no_proxy=""):
+        monkeypatch.setenv("http_proxy", url)
+        monkeypatch.setenv("no_proxy", no_proxy)
+
+    return use
+
+
+def test_post_answer_reaches_the_bridge_through_the_proxy(proxied):
+    """Sol round 5, finding 2: on Azure the bridge is reachable only through `http_proxy`. A purchase POST
+    connected to the bridge directly, so a correct 201 could never arrive. It now goes through the proxy,
+    once, in absolute form, with the bridge's Host, as urllib sends the rest of the bridge client's calls."""
+    bridge_port = closed_port()
+    with serve({"POST " + PURCHASES: Answer(status=201, body=CREATED, headers=JSON)}) as origin, \
+            proxy(origin.server_port) as tailscale:
+        proxied(tailscale.url)
+        got = Bridge(base_url=f"http://127.0.0.1:{bridge_port}/", api_key=KEY).post_answer(PURCHASES, {"lines": []})
+    assert (got.status, got.body, got.problem) == (201, json.loads(CREATED), "")
+    assert tailscale.lines == [f"POST http://127.0.0.1:{bridge_port}{PURCHASES} HTTP/1.1"]
+    assert tailscale.hosts == [f"127.0.0.1:{bridge_port}"]
+    assert origin.requests == ["POST " + PURCHASES] and origin.keys == {KEY}
+
+
+def test_the_catalog_is_read_through_the_proxy_too(proxied):
+    bridge_port = closed_port()
+    with serve({"/api/v1/products": Answer(body=b'{"products": [{"sku": "COKE20"}]}')}) as origin, \
+            proxy(origin.server_port) as tailscale:
+        proxied(tailscale.url)
+        assert Bridge(base_url=f"http://127.0.0.1:{bridge_port}", api_key=KEY).products() == [{"sku": "COKE20"}]
+    assert tailscale.lines == [f"GET http://127.0.0.1:{bridge_port}/api/v1/products HTTP/1.1"]
+
+
+def test_a_proxy_that_drops_the_post_is_no_answer_and_it_is_sent_once(proxied):
+    """The proxy accepted the connection and took the request, then hung up: the bridge may have it, so it is
+    `BridgeNoAnswer` (`unknown`), never retried."""
+    with serve({}) as origin, proxy(origin.server_port, fail=True) as tailscale:
+        proxied(tailscale.url)
+        with pytest.raises(bridge_module.BridgeNoAnswer, match="may have arrived"):
+            Bridge(base_url=f"http://127.0.0.1:{closed_port()}", api_key=KEY).post_answer(PURCHASES, {"lines": []})
+    assert len(tailscale.lines) == 1 and origin.requests == []
+
+
+def test_a_proxy_that_cant_be_reached_is_unreachable_and_nothing_was_sent(proxied):
+    proxied(f"http://127.0.0.1:{closed_port()}")
+    with pytest.raises(BridgeUnreachable, match="nothing was sent"):
+        Bridge(base_url=f"http://127.0.0.1:{closed_port()}", api_key=KEY).post_answer(PURCHASES, {"lines": []})
+
+
+def test_a_502_from_the_proxy_is_returned_as_it_came(proxied):
+    """Tailscale's proxy answers 502 until the node has joined. That came after connecting, so it is an answer
+    (settled `unknown` by `submit`), never `BridgeUnreachable`."""
+    with serve({"POST " + PURCHASES: Answer(status=502, body=b"{}", headers=JSON)}) as origin, \
+            proxy(origin.server_port) as tailscale:
+        proxied(tailscale.url)
+        got = Bridge(base_url=f"http://127.0.0.1:{closed_port()}", api_key=KEY).post_answer(PURCHASES, {"lines": []})
+    assert got.status == 502 and len(tailscale.lines) == 1
+
+
+def test_no_proxy_sends_the_post_straight_to_the_bridge(proxied):
+    with serve({"POST " + PURCHASES: Answer(status=201, body=CREATED, headers=JSON)}) as origin:
+        proxied(f"http://127.0.0.1:{closed_port()}", no_proxy="127.0.0.1")
+        got = Bridge(base_url=origin.url, api_key=KEY).post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and origin.requests == ["POST " + PURCHASES]

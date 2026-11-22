@@ -290,7 +290,8 @@ def test_a_failed_connect_allows_one_retry_in_the_run(db, fake, schema_url, monk
     real, failed = http.client.HTTPConnection.connect, []
 
     def connect(self):
-        if not failed and sys._getframe(1).f_code.co_name == "post_answer":
+        caller = sys._getframe(1)       # the purchase POST's connect, not the catalog's (both go through `_exchange`)
+        if not failed and caller.f_code.co_name == "_exchange" and caller.f_locals.get("method") == "POST":
             failed.append(True)
             raise ConnectionRefusedError("simulated: refused while connecting")
         return real(self)

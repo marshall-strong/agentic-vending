@@ -86,15 +86,22 @@ class IdTaken(ValueError):
         self.row, self.request_id = row, request_id
 
 
+def id_holder(conn: psycopg.Connection, row: int, request_id: str) -> str | None:
+    """What holds `request_id` besides submission `row` ("submission 4", say), or None: another submission
+    settled under it or whose POST got a validated `201` for it (`created_id`), or a request we recorded."""
+    other = conn.execute("select id from purchase_submissions where (request_id = %s or created_id = %s)"
+                         " and id <> %s order by id limit 1", (request_id, request_id, row)).fetchone()
+    if other is not None:
+        return f"submission {other[0]}"
+    known = conn.execute("select status from purchase_requests where request_id = %s", (request_id,)).fetchone()
+    return None if known is None else f"our recorded request ({known[0]})"
+
+
 def id_taken(conn: psycopg.Connection, row: int, request_id: str) -> None:
     """Raise `IdTaken` if `request_id` is bound to anything but submission `row`."""
-    other = conn.execute("select id from purchase_submissions where request_id = %s and id <> %s limit 1",
-                         (request_id, row)).fetchone()
-    if other is not None:
-        raise IdTaken(row, request_id, f"submission {other[0]}")
-    known = conn.execute("select status from purchase_requests where request_id = %s", (request_id,)).fetchone()
-    if known is not None:
-        raise IdTaken(row, request_id, f"our recorded request ({known[0]})")
+    holder = id_holder(conn, row, request_id)
+    if holder is not None:
+        raise IdTaken(row, request_id, holder)
 
 
 class AlreadySettled(RuntimeError):
@@ -167,9 +174,10 @@ def settle(side: psycopg.Connection, row: int, status: str, *, request_id: str |
 
 
 def open_rows(conn: psycopg.Connection) -> list[tuple]:
-    """(id, at, status, line count, detail) for every submission a person still has to settle."""
+    """(id, at, status, line count, detail, created_id) for every submission a person still has to settle.
+    `created_id` is the request the bridge accepted with a validated `201`, or None."""
     return conn.execute(
-        "select id, at, status, jsonb_array_length(body->'lines'), detail from purchase_submissions"
+        "select id, at, status, jsonb_array_length(body->'lines'), detail, created_id from purchase_submissions"
         " where status = any(%s) order by id",
         (list(OPEN),),
     ).fetchall()
@@ -180,7 +188,7 @@ def unresolved(conn: psycopg.Connection) -> Refusal | None:
     rows = open_rows(conn)
     if not rows:
         return None
-    named = ", ".join(f"{row} ({status} since {at:%Y-%m-%d %H:%M} UTC)" for row, at, status, _, _ in rows)
+    named = ", ".join(f"{row} ({status} since {at:%Y-%m-%d %H:%M} UTC)" for row, at, status, *_ in rows)
     return Refusal("submission_unresolved", (
         f"submission{'s' if len(rows) > 1 else ''} {named} may already exist on the bridge, so nothing can be "
         f"submitted; {RESOLVE_HINT.format(row=rows[0][0])}"))
@@ -191,6 +199,11 @@ def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str
     """Settle one open row as filed under `request_id`, or as never filed (`request_id` None). Returns what
     was done. A `request_id` that is given but empty or only spaces raises `ValueError` before anything is
     written: it is a typo, not "never filed", and the row stays open.
+
+    A row holding `created_id` got the bridge's validated `201` for that request, so it was filed: never filed
+    is refused, and so is any other request ID (a person checks with the instructors). Both raise `ValueError`
+    and leave the row open. A `created_id` something else already holds (`id_holder`) isn't this attempt's,
+    so it settles nothing and refuses nothing: the row is like one with no `created_id`.
 
     Waits for a submit in flight to finish first. With `lock_timeout_ms`, it gives
     up after that long and raises `psycopg.errors.LockNotAvailable`, so a caller
@@ -209,13 +222,22 @@ def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str
         # The lock every write takes; a submit holds it until its row is settled.
         is_halted(conn, lock=True)
         found = conn.execute(
-            "select at, status, body, plan_hash, visit_fee_cents from purchase_submissions where id = %s for update",
-            (row,)).fetchone()
+            "select at, status, body, plan_hash, visit_fee_cents, created_id from purchase_submissions"
+            " where id = %s for update", (row,)).fetchone()
         if found is None:
             raise ValueError(f"There is no submission {row}.")
-        at, status, body, plan_hash, fee = found
+        at, status, body, plan_hash, fee, created_id = found
         if status not in OPEN:
             raise ValueError(f"Submission {row} is {status}, not sending or unknown; nothing to settle.")
+        if created_id is not None and id_holder(conn, row, created_id) is not None:
+            created_id = None
+        if created_id is not None and request_id is None:
+            raise ValueError(f"The bridge accepted request {created_id} for submission {row} (a validated 201), so "
+                             f"it was filed and can't be marked never filed; use --request-id {created_id}")
+        if created_id is not None and request_id != created_id:
+            raise ValueError(f"The bridge accepted request {created_id} for submission {row}, not {request_id}; "
+                             "check with the instructors which request is this submission's before settling it. "
+                             f"Submission {row} was left open")
         if request_id is not None:
             id_taken(conn, row, request_id)     # an IdTaken is a ValueError: `check` leaves the row open
             conn.execute("update purchase_submissions set status = 'accepted', request_id = %s, resolved_by = %s,"
@@ -318,8 +340,9 @@ def main(argv: list[str] | None = None) -> int:
             rows = open_rows(conn)
             if not rows:
                 print("Nothing to settle: every submission was accepted, refused or never filed.")
-            for row, at, status, lines, detail in rows:
-                print(f"{row}  {at:%Y-%m-%d %H:%M}  {status:8}  {lines} lines  {detail or ''}".rstrip())
+            for row, at, status, lines, detail, created_id in rows:
+                accepted = f"  accepted as {created_id} (resolve with --request-id {created_id})" if created_id else ""
+                print(f"{row}  {at:%Y-%m-%d %H:%M}  {status:8}  {lines} lines{accepted}  {detail or ''}".rstrip())
             return 0
         if args.action == "check":
             from vending.bridge import Bridge

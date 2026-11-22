@@ -11,7 +11,8 @@ our database and the bridge:
 - the catalog, from our copy in `catalog_products` that the catalog sync keeps,
   so a bridge outage doesn't stop planning. Only when we hold no listed product
   (the sync has never run) is it read live from the bridge
-  (`GET /api/v1/products`), and the reply says so;
+  (`GET /api/v1/products`, within `bridge.CATALOG_DEADLINE_SECONDS` in all, since
+  submit reads it holding the halt lock), and the reply says so;
 - the spendable balance, from the ledger;
 - the planner's settings, from the `config` table. None is required. How many
   of a product fit in a column comes from its catalog size and the loading
@@ -111,8 +112,8 @@ def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...], *, stale_uns
 
 def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
     """The current state from our database. `catalog` is the product list from `read_catalog`.
-    "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`)."""
-    now = now or ledger.db_now(conn)
+    "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`), read
+    after the pending requests (below). A `now` given (a simulation) is used as it is."""
     settings = planner_config(conn)
     notes: list[str] = []
 
@@ -126,6 +127,10 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # and the snapshot would date from before that wait, so it could miss the submit it waited for.
     pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
         "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
+    # The clock, for the balance and the stock replay's cutoff, only now (Sol round 5): read before the pending
+    # requests, a fulfillment committed in between, with its receipt's `resolved_at` after that reading, was
+    # neither pending nor counted (the replay stops at the clock), and the same plan went out twice.
+    now = now or ledger.db_now(conn)
     balance = ledger.balance(conn, now)
     if balance is None:
         raise NotReady(ledger.OPEN_HINT)
@@ -187,18 +192,21 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
 
 
-def read_catalog(conn: psycopg.Connection, bridge: Bridge, now: datetime) -> tuple[list[dict], list[str]]:
+def read_catalog(conn: psycopg.Connection, bridge: Bridge,
+                 now: datetime | None = None) -> tuple[list[dict], list[str]]:
     """The catalog and any notes about where it came from.
 
     Our synced copy comes first: each listed product as the bridge last gave it,
     so fields like `active` read the same as a live answer. A copy older than
     `get_catalog`'s stale limit is still used, with a note saying to sync. Only
     when we hold no listed product is the bridge read, which can raise `NotReady`.
+    `now` (None: the database clock) only dates the copy.
     """
     synced_at = conn.execute("select max(synced_at) from catalog_syncs").fetchone()[0]
     stored = [row[0] for row in conn.execute(
         "select last_response from catalog_products where delisted_at is null order by sku")]
     if synced_at is not None and stored:
+        now = now or ledger.db_now(conn)
         notes = []
         if now - synced_at > catalog_tool.STALE_AFTER:
             notes.append(f"STALE: the catalog was last synced {(now - synced_at).total_seconds() / 3600:.1f} hours "
@@ -250,8 +258,10 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
 
     The halt switch is checked before the catalog is read, so that halted with
     the bridge down tells the agent to stop, not to check Tailscale.
+
+    With no `now` (a live run), `gather` reads the clock after the pending requests, in the same transaction;
+    a `now` given (a simulation) is used throughout as it is.
     """
-    now = now or ledger.db_now(conn)
     halted = config.is_halted(conn)
     try:
         catalog, catalog_notes = read_catalog(conn, bridge, now)

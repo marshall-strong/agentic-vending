@@ -627,3 +627,80 @@ def test_submit_returns_the_same_warnings_and_notes_as_preview(db, fake):  # noq
     assert reply["success"]
     assert (reply["warnings"], reply["notes"]) == (previewed["warnings"], previewed["notes"])
     assert reply["warnings"] or reply["notes"], "the case should have something to show"
+
+
+def test_a_fulfillment_committed_just_after_the_clock_is_read_never_files_the_plan_twice(db, fake, monkeypatch):  # noqa: F811
+    """Sol round 5, finding 1. The receipt sync fulfills pr-1 right after the second submit reads the clock,
+    and the receipt's `resolved_at` is after that reading. When the clock was read before the pending
+    requests, the pending query saw nothing and the stock replay (up to the clock) missed the delivery, so
+    the same plan went out again. The clock is now read after the pending requests: either pr-1 is still
+    pending to it, or the clock is after the fulfillment and the delivery is counted."""
+    from datetime import timedelta
+
+    prepared(db)
+    assert submit()["success"] and len(fake.posts) == 1
+    clock, armed = [NOW], []
+
+    def db_now(conn):
+        reading = clock[0]
+        if armed and armed.pop():
+            store(db, "pr-1", fulfilled("pr-1", receipt(units_loaded=7, units_to_back_stock=4,
+                                                        resolved_at="2026-11-09T13:00:00Z")),
+                  NOW + timedelta(hours=1))
+            clock[0] = NOW + timedelta(hours=2)     # the sync committed after this reading, so time moved on
+        return reading
+
+    monkeypatch.setattr(ledger, "db_now", db_now)
+    armed.append(True)
+    again = submit()
+    assert not armed, "the fulfillment never happened"
+    assert not again["success"], again["message"]
+    assert len(fake.posts) == 1
+    assert db.execute("select status from purchase_requests where request_id = 'pr-1'").fetchone() == ("fulfilled",)
+
+
+def test_a_dripped_catalog_frees_the_write_lock_at_the_deadline(db, fake, schema_url, monkeypatch):  # noqa: F811
+    """Sol round 5, finding 4. With no stored catalog, submit reads it from the bridge while it holds the
+    halt lock. A catalog whose body drips used to hold the lock for as long as it took (each byte inside the
+    per-read timeout). The read now has a total deadline (2 s here), so the submit gives up and the lock is
+    free; nothing is sent."""
+    import time
+
+    from vending import bridge as bridge_module
+    from vending.config import is_halted
+    from vending.tools import submit as submit_tool
+    from vending.write_gate import run_write
+    monkeypatch.setattr(bridge_module, "CATALOG_DEADLINE_SECONDS", 2, raising=False)
+    prepared(db)
+    fake.catalog_drip = 0.25        # the catalog alone would take over a minute
+    plan = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()])
+    replies = []
+
+    def one():
+        with open_in(*schema_url) as conn:
+            action = submit_tool.submit_desired_state(plan, fake.client, lambda: open_in(*schema_url))
+            replies.append(run_write(conn, "submit_desired_state", {}, action))
+
+    started = time.monotonic()
+    thread = threading.Thread(target=one)
+    thread.start()
+    time.sleep(max(0.0, started + 4 - time.monotonic()))        # the deadline plus a margin
+    with db.transaction():
+        db.execute("set local lock_timeout = '200ms'")
+        is_halted(db, lock=True)        # raises LockNotAvailable while the submit still holds it
+    thread.join(timeout=30)
+    [reply] = replies
+    assert not reply.success and "couldn't read the catalog" in reply.message and "within 2 s" in reply.message
+    assert fake.gets == 1 and fake.posts == []
+
+
+def test_a_201_naming_a_request_we_already_hold_keeps_no_created_id_so_a_person_can_settle_it(db, fake):  # noqa: F811
+    """A validated-looking 201 under r1, a request we already recorded, isn't this attempt's: the row is
+    `unknown` with the answer kept and no `created_id`, so `--not-filed` isn't refused for it."""
+    prepared(db)
+    fake.answer = (201, {"id": "r1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
+    reply = submit()
+    assert reply["status"] == "unknown" and "already holds" in reply["message"]
+    assert db.execute("select status, created_id, response->>'id' from purchase_submissions").fetchall() == [
+        ("unknown", None, "r1")]
+    assert submissions.resolve(db, 1, None, "kevin").startswith("Submission 1 marked never filed")
