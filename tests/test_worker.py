@@ -163,6 +163,20 @@ def test_tracking_daily_skips_when_its_sync_failed_this_round():
     assert "sync_history" in results[1].error
 
 
+def test_tracking_daily_skips_when_the_slot_check_failed_this_round():
+    """`slots check` runs first to confirm the assignment the check's figures are read against: if
+    it failed this round (the server gave a different assignment, or none is stored), sending would
+    read the books against a slot set that may be wrong, so the check skips (worker.NEEDS)."""
+    calls = []
+    jobs = [("slots_check", lambda: 1), ("sync_history", lambda: 0), ("sync_requests", lambda: 0),
+            ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 1), ("finished", 0),
+                                                           ("finished", 0), ("skipped", None)]
+    assert "slots_check" in results[3].error
+
+
 def test_tracking_daily_runs_when_its_syncs_passed():
     calls = []
     jobs = [("sync_history", lambda: 0), ("sync_requests", lambda: 0),

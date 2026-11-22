@@ -8,8 +8,9 @@ Each round runs, in order, `python -m vending.slots check`,
 `python -m vending.sync_catalog`, `python -m vending.sync_product_requests` and
 `python -m vending.tracking_daily`, in this process. The last sends the day's tracking check once it is
 due, only when `TRACKING_DAILY` is `on` (off by default; `vending.tracking_daily`), and only when
-the round's `sync_history` and `sync_requests` both finished (`worker.NEEDS`): the check reads the
-polls and receipts those syncs bring in, so a sync that failed, crashed or is still running would
+the round's `slots check`, `sync_history` and `sync_requests` all finished (`worker.NEEDS`): the
+check reads the polls and receipts those syncs bring in, against the assignment `slots check`
+confirms, so one that failed, crashed or is still running would
 leave it reading stale books and spending the day's one check. `slots check` goes first. It
 only confirms our slot assignment: if the server gives a different one, or none
 is stored, it changes nothing and fails the round until a person runs
@@ -94,8 +95,10 @@ Job = tuple[str, Callable[[], int]]
 # A job here skips its round when a named earlier job of the same round didn't finish with 0
 # (failed, crashed, timed out, or still running from an earlier round): the tracking check reads
 # the polls and receipts its round's syncs bring in, so a sync that didn't finish would leave it
-# reading stale books and spending the day's one check on them. It tries again next round.
-NEEDS = {"tracking_daily": ("sync_history", "sync_requests")}
+# reading stale books and spending the day's one check on them, and a failed slot check leaves
+# the assignment unconfirmed, so the books it reads may be against slots that are no longer ours.
+# It tries again next round.
+NEEDS = {"tracking_daily": ("slots_check", "sync_history", "sync_requests")}
 
 
 def default_jobs() -> list[Job]:
