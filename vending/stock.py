@@ -1116,16 +1116,6 @@ def closet(conn: psycopg.Connection) -> tuple[ClosetCount, ...]:
     return closet_from_receipts(*_receipts(conn))
 
 
-def slot_product_costs(conn: psycopg.Connection) -> dict[str, Fraction | None]:
-    """Each slot's mean paid cost per unit for the product its receipts last loaded, before
-    any sale: what refilling that product pays. A slot with no receipt for it has None.
-
-    The replay's `SlotCount.unit_cost` is None once a slot sells out, because its layers go
-    with the units, but a sold-out slot is exactly the one the midweek wake check (#219)
-    prices. So the cost comes from the receipts alone, and no poll can move it."""
-    return {c.slot: c.unit_cost for c in first_in_first_out(movements_from_receipts(*_receipts(conn))).slots}
-
-
 def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetCount, ...]:
     """`closet` without the database: the same receipt fields as `movements_from_receipts`."""
     pulled = {line["pulled_sku"] for line in lines if line["units_pulled"]}

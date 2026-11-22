@@ -81,13 +81,13 @@ The fix is product choice, not visits: high-capacity packages, or two columns fo
 
 **Rule.** Ask for a midweek visit only when the margin it saves before Friday is more than $25 (no substitution between our slots, R9):
 
-> saved margin = sum over empty slots of (rate per class day × class days saved × margin per unit)
+> saved margin = sum over slots of (units one visit can load × margin per unit), the loadable units being the saved class days' demand, capped at one column of the slot's product (the loading chart through the planner's capacity inputs, `docs/capacity.md`)
 
 Plan on **2 class days saved** for a Monday-morning request, **1** for Tuesday, none after Tuesday (Proposed).
 
 **Class days saved.** Visits land after 1 PM (said of Friday, #106 row 14; midweek is our inference, R5). Monday's request filled Tuesday saves 3 days at best; visits "may take longer than 24 hours", so plan on Wednesday: 2. Tuesday's, filled Thursday: 1. Thursday's: 0. `vending.midweek_wake` (MIDWEEK_WAKE=on, #219) applies this rule to the stored facts after each sync round and records a wake-up when a visit would pay, so the agent's next run sees it without re-deciding.
 
-**Margin per unit** = shelf price ÷ 1.08 − unit cost, at run 2's most-we-pay pack prices (`docs/sample-directive.md`), so worst case. The table rounds; the arithmetic uses unrounded values.
+**Margin per unit** = shelf price ÷ 1.08 − what loading that unit costs: the closet's oldest layers first (FIFO, priced once however many slots the visit loads), then new stock at the primary sourcing option's price per unit, at run 2's most-we-pay pack prices (`docs/sample-directive.md`), so worst case. The table rounds; the arithmetic uses unrounded values, and days left is units on hand over the rate, never the display string's rounding.
 
 | Product (run 2) | Unit cost at most | Price | Price ex tax | Margin | Break-even units (25 ÷ margin, rounded up) |
 |---|---|---|---|---|---|

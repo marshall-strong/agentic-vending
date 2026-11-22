@@ -8,7 +8,7 @@ a second fast seller the same week wakes nothing more, and the job is off by def
 """
 
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from fractions import Fraction
 
@@ -16,7 +16,7 @@ import pytest
 
 from tests.conftest import store_poll
 from tests.test_dashboard import fulfilled
-from vending import db, midweek_wake, settings
+from vending import db, ledger, midweek_wake, settings, sourcing
 from vending.midweek_wake import Outlook, decide
 
 # Monday 7 Dec 2026, noon Eastern (EST, UTC-5): inside the fall term, week of Sat 5 Dec.
@@ -29,15 +29,32 @@ BREAK_MONDAY = datetime(2026, 12, 21, 17, tzinfo=timezone.utc)  # winter break w
 BRIEFING_WEEK = "2026-11-07"
 
 
-def out(slot, rate, days_left, price=450, cost=Fraction(169)):
-    """An Outlook for one slot, in cents."""
+def out(slot, rate, days_left, price=450, cost=Fraction(169), capacity=8):
+    """An Outlook for one slot, in cents: its new stock prices at `cost` a unit."""
     return Outlook(slot, None if rate is None else Decimal(str(rate)),
-                   None if days_left is None else Decimal(str(days_left)), price, cost)
+                   None if days_left is None else Decimal(str(days_left)), price,
+                   capacity=capacity,
+                   new_unit_cents=None if cost is None else cost)
 
 
-def premium(slots, rate="1.354", days_left=0, price=450, cost=Fraction(169)):
+def premium(slots, rate="1.354", days_left=0, price=450, cost=Fraction(169), capacity=8):
     """Premium-priced slots ($4.50: the mid-premium fall prior, 1.354 a class day) empty now."""
-    return [Outlook(s, Decimal(str(rate)), Decimal(str(days_left)), price, cost) for s in slots]
+    return [out(s, rate, days_left, price=price, cost=cost, capacity=capacity) for s in slots]
+
+
+def test_the_closet_is_priced_into_one_load_not_every_load():
+    # Two slots, one closet layer of 2 units at $3: the visit draws them once (into slot
+    # 15, the lowest slot first), so slot 16 sources all its units at $1.69. Pricing the
+    # closet into both loads would double-count it (the #219 review's cost basis).
+    margin_a_unit = Fraction(450) / Fraction(108, 100)
+    saved = Fraction("1.354") * 2                                  # 2.708 units a slot
+    revenue = 2 * saved * margin_a_unit
+    cost = (2 * 300 + (saved - 2) * 169) + saved * 169
+    wake = decide(MONDAY, premium(["15", "16"]), closet_layers=((Fraction(2), Fraction(300)),),
+                  fee_cents=0)                               # the margin alone is under $25
+    assert wake is not None
+    assert wake.saved_margin_cents == round((revenue - cost).numerator / (revenue - cost).denominator)
+    assert wake.slots == ("15", "16")
 
 
 # --- the decision, pure ---------------------------------------------------------
@@ -133,7 +150,10 @@ def test_request_midweek_run_records_once_and_logs(conn, capsys):
     assert midweek_wake.request_midweek_run(conn, "Slots 15 and 16 would sell out.", by="tester", now=MONDAY)
     row = midweek_wake.current(conn, MONDAY)
     assert row["requested_at"] is not None and row["requested_by"] == "tester"
-    assert not midweek_wake.request_midweek_run(conn, "again")   # already asked: nothing to start
+    first = row["requested_at"]
+    assert not midweek_wake.request_midweek_run(conn, "again", by="other", now=MONDAY)
+    row = midweek_wake.current(conn, MONDAY)
+    assert row["requested_at"] == first and row["requested_by"] == "tester"
     assert "midweek run requested" in capsys.readouterr().out
 
 
@@ -149,19 +169,45 @@ def test_current_reads_this_week_only(conn):
 # --- the worker's job, on stored facts -------------------------------------------
 
 
-def fast_week(conn, slots=("15", "16", "17", "18"), *, loaded=6, sold=6, paid="10.14", tag="a"):
+def fast_week(conn, slots=("15", "16", "17", "18"), *, loaded=6, sold=6, paid="10.14", tag="a",
+              monday=MONDAY, opening=60000, sales_cents=None):
     """Slots loaded Friday evening ($1.69 a unit), sold out by Monday's poll, $4.50 each.
 
     Price $4.50 sits nearest the mid-premium fall prior (1.354 a class day); a Monday
-    check saves 2 class days per slot, so 4 slots save $26.83 against the $25 fee."""
-    friday_evening = datetime(2026, 12, 4, 22, tzinfo=timezone.utc)
+    check saves 2 class days per slot, so 4 slots save $26.83 against the $25 fee.
+    Seeds the ledger's opening ($600.00) so the check can price the visit against it.
+    The product is in the catalog (a 12 oz can: 8 a column) and on the sourcing table
+    ($10.14 a 6-pack), so the visit's new units price at the same $1.69 the receipts
+    paid. `sales_cents` overrides the polls' lifetime sales cents (None: units x price)."""
+    catalog_and_sourcing(conn)
+    if conn.execute("select 1 from ledger_entries where kind = 'opening'").fetchone() is None:
+        ledger.record(conn, "opening", opening, "opening capital", "tester",
+                      at=monday - timedelta(days=4))
+    friday_evening = monday - timedelta(days=2, hours=19)       # the Friday 22:00 UTC before
     for slot in slots:
         fulfilled(conn, f"wake-{tag}-{slot}", slot, "WAKE-SKU", units_loaded=loaded, paid=paid,
                   at=friday_evening)
-    store_poll(conn, f"wake-before-{tag}", datetime(2026, 12, 4, 20, tzinfo=timezone.utc).isoformat(),
-               {s: (450, 100) for s in slots})
-    store_poll(conn, f"wake-monday-{tag}", datetime(2026, 12, 7, 16, tzinfo=timezone.utc).isoformat(),
-               {s: (450, 100 + sold) for s in slots})
+
+    def readings(units):
+        return (450, units) if sales_cents is None else (450, units, sales_cents)
+
+    store_poll(conn, f"wake-before-{tag}", (friday_evening - timedelta(hours=2)).isoformat(),
+               {s: readings(100) for s in slots})
+    store_poll(conn, f"wake-monday-{tag}", (monday - timedelta(hours=1)).isoformat(),
+               {s: readings(100 + sold) for s in slots})
+
+
+def catalog_and_sourcing(conn):
+    """WAKE-SKU: a 12 fl oz can (8 a column, the loading chart) the sourcing table sells at
+    $10.14 a 6-pack ($1.69 a unit), so the visit's new units price at the planner's sourcing
+    cost, and one visit loads at most 8 into a slot. Idempotent."""
+    conn.execute("insert into catalog_products (sku, name, size, last_response)"
+                 " values ('WAKE-SKU', 'Wake Cola', '12 fl oz can', '{}')"
+                 " on conflict (sku) do nothing")
+    sourcing.set_option(conn, sourcing.Option(
+        sku="WAKE-SKU", rank="primary", store="Walmart", units_per_pack=6, expected_cents=1014,
+        max_cents=1014, url=None, pack_description=None,
+        checked_at=MONDAY - timedelta(days=2), checked_by="tester"), MONDAY)
 
 
 def test_fast_seller_week_wakes_exactly_once(conn):
@@ -236,13 +282,8 @@ def test_job_on_runs_the_check(conn, monkeypatch):
 # --- the cost basis ---------------------------------------------------------------
 
 
-def test_slot_product_costs_survive_a_sell_out(conn):
-    from vending import stock
-
-    fast_week(conn)                                             # slots 15-18 empty now, sold out
-    costs = stock.slot_product_costs(conn)
-    assert [costs[s] for s in ("15", "16", "17", "18")] == [Fraction(169)] * 4   # $10.14 for 6
-    assert costs.get("25") is None                              # no receipt: no cost to guess with
+# (the cost basis is covered by test_the_closet_is_priced_into_one_load_not_every_load
+# and test_the_cost_prices_the_visit_load_closet_first_then_sourcing above)
 
 
 # --- the surfaces ----------------------------------------------------------------
@@ -318,3 +359,126 @@ def test_worker_carries_the_job():
 
     assert worker.JOB_NAMES["midweek_wake"] == "Midweek wake-up check"
     assert [name for name, _ in worker.default_jobs()][-1] == "midweek_wake"   # after the syncs it reads
+
+
+# --- the Sol review: one red test per finding (each fails on the code it targets) ---
+
+FALL_MONDAY = datetime(2026, 11, 16, 17, tzinfo=timezone.utc)   # Mon 16 Nov, noon ET: fall data
+
+
+def test_saved_units_capped_at_what_one_visit_can_load():
+    # Six slots at 4.5 a class day, empty now, save two class days: 6 x 4.5 x 2 = 54 units.
+    # One visit loads at most one column (8 for a 12 oz can, docs/capacity.md), so the
+    # credit is 6 x 8 = 48 units, never 54.
+    margin = Fraction(450) / Fraction(108, 100) - Fraction(169)
+    wake = decide(MONDAY, premium(["15", "16", "17", "18", "25", "26"], rate="4.5"))
+    assert wake is not None
+    assert wake.saved_margin_cents == round(48 * margin)
+
+
+def test_the_cost_prices_the_visit_load_closet_first_then_sourcing(conn):
+    """Slot 15's receipts hold a sold-out $1 batch and a fresh $3 batch, with 2 cans over
+    in the closet. The visit's load is priced as what it loads: the closet's oldest
+    layers first ($3 a can, once, into the lowest slot), then the sourcing cost for the
+    new purchases ($1.69) -- never the receipts' mean over the sold batch."""
+    catalog_and_sourcing(conn)
+    fast_week(conn, slots=("16", "17", "18", "25"), tag="s")
+    store_poll(conn, "wake-old-base-15", datetime(2026, 12, 3, 18, tzinfo=timezone.utc).isoformat(),
+               {"15": (450, 100)})                    # the counter before the $1 batch went in
+    fulfilled(conn, "wake-old-15", "15", "WAKE-SKU", units_loaded=6, paid="6.00",
+              at=datetime(2026, 12, 3, 20, tzinfo=timezone.utc))
+    store_poll(conn, "wake-old-sold-15", datetime(2026, 12, 4, 12, tzinfo=timezone.utc).isoformat(),
+               {"15": (450, 106)})                       # the $1 batch sold out before the refill
+    fulfilled(conn, "wake-new-15", "15", "WAKE-SKU", units_loaded=6, paid="24.00",
+              to_back_stock=2, at=datetime(2026, 12, 4, 22, tzinfo=timezone.utc))
+    store_poll(conn, "wake-mon-15", datetime(2026, 12, 7, 16, 30, tzinfo=timezone.utc).isoformat(),
+               {"15": (450, 112), "16": (450, 106), "17": (450, 106), "18": (450, 106),
+                "25": (450, 106)})
+    wake = midweek_wake.evaluate(conn, MONDAY)
+    assert wake is not None
+    revenue_a_unit = Fraction(450) / Fraction(108, 100)
+    saved_units = Fraction("2.708")                      # 1.354 a class day x 2 saved days
+    load_15 = 2 * 300 + (saved_units - 2) * 169          # the closet's two $3 cans, then sourcing
+    total = 4 * saved_units * (revenue_a_unit - 169) + (saved_units * revenue_a_unit - load_15)
+    assert wake.saved_margin_cents == round(total.numerator / total.denominator)
+
+
+def test_days_left_is_not_the_display_rounding(conn):
+    """Slot 15 sells 33 units over 25 in-stock class days (own rate 1.32) with 4 left:
+    3.03 days, which the machine state's display rounds to 3.0. Friday is only saved when
+    the slot is empty as Friday begins, so the unrounded 3.03 leaves Friday working."""
+    from vending import class_days
+
+    catalog_and_sourcing(conn)
+    fast_week(conn, slots=("16", "17", "18", "25"), tag="r")
+    day = MONDAY.date() - timedelta(days=1)
+    walked = []                                          # the 25 class days before Monday
+    while len(walked) < 25:
+        if class_days.is_class_day(day):
+            walked.append(day)
+        day -= timedelta(days=1)
+    load_at = datetime.combine(walked[-1], time(20), tzinfo=timezone.utc)
+    fulfilled(conn, "wake-slow-15", "15", "WAKE-SKU", units_loaded=37, paid="62.53", at=load_at)
+    poll_days = list(reversed(walked[:-1]))              # the 24 class days after the load
+    rises = [0] + [2] * 10 + [1] * 13                    # 33 sold from the day after it
+    lifetime = 100
+    for day, rise in zip(poll_days, rises):
+        lifetime += rise
+        poll = datetime.combine(day, time(16), tzinfo=timezone.utc)
+        store_poll(conn, f"wake-slow-{day.isoformat()}", poll.isoformat(), {"15": (450, lifetime)})
+    store_poll(conn, "wake-slow-monday", datetime(2026, 12, 7, 16, 30, tzinfo=timezone.utc).isoformat(),
+               {"15": (450, 133), "16": (450, 106), "17": (450, 106), "18": (450, 106),
+                "25": (450, 106)})
+    state = midweek_wake.evaluate(conn, MONDAY)
+    assert state is None or "15" not in state.slots
+
+
+def test_a_crashed_request_leaves_the_week_unrecorded(conn, schema_url, monkeypatch):
+    """The insert and the run request are one transaction: a crash after the insert rolls
+    it back, so a second connection's retry records the week in one piece."""
+    from tests.conftest import open_in
+
+    fast_week(conn)
+
+    def crash(*a, **k):
+        raise RuntimeError("crashed after the insert")
+
+    monkeypatch.setattr(midweek_wake, "request_midweek_run", crash)
+    with pytest.raises(RuntimeError):
+        midweek_wake.check(conn, now=MONDAY)
+    monkeypatch.undo()                                  # the retry runs the real request
+    assert conn.execute("select count(*) from midweek_wakeups").fetchone()[0] == 0
+    with open_in(*schema_url) as conn2:
+        assert midweek_wake.check(conn2, now=MONDAY) is True
+    row = midweek_wake.current(conn, MONDAY)
+    assert row["requested_at"] is not None and row["requested_by"] == "midweek_wake"
+
+
+def test_no_wake_before_the_competition_starts(conn, capsys):
+    """Fall data (before the 3 Dec start) triggers nothing: the decision and the worker
+    job are gated on the start before any gathering."""
+    fast_week(conn, monday=FALL_MONDAY, tag="fall")
+    assert midweek_wake.check(conn, now=FALL_MONDAY) is False
+    assert midweek_wake.evaluate(conn, FALL_MONDAY) is None
+    assert midweek_wake.current(conn, FALL_MONDAY) is None
+    assert "3 Dec" in capsys.readouterr().out
+
+
+def test_an_open_request_blocks_the_wake(conn):
+    """A purchase request still pending can't be followed by a visit, so the wake records
+    nothing and the week stays open for a later round (the planner's request_pending)."""
+    fast_week(conn)
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status)"
+                 " values ('wake-pending', %s, false, '{}', 'pending')", (MONDAY - timedelta(days=1),))
+    assert midweek_wake.check(conn, now=MONDAY) is False
+    assert midweek_wake.current(conn, MONDAY) is None
+
+
+def test_a_balance_under_the_visit_blocks_the_wake(conn):
+    """The visit costs its fee plus the units it must load; under the spendable balance
+    the planner's insufficient_balance gate would refuse it, so nothing is recorded."""
+    fast_week(conn, slots=("15", "16", "17", "18", "25", "26", "27", "28", "35", "36", "37", "38"),
+              tag="poor", opening=1000, sales_cents=0)   # $10.00 in, $121.68 of receipts, no takings
+    assert midweek_wake.check(conn, now=MONDAY) is False
+    assert midweek_wake.current(conn, MONDAY) is None
+

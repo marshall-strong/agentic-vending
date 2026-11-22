@@ -109,6 +109,13 @@ def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...], *, stale_uns
     return value
 
 
+def pending_requests(conn: psycopg.Connection) -> tuple[planner.PendingRequest, ...]:
+    """The purchase requests still open, oldest first. The planner submits no new request
+    while one is open (`request_pending`), and neither does the midweek wake check."""
+    return tuple(planner.PendingRequest(r) for (r,) in conn.execute(
+        "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
+
+
 def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
     """The current state from our database. `catalog` is the product list from `read_catalog`.
     "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`)."""
@@ -157,8 +164,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # One lot per layer, oldest first: the planner draws them in that order, as the stock replay does.
     closet = tuple(planner.ClosetStock(c.product, units, cost)
                    for c in counted.closet for units, cost in c.layers or ((c.units, c.unit_cost),))
-    pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
-        "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
+    pending = pending_requests(conn)
     products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))
                      for p in catalog if p.get("sku"))
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
