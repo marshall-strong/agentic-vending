@@ -62,20 +62,22 @@ class AlreadySettled(RuntimeError):
 
 
 def save_sending(side: psycopg.Connection, plan_hash: str, body: dict,
-                 directive: str | None, visit_fee_cents: int | None = None) -> int:
+                 directive: str | None, visit_fee_cents: int | None = None, purpose: str | None = None) -> int:
     """Commit a `sending` row on `side`, an autocommit connection of its own, so a crash after this can't lose it.
 
     `visit_fee_cents` is the fee the plan quoted for an off-cycle request (None
     otherwise). It is saved here, before the POST, so even a request settled
     later by `resolve` carries the fee that was agreed when it was sent.
+    `purpose` is `fill` for the day-one fill (`vending.fill`), None for the
+    agent's; `settle` and `resolve` keep it.
     """
     if not side.autocommit:
         # In a transaction the row would only commit after the POST, which is what it guards against.
         raise ValueError("save_sending needs an autocommit connection")
     (row,) = side.execute(
-        "insert into purchase_submissions (plan_hash, body, directive, visit_fee_cents)"
-        " values (%s, %s, %s, %s) returning id",
-        (plan_hash, Jsonb(body), directive, visit_fee_cents),
+        "insert into purchase_submissions (plan_hash, body, directive, visit_fee_cents, purpose)"
+        " values (%s, %s, %s, %s, %s) returning id",
+        (plan_hash, Jsonb(body), directive, visit_fee_cents, purpose),
     ).fetchone()
     return row
 

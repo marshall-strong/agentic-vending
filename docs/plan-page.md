@@ -51,6 +51,7 @@ planner, hash and submit, so the request is recorded the same way as the agent's
 python -m vending.fill                                    # preview only; sends nothing
 python -m vending.fill --submit --hash HASH --by NAME     # send it
 python -m vending.fill --submit --hash HASH --late --by NAME   # send it after the deadline anyway
+python -m vending.fill --submit --hash HASH --accept-deviations --by NAME   # send packs that differ from the pick
 ```
 
 1. Run the preview. It shows each line (slot, product, units, store, packs, unit cost, sale price),
@@ -58,19 +59,29 @@ python -m vending.fill --submit --hash HASH --late --by NAME   # send it after t
 2. Read the warnings. A line whose store cutoff for Mon 30 Nov has passed will likely be stocked at
    the next scheduled visit. For Mon 30 Nov, the Amazon cutoff is Sat 28 Nov 23:59 and the in-store
    cutoff is Sun 29 Nov 23:59.
-3. Send it with the hash from step 1. If anything changed since the preview (plan, price, pack or
+3. Read "Differs from the pick", if the preview shows it. The command buys from the sourcing table's
+   checked rows, so a product can come out in another pack size, another number of packs or units, or
+   a higher most-we-pay cost than the pick. Each product that differs is listed, with what the pick
+   buys and what the request buys. The send refuses with `pick_deviation` unless you add
+   `--accept-deviations`, and `action_log` records the flag and the list. Or load and pick a revised plan.
+4. Send it with the hash from step 1. If anything changed since the preview (plan, price, pack or
    balance), the hash no longer matches, and the command refuses with `plan_changed`. Run the
    preview again. The hash also covers the picked plan's ID and our slots (the server's assignment),
    so a hash from another plan or assignment never sends this one.
 
-While the send runs, it holds the pick and the slot assignment. A `plan_store pick` or a new slot
-assignment waits until the send is over. Right before the POST, the command reads the pick and our
-slots again and refuses with `pick_changed` if either changed.
+While the send runs, it holds the pick, the slot assignment, the sourcing table, our catalog copy and
+the ledger. A `plan_store pick`, a new slot assignment, a `sourcing set` or a change to the ledger's
+opening waits until the send is over. So the checked prices and the opening that the checks read are
+the ones the planner reads. The checks also run again on the exact rows and opening the planner was
+given. Right before the POST, the command reads the pick and our slots again and refuses with
+`pick_changed` if either changed.
 
-The deadline is checked right before the POST too. It comes from the Key dates panel
-(`vending.key_dates.FILL_REQUEST`). From 00:00 ET Mon 30 Nov the command refuses with `fill_deadline`,
-unless you add `--late`. A late request may be denied, but it may not be, so a person can still choose
-to send it. The preview warns once the deadline has passed, and `action_log` records `late`.
+The deadline is checked right before the POST too, once the attempt is saved in
+`purchase_submissions`. It comes from the Key dates panel (`vending.key_dates.FILL_REQUEST`). From
+00:00 ET Mon 30 Nov the command refuses with `fill_deadline`, unless you add `--late`. A send that
+crosses midnight while it runs is stopped there, and its attempt is marked never filed (nothing was
+sent). A late request may be denied, but it may not be, so a person can still choose to send it. The
+preview warns once the deadline has passed, and `action_log` records `late`.
 
 The request buys what the plan buys. The plan adds up each product's units across its slots and rounds
 that total up to whole packs: ten slots of 7 Coca-Cola is six 12-packs, not ten. So the request has:
@@ -78,11 +89,15 @@ that total up to whole packs: ten slots of 7 Coca-Cola is six 12-packs, not ten.
 - one purchase line per product, on its first slot, with the packs for all its slots;
 - a back-stock line for each of the product's other slots, which loads that slot's units from those packs;
 - a note that names how many units go in each slot. The bridge's purchase line has no load target, so
-  without it the worker would fill the first slot with whatever fits.
+  without it the worker would fill the first slot with whatever fits. The note groups the slots by
+  where their units come from: "From slot A's purchase: A=7, B=7." for a purchase and the slots it
+  feeds, "Own purchase:" for a purchase line that feeds no other slot, and "From closet stock:" for a
+  back-stock line that loads units already in the closet. For 20 slots it stays under the bridge's 500
+  characters.
 
 The bridge spec doesn't say if a line may load units that another line of the same request bought. We
-asked David on 19 Oct, with no answer yet. The note says it plainly. The agent's own plans still buy
-per slot.
+asked David on 19 Oct, with no answer yet. Confirm it with him before the real send. The note says it
+plainly. The agent's own plans still buy per slot.
 
 The command sends the products at the sourcing table's checked prices, never the plan's estimates.
 It refuses, with every reason and nothing sent, when:
@@ -95,8 +110,12 @@ It refuses, with every reason and nothing sent, when:
   (`python -m vending.sourcing remove SKU --alternate --by NAME`);
 - the ledger has no opening, an opening dated after now, or only the test opening from before the fall
   cut (`test_opening`, #215);
-- a request was sent since the opening, or by this command at any time, and was not rejected
-  (`fill_already_sent`);
+- a request was sent since the opening, or by this command at any time, and was not rejected by the
+  bridge (`fill_already_sent`). The command's own attempts carry `purpose = 'fill'` in
+  `purchase_submissions`, saved before the POST and kept when the attempt is settled or resolved by
+  hand, so an interruption before `action_log` is written can't hide a sent fill;
+- the sourcing table or the opening changed during the send (`inputs_changed`). The locks above
+  should stop this, so it is a second check;
 - the agent's own submit refuses: over spendable cash, a pending request, an unsettled submission,
   the halt switch, and the rest in [`tool-contracts.md`](tool-contracts.md).
 

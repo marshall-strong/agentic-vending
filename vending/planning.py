@@ -57,6 +57,7 @@ class Gathered:
     price_poll_at: datetime | None
     notes: tuple[str, ...]
     sourcing_rows: tuple[sourcing.Option, ...] = ()   # the table rows the planner was given
+    opening_at: datetime | None = None                # the ledger's opening the balance counted from
 
 
 def planner_config(conn: psycopg.Connection, *, stale_wildcard_unset: bool = False) -> planner.Config:
@@ -183,7 +184,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
         silent = frozenset(s.slot for s in report.silent)
     current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
                                    spendable, verdict, silent)
-    return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
+    return Gathered(current, settings, now, poll_at, tuple(notes), table_rows, balance.opening_at)
 
 
 def read_catalog(conn: psycopg.Connection, bridge: Bridge, now: datetime) -> tuple[list[dict], list[str]]:

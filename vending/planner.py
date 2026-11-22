@@ -1136,7 +1136,9 @@ def _add_part(s: _Slot, source: str, unit_cost: Fraction | int | None,
 # - a back-stock line for each of its other slots, loading that slot's units, which the
 #   worker takes from the packs just bought (the closet holds them after the purchase line);
 # - the request's `note`, naming every slot's load, the purchase lines' too, since a
-#   purchase line otherwise loads whatever fits.
+#   purchase line otherwise loads whatever fits. It groups the loads by supplier: each
+#   purchase with the slots it feeds (`fed_by`), and apart from them any back-stock line
+#   that loads units already in the closet (`_pool_note`).
 #
 # The spec doesn't say whether a line may load what another line of the same request bought
 # (asked of David on 19 Oct, docs/planning/tool-list.md), so the agent's plans don't pool.
@@ -1159,13 +1161,34 @@ def _pool(slots: list[_Slot], sources: _Sources) -> dict[str, tuple[_Slot, ...]]
 
 
 def _pool_note(lines: tuple[Line, ...]) -> str:
-    """The request's note for a pooled plan: every slot's load, and where the back-stock lines' units come from."""
-    loads = ", ".join(f"{ln.slot}={ln.units_to_load}" for ln in lines)
-    note = f"Units to load in each slot: {loads}."
-    if any(ln.fed_by for ln in lines):
-        note += (" Back-stock lines load units bought on this visit's purchase line for the same SKU; "
-                 "what is left goes to back stock.")
-    return note
+    """The request's note for a pooled plan: every slot's load, grouped by where its units come from.
+
+    Each purchase line that feeds other slots gets "From slot X's purchase:" with its own load and each fed
+    slot's (`fed_by` per line). A purchase line that feeds nobody is "Own purchase". A back-stock line no
+    purchase feeds loads stock already in the closet, so it is listed apart and never sent to the new units.
+    The groups keep it short: 20 slots fit well under the bridge's 500 characters."""
+    def loads(group: list[Line]) -> str:
+        return ", ".join(f"{ln.slot}={ln.units_to_load}" for ln in group)
+
+    fed: dict[str, list[Line]] = defaultdict(list)
+    for ln in lines:
+        if ln.fed_by:
+            fed[ln.fed_by].append(ln)
+    parts, alone = [], []
+    for ln in lines:
+        if ln.purchase is None:
+            continue
+        if fed.get(ln.slot):
+            parts.append(f"From slot {ln.slot}'s purchase: {loads([ln, *fed[ln.slot]])}.")
+        else:
+            alone.append(ln)
+    if alone:
+        parts.append(f"Own purchase: {loads(alone)}.")
+    if closet := [ln for ln in lines if ln.purchase is None and not ln.fed_by]:
+        parts.append(f"From closet stock: {loads(closet)}.")
+    if any(ln.purchase is not None for ln in lines):
+        parts.append("Leftovers go to back stock.")
+    return " ".join(["Units to load per slot.", *parts])
 
 
 def _size(option: _Option, short: int, extra: int) -> PlannedPurchase:

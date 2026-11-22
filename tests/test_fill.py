@@ -31,6 +31,12 @@ def plan_json() -> dict:
             + [{"slot": s, "sku": "PICKLE", "units": 8, "price_cents": 300} for s in PICKLE]}
 
 
+# The round's own pack list, as `plan_rounds` reads it: what the pick buys (round 2, finding 4 compares).
+PROJECTION = {"packs": [
+    {"sku": "COKE20", "units_per_pack": 12, "expected_cents": 1237, "max_cents": 1300},
+    {"sku": "PICKLE", "units_per_pack": 24, "expected_cents": 1800, "max_cents": 2100}]}
+
+
 def option(sku, rank="primary", **over) -> sourcing.Option:
     base = {"COKE20": dict(store="Costco", units_per_pack=12, expected_cents=1237, max_cents=1300, url=None),
             "PICKLE": dict(store="Amazon", units_per_pack=24, expected_cents=1800, max_cents=2100,
@@ -49,8 +55,8 @@ def seed(conn, fake, *, opened=OPENED, prices=("COKE20", "PICKLE")) -> int:  # n
         sourcing.set_option(conn, option(sku), NOW)
     plan_id = conn.execute(
         "insert into first_fill_plans (loaded_by, label, source_note, plan, projection, slots, picked)"
-        " values ('Test Loader', '6', 'round6/plan6.json', %s, '{}', %s, true) returning id",
-        (Jsonb(plan_json()), list(TEST_SLOTS))).fetchone()[0]
+        " values ('Test Loader', '6', 'round6/plan6.json', %s, %s, %s, true) returning id",
+        (Jsonb(plan_json()), Jsonb(PROJECTION), list(TEST_SLOTS))).fetchone()[0]
     return plan_id
 
 
@@ -316,8 +322,8 @@ def load_plan(conn, plan=None, label="7") -> int:
     """Another stored plan for our slots, unpicked."""
     return conn.execute(
         "insert into first_fill_plans (loaded_by, label, source_note, plan, projection, slots)"
-        " values ('Test Loader', %s, 'round/plan.json', %s, '{}', %s) returning id",
-        (label, Jsonb(plan or plan_json()), list(TEST_SLOTS))).fetchone()[0]
+        " values ('Test Loader', %s, 'round/plan.json', %s, %s, %s) returning id",
+        (label, Jsonb(plan or plan_json()), Jsonb(PROJECTION), list(TEST_SLOTS))).fetchone()[0]
 
 
 def picked_id(conn) -> int:
@@ -334,10 +340,14 @@ def test_an_unchecked_alternate_is_refused_with_nothing_sent(db, fake, schema_ur
     assert run(schema_url, fake, "--submit", "--hash", "0" * 64, "--by", "Test Submitter") == 1
     capsys.readouterr()
     assert codes(db) == ["no_checked_price"] and fake.posts == []
-    # Checked, it goes in the request.
+    # Checked, it goes in the request. At $15.00 a pack it raises the worst case above the pick's, so the
+    # preview lists that and the send needs --accept-deviations (round 2, finding 4).
     sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", expected_cents=1400, max_cents=1500), NOW)
-    _, plan_hash = previewed(schema_url, fake, capsys)
-    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 0
+    out, plan_hash = previewed(schema_url, fake, capsys)
+    assert "- COKE20: the pick buys 6 x 12 (72 units, at most $78.00); this request buys 6 x 12 (72 units, at most " \
+           "$90.00)" in out
+    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter",
+               "--accept-deviations") == 0
     [posted] = fake.posts
     assert posted["lines"][0]["alternate"]["store"] == "Walmart"
 
@@ -453,3 +463,207 @@ def test_a_preview_after_the_deadline_warns_and_says_to_add_late(db, fake, schem
     assert re.search(r"--submit --hash [0-9a-f]{64} --late --by NAME", out)
     assert fill.main([], bridge=fake.client, connect=lambda: open_in(*schema_url), now=SUN_LAST_SECOND) == 0
     assert "fill request deadline" not in capsys.readouterr().out
+
+
+# --- Sol review, round 2 --------------------------------------------------------------------------
+
+TEST_OPENING_AT = datetime(2026, 11, 11, 17, tzinfo=timezone.utc)
+
+
+def _clear_checked_price(conn):
+    sourcing.set_option(conn, option("COKE20", expected_cents=None), NOW)
+
+
+def _test_opening(conn):
+    conn.execute("update ledger_entries set at = %s where kind = 'opening'", (TEST_OPENING_AT,))
+
+
+@pytest.mark.parametrize("change", [_clear_checked_price, _test_opening], ids=["clear price", "test opening"])
+def test_inputs_can_not_change_between_the_checks_and_the_planner(db, fake, schema_url, capsys, monkeypatch,  # noqa: F811
+                                                                   change):
+    """Round 2, blocker 1: a second connection cleared COKE20's checked price (cap unchanged), or re-dated the
+    opening to the 11 Nov test date, after the fill's checks and before the planner read them again. The hash
+    didn't change, so the old approval posted. The submit now holds the sourcing table and the ledger, so the
+    change waits for the send."""
+    from vending import planning
+
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    real, seen = planning.plan, {}
+
+    def changed_then_planned(conn, *args, **kwargs):
+        if "changed" not in seen:
+            with open_in(*schema_url) as other:
+                other.execute("set lock_timeout = '1s'")
+                try:
+                    change(other)
+                    seen["changed"] = True
+                except psycopg.errors.LockNotAvailable:
+                    seen["changed"] = False
+        return real(conn, *args, **kwargs)
+
+    monkeypatch.setattr(planning, "plan", changed_then_planned)
+    run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter")
+    capsys.readouterr()
+    # The change could not land mid-submit, so what was sent is what was checked.
+    assert seen == {"changed": False}
+    [posted] = fake.posts
+    assert posted["lines"][0]["primary"]["store"] == "Costco"
+    assert sourcing.options_for(db, ["COKE20"])[0].expected_cents == 1237
+    assert ledger.opening(db).at == OPENED
+
+
+def test_the_guards_run_on_the_rows_the_planner_used(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Round 2, blocker 1: the guards read the database again rather than what the planner was given. If the
+    planner's sourcing rows lack a checked price, or its opening is the test one, nothing is sent."""
+    from dataclasses import replace
+
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    real_rows = sourcing.listed_options
+    monkeypatch.setattr(sourcing, "listed_options", lambda conn: [
+        replace(o, expected_cents=None) if (o.sku, o.rank) == ("COKE20", "primary") else o for o in real_rows(conn)])
+    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 1
+    assert "no_checked_price" in capsys.readouterr().err and fake.posts == []
+    monkeypatch.setattr(sourcing, "listed_options", real_rows)
+    real_balance = ledger.balance
+    monkeypatch.setattr(ledger, "balance", lambda conn, as_of=None: replace(
+        real_balance(conn, as_of), opening_at=TEST_OPENING_AT))
+    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 1
+    assert "test_opening" in capsys.readouterr().err and fake.posts == []
+    assert db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
+
+
+LATER = datetime(2026, 11, 30, 2, 0, tzinfo=timezone.utc)
+
+
+def _move_opening_past_the_fill(conn):
+    conn.execute("update purchase_requests set status = 'fulfilled'")
+    conn.execute("update ledger_entries set at = %s where kind = 'opening'",
+                 (datetime(2026, 11, 30, 1, 30, tzinfo=timezone.utc),))
+
+
+def _second_try(schema_url, fake, capsys) -> str:  # noqa: F811
+    """A preview, then a submit, after the opening moved past the fill. Returns the preview."""
+    assert fill.main([], bridge=fake.client, connect=lambda: open_in(*schema_url), now=LATER) == 0
+    out = capsys.readouterr().out
+    assert fill.main(["--submit", "--hash", "0" * 64, "--by", "Test Submitter"], bridge=fake.client,
+                     connect=lambda: open_in(*schema_url), now=LATER) == 1
+    capsys.readouterr()
+    return out
+
+
+def test_a_fill_interrupted_before_its_log_still_counts_as_sent(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Round 2, blocker 2: the fill was found by its action_log row. An interruption after the submission was
+    settled but before that row committed left an accepted request with no fill marker; once it was fulfilled
+    and the opening moved past it, a fresh approval posted again. The marker is now on the submission row,
+    saved before the POST."""
+    from vending.tools import submit as submit_tool
+
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    real = submit_tool._send
+
+    def interrupted(*args, **kwargs):
+        real(*args, **kwargs)
+        raise RuntimeError("the process died here")
+
+    monkeypatch.setattr(submit_tool, "_send", interrupted)
+    with pytest.raises(RuntimeError):
+        run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter")
+    monkeypatch.setattr(submit_tool, "_send", real)
+    assert db.execute("select status, request_id, purpose from purchase_submissions").fetchall() == [
+        ("accepted", "pr-1", "fill")]
+    assert db.execute("select count(*) from action_log where tool = 'fill.submit'"
+                      " and result->>'request_id' is not null").fetchone() == (0,)
+    _move_opening_past_the_fill(db)
+    out = _second_try(schema_url, fake, capsys)
+    assert "fill_already_sent: request pr-1 (fulfilled)" in out and "Plan hash: none" in out
+    assert codes(db) == ["fill_already_sent"] and len(fake.posts) == 1
+
+
+def test_a_fill_settled_by_hand_keeps_its_marker(db, fake, schema_url, capsys):  # noqa: F811
+    """Round 2, blocker 2: the marker survives a person's `submissions resolve`, and a request the bridge
+    rejected doesn't count."""
+    from vending import submissions
+
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    fake.answer = (503, {"detail": "down"})
+    assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 1
+    [(row, purpose)] = db.execute("select id, purpose from purchase_submissions").fetchall()
+    assert purpose == "fill"
+    submissions.resolve(db, row, "pr-9", "Test Resolver")
+    assert db.execute("select status, purpose from purchase_submissions").fetchall() == [("accepted", "fill")]
+    _move_opening_past_the_fill(db)
+    assert "fill_already_sent: request pr-9 (fulfilled)" in _second_try(schema_url, fake, capsys)
+    assert len(fake.posts) == 1
+    # Rejected by the bridge: the marker no longer blocks a new fill.
+    db.execute("update purchase_requests set status = 'rejected'")
+    assert fill.main([], bridge=fake.client, connect=lambda: open_in(*schema_url), now=LATER) == 0
+    assert "fill_already_sent" not in capsys.readouterr().out
+
+
+def test_the_deadline_is_checked_again_after_the_attempt_is_saved(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Round 2, major 3: the deadline was checked before the side connection opened and the attempt was saved.
+    A send that crosses midnight there is now stopped before the POST, and its attempt settled as never filed."""
+    from vending import submissions
+
+    seed(db, fake)
+    clock = {"now": NOW}
+    monkeypatch.setattr(ledger, "db_now", lambda conn: clock["now"])
+    real_save = submissions.save_sending
+
+    def saved_at_midnight(*args, **kwargs):
+        row = real_save(*args, **kwargs)
+        clock["now"] = MON_0030
+        return row
+
+    monkeypatch.setattr(submissions, "save_sending", saved_at_midnight)
+
+    def submit(*extra) -> int:
+        clock["now"] = NOW
+        assert fill.main([], bridge=fake.client, connect=lambda: open_in(*schema_url)) == 0
+        found = HASH.search(capsys.readouterr().out)
+        return fill.main(["--submit", "--hash", found.group(1), "--by", "Test Submitter", *extra],
+                         bridge=fake.client, connect=lambda: open_in(*schema_url))
+
+    assert submit() == 1
+    assert "fill_deadline" in capsys.readouterr().err and fake.posts == []
+    [(status, detail)] = db.execute("select status, detail from purchase_submissions").fetchall()
+    assert status == "not_filed" and "fill_deadline" in detail
+    assert codes(db) == ["fill_deadline"]
+    # With --late, the same crossing still sends.
+    assert submit("--late") == 0
+    assert len(fake.posts) == 1
+
+
+DEVIATION = ("COKE20: the pick buys 6 x 12 (72 units, at most $78.00); this request buys 5 x 16 (80 units, at "
+             "most $85.00)")
+
+
+def test_a_request_that_buys_other_packs_than_the_pick_needs_approval(db, fake, schema_url, capsys):  # noqa: F811
+    """Round 2, major 4: only the slots' loads went to the planner. The pick buys 70 Coca-Cola as 6 x 12 (72);
+    with a checked 16-pack now in the table the request bought 5 x 16 (80), and nothing said so."""
+    seed(db, fake)
+    sourcing.set_option(db, option("COKE20", units_per_pack=16, expected_cents=1500, max_cents=1700), NOW)
+    out, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash
+    assert "Differs from the pick (1):" in out and f"- {DEVIATION}" in out
+    assert "--accept-deviations" in out
+    argv = ["--submit", "--hash", plan_hash, "--by", "Test Submitter"]
+    assert run(schema_url, fake, *argv) == 1
+    assert "pick_deviation" in capsys.readouterr().err and fake.posts == []
+    assert codes(db) == ["pick_deviation"]
+    assert run(schema_url, fake, *argv, "--accept-deviations") == 0
+    [posted] = fake.posts
+    assert posted["lines"][0]["primary"]["packs"] == 5
+    [(arguments,)] = db.execute("select arguments from action_log where tool = 'fill.submit' and outcome = 'done'"
+                                ).fetchall()
+    assert arguments["accept_deviations"] is True and arguments["deviations"] == [DEVIATION]
+
+
+def test_a_request_that_buys_what_the_pick_buys_needs_no_approval(db, fake, schema_url, capsys):  # noqa: F811
+    seed(db, fake)
+    out, _ = previewed(schema_url, fake, capsys)
+    assert "Differs from the pick" not in out and "--accept-deviations" not in out
