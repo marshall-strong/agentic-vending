@@ -410,16 +410,20 @@ RESET_LOCK = "vending.ledger.reset_test_opening"
 class ResetPlan:
     """What `reset_test_opening` would do: move `opening` to the archive, and nothing else.
 
-    The rest is what stays where it is and falls before the real opening once
-    that is recorded after it: the entries dated at or after the test opening,
-    by kind (count, signed total), and the receipt lines and midweek visits
-    since the test opening (count, total paid).
+    The rest is what stays where it is and falls before a real opening recorded
+    at `now`, the plan's own clock (the runbook records it without `--at`): the
+    entries dated from the test opening to `now`, by kind (count, signed total),
+    and the receipt lines and midweek visits in that span (count, total paid).
+    `after_now` counts the entries and receipt lines dated after `now`: they
+    fall after an opening recorded then, so they are not in the lists (Sol
+    review of #222, round 4, finding 5).
     """
     opening: Entry
     now: datetime
     later_entries: dict[str, tuple[int, Fraction]]
     receipts: tuple[int, Fraction]
     visits: tuple[int, int]
+    after_now: int = 0
 
 
 def _eastern(moment: datetime) -> str:
@@ -485,16 +489,21 @@ def plan_reset(conn: psycopg.Connection, now: datetime | None = None) -> ResetPl
     if why:
         raise LedgerError(why)
     later: dict[str, tuple[int, Fraction]] = {}
+    after = 0
     for e in entries(conn, opened.at):
         if e.id == opened.id:
             continue
+        if e.at > now:
+            after += 1
+            continue
         count, total = later.get(e.kind, (0, Fraction(0)))
         later[e.kind] = (count + 1, total + e.amount_cents)
-    paid = [stock.cents(line["total_paid"]) for line in stock.receipt_lines(conn)
-            if line["at"] is not None and line["at"] >= opened.at]
+    lines = [line for line in stock.receipt_lines(conn) if line["at"] is not None and line["at"] >= opened.at]
+    paid = [stock.cents(line["total_paid"]) for line in lines if line["at"] <= now]
+    after += len(lines) - len(paid)
     visits = _visit_rows(conn, opened.at, now)
     return ResetPlan(opened, now, later, (len(paid), sum((p for p in paid if p is not None), Fraction(0))),
-                     (len(visits), sum(fee for _, fee in visits)))
+                     (len(visits), sum(fee for _, fee in visits)), after)
 
 
 def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None = None) -> Entry:
@@ -512,13 +521,19 @@ def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None =
     round 2, finding 1). `now`, for tests, fixes both readings; without it both are the database clock (`db_now`).
 
     The database checks the window again at commit (migration 022's deferred trigger on
-    `ledger_entries_archive`), because a pause after the last read, or a caller's transaction that commits
-    later, could still commit after the cutoff (Sol review, round 3, finding 1). When this call commits, that
-    refusal is a `LedgerError`. Inside a caller's transaction, the caller's commit raises it instead, and
-    nothing is committed.
+    `ledger_entries_archive`), because a pause after the last read could still commit after the cutoff (Sol
+    review, round 3, finding 1). That refusal is a `LedgerError` too.
+
+    The reset owns its transaction: on a connection already in one it refuses before reading anything, so no
+    caller can run it before midnight and commit after (or check the deferred trigger early with `SET
+    CONSTRAINTS ALL IMMEDIATE`) (Sol review, round 4, finding 1). On an idle connection it opens its own
+    transaction and commits it before it returns.
     """
     if not by.strip():
         raise LedgerError("a reset needs the name of who ran it (--by)")
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        raise LedgerError("the reset runs in its own transaction, and this connection is already in one. "
+                          "Run it on a connection with no open transaction. Nothing was changed")
     try:
         with conn.transaction():
             conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (RESET_LOCK,))
@@ -1153,7 +1168,8 @@ def _reset(conn: psycopg.Connection, by: str, yes: bool) -> int:
         reset_test_opening(conn, by)
         print("Moved one entry out of the books, into ledger_entries_archive:")
     print(f"  {_entry_line(o)}")
-    print("Nothing else moves. Once the real opening is recorded, these fall before it:")
+    print(f"Nothing else moves. Record the real opening now (step 4, without --at), and these, dated from {since} "
+          f"to {_eastern(plan.now)}, fall before it:")
     tokens = plan.later_entries.get("tokens")
     print(f"  model calls since {since}: {tokens[0] if tokens else 0} entries, "
           f"{money(-tokens[1] if tokens else 0)} spent. Development spend: on the dev-spend page, not in the balance")
@@ -1165,6 +1181,11 @@ def _reset(conn: psycopg.Connection, by: str, yes: bool) -> int:
         if kind != "tokens":
             print(f"  {kind} entries since {since}: {count}, {money(total)}. Not in the balance; "
                   "`ledger show` names them. Re-record any that belong in the competition books")
+    if plan.after_now:
+        one = plan.after_now == 1
+        print(f"  {plan.after_now} {'entry or receipt line is' if one else 'entries or receipt lines are'} dated "
+              f"after {_eastern(plan.now)}, so {'it falls' if one else 'they fall'} after an opening recorded now "
+              "and still count. Not listed above")
     if yes:
         print("The ledger has no opening now. Record the real one next: "
               "python -m vending.ledger open --amount 600.00 --by NAME")
