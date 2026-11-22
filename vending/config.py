@@ -87,6 +87,17 @@ def _slot(value: Any) -> str | None:
     return None
 
 
+# What the worker's scheduled agent runs do (`vending.agent_schedule`). The lower of this and the container's
+# `AGENT_SCHEDULE_MODE` wins, so both must say so before the worker runs the agent.
+SCHEDULE_MODES = ("off", "dry-run", "live")
+
+
+def _schedule_mode(value: Any) -> str | None:
+    if value not in SCHEDULE_MODES:
+        return f"must be off, dry-run or live, not {json.dumps(value)}"
+    return None
+
+
 # Set once, never changed: the wildcard is a fixed slot.
 WRITE_ONCE = frozenset({"wildcard_slot"})
 
@@ -131,6 +142,8 @@ KNOWN: dict[str, Setting] = {
                                    lambda v: _whole(v, 1, 60000, "cents")),
     "model_daily_cap_cents": Setting("most live model calls may spend in one Eastern day (default 400)",
                                      lambda v: _whole(v, 1, 60000, "cents")),
+    "agent_schedule_mode": Setting("what the worker's scheduled agent runs do: off, dry-run or live; the lower of "
+                                   "this and the container's AGENT_SCHEDULE_MODE wins (default off)", _schedule_mode),
     "model_test_daily_cap_cents": Setting("most test calls (replays, sweeps) may spend in one Eastern day "
                                           "(default 2000)", lambda v: _whole(v, 1, 60000, "cents")),
 }

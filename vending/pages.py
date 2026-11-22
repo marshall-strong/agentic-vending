@@ -181,6 +181,7 @@ HIDE = {
     "purchase_submissions": db_explorer.Project("detail", ("status",), _submission_detail, SUBMISSION_OTHER),
     # A step the model was told had failed holds the raw error (#165).
     "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),
+    "agent_schedule": db_explorer.Hide("outcome", "failed", ("detail",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
     **TOTALS,

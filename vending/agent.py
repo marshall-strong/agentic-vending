@@ -7,6 +7,26 @@ One run:
 
 1. If the halt switch is on, the run is recorded as `halted` and nothing else happens. It is
    checked again before every model request, so turning it on mid-run stops the run there.
+   Only one run goes at a time, in any mode, from any machine on the same database: a run holds
+   the run lease (`vending.run_lease`, a row in the database) from start to end. A dropped or
+   killed connection never frees it; the run renews it while it goes, and checks it still holds
+   it before every model request and before a purchase request is sent. Each paid model request
+   checks it again in the transaction that reserves its budget (`run_lease.hold`, through the
+   harness's `hold`): it renews it under the row's lock, and goes only if the lease then outlasts
+   the request (`LEASE_MARGIN`). A takeover locks the same row, so the two never interleave. A run
+   that lost it stops there and is `failed`, and reserves and sends nothing. A run that finds it
+   taken is recorded as `skipped` at once, and its detail names the other run. A scheduled run
+   (always a dry run) passes `authorize`, which runs in the transaction that takes the lease, once
+   it is free and before anything is paid for (`vending.agent_schedule`). The run's ending is
+   written to `agent_runs` with `FINISH_RETRIES` more tries if it fails. The whole run has a
+   deadline (`RUN_DEADLINE`): past it, the run stops and is `failed`, and the harness sends no more
+   requests (it checks the deadline after counting a request's tokens and again just before
+   sending). A model request already sent ends first: the harness gives it at most
+   `REQUEST_DEADLINE` by the wall clock, and sends it only if the lease outlasts that. A request it
+   gave up on keeps its worst case, and while its thread may still be going the run doesn't give
+   the lease back (it expires by itself), so no other run's request can overlap it. An MCP request
+   has `TOOL_TIMEOUT`, and every database call of the run has `DB_TIMEOUT` (statement and lock), so
+   nothing can hold the run, or the lease, for ever.
 2. It starts our MCP server (`python -m vending.server`, `VENDING_TOOLS=built`) over stdio and
    offers the model the tools the server lists. A dry run hides every write tool. A live run
    refuses to start while `submit_desired_state` isn't built, sends only the plan its last preview
@@ -46,7 +66,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -55,16 +75,36 @@ import anyio
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending import agent_runs, db, ledger, settings, slots
+from vending import agent_runs, db, ledger, run_lease, settings, slots
 from vending.config import is_halted
-from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError
+from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError, NotHeld
 from vending.tools.project_rules import RULES_DIR
 
 DEFAULT_MODEL = "claude-opus-5-5"   # pending a team decision
 DEFAULT_EFFORT = "medium"
 MAX_TOKENS = 16_000
 MAX_TURNS = 15                      # tool rounds; on the last one the model must answer
-REQUEST_TIMEOUT = 300.0             # seconds for one model request; the SDK's default is 10 minutes
+REQUEST_TIMEOUT = 300.0             # the SDK's timeout: seconds for each wait for bytes (its default is 10 minutes)
+# Seconds one model request may take in all, send to answer, by the wall clock. The harness enforces it (the
+# SDK's timeout doesn't: a reply that keeps trickling in resets it), then gives up on the request.
+REQUEST_DEADLINE = REQUEST_TIMEOUT
+TOOL_TIMEOUT = timedelta(minutes=2)  # one MCP request (a tool call, the tool list); the SDK waits for ever
+RUN_DEADLINE = 60 * 60.0            # seconds for a whole run; a placeholder, like the caps (#129)
+# Seconds any one database statement of a run may take, or wait for a lock, before it fails: the start,
+# each step, the halt and lease checks, the harness's bookkeeping and the final record.
+DB_TIMEOUT = 30.0
+BUSY = "Not started: another agent run was still going"
+LOST_LEASE = ("Stopped before turn {turn}: this run no longer holds the run lease (it expired or another "
+              "run took it over), so it sent no more model requests.")
+LOST_LEASE_SUBMIT = ("Stopped before submit_desired_state: this run no longer holds the run lease (it expired "
+                     "or another run took it over), so nothing was sent and nothing was bought.")
+# Seconds between tries at recording a run's ending in agent_runs, after the first try fails.
+FINISH_RETRIES = (2.0, 10.0, 30.0)
+# How long the run lease must still last when a paid model request is reserved: longer than the request can
+# take (`REQUEST_DEADLINE`), plus the reservation's commit and the request's bookkeeping. The harness checks it
+# in the reservation's transaction (`run_lease.hold`), and again just before the request is sent.
+LEASE_MARGIN = timedelta(seconds=REQUEST_DEADLINE + 2 * DB_TIMEOUT)
+NOT_RECORDED = "The run couldn't be recorded in agent_runs ({error}), so it stopped before anything was sent."
 # Never passed on to the server: the key the agent pays with, and what the SDK would pick up by itself.
 MODEL_KEY_VARS = frozenset({DEFAULT_KEY_ENV, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
 
@@ -153,6 +193,7 @@ class Outcome:
     turn: int = 0                       # the model response being worked through
     plan_turn: int | None = None        # the response whose preview set `plan`: a submit must come later
     tool_calls: list[str] = field(default_factory=list)
+    recorded: bool = True               # False when its ending couldn't be written to agent_runs, even on retry
 
 
 # The first submit, and one retry after a reply proving no byte of the request left.
@@ -167,6 +208,10 @@ NO_RETRY_HINT = "\n\nNothing was sent. This run has used its one retry, so it ca
 
 UNRESOLVED = ("SUBMISSION UNRESOLVED: the bridge may have accepted it. A person must settle it with "
               "`python -m vending.submissions resolve` before anyone submits again. ")
+
+
+class LeaseLost(Exception):
+    """The run no longer holds the run lease: it stops where it is. `Outcome` already says why."""
 
 
 class RulesCardMissing(RuntimeError):
@@ -333,11 +378,13 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
                    model: str, effort: str, system: str, opening: str, live: bool,
                    halted: Callable[[], bool] = lambda: False,
                    on_submit: Callable[[Outcome], None] = lambda out: None, max_turns: int = MAX_TURNS,
-                   label: str = "", on_step: Callable[..., None] = lambda *a, **k: None) -> None:
+                   label: str = "", on_step: Callable[..., None] = lambda *a, **k: None,
+                   owned: Callable[[], bool] = lambda: True) -> None:
     """The tool loop, filling in `out` as it goes so nothing it learned is lost if it stops early.
 
-    `call_tool(name, arguments)` is awaited and returns an MCP `CallToolResult`. `halted()` is
-    checked before every model request. `on_submit(out)` runs straight after a submit succeeds.
+    `call_tool(name, arguments)` is awaited and returns an MCP `CallToolResult`. `halted()` and
+    `owned()` (the run still holds the run lease) are checked before every model request, and
+    `owned()` again just before a submit is sent. `on_submit(out)` runs straight after a submit succeeds.
     `on_step(turn, kind, content, tool=None, is_error=False)` is called for every step, in order.
     """
     async def note(turn: int, kind: str, content: str, **extra: Any) -> None:
@@ -349,6 +396,9 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
         if await anyio.to_thread.run_sync(halted):
             out.status, out.detail = "halted", f"The halt switch was turned on; stopped before turn {turn + 1}."
             return
+        if not await anyio.to_thread.run_sync(owned):
+            out.status, out.detail = "failed", LOST_LEASE.format(turn=turn + 1)
+            return
         request = {"model": model, "max_tokens": MAX_TOKENS, "system": system, "messages": messages,
                    "tools": tools, "tool_choice": {"type": "auto" if turn < max_turns else "none"},
                    "cache_control": {"type": "ephemeral"},     # each turn re-sends the history: read it from cache
@@ -359,6 +409,11 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
         try:
             response = await anyio.to_thread.run_sync(
                 lambda: harness.call(request, label=f"{label} turn {turn + 1}".strip()))
+        except NotHeld as error:            # the lease check at the reservation said no: nothing reserved or sent
+            out.status = "failed"
+            out.detail = (LOST_LEASE.format(turn=turn + 1) if run_lease.LOST in str(error)
+                          else f"Stopped on turn {turn + 1}: {error}")
+            return
         except HarnessError as error:      # CapReached included: nothing more can be paid for
             out.status, out.detail = "failed", f"Stopped on turn {turn + 1}: {error}"
             return
@@ -377,7 +432,11 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
             for block in response.content:
                 if block.type == "tool_use":
                     out.tool_calls.append(block.name)
-                    text, failed = await _use(block, call_tool, schemas, out, live=live, on_submit=on_submit)
+                    try:
+                        text, failed = await _use(block, call_tool, schemas, out, live=live, on_submit=on_submit,
+                                                  owned=owned)
+                    except LeaseLost:
+                        return
                     results.append({"type": "tool_result", "tool_use_id": block.id, "content": text,
                                     "is_error": failed})
                     await note(turn + 1, "tool_result", text, tool=block.name, is_error=failed)
@@ -419,7 +478,7 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
 
 
 async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict, out: Outcome, *, live: bool,
-               on_submit: Callable[[Outcome], None]) -> tuple[str, bool]:
+               on_submit: Callable[[Outcome], None], owned: Callable[[], bool] = lambda: True) -> tuple[str, bool]:
     """Run one tool call the model asked for: (text for the model, is_error)."""
     name, arguments = block.name, dict(block.input or {})
     if name not in schemas:
@@ -443,6 +502,9 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
                     "then submit in your next turn."), True
         if "expected_plan_hash" in (schemas[name].get("properties") or {}):
             arguments["expected_plan_hash"] = out.plan["plan_hash"]   # refused by the server if anything moved
+        if not await anyio.to_thread.run_sync(owned):   # the last check before money can be spent
+            out.status, out.detail = "failed", LOST_LEASE_SUBMIT
+            raise LeaseLost
         out.submit_sent = True                    # set before sending: cleared only by a reply proving nothing left
         out.submits += 1
         try:
@@ -535,18 +597,99 @@ def _settle(out: Outcome) -> None:
         out.status, out.detail = "failed", UNRESOLVED + out.unresolved + (f" Then: {out.detail}" if out.detail else "")
 
 
+def _bounded(connect: Callable[[], psycopg.Connection], seconds: float) -> Callable[[], psycopg.Connection]:
+    """`connect`, with a statement and lock timeout of `seconds` on each connection it opens."""
+    return db.with_timeouts(connect, seconds)
+
+
+def _renew(connect: Callable[[], psycopg.Connection], token: Any) -> bool:
+    with connect() as conn:
+        return run_lease.renew(conn, token)
+
+
+async def _heartbeat(connect: Callable[[], psycopg.Connection], token: Any) -> None:
+    """Renew the lease every `run_lease.HEARTBEAT` seconds until it is lost or the run ends. A renewal that
+    fails is tried again next time; the run's own checks fail closed if the lease lapses meanwhile."""
+    while True:
+        await anyio.sleep(run_lease.HEARTBEAT)
+        try:
+            if not await anyio.to_thread.run_sync(lambda: _renew(connect, token)):
+                return
+        except Exception:       # noqa: BLE001 - the database is down: the next renewal tries again
+            pass
+
+
 async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT,
               connect: Callable[[], psycopg.Connection] = db.connect, client: Any = None,
               now: Callable[[], datetime] | None = None, open_tools: Callable | None = None,
               max_turns: int = MAX_TURNS, rules_card: Path | None = None,
-              bridge: Callable[[], Any] | None = None) -> tuple[int, Outcome]:
+              deadline: float = RUN_DEADLINE,
+              authorize: Callable[[psycopg.Connection], str | None] | None = None,
+              bridge: Callable[[], Any] | None = None) -> tuple[int | None, Outcome]:
     """One weekly run, recorded in `agent_runs`. Returns (run id, outcome).
 
+    Holds the run lease throughout (`vending.run_lease`). If another run holds it, this one is recorded
+    as `skipped` and nothing else happens. `authorize(conn)`, if given, runs once the lease is free and
+    before it is taken, in the same transaction: a reason it returns means the run doesn't start, and
+    comes back as a `skipped` outcome with no run id and no `agent_runs` row. A run whose start can't be
+    recorded has no run id either. Past `deadline` seconds the run stops and is recorded as `failed`.
+
     `bridge` builds the client a live run's submission check reads with (`vending.bridge.Bridge` by default).
-    """
-    now = now or (lambda: datetime.now(timezone.utc))
+    The check runs inside the lease, before the model starts."""
+    connect = _bounded(connect, DB_TIMEOUT)
     with connect() as conn:
-        run_id = agent_runs.start(conn, mode="live" if live else "dry-run", model=model)
+        taken = run_lease.take(conn, deadline=deadline, authorize=authorize)
+    if isinstance(taken, run_lease.Refused):
+        return None, Outcome("skipped", taken.detail)
+    if isinstance(taken, run_lease.Busy):
+        with connect() as conn:
+            run_id = agent_runs.start(conn, mode="live" if live else "dry-run", model=model)
+            out = Outcome("skipped", BUSY + (f" (agent run {taken.run_id})." if taken.run_id is not None else "."))
+            agent_runs.finish(conn, run_id, out.status, detail=out.detail, cost_usd=Decimal(0))
+        return run_id, out
+    if taken.took_over is not None:
+        print(f"agent run {taken.took_over} stopped renewing the run lease; recorded it as stopped and took over",
+              file=sys.stderr, flush=True)
+    harnesses: list = []     # the run's harness, once it has one
+    try:
+        async with anyio.create_task_group() as beats:
+            beats.start_soon(_heartbeat, connect, taken.token)
+            try:
+                return await _run_owned(live=live, model=model, effort=effort, connect=connect, client=client,
+                                        now=now, open_tools=open_tools, max_turns=max_turns, rules_card=rules_card,
+                                        deadline=deadline, token=taken.token, harnesses=harnesses,
+                                        bridge=bridge)
+            finally:
+                beats.cancel_scope.cancel()
+    finally:
+        if any(h.in_flight() for h in harnesses):
+            # A request the harness gave up on may still be going: keep the lease, so no other run's request
+            # overlaps it. It expires by itself (`run_lease.TTL` after the last renewal).
+            print("a model request this run gave up on may still be going, so the run lease is kept until it "
+                  "expires", file=sys.stderr, flush=True)
+        else:
+            _give_back(connect, taken.token)
+
+
+def _give_back(connect: Callable[[], psycopg.Connection], token: Any) -> None:
+    try:
+        with connect() as conn:
+            run_lease.give_back(conn, token)
+    except Exception as error:      # noqa: BLE001 - it expires by itself (`run_lease.TTL`)
+        print(f"the run lease couldn't be given back ({type(error).__name__}); it expires by itself",
+              file=sys.stderr, flush=True)
+
+
+async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[], psycopg.Connection],
+                     client: Any, now: Callable[[], datetime] | None, open_tools: Callable | None,
+                     max_turns: int, rules_card: Path | None, deadline: float,
+                     token: Any, harnesses: list,
+                     bridge: Callable[[], Any] | None = None) -> tuple[int | None, Outcome]:
+    import time
+
+    stop_at = time.monotonic() + deadline     # the harness sends nothing past it
+    now = now or (lambda: datetime.now(timezone.utc))
+    run_id = None
     harness = None
     out = Outcome("failed", "")
     warned = []
@@ -565,29 +708,50 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
         with connect() as c:
             return is_halted(c)
 
+    def owned() -> bool:
+        return _renew(connect, token)
+
     try:
-        if halted():
-            out.status, out.detail = "halted", "The halt switch is on: nothing was read, called or sent."
-            return run_id, out
-        system = system_prompt(rules_card)     # before any server is started or request sent
-        with connect() as conn:
-            notes = last_notes(conn, live=live)
-        if client is None:
-            client = model_client()
-        # Only a live run spends the competition's money; a dry run is test spend, under the test cap.
-        harness = Harness(client, connect, purpose="live" if live else "test", by="agent")
-        if live:
-            await anyio.to_thread.run_sync(lambda: check_submissions(connect, bridge, record_step))
-        async with (open_tools or _open_server)() as (listed, call_tool):
-            if live and SUBMIT not in {t.name for t in listed}:
-                out.detail = "submit_desired_state isn't built on this server, so a live run can't submit. Use a dry run."
+        # The deadline covers the whole run, its start included. A database call can't be cut off mid-way,
+        # but each has DB_TIMEOUT; cancellation lands at the next await, and a model request in flight
+        # (in a thread) ends first.
+        with anyio.move_on_after(deadline) as timer:
+            with connect() as conn:
+                run_id = agent_runs.start(conn, mode="live" if live else "dry-run", model=model)
+                run_lease.attach(conn, token, run_id)
+            await anyio.sleep(0)        # already past the deadline: stop here
+            if halted():
+                out.status, out.detail = "halted", "The halt switch is on: nothing was read, called or sent."
             else:
-                startup = await startup_read(call_tool, record_step)
-                await converse(harness, call_tool, tool_definitions(listed, live=live), out, model=model,
-                               effort=effort, system=system, opening=brief(now(), notes, live=live, startup=startup), live=live,
-                               halted=halted,
-                               on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
-                               label=f"agent run {run_id}", on_step=record_step)
+                system = system_prompt(rules_card)     # before any server is started or request sent
+                with connect() as conn:
+                    notes = last_notes(conn, live=live)
+                if client is None:
+                    client = model_client()
+                # Only a live run spends the competition's money; a dry run is test spend, under the test cap.
+                # Each paid request checks the lease in the transaction that reserves its budget, so a run
+                # taken over meanwhile reserves and sends nothing (`run_lease.hold`).
+                harness = Harness(client, connect, purpose="live" if live else "test", by="agent",
+                                  hold=lambda c: run_lease.hold(c, token, LEASE_MARGIN),
+                                  hold_margin=LEASE_MARGIN.total_seconds(), request_deadline=REQUEST_DEADLINE,
+                                  stop_at=stop_at)
+                harnesses.append(harness)
+                if live:    # inside the lease, so no other run's submit overlaps the check
+                    await anyio.to_thread.run_sync(lambda: check_submissions(connect, bridge, record_step))
+                async with (open_tools or _open_server)() as (listed, call_tool):
+                    if live and SUBMIT not in {t.name for t in listed}:
+                        out.detail = ("submit_desired_state isn't built on this server, so a live run can't "
+                                      "submit. Use a dry run.")
+                    else:
+                        startup = await startup_read(call_tool, record_step)
+                        await converse(harness, call_tool, tool_definitions(listed, live=live), out, model=model,
+                                       effort=effort, system=system,
+                                       opening=brief(now(), notes, live=live, startup=startup), live=live,
+                                       halted=halted,
+                                       on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
+                                       label=f"agent run {run_id}", on_step=record_step, owned=owned)
+        if timer.cancelled_caught:
+            out.status, out.detail = "failed", f"Stopped at the run's deadline ({deadline / 60:g} min)."
     except Exception as error:   # record the run whatever broke; the ledger already holds what was spent
         out.status, out.detail = "failed", f"{type(error).__name__}: {error}"[:1000]
     except BaseException as error:   # Ctrl-C or cancellation: record it, then let it through
@@ -595,14 +759,43 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
         raise
     finally:
         _settle(out)
-        answer = out.answer or {}
-        with connect() as conn:
-            agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer),
-                              update=answer.get("update"),
-                              notes=answer.get("notes"), detail=out.detail,
-                              cost_usd=harness.spent if harness is not None else Decimal(0),
-                              request_id=out.request_id)
+        if run_id is None:
+            out.status, out.detail = "failed", NOT_RECORDED.format(error=out.detail or "no reason given")
+        else:
+            _record_ending(connect, run_id, out, harness)
     return run_id, out
+
+
+def _record_ending(connect: Callable[[], psycopg.Connection], run_id: int, out: Outcome, harness: Any) -> None:
+    """Write the run's ending to agent_runs, trying again after each of `FINISH_RETRIES`. If it never lands,
+    `out.recorded` is False and the detail says so; the schedule's row keeps it in Needs attention until
+    agent_runs has an ending (`vending.dashboard`). A blocking sleep: the run has nothing else to do now."""
+    import time
+
+    answer = out.answer or {}
+    error = None
+    for wait in (0.0, *FINISH_RETRIES):
+        if wait:
+            time.sleep(wait)
+        try:
+            with connect() as conn:
+                agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer),
+                                  update=answer.get("update"),
+                                  notes=answer.get("notes"), detail=out.detail,
+                                  cost_usd=harness.spent if harness is not None else Decimal(0),
+                                  request_id=out.request_id)
+            return
+        except ValueError:      # it already has an ending: the run that took over the lease recorded it
+            out.detail = (f"{out.detail} Its agent_runs row already had an ending, recorded by the run that "
+                          "took over its lease.").strip()
+            return
+        except Exception as caught:      # noqa: BLE001 - each try is bounded by DB_TIMEOUT
+            error = caught
+            print(f"agent run {run_id}: its ending couldn't be recorded ({type(caught).__name__})",
+                  file=sys.stderr, flush=True)
+    out.recorded = False
+    out.detail = (f"{out.detail} Its ending couldn't be recorded ({type(error).__name__}, "
+                  f"{1 + len(FINISH_RETRIES)} tries); agent_runs may still say running.").strip()
 
 
 def _open_server():
@@ -615,7 +808,8 @@ def _open_server():
     @asynccontextmanager
     async def opened():
         params = StdioServerParameters(command=sys.executable, args=["-m", "vending.server"], env=server_env())
-        async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+        async with stdio_client(params) as (read, write), \
+                ClientSession(read, write, read_timeout_seconds=TOOL_TIMEOUT) as session:
             await session.initialize()
             listed = (await session.list_tools()).tools
             yield listed, session.call_tool
