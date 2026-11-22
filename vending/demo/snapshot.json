@@ -46,6 +46,16 @@
    "detail": null,
    "cost_usd": null
   },
+  "last_finished": {
+   "id": 5,
+   "started_at": {
+    "$datetime": "2026-12-07T14:00:00+00:00"
+   },
+   "finished_at": {
+    "$datetime": "2026-12-07T14:12:00+00:00"
+   },
+   "status": "submitted"
+  },
   "last_action": {
    "at": {
     "$datetime": "2026-12-09T14:53:00+00:00"
@@ -2749,6 +2759,9 @@
    "left": 22,
    "unsettled": 0
   }
+ },
+ "opened_at": {
+  "$datetime": "2026-12-02T15:00:00+00:00"
  },
  "key_dates": {
   "ok": true,

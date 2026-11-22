@@ -527,13 +527,10 @@ def _compare(plan: scoring.Score, base: scoring.Score, swapped: tuple[str, ...] 
 
 # --- Incident log ------------------------------------------------------------------------------
 
-def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None,
-              syncs: dict | None = None) -> dict:
+def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None) -> dict:
     """The incident log's data, newest first. `weeks` is the report card panel's data, for weeks that
-    failed a hard check (None when that panel couldn't be built). `syncs` is the worker's latest
-    sync round as `/health` shows it (memory only, so the dashboard hands it over): its latest
-    round failing is one incident while it stays the latest. Every note is this code's own words;
-    a failure's stored text is never read."""
+    failed a hard check (None when that panel couldn't be built). Every note is this code's own
+    words; a failure's stored text is never read."""
     opened = ledger.opening(conn)
     if opened is None or now < opened.at:
         return {"opened": False}
@@ -573,13 +570,14 @@ def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None
     for id_, started, n in errors:
         rows.append(_row(started, "tool_errors", f"Run {id_}",
                          f"The model was told {n} tool call{'s' if n != 1 else ''} failed. See How it decided under Runs."))
-    # The worker's latest round lives in its memory, so it can't be counted in SQL; while it is the
-    # latest and failed, it is exactly one incident. A round from before the opening isn't one.
-    jobs = failed_sync_jobs(syncs)
-    round_at = sync_round_at(syncs)
-    if jobs and round_at is not None and since <= round_at <= now:
-        rows.append(_row(round_at, "sync_failed", "Sync round", f"The latest sync round failed: {jobs}."))
-        total += 1
+    # One row per failed round, as the worker wrote each one (`vending.worker.record_failed_round`,
+    # `sync_incidents`, migration 026), so a round stays listed after a later round passes or the
+    # worker restarts. A round from before the opening isn't one.
+    rounds, rounds_total = _sync_incidents(conn, since, now)
+    total += rounds_total
+    for round_at, jobs in rounds:
+        rows.append(_row(round_at, "sync_failed", "Sync round",
+                         f"A sync round failed: {failed_jobs_text(jobs)}."))
     checks, check_total = _tracking_outside(conn, since, now)
     total += check_total
     for id_, at, results in checks:
@@ -617,24 +615,40 @@ def _error_steps(conn: psycopg.Connection, since: datetime, now: datetime) -> tu
         return 0, []
 
 
-def _tracking_outside(conn: psycopg.Connection, since: datetime, now: datetime) -> tuple[list[tuple], int]:
-    """The tracking checks (migration 021) whose verdicts name a figure `outside`, as
-    (id, answered_at, results), newest first, with their count. Before the migration there is no
-    table, and that is no incidents. Only the verdicts are read; the stored request and answer
-    never reach the log."""
+def _sync_incidents(conn: psycopg.Connection, since: datetime, now: datetime) -> tuple[list, int]:
+    """The worker's failed rounds (`sync_incidents`, migration 026), as (round_at, jobs) newest
+    first, with their count. Before the migration there is no table, and that is no incidents.
+    `jobs` is what the worker wrote from its own round: each job's name, exit code and outcome —
+    never error text — so the note here is fixed words by construction."""
     import psycopg
-    where = ("from tracking_checks where results is not null and sent_at >= %s and sent_at <= %s"
-             " and exists (select 1 from jsonb_each_text(results) v where v.value = 'outside')")
-    args = (since, now)
     try:
-        with conn.transaction():
-            count = conn.execute(f"select count(*) {where}", args).fetchone()[0]
-            rows = conn.execute(f"select id, coalesce(answered_at, sent_at) as at, results {where}"
-                                " order by coalesce(answered_at, sent_at) desc, id desc limit %s",
-                                (*args, INCIDENTS_SHOWN)).fetchall()
-            return rows, count
+        rows = conn.execute("select round_at, jobs from sync_incidents"
+                            " where round_at >= %s and round_at <= %s"
+                            " order by round_at desc, id desc", (since, now)).fetchall()
+    except psycopg.errors.UndefinedTable:     # before migration 026
+        return [], 0
+    return rows, len(rows)
+
+
+def _tracking_outside(conn: psycopg.Connection, since: datetime, now: datetime) -> tuple[list, int]:
+    """The tracking checks (migration 021) whose verdicts name a figure `outside`, as
+    (id, answered_at, results) newest first, with their count. Before the migration there is no
+    table, and that is no incidents. `results` is the bridge's JSON, so every row is read through
+    the shared allowlist (`tracking.verdicts`), and a `results` that isn't the documented four-key
+    object at all is skipped: an array or an extra key can neither crash this query nor hide the
+    log. The stored request and answer never reach the log."""
+    import psycopg
+    where = ("from tracking_checks where results is not null and jsonb_typeof(results) = 'object'"
+             " and sent_at >= %s and sent_at <= %s")
+    try:
+        rows = conn.execute(f"select id, coalesce(answered_at, sent_at) as at, results {where}"
+                            " order by coalesce(answered_at, sent_at) desc, id desc",
+                            (since, now)).fetchall()
     except psycopg.errors.UndefinedTable:     # before migration 021
         return [], 0
+    checks = [(id_, at, v) for id_, at, v in ((r[0], r[1], tracking.verdicts(r[2])) for r in rows)
+              if any(v.get(k) == "outside" for k in TRACKING_RESULTS)]
+    return checks[:INCIDENTS_SHOWN], len(checks)
 
 
 def failed_sync_jobs(syncs: dict | None) -> str | None:
@@ -644,7 +658,14 @@ def failed_sync_jobs(syncs: dict | None) -> str | None:
     (`dashboard.build_alerts`), Needs attention and this log all share one wording."""
     if not syncs or not syncs.get("rounds"):
         return None
-    failed = [r for r in syncs.get("results") or [] if r.get("exit_code") != 0]
+    return failed_jobs_text(syncs.get("results"))
+
+
+def failed_jobs_text(results: list | None) -> str | None:
+    """The failed jobs of one sync round, each named with its exit code or outcome, or None when
+    every job passed. Used for the worker's latest round (`failed_sync_jobs`) and for the stored
+    `sync_incidents` rows, whose `jobs` is the same sanitized list."""
+    failed = [r for r in results or [] if r.get("exit_code") != 0]
     if not failed:
         return None
     return ", ".join(f"`{r.get('job')}` " + (f"exit {r['exit_code']}" if r.get("exit_code") is not None

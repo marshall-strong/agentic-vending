@@ -265,11 +265,16 @@ def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None, p
                                       " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run and run["status"] == "running" and now - run["started_at"] > STALE_RUN:
         run["stale"] = True
+    # The latest run that FINISHED, whatever it ended as. A failure banner stays until a later run
+    # finishes successfully, so a retry that is still running must not hide the run before it.
+    last_finished = _optional(conn, "select id, started_at, finished_at, status from agent_runs"
+                                    " where mode = 'live' and started_at <= %s and status <> 'running'"
+                                    " order by started_at desc, id desc limit 1", (now,))
     last = _optional(conn, f"select at, kind, tool, outcome from action_log where {ACTIVITY_VISIBLE}"
                            " order by at desc, id desc limit 1", (now, opening, list(PRE_OPENING_WRITES)))
     return {"halted": halted, "halt_changed_at": flag and flag["updated_at"],
             "halt_changed_by": flag and flag["updated_by"], "latest_run": run,
-            "last_action": last, "next_cutoff": next_cutoff(now)}
+            "last_finished": last_finished, "last_action": last, "next_cutoff": next_cutoff(now)}
 
 
 def _our_slots(conn: psycopg.Connection) -> dict:
@@ -904,9 +909,13 @@ def _tracking(conn: psycopg.Connection) -> dict | None:
     if not rows:
         return None
     row = rows[0]
+    # `results` is the bridge's JSON, so it goes through the shared allowlist (`tracking.verdicts`):
+    # only the four documented keys, each only `within`/`outside`, reach the public JSON and the
+    # banner, and a `results` that isn't that object at all names nothing.
+    results = tracking.verdicts(row["results"])
     return {"checked_at": row["answered_at"] or row["sent_at"],
-            "outside": [k for k in tracking.RESULTS if row["results"].get(k) == "outside"],
-            "results": dict(row["results"])}
+            "outside": [k for k in tracking.RESULTS if results.get(k) == "outside"],
+            "results": results}
 
 
 def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
@@ -955,7 +964,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
         "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
         "report_cards": cards,
         "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
-            conn, now, cards["data"] if cards["ok"] else None, syncs))),
+            conn, now, cards["data"] if cards["ok"] else None))),
         "tracking": _panel(lambda: _isolated(conn, lambda: _tracking(conn))),
         "purchase_requests": ({"ok": True, "data": purchases["data"][0][:REQUEST_ROWS]}
                               if purchases["ok"] else purchases),
@@ -968,6 +977,9 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
         # The assignment panel explains the bad setting. Keep the weekly view available.
         lock = None
     before_lock = lock is not None and now < lock
+    # The ledger-opening boundary the failure banner applies to run and tracking alerts: a failure
+    # from before the opening is development spend, not a competition incident. None until it opens.
+    snap["opened_at"] = live_since
     snap["key_dates"] = key_dates.panel(conn, now, opening, slots, snap["catalog_counts"], lock,
                                         lambda read: _isolated(conn, read))
     if before_lock:
@@ -1163,6 +1175,12 @@ def build_alerts(snap: dict) -> list[dict]:
     time — never a failure's own text, which can quote a row or name the host; the detail stays
     in the database, `/health` and the container's log. Built from the snapshot alone, so it
     reads nothing, and `/state.json` carries the same list as `alerts`.
+
+    Run and tracking alerts cover the live competition only: the moment they name must be at or
+    after the ledger's opening (`opened_at`), so a development failure from before it never
+    banners. A sync round is current state, so it banners whenever it ran. A run's failure stays
+    on the banner until a later run FINISHES successfully: a retry that is still running doesn't
+    clear it.
     """
     out: list[dict] = []
 
@@ -1173,25 +1191,51 @@ def build_alerts(snap: dict) -> list[dict]:
         add("sync_failed", report_card.sync_round_at(snap.get("syncs")),
             f"The worker's latest sync round failed: {jobs}. See `/health`.")
 
-    run = snap["status"]["latest_run"]
+    opened = snap.get("opened_at")
+    status = snap.get("status") or {}
+    run, done = status.get("latest_run"), status.get("last_finished")
     if run and run.get("stale"):
-        add("run_stuck", run["started_at"],
-            f"Run #{run['id']} has said `running` for {_span(snap['as_of'] - run['started_at'])}: "
-            "the process probably died.")
-    elif run and run["status"] == "failed":
-        add("run_failed", run["started_at"], f"Run #{run['id']} failed. See Runs below.")
-    elif run and run["status"] == "halted":
-        add("run_halted", run["started_at"], f"Run #{run['id']} ended halted: the halt switch is on.")
+        alerts = [("run_stuck", run["started_at"], run["started_at"],
+                   f"Run #{run['id']} has said `running` for {_span(snap['as_of'] - run['started_at'])}: "
+                   "the process probably died.")]
+    elif run and run["status"] in ("failed", "halted"):
+        kind, at, text = _run_alert(run, status)
+        alerts = [(kind, run["started_at"], at, text)]
+    elif done and done["status"] in ("failed", "halted"):
+        # The latest run is still going (or none has started): the last finished run's failure
+        # stays visible until a run finishes successfully.
+        kind, at, text = _run_alert(done, status)
+        alerts = [(kind, done["started_at"], at, text)]
+    else:
+        alerts = []
+    for kind, began, at, text in alerts:
+        # The boundary is when the run started: a run from before the opening is development,
+        # whatever happened to it later; the line itself shows when it ended.
+        if opened is not None and (began is None or began >= opened):
+            add(kind, at, text)
 
     if (check := snap.get("tracking")) and check["ok"] and check["data"] and check["data"]["outside"]:
-        outside = ", ".join(check["data"]["outside"])
-        add("tracking_outside", check["data"]["checked_at"],
-            f"The bridge's tracking check said {outside} outside: our figures and the bridge's counts "
-            "disagree. Compare with `python -m vending.tracking show`.")
+        at = check["data"]["checked_at"]
+        if opened is not None and (at is None or at >= opened):
+            outside = ", ".join(check["data"]["outside"])
+            add("tracking_outside", at,
+                f"The bridge's tracking check said {outside} outside: our figures and the bridge's counts "
+                "disagree. Compare with `python -m vending.tracking show`.")
 
     if (missed := _missed_scheduled_run(snap)) is not None:
         out.append(missed)
     return out
+
+
+def _run_alert(run: dict, status: dict) -> tuple[str, datetime, str]:
+    """The banner line for a finished run that failed or ended halted: when the run ended (a
+    finished run's `finished_at`, else when it started), and, for a halt, the switch as it is now
+    (`config`), not as it was when the run ended — a halt the team has since turned off says so."""
+    at = run.get("finished_at") or run["started_at"]
+    if run["status"] == "failed":
+        return "run_failed", at, f"Run #{run['id']} failed. See Runs below."
+    switch = "The halt switch is on." if status.get("halted") else "The halt switch is off now."
+    return "run_halted", at, f"Run #{run['id']} ended halted. {switch}"
 
 
 def _missed_scheduled_run(snap: dict) -> dict | None:
@@ -1205,6 +1249,30 @@ def _missed_scheduled_run(snap: dict) -> dict | None:
     returns None and the banner says nothing about missed runs.
     """
     return None
+
+
+def outage_alerts(syncs: dict | None) -> list[dict]:
+    """The banner lines answerable with no database: the worker's own latest sync round, the same
+    line the live banner shows. The run and tracking lines need the database, so an outage banner
+    names only the sync round."""
+    return build_alerts({"syncs": syncs, "status": {}, "tracking": None})
+
+
+def outage_page(message: str, alerts: list[dict]) -> str:
+    """The page `/dashboard` answers with when the database can't be read: why the rest is missing,
+    plus the failure banner the worker knows on its own (`outage_alerts`). The page's refresh
+    handler swaps this banner in during an outage (`SCRIPT`), so a failed sync round shows without
+    Postgres; an outage with nothing failing carries no banner."""
+    body = (f'<header class="top">{mascot_svg("problem")}<h1>Agent dashboard</h1>'
+            f'<span class="verdict problem">No data</span></header>'
+            f'<ul class="attention"><li class="bad"><span class="dot">!</span><span>'
+            f"Can't read the database: {_e(message)}. This page tries again every {REFRESH_SECONDS} s."
+            '</span></li></ul>')
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">'
+            f'<title>Problem &middot; Agent dashboard</title>'
+            f'<style>{STYLE}</style></head><body><main>{_alerts_html(alerts)}{body}</main></body></html>')
 
 
 def verdict(items: list[dict]) -> str:
@@ -2710,10 +2778,29 @@ SCRIPT = """(function () {
     fetch(location.pathname, {cache: 'no-store', headers: {'%s': '1'}}).then(function (r) {
       // Signed out (the password's cookie ran out): reload, so the password page shows.
       if (r.redirected && new URL(r.url).pathname === '/login') { location.reload(); throw new Error('signed out'); }
-      if (!r.ok) throw new Error(r.status);
-      return r.text();
-    }).then(function (html) {
-      var doc = new DOMParser().parseFromString(html, 'text/html');
+      if (!r.ok) return r.text().then(function (html) {
+        // The database is down (503). The outage page still carries the worker's own banner, so a
+        // failed sync round shows without Postgres: swap just the banner in and keep the rest of
+        // the page as it is. No banner there — nothing is failing that the worker can name.
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var banner = doc.querySelector('.failbanner');
+        if (!banner) throw new Error(r.status);
+        return {failbanner: banner.innerHTML};
+      });
+      return r.text().then(function (html) { return {page: html}; });
+    }).then(function (got) {
+      if (got.failbanner !== undefined) {
+        var main0 = document.querySelector('main'), box = main0.querySelector('.failbanner');
+        if (!box) {
+          box = document.createElement('div');
+          box.className = 'failbanner'; box.setAttribute('role', 'alert');
+          main0.insertBefore(box, main0.firstChild);
+        }
+        box.innerHTML = got.failbanner;
+        failed = true; times();
+        return;
+      }
+      var doc = new DOMParser().parseFromString(got.page, 'text/html');
       var fresh = doc.querySelector('main'), main = document.querySelector('main');
       if (!fresh || !main) throw new Error('no page');
       if (doc.title) document.title = doc.title;   // the verdict in the tab follows the page

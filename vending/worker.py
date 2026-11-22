@@ -21,7 +21,10 @@ minutes ahead, or a round still running at the first.
 None of them migrates: on a database that is behind each refuses (exit 2), the
 round is logged as failed, and the worker tries again next round,
 so a deploy can never change the shared database's schema. A person runs
-`python -m vending.db migrate`.
+`python -m vending.db migrate`. A round that ends with a failed job is also
+written to `sync_incidents` (migration 026), so the dashboard's incident log
+keeps every failed round, not only the latest; a round the database can't
+record waits and is written after a later round (`vending.worker.record_failed_round`).
 
 Each job gets JOB_TIMEOUT_MINUTES (30). Python can't stop a thread, so a job
 that overruns is reported as timed out and left to finish in the background,
@@ -107,6 +110,12 @@ class JobResult:
     error: str | None = None        # for the log only: /health never shows it
 
 
+# Failed rounds waiting for the database, newest last (`record_failed_round`). An outage takes the
+# rounds' jobs down with it, so their incident rows would be lost without this; a long outage is
+# bounded, so the wait is too.
+PENDING_MAX = 48
+
+
 @dataclass
 class State:
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -139,6 +148,47 @@ def _describe(problem: BaseException) -> str:
     if psycopg is not None and isinstance(problem, psycopg.Error):
         return f"{type(problem).__name__}: SQLSTATE {problem.sqlstate or 'none'}"
     return f"{type(problem).__name__}: {problem}"
+
+
+def record_rounds(rows: list, conn) -> bool:
+    """Write failed rounds to `sync_incidents` (migration 026): one row per `(round_id, jobs)`, under
+    its stable id (`State.last_round_at`), so a retried write never doubles a round. True when the
+    writes went through — a round already stored counts, so the caller can drop it from its wait
+    list. Raises when the database refuses, and writes nothing then (each caller decides what a
+    partial write means; the worker retries the whole wait list)."""
+    from psycopg.types.json import Jsonb
+
+    for at, jobs in rows:
+        conn.execute("insert into sync_incidents (round_id, round_at, jobs)"
+                     " values (%s, %s, %s) on conflict (round_id) do nothing",
+                     (at, datetime.fromisoformat(at), Jsonb(jobs)))
+    return True
+
+
+def record_failed_round(state: State, pending: list, log: Callable[[str], None] = print) -> None:
+    """Keep one `sync_incidents` row per failed round (migration 026), for the dashboard's incident
+    log: a round that failed must stay listed after a later round passes, so the row is written when
+    the round ends, not derived from the latest one. The row carries what /health shows (each job's
+    name, exit code, outcome), never error text. A round the database refuses — it is down, like the
+    round's own jobs were — waits in `pending` and is written after a later round. Recording is
+    best-effort: a failure is logged, and never stops the rounds."""
+    from vending import settings
+
+    if not state.healthy and state.last_round_at:
+        pending.append((state.last_round_at,
+                        [{"job": r.job, "exit_code": r.exit_code, "outcome": r.outcome}
+                         for r in state.results]))
+        del pending[:-PENDING_MAX]
+    if not pending or not settings.get("DATABASE_URL"):
+        return
+    try:
+        from vending.db import connect
+
+        with connect() as conn:
+            if record_rounds(pending, conn):
+                pending.clear()
+    except Exception as problem:  # noqa: BLE001 - recording an incident must never stop the rounds
+        log(f"sync_incidents: {_describe(problem)}")
 
 
 def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: float | None = None,
@@ -578,6 +628,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         reads = visit_polls.default_reader(log)
     jobs = default_jobs() if jobs is None else jobs
     state = State()
+    unrecorded: list = []                 # failed rounds waiting for the database (`record_failed_round`)
     running: dict[str, threading.Thread] = {}
     server = serve_health(state, args.port) if args.port and not args.once else None
     previous = None
@@ -589,6 +640,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             state.results = run_round(jobs, log, args.timeout * 60, running)
             state.rounds += 1
             state.last_round_at = datetime.now(timezone.utc).isoformat()
+            record_failed_round(state, unrecorded, log)
             if args.once:
                 return max((r.exit_code if r.exit_code is not None else 1) for r in state.results)
             now = clock()

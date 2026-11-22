@@ -3,12 +3,13 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import psycopg
 import pytest
 from psycopg.types.json import Jsonb
 
 from tests.conftest import store_poll
 from tests.test_dashboard import fulfilled, page_conn  # noqa: F401
-from vending import agent_runs, config, dashboard, ledger, report_card, slots
+from vending import agent_runs, config, dashboard, ledger, report_card, slots, worker
 from vending.replay import scoring
 from vending.replay.deciders import Plan, SlotPlan
 from vending.replay.state import SlotWeek, WeekState
@@ -589,6 +590,26 @@ def test_report_card_text_naming_a_selection_outside_ours_is_redacted():
 
 # --- Incident log: sync rounds and tracking checks -----------------------------------------------
 
+JOBS = [{"job": "sync_history", "exit_code": 3, "outcome": "finished"}]
+
+
+class _OneConn:
+    """`vending.db.connect` stood in for: the worker's one write, on the test schema's connection."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self.conn
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _round(at: datetime, jobs=JOBS):
+    return (at.isoformat(), jobs)
+
+
 def test_a_failed_sync_round_and_an_outside_tracking_check_are_incidents(conn, page_conn, opened):
     from tests.test_dashboard import _syncs
     checked = OPEN + timedelta(hours=2)
@@ -598,8 +619,8 @@ def test_a_failed_sync_round_and_an_outside_tracking_check_are_incidents(conn, p
         " values (%s, '2026-12-02', 'test', 's1', %s, '{}', %s, 200, %s, true, %s)",
         (checked, checked, checked + timedelta(minutes=5), Jsonb({"error": SECRET}),
          Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
-    snap = dashboard.snapshot(page_conn, NOW,
-                              syncs=_syncs(("sync_history", {"exit_code": 3}), at=OPEN + timedelta(hours=4)))
+    assert worker.record_rounds([_round(OPEN + timedelta(hours=4))], conn)
+    snap = dashboard.snapshot(page_conn, NOW)
     rows = snap["incidents"]["data"]["rows"]
     kinds = [r["kind"] for r in rows]
     assert "sync_failed" in kinds and "tracking_outside" in kinds
@@ -610,8 +631,60 @@ def test_a_failed_sync_round_and_an_outside_tracking_check_are_incidents(conn, p
     assert SECRET not in dashboard.to_json(snap["incidents"]) and SECRET not in dashboard.render(snap)
 
 
+def test_each_failed_round_stays_an_incident(conn, page_conn, opened):
+    """One sanitized event per failed round (`sync_incidents`, migration 026): a later round that
+    passes leaves the earlier rows in the log, and the worker's latest round (memory) decides only
+    the banner."""
+    first, second = OPEN + timedelta(hours=1), OPEN + timedelta(hours=2)
+    assert worker.record_rounds([_round(first), _round(second)], conn)
+    rows = [r for r in dashboard.snapshot(page_conn, NOW)["incidents"]["data"]["rows"]
+            if r["kind"] == "sync_failed"]
+    assert [r["at"] for r in rows] == [second, first]
+    assert all("`sync_history` exit 3" in r["note"] for r in rows)
+    assert dashboard.snapshot(page_conn, NOW)["incidents"]["data"]["total"] == 2
+    # The banner says only what the worker's latest round says, so a passing round clears it
+    # without touching the log.
+    from tests.test_dashboard import _syncs
+    syncs = _syncs(("sync_history", {"exit_code": 0}), at=OPEN + timedelta(hours=3))
+    snap = dashboard.snapshot(page_conn, NOW, syncs=syncs)
+    assert snap["alerts"] == [] and snap["incidents"]["data"]["total"] == 2
+
+
+def test_a_recorded_round_is_never_written_twice(conn, page_conn, opened):
+    assert worker.record_rounds([_round(OPEN + timedelta(hours=1))], conn)
+    assert worker.record_rounds([_round(OPEN + timedelta(hours=1))], conn)   # a retried write is a no-op
+    assert conn.execute("select count(*) from sync_incidents").fetchone()[0] == 1
+
+
+def test_a_round_the_database_missed_is_recorded_after_a_later_round(monkeypatch, conn, page_conn, opened):
+    """The database is down for a failed round (it was down for its jobs too): the round waits and
+    a later round writes it, so the outage's failures are not lost."""
+    from tests.test_dashboard import SECRET
+    import vending.db as db_mod
+    waited: list = []
+
+    def down():
+        raise psycopg.OperationalError(SECRET)
+
+    monkeypatch.setattr(db_mod, "connect", down)
+    state = worker.State()
+    state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+    state.rounds, state.last_round_at = 1, (OPEN + timedelta(hours=1)).isoformat()
+    worker.record_failed_round(state, waited, log=lambda _: None)
+    assert len(waited) == 1 and waited[0][1][0]["exit_code"] == 3
+    assert page_conn.execute("select count(*) from sync_incidents").fetchone()[0] == 0
+    monkeypatch.setattr(db_mod, "connect", lambda: _OneConn(conn))
+    state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
+    state.rounds, state.last_round_at = 2, (OPEN + timedelta(hours=2)).isoformat()
+    worker.record_failed_round(state, waited, log=print)
+    assert waited == []
+    row, = page_conn.execute("select round_at, jobs from sync_incidents").fetchall()
+    assert row[0] == OPEN + timedelta(hours=1) and row[1][0]["job"] == "sync_history"
+
+
 def test_a_sync_round_from_before_the_opening_is_not_an_incident(conn, page_conn, opened):
     from tests.test_dashboard import _syncs
+    assert worker.record_rounds([_round(OPEN - timedelta(hours=1))], conn)
     snap = dashboard.snapshot(page_conn, NOW,
                               syncs=_syncs(("sync_history", {"exit_code": 1}), at=OPEN - timedelta(hours=1)))
     assert not [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "sync_failed"]

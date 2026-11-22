@@ -1594,3 +1594,34 @@ def test_the_public_dashboard_keeps_a_pick_of_ours_through_its_no_script_reload(
     for other in ("12", "15%22%3E%3Cscript%3E", ""):     # not ours, not a selection, empty
         page = _get(site, f"/dashboard?sel={other}")[2]
         assert 'content="30; url=?refresh=1"' in page and "sel=12" not in page.split("<noscript>")[1][:120], other
+
+
+def test_when_the_database_is_down_the_worker_still_names_its_failed_syncs(monkeypatch, capsys, site):
+    """#220: with Postgres unreachable the page can't be drawn, but an open tab must still learn of
+    a failed sync round. The 503s carry the worker's own alert lines, and the page's refresh
+    handler lifts the banner out of the outage page instead of keeping a stale one."""
+    state = site.RequestHandlerClass.state
+    state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+    state.rounds, state.last_round_at = 1, state.started_at
+
+    def down():
+        raise psycopg.OperationalError(SECRET)
+
+    monkeypatch.setattr(pages, "connect", down)
+    status, _, body = _get(site, "/dashboard")
+    assert status == 503 and SECRET not in body
+    assert '<div class="failbanner" role="alert">' in body
+    assert "Sync round failed" in body and "sync_history" in body and "exit 3" in body
+    assert "Can't read the database" in body
+    status, _, body = _get(site, "/dashboard/state.json")
+    data = json.loads(body)
+    assert status == 503 and SECRET not in body
+    assert [a["kind"] for a in data["alerts"]] == ["sync_failed"]
+    assert "`sync_history` exit 3" in data["alerts"][0]["text"]
+    # The refresh handler swaps only the banner in an outage, and the error still reaches the log.
+    assert "failbanner" in dashboard.SCRIPT
+    assert SECRET in capsys.readouterr().err
+    # A worker whose latest round passed: the outage names nothing.
+    state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
+    assert '<div class="failbanner"' not in _get(site, "/dashboard")[2]
+    assert json.loads(_get(site, "/dashboard/state.json")[2])["alerts"] == []

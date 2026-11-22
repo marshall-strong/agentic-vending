@@ -95,6 +95,17 @@ IN_FLIGHT = timedelta(hours=1)
 RESULTS = ("cash", "sales_tax_owed", "coil", "back_stock")
 VERDICTS = ("within", "outside")
 
+
+def verdicts(results: Any) -> dict[str, str]:
+    """The stored `results` of a check, allowlisted: only the four documented keys (`RESULTS`), each
+    only `within` or `outside` (`VERDICTS`). The stored JSON is the bridge's, so the public JSON, the
+    failure banner and the incident log all read the check through this one validator (`dashboard._tracking`,
+    `report_card.incidents`): an extra key, another value or an array — anything undocumented — is
+    dropped, and a non-object gives {}."""
+    if not isinstance(results, dict):
+        return {}
+    return {k: results[k] for k in RESULTS if results.get(k) in VERDICTS}
+
 # Statuses that mean the bridge refused before checking, so the day's check is still there.
 REFUSED_BEFORE_CHECK = (400, 401, 403, 404, 409, 422)
 
