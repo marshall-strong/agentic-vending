@@ -22,9 +22,17 @@ it answers**:
    in Eastern time), and the worst case is written as a `pending` row (and, for
    a live call, a ledger estimate). If the minimum output won't fit, nothing is
    sent and `CapReached` says why. If the row can't be written, nothing is sent
-   either: spend we can't record isn't spent.
+   either: spend we can't record isn't spent. A harness given `hold` (the
+   agent's run lease, `vending.run_lease.hold`) checks it first, in the same
+   transaction: if it says no, nothing is reserved or sent and `NotHeld` says why.
 3. The request is sent once; the client's own retries are turned off, because
-   each could bill again.
+   each could bill again. A harness given `stop_at` (the caller's deadline)
+   checks it after the count and again just before sending: past it, nothing is
+   sent (`PastDeadline`). One given `request_deadline` waits at most that long
+   for the answer, by the wall clock, since the SDK's timeout only bounds each
+   wait for bytes; past it the harness gives up (`Abandoned`) and keeps the
+   worst case. Given `hold_margin` too, it sends only if the lease `hold`
+   renewed still lasts past that hard end.
 4. The answer's `usage` is priced from `model_prices.json` (at the model that
    actually answered) and the row is corrected to that cost, with its tokens,
    latency, stop reason and Anthropic's request id. If the correction fails, the
@@ -138,6 +146,22 @@ def check_client(client: Any, key_env: str) -> None:
 
 class CapReached(HarnessError):
     """Not sent: the worst case doesn't fit under what's left of a cap. Nothing was spent."""
+
+
+class NotHeld(HarnessError):
+    """Not sent: `hold` said the caller may not spend now (the agent lost its run lease). Nothing was reserved."""
+
+
+class PastDeadline(HarnessError):
+    """Not sent: the caller's deadline (`stop_at`) passed while the request was being counted or reserved."""
+
+
+class Abandoned(HarnessError):
+    """Sent, but no answer came within `request_deadline`: the harness stopped waiting. It may have billed, so
+    its worst case stays in the books. Its thread may still be going: `in_flight()` says so."""
+
+
+NEAR_END = "the lease `hold` renewed ends before the request's hard end"
 
 
 @dataclass(frozen=True)
@@ -295,7 +319,10 @@ class Harness:
                  run_cap_usd: Decimal | None = None, daily_cap_usd: Decimal | None = None,
                  prices: PriceTable | None = None, min_tokens: int = DEFAULT_MIN_TOKENS,
                  now: Callable[[], datetime] | None = None, by: str = "harness",
-                 key_env: str = DEFAULT_KEY_ENV, run_id: str | None = None):
+                 key_env: str = DEFAULT_KEY_ENV, run_id: str | None = None,
+                 hold: Callable[[psycopg.Connection], str | None] | None = None,
+                 hold_margin: float | None = None, request_deadline: float | None = None,
+                 stop_at: float | None = None):
         if purpose not in PURPOSES:
             raise HarnessError(f"purpose must be one of {', '.join(PURPOSES)}, not {purpose!r}")
         if key_env.upper().startswith("ANTHROPIC_"):
@@ -309,6 +336,15 @@ class Harness:
         self.prices = prices or load_prices()
         self.min_tokens = min_tokens
         self.now = now      # None: the database clock, read under the lock (a test may pass a fixed one)
+        # Checked in the reservation's transaction, before anything is reserved: why not to spend, or None.
+        # `hold_margin`: the seconds `hold` promises, from when the reservation starts, when it says yes.
+        self.hold, self.hold_margin = hold, hold_margin
+        # The most seconds one request may take, from send to answer, by the wall clock. The SDK's own timeout
+        # only bounds each wait for bytes, so a reply that keeps trickling in could outlast it. None: no limit.
+        self.request_deadline = request_deadline
+        # `time.monotonic()` past which nothing more is reserved or sent (the caller's deadline). None: none.
+        self.stop_at = stop_at
+        self._threads: list = []    # requests given up on that may still be going
         daily_key, daily_default = DAILY_CAPS[purpose]
         with connect() as conn:
             self.run_cap = run_cap_usd if run_cap_usd is not None else Decimal(
@@ -318,6 +354,38 @@ class Harness:
         self.spent = Decimal(0)     # this run, estimates included
         self.reserved = 0           # requests that got past the caps (each has a model_calls row)
         self.calls: list[Call] = []
+
+    def in_flight(self) -> bool:
+        """Whether a request the harness gave up on (`Abandoned`) may still be going."""
+        return any(t.is_alive() for t in self._threads)
+
+    def _past(self, when: str) -> None:
+        if self.stop_at is not None and time.monotonic() >= self.stop_at:
+            raise PastDeadline(f"not sent: the run's deadline passed {when}. Nothing was spent.")
+
+    def _send(self, body: dict) -> Any:
+        """`messages.create(**body)`, given at most `request_deadline` seconds by the wall clock. Past that, its
+        thread is left to end by itself, and this raises `Abandoned`."""
+        if self.request_deadline is None:
+            return self.client.messages.create(**body)
+        import threading
+
+        done: dict = {}
+
+        def send() -> None:
+            try:
+                done["response"] = self.client.messages.create(**body)
+            except BaseException as error:      # noqa: BLE001 - handed to the caller below
+                done["error"] = error
+        thread = threading.Thread(target=send, name="model_request", daemon=True)
+        thread.start()
+        thread.join(self.request_deadline)
+        if thread.is_alive():
+            self._threads.append(thread)
+            raise Abandoned(f"no answer within {self.request_deadline:g} s")
+        if "error" in done:
+            raise done["error"]
+        return done["response"]
 
     def call(self, request: dict, *, label: str = "") -> Any:
         """Send `request` (a `messages.create` body) under the caps and record its cost. Returns the response."""
@@ -346,16 +414,34 @@ class Harness:
             counted = self.client.messages.count_tokens(**{k: v for k, v in request.items() if k in COUNTED}).input_tokens
         except anthropic.APIError as error:
             raise HarnessError(f"counting the request failed ({_describe(error)}); nothing was sent or spent") from None
+        # The caller's deadline can't stop this thread, so it is checked here, and again just before sending.
+        self._past("while the request was counted")
 
         reference = f"{self.purpose}{' ' + label if label else ''}"
+        reserving = time.monotonic()
         held = self._reserve(model, effort, counted, wanted, floor, caches, label, reference)
         self.spent += held.worst
         self.reserved += 1
 
+        # The last checks before money can be spent: the deadline, and that the lease `hold` renewed still lasts
+        # past the request's hard end (the reservation's own commit may have been slow).
+        try:
+            self._past("while the request was reserved")
+            if self.hold is not None and self.hold_margin is not None and self.request_deadline is not None                     and time.monotonic() + self.request_deadline > reserving + self.hold_margin:
+                raise NotHeld(f"not sent: {NEAR_END}. Nothing was spent.")
+        except HarnessError as error:
+            self._refused(held, f"{reference} not sent: {error}", None, 0.0)
+            self.spent -= held.worst
+            raise
+
         body = {**request, "max_tokens": held.max_tokens, "service_tier": "standard_only"}
         started = time.monotonic()
         try:
-            response = self.client.messages.create(**body)
+            response = self._send(body)
+        except Abandoned as error:      # it may still run and bill: kept at its worst case
+            self._mark(held, f"{reference} estimate: abandoned, {error}", None, time.monotonic() - started)
+            raise Abandoned(f"the model call was abandoned ({error}); kept at its worst case, "
+                            f"${held.worst:.4f}") from None
         except anthropic.APIStatusError as error:
             seconds = time.monotonic() - started
             if error.status_code < 500:      # refused by the API, not billed
@@ -412,6 +498,8 @@ class Harness:
             with self.connect() as conn, conn.transaction():
                 conn.execute(f"set local lock_timeout = '{LOCK_TIMEOUT}'")
                 conn.execute("select pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+                if self.hold is not None and (why := self.hold(conn)) is not None:
+                    raise NotHeld(f"not sent: {why}. Nothing was reserved or spent.")
                 now = self.now() if self.now else ledger.db_now(conn)
                 left_today = self.daily_cap - spent_since(conn, day_start(now), self.purpose)
                 allowed = min(self.run_cap - self.spent, left_today)
@@ -436,7 +524,7 @@ class Harness:
                     " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s) returning id",
                     (now, self.purpose, label, self.run_id, model, effort, self.key_env, max_tokens,
                      worst, worst, entry, self.by, self.host)).fetchone()[0]
-        except CapReached:
+        except (CapReached, NotHeld):
             raise
         except Exception as error:
             raise HarnessError(f"couldn't write the worst-case estimate ({type(error).__name__}: "

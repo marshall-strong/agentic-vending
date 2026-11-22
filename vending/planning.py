@@ -11,7 +11,8 @@ our database and the bridge:
 - the catalog, from our copy in `catalog_products` that the catalog sync keeps,
   so a bridge outage doesn't stop planning. Only when we hold no listed product
   (the sync has never run) is it read live from the bridge
-  (`GET /api/v1/products`), and the reply says so;
+  (`GET /api/v1/products`, within `bridge.CATALOG_DEADLINE_SECONDS` in all, since
+  submit reads it holding the halt lock), and the reply says so;
 - the spendable balance, from the ledger;
 - the planner's settings, from the `config` table. None is required. How many
   of a product fit in a column comes from its catalog size and the loading
@@ -29,6 +30,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 
@@ -56,6 +58,8 @@ class Gathered:
     price_poll_at: datetime | None
     notes: tuple[str, ...]
     sourcing_rows: tuple[sourcing.Option, ...] = ()   # the table rows the planner was given
+    opening_at: datetime | None = None                # the ledger's opening the balance counted from
+    opening: ledger.Entry | None = None               # that opening's entry, to tell the test one (#215)
 
 
 def planner_config(conn: psycopg.Connection, *, stale_wildcard_unset: bool = False) -> planner.Config:
@@ -86,6 +90,7 @@ def planner_config(conn: psycopg.Connection, *, stale_wildcard_unset: bool = Fal
         wildcard_purchase_cap_cents=_limit(conn, "wildcard_purchase_cap_cents", planner.AGREED_WILDCARD_CAP_CENTS),
         tax_percent=_int_setting(conn, "tax_percent", planner.DEFAULT_TAX_PERCENT),
         midweek_fee_cents=_int_setting(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS),
+        spendable_floor_cents=_limit(conn, "spendable_floor_cents", planner.SPENDABLE_FLOOR_CENTS),
         halted=config.is_halted(conn),
     )
 
@@ -109,18 +114,48 @@ def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...], *, stale_uns
     return value
 
 
-def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
+def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None, *,
+           count_takings: bool = True) -> Gathered:
     """The current state from our database. `catalog` is the product list from `read_catalog`.
-    "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`)."""
-    now = now or ledger.db_now(conn)
+    "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`), read
+    after the pending requests (below). A `now` given (a simulation) is used as it is.
+    `count_takings=False` (the day-one fill only) gives the planner the spendable balance without takings
+    (`Balance.cash_without_takings_cents`), so no poll, and no history backfill, moves its balance gate."""
     settings = planner_config(conn)
     notes: list[str] = []
 
+    # Pending requests first, then the balance and receipts. The receipt sync fulfills a request in one
+    # transaction (its status and its lines together, `purchase_requests.store`), and each read here sees
+    # what had committed when it ran. Read in this order, a fulfillment that lands part way through either
+    # left the request pending when it was read (so the plan is refused, `request_pending`) or committed
+    # before, so the receipts read after it hold its lines. Read the other way round, the stock could miss
+    # the delivery and the request no longer be pending, and the same plan would be ordered twice (#217).
+    # A repeatable-read snapshot wouldn't help: the write gate's first statement waits for the halt lock,
+    # and the snapshot would date from before that wait, so it could miss the submit it waited for.
+    pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
+        "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
+    # The clock, for the balance and the stock replay's cutoff, only now (Sol round 5): read before the pending
+    # requests, a fulfillment committed in between, with its receipt's `resolved_at` after that reading, was
+    # neither pending nor counted (the replay stops at the clock), and the same plan went out twice.
+    now = now or ledger.db_now(conn)
     balance = ledger.balance(conn, now)
     if balance is None:
         raise NotReady(ledger.OPEN_HINT)
+    if balance.opening_at > now:
+        # `ledger.balance` counts the opening whenever it is dated, so a future one would lend
+        # money that isn't ours yet. Nothing is spent before the opening.
+        opens = balance.opening_at.astimezone(ZoneInfo(ledger.TIMEZONE))
+        raise NotReady(f"the ledger's opening is dated {opens:%Y-%m-%d %H:%M} ET, after now, so no money is ours "
+                       "to spend yet; wait for it, or re-date the opening if that time is wrong")
     notes.extend(balance.notes)
-    spendable = math.floor(balance.spendable_cents)
+    if count_takings:
+        spendable = math.floor(balance.spendable_cents)
+    else:
+        spendable = math.floor(balance.cash_without_takings_cents)
+        if balance.takings.cents:
+            notes.append(f"the balance gate leaves out {ledger.money(balance.takings.cents)} of takings from the "
+                         "polls, so a history backfill can't change it")
+    opened = ledger.opening(conn)   # the entry the balance counted from: the fill tells the test one by it
 
     receipts = stock.receipt_lines(conn)    # read once: the stock and the trial's loads share these rows
     counted = stock.stock(conn, until=now, lines=receipts)
@@ -157,8 +192,6 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # One lot per layer, oldest first: the planner draws them in that order, as the stock replay does.
     closet = tuple(planner.ClosetStock(c.product, units, cost)
                    for c in counted.closet for units, cost in c.layers or ((c.units, c.unit_cost),))
-    pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
-        "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
     products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))
                      for p in catalog if p.get("sku"))
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
@@ -176,21 +209,24 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
         silent = frozenset(s.slot for s in report.silent)
     current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
                                    spendable, verdict, silent)
-    return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
+    return Gathered(current, settings, now, poll_at, tuple(notes), table_rows, balance.opening_at, opened)
 
 
-def read_catalog(conn: psycopg.Connection, bridge: Bridge, now: datetime) -> tuple[list[dict], list[str]]:
+def read_catalog(conn: psycopg.Connection, bridge: Bridge,
+                 now: datetime | None = None) -> tuple[list[dict], list[str]]:
     """The catalog and any notes about where it came from.
 
     Our synced copy comes first: each listed product as the bridge last gave it,
     so fields like `active` read the same as a live answer. A copy older than
     `get_catalog`'s stale limit is still used, with a note saying to sync. Only
     when we hold no listed product is the bridge read, which can raise `NotReady`.
+    `now` (None: the database clock) only dates the copy.
     """
     synced_at = conn.execute("select max(synced_at) from catalog_syncs").fetchone()[0]
     stored = [row[0] for row in conn.execute(
         "select last_response from catalog_products where delisted_at is null order by sku")]
     if synced_at is not None and stored:
+        now = now or ledger.db_now(conn)
         notes = []
         if now - synced_at > catalog_tool.STALE_AFTER:
             notes.append(f"STALE: the catalog was last synced {(now - synced_at).total_seconds() / 3600:.1f} hours "
@@ -219,8 +255,8 @@ def _bridge_catalog(bridge: Bridge) -> list[dict]:
     return products
 
 
-def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
-    """The validated tool input as the planner's dataclasses."""
+def to_planner(desired: schema.DesiredState, *, pool: bool = False) -> planner.DesiredState:
+    """The validated tool input as the planner's dataclasses. `pool` is never the agent's: see the planner."""
     return planner.DesiredState(
         slots=tuple(planner.DesiredSlot(s.slot, s.keep, s.product, s.sale_price, s.fill_to) for s in desired.slots),
         off_cycle=desired.off_cycle,
@@ -233,23 +269,29 @@ def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
             )
             for s in desired.sourcing
         ),
+        pool=pool,
     )
 
 
 def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
-         now: datetime | None = None) -> tuple[planner.Plan, Gathered]:
-    """Run the planner on live data. Raises `NotReady` when a person has to act first."""
-    gathered = gather_live(conn, bridge, now)
-    return plan_gathered(gathered, desired), gathered
+         now: datetime | None = None, *, pool: bool = False,
+         count_takings: bool = True) -> tuple[planner.Plan, Gathered]:
+    """Run the planner on live data. Raises `NotReady` when a person has to act first. `count_takings`: see
+    `gather`; never the agent's."""
+    gathered = gather_live(conn, bridge, now, count_takings=count_takings)
+    return plan_gathered(gathered, desired, pool=pool), gathered
 
 
-def gather_live(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None) -> Gathered:
+def gather_live(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None, *,
+                count_takings: bool = True) -> Gathered:
     """The catalog (our synced copy first, `read_catalog`) and everything else `gather` reads.
 
     The halt switch is checked before the catalog is read, so that halted with
     the bridge down tells the agent to stop, not to check Tailscale.
+
+    With no `now` (a live run), `gather` reads the clock after the pending requests, in the same transaction;
+    a `now` given (a simulation) is used throughout as it is.
     """
-    now = now or ledger.db_now(conn)
     halted = config.is_halted(conn)
     try:
         catalog, catalog_notes = read_catalog(conn, bridge, now)
@@ -257,16 +299,16 @@ def gather_live(conn: psycopg.Connection, bridge: Bridge, now: datetime | None =
         if halted:
             raise NotReady(f"{HALTED_HINT} (and {blocked})") from None
         raise
-    gathered = gather(conn, catalog, now)
+    gathered = gather(conn, catalog, now, count_takings=count_takings)
     return replace(gathered, notes=(*catalog_notes, *gathered.notes))
 
 
-def plan_gathered(gathered: Gathered, desired: schema.DesiredState) -> planner.Plan:
+def plan_gathered(gathered: Gathered, desired: schema.DesiredState, *, pool: bool = False) -> planner.Plan:
     """The planner's answer for `desired` on what `gather_live` read. Pure: no database, no bridge.
 
     The preview, the submit and the midweek wake check (`vending.midweek_wake`) all plan through
     here, so the same desired state always gets the same lines, cost and refusals."""
-    result = planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now)
+    result = planner.plan_restock(gathered.current, to_planner(desired, pool=pool), gathered.config, gathered.now)
     stale = _stale_table_prices(gathered.sourcing_rows, result, desired, gathered.now)
     if stale:
         result = replace(result, warnings=(*result.warnings, *stale))

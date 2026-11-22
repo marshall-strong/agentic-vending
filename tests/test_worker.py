@@ -152,6 +152,63 @@ def test_a_job_that_overruns_is_timed_out_and_skipped_until_it_ends():
     assert len(calls) == 2
 
 
+def test_tracking_daily_skips_when_its_sync_failed_this_round():
+    """The daily check reads the polls and receipts the round's syncs bring in: a sync that failed
+    would leave it reading stale books and spending the day's check, so it skips (worker.NEEDS)."""
+    calls = []
+    jobs = [("sync_history", lambda: 2), ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2), ("skipped", None)]
+    assert "sync_history" in results[1].error
+
+
+def test_tracking_daily_skips_when_the_slot_check_failed_this_round():
+    """`slots check` runs first to confirm the assignment the check's figures are read against: if
+    it failed this round (the server gave a different assignment, or none is stored), sending would
+    read the books against a slot set that may be wrong, so the check skips (worker.NEEDS)."""
+    calls = []
+    jobs = [("slots_check", lambda: 1), ("sync_history", lambda: 0), ("sync_requests", lambda: 0),
+            ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 1), ("finished", 0),
+                                                           ("finished", 0), ("skipped", None)]
+    assert "slots_check" in results[3].error
+
+
+def test_tracking_daily_runs_when_its_syncs_passed():
+    calls = []
+    jobs = [("sync_history", lambda: 0), ("sync_requests", lambda: 0),
+            ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == [1] and [(r.outcome, r.exit_code) for r in results] == [("finished", 0)] * 3
+
+
+def test_tracking_daily_skips_when_its_sync_is_still_running():
+    release = threading.Event()
+    calls = []
+
+    def hangs():
+        release.wait(5)
+        return 0
+    jobs = [("sync_history", hangs), ("tracking_daily", lambda: calls.append(1) or 0)]
+    running = {}
+    worker.run_round(jobs[:1], log=lambda _: None, timeout=0.05, running=running)
+    second = worker.run_round(jobs, log=lambda _: None, timeout=5, running=running, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in second] == [("still running", None), ("skipped", None)]
+    release.set()
+    running["sync_history"].join(5)
+
+
+def test_the_gated_job_is_skipped_through_main_too():
+    calls = []
+    jobs = [("sync_history", lambda: 1), ("tracking_daily", lambda: calls.append(1) or 0)]
+    assert worker.main(["--once", "--port", "0"], jobs=jobs, log=lambda _: None) == 1
+    assert calls == []
+
+
 def test_timeout_must_be_positive():
     with pytest.raises(SystemExit):
         worker.main(["--timeout", "0", "--port", "0"], jobs=[], log=lambda _: None)
@@ -162,8 +219,8 @@ def test_the_default_jobs_never_migrate(monkeypatch):
 
     In production the worker runs these against the shared Azure database at every
     start and every hour, so a sync that migrated would change its schema on deploy.
-    The wake job refuses the same way when it is on and the slot check passed; here it
-    is switched on so this covers it too.
+    The wake job refuses the same way when it is on; here it is switched on so this covers
+    it too.
     """
     pytest.importorskip("psycopg")
     from vending import db
@@ -173,18 +230,14 @@ def test_the_default_jobs_never_migrate(monkeypatch):
     monkeypatch.setattr(db, "connect", lambda: nullcontext(object()))
     monkeypatch.setattr(db, "pending", lambda conn: ["999_not_yet_applied.sql"])
     monkeypatch.setattr(db, "migrate", lambda conn: migrated.append(conn) or [])
+    monkeypatch.setenv("TRACKING_DAILY", "on")     # off, the daily check never opens the database
     results = worker.run_round(worker.default_jobs(), log=lambda _: None)
-    assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog", "sync_product_requests", "midweek_wake"]
+    assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog",
+                                        "sync_product_requests", "midweek_wake", "tracking_daily"]
     assert migrated == []
-    # The wake job runs only after a slot check that passed, so this round it skips (exit 0).
-    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 5 + [("finished", 0)]
-    # With the slot check passing, the wake job refuses the database that is behind too.
-    from vending import slots
-
-    monkeypatch.setattr(slots, "main", lambda argv: 0)
-    results = worker.run_round(worker.default_jobs(), log=lambda _: None)
-    assert migrated == []
-    assert [(r.job, r.exit_code) for r in results][-1] == ("midweek_wake", 2)
+    # Without the worker's NEEDS every job runs, so the wake job refuses the database that is behind
+    # too; that it waits for a slot check that passed is tested in test_midweek_wake.
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 7
 
 
 # --- The home page at / (#54) -----------------------------------------------------

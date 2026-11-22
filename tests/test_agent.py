@@ -2,6 +2,7 @@
 Anthropic API, the bridge or a real server process. Runs and spend land in a throwaway schema."""
 
 import json
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -192,6 +193,7 @@ def test_a_dry_run_never_sends_a_write_the_model_makes_up(connect, conn):
 
 
 def test_notes_carry_from_one_run_to_the_next(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="Slot 3 is slow; pull it if under 2 a week.")), Tools())
     client = Script(answer())
     go(connect, client, Tools())
@@ -372,6 +374,7 @@ def test_turning_the_halt_on_mid_run_stops_before_the_next_model_call(connect, c
 
 
 def test_a_live_run_reads_only_live_notes(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="dry: would submit 15")), Tools())
     client = Script(answer())
     go(connect, client, Tools())                                    # a dry run reads it, labelled
@@ -380,6 +383,73 @@ def test_a_live_run_reads_only_live_notes(connect, conn):
     go(connect, client, Tools(LIVE_TOOLS), live=True)               # a live run never does
     opening = client.sent[0]["messages"][0]["content"]
     assert "would submit 15" not in opening and "No notes yet" in opening
+
+
+def open_books(conn, at=None):
+    """Record a real opening (not the 11 Nov test one), now by the database clock unless `at` is given.
+
+    Runs' `started_at` is the database clock, so an opening at `at` (default: now) splits the runs before it
+    from the runs after it."""
+    from vending import ledger
+
+    at = at or conn.execute("select clock_timestamp()").fetchone()[0]
+    return ledger.record(conn, "opening", 60000, "opening capital", "test", at)
+
+
+def test_no_notes_carry_over_before_a_real_opening(connect, conn):
+    """#216: notes count from the real opening. Before it, a run's notes may name slots that aren't ours."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "real ledger opening isn't recorded yet" in opening
+
+
+def test_the_11_nov_test_opening_is_not_a_real_opening_for_notes(connect, conn):
+    from vending import ledger
+
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (%s, %s, 'opening', 60000, %s, 'marshall')",
+                 (ledger.TEST_OPENING_ID, datetime(2026, 11, 11, 19, tzinfo=timezone.utc), ledger.TEST_OPENING_DETAIL))
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "real ledger opening isn't recorded yet" in opening
+
+
+def test_notes_from_runs_before_the_real_opening_are_dropped_and_later_ones_kept(connect, conn):
+    """Run 2's notes, from before the 20 Nov redraw, must not reach a run after the real opening (#216)."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())   # before the opening
+    open_books(conn)
+    client = Script(answer(notes="New notes."))
+    go(connect, client, Tools())                                         # the first run since the opening
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "first run since the ledger opening" in opening
+    client = Script(answer())
+    go(connect, client, Tools())                                         # notes since the opening carry on
+    assert "New notes." in client.sent[0]["messages"][0]["content"]
+
+
+def test_notes_from_before_the_slot_assignment_are_dropped_even_after_a_backdated_opening(connect, conn):
+    """Sol review of #222, round 4, finding 3: a recovery opening backdated before the redraw (18 Nov) must not
+    bring back a 19 Nov run's notes. Notes count from the later of the real opening and when our slots (the
+    server's assignment) were first read (`slot_assignment.first_read_at`)."""
+    conn.execute("update slot_assignment set first_read_at = %s", (datetime(2026, 11, 20, 17, tzinfo=timezone.utc),))
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    conn.execute("update agent_runs set started_at = %s", (datetime(2026, 11, 19, 17, tzinfo=timezone.utc),))
+    open_books(conn, datetime(2026, 11, 18, 17, tzinfo=timezone.utc))
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "first run since the ledger opening" in opening
+
+
+def test_no_notes_carry_over_without_a_stored_slot_assignment(conn):
+    """Finding 3: with no assignment stored, nothing says which runs read the current one, so no notes carry."""
+    open_books(conn, datetime(2026, 11, 18, 17, tzinfo=timezone.utc))
+    conn.execute("delete from slot_assignment")
+    assert "slot assignment isn't recorded" in agent.last_notes(conn, live=False)
 
 
 def test_the_server_never_gets_the_model_key(monkeypatch):
@@ -483,6 +553,7 @@ def test_a_submit_call_that_raises_is_flagged_unresolved(connect, conn):
 # --- The rules card -----------------------------------------------------------------
 
 def test_the_system_prompt_is_the_rules_card_then_the_instructions(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="Slot 3 is slow.")), Tools())
     client = Script(tool_turn(use("get_machine_state")), answer())
     go(connect, client, Tools())
@@ -671,3 +742,606 @@ def test_different_startup_snapshots_leave_system_prompt_byte_identical(connect,
         clients.append(client)
     assert clients[0].sent[0]["system"].encode("utf-8") == clients[1].sent[0]["system"].encode("utf-8") == original
     assert clients[0].sent[0]["messages"][0] != clients[1].sent[0]["messages"][0]
+
+
+# --- One run at a time, and a deadline (#213) ---------------------------------------
+
+def _lock_free(conn):
+    """Whether the run lease is free."""
+    return conn.execute("select token from agent_run_lease").fetchone()[0] is None
+
+
+def test_a_run_never_overlaps_another_and_says_which_one_holds_it(connect, conn):
+    from vending import agent_runs, run_lease
+
+    going = agent_runs.start(conn, mode="dry-run", model="by hand")
+    held = run_lease.take(conn, deadline=60)
+    assert run_lease.attach(conn, held.token, going)
+    client, tools = Script(), Tools()
+    run_id, out = go(connect, client, tools, live=True)
+    # Recorded, and nothing read, called or sent.
+    assert (out.status, out.detail) == ("skipped", f"{agent.BUSY} (agent run {going}).")
+    assert client.sent == [] and tools.calls == []
+    assert stored(conn, run_id)[:2] == ("live", "skipped") and stored(conn, run_id)[5] == out.detail
+    run_lease.give_back(conn, held.token)
+    # Once the other run lets go, a run goes ahead, and gives the lease back at its end.
+    run_id, out = go(connect, Script(answer()), Tools())
+    assert out.status == "skipped" and out.detail != f"{agent.BUSY} (agent run {going})."
+    assert _lock_free(conn)
+
+
+def test_a_run_that_breaks_gives_the_lock_back(connect, conn):
+    class Broken(Tools):
+        async def call(self, name, arguments):
+            raise RuntimeError("server died")
+
+    go(connect, Script(tool_turn(use("get_pnl"))), Broken())
+    assert _lock_free(conn)
+
+
+def test_a_server_that_stops_answering_is_cut_off_at_the_deadline(connect, conn):
+    class Hung(Tools):
+        async def call(self, name, arguments):
+            self.calls.append((name, arguments))
+            await anyio.sleep_forever()
+
+    tools = Hung()
+    run_id, out = go(connect, Script(tool_turn(use("get_pnl")), answer()), tools, deadline=0.5)
+    assert tools.calls, "the hung call was reached"
+    assert (out.status, out.detail) == ("failed", "Stopped at the run's deadline (0.00833333 min).")
+    assert stored(conn, run_id)[1] == "failed"
+    assert _lock_free(conn)
+
+
+def test_the_deadline_outlasts_a_model_request():
+    assert agent.RUN_DEADLINE > agent.REQUEST_TIMEOUT * 2
+    from vending import agent_schedule, run_lease
+    from vending.dashboard import _span
+    # A lease outlasts a model request and a tool call, so a run waiting on one keeps it.
+    assert run_lease.TTL.total_seconds() > agent.REQUEST_TIMEOUT + agent.TOOL_TIMEOUT.total_seconds()
+    assert run_lease.TTL.total_seconds() > 3 * run_lease.HEARTBEAT
+    # A request already sent at the deadline finishes within the lease's grace.
+    assert run_lease.GRACE.total_seconds() >= agent.REQUEST_TIMEOUT + 2 * agent.DB_TIMEOUT
+    # The lease a paid request needs (round 3) fits in one renewal, and in the grace past the deadline.
+    assert agent.LEASE_MARGIN.total_seconds() >= agent.REQUEST_TIMEOUT
+    assert agent.LEASE_MARGIN <= run_lease.TTL and agent.LEASE_MARGIN <= run_lease.GRACE
+    # The worker lets go of a run, and the dashboard calls it stuck, only once its lease can't be held any more.
+    assert agent_schedule.STUCK_AFTER.total_seconds() >= agent.RUN_DEADLINE + run_lease.GRACE.total_seconds()
+    assert _span(agent_schedule.STUCK_AFTER) in agent_schedule.ABANDONED
+
+
+def test_every_mcp_request_has_a_read_timeout(monkeypatch):
+    import mcp
+    import mcp.client.stdio
+
+    made = {}
+
+    class Session:
+        def __init__(self, read, write, **kw):
+            made.update(kw)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def initialize(self):
+            pass
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[])
+
+        async def call_tool(self, name, arguments):
+            pass
+
+    @asynccontextmanager
+    async def stdio(params):
+        yield None, None
+
+    monkeypatch.setattr(mcp, "ClientSession", Session)
+    monkeypatch.setattr(mcp.client.stdio, "stdio_client", stdio)
+
+    async def open_it():
+        async with agent._open_server() as (listed, _):
+            return listed
+
+    assert anyio.run(open_it) == []
+    assert made["read_timeout_seconds"] == agent.TOOL_TIMEOUT
+
+
+# --- Sol review, round 2: a run lease that outlives a connection, and bounded database work ---------
+
+def _lease(conn):
+    return conn.execute("select token, run_id from agent_run_lease").fetchone()
+
+
+class Blocking(Tools):
+    """A server whose first call waits until the test lets it go."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.reached, self.release = threading.Event(), threading.Event()
+
+    async def call(self, name, arguments):
+        self.reached.set()
+        await anyio.to_thread.run_sync(lambda: self.release.wait(20))
+        return await super().call(name, arguments)
+
+
+def _in_thread(target):
+    box = {}
+    thread = threading.Thread(target=lambda: box.setdefault("out", target()), daemon=True)
+    thread.start()
+    return thread, box
+
+
+def test_killing_a_runs_database_connections_never_lets_a_second_run_start(connect, conn):
+    """Round 2, blocker 2: the run lock was a session lock, so killing that backend freed it mid-run."""
+    tools = Blocking()
+    since = conn.execute("select clock_timestamp()").fetchone()[0]
+    first, box = _in_thread(lambda: go(connect, Script(tool_turn(use("get_pnl")), answer()), tools))
+    assert tools.reached.wait(10)
+    # Every connection opened since the test began, so the first run's, whatever it holds.
+    conn.execute("select pg_terminate_backend(pid) from pg_stat_activity"
+                 " where datname = current_database() and pid <> pg_backend_pid() and backend_start > %s", (since,))
+    client = Script()
+    second_id, second = go(connect, client, Tools())
+    assert second.status == "skipped" and client.sent == [], "a second run started while the first was going"
+    first_id = _lease(conn)[1]
+    assert (second.status, second.detail) == ("skipped", f"{agent.BUSY} (agent run {first_id}).")
+    assert client.sent == [] and second_id != first_id
+    tools.release.set()
+    first.join(20)
+    assert box["out"][0] == first_id and box["out"][1].status == "skipped"
+    assert _lease(conn) == (None, None)
+
+
+def test_a_run_that_lost_its_lease_sends_no_more_model_requests(connect, conn):
+    """Round 2, blocker 2: ownership is checked before every model request."""
+    class Steals(Tools):
+        async def call(self, name, arguments):
+            if name == "get_pnl":
+                conn.execute("update agent_run_lease set token = gen_random_uuid()")
+            return await super().call(name, arguments)
+    client = Script(tool_turn(use("get_pnl")), answer())
+    run_id, out = go(connect, client, Steals())
+    assert len(client.sent) == 1
+    assert (out.status, out.detail) == ("failed", agent.LOST_LEASE.format(turn=2))
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_run_that_lost_its_lease_never_submits(connect, conn):
+    """Round 2, blocker 2: ownership is checked again just before a purchase request is sent."""
+    class StealsOnSecond(Script):
+        def create(self, **body):
+            if len(self.sent) == 1:
+                conn.execute("update agent_run_lease set token = gen_random_uuid()")
+            return super().create(**body)
+    tools = Tools(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED, "submit_desired_state": SENT})
+    client = StealsOnSecond(preview(), tool_turn(submit()), answer("submit"))
+    run_id, out = go(connect, client, tools, live=True)
+    assert "submit_desired_state" not in [name for name, _ in tools.calls]
+    assert out.status == "failed" and out.request_id is None and not out.submit_sent
+    assert out.detail == agent.LOST_LEASE_SUBMIT
+
+
+def test_an_expired_lease_is_taken_over_and_its_run_recorded(connect, conn):
+    """Round 2, blocker 2: a run whose process stopped renewing its lease is failed by the next run."""
+    from vending import agent_runs
+
+    stale = agent_runs.start(conn, mode="live", model="stalled")
+    conn.execute("update agent_run_lease set token = gen_random_uuid(), run_id = %s, taken_at = now() - interval '2 hours',"
+                 " renewed_at = now() - interval '1 hour', expires_at = now() - interval '1 minute',"
+                 " hard_until = now() + interval '1 hour'", (stale,))
+    run_id, out = go(connect, Script(answer()), Tools())
+    assert out.status == "skipped" and run_id != stale
+    status, detail = conn.execute("select status, detail from agent_runs where id = %s", (stale,)).fetchone()
+    assert status == "failed" and detail.startswith("Stopped: its run lease expired")
+    assert _lease(conn) == (None, None)
+
+
+def test_a_run_blocked_in_the_database_ends_and_lets_go(connect, conn, schema_url, monkeypatch):
+    """Round 2, major 4: behind an exclusive lock on agent_runs, a 50 ms run held the run lock past 500 ms."""
+    from tests.conftest import open_in
+
+    monkeypatch.setattr(agent, "DB_TIMEOUT", 0.3, raising=False)
+    with open_in(*schema_url) as other:
+        other.execute("begin")
+        other.execute("lock table agent_runs in access exclusive mode")
+        thread, box = _in_thread(lambda: go(connect, Script(answer()), Tools(), deadline=0.05))
+        thread.join(5)
+        blocked = thread.is_alive()
+        other.execute("rollback")
+    thread.join(20)
+    assert not blocked, "the run waited on the database past its timeouts"
+    run_id, out = box["out"]
+    assert run_id is None and out.status == "failed" and "couldn't be recorded" in out.detail
+    assert _lease(conn) == (None, None)
+
+
+def test_every_database_call_of_a_run_has_a_time_limit(connect, schema_url):
+    bounded = agent._bounded(connect, 1.5)
+    with bounded() as c:
+        assert c.execute("select current_setting('statement_timeout'), current_setting('lock_timeout')").fetchone() \
+            == ("1500ms", "1500ms")
+
+
+# --- Sol review, round 3: ownership is checked where money is reserved, and the ending is retried ---------
+
+def test_a_run_taken_over_after_its_lease_check_reserves_and_sends_nothing(connect, conn):
+    """Round 3, blocker 2: the lease was checked before the tokens were counted and the budget reserved, so a
+    run taken over in between still sent a paid request. Now the check is in the reservation's transaction."""
+    from vending import run_lease
+
+    class TakenOverWhileCounting(Script):
+        def count_tokens(self, **body):
+            # The run's lease lapses and another run takes it over, after the turn's own check.
+            conn.execute("update agent_run_lease set expires_at = now() - interval '1 second'")
+            assert isinstance(run_lease.take(conn, deadline=60), run_lease.Lease)
+            return super().count_tokens(**body)
+    client = TakenOverWhileCounting(answer())
+    run_id, out = go(connect, client, Tools())
+    assert client.sent == [], "a run that lost its lease sent a paid request"
+    assert calls(conn) == {}, "a run that lost its lease reserved money"
+    assert out.status == "failed" and out.detail.startswith(agent.LOST_LEASE.format(turn=1))
+    # The run that took over recorded this one's ending; this one doesn't retry against it.
+    assert out.recorded and "tries" not in out.detail
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_paid_request_is_sent_only_with_the_lease_held_for_longer_than_it_can_take(connect, conn, schema_url):
+    """Round 3, blocker 2: a lease 30 s from expiry at dispatch could be taken over mid-request. The reservation
+    renews it under its row lock, in its own transaction, so it outlasts the request."""
+    from tests.conftest import open_in
+
+    seen = {}
+
+    class NearlyExpired(Script):
+        def count_tokens(self, **body):
+            conn.execute("update agent_run_lease set expires_at = clock_timestamp() + interval '30 seconds'")
+            return super().count_tokens(**body)
+
+        def create(self, **body):
+            with open_in(*schema_url) as other:
+                seen["left"] = other.execute("select expires_at - clock_timestamp() from agent_run_lease").fetchone()[0]
+            return super().create(**body)
+    go(connect, NearlyExpired(answer()), Tools())
+    assert seen["left"].total_seconds() >= agent.REQUEST_TIMEOUT
+
+
+def test_an_ending_that_couldnt_be_recorded_is_tried_again(connect, conn, monkeypatch):
+    """Round 3, major 6: one failed agent_runs.finish() left the run `running` for good."""
+    from vending import agent_runs
+
+    monkeypatch.setattr(agent, "FINISH_RETRIES", (0, 0, 0))
+    real, tries = agent_runs.finish, []
+
+    def flaky(*a, **k):
+        tries.append(1)
+        if len(tries) < 3:
+            raise psycopg.OperationalError("connection lost")
+        return real(*a, **k)
+    monkeypatch.setattr(agent_runs, "finish", flaky)
+    run_id, out = go(connect, Script(answer()), Tools())
+    assert len(tries) == 3 and out.status == "skipped" and out.recorded
+    assert stored(conn, run_id)[1] == "skipped"
+
+
+def test_an_ending_that_never_lands_says_so(connect, conn, monkeypatch):
+    from vending import agent_runs
+
+    monkeypatch.setattr(agent, "FINISH_RETRIES", (0, 0))
+
+    def down(*a, **k):
+        raise psycopg.OperationalError("connection lost")
+    monkeypatch.setattr(agent_runs, "finish", down)
+    run_id, out = go(connect, Script(answer()), Tools())
+    assert not out.recorded and "agent_runs may still say running" in out.detail
+    assert conn.execute("select status from agent_runs where id = %s", (run_id,)).fetchone()[0] == "running"
+
+
+def test_a_run_whose_lease_ends_before_a_request_could_finish_sends_nothing(connect, conn):
+    """Round 3, blocker 2: at the lease's hard limit, a request reserved now could outlive the lease."""
+    from vending import run_lease
+
+    class AtTheLimit(Script):
+        def count_tokens(self, **body):
+            conn.execute("update agent_run_lease set hard_until = clock_timestamp() + interval '1 minute',"
+                         " expires_at = least(expires_at, clock_timestamp() + interval '1 minute')")
+            return super().count_tokens(**body)
+    client = AtTheLimit(answer())
+    _, out = go(connect, client, Tools())
+    assert client.sent == [] and calls(conn) == {}
+    assert out.status == "failed" and run_lease.NEAR_END in out.detail
+
+
+# --- Sol review, round 4: a model request has a hard end, and the run's deadline is checked before paying ---
+
+def test_a_model_request_that_never_ends_is_abandoned_while_the_lease_is_held(connect, conn, monkeypatch):
+    """Round 4, finding 1: the SDK's timeout bounds each wait for bytes, not the whole request, so a reply that
+    kept trickling in outlasted the lease and a second run could start beside it. The harness now gives a
+    request a hard end, inside the lease, and keeps the lease while the abandoned request's thread goes on."""
+    import time
+
+    monkeypatch.setattr(agent, "REQUEST_DEADLINE", 0.5)
+    release, started = threading.Event(), threading.Event()
+
+    class Trickling(Script):
+        def create(self, **body):
+            started.set()
+            release.wait(30)        # bytes keep coming, so no I/O timeout ever fires
+            return super().create(**body)
+    try:
+        began = time.monotonic()
+        run_id, out = go(connect, Trickling(answer()), Tools())
+        assert time.monotonic() - began < 10
+        assert started.is_set()
+        assert out.status == "failed" and "abandoned" in out.detail
+        # It may have run: kept at its worst case.
+        assert conn.execute("select status, cost_usd = worst_case_usd from model_calls").fetchone() == ("error", True)
+        # Still in flight, so the lease wasn't given back, and no other run starts beside it.
+        assert conn.execute("select token is not null and expires_at > now() from agent_run_lease").fetchone()[0]
+        second = Script(answer())
+        _, other = go(connect, second, Tools())
+        assert other.status == "skipped" and second.sent == []
+    finally:
+        release.set()
+
+
+def test_a_request_is_sent_only_if_its_hard_end_falls_inside_the_lease(connect, conn, monkeypatch):
+    """Round 4, finding 1: the lease is checked again just before the request goes. Here the reservation itself
+    was slow, so the lease the reservation renewed would end before the request's hard end."""
+    import time
+    from datetime import timedelta
+
+    from vending import run_lease
+
+    monkeypatch.setattr(agent, "LEASE_MARGIN", timedelta(seconds=2))
+    monkeypatch.setattr(agent, "REQUEST_DEADLINE", 1.5)
+    real = run_lease.hold
+
+    def slow_hold(c, token, margin):
+        why = real(c, token, margin)
+        time.sleep(0.8)
+        return why
+    monkeypatch.setattr(run_lease, "hold", slow_hold)
+    client = Script(answer())
+    _, out = go(connect, client, Tools())
+    assert client.sent == []
+    from vending import harness
+
+    assert out.status == "failed" and harness.NEAR_END in out.detail
+    # Reserved, then let go at $0: nothing was sent.
+    assert conn.execute("select status, cost_usd from model_calls").fetchone() == ("refused", 0)
+
+
+def test_counting_past_the_run_deadline_sends_and_reserves_nothing(connect, conn):
+    """Round 4, finding 4: the run's deadline can't interrupt the thread that counts tokens, so a slow count
+    went on to reserve and send a paid request after the deadline."""
+    import time
+
+    class SlowCount(Script):
+        def count_tokens(self, **body):
+            time.sleep(1.25)
+            return super().count_tokens(**body)
+    client = SlowCount(answer())
+    run_id, out = go(connect, client, Tools(), deadline=1)
+    assert out.status == "failed"
+    assert client.sent == [] and calls(conn) == {}
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_reservation_that_ends_past_the_run_deadline_sends_nothing(connect, conn, monkeypatch):
+    """Round 4, finding 4: the deadline is checked again right before the request goes."""
+    import time
+
+    from vending import run_lease
+
+    real = run_lease.hold
+
+    def slow_hold(c, token, margin):
+        why = real(c, token, margin)
+        time.sleep(1.25)
+        return why
+    monkeypatch.setattr(run_lease, "hold", slow_hold)
+    client = Script(answer())
+    _, out = go(connect, client, Tools(), deadline=1)
+    assert out.status == "failed" and client.sent == []
+    assert conn.execute("select status, cost_usd from model_calls").fetchone() == ("refused", 0)
+
+
+# --- One retry after a submit that ordered nothing (#217) ------------------------------
+
+CHANGED = {"success": False, "message": "Refused: plan_changed", "plan_hash": "abc",
+           "refusals": [{"code": "plan_changed", "message": "the plan now hashes to def"}]}
+PREVIEWED_AGAIN = {**PREVIEWED, "plan_hash": "def"}
+SUBMIT_SCHEMA = {"type": "object", "properties": {"desired": {}, "expected_plan_hash": {}}}
+
+
+class InTurn(Tools):
+    """Answers each tool from its own list, one reply per call; the last reply repeats."""
+
+    async def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        queue = self.replies.get(name, [{"success": True, "message": "ok"}])
+        reply = queue.pop(0) if len(queue) > 1 else queue[0]
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(reply))],
+                               structuredContent=reply, isError=False)
+
+
+def live_tools(previews, submits):
+    return InTurn(LIVE_TOOLS, replies={"preview_desired_state": list(previews), "submit_desired_state": list(submits)},
+                  schemas={"submit_desired_state": SUBMIT_SCHEMA})
+
+
+def sent_submits(tools):
+    return [args for name, args in tools.calls if name == "submit_desired_state"]
+
+
+def last_result(client, request, index=0):
+    """The text of a tool result sent back to the model in `request` (0-based)."""
+    return client.sent[request]["messages"][-1]["content"][index]["content"]
+
+
+def test_a_plan_changed_refusal_allows_one_retry_after_a_new_preview(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    answer("submit", reason="restock 15"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [CHANGED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    # Each submit carries the hash of the preview just before it.
+    assert sent_submits(tools) == [{"desired": PLAN, "expected_plan_hash": "abc"},
+                                   {"desired": PLAN, "expected_plan_hash": "def"}]
+    assert "may submit once more" in last_result(client, 2)
+    assert stored(conn, run_id)[1] == "submitted" and stored(conn, run_id)[-1] == "req_9"
+
+
+def test_a_second_refusal_ends_the_retries(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    preview(id="p3"), tool_turn(submit(id="s3")), answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN, PREVIEWED_AGAIN], [CHANGED])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 2
+    assert "used its one retry" in last_result(client, 4)
+    assert "used its one retry" in last_result(client, 6)
+    assert out.status == "failed" and "nothing was bought" in out.detail
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_retry_waits_for_a_new_preview_in_an_earlier_turn(connect, conn):
+    client = Script(preview(), tool_turn(submit()), tool_turn(submit(id="s2")),
+                    tool_turn(use("preview_desired_state", {"desired": PLAN}, id="p2"), submit(id="s3")),
+                    answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [CHANGED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 1
+    assert "Preview again" in last_result(client, 3)
+    assert "read the preview's cost" in last_result(client, 4, 1)
+    assert out.status == "failed"
+
+
+NOT_CONNECTED = {"success": False, "status": "not_filed", "submission": 1,
+                 "message": "Couldn't connect to the bridge (ConnectionRefusedError): nothing was sent."}
+
+
+def test_a_failed_connect_allows_one_retry_after_a_new_preview(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    answer("submit", reason="restock 15"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [NOT_CONNECTED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 2 and "may submit once more" in last_result(client, 2)
+    assert stored(conn, run_id)[1] == "submitted" and stored(conn, run_id)[-1] == "req_9"
+
+
+@pytest.mark.parametrize("first", [
+    {"success": False, "status": "unknown", "submission": 1,
+     "message": "Sent, and no answer settles it (the bridge answered 422, and only the 201 it documents settles "
+                "a request. It said: {\"error\": \"invalid lines\"})"},
+    {"success": False, "status": "unknown", "submission": 1, "message": "refused",
+     "refusals": [{"code": "plan_changed", "message": "a POST's reply carrying plan_changed"}]},
+    {"success": False, "status": "refused", "submission": 1, "message": "The bridge refused the request (422)"},
+    {"success": False, "message": "Refused", "refusals": [{"code": "below_floor", "message": "too cheap"}]},
+    {"success": False, "message": "Refused", "refusals": [
+        {"code": "plan_changed", "message": "moved"}, {"code": "submission_unresolved", "message": "open"}]},
+], ids=["a 4xx to the POST", "a POST reply carrying plan_changed", "a status no longer sent",
+        "a refusal before the POST that isn't plan_changed", "plan_changed with another refusal"])
+def test_only_plan_changed_or_a_failed_connect_allows_a_retry(connect, conn, first):
+    """Only our own `plan_changed` alone (no submission number) and `not_filed` (connecting failed) prove no
+    byte left. Anything else ends the run's submits: when in doubt, never send twice. This is the same-run latch;
+    `tests/test_submit_runs.py` sends each kind of answer through two live runs against the real server and a
+    loopback bridge, and counts the POSTs across both."""
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [first, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 1 and out.status == "failed"
+    assert "may submit once more" not in last_result(client, 2) and "already submitted" in last_result(client, 4)
+
+
+@pytest.mark.parametrize("first", [
+    {"success": False, "status": "unknown", "message": "the bridge answered 502"},
+    {"success": False, "message": "Can't submit yet: no catalog"},
+    {"success": True, "message": "sent, but no id"},
+    SENT,
+])
+def test_no_reply_that_may_have_ordered_allows_another_send(connect, conn, first):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("skip"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [first, SENT])
+    go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 1
+    assert "already submitted" in last_result(client, 4)
+
+
+# --- Open submissions settled before the model starts (#217) ---------------------------
+
+class Lookup:
+    """A fake bridge that answers only `purchase_request`, from `known`; any other ID is a 404."""
+
+    def __init__(self, known):
+        self.known, self.asked = known, []
+
+    def __call__(self):
+        return self
+
+    def purchase_request(self, request_id):
+        from vending.bridge import BridgeNotFound
+
+        self.asked.append(request_id)
+        found = self.known.get(request_id, BridgeNotFound(f"404 Not Found from /{request_id}"))
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+
+def open_row(conn, *, response=None, created_id=None):
+    """A submission left open two hours ago: `sending` with `created_id` (its POST got a validated 201 that was
+    never recorded), otherwise `unknown`, holding `response` if given."""
+    from psycopg.types.json import Jsonb
+
+    return conn.execute(
+        "insert into purchase_submissions (at, plan_hash, body, status, response, created_id) values"
+        " (now() - interval '2 hours', 'h', %s, %s, %s, %s) returning id",
+        (Jsonb({"lines": [], "off_cycle": False}), "unknown" if created_id is None else "sending",
+         None if response is None else Jsonb(response), created_id)).fetchone()[0]
+
+
+LOST = {"id": "pr-lost", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}
+
+
+def check_steps(conn, run_id):
+    return conn.execute("select content, is_error from agent_steps where run_id = %s and tool = 'check_submissions'",
+                        (run_id,)).fetchall()
+
+
+def test_a_live_run_settles_a_validated_201_it_never_recorded(connect, conn):
+    """A row whose POST got a validated 201 (`created_id`) but was never settled is settled from the bridge's
+    record of that ID. A lost reply holds none: `tests/test_submit.py::test_a_lost_reply_stays_blocked_for_later_runs`
+    sends one through the submit tool, and `test_a_live_run_leaves_a_lost_reply_it_cant_tell_open` below is its
+    startup check."""
+    row = open_row(conn, response=LOST, created_id="pr-lost")
+    bridge = Lookup({"pr-lost": LOST})
+    run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert conn.execute("select status, request_id, resolved_by from purchase_submissions where id = %s",
+                        (row,)).fetchone() == ("accepted", "pr-lost", "auto-check")
+    [(content, is_error)] = check_steps(conn, run_id)
+    assert not is_error and json.loads(content)["submissions"][0]["status"] == "accepted"
+    # Settled once: the next run has nothing to check, and the request is recorded once.
+    run_id, _ = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert check_steps(conn, run_id) == [] and bridge.asked == ["pr-lost"]
+    assert conn.execute("select count(*) from purchase_requests where request_id = 'pr-lost'").fetchone() == (1,)
+
+
+@pytest.mark.parametrize("response", [None, LOST], ids=["a lost reply", "an ambiguous answer naming a request"])
+def test_a_live_run_leaves_a_row_without_a_validated_201_open(connect, conn, response):
+    row = open_row(conn, response=response)
+    bridge = Lookup({"pr-lost": LOST})
+    run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert conn.execute("select status from purchase_submissions where id = %s", (row,)).fetchone() == ("unknown",)
+    [(content, is_error)] = check_steps(conn, run_id)
+    assert is_error and "no validated 201" in content and bridge.asked == []
+
+
+def test_a_dry_run_never_checks_the_bridge(connect, conn):
+    open_row(conn, response=LOST, created_id="pr-lost")
+    bridge = Lookup({"pr-lost": LOST})
+    go(connect, Script(answer("skip")), Tools(), bridge=bridge)
+    assert bridge.asked == []

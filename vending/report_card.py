@@ -33,8 +33,9 @@ values; one week that fails to score leaves the others.
 
 **Incident log.** From the opening on, newest first: refused and failed tool calls (`action_log`),
 halt switch flips (`action_log`, tool `halt`), live runs that failed, halted or were left running,
-live runs whose model was told a tool call failed (`agent_steps`, counted, never quoted), and weeks
-that failed a hard check. Each has a one-line note. A failure's stored text is never read here: the
+live runs whose model was told a tool call failed (`agent_steps`, counted, never quoted), weeks
+that failed a hard check, and tracking checks (`tracking_checks`, #218) that the bridge answered
+`outside` on any figure or that got no usable answer. Each has a one-line note. A failure's stored text is never read here: the
 row says `error: True` and `dashboard.hide_errors` puts its fixed message in.
 """
 
@@ -68,6 +69,11 @@ PLAN_LOOKBACK = timedelta(days=14)
 NOTE_CHARS = 160
 # A live run still `running` this long after it started is taken as dead (the dashboard's STALE_RUN).
 STALE_RUN = timedelta(hours=2)
+# A tracking check sent this long ago with no answer recorded: the worker crashed after the
+# reservation committed, so the day's check may have been spent with nothing in the log. The
+# bridge's client gives up after `vending.bridge.TIMEOUT_SECONDS`, so a live send resolves long
+# before this.
+UNRESOLVED_AFTER = timedelta(minutes=15)
 # Every slot needs a reason to pass the replayer's "valid plan" check, but the agent writes reasons
 # only for the slots its plan changes (`vending.agent.recorded_plan`).
 NO_REASON = "(no reason recorded: the plan leaves this slot as it was)"
@@ -527,7 +533,8 @@ def _compare(plan: scoring.Score, base: scoring.Score, swapped: tuple[str, ...] 
 
 def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None) -> dict:
     """The incident log's data, newest first. `weeks` is the report card panel's data, for weeks that
-    failed a hard check (None when that panel couldn't be built)."""
+    failed a hard check (None when that panel couldn't be built). Every note is this code's own
+    words; a failure's stored text is never read."""
     opened = ledger.opening(conn)
     if opened is None or now < opened.at:
         return {"opened": False}
@@ -567,6 +574,31 @@ def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None
     for id_, started, n in errors:
         rows.append(_row(started, "tool_errors", f"Run {id_}",
                          f"The model was told {n} tool call{'s' if n != 1 else ''} failed. See How it decided under Runs."))
+    # One row per failed round, as the worker wrote each one (`vending.worker.record_failed_round`,
+    # `sync_incidents`, migration 026), so a round stays listed after a later round passes or the
+    # worker restarts. A round from before the opening isn't one.
+    rounds, rounds_total = _sync_incidents(conn, since, now)
+    total += rounds_total
+    for round_at, jobs in rounds:
+        rows.append(_row(round_at, "sync_failed", "Sync round",
+                         f"A sync round failed: {failed_jobs_text(jobs)}."))
+    checked, checks = _tracking(conn, since, now)
+    total += checked
+    for id_, at, as_of_time, status, results, error_type, answered in checks:
+        outside = [k for k in TRACKING_FIGURES if isinstance(results, dict) and results.get(k) == "outside"]
+        if outside:
+            rows.append(_row(at, "books_outside", f"Tracking check {id_}",
+                             f"The bridge's books differ from ours on {', '.join(TRACKING_FIGURES[k] for k in outside)}, "
+                             f"as of the poll at {_when(as_of_time)}. It never says by how much."))
+        elif answered is None:
+            rows.append(_row(at, "check_unresolved", f"Tracking check {id_}",
+                             "No answer was recorded for it: the worker may have crashed after sending. "
+                             "A tracking check may have been used; check with the instructors."))
+        else:
+            rows.append(_row(at, "check_unanswered", f"Tracking check {id_}",
+                             "No usable answer: it may have used that day's check, and its verdicts are unknown."
+                             if status is None or error_type == "malformed_answer" else
+                             "The bridge answered without verdicts; it may have used that day's check."))
     for card in (weeks or {}).get("weeks", []):
         if card["grade"] != "fail":
             continue
@@ -595,6 +627,94 @@ def _error_steps(conn: psycopg.Connection, since: datetime, now: datetime) -> tu
             return count, rows
     except psycopg.errors.UndefinedTable:     # before migration 014
         return 0, []
+
+
+def _sync_incidents(conn: psycopg.Connection, since: datetime, now: datetime) -> tuple[list, int]:
+    """The worker's failed rounds (`sync_incidents`, migration 026), as (round_at, jobs) newest
+    first, with their count. Before the migration there is no table, and that is no incidents.
+    `jobs` is what the worker wrote from its own round: each job's name, exit code and outcome —
+    never error text — so the note here is fixed words by construction.
+
+    The query runs in its own transaction (a savepoint inside the panel's), like `_error_steps`':
+    caught outside it, an `UndefinedTable` rolls back to the savepoint instead of aborting the
+    panel's transaction, where the next query would fail and the whole log would disappear."""
+    import psycopg
+    try:
+        with conn.transaction():
+            rows = conn.execute("select round_at, jobs from sync_incidents"
+                                " where round_at >= %s and round_at <= %s"
+                                " order by round_at desc, id desc", (since, now)).fetchall()
+    except psycopg.errors.UndefinedTable:     # before migration 026
+        return [], 0
+    return rows, len(rows)
+
+
+# The four figures of a tracking check (`vending.tracking.RESULTS`), as the incident log names them.
+TRACKING_FIGURES = {"cash": "cash", "sales_tax_owed": "sales tax owed", "coil": "the coil",
+                    "back_stock": "back stock"}
+
+
+_OUTSIDE_SQL = " or ".join(f"results->>'{k}' = 'outside'" for k in TRACKING_FIGURES)
+
+
+def _tracking(conn: psycopg.Connection, since: datetime, now: datetime) -> tuple[int, list[tuple]]:
+    """How many tracking checks from `since` to `now` read `outside` on a figure, may have used the
+    day's check with no verdicts, or have no answer recorded at all past `UNRESOLVED_AFTER` (the worker
+    crashed after the reservation committed), and the newest `INCIDENTS_SHOWN` of them as (id, at,
+    as_of_time, status, results, error_type, answered_at). Only stored verdicts and our own codes are
+    read, never the bridge's text.
+
+    `results` is the bridge's JSON, so a figure counts as `outside` only when `results` is an object
+    and one of the four documented keys (`TRACKING_FIGURES`) says so: an array or an undocumented key
+    can neither add an incident nor crash the query. The window, the order and `at` are the check's
+    event time, `answered_at` falling back to `sent_at`: the moment the failure banner names
+    (`dashboard._tracking_alert`), so a check answered after the opening is an incident in both."""
+    import psycopg
+    where = ("from tracking_checks where coalesce(answered_at, sent_at) >= %s"
+             " and coalesce(answered_at, sent_at) <= %s and"
+             f" ((jsonb_typeof(results) = 'object' and ({_OUTSIDE_SQL}))"
+             "  or (used_check is distinct from false and results is null and answered_at is not null"
+             "      and status is distinct from 429)"
+             "  or (answered_at is null and sent_at <= %s))")
+    try:
+        with conn.transaction():
+            count = conn.execute(f"select count(*) {where}", (since, now, now - UNRESOLVED_AFTER)).fetchone()[0]
+            rows = conn.execute(f"select id, coalesce(answered_at, sent_at), as_of_time, status, results, error_type,"
+                                f" answered_at {where} order by coalesce(answered_at, sent_at) desc, id desc limit %s",
+                                (since, now, now - UNRESOLVED_AFTER, INCIDENTS_SHOWN)).fetchall()
+            return count, rows
+    except psycopg.errors.UndefinedTable:     # before migration 021
+        return 0, []
+
+
+def failed_sync_jobs(syncs: dict | None) -> str | None:
+    """The failed jobs of the worker's latest sync round (`vending.worker.State.public`), each named
+    with its exit code or outcome, or None when every job passed, no round has run yet, or the
+    worker handed nothing over (the dashboard run on its own). Fixed words only: the banner
+    (`dashboard.build_alerts`), Needs attention and this log all share one wording."""
+    if not syncs or not syncs.get("rounds"):
+        return None
+    return failed_jobs_text(syncs.get("results"))
+
+
+def failed_jobs_text(results: list | None) -> str | None:
+    """The failed jobs of one sync round, each named with its exit code or outcome, or None when
+    every job passed. Used for the worker's latest round (`failed_sync_jobs`) and for the stored
+    `sync_incidents` rows, whose `jobs` is the same sanitized list."""
+    failed = [r for r in results or [] if r.get("exit_code") != 0]
+    if not failed:
+        return None
+    return ", ".join(f"`{r.get('job')}` " + (f"exit {r['exit_code']}" if r.get("exit_code") is not None
+                                             else str(r.get("outcome") or "no exit code"))
+                     for r in failed)
+
+
+def sync_round_at(syncs: dict | None) -> datetime | None:
+    """When the worker's latest sync round ran, or None when it can't be read."""
+    try:
+        return datetime.fromisoformat(syncs["last_round_at"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _row(at: datetime, kind: str, what: str, note: str | None, *, error: bool = False) -> dict:
@@ -634,7 +754,10 @@ _CHECK_TONE = {scoring.PASS: "ok", scoring.FAIL: "bad", scoring.SKIP: "muted"}
 _KIND = {"refused": ("Refused", "warn"), "failed": ("Failed", "bad"), "halt_on": ("Halt on", "warn"),
          "halt_off": ("Halt off", "info"), "halt": ("Halt switch", "info"), "run_failed": ("Run failed", "bad"),
          "run_halted": ("Run halted", "warn"), "run_stuck": ("Run stuck", "bad"),
-         "tool_errors": ("Tool errors", "warn"), "week_failed": ("Week failed", "bad")}
+         "tool_errors": ("Tool errors", "warn"), "week_failed": ("Week failed", "bad"),
+         "sync_failed": ("Sync failed", "bad"),
+         "books_outside": ("Books outside", "bad"), "check_unanswered": ("Check unanswered", "warn"),
+         "check_unresolved": ("Check unresolved", "warn")}
 
 
 def _pill(text: str, tone: str) -> str:
@@ -736,8 +859,9 @@ def incidents_html(panel: dict) -> str:
     if not data["rows"]:
         return '<p class="empty">No incidents since the opening.</p>'
     shown, total = len(data["rows"]), data["total"]
-    lede = (f'<p class="sub lede">Refused and failed tool calls, halts, runs that failed, and weeks that failed a hard '
-            f'check, newest first. Error text isn\'t shown. {"Latest " + str(shown) + " of " + str(total) + "." if total > shown else ""}</p>')
+    lede = (f'<p class="sub lede">Refused and failed tool calls, halts, runs that failed, a failed sync round, '
+            f'weeks that failed a hard check, and tracking checks that read outside or got no answer, newest first. '
+            f'Error text isn\'t shown. {"Latest " + str(shown) + " of " + str(total) + "." if total > shown else ""}</p>')
     body = []
     for r in data["rows"]:
         label, tone = _KIND.get(r["kind"], (r["kind"], "muted"))

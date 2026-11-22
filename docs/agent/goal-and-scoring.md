@@ -8,6 +8,10 @@ The winner has the most cumulative profit at the end of run week 9, and must qua
 
 The last term is real money: model and token spend, plus any other metered service the agent calls. It comes out of the same account as a dispatch fee (sections 3.3 and 6). Every tool call and every long answer costs something.
 
+**When it starts and ends** (David, 17 Nov: `docs/planning/2026-11-17-david-answers.md`, "The dates"). Our slots start empty (A9), so the first fill stocks them. Every drink in it must be approved in the catalog by **Wed 25 Nov**. The first fill is one normal purchase request naming every assigned slot, with a sale price on each line, received by **Sun 29 Nov 23:59**; one product not in the catalog denies the whole request. Staff buy and load it on **Mon 30 Nov**. Sales count from **Thu 3 Dec**, when the machine goes live; the first restock request is due Thu 3 Dec 23:59 for the Fri 4 Dec visit. Run week 9 ends **Wed 3 Feb** if the break weeks count (not yet confirmed; if they don't, about 10 to 17 Feb). Keep selling up to the end: do not stop restocking in late January. Count weeks from 3 Dec, not from when the ledger opened.
+
+**Stock left at the end** (A5). Unsold units are valued at what we paid, so they are not a loss. Don't let slots run down or go empty to avoid holding stock: an empty slot in the last week is lost sales.
+
 **The $600 is capital, not profit.** It is the only money we are given. It does not count toward the score and does not put us $600 ahead. Only what we do with it counts (section 6).
 
 **Qualifying for the leaderboard.** A team has to run its slots as a business across the quarter: either restock at least **four complete inventory locations**, or direct the restock of at least **thirty individual units** (section 6). Pricing high, never restocking and banking a few sales does not qualify. Keep both counts in view when deciding to skip a restock.

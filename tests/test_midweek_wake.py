@@ -143,12 +143,17 @@ def test_sixteen_unrelated_cheap_cans_in_the_closet_dont_trigger_a_wake():
 
 def test_a_spendable_balance_under_the_planners_cost_is_no_wake():
     """Sol, round 2: $54.44 spendable against the planner's $65.56 (two slots, two 6-packs
-    each at $10.14, plus the $25 fee) is the planner's insufficient_balance: no wake."""
+    each at $10.14, plus the $25 fee) is the planner's insufficient_balance: no wake. Since #188
+    the planner also keeps the spendable floor after the visit (`below_spendable_floor`), so
+    exactly $65.56 is no wake either; $65.56 plus the floor wakes."""
     two = FOUR[:2]
     logged = []
     assert decide(MONDAY, outlooks(two, rate="3"), machine(two, balance=5444), log=logged.append) is None
     assert any("insufficient_balance" in line and "$65.56" in line for line in logged)
-    wake = decide(MONDAY, outlooks(two, rate="3"), machine(two, balance=6556))
+    logged.clear()
+    assert decide(MONDAY, outlooks(two, rate="3"), machine(two, balance=6556), log=logged.append) is None
+    assert any("below_spendable_floor" in line and "$65.56" in line for line in logged)
+    wake = decide(MONDAY, outlooks(two, rate="3"), machine(two, balance=6556 + planner.SPENDABLE_FLOOR_CENTS))
     assert wake is not None and wake.visit_cost_cents == 6556
     assert wake.saved_margin_cents == cents(2 * 6 * MARGIN)       # 3 a class day x 2 days, under a column
 
@@ -579,29 +584,34 @@ def test_worker_carries_the_job():
     from vending import worker
 
     assert worker.JOB_NAMES["midweek_wake"] == "Midweek wake-up check"
-    assert [name for name, _ in worker.default_jobs()][-1] == "midweek_wake"   # after the syncs it reads
+    names = [name for name, _ in worker.default_jobs()]
+    # After the syncs it reads, and only after a slot check that passed.
+    assert names.index("midweek_wake") > max(names.index(n) for n in names if n.startswith("sync_"))
+    assert worker.NEEDS["midweek_wake"] == ("slots_check",)
 
 
 def test_the_wake_waits_for_the_slot_check(monkeypatch):
     """Sol, round 3: a round whose slot assignment check fails (exit 1) must not run the wake
-    check on slots nobody confirmed; the other syncs run as before."""
-    from vending import slots, sync_catalog, sync_history, sync_product_requests, sync_requests, worker
+    check on slots nobody confirmed; the other syncs run as before. The worker's NEEDS holds it."""
+    from vending import (slots, sync_catalog, sync_history, sync_product_requests, sync_requests, tracking_daily,
+                         worker)
 
-    for module in (sync_history, sync_requests, sync_catalog, sync_product_requests):
+    for module in (sync_history, sync_requests, sync_catalog, sync_product_requests, tracking_daily):
         monkeypatch.setattr(module, "main", lambda argv: 0)
     monkeypatch.setenv("MIDWEEK_WAKE", "on")
     ran = []
     monkeypatch.setattr(midweek_wake, "job", lambda: ran.append("wake") or 0)
     monkeypatch.setattr(slots, "main", lambda argv: 1)
     jobs = worker.default_jobs()
-    results = worker.run_round(jobs, log=lambda _: None)
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
     assert ran == []
-    assert [(r.job, r.exit_code) for r in results] == [
-        ("slots_check", 1), ("sync_history", 0), ("sync_requests", 0), ("sync_catalog", 0),
-        ("sync_product_requests", 0), ("midweek_wake", 0)]
+    assert [(r.job, r.outcome, r.exit_code) for r in results] == [
+        ("slots_check", "finished", 1), ("sync_history", "finished", 0), ("sync_requests", "finished", 0),
+        ("sync_catalog", "finished", 0), ("sync_product_requests", "finished", 0),
+        ("midweek_wake", "skipped", None), ("tracking_daily", "skipped", None)]
     monkeypatch.setattr(slots, "main", lambda argv: 0)
-    worker.run_round(jobs, log=lambda _: None)                    # the same job list, next round
+    worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)   # the same job list, next round
     assert ran == ["wake"]
     monkeypatch.setattr(slots, "main", lambda argv: (_ for _ in ()).throw(RuntimeError("boom")))
-    worker.run_round(jobs, log=lambda _: None)                    # a crashed check gates it too
+    worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)   # a crashed check gates it too
     assert ran == ["wake"]

@@ -1,14 +1,16 @@
 """The weekly report card and the incident log (#48): `vending.report_card` on the dashboard."""
 
+import threading
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import psycopg
 import pytest
 from psycopg.types.json import Jsonb
 
 from tests.conftest import store_poll
 from tests.test_dashboard import fulfilled, page_conn  # noqa: F401
-from vending import agent_runs, config, dashboard, ledger, report_card, slots
+from vending import agent_runs, config, dashboard, ledger, report_card, slots, worker
 from vending.replay import scoring
 from vending.replay.deciders import Plan, SlotPlan
 from vending.replay.state import SlotWeek, WeekState
@@ -585,3 +587,303 @@ def test_report_card_text_naming_a_selection_outside_ours_is_redacted():
                                                        "All 20 slots once, every field well formed."]}]}}
     notes = dashboard._scope_numbered(panel, ours)["data"]["weeks"][0]["notes"]
     assert notes == ["Slot 15 was kept.", dashboard.OUTSIDE_ASSIGNMENT, "All 20 slots once, every field well formed."]
+
+
+# --- Incident log: sync rounds and tracking checks -----------------------------------------------
+
+JOBS = [{"job": "sync_history", "exit_code": 3, "outcome": "finished"}]
+
+
+class _OneConn:
+    """`vending.db.connect` stood in for: the worker's one write, on the test schema's connection."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self.conn
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _round(at: datetime, jobs=JOBS):
+    return (at.isoformat(), jobs)
+
+
+def test_a_failed_sync_round_and_an_outside_tracking_check_are_incidents(conn, page_conn, opened):
+    from tests.test_dashboard import _syncs
+    checked = OPEN + timedelta(hours=2)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-12-02', 'test', 's1', %s, '{}', %s, 200, %s, true, %s)",
+        (checked, checked, checked + timedelta(minutes=5), Jsonb({"error": SECRET}),
+         Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    assert worker.record_rounds([_round(OPEN + timedelta(hours=4))], conn)
+    snap = dashboard.snapshot(page_conn, NOW)
+    rows = snap["incidents"]["data"]["rows"]
+    kinds = [r["kind"] for r in rows]
+    assert "sync_failed" in kinds and "books_outside" in kinds
+    sync_row = next(r for r in rows if r["kind"] == "sync_failed")
+    assert sync_row["what"] == "Sync round" and "`sync_history` exit 3" in sync_row["note"]
+    tracking_row = next(r for r in rows if r["kind"] == "books_outside")
+    assert "cash" in tracking_row["note"] and SECRET not in tracking_row["note"]
+    assert SECRET not in dashboard.to_json(snap["incidents"]) and SECRET not in dashboard.render(snap)
+
+
+def test_each_failed_round_stays_an_incident(conn, page_conn, opened):
+    """One sanitized event per failed round (`sync_incidents`, migration 026): a later round that
+    passes leaves the earlier rows in the log, and the worker's latest round (memory) decides only
+    the banner."""
+    first, second = OPEN + timedelta(hours=1), OPEN + timedelta(hours=2)
+    assert worker.record_rounds([_round(first), _round(second)], conn)
+    rows = [r for r in dashboard.snapshot(page_conn, NOW)["incidents"]["data"]["rows"]
+            if r["kind"] == "sync_failed"]
+    assert [r["at"] for r in rows] == [second, first]
+    assert all("`sync_history` exit 3" in r["note"] for r in rows)
+    assert dashboard.snapshot(page_conn, NOW)["incidents"]["data"]["total"] == 2
+    # The banner says only what the worker's latest round says, so a passing round clears it
+    # without touching the log.
+    from tests.test_dashboard import _syncs
+    syncs = _syncs(("sync_history", {"exit_code": 0}), at=OPEN + timedelta(hours=3))
+    snap = dashboard.snapshot(page_conn, NOW, syncs=syncs)
+    assert snap["alerts"] == [] and snap["incidents"]["data"]["total"] == 2
+
+
+def test_a_recorded_round_is_never_written_twice(conn, page_conn, opened):
+    assert worker.record_rounds([_round(OPEN + timedelta(hours=1))], conn)
+    assert worker.record_rounds([_round(OPEN + timedelta(hours=1))], conn)   # a retried write is a no-op
+    assert conn.execute("select count(*) from sync_incidents").fetchone()[0] == 1
+
+
+def test_a_round_the_database_missed_is_recorded_after_a_later_round(monkeypatch, conn, page_conn, opened):
+    """The database is down for a failed round (it was down for its jobs too): the round waits and
+    a later round writes it, so the outage's failures are not lost."""
+    from tests.test_dashboard import SECRET
+    import vending.db as db_mod
+    waited: list = []
+
+    def down(**k):
+        raise psycopg.OperationalError(SECRET)
+
+    monkeypatch.setattr(db_mod, "connect", down)
+    state = worker.State()
+    state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+    state.rounds, state.last_round_at = 1, (OPEN + timedelta(hours=1)).isoformat()
+    writer = worker.record_failed_round(state, waited, log=lambda _: None)
+    writer.join(60)
+    assert len(waited) == 1 and waited[0][1][0]["exit_code"] == 3
+    assert page_conn.execute("select count(*) from sync_incidents").fetchone()[0] == 0
+    monkeypatch.setattr(db_mod, "connect", lambda **k: _OneConn(conn))
+    state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
+    state.rounds, state.last_round_at = 2, (OPEN + timedelta(hours=2)).isoformat()
+    writer = worker.record_failed_round(state, waited, log=print)
+    writer.join(60)
+    assert waited == []
+    row, = page_conn.execute("select round_at, jobs from sync_incidents").fetchall()
+    assert row[0] == OPEN + timedelta(hours=1) and row[1][0]["job"] == "sync_history"
+
+
+def test_a_sync_round_from_before_the_opening_is_not_an_incident(conn, page_conn, opened):
+    from tests.test_dashboard import _syncs
+    assert worker.record_rounds([_round(OPEN - timedelta(hours=1))], conn)
+    snap = dashboard.snapshot(page_conn, NOW,
+                              syncs=_syncs(("sync_history", {"exit_code": 1}), at=OPEN - timedelta(hours=1)))
+    assert not [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "sync_failed"]
+    # The banner is current state, so it still says the latest round failed; the log starts at the opening.
+    assert [a["kind"] for a in snap["alerts"]] == ["sync_failed"]
+
+
+def test_the_log_survives_a_missing_optional_table(conn, page_conn, opened):
+    """A database without migration 026 has no `sync_incidents`, and one without 021 no
+    `tracking_checks`: either source counts as no incidents and the panel's other incidents stay.
+    Each optional read runs in its own savepoint (`_error_steps`' pattern), so one missing table
+    cannot abort the panel's transaction and hide every incident."""
+    conn.execute("insert into action_log (at, kind, tool, arguments, outcome, detail)"
+                 " values (%s, 'write', 'submit_desired_state', '{}', 'refused', 'no')",
+                 (OPEN + timedelta(hours=1),))
+    assert worker.record_rounds([_round(OPEN + timedelta(hours=2))], conn)
+    conn.execute("drop table sync_incidents")          # a database without migration 026
+    data = dashboard.snapshot(page_conn, NOW)["incidents"]["data"]
+    assert data["total"] == 1 and [r["kind"] for r in data["rows"]] == ["refused"]
+    conn.execute("drop table tracking_checks")         # a database without migration 021
+    data = dashboard.snapshot(page_conn, NOW)["incidents"]["data"]
+    assert data["total"] == 1 and [r["kind"] for r in data["rows"]] == ["refused"]
+
+
+def test_a_locked_sync_incidents_table_cannot_stall_the_round(monkeypatch, conn, page_conn, schema_url, opened):
+    """An exclusive lock on `sync_incidents` (a backup, a migration) must not hang the sync: the
+    write runs off the scheduling path, its writer gives up at `worker.WRITE_TIMEOUT`, and the
+    round stays in the pending list for a later round to write (`record_failed_round`)."""
+    import vending.db as db_mod
+    url, schema = schema_url
+    holder = psycopg.connect(url, connect_timeout=3,
+                             options=db_mod.session_options(url, f"-c search_path={schema}"))
+    try:
+        holder.execute("lock table sync_incidents in access exclusive mode")
+        monkeypatch.setattr(db_mod, "connect", lambda **k: _OneConn(conn))
+        monkeypatch.setattr(worker, "WRITE_TIMEOUT", "300ms")
+        state = worker.State()
+        state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+        state.rounds, state.last_round_at = 1, (OPEN + timedelta(hours=1)).isoformat()
+        waited: list = []
+        lines: list[str] = []
+        writer = worker.record_failed_round(state, waited, log=lines.append)
+        assert writer is not None, "the round loop started the write in the background"
+        writer.join(60)
+        assert not writer.is_alive(), "the incident write stalled on the lock"
+        assert waited and waited[0][1][0]["exit_code"] == 3, "the round stayed in the pending list"
+        assert any("57014" in line for line in lines), lines   # the write gave up on its timeout
+        holder.rollback()                                      # the lock is gone
+        assert page_conn.execute("select count(*) from sync_incidents").fetchone()[0] == 0
+        # A later round writes the waited one, as it would after any database refusal.
+        state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
+        state.rounds, state.last_round_at = 2, (OPEN + timedelta(hours=2)).isoformat()
+        writer = worker.record_failed_round(state, waited, log=lambda _: None)
+        writer.join(60)
+        assert waited == []
+        assert page_conn.execute("select count(*) from sync_incidents").fetchone()[0] == 1
+    finally:
+        holder.rollback()
+        holder.close()
+
+
+def test_a_silent_database_cannot_stall_the_round_loop(monkeypatch):
+    """A connection that goes silent after login blocks every write on it, and no server-side
+    timeout can fire: the query never reaches a server. The incident write runs off the
+    scheduling path, on a connection bounded at the TCP layer (`worker.INCIDENT_TCP`), so the
+    round loop still schedules its next round while the writer waits."""
+    import vending.db as db_mod
+
+    gate = threading.Event()
+    asked: dict = {}
+
+    class Silent:
+        """A connection whose login succeeds and whose first execute never answers."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def transaction(self):
+            return self
+
+        def execute(self, *a, **k):
+            if not gate.is_set():
+                gate.wait()                     # silent: no answer ever comes
+            return None
+
+    def connect(**options):
+        asked.update(options)
+        return Silent()
+
+    monkeypatch.setattr(db_mod, "connect", connect)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://silent.invalid/vending")   # the writer runs
+    monkeypatch.setattr(worker, "_slot_lock", lambda: None)
+    lines: list[str] = []
+    outcome: dict = {}
+
+    def sleep_until_next_round(seconds):
+        gate.set()                              # the loop got past the stuck write...
+        raise worker.Stopped()                  # ...to its next round: stop there
+
+    def run():
+        outcome["code"] = worker.main(["--every", "60", "--at-minute", "off", "--port", "0"],
+                                     jobs=[("sync_history", lambda: 3)],
+                                     sleep=sleep_until_next_round, log=lines.append)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(60)
+    assert not thread.is_alive(), "the round loop stalled on the incident write"
+    assert outcome.get("code") == 0
+    assert any("next round at" in line for line in lines), lines   # it scheduled the next round
+    assert not any("sync_incidents:" in line for line in lines), lines   # and logged no failure
+    # The writer was asked to connect with the TCP-level bounds, and it finished once the gate opened
+    # (the worker's exit waits for it, bounded).
+    assert asked == worker.INCIDENT_TCP, asked
+    assert worker._WRITER is None
+
+
+class _Blocking:
+    """`vending.db.connect` stood in for: a connection that logs in, then holds every write until
+    `gate` opens, and keeps the rounds it was handed (`written`)."""
+
+    def __init__(self, gate, written):
+        self.gate, self.written = gate, written
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def transaction(self):
+        return self
+
+    def execute(self, query, params=()):
+        self.gate.wait(60)
+        if "insert into sync_incidents" in query:
+            self.written.append(params[0])
+
+
+def test_one_writer_at_a_time_and_the_rounds_stay_queued_until_written(monkeypatch):
+    """While a write hangs, the rounds stay in the wait list (nothing is lost if it never lands), a
+    later round starts no second writer, and once the database answers the one writer writes them
+    all and the list empties."""
+    import vending.db as db_mod
+
+    gate, written = threading.Event(), []
+    monkeypatch.setattr(db_mod, "connect", lambda **k: _Blocking(gate, written))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://silent.invalid/vending")
+    waited: list = []
+    state = worker.State()
+    state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+    state.rounds, state.last_round_at = 1, (OPEN + timedelta(hours=1)).isoformat()
+    writer = worker.record_failed_round(state, waited, log=lambda _: None)
+    try:
+        assert writer is not None and writer.is_alive(), "the write is in flight"
+        assert [at for at, _ in waited] == [state.last_round_at], "the round stays queued meanwhile"
+        first = state.last_round_at
+        state.rounds, state.last_round_at = 2, (OPEN + timedelta(hours=2)).isoformat()
+        assert worker.record_failed_round(state, waited, log=lambda _: None) is None, "one writer only"
+        assert [at for at, _ in waited] == [first, state.last_round_at]
+    finally:
+        gate.set()
+    writer.join(60)
+    assert not writer.is_alive() and waited == []
+    assert sorted(set(written)) == [first, state.last_round_at], written
+    assert worker._WRITER is None
+
+
+def test_the_incident_connection_is_bounded_at_the_tcp_layer(conn):
+    """The bounds reach libpq: a real connection opened the way the writer opens it reports them."""
+    from vending import db
+
+    with db.connect(**worker.INCIDENT_TCP) as bounded:
+        given = bounded.info.get_parameters()
+    for name, value in worker.INCIDENT_TCP.items():
+        assert given.get(name) == str(value), (name, given)
+
+
+def test_a_check_is_windowed_by_when_it_was_answered(conn, page_conn, opened):
+    """The banner and the log use the same event time (`answered_at`, falling back to `sent_at`):
+    a check sent before the opening but answered after it is a competition incident in both, and
+    the log's row carries the moment it was answered."""
+    sent = OPEN - timedelta(hours=2)
+    answered = OPEN + timedelta(hours=1)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-12-01', 'test', 's0', %s, '{}', %s, 200, '{}', true, %s)",
+        (sent, sent, answered,
+         Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    snap = dashboard.snapshot(page_conn, NOW)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "tracking_outside" and alert["at"] == answered
+    row, = [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "books_outside"]
+    assert row["at"] == answered and "cash" in row["note"]
+    assert snap["incidents"]["data"]["total"] == 1

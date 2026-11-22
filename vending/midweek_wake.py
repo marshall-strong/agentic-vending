@@ -39,7 +39,8 @@ sync round, on a Monday or Tuesday Eastern:
 4. **Wake** only when the saved margin beats the visit's own cost as the planner
    defines it (`Cost.visit_fee_cents`, config `midweek_fee_cents`). The purchases are
    stock that keeps its cost (A5), not a cost of the visit; whether the balance can pay
-   for them is the planner's `insufficient_balance` gate in step 2.
+   for them, with the spendable floor left, is the planner's `insufficient_balance` and
+   `below_spendable_floor` gates in step 2.
 
 Nothing runs before the competition's start Eastern (`start.on_or_after_start`): fall
 data never wakes anybody. A stale poll, no rate, no price or an unknown cost for what
@@ -53,9 +54,10 @@ are one transaction. `eligible` is the one path to a wake: the worker's pass (`c
 agent's briefing (`vending.briefing`) show the row, so the next run sees why.
 
 **Starting the run.** `request_midweek_run` is the hook. Today it records the request
-on this week's row and logs it; it starts nothing. The scheduled agent (#224) should
-call it, or read `current` for a row with no `requested_at`, once both PRs merge,
-and start `vending.agent.run` with the row's reason in its briefing.
+on this week's row and logs it; it starts nothing. The scheduled agent runs (#224,
+`vending.agent_schedule`) run only at their set times and don't read this yet; a later
+change can have them call it, or read `current` for a row with no `requested_at`, and
+start `vending.agent.run` with the row's reason in its briefing.
 
 `window`, `at_risk` and `decide` are pure: `decide` takes the gathered facts and a
 clock and touches no database. `evaluate` gathers; `record` and `request_midweek_run`
@@ -378,8 +380,8 @@ def eligible(conn, now: datetime | None = None, log=print) -> Wake | None:
 def current(conn, now: datetime | None = None) -> dict | None:
     """This week's wake-up row (Eastern week, Saturday start), as a dict, or None.
 
-    The dashboard and the briefing read this to show why the week was woken; the
-    scheduled agent (#224) reads it for a row whose `requested_at` is still null.
+    The dashboard and the briefing read this to show why the week was woken. The
+    scheduled agent runs (#224) don't read it yet (see "Starting the run" above).
     """
     now = now or ledger.db_now(conn)
     week = ledger.week_of(now.astimezone(EASTERN))
@@ -411,7 +413,7 @@ def request_midweek_run(conn, reason: str, *, by: str | None = None,
                         now: datetime | None = None, log=print) -> bool:
     """Ask for a midweek agent run, with `reason` as what its briefing should carry.
 
-    The hook the scheduled agent (#224) will wire up. Today it only records the
+    The hook for the scheduled agent runs (#224), not wired up yet. Today it only records the
     request on this week's wake-up row and logs it: nothing starts a run. True when
     the request was recorded now; False when this week has no wake-up row, or its
     request is already recorded, so there is nothing to start a run for.

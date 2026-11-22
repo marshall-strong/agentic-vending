@@ -46,6 +46,17 @@
    "detail": null,
    "cost_usd": null
   },
+  "last_finished": {
+   "id": 5,
+   "started_at": {
+    "$datetime": "2026-12-07T14:00:00+00:00"
+   },
+   "finished_at": {
+    "$datetime": "2026-12-07T14:12:00+00:00"
+   },
+   "status": "submitted"
+  },
+  "stuck_run": null,
   "last_action": {
    "at": {
     "$datetime": "2026-12-09T14:53:00+00:00"
@@ -2563,6 +2574,20 @@
    ]
   }
  },
+ "tracking": {
+  "ok": true,
+  "data": {
+   "on": false,
+   "at": "06:00",
+   "wrong_setting": false,
+   "checks": [],
+   "answered": null
+  }
+ },
+ "tracking_alert": {
+  "ok": true,
+  "data": null
+ },
  "purchase_requests": {
   "ok": true,
   "data": [
@@ -2769,6 +2794,22 @@
    "requested_by": "midweek_wake"
   }
  },
+ "scheduled_runs": {
+  "ok": true,
+  "data": {
+   "latest": null,
+   "incidents": [],
+   "setting_ok": true,
+   "setting_live": false
+  }
+ },
+ "submissions": {
+  "ok": true,
+  "data": []
+ },
+ "opened_at": {
+  "$datetime": "2026-12-02T15:00:00+00:00"
+ },
  "key_dates": {
   "ok": true,
   "data": {
@@ -2953,6 +2994,7 @@
      "price": "2.50",
      "unit_cost": null,
      "cost_basis": null,
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": null,
      "floor_from": [],
@@ -2995,6 +3037,7 @@
      "price": "2.50",
      "unit_cost": "1.45",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.60",
      "floor_from": [
@@ -3030,6 +3073,7 @@
      "price": "2.50",
      "unit_cost": "1.45",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.60",
      "floor_from": [
@@ -3065,6 +3109,7 @@
      "price": "2.50",
      "unit_cost": "1.40",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.55",
      "floor_from": [
@@ -3100,6 +3145,7 @@
      "price": "1.75",
      "unit_cost": "0.68",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "0.75",
      "floor_from": [
@@ -3135,6 +3181,7 @@
      "price": "1.75",
      "unit_cost": "0.63",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "0.70",
      "floor_from": [
@@ -3179,6 +3226,7 @@
      "price": "2.75",
      "unit_cost": "1.20",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.30",
      "floor_from": [
@@ -3214,6 +3262,7 @@
      "price": "2.50",
      "unit_cost": "1.30",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.45",
      "floor_from": [
@@ -3249,6 +3298,7 @@
      "price": "2.50",
      "unit_cost": null,
      "cost_basis": null,
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": null,
      "floor_from": [],
@@ -3291,6 +3341,7 @@
      "price": "2.50",
      "unit_cost": null,
      "cost_basis": null,
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": null,
      "floor_from": [],
@@ -3324,6 +3375,7 @@
      "price": "2.50",
      "unit_cost": "1.40",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.55",
      "floor_from": [
@@ -3359,6 +3411,7 @@
      "price": "3.00",
      "unit_cost": null,
      "cost_basis": null,
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": null,
      "floor_from": [],
@@ -3401,6 +3454,7 @@
      "price": "3.25",
      "unit_cost": "1.75",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.90",
      "floor_from": [
@@ -3436,6 +3490,7 @@
      "price": "2.50",
      "unit_cost": "1.15",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.25",
      "floor_from": [
@@ -3471,6 +3526,7 @@
      "price": "4.00",
      "unit_cost": "2.60",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "2.85",
      "floor_from": [
@@ -3506,6 +3562,7 @@
      "price": "2.25",
      "unit_cost": "0.95",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.05",
      "floor_from": [
@@ -3541,6 +3598,7 @@
      "price": "2.50",
      "unit_cost": "1.40",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.55",
      "floor_from": [
@@ -3576,6 +3634,7 @@
      "price": "2.50",
      "unit_cost": "1.45",
      "cost_basis": "receipt",
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": "1.60",
      "floor_from": [
@@ -3611,6 +3670,7 @@
      "price": "2.75",
      "unit_cost": null,
      "cost_basis": null,
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": null,
      "floor_from": [],
@@ -3644,6 +3704,7 @@
      "price": "2.50",
      "unit_cost": null,
      "cost_basis": null,
+     "expected_from": null,
      "ceiling": "6.50",
      "floor": null,
      "floor_from": [],
@@ -3727,5 +3788,6 @@
    "text": "Midweek wake-up: Slots 16, 17 and 25 are projected to sell out before Friday's restock (16: empty now; 17: 1 on hand at 1.4 a class day; 25: empty now). A midweek visit requested now plans on Wednesday afternoon; the planner prices it at up to $85.84 with the $25.00 fee, and the sales it would save before Friday are worth $31.02 in margin at the most we pay, more than the fee (docs/restock-policy.md, section 2). A midweek run was requested."
   }
  ],
+ "alerts": [],
  "demo": true
 }

@@ -243,6 +243,52 @@ def test_first_week_end_to_end(schema_url, monkeypatch, tmp_path):
     assert {p.name for p in out.iterdir()} >= {"season.json", "weeks.json", "runs.json", "daily_slots.csv"}
 
 
+def test_a_season_run_settles_an_open_submission_from_its_own_bridge(schema_url, monkeypatch):
+    """Sol round 3, finding 6: a season's agent run checks open submissions against the season's bridge, not
+    the real one. A submission whose POST got a validated 201 that was never recorded is settled from it."""
+    from psycopg.types.json import Jsonb
+
+    from tests.conftest import open_in
+    from vending import db
+    from vending.simulate import season
+    from vending.simulate.bridge import Filed
+
+    url, schema = schema_url
+    monkeypatch.setattr(db, "connect", lambda: open_in(url, schema))
+    monkeypatch.setenv("VENDING_TOOLS", "built")
+    with open_in(url, schema) as conn:
+        conn.execute("delete from slot_assignment")
+        st = season.new_state(11, "scripted", "claude-opus-5-5", "medium", False, 3, EXAMPLE)
+        with patched(st.clock):
+            season.setup(conn, st, Decimal(1), Decimal(1))
+            body = {"lines": [], "off_cycle": False}
+            st.bridge.requests["pr_sim_seed"] = Filed("pr_sim_seed", body, st.clock.now())
+            conn.execute("insert into purchase_submissions (plan_hash, body, status, created_id)"
+                         " values ('h', %s, 'sending', 'pr_sim_seed')", (Jsonb(body),))
+            season.run_agent(conn, st, "weekly", Decimal(1), Decimal(1), Decimal(0))
+        assert ("GET", "/api/v1/purchase-requests/pr_sim_seed") in st.bridge.calls
+        assert conn.execute("select status, request_id, resolved_by from purchase_submissions"
+                            " where created_id = 'pr_sim_seed'").fetchone() == ("accepted", "pr_sim_seed", "auto-check")
+
+
+def test_a_season_resolves_a_refused_post_as_a_person_would(conn):
+    """The submit tool leaves a refused POST `unknown`; the season knows its bridge filed nothing, so it resolves
+    the row as never filed, and the next run isn't blocked."""
+    from psycopg.types.json import Jsonb
+
+    from vending import submissions
+    from vending.simulate import season
+
+    refused, other = {"lines": [{"slot": "12"}], "off_cycle": False}, {"lines": [], "off_cycle": True}
+    for body in (refused, other):
+        conn.execute("insert into purchase_submissions (plan_hash, body, status) values ('h', %s, 'unknown')",
+                     (Jsonb(body),))
+    assert season.settle_refused(conn, [{"status": 422, "body": refused}, {"status": 404, "body": other}]) == [1]
+    assert conn.execute("select status, resolved_by from purchase_submissions order by id").fetchall() == [
+        ("not_filed", season.BY), ("unknown", None)]
+    assert submissions.unresolved(conn).code == "submission_unresolved"
+
+
 def test_a_seasons_slots_come_from_its_assignment(tmp_path):
     from vending.simulate import season
     good = tmp_path / "slots.json"
@@ -350,6 +396,7 @@ def test_run_agent_puts_the_servers_globals_back(monkeypatch):
 
     async def fake_run(**_k):
         seen.append(server.bridge())
+        assert _k["bridge"]() is server.bridge()        # startup recovery reads the season's bridge too
         assert server._conn is None                      # nothing cached from before this run
         server._conn = _FakeConn()                       # what the tools would cache
         opened.append(server._conn)

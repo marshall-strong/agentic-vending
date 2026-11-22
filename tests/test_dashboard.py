@@ -13,6 +13,7 @@ from http.server import ThreadingHTTPServer
 
 import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 
 from tests.conftest import CONNECT_TIMEOUT, TEST_NOW, TEST_SLOTS, store_poll
 from vending import agent_runs, dashboard, ledger
@@ -108,6 +109,19 @@ def test_a_fresh_database_shows_halted_and_empty_panels(page_conn):
     assert all(snap[k] == {"ok": True, "data": []}
                for k in ("runs", "activity", "purchase_requests", "catalog_requests"))
     assert "No plan yet" in dashboard.render(snap)
+
+
+def test_an_open_submission_says_orders_are_blocked_and_what_to_run(conn, page_conn):
+    conn.execute("insert into purchase_submissions (at, plan_hash, body, status, detail) values"
+                 " (now() - interval '3 hours', 'h', '{}', 'unknown', 'TimeoutError: <raw bridge text>')")
+    snap = dashboard.snapshot(page_conn)
+    [blocked] = [a for a in snap["attention"] if "Orders are blocked" in a["text"]]
+    assert blocked["level"] == "bad" and "(unknown, 3 h ago)" in blocked["text"]
+    assert "python -m vending.submissions resolve " in blocked["text"] and "raw bridge text" not in blocked["text"]
+    page = dashboard.render(snap)
+    assert "Orders are blocked" in page and "<code>python -m vending.submissions resolve " in page
+    conn.execute("update purchase_submissions set status = 'not_filed'")
+    assert not any("Orders are blocked" in a["text"] for a in dashboard.snapshot(page_conn)["attention"])
 
 
 def test_plan_compares_with_the_run_before(conn, page_conn, open_ledger):
@@ -1834,3 +1848,226 @@ def test_lane_products_skips_a_product_that_is_not_text():
                                                 {"slot": "21", "now": {"product": "CELSIUS-12CAN"}}]}},
     }
     assert machine_art.lane_products(snap, ["12", "14", "16", "18", "21"]) == ["CELSIUS-12CAN", "RB-8CAN"]
+
+
+# --- Failure banner (#220) -----------------------------------------------------------------------
+
+SECRET = "connection to host db.private.internal refused for user vending_rw"
+
+
+def _syncs(*jobs, at=None):
+    """A worker round like `vending.worker.State.public` hands the page (`vending.worker.run_round`):
+    `(job name, fields)` pairs, `fields` holding `exit_code` and, when it has none, an `outcome`."""
+    at = at or (MONDAY - timedelta(minutes=5))
+    return {"started_at": (at - timedelta(hours=1)).isoformat(), "rounds": 3,
+            "last_round_at": at.isoformat(), "next_round_at": MONDAY.isoformat(),
+            "results": [{"job": job, "started_at": at.isoformat(), "seconds": 1.0,
+                         "outcome": "finished", **fields} for job, fields in jobs]}
+
+
+def test_a_failed_sync_round_shows_the_banner(conn, page_conn, open_ledger):
+    syncs = _syncs(("slots_check", {"exit_code": 0}), ("sync_history", {"exit_code": 3}),
+                   ("sync_catalog", {"exit_code": None, "outcome": "timed out"}))
+    snap = dashboard.snapshot(page_conn, MONDAY, syncs=syncs)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "sync_failed"
+    assert alert["at"] == MONDAY - timedelta(minutes=5)
+    assert "`sync_history` exit 3" in alert["text"] and "`sync_catalog` timed out" in alert["text"]
+    page = dashboard.render(snap)
+    assert '<div class="failbanner" role="alert">' in page
+    assert "Sync round failed" in page and "sync_history" in page and "timed out" in page
+
+
+def test_no_banner_when_everything_is_fine(conn, page_conn, open_ledger):
+    syncs = _syncs(("slots_check", {"exit_code": 0}), ("sync_history", {"exit_code": 0}),
+                   ("sync_requests", {"exit_code": 0}), ("sync_catalog", {"exit_code": 0}),
+                   ("sync_product_requests", {"exit_code": 0}))
+    snap = dashboard.snapshot(page_conn, MONDAY, syncs=syncs)
+    assert snap["alerts"] == []
+    page = dashboard.render(snap)
+    assert '<div class="failbanner"' not in page and 'role="alert"' not in page
+
+
+def test_a_fresh_database_shows_no_banner(page_conn):
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert snap["alerts"] == []
+    assert '<div class="failbanner"' not in dashboard.render(snap)
+
+
+def test_a_failed_run_shows_the_banner_without_its_error_text(conn, page_conn, open_ledger):
+    run = _live_run(conn)
+    agent_runs.finish(conn, run, "failed", detail=SECRET)
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "run_failed"
+    assert alert["text"] == f"Run #{run} failed. See Runs below."
+    page = dashboard.render(snap)
+    assert SECRET not in page and SECRET not in dashboard.to_json(snap)
+    assert "Agent run failed" in page
+
+
+@pytest.mark.parametrize("status,kind", [("halted", "run_halted"), ("running", "run_stuck")])
+def test_a_halted_or_stuck_latest_run_shows_the_banner(conn, page_conn, open_ledger, status, kind):
+    run = _live_run(conn)
+    if status == "running":
+        conn.execute("update agent_runs set started_at = %s where id = %s",
+                     (MONDAY - dashboard.STALE_RUN - timedelta(minutes=1), run))
+    else:
+        agent_runs.finish(conn, run, status, detail="The halt switch is on.")
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == kind
+    assert dashboard.render(snap).count('role="alert"') == 1
+
+
+def test_a_tracking_check_outside_shows_the_banner_and_an_incident(conn, page_conn, open_ledger):
+    at = MONDAY - timedelta(hours=1)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-09', 'test', 's1', %s, '{}', %s, 200, %s, true, %s)",
+        (at, at, at + timedelta(minutes=5), Jsonb({"error": SECRET, "detail": SECRET}),
+         Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "tracking_outside"
+    assert alert["text"].startswith("The bridge's tracking check said cash outside")
+    page = dashboard.render(snap)
+    assert "Tracking check outside" in page and "cash" in page
+    assert SECRET not in page and SECRET not in dashboard.to_json(snap)
+    row, = snap["incidents"]["data"]["rows"]
+    assert row["kind"] == "books_outside" and "cash" in row["note"] and SECRET not in row["note"]
+    assert snap["incidents"]["data"]["total"] == 1
+    # The next check coming back all within clears the banner.
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-09', 'test', 's2', %s, '{}', %s, 200, '{}', true, %s)",
+        (MONDAY, MONDAY, MONDAY,
+         Jsonb({k: "within" for k in ("cash", "sales_tax_owed", "coil", "back_stock")})))
+    assert dashboard.snapshot(page_conn, MONDAY)["alerts"] == []
+
+
+def test_the_missed_run_hook_stays_quiet_until_a_schedule_is_recorded(page_conn):
+    """Nothing records an expected run schedule yet (`agent_runs` holds runs that happened; the
+    worker's round times are memory only), so the hook returns None and no alert appears."""
+    assert dashboard._missed_scheduled_run({"syncs": None}) is None
+    assert dashboard.snapshot(page_conn, MONDAY)["alerts"] == []
+
+
+def test_a_retry_still_running_keeps_the_last_failure_banner(conn, page_conn, open_ledger):
+    """A retry that is still running must not clear the alert of the run before it - neither a
+    finished run's failure (the banner stays until a later run FINISHES successfully) nor a run
+    left `running` past two hours (starting a retry doesn't resolve it; the retry finishing
+    does)."""
+    failed = _live_run(conn)
+    conn.execute("update agent_runs set started_at = %s where id = %s",
+                 (MONDAY - timedelta(hours=8), failed))
+    agent_runs.finish(conn, failed, "failed", detail=SECRET)
+    retry = agent_runs.start(conn, mode="live", model="m")
+    conn.execute("update agent_runs set started_at = %s where id = %s",
+                 (MONDAY - timedelta(hours=1), retry))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    [alert] = [a for a in snap["alerts"] if a["kind"] == "run_failed"]
+    assert alert["text"] == f"Run #{failed} failed. See Runs below."
+    # The retry finishing successfully clears it.
+    agent_runs.finish(conn, retry, "submitted")
+    assert not [a for a in dashboard.snapshot(page_conn, MONDAY)["alerts"] if a["kind"] == "run_failed"]
+
+    later = MONDAY + timedelta(hours=5)
+    # A run left `running` past the stale bound banners too, and it is the newest thing that
+    # happened: before any retry, the stuck run itself carries the line. (It starts inside the
+    # ledger window, after the finished runs above.)
+    stuck = agent_runs.start(conn, mode="live", model="m")
+    conn.execute("update agent_runs set started_at = %s where id = %s",
+                 (MONDAY + timedelta(hours=2), stuck))
+    [alert] = [a for a in dashboard.snapshot(page_conn, later)["alerts"] if a["kind"] == "run_stuck"]
+    assert alert["text"].startswith(f"Run #{stuck} has said `running` for")
+    # Starting a retry doesn't clear it: the stuck row is still unresolved. The newest run is the
+    # retry, which used to hide the stuck one; the last finished run started before it.
+    after = agent_runs.start(conn, mode="live", model="m")
+    conn.execute("update agent_runs set started_at = %s where id = %s",
+                 (MONDAY + timedelta(hours=4), after))
+    [alert] = [a for a in dashboard.snapshot(page_conn, later)["alerts"] if a["kind"] == "run_stuck"]
+    assert alert["text"].startswith(f"Run #{stuck} has said `running` for")
+    assert not [a for a in dashboard.snapshot(page_conn, later)["alerts"] if a["kind"] == "run_failed"]
+    # The retry finishing successfully resolves the stuck run: the banner is clear.
+    agent_runs.finish(conn, after, "submitted")
+    assert dashboard.snapshot(page_conn, later)["alerts"] == []
+
+
+def test_run_and_tracking_alerts_stay_inside_the_ledger_window(conn, page_conn, open_ledger):
+    """A failure from before the ledger's opening is development spend, not a competition incident,
+    so it never banners (`open_ledger` opens MONDAY - 7 days). A sync round is current state, so
+    it banners whenever it ran."""
+    before = MONDAY - timedelta(days=8)
+    run = _live_run(conn)
+    conn.execute("update agent_runs set started_at = %s where id = %s", (before, run))
+    agent_runs.finish(conn, run, "failed", detail=SECRET)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-01', 'test', 's0', %s, '{}', %s, 200, '{}', true, %s)",
+        (before, before, before + timedelta(minutes=5),
+         Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    assert dashboard.snapshot(page_conn, MONDAY)["alerts"] == []
+    # The same failures after the opening banner.
+    late = MONDAY - timedelta(hours=1)
+    late_run = _live_run(conn)
+    conn.execute("update agent_runs set started_at = %s where id = %s", (late, late_run))
+    agent_runs.finish(conn, late_run, "failed", detail=SECRET)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-09', 'test', 's1', %s, '{}', %s, 200, '{}', true, %s)",
+        (late, late, late + timedelta(minutes=5),
+         Jsonb({"cash": "within", "sales_tax_owed": "within", "coil": "within", "back_stock": "outside"})))
+    kinds = sorted(a["kind"] for a in dashboard.snapshot(page_conn, MONDAY)["alerts"])
+    assert kinds == ["run_failed", "tracking_outside"]
+
+
+def test_tracking_results_are_read_through_the_allowlist(conn, page_conn, open_ledger):
+    """`results` is the bridge's JSON: an array there must not crash the incident log (which would
+    hide all of it), and nothing undocumented reaches the public JSON. A newest check whose results
+    cannot be read names nothing and is skipped, so it cannot clear a known `outside` alert: the
+    newest valid check decides the banner."""
+    at = MONDAY - timedelta(hours=2)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-09', 'test', 's2', %s, '{}', %s, 200, '{}', true, %s)",
+        (at, at, at + timedelta(minutes=5), Jsonb(["cash", "outside"])))
+    earlier = MONDAY - timedelta(hours=3)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-11-09', 'test', 's1', %s, '{}', %s, 200, '{}', true, %s)",
+        (earlier, earlier, earlier + timedelta(minutes=5),
+         Jsonb({"cash": "outside", "smuggled": "outside", "coil": "within"})))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    # The newest check's results aren't the documented object, so it names nothing and is skipped;
+    # the newest valid check decides, and its verdicts survive the same allowlist (`smuggled` doesn't).
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "tracking_outside"
+    assert alert["text"].startswith("The bridge's tracking check said cash outside")
+    assert snap["tracking_alert"]["ok"]
+    assert snap["tracking_alert"]["data"]["results"] == {"cash": "outside", "coil": "within"}
+    # The log survives the array and reads the same check through the same allowlist.
+    row, = [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "books_outside"]
+    assert "cash" in row["note"] and "smuggled" not in row["note"]
+    assert snap["incidents"]["data"]["total"] == 1
+    assert "smuggled" not in dashboard.to_json(snap)
+
+
+def test_the_halted_banner_reports_the_switch_as_it_is_now(conn, page_conn, open_ledger):
+    """The run's halt is history; the switch line comes from `config` now, and a finished run shows
+    when it finished."""
+    run = _live_run(conn)
+    agent_runs.finish(conn, run, "halted", detail=SECRET)
+    finished = conn.execute("select finished_at from agent_runs where id = %s", (run,)).fetchone()[0]
+    [alert] = dashboard.snapshot(page_conn, MONDAY)["alerts"]
+    assert alert["kind"] == "run_halted" and alert["at"] == finished
+    assert alert["text"] == f"Run #{run} ended halted. The halt switch is on."
+    conn.execute("update config set value = 'false' where key = 'halted'")
+    [alert] = dashboard.snapshot(page_conn, MONDAY)["alerts"]
+    assert alert["text"] == f"Run #{run} ended halted. The halt switch is off now."

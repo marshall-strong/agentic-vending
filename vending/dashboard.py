@@ -14,6 +14,9 @@ machine that runs it. The Container App serves the same page to anyone at
 read. Both routes scope the data to the ledger opening and current assignment.
 
 The page, top to bottom:
+ - A failure banner at the very top when something is failing now (#220): the worker's latest
+   sync round, the latest agent run, and a tracking check that came back `outside`, one line
+   each in plain words and Eastern time, never the failure's own text.
  - The status bar, one row of six cells: the verdict (OK / check / problem) with the halt
    switch and the latest run; when the machine was last polled and the next sync; the order
    cutoff countdown; spendable (from the ledger once it has opened; before that, only that
@@ -73,8 +76,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
 from vending import (capacity, db, leaderboards, machine_art, midweek_wake, money_panel, plan_rounds, report_card,
-                     settings, slot_counts, visits)
-from vending import agent_runs, key_dates, pricing_panel
+                     settings, slot_counts, tracking, visits)
+from vending import agent_runs, agent_schedule, key_dates, pricing_panel, tracking_daily
 from vending import stock as stock_mod
 from vending import planner
 from vending.planner import IN_STORE_CUTOFF
@@ -262,11 +265,24 @@ def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None, p
                                       " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run and run["status"] == "running" and now - run["started_at"] > STALE_RUN:
         run["stale"] = True
+    # The latest run still `running` past the stale bound (`STALE_RUN`), whatever the newest run
+    # is: a run the worker probably lost stays on the banner while a retry runs, and only a run
+    # finishing resolves it (`build_alerts`).
+    stuck = _optional(conn, "select id, started_at from agent_runs"
+                            " where mode = 'live' and started_at <= %s and started_at < %s"
+                            " and status = 'running'"
+                            " order by started_at desc, id desc limit 1", (now, now - STALE_RUN))
+    # The latest run that FINISHED, whatever it ended as. A failure banner stays until a later run
+    # finishes successfully, so a retry that is still running must not hide the run before it.
+    last_finished = _optional(conn, "select id, started_at, finished_at, status from agent_runs"
+                                    " where mode = 'live' and started_at <= %s and status <> 'running'"
+                                    " order by started_at desc, id desc limit 1", (now,))
     last = _optional(conn, f"select at, kind, tool, outcome from action_log where {ACTIVITY_VISIBLE}"
                            " order by at desc, id desc limit 1", (now, opening, list(PRE_OPENING_WRITES)))
     return {"halted": halted, "halt_changed_at": flag and flag["updated_at"],
             "halt_changed_by": flag and flag["updated_by"], "latest_run": run,
-            "last_action": last, "next_cutoff": next_cutoff(now)}
+            "last_finished": last_finished, "stuck_run": stuck, "last_action": last,
+            "next_cutoff": next_cutoff(now)}
 
 
 def _our_slots(conn: psycopg.Connection) -> dict:
@@ -602,11 +618,12 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
         conn.execute("set transaction isolation level repeatable read, read only")
         # Event timestamps come from Postgres. Use its clock for the same transaction's cutoff.
         now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
-        snap, assignment_at = _snapshot(conn, now, public)
+        snap, assignment_at = _snapshot(conn, now, public, syncs)
     snap["syncs"] = syncs
     hide_errors(snap, public=public)
     only_ours(snap, assignment_at)
     snap["attention"] = attention(snap)
+    snap["alerts"] = build_alerts(snap)
     return snap
 
 
@@ -851,8 +868,9 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
         run["detail"] = OLD_ASSIGNMENT
     for name, panel in snap.items():
         # Key dates' texts are fixed messages, dates and counts that name no selection; scoping them would
-        # hide the slot check's instructions exactly when no assignment can be read.
-        if name not in ("runs", "pricing", "report_cards", "key_dates") or not panel["ok"]:
+        # hide the slot check's instructions exactly when no assignment can be read. The tracking check's
+        # are our fixed words and the four verdicts (`tracking_daily.latest`), which name no selection either.
+        if name not in ("runs", "pricing", "report_cards", "key_dates", "tracking") or not panel["ok"]:
             snap[name] = _scope_text(panel, ours)
     if (cards := snap.get("report_cards")) and cards["ok"]:
         # Its text is the scorer's and ours, about a plan already cut to our assignment
@@ -868,6 +886,20 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
                     price.update(_scope_text(fields, ours))
 
 
+# The worker's scheduled agent runs (`vending.agent_schedule`), read from the table, not the worker's /health,
+# so turning the schedule off hides none. Two reads, so neither crowds out the other: the newest row, however
+# old, and every failed, missed or halted row of the last week, with any still `running`, and, however old, any
+# whose agent run still says `running` in agent_runs after the schedule recorded its ending (that ending
+# couldn't be written there). No `detail`: a failed one's can hold an error. And the database's
+# `agent_schedule_mode`, to say when it isn't a mode, or says `live` (run as dry-run).
+SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.status as agent_status"
+                     " from agent_schedule s left join agent_runs r on r.id = s.run_id")
+SCHEDULED_LATEST_SQL = f"select {SCHEDULED_COLUMNS} order by s.due_at desc limit 1"
+SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS}"
+                           " where (s.due_at > %s and s.outcome in ('failed', 'missed', 'halted'))"
+                           " or s.outcome = 'running' or (s.outcome <> 'running' and r.status = 'running')"
+                           " order by s.due_at desc limit 50")
+SCHEDULED_SETTING_SQL = "select value from config where key = %s"
 # Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
 CATALOG_REQUESTS_SQL = ("select id, requested_at, name, size, status, sku, decision_note"
                         " from product_requests order by requested_at desc, id desc")
@@ -890,7 +922,32 @@ def _catalog_counts(catalog: dict) -> dict:
                                  "unsettled": by_status["sending"] + by_status["unknown"]}}
 
 
-def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> tuple[dict, datetime | None]:
+def _tracking_alert(conn: psycopg.Connection) -> dict | None:
+    """The newest answered tracking check (`tracking_checks`, migration 021) whose verdicts can be
+    read, and which of them said `outside`, or None when no readable check has been answered yet.
+    A newest check whose `results` aren't the bridge's documented verdicts names nothing and is
+    skipped, so a corrupt or undocumented answer cannot clear a known `outside` alert: the newest
+    valid check decides, the same one the incident log reads. Only the verdicts and times are read:
+    the stored request and answer are the bridge's, and never shown or sent."""
+    rows = _rows(conn, "select id, sent_at, answered_at, results from tracking_checks"
+                       " where results is not null and jsonb_typeof(results) = 'object'"
+                       " order by coalesce(answered_at, sent_at) desc, id desc limit 5")
+    for row in rows:
+        # `results` is the bridge's JSON, so it goes through the shared allowlist (`tracking.verdicts`):
+        # only the four documented keys, each only `within`/`outside`, reach the public JSON and the
+        # banner. A row the allowlist leaves empty names nothing and is skipped; a real check is
+        # stored with all four (`tracking._results`), so the first row usually decides.
+        results = tracking.verdicts(row["results"])
+        if not results:
+            continue
+        return {"checked_at": row["answered_at"] or row["sent_at"],
+                "outside": [k for k in tracking.RESULTS if results.get(k) == "outside"],
+                "results": results}
+    return None
+
+
+def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
+              syncs: dict | None = None) -> tuple[dict, datetime | None]:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
     assigned = _optional(conn, "select first_read_at from slot_assignment where id = 1") if slots else None
@@ -906,6 +963,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
                                        f" and started_at {comparison} %s",
                                  (live_since or now,))
     catalog = _panel(lambda: _rows(conn, CATALOG_REQUESTS_SQL))
+    scheduled = _panel(lambda: _isolated(conn, lambda: _scheduled(conn, now)))
     if live_since is None:
         spend = {"ok": True, "data": None}
     elif purchases["ok"]:
@@ -936,11 +994,18 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
         "report_cards": cards,
         "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
             conn, now, cards["data"] if cards["ok"] else None))),
+        "tracking": _panel(lambda: _isolated(conn, lambda: tracking_daily.panel(conn, now))),
+        "tracking_alert": _panel(lambda: _isolated(conn, lambda: _tracking_alert(conn))),
         "purchase_requests": ({"ok": True, "data": purchases["data"][0][:REQUEST_ROWS]}
                               if purchases["ok"] else purchases),
         "catalog_requests": catalog,
         "catalog_counts": _catalog_counts(catalog),
         "midweek_wakeup": _panel(lambda: _guarded(conn, lambda: midweek_wake.current(conn, now))),
+        "scheduled_runs": scheduled,
+        # Open purchase submissions: while any is left, no purchase request can be sent.
+        "submissions": _panel(lambda: _rows(
+            conn, "select id, at, status from purchase_submissions where status in ('sending', 'unknown')"
+                  " order by id")),
     }
     try:
         lock = lock_at()
@@ -948,6 +1013,9 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
         # The assignment panel explains the bad setting. Keep the weekly view available.
         lock = None
     before_lock = lock is not None and now < lock
+    # The ledger-opening boundary the failure banner applies to run and tracking alerts: a failure
+    # from before the opening is development spend, not a competition incident. None until it opens.
+    snap["opened_at"] = live_since
     snap["key_dates"] = key_dates.panel(conn, now, opening, slots, snap["catalog_counts"], lock,
                                         lambda read: _isolated(conn, read))
     if before_lock:
@@ -1056,6 +1124,18 @@ def attention(snap: dict) -> list[dict]:
 
     if (failing := _failing_syncs(snap.get("syncs"), now)) is not None:
         add("bad", failing)
+    for scheduled in _scheduled_runs(snap.get("scheduled_runs"), snap.get("syncs"), now):
+        add(*scheduled)
+
+    open_submissions = snap.get("submissions") or {"ok": True, "data": []}
+    if open_submissions["ok"] and open_submissions["data"]:
+        first = open_submissions["data"][0]
+        named = ", ".join(f"{r['id']} ({r['status']}, {_span(now - r['at'])} ago)" for r in open_submissions["data"])
+        add("bad", f"Orders are blocked: purchase submission {named} may already be on the bridge, so the agent "
+                   "can't send another request until a person settles it. Find out whether the bridge filed it "
+                   "(ask the instructors if no request ID is known), then run "
+                   f"`python -m vending.submissions resolve {first['id']} "
+                   "--request-id ID --by NAME` or `--not-filed --by NAME`.")
 
     catalog = snap["catalog_requests"]
     if catalog["ok"]:
@@ -1067,6 +1147,11 @@ def attention(snap: dict) -> list[dict]:
     money = snap.get("money")
     if money and money["ok"]:
         for level, text in money_panel.attention(money["data"]):
+            add(level, text)
+
+    tracking = snap.get("tracking")
+    if tracking and tracking["ok"]:
+        for level, text in tracking_daily.attention(tracking["data"]):
             add(level, text)
 
     plan = snap.get("plan") or {}
@@ -1106,9 +1191,10 @@ def attention(snap: dict) -> list[dict]:
 
     for key, name in (("plan", "Plan"), ("runs", "Runs"), ("activity", "Tool calls"), ("sales", "Sales"),
                       ("stock", "Stock"), ("purchase_requests", "Purchase requests"),
-                      ("catalog_requests", "Catalog requests"), ("money", "Money"),
+                      ("catalog_requests", "Catalog requests"), ("submissions", "Purchase submissions"),
+                      ("money", "Money"),
                       ("leaderboards", "Leaderboards"), ("report_cards", "Report card"),
-                      ("incidents", "Incident log")):
+                      ("incidents", "Incident log"), ("tracking", "Tracking check")):
         if key in snap and not snap[key]["ok"]:
             add("info", f"{name} isn't available: {snap[key]['why']}")
 
@@ -1123,22 +1209,231 @@ def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
     A job that crashed, timed out or was still running has no exit code; the worker counts it as
     failing too (`State.healthy`), so it is named with its outcome.
     """
-    if not syncs or not syncs.get("rounds"):
+    jobs = report_card.failed_sync_jobs(syncs)
+    if jobs is None:
         return None
-    failed = [r for r in syncs.get("results") or [] if r.get("exit_code") != 0]
-    if not failed:
-        return None
-    jobs = ", ".join(f"`{r.get('job')}` " + (f"exit {r['exit_code']}" if r.get("exit_code") is not None
-                                             else str(r.get("outcome") or "no exit code"))
-                     for r in failed)
     when = ""
-    try:
-        when = f" ({_span(now - datetime.fromisoformat(syncs['last_round_at']))} ago)"
-    except (KeyError, TypeError, ValueError):
-        pass
+    if (round_at := report_card.sync_round_at(syncs)) is not None:
+        when = f" ({_span(now - round_at)} ago)"
+    failed = [r for r in (syncs.get("results") or []) if r.get("exit_code") != 0]
     codes = sorted({r["exit_code"] for r in failed if r.get("exit_code") in SYNC_EXITS})
     meaning = "".join(f" Exit {c}: {SYNC_EXITS[c]}." for c in codes)
     return f"The worker's latest hourly sync{when} failed: {jobs}.{meaning} See `/health`."
+
+
+# --- Failure banner ------------------------------------------------------------------------------
+
+# The banner's lead words per alert kind (`build_alerts`).
+ALERT_LABELS = {"sync_failed": "Sync round failed", "run_failed": "Agent run failed",
+                "run_halted": "Agent run halted", "run_stuck": "Agent run stuck",
+                "tracking_outside": "Tracking check outside", "missed_run": "Scheduled run missed"}
+# Each banner line's group (`data-kind` on the line): during an outage the refresh handler
+# (`SCRIPT`) adds, replaces or removes only the sync line - the one the worker can name without
+# the database - and the run and tracking lines stay until a refresh that read the database.
+ALERT_GROUPS = {"sync_failed": "sync", "run_failed": "run", "run_halted": "run",
+                "run_stuck": "run", "tracking_outside": "tracking", "missed_run": "run"}
+
+
+def build_alerts(snap: dict) -> list[dict]:
+    """What the page-top banner says now: the worker's latest sync round, the latest agent run,
+    and the newest tracking check's verdict. One line each, plain words the code wrote and a
+    time — never a failure's own text, which can quote a row or name the host; the detail stays
+    in the database, `/health` and the container's log. Built from the snapshot alone, so it
+    reads nothing, and `/state.json` carries the same list as `alerts`.
+
+    Run and tracking alerts cover the live competition only: the moment they name must be at or
+    after the ledger's opening (`opened_at`), so a development failure from before it never
+    banners. A sync round is current state, so it banners whenever it ran. A run's failure stays
+    on the banner until a later run FINISHES successfully: a retry that is still running doesn't
+    clear it.
+    """
+    out: list[dict] = []
+
+    def add(kind: str, at: datetime | None, text: str) -> None:
+        out.append({"kind": kind, "at": at, "text": text})
+
+    if (jobs := report_card.failed_sync_jobs(snap.get("syncs"))) is not None:
+        add("sync_failed", report_card.sync_round_at(snap.get("syncs")),
+            f"The worker's latest sync round failed: {jobs}. See `/health`.")
+
+    opened = snap.get("opened_at")
+    status = snap.get("status") or {}
+    run, done = status.get("latest_run"), status.get("last_finished")
+    if run and run.get("stale"):
+        alerts = [("run_stuck", run["started_at"], run["started_at"],
+                   f"Run #{run['id']} has said `running` for {_span(snap['as_of'] - run['started_at'])}: "
+                   "the process probably died.")]
+    elif (stuck := status.get("stuck_run")) and not (done and done["started_at"] > stuck["started_at"]):
+        # The newest run isn't stuck (a newer one started), but an older run is still `running`
+        # past the stale bound and no run has finished since it started: the retry the team began
+        # doesn't resolve it - only a run finishing does.
+        alerts = [("run_stuck", stuck["started_at"], stuck["started_at"],
+                   f"Run #{stuck['id']} has said `running` for {_span(snap['as_of'] - stuck['started_at'])}: "
+                   "the process probably died.")]
+    elif run and run["status"] in ("failed", "halted"):
+        kind, at, text = _run_alert(run, status)
+        alerts = [(kind, run["started_at"], at, text)]
+    elif done and done["status"] in ("failed", "halted"):
+        # The latest run is still going (or none has started): the last finished run's failure
+        # stays visible until a run finishes successfully.
+        kind, at, text = _run_alert(done, status)
+        alerts = [(kind, done["started_at"], at, text)]
+    else:
+        alerts = []
+    for kind, began, at, text in alerts:
+        # The boundary is when the run started: a run from before the opening is development,
+        # whatever happened to it later; the line itself shows when it ended.
+        if opened is not None and (began is None or began >= opened):
+            add(kind, at, text)
+
+    if (check := snap.get("tracking_alert")) and check["ok"] and check["data"] and check["data"]["outside"]:
+        at = check["data"]["checked_at"]
+        if opened is not None and (at is None or at >= opened):
+            outside = ", ".join(check["data"]["outside"])
+            add("tracking_outside", at,
+                f"The bridge's tracking check said {outside} outside: our figures and the bridge's counts "
+                "disagree. Compare with `python -m vending.tracking show`.")
+
+    if (missed := _missed_scheduled_run(snap)) is not None:
+        out.append(missed)
+    return out
+
+
+def _run_alert(run: dict, status: dict) -> tuple[str, datetime, str]:
+    """The banner line for a finished run that failed or ended halted: when the run ended (a
+    finished run's `finished_at`, else when it started), and, for a halt, the switch as it is now
+    (`config`), not as it was when the run ended — a halt the team has since turned off says so."""
+    at = run.get("finished_at") or run["started_at"]
+    if run["status"] == "failed":
+        return "run_failed", at, f"Run #{run['id']} failed. See Runs below."
+    switch = "The halt switch is on." if status.get("halted") else "The halt switch is off now."
+    return "run_halted", at, f"Run #{run['id']} ended halted. {switch}"
+
+
+def _missed_scheduled_run(snap: dict) -> dict | None:
+    """A missed scheduled run would become a banner alert here, and there is none yet.
+
+    Scheduled runs are recorded in `agent_schedule` (#224, `vending.agent_schedule`), and a missed
+    one already shows in Needs attention (`_scheduled_runs`). Wiring it onto the banner is a
+    follow-up: return `{'kind': 'missed_run', 'at': ..., 'text': ...}` here for a run that never
+    started. Until then this returns None and the banner says nothing about missed runs.
+    """
+    return None
+
+
+def outage_alerts(syncs: dict | None) -> list[dict]:
+    """The banner lines answerable with no database: the worker's own latest sync round, the same
+    line the live banner shows. The run and tracking lines need the database, so an outage banner
+    names only the sync round."""
+    return build_alerts({"syncs": syncs, "status": {}, "tracking_alert": None})
+
+
+def outage_page(message: str, alerts: list[dict], outage: bool = False) -> str:
+    """The page `/dashboard` answers with when the database can't be read: why the rest is missing,
+    plus the failure banner the worker knows on its own (`outage_alerts`). The page's refresh
+    handler swaps this banner's sync line in during an outage (`SCRIPT`), so a failed sync round
+    shows without Postgres. `outage` marks the page (`data-sync-ok`) when this is the worker's
+    real outage reply - the database couldn't be read, and the syncs handed over are the worker's
+    own - so the handler can tell it from any other error reply, and from an outage with nothing
+    failing (a recovered sync round, the database still down), which clears a stale line instead
+    of throwing and keeping it. A generic 500 - a bug drawing the page, not an outage - carries
+    neither the marker nor the banner, and what is shown stays."""
+    body = (f'<header class="top">{mascot_svg("problem")}<h1>Agent dashboard</h1>'
+            f'<span class="verdict problem">No data</span></header>'
+            f'<ul class="attention"><li class="bad"><span class="dot">!</span><span>'
+            f"Can't read the database: {_e(message)}. This page tries again every {REFRESH_SECONDS} s."
+            '</span></li></ul>')
+    marker = ' data-sync-ok="1"' if outage else ""
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">'
+            f'<title>Problem &middot; Agent dashboard</title>'
+            f'<style>{STYLE}</style></head><body><main{marker}>{_alerts_html(alerts)}{body}</main></body></html>')
+
+
+def _scheduled(conn: psycopg.Connection, now: datetime) -> dict:
+    """The scheduled runs' panel: the newest row, the last week's problems, and whether the database's
+    `agent_schedule_mode` is one of the three words (`setting_ok`)."""
+    latest = _rows(conn, SCHEDULED_LATEST_SQL)
+    setting = _rows(conn, SCHEDULED_SETTING_SQL, (agent_schedule.DB_MODE_KEY,))
+    return {"latest": latest[0] if latest else None,
+            "incidents": _rows(conn, SCHEDULED_INCIDENTS_SQL, (now - agent_schedule.LOOKBACK,)),
+            "setting_ok": not setting or agent_schedule.valid_database_mode(setting[0]["value"]),
+            "setting_live": bool(setting) and setting[0]["value"] == "live"}
+
+
+# How Needs attention reads a scheduled agent run (`vending.agent_schedule`), by its outcome.
+SCHEDULED = {"failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started in its window"),
+             "halted": ("warn", "was halted: the halt switch was on"), "skipped": ("info", "skipped"),
+             "running": ("info", "is running now")}
+# Each of these stays in Needs attention for a week (`agent_schedule.LOOKBACK`), whatever ran after it.
+SCHEDULED_PROBLEMS = ("failed", "missed", "halted")
+
+
+def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
+    """(level, sentence) on one `agent_schedule` row, or None for an outcome it doesn't know."""
+    outcome = row.get("outcome")
+    if outcome not in SCHEDULED:
+        return None
+    level, what = SCHEDULED[outcome]
+    claimed = row.get("claimed_at")
+    if outcome == "running" and isinstance(claimed, datetime) and now - claimed > agent_schedule.STUCK_AFTER:
+        level, what = "bad", (f"has said `running` for {_span(now - claimed)}, past the agent's deadline: "
+                              "the worker probably stopped mid-run")
+    if outcome == "skipped" and row.get("mode") == "off":
+        what = f"skipped: `{agent_schedule.DB_MODE_KEY}` is off in the database"
+    if outcome != "running" and row.get("agent_status") == "running":
+        level, what = "bad", (f"ended {outcome}, but its agent run still says running in agent_runs: its ending "
+                              "couldn't be recorded there. Record it by hand once you know how it ended")
+    try:
+        due = _eastern(row["due_at"])
+        when = f" due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
+    except (KeyError, TypeError, ValueError, AttributeError):
+        when = ""
+    kind = {"dry-run": "dry run", "live": "live run"}.get(row.get("mode"), "run")
+    run = f" (agent run {int(row['run_id'])})" if isinstance(row.get("run_id"), int) else ""
+    see = "" if outcome in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
+    return level, f"The scheduled {kind}{when} {what}{run}.{see}"
+
+
+SCHEDULE_UNAVAILABLE = ("Scheduled agent run status unavailable: the `agent_schedule` table couldn't be read "
+                        "just now. `python -m vending.agent_schedule` shows the rows.")
+
+
+def _scheduled_runs(panel: dict | None, syncs: dict | None, now: datetime) -> list[tuple[str, str]]:
+    """Needs attention's lines on the scheduled agent runs: a wrong setting (from the worker's /health, or the
+    database's `agent_schedule_mode`), the newest run whatever its outcome and age, and every failed, missed
+    or halted run of the last week and every stuck one (from `agent_schedule`). A panel that couldn't be read
+    says so. Nothing when there is no panel (an old snapshot) or no row yet."""
+    out: list[tuple[str, str]] = []
+    schedule = (syncs or {}).get("agent_schedule")
+    if isinstance(schedule, dict) and schedule.get("mode") == "invalid":
+        out.append(("bad", "Scheduled agent runs are off because a setting is wrong (`AGENT_SCHEDULE_MODE`, "
+                           "`AGENT_SCHEDULE` or `AGENT_SCHEDULE_FROM`). The container's log says which."))
+    data = panel.get("data") if panel is not None and panel.get("ok") else None
+    # Either setting says live: say that it runs as a dry run in this version.
+    if (isinstance(schedule, dict) and schedule.get("setting") == "live") or \
+            (isinstance(data, dict) and data.get("setting_live")):
+        out.append(("info", agent_schedule.LIVE_NOT_ENABLED))
+    if panel is None:
+        return out
+    if not isinstance(data, dict):
+        out.append(("warn", SCHEDULE_UNAVAILABLE))
+        return out
+    if data.get("setting_ok") is False:
+        out.append(("bad", agent_schedule.INVALID_IN_DB))
+    latest = data.get("latest")
+    seen = set()
+    if isinstance(latest, dict) and (line := _scheduled_line(latest, now)) is not None:
+        out.append(line)
+        seen.add(latest.get("due_at"))
+    for row in data.get("incidents") or []:
+        if row.get("due_at") in seen:
+            continue
+        line = _scheduled_line(row, now)
+        if line is not None and line[0] != "info":
+            out.append(line)
+    return out
 
 
 def verdict(items: list[dict]) -> str:
@@ -1987,6 +2282,22 @@ def _attention_html(items: list[dict]) -> str:
     return f'<ul class="attention">{rows}</ul>'
 
 
+def _alerts_html(alerts: list[dict]) -> str:
+    """The page-top failure banner (#220): one line per current failure, or nothing when all is
+    well. The words are the code's own (`build_alerts`), the time is Eastern, and no failure's
+    text reaches it. Each line carries its group (`data-kind`): the refresh handler's outage swap
+    (`SCRIPT`) replaces only the sync line, the one the worker can name without the database."""
+    if not alerts:
+        return ""
+
+    def line(a: dict) -> str:
+        kind = ALERT_GROUPS.get(a["kind"], "run")
+        label = _e(ALERT_LABELS.get(a["kind"], a["kind"]))
+        return f'<p data-kind="{kind}"><b>{label}</b> {_code(_e(a["text"]))} {_time(a["at"], "et")}</p>'
+
+    return f'<div class="failbanner" role="alert">{"".join(line(a) for a in alerts)}</div>'
+
+
 def _code(text: str) -> str:
     """Escaped text with `backticks` shown as code."""
     parts = text.split("`")
@@ -2230,6 +2541,12 @@ header.top .meta { color:var(--muted); font-size:12px; margin-left:auto }
 .demo-banner { position:sticky; top:0; z-index:20; padding:10px 16px; text-align:center; font-size:15px; font-weight:700;
   background:#ffd23f; color:#1a1400; border-bottom:3px solid #b8860b }
 .demo-banner a { color:inherit; text-decoration:underline }
+/* The failure banner (#220): one red line per current failure, at the very top of the page. */
+.failbanner { border:1px solid var(--bad); background:var(--bad-soft); border-radius:8px; padding:4px 12px;
+  margin:0 0 12px; font-size:14px }
+.failbanner p { margin:5px 0 }
+.failbanner b { color:var(--bad) }
+.failbanner time { white-space:nowrap }
 /* The status bar: one compact row of six cells; each links to its section. */
 .strip { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); background:var(--surface); border:1px solid var(--line);
   border-radius:10px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:10px }
@@ -2444,6 +2761,7 @@ STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 STYLE += pricing_panel.STYLE   # the pricing panel's own rules
 STYLE += leaderboards.STYLE
 STYLE += report_card.STYLE
+STYLE += tracking_daily.STYLE
 
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
@@ -2629,10 +2947,40 @@ SCRIPT = """(function () {
     fetch(location.pathname, {cache: 'no-store', headers: {'%s': '1'}}).then(function (r) {
       // Signed out (the password's cookie ran out): reload, so the password page shows.
       if (r.redirected && new URL(r.url).pathname === '/login') { location.reload(); throw new Error('signed out'); }
-      if (!r.ok) throw new Error(r.status);
-      return r.text();
-    }).then(function (html) {
-      var doc = new DOMParser().parseFromString(html, 'text/html');
+      if (!r.ok) return r.text().then(function (html) {
+        // The database is down (503). The outage page still carries the worker's own sync line, so
+        // a failed sync round shows without Postgres: swap just that line in and keep the rest of
+        // the page as it is. Only the worker's real outage reply marks itself (data-sync-ok); any
+        // other error reply (a proxy's 502, a 500 of ours) isn't ours to read, and what is shown
+        // stays.
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        if (!doc.querySelector('[data-sync-ok]')) throw new Error(r.status);
+        var line = doc.querySelector('.failbanner [data-kind="sync"]');
+        return {syncline: line ? line.outerHTML : ''};
+      });
+      return r.text().then(function (html) { return {page: html}; });
+    }).then(function (got) {
+      if (got.syncline !== undefined) {
+        // An outage names only the sync round: add, replace or remove just that line, and leave
+        // the run and tracking lines - which the outage cannot check - for a refresh that read
+        // the database.
+        var main0 = document.querySelector('main'), box = main0.querySelector('.failbanner');
+        var old = box && box.querySelector('[data-kind="sync"]');
+        if (old) old.remove();
+        if (got.syncline) {
+          if (!box) {
+            box = document.createElement('div');
+            box.className = 'failbanner'; box.setAttribute('role', 'alert');
+            main0.insertBefore(box, main0.firstChild);
+          }
+          box.innerHTML = got.syncline + box.innerHTML;   // the sync line goes first, as drawn
+        } else if (box && !box.innerHTML) {
+          box.remove();                                   // the last line went: no banner at all
+        }
+        failed = true; times();
+        return;
+      }
+      var doc = new DOMParser().parseFromString(got.page, 'text/html');
       var fresh = doc.querySelector('main'), main = document.querySelector('main');
       if (!fresh || !main) throw new Error('no page');
       if (doc.title) document.title = doc.title;   // the verdict in the tab follows the page
@@ -2710,6 +3058,9 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     items = snap.get("attention")
     if items is None:
         items = attention(snap)
+    alerts = snap.get("alerts")
+    if alerts is None:                       # a snapshot made before the banner existed
+        alerts = build_alerts(snap)
     state = verdict(items)
     head = (f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
             + (f'<a class="chartlink" href="{_e(charts["money"])}">Money chart</a>' if "money" in charts else "")
@@ -2730,8 +3081,11 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
               if "report_cards" in snap else "")
     incidents = (f'<section id="incidents"><h2>Incident log <span class="hint">since the opening</span></h2>'
                  f'{report_card.incidents_html(snap["incidents"])}</section>' if "incidents" in snap else "")
+    tracking = (f'<section id="tracking"><h2>Tracking check <span class="hint">our books, checked by the bridge'
+                f' &middot; newest first</span></h2>{tracking_daily.panel_html(snap["tracking"])}</section>'
+                if "tracking" in snap else "")
     body = (head + _status_bar(snap, items, charts) + key_dates.html(snap.get("key_dates"))
-            + _cabinet_html(snap, items) + pricing + money
+            + _cabinet_html(snap, items) + pricing + money + tracking
             + _plan_section(snap)
             + report + incidents
             + '<div class="grid2">'
@@ -2765,7 +3119,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + ('<meta name="robots" content="noindex">' if demo else "")
             + reload
             + f'<title>{DEMO_TITLE if demo else ""}{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
-            f'<style>{STYLE}{machine_art.STYLE}{key_dates.STYLE}</style></head><body>{banner}<main>{body}</main>'
+            f'<style>{STYLE}{machine_art.STYLE}{key_dates.STYLE}</style></head><body>{banner}'
+            f'<main>{_alerts_html(alerts)}{body}</main>'
             f'<script>{SCRIPT % (int(refresh), int(demo), DEMO_STORAGE if demo else LIVE_STORAGE, visits.REFRESH_HEADER)}'
             '</script></body></html>')
 

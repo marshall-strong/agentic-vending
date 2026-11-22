@@ -170,6 +170,13 @@ def _judge_notes(col: Callable[[str], sql.Composable]) -> sql.Composable:
         "  from jsonb_each({notes}) as e) end").format(notes=col("judge_notes"), fixed=fixed)
 
 
+# What /db shows in place of a tracking check's answer and its error type (#218): `answer` holds the
+# bridge's own JSON (its `error`, `detail` and `items`, which can quote what it received), and
+# `error_type` is kept as the bridge sent it. The four verdicts and our own words for a refusal
+# (`tracking_daily.panel`) stay visible.
+TRACKING_OTHER = "(the bridge's own words for a check aren't shown on this public page; they are in the database)"
+
+
 # What the public explorer leaves out besides, by table name. The dashboard's own list is
 # `dashboard.hide_errors`.
 HIDE = {
@@ -181,6 +188,9 @@ HIDE = {
     "purchase_submissions": db_explorer.Project("detail", ("status",), _submission_detail, SUBMISSION_OTHER),
     # A step the model was told had failed holds the raw error (#165).
     "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),
+    # The bridge's own words for a tracking check (#218); every row, whatever its status.
+    "tracking_checks": db_explorer.Hide("", "", ("answer", "error_type"), TRACKING_OTHER),
+    "agent_schedule": db_explorer.Hide("outcome", "failed", ("detail",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
     **TOTALS,
@@ -371,9 +381,19 @@ def _notice(title: str, text: str) -> str:
             "</body></html>")
 
 
-def _problem(path: str, status: int, text: str) -> Reply:
+def _problem(path: str, status: int, text: str, syncs: dict | None = None,
+             outage: bool = False) -> Reply:
+    """A page that can't be drawn. When the worker handed its latest sync round over, the reply
+    still carries what it can name on its own (`dashboard.outage_alerts`): the sync line on the
+    dashboard's outage page — which the page's refresh handler lifts out during an outage — and
+    `alerts` beside the error in `/dashboard/state.json`, so a failed sync shows without Postgres.
+    Only the worker's real outage reply (the database couldn't be read, and the worker handed its
+    round over) marks the page for the handler (`outage`): a generic 500 or another 503 is not an
+    outage of that kind, and carries neither the marker nor the banner."""
     if path == STATE:
-        return Reply(status, JSON, dashboard.to_json({"error": text}))
+        return Reply(status, JSON, dashboard.to_json({"error": text, "alerts": dashboard.outage_alerts(syncs)}))
+    if path == DASHBOARD:
+        return Reply(status, HTML, dashboard.outage_page(text, dashboard.outage_alerts(syncs), outage))
     return Reply(status, HTML, _notice(TITLES[path], text))
 
 
@@ -654,7 +674,9 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
     except (psycopg.Error, settings.SettingsError) as error:
         first = str(error).strip().splitlines()[0] if str(error).strip() else ""
         _log(type(error).__name__, f"{path}: {type(error).__name__}: {first}")
-        return _problem(path, 503, CANT_READ)
+        # The outage marker only when the worker handed its own sync round over: without it the
+        # reply can't say whether the sync recovered, so an open tab keeps what it shows.
+        return _problem(path, 503, CANT_READ, syncs=syncs, outage=syncs is not None)
     except Exception as error:  # noqa: BLE001 - a public page answers, whatever happened
         _log(type(error).__name__, f"{path}: {type(error).__name__}: {error}")
         return _problem(path, 500, BROKEN)

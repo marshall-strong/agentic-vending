@@ -41,6 +41,134 @@ for the new assignment. At the lock, the dashboard switches to the agent's Frida
 
 The screenshots show the real round 1, 2a and 2b files. The catalog requests come from a throwaway local database seeded with sample requests, not from the team's database.
 
+## Send the picked plan as the day-one fill
+
+The fill's purchase request is due by 23:59 ET on Sun 29 Nov. Staff buy and stock it on Mon 30 Nov.
+`python -m vending.fill` turns the picked plan into that request (#214). It uses the agent's own
+planner, hash and submit, so the request is recorded the same way as the agent's.
+
+```
+python -m vending.fill                                    # preview only; sends nothing
+python -m vending.fill --submit --hash HASH --by NAME     # send it
+python -m vending.fill --submit --hash HASH --late --by NAME   # send it after the deadline anyway
+python -m vending.fill --submit --hash HASH --accept-deviations --by NAME   # send packs that differ from the pick
+```
+
+1. Run the preview. It shows each line (slot, product, units, store, packs, unit cost, sale price),
+   the total cost against spendable cash, and the plan hash.
+2. Read the warnings. A line whose store cutoff for Mon 30 Nov has passed will likely be stocked at
+   the next scheduled visit. For Mon 30 Nov, the Amazon cutoff is Sat 28 Nov 23:59 and the in-store
+   cutoff is Sun 29 Nov 23:59.
+3. Read "Differs from the pick", if the preview shows it. The command buys from the sourcing table's
+   checked rows, so a product can come out in another pack size, another number of packs or units, or
+   a higher most-we-pay cost than the pick. The stocker may buy a product's alternate instead of its
+   primary, so each is compared on its own. Each one that differs is listed, with what the pick buys
+   and what that choice buys. The send refuses with `pick_deviation` unless you add
+   `--accept-deviations`, and `action_log` records the flag and the list. Or load and pick a revised plan.
+4. Send it with the hash from step 1. The hash covers the request (its lines, the worst-case cost
+   and the visit fee), the picked plan's ID and our slots (the server's assignment). If any of those
+   changed since the preview, the command refuses with `plan_changed`; run the preview again. A hash
+   from another plan or assignment never sends this one. The hash does not cover spendable cash or
+   the price ceiling. Those are checked again at the send, right before the POST (below).
+
+While the send runs, it holds the pick, the slot assignment, the sourcing table, our catalog copy,
+the ledger, `config` and the receipt sync's lock. A `plan_store pick`, a new slot assignment, a
+`sourcing set`, a change to the ledger's opening, a `config set` (such as a price ceiling) or the
+receipt sync waits until the send is over. That is a few seconds, plus the POST. The checks also run
+again on the exact rows and opening the planner was given.
+
+The send takes all of those locks at once, before it saves anything, and never waits for one. It
+already holds the halt switch's row, so waiting for a lock would leave a `halt on` started then
+queued behind the send, and the send would post once the lock came free. So if any input is busy,
+the command refuses before it saves anything, and nothing is sent:
+
+- `settings_busy`: someone is turning the halt switch on or off, or running `config set`;
+- `receipts_busy`: the receipt sync is storing receipts;
+- `inputs_busy`: someone is changing the pick, the slot assignment, the sourcing table, our catalog
+  copy or the ledger.
+
+Check `python -m vending.halt status` and run the send again in a minute. If the halt switch is
+already on when the send starts, it refuses (`halted`) and nothing is saved or sent.
+
+Known limit: a `halt on` started in the few seconds while a send holds its locks waits until that send
+is over, so it can't stop that one send. That is by design. The person running the fill is the
+operator; the halt switch is for the unattended agent.
+
+The send's transaction is READ COMMITTED (the write gate sets it and checks it). So a second send that
+waited for the first reads what the first committed, and refuses with `fill_already_sent`. Right
+before the POST, that check and the open-submission check also run again on the connection that saved
+the attempt, which reads what is committed at that moment.
+
+The balance the send checks is not quite the ledger's spendable cash. It leaves out takings, the sales
+worked out from the machine's polls, because a history backfill can change those after the last check.
+It is the opening and any later capital, plus or minus adjustments, less receipts, visit fees, model
+calls and tax remitted (`ledger.Balance.cash_without_takings_cents`). That is never more than the
+spendable cash. Before the machine opens there are no takings, so on Sun 29 Nov it is the same figure.
+The preview's "Spendable" line shows this number, and a note says how much of the takings it left out.
+
+Once the attempt is saved in `purchase_submissions`, right before the POST, the command runs the whole
+preview again: the planner over the current rows, every guard, the differences from the pick and the
+balance. The pick and our slots must be the ones it planned (`pick_changed`), the hash the approved
+one (`plan_changed`), and the request body byte for byte the one about to be sent
+(`request_changed`). Any refusal marks the attempt never filed, and nothing is sent. So a price
+ceiling lowered, or less cash after a receipt, since the preview stops the send.
+
+That check reads the clock before it runs the planner. So it reads the clock again at the end, after
+its last ledger read, as the last reading before the POST, and checks the deadline, each quote's age
+and the cash at that reading. A quote that turns a week old (`stale_price`), or a ledger entry dated a
+few moments later that comes due (`insufficient_balance`, or `ledger_entry_due` when it comes due
+during that last ledger read), while the check runs stops the send.
+
+The deadline is checked in that last check too. It comes from the Key dates panel (`vending.key_dates.FILL_REQUEST`). From
+00:00 ET Mon 30 Nov the command refuses with `fill_deadline`, unless you add `--late`. A send that
+crosses midnight while it runs is stopped there, and its attempt is marked never filed (nothing was
+sent). A late request may be denied, but it may not be, so a person can still choose to send it. The
+preview warns once the deadline has passed, and `action_log` records `late`.
+
+The request buys what the plan buys. The plan adds up each product's units across its slots and rounds
+that total up to whole packs: ten slots of 7 Coca-Cola is six 12-packs, not ten. So the request has:
+
+- one purchase line per product, on its first slot, with the packs for all its slots;
+- a back-stock line for each of the product's other slots, which loads that slot's units from those packs;
+- a note that names how many units go in each slot. The bridge's purchase line has no load target, so
+  without it the worker would fill the first slot with whatever fits. The note groups the slots by
+  where their units come from: "From slot A's purchase: A=7, B=7." for a purchase and the slots it
+  feeds, "Own purchase:" for a purchase line that feeds no other slot, and "From closet stock:" for a
+  back-stock line that loads units already in the closet. For 20 slots it stays under the bridge's 500
+  characters.
+
+The bridge spec doesn't say if a line may load units that another line of the same request bought. We
+asked David on 19 Oct, with no answer yet. Confirm it with him before the real send. The note says it
+plainly. The agent's own plans still buy per slot.
+
+The command sends the products at the sourcing table's checked prices, never the plan's estimates.
+It refuses, with every reason and nothing sent, when:
+
+- the plan was picked for another slot assignment than our slots (the server's assignment) now
+  (`plan_assignment`);
+- a product has no sourcing row, store or checked price (`no_checked_price`, #202);
+- a product's alternate has no checked price (`no_checked_price`). The request sends the alternate
+  too, so the command refuses rather than drop it. Check its price or remove it
+  (`python -m vending.sourcing remove SKU --alternate --by NAME`);
+- a product's primary or alternate price was checked more than a week ago (`stale_price`). The agent's
+  planner only warns about an old price, but the fill sends both choices to the stocker, so each must be
+  checked again (`python -m vending.sourcing set SKU [--alternate] ... --by NAME`);
+- the ledger has no opening, an opening dated after now, or the 11 Nov test opening (`test_opening`,
+  #215). The test opening is told by its ledger entry (entry 1, dated 11 Nov in Eastern time, with its
+  exact detail; `ledger.is_test_opening`, as in #222), or by any opening dated on or before 11 Nov. It
+  does not depend on the fall cut, which can move;
+- a request was sent since the opening, or by this command at any time, and was not rejected by the
+  bridge (`fill_already_sent`). The command's own attempts carry `purpose = 'fill'` in
+  `purchase_submissions`, saved before the POST and kept when the attempt is settled or resolved by
+  hand, so an interruption before `action_log` is written can't hide a sent fill;
+- the sourcing table or the opening changed during the send (`inputs_changed`). The locks above
+  should stop this, so it is a second check;
+- the agent's own submit refuses: over spendable cash, a pending request, an unsettled submission,
+  the halt switch, and the rest in [`tool-contracts.md`](tool-contracts.md).
+
+A sent request goes into `purchase_requests`, where the hourly `python -m vending.sync_requests`
+reads its status and receipts. `action_log` records who sent it and the plan's ID (tool `fill.submit`).
+
 ## Where each number comes from
 
 | On the page | Source | Computed here? |

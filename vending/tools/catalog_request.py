@@ -262,7 +262,7 @@ def _send(client: Bridge, body: dict, row: int, connect: Callable[[], psycopg.Co
         if error.status == 429:
             raise Refused([Refusal("too_many_open_requests",
                                    "the bridge has too many of our product requests open; wait for earlier ones to be decided")]) from None
-        if error.status >= 500:
+        if error.status >= 500 or error.status < 400:    # a 5xx, or a redirect `post` didn't follow
             return _unknown(connect, row, f"the bridge answered {error.status}", None)
         _forget(connect, row)
         return CatalogRequestReply(success=False, message=f"The bridge refused the request ({error}); nothing was stored.")

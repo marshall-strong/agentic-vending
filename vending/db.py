@@ -9,6 +9,7 @@ in its own transaction, and recorded in `schema_migrations` so each runs once.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 
 import psycopg
 
@@ -34,7 +35,26 @@ def session_options(url: str, *extra: str) -> str:
     return " ".join(option for option in (given, *extra, UTC_SESSION) if option)
 
 
-def connect() -> psycopg.Connection:
+def with_timeouts(connect: Callable[[], psycopg.Connection], seconds: float) -> Callable[[], psycopg.Connection]:
+    """`connect`, with a statement and lock timeout of `seconds` on each connection it opens, so no one
+    statement can hang its caller (the agent's run, the worker's scheduler)."""
+    ms = str(max(1, int(seconds * 1000)))
+
+    def opened() -> psycopg.Connection:
+        conn = connect()
+        try:
+            conn.execute("select set_config('statement_timeout', %s, false), set_config('lock_timeout', %s, false)",
+                         (ms, ms))
+            if not conn.autocommit:
+                conn.commit()
+        except BaseException:
+            conn.close()
+            raise
+        return conn
+    return opened
+
+
+def connect(**extra) -> psycopg.Connection:
     url = settings.require(
         "DATABASE_URL",
         "Copy the DATABASE_URL line from .env.example into .env "
@@ -45,8 +65,10 @@ def connect() -> psycopg.Connection:
     # transaction and a long backfill would lose all its work on any error.
     # A time limit, so a down or unreachable database fails with an error
     # instead of hanging on TCP retries. The session runs in UTC (`UTC_SESSION`).
+    # `extra` are libpq connect parameters for one caller's need, such as the
+    # worker's incident writer bounding its connection at the TCP layer.
     return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
-                           options=session_options(url))
+                           options=session_options(url), **extra)
 
 
 def migrate(conn: psycopg.Connection) -> list[str]:
