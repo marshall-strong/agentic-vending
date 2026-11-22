@@ -192,6 +192,7 @@ def test_a_dry_run_never_sends_a_write_the_model_makes_up(connect, conn):
 
 
 def test_notes_carry_from_one_run_to_the_next(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="Slot 3 is slow; pull it if under 2 a week.")), Tools())
     client = Script(answer())
     go(connect, client, Tools())
@@ -372,6 +373,7 @@ def test_turning_the_halt_on_mid_run_stops_before_the_next_model_call(connect, c
 
 
 def test_a_live_run_reads_only_live_notes(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="dry: would submit 15")), Tools())
     client = Script(answer())
     go(connect, client, Tools())                                    # a dry run reads it, labelled
@@ -380,6 +382,73 @@ def test_a_live_run_reads_only_live_notes(connect, conn):
     go(connect, client, Tools(LIVE_TOOLS), live=True)               # a live run never does
     opening = client.sent[0]["messages"][0]["content"]
     assert "would submit 15" not in opening and "No notes yet" in opening
+
+
+def open_books(conn, at=None):
+    """Record a real opening (not the 11 Nov test one), now by the database clock unless `at` is given.
+
+    Runs' `started_at` is the database clock, so an opening at `at` (default: now) splits the runs before it
+    from the runs after it."""
+    from vending import ledger
+
+    at = at or conn.execute("select clock_timestamp()").fetchone()[0]
+    return ledger.record(conn, "opening", 60000, "opening capital", "test", at)
+
+
+def test_no_notes_carry_over_before_a_real_opening(connect, conn):
+    """#216: notes count from the real opening. Before it, a run's notes may name slots that aren't ours."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "real ledger opening isn't recorded yet" in opening
+
+
+def test_the_11_nov_test_opening_is_not_a_real_opening_for_notes(connect, conn):
+    from vending import ledger
+
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (%s, %s, 'opening', 60000, %s, 'marshall')",
+                 (ledger.TEST_OPENING_ID, datetime(2026, 11, 11, 19, tzinfo=timezone.utc), ledger.TEST_OPENING_DETAIL))
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "real ledger opening isn't recorded yet" in opening
+
+
+def test_notes_from_runs_before_the_real_opening_are_dropped_and_later_ones_kept(connect, conn):
+    """Run 2's notes, from before the 20 Nov redraw, must not reach a run after the real opening (#216)."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())   # before the opening
+    open_books(conn)
+    client = Script(answer(notes="New notes."))
+    go(connect, client, Tools())                                         # the first run since the opening
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "first run since the ledger opening" in opening
+    client = Script(answer())
+    go(connect, client, Tools())                                         # notes since the opening carry on
+    assert "New notes." in client.sent[0]["messages"][0]["content"]
+
+
+def test_notes_from_before_the_slot_assignment_are_dropped_even_after_a_backdated_opening(connect, conn):
+    """Sol review of #222, round 4, finding 3: a recovery opening backdated before the redraw (18 Nov) must not
+    bring back a 19 Nov run's notes. Notes count from the later of the real opening and when our slots (the
+    server's assignment) were first read (`slot_assignment.first_read_at`)."""
+    conn.execute("update slot_assignment set first_read_at = %s", (datetime(2026, 11, 20, 17, tzinfo=timezone.utc),))
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    conn.execute("update agent_runs set started_at = %s", (datetime(2026, 11, 19, 17, tzinfo=timezone.utc),))
+    open_books(conn, datetime(2026, 11, 18, 17, tzinfo=timezone.utc))
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "first run since the ledger opening" in opening
+
+
+def test_no_notes_carry_over_without_a_stored_slot_assignment(conn):
+    """Finding 3: with no assignment stored, nothing says which runs read the current one, so no notes carry."""
+    open_books(conn, datetime(2026, 11, 18, 17, tzinfo=timezone.utc))
+    conn.execute("delete from slot_assignment")
+    assert "slot assignment isn't recorded" in agent.last_notes(conn, live=False)
 
 
 def test_the_server_never_gets_the_model_key(monkeypatch):
@@ -483,6 +552,7 @@ def test_a_submit_call_that_raises_is_flagged_unresolved(connect, conn):
 # --- The rules card -----------------------------------------------------------------
 
 def test_the_system_prompt_is_the_rules_card_then_the_instructions(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="Slot 3 is slow.")), Tools())
     client = Script(tool_turn(use("get_machine_state")), answer())
     go(connect, client, Tools())
@@ -671,3 +741,199 @@ def test_different_startup_snapshots_leave_system_prompt_byte_identical(connect,
         clients.append(client)
     assert clients[0].sent[0]["system"].encode("utf-8") == clients[1].sent[0]["system"].encode("utf-8") == original
     assert clients[0].sent[0]["messages"][0] != clients[1].sent[0]["messages"][0]
+
+
+# --- One retry after a submit that ordered nothing (#217) ------------------------------
+
+CHANGED = {"success": False, "message": "Refused: plan_changed", "plan_hash": "abc",
+           "refusals": [{"code": "plan_changed", "message": "the plan now hashes to def"}]}
+PREVIEWED_AGAIN = {**PREVIEWED, "plan_hash": "def"}
+SUBMIT_SCHEMA = {"type": "object", "properties": {"desired": {}, "expected_plan_hash": {}}}
+
+
+class InTurn(Tools):
+    """Answers each tool from its own list, one reply per call; the last reply repeats."""
+
+    async def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        queue = self.replies.get(name, [{"success": True, "message": "ok"}])
+        reply = queue.pop(0) if len(queue) > 1 else queue[0]
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(reply))],
+                               structuredContent=reply, isError=False)
+
+
+def live_tools(previews, submits):
+    return InTurn(LIVE_TOOLS, replies={"preview_desired_state": list(previews), "submit_desired_state": list(submits)},
+                  schemas={"submit_desired_state": SUBMIT_SCHEMA})
+
+
+def sent_submits(tools):
+    return [args for name, args in tools.calls if name == "submit_desired_state"]
+
+
+def last_result(client, request, index=0):
+    """The text of a tool result sent back to the model in `request` (0-based)."""
+    return client.sent[request]["messages"][-1]["content"][index]["content"]
+
+
+def test_a_plan_changed_refusal_allows_one_retry_after_a_new_preview(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    answer("submit", reason="restock 15"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [CHANGED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    # Each submit carries the hash of the preview just before it.
+    assert sent_submits(tools) == [{"desired": PLAN, "expected_plan_hash": "abc"},
+                                   {"desired": PLAN, "expected_plan_hash": "def"}]
+    assert "may submit once more" in last_result(client, 2)
+    assert stored(conn, run_id)[1] == "submitted" and stored(conn, run_id)[-1] == "req_9"
+
+
+def test_a_second_refusal_ends_the_retries(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    preview(id="p3"), tool_turn(submit(id="s3")), answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN, PREVIEWED_AGAIN], [CHANGED])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 2
+    assert "used its one retry" in last_result(client, 4)
+    assert "used its one retry" in last_result(client, 6)
+    assert out.status == "failed" and "nothing was bought" in out.detail
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_retry_waits_for_a_new_preview_in_an_earlier_turn(connect, conn):
+    client = Script(preview(), tool_turn(submit()), tool_turn(submit(id="s2")),
+                    tool_turn(use("preview_desired_state", {"desired": PLAN}, id="p2"), submit(id="s3")),
+                    answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [CHANGED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 1
+    assert "Preview again" in last_result(client, 3)
+    assert "read the preview's cost" in last_result(client, 4, 1)
+    assert out.status == "failed"
+
+
+NOT_CONNECTED = {"success": False, "status": "not_filed", "submission": 1,
+                 "message": "Couldn't connect to the bridge (ConnectionRefusedError): nothing was sent."}
+
+
+def test_a_failed_connect_allows_one_retry_after_a_new_preview(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    answer("submit", reason="restock 15"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [NOT_CONNECTED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 2 and "may submit once more" in last_result(client, 2)
+    assert stored(conn, run_id)[1] == "submitted" and stored(conn, run_id)[-1] == "req_9"
+
+
+@pytest.mark.parametrize("first", [
+    {"success": False, "status": "unknown", "submission": 1,
+     "message": "Sent, and no answer settles it (the bridge answered 422, and only the 201 it documents settles "
+                "a request. It said: {\"error\": \"invalid lines\"})"},
+    {"success": False, "status": "unknown", "submission": 1, "message": "refused",
+     "refusals": [{"code": "plan_changed", "message": "a POST's reply carrying plan_changed"}]},
+    {"success": False, "status": "refused", "submission": 1, "message": "The bridge refused the request (422)"},
+    {"success": False, "message": "Refused", "refusals": [{"code": "below_floor", "message": "too cheap"}]},
+    {"success": False, "message": "Refused", "refusals": [
+        {"code": "plan_changed", "message": "moved"}, {"code": "submission_unresolved", "message": "open"}]},
+], ids=["a 4xx to the POST", "a POST reply carrying plan_changed", "a status no longer sent",
+        "a refusal before the POST that isn't plan_changed", "plan_changed with another refusal"])
+def test_only_plan_changed_or_a_failed_connect_allows_a_retry(connect, conn, first):
+    """Only our own `plan_changed` alone (no submission number) and `not_filed` (connecting failed) prove no
+    byte left. Anything else ends the run's submits: when in doubt, never send twice. This is the same-run latch;
+    `tests/test_submit_runs.py` sends each kind of answer through two live runs against the real server and a
+    loopback bridge, and counts the POSTs across both."""
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("submit"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [first, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 1 and out.status == "failed"
+    assert "may submit once more" not in last_result(client, 2) and "already submitted" in last_result(client, 4)
+
+
+@pytest.mark.parametrize("first", [
+    {"success": False, "status": "unknown", "message": "the bridge answered 502"},
+    {"success": False, "message": "Can't submit yet: no catalog"},
+    {"success": True, "message": "sent, but no id"},
+    SENT,
+])
+def test_no_reply_that_may_have_ordered_allows_another_send(connect, conn, first):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("skip"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [first, SENT])
+    go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 1
+    assert "already submitted" in last_result(client, 4)
+
+
+# --- Open submissions settled before the model starts (#217) ---------------------------
+
+class Lookup:
+    """A fake bridge that answers only `purchase_request`, from `known`; any other ID is a 404."""
+
+    def __init__(self, known):
+        self.known, self.asked = known, []
+
+    def __call__(self):
+        return self
+
+    def purchase_request(self, request_id):
+        from vending.bridge import BridgeNotFound
+
+        self.asked.append(request_id)
+        found = self.known.get(request_id, BridgeNotFound(f"404 Not Found from /{request_id}"))
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+
+def open_row(conn, *, response=None, created_id=None):
+    """A submission left open two hours ago: `sending` with `created_id` (its POST got a validated 201 that was
+    never recorded), otherwise `unknown`, holding `response` if given."""
+    from psycopg.types.json import Jsonb
+
+    return conn.execute(
+        "insert into purchase_submissions (at, plan_hash, body, status, response, created_id) values"
+        " (now() - interval '2 hours', 'h', %s, %s, %s, %s) returning id",
+        (Jsonb({"lines": [], "off_cycle": False}), "unknown" if created_id is None else "sending",
+         None if response is None else Jsonb(response), created_id)).fetchone()[0]
+
+
+LOST = {"id": "pr-lost", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}
+
+
+def check_steps(conn, run_id):
+    return conn.execute("select content, is_error from agent_steps where run_id = %s and tool = 'check_submissions'",
+                        (run_id,)).fetchall()
+
+
+def test_a_live_run_settles_a_validated_201_it_never_recorded(connect, conn):
+    """A row whose POST got a validated 201 (`created_id`) but was never settled is settled from the bridge's
+    record of that ID. A lost reply holds none: `tests/test_submit.py::test_a_lost_reply_stays_blocked_for_later_runs`
+    sends one through the submit tool, and `test_a_live_run_leaves_a_lost_reply_it_cant_tell_open` below is its
+    startup check."""
+    row = open_row(conn, response=LOST, created_id="pr-lost")
+    bridge = Lookup({"pr-lost": LOST})
+    run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert conn.execute("select status, request_id, resolved_by from purchase_submissions where id = %s",
+                        (row,)).fetchone() == ("accepted", "pr-lost", "auto-check")
+    [(content, is_error)] = check_steps(conn, run_id)
+    assert not is_error and json.loads(content)["submissions"][0]["status"] == "accepted"
+    # Settled once: the next run has nothing to check, and the request is recorded once.
+    run_id, _ = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert check_steps(conn, run_id) == [] and bridge.asked == ["pr-lost"]
+    assert conn.execute("select count(*) from purchase_requests where request_id = 'pr-lost'").fetchone() == (1,)
+
+
+@pytest.mark.parametrize("response", [None, LOST], ids=["a lost reply", "an ambiguous answer naming a request"])
+def test_a_live_run_leaves_a_row_without_a_validated_201_open(connect, conn, response):
+    row = open_row(conn, response=response)
+    bridge = Lookup({"pr-lost": LOST})
+    run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
+    assert conn.execute("select status from purchase_submissions where id = %s", (row,)).fetchone() == ("unknown",)
+    [(content, is_error)] = check_steps(conn, run_id)
+    assert is_error and "no validated 201" in content and bridge.asked == []
+
+
+def test_a_dry_run_never_checks_the_bridge(connect, conn):
+    open_row(conn, response=LOST, created_id="pr-lost")
+    bridge = Lookup({"pr-lost": LOST})
+    go(connect, Script(answer("skip")), Tools(), bridge=bridge)
+    assert bridge.asked == []

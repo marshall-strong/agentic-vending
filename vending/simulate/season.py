@@ -22,7 +22,7 @@ from typing import Any
 import anyio
 import psycopg
 
-from vending import agent, config, db, ledger, sourcing, stock, sync_catalog, sync_history, sync_requests
+from vending import agent, config, db, ledger, sourcing, stock, submissions, sync_catalog, sync_history, sync_requests
 from vending import slots as slot_assignment
 from vending.harness import Harness
 from vending.simulate import world
@@ -336,7 +336,7 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     since = wall_clock(conn)
     config.set_value(conn, "model_run_cap_cents", int(cap * 100), BY)
     client = None if st.decider == "model" else Scripted(wide=st.decider == "scripted-wide")
-    requests_before = set(st.bridge.requests)
+    requests_before, refused_before = set(st.bridge.requests), len(st.bridge.refused)
 
     class TestHarness(Harness):
         """Every call is test spend (purpose `test`), as the brief for this run asks, so none reaches the ledger."""
@@ -352,10 +352,11 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     try:
         run_id, out = anyio.run(lambda: agent.run(live=True, model=st.model, effort=st.effort, client=client,
                                                   now=st.clock.now, open_tools=_open_tools,
-                                                  connect=db.connect))
+                                                  connect=db.connect, bridge=lambda: st.bridge))
     finally:
         agent.Harness, server.bridge, server.connect = saved
         _drop_cached_connection(server)
+    settle_refused(conn, st.bridge.refused[refused_before:])
     at = st.clock.now()
     restamp(conn, at, since)
     conn.execute("update agent_runs set finished_at = %s where id = %s", (at + timedelta(minutes=3), run_id))
@@ -370,6 +371,23 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
         st.log.append({"at": at.isoformat(), "kind": "request_filed", "request_id": request_id,
                        "off_cycle": bool(filed.body.get("off_cycle")), "visit_at": when.isoformat()})
     return record
+
+
+def settle_refused(conn: psycopg.Connection, refused: list[dict]) -> list[int]:
+    """Do what a person would after a refused purchase POST: the submit tool leaves it `unknown` (only a `201`
+    settles a row by itself), and this season's bridge knows it filed nothing, so the row is resolved as never
+    filed, by `BY`. Without it, one refusal would block every later run of the season. Returns the rows."""
+    bodies = [r["body"] for r in refused if r.get("status") in (422, 429) and "body" in r]
+    done: list[int] = []
+    if not bodies:
+        return done
+    for row, body in conn.execute("select id, body from purchase_submissions where status = any(%s) order by id",
+                                  (list(submissions.OPEN),)).fetchall():
+        if body in bodies:
+            bodies.remove(body)
+            submissions.resolve(conn, row, None, BY)
+            done.append(row)
+    return done
 
 
 def handle(conn: psycopg.Connection, st: State, ev: Event, opts: dict) -> None:

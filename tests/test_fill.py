@@ -299,7 +299,7 @@ def test_the_fill_can_not_be_sent_twice(db, fake, schema_url, capsys):  # noqa: 
     assert len(fake.posts) == 1
     # Rejected by the bridge: the fill may be sent again.
     db.execute("update purchase_requests set status = 'rejected'")
-    fake.answer = (201, {"id": "pr-2", "status": "pending"})
+    fake.answer = (201, {"id": "pr-2", "status": "pending", "created_at": "2026-11-30T01:00:00Z"})
     _, plan_hash = previewed(schema_url, fake, capsys)
     assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 0
     assert len(fake.posts) == 2
@@ -704,18 +704,35 @@ def _lower_the_ceiling(conn):
 
 
 def _old_request(conn):
-    """A request from before the opening, fulfilled with no lines yet: its receipt costs nothing so far."""
-    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status)"
-                 " values ('pr-old', '2026-11-20T15:00:00Z', false, '{}', 'fulfilled')")
+    """A request from before the opening, fulfilled, whose one line (dated after the opening, nothing loaded)
+    costs $0.00 so far.
+
+    `store` takes a corrected amount on the same lines, never lines added to a receipt that had none (#225), so
+    the sync's change below is a correction of this receipt."""
+    from tests.test_sync_requests import BODY, fulfilled
+    from vending.purchase_requests import record, store
+
+    record(conn, "pr-old", datetime(2026, 11, 20, 15, 0, tzinfo=timezone.utc), False, BODY)
+    store(conn, "pr-old", fulfilled("pr-old", _old_line("0.00"), fulfilled_at="2026-11-29T15:30:00Z",
+                                    total_paid="0.00"), NOW)
+
+
+def _old_line(paid: str) -> dict:
+    """`pr-old`'s line: nothing bought or loaded, so it leaves the stock alone and only its cost counts."""
+    from tests.test_sync_requests import receipt
+
+    return receipt(outcome="unavailable", packs_bought=0, units_bought=0, units_loaded=0, units_lost=0,
+                   loss_note=None, units_to_back_stock=0, unit_cost_paid=None, total_paid=paid,
+                   resolved_at="2026-11-29T15:00:00Z")
 
 
 def _receipt_sync_spends_the_cash(conn):
-    """The receipt sync reads `pr-old` again: its receipt, dated after the opening, paid $590.00."""
-    from tests.test_sync_requests import fulfilled, receipt
+    """The receipt sync reads `pr-old` again: the bridge corrected its receipt to $590.00."""
+    from tests.test_sync_requests import fulfilled
     from vending.purchase_requests import store
 
-    store(conn, "pr-old", fulfilled("pr-old", receipt(total_paid="590.00", resolved_at="2026-11-29T15:00:00Z"),
-                                    fulfilled_at="2026-11-29T15:30:00Z", total_paid="590.00"), NOW)
+    store(conn, "pr-old", fulfilled("pr-old", _old_line("590.00"), fulfilled_at="2026-11-29T15:30:00Z",
+                                    updated_at="2026-11-29T16:00:00Z", total_paid="590.00"), NOW)
 
 
 @pytest.mark.parametrize("change", [_lower_the_ceiling, _receipt_sync_spends_the_cash],

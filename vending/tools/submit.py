@@ -10,12 +10,31 @@ anything is sent:
 
 1. commits a `sending` row in `purchase_submissions`, so a crash after the POST
    can't lose the fact that we sent something;
-2. POSTs the plan's request body once, never retried: a retry after a lost
-   answer could order twice;
-3. settles the row on that same connection: `accepted` (and the request goes
-   into `purchase_requests` for the sync to read back), `refused` (a 4xx: the
-   bridge said no, and says why), `not_filed` (it never left), or `unknown`
-   (sent, no usable answer; a 5xx keeps the body the bridge sent).
+2. POSTs the plan's request body once, never retried and never redirected
+   (`Bridge.post_answer`): a retry after a lost answer could order twice;
+3. keeps the bridge's answer on the row the moment it is read (`save_answer`),
+   with `created_id` set only for a validated `201`, so the ID is on the row even
+   if settling fails, and the next run's check can look it up;
+4. settles the row on that same connection, one of three ways:
+   - `accepted`: only the documented acceptance, whole (`accepted`): a `201`,
+     `application/json`, read in full within the deadline and size cap, strict
+     JSON, the `PurchaseRequestPending` body with status `pending`, under an ID
+     no other attempt or request holds. The request goes into
+     `purchase_requests` for the sync to read back.
+   - `not_filed`: connecting failed, so no byte of the request left.
+   - `unknown`: everything else. A `4xx` or `5xx` (even the bridge's documented
+     refusal), a redirect, any other success, a body cut off, too slow, too
+     long, encoded or not plain JSON, or a lost answer. The reason is kept, with
+     the body the bridge sent.
+
+An `unknown` row blocks every later submit (`submission_unresolved`) until a
+person settles it with `python -m vending.submissions resolve`. Nothing settles
+a POST's answer as "nothing was ordered" by itself: a reply shaped like a refusal
+can't prove that, so a person checks.
+
+Only `plan_changed` (our own preview, before step 1) and `not_filed` (connecting
+failed) let the agent try once more in the same run. A refusal before step 1
+comes back with no `submission` number.
 
 The day-one fill (`vending.fill`) adds checks of its own through hooks the agent
 never passes: `before_send` before step 1, with the inputs the planner was given,
@@ -28,10 +47,9 @@ If the bridge accepted the request but recording that fails anyway, the answer
 is written to stderr and the error the agent sees names the request ID and the
 `resolve` command, so the ID is never only in memory. That includes finding the
 row already settled by something else (`submissions.AlreadySettled`), which
-`settle` refuses to overwrite. While a row is `sending`
-or `unknown`, the request may or may not exist on the bridge, so the tool
-refuses to submit anything until a person settles it with
-`python -m vending.submissions resolve`.
+`settle` refuses to overwrite. A row left `sending` that way holds `created_id`,
+so `python -m vending.submissions check` (which a live agent run also does first)
+can settle it from the bridge.
 """
 
 from __future__ import annotations
@@ -44,7 +62,7 @@ from datetime import datetime
 import psycopg
 
 from vending import planner, planning, submissions
-from vending.bridge import Bridge, BridgeAnswered, BridgeNoAnswer, BridgeUnreachable
+from vending.bridge import Bridge, BridgeNoAnswer, BridgeUnreachable, PostAnswer
 from vending.ledger import money
 from vending.pricing import Refusal
 from vending.tools import WriteReply
@@ -52,10 +70,16 @@ from vending.tools.desired_state import DesiredState
 from vending.write_gate import Refused
 
 ROUTE = "/api/v1/purchase-requests"
+ACCEPTED_STATUS = 201
+# `PurchaseRequestPending`'s fields (`docs/bridge-openapi-2026-11-20.json`): an acceptance with any other isn't
+# the documented one, so it settles nothing.
+PENDING_FIELDS = frozenset({"id", "status", "created_at", "decision_note"})
 
 
 class SubmitReply(WriteReply):
     request_id: str | None = None
+    # The request's status when accepted; otherwise how the record was settled: `not_filed` (it never left)
+    # means nothing was ordered, `unknown` that it may have been.
     status: str | None = None
     plan_hash: str | None = None
     submission: int | None = None
@@ -149,36 +173,71 @@ def _last_check(side: psycopg.Connection, row: int, body: dict,
         raise Refused(refusals)
 
 
+def _str(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def accepted(answer: PostAnswer) -> str:
+    """Why the answer to the POST isn't the documented acceptance; "" if it is: a `201` whose body is plain
+    JSON (`PostAnswer.problem` empty) in the `PurchaseRequestPending` shape, status `pending`."""
+    if answer.status != ACCEPTED_STATUS:
+        return f"the bridge answered {answer.status}, and only the {ACCEPTED_STATUS} it documents settles a request"
+    if answer.problem:
+        return answer.problem
+    body = answer.body
+    if not isinstance(body, dict):
+        return "its answer isn't a JSON object"
+    extra = set(body) - PENDING_FIELDS
+    if extra:
+        return f"its answer has fields a new request doesn't document ({', '.join(sorted(extra))})"
+    if not _str(body.get("id")):
+        return "its answer has no request ID"
+    if body.get("status") != "pending":
+        return f"its answer's status is {body.get('status')!r}, not pending"
+    if not _str(body.get("created_at")) or not (body.get("decision_note") is None
+                                                or isinstance(body.get("decision_note"), str)):
+        return "its answer isn't the documented new request (created_at, decision_note)"
+    return ""
+
+
+def _short(text: str, size: int = 300) -> str:
+    return text if len(text) <= size else text[:size] + f"... ({len(text)} characters)"
+
+
 def _send(client: Bridge, plan: planner.Plan, body: dict, row: int, side: psycopg.Connection,
           now: datetime) -> SubmitReply:
     try:
-        answer = client.post(ROUTE, body)
-    except BridgeAnswered as error:
-        if error.status == 429:
-            submissions.settle(side, row, "refused", detail=str(error))
-            raise Refused([Refusal("too_many_open_requests",
-                                   "the bridge has too many of our requests open; wait for earlier ones to be decided")]) from None
-        if error.status >= 500:
-            return _unknown(side, row, plan, f"the bridge answered {error.status}: {error.detail}")
-        submissions.settle(side, row, "refused", detail=str(error))
-        return SubmitReply(success=False, submission=row, plan_hash=plan.plan_hash,
-                           message=f"The bridge refused the request ({error}); nothing was ordered. "
-                                   "Fix what it names and preview again.")
+        answer = client.post_answer(ROUTE, body)
     except BridgeUnreachable as error:
         submissions.settle(side, row, "not_filed", detail=str(error))
-        return SubmitReply(success=False, submission=row, plan_hash=plan.plan_hash,
-                           message=f"Couldn't reach the bridge ({error}); nothing was sent.")
+        return SubmitReply(success=False, status="not_filed", submission=row, plan_hash=plan.plan_hash,
+                           message=f"Couldn't connect to the bridge ({error}); nothing was sent.")
     except BridgeNoAnswer as error:
         return _unknown(side, row, plan, str(error))
-    request_id = answer.get("id") if isinstance(answer, dict) else None
-    if not request_id:
-        return _unknown(side, row, plan, "the bridge accepted it, but its answer has no request ID", answer)
-    status = answer.get("status") or "pending"
+    why = accepted(answer)
+    created_id = None if why else answer.body["id"]
+    # Kept before anything else can fail: the next run's check looks up `created_id`.
     try:
-        submissions.settle(side, row, "accepted", request_id=request_id, response=answer, submitted_at=now)
+        submissions.save_answer(side, row, answer.body, created_id=created_id)
     except Exception as error:
-        _keep(row, request_id, answer, error)
-        raise AnswerNotStored(row, request_id, answer, error) from error
+        if created_id is not None:
+            _keep(row, created_id, answer.body, error)
+            raise AnswerNotStored(row, created_id, answer.body, error) from error
+        # Not an acceptance, so nothing to lose: settle it `unknown` without the body (a NUL character in it, say).
+        return _unknown(side, row, plan, f"{why}; its answer couldn't be stored ({type(error).__name__})")
+    if why:
+        said = f" It said: {_short(answer.text)}" if answer.text else ""
+        return _unknown(side, row, plan, f"{why}.{said}", answer.body)
+    request_id, status = created_id, answer.body["status"]
+    try:
+        submissions.settle(side, row, "accepted", request_id=request_id, response=answer.body, submitted_at=now)
+    except submissions.IdTaken as taken:
+        # Not this attempt's request after all, so not an acceptance: the row keeps the answer and no `created_id`.
+        submissions.save_answer(side, row, answer.body)
+        return _unknown(side, row, plan, str(taken), answer.body)
+    except Exception as error:
+        _keep(row, request_id, answer.body, error)
+        raise AnswerNotStored(row, request_id, answer.body, error) from error
     return SubmitReply(
         success=True, count=len(plan.lines), request_id=request_id, status=status, plan_hash=plan.plan_hash,
         submission=row, lines=len(plan.lines), max_cost=money(plan.cost.max_cents), directive=plan.directive,
@@ -194,7 +253,7 @@ def _unknown(side: psycopg.Connection, row: int, plan: planner.Plan, why: str,
     submissions.settle(side, row, "unknown", response=answer, detail=why)
     return SubmitReply(
         success=False, status="unknown", submission=row, plan_hash=plan.plan_hash,
-        message=(f"Sent, but no usable answer came back ({why}), so the request may or may not exist. "
+        message=(f"Sent, and no answer settles it ({why}), so the request may or may not exist. "
                  f"Don't submit again; {submissions.RESOLVE_HINT.format(row=row)}"),
     )
 
