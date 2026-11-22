@@ -263,10 +263,16 @@ def test_an_outage_swaps_only_the_sync_line_and_an_unmarked_error_keeps_the_rest
         dashboard.outage_alerts({"rounds": 1, "last_round_at": at.isoformat(),
                                  "results": [{"job": "sync_history", "exit_code": 0,
                                               "outcome": "finished"}]}), outage=True)
+    # The page's own generic 500 (a bug drawing it), as the pages answer it, even with a failing round.
+    from vending import pages
+    broken = pages._problem(pages.DASHBOARD, 500, pages.BROKEN, syncs={
+        "rounds": 1, "last_round_at": at.isoformat(),
+        "results": [{"job": "sync_history", "exit_code": 9, "outcome": "finished"}]}).body
     run_script(tmp_path, f'''
       const SEED = {json.dumps(seed)};
       const FAILING = {json.dumps(failing)};
       const RECOVERED = {json.dumps(recovered)};
+      const BROKEN = {json.dumps(broken)};
       var main = document.querySelector("main");
       const clean = main.innerHTML;          // the page without any banner
       const serve = (ok, status, html) => {{ RESP = () => Promise.resolve(
@@ -308,9 +314,12 @@ def test_an_outage_swaps_only_the_sync_line_and_an_unmarked_error_keeps_the_rest
       assert(kinds() === "sync,run,tracking", "an unmarked error page keeps what is shown: " + kinds());
 
       // A generic 500 of ours is not the outage either: no marker, nothing changes.
-      serve(false, 500, "<html><body><h1>Agent dashboard</h1></body></html>");
+      serve(false, 500, BROKEN);
       await refresh();
       assert(kinds() === "sync,run,tracking", "a 500 without the marker changes nothing: " + kinds());
+      box = document.querySelector("main .failbanner");
+      assert(box.textContent.indexOf("exit 3") >= 0 && box.textContent.indexOf("exit 9") < 0,
+             "the 500's own sync line was not swapped in: " + box.textContent);
 
       // The outage page never takes the page down: a fetch that throws is the old failed-refresh path.
       RESP = () => Promise.reject(new Error("gone"));

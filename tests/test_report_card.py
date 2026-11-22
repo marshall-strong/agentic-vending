@@ -781,6 +781,7 @@ def test_a_silent_database_cannot_stall_the_round_loop(monkeypatch):
         return Silent()
 
     monkeypatch.setattr(db_mod, "connect", connect)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://silent.invalid/vending")   # the writer runs
     monkeypatch.setattr(worker, "_slot_lock", lambda: None)
     lines: list[str] = []
     outcome: dict = {}
@@ -801,12 +802,71 @@ def test_a_silent_database_cannot_stall_the_round_loop(monkeypatch):
     assert outcome.get("code") == 0
     assert any("next round at" in line for line in lines), lines   # it scheduled the next round
     assert not any("sync_incidents:" in line for line in lines), lines   # and logged no failure
-    # The writer was asked to connect with the TCP-level bounds, and it finished once the gate opened.
-    assert asked.get("keepalives") == 1 and "tcp_user_timeout" in asked, asked
-    with worker._INCIDENT_LOCK:
-        writer = worker._WRITER
+    # The writer was asked to connect with the TCP-level bounds, and it finished once the gate opened
+    # (the worker's exit waits for it, bounded).
+    assert asked == worker.INCIDENT_TCP, asked
+    assert worker._WRITER is None
+
+
+class _Blocking:
+    """`vending.db.connect` stood in for: a connection that logs in, then holds every write until
+    `gate` opens, and keeps the rounds it was handed (`written`)."""
+
+    def __init__(self, gate, written):
+        self.gate, self.written = gate, written
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def transaction(self):
+        return self
+
+    def execute(self, query, params=()):
+        self.gate.wait(60)
+        if "insert into sync_incidents" in query:
+            self.written.append(params[0])
+
+
+def test_one_writer_at_a_time_and_the_rounds_stay_queued_until_written(monkeypatch):
+    """While a write hangs, the rounds stay in the wait list (nothing is lost if it never lands), a
+    later round starts no second writer, and once the database answers the one writer writes them
+    all and the list empties."""
+    import vending.db as db_mod
+
+    gate, written = threading.Event(), []
+    monkeypatch.setattr(db_mod, "connect", lambda **k: _Blocking(gate, written))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://silent.invalid/vending")
+    waited: list = []
+    state = worker.State()
+    state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+    state.rounds, state.last_round_at = 1, (OPEN + timedelta(hours=1)).isoformat()
+    writer = worker.record_failed_round(state, waited, log=lambda _: None)
+    try:
+        assert writer is not None and writer.is_alive(), "the write is in flight"
+        assert [at for at, _ in waited] == [state.last_round_at], "the round stays queued meanwhile"
+        first = state.last_round_at
+        state.rounds, state.last_round_at = 2, (OPEN + timedelta(hours=2)).isoformat()
+        assert worker.record_failed_round(state, waited, log=lambda _: None) is None, "one writer only"
+        assert [at for at, _ in waited] == [first, state.last_round_at]
+    finally:
+        gate.set()
     writer.join(60)
-    assert not writer.is_alive()
+    assert not writer.is_alive() and waited == []
+    assert sorted(set(written)) == [first, state.last_round_at], written
+    assert worker._WRITER is None
+
+
+def test_the_incident_connection_is_bounded_at_the_tcp_layer(conn):
+    """The bounds reach libpq: a real connection opened the way the writer opens it reports them."""
+    from vending import db
+
+    with db.connect(**worker.INCIDENT_TCP) as bounded:
+        given = bounded.info.get_parameters()
+    for name, value in worker.INCIDENT_TCP.items():
+        assert given.get(name) == str(value), (name, given)
 
 
 def test_a_check_is_windowed_by_when_it_was_answered(conn, page_conn, opened):
