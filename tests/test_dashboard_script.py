@@ -54,6 +54,8 @@ class Node {
   get innerHTML() { return serialize(this); }
   focus() { if (document.contains(this)) document.activeElement = this; }
   blur() { document.activeElement = document.body; }
+  remove() { const p = this.parentNode, i = p ? p.children.indexOf(this) : -1;
+    if (i >= 0) p.children.splice(i, 1); this.parentNode = null; }
   scrollIntoView() { scrolled.push(this.id || this.attrs["class"]); }
   addEventListener() {}
 }
@@ -123,7 +125,10 @@ const CSS = {escape: s => String(s)};
 const intervals = [];
 const setInterval = (fn, ms) => intervals.push({fn, ms});
 class DOMParser { parseFromString(html) { const d = new Node("#doc"); parse(html, d); d.title = ""; return d; } }
-const fetch = () => Promise.resolve({ok: true, redirected: false, text: () => Promise.resolve(PAGE)});
+// A test sets RESP to feed the refresh handler a fetch answer of its own ({ok, status, redirected,
+// text}); with it null, the refresh reads the page itself, like the stub's default below.
+let RESP = null;
+const fetch = () => (RESP ? RESP() : Promise.resolve({ok: true, redirected: false, text: () => Promise.resolve(PAGE)}));
 const fire = (type, target, extra) => { let stopped = false;
   const e = Object.assign({type, target, preventDefault() { stopped = true; }}, extra || {});
   (handlers.document[type] || []).forEach(fn => fn(e)); return stopped; };
@@ -225,3 +230,48 @@ def test_a_direct_pick_link_lands_on_the_close_up_at_tablet_width(tmp_path, widt
       await new Promise(r => setTimeout(r, 150));      // past the start-up timer
       assert(scrolled[scrolled.length - 1] === "{lands}", "landed on: " + JSON.stringify(scrolled));
     ''', width=width, hash="#sel-46")
+
+
+def test_an_outage_clears_or_swaps_only_the_banner_and_an_unmarked_error_keeps_it(tmp_path):
+    """The refresh handler's outage behaviour, run under the same DOM stand-in: a marked outage page
+    (`data-sync-ok`) swaps its banner in, or clears the stale one when the recovered sync names
+    nothing, while the rest of the page stays; an error page without the marker changes nothing."""
+    run_script(tmp_path, r'''
+      var main = document.querySelector("main");
+      var clean = main.innerHTML;          // the page without any banner
+      // The page as last drawn carries a stale banner: the outage before the sync recovered.
+      main.innerHTML = '<div class="failbanner" role="alert"><p><b>Sync round failed</b> `sync_history` exit 3</p></div>'
+                       + clean;
+      const outage = (banner) => '<!doctype html><html><head><title>Problem</title></head><body><main data-sync-ok="1">'
+        + (banner ? '<div class="failbanner" role="alert"><p><b>Sync round failed</b> `sync_history` exit 9</p></div>' : '')
+        + clean + '</main></body></html>';
+      const serve = (ok, status, html) => { RESP = () => Promise.resolve(
+        {ok, status, redirected: false, text: () => Promise.resolve(html)}); };
+
+      // The outage still failing: only the banner is swapped in, the rest of the page stays.
+      serve(false, 503, outage(true));
+      await refresh();
+      var box = document.querySelector("main .failbanner");
+      assert(box && box.textContent.indexOf("exit 9") >= 0, "the outage banner was swapped in");
+      assert(document.querySelector("main .vm"), "the rest of the page survived the swap");
+
+      // Recovered sync, still no database: a marked outage page with no banner clears the stale one.
+      serve(false, 503, outage(false));
+      await refresh();
+      assert(!document.querySelector("main .failbanner"), "the marked outage cleared the stale banner");
+      assert(document.querySelector("main .vm"), "the rest of the page survived the clear");
+
+      // Another error page without the marker (a proxy's): what is shown stays.
+      main = document.querySelector("main");
+      main.innerHTML = '<div class="failbanner" role="alert"><p><b>Sync round failed</b> stale</p></div>' + main.innerHTML;
+      serve(false, 502, "<html><body><h1>502 Bad Gateway</h1></body></html>");
+      await refresh();
+      box = document.querySelector("main .failbanner");
+      assert(box && box.textContent.indexOf("stale") >= 0, "an unmarked error page keeps what is shown");
+
+      // The outage page never takes the page down: a fetch that throws is the old failed-refresh path.
+      RESP = () => Promise.reject(new Error("gone"));
+      await refresh();
+      assert(document.querySelector("main .failbanner"), "a failed fetch keeps the last page");
+      RESP = null;
+    ''')

@@ -115,6 +115,11 @@ class JobResult:
 # bounded, so the wait is too.
 PENDING_MAX = 48
 
+# How long the incident write (`record_rounds`) waits for a lock or for the database itself. A
+# timeout raises there, `record_failed_round` logs it and keeps the round in its wait list, and the
+# sync moves on to its next round — an exclusive lock on `sync_incidents` must not stall it.
+WRITE_TIMEOUT = "5s"
+
 
 @dataclass
 class State:
@@ -155,13 +160,20 @@ def record_rounds(rows: list, conn) -> bool:
     its stable id (`State.last_round_at`), so a retried write never doubles a round. True when the
     writes went through — a round already stored counts, so the caller can drop it from its wait
     list. Raises when the database refuses, and writes nothing then (each caller decides what a
-    partial write means; the worker retries the whole wait list)."""
+    partial write means; the worker retries the whole wait list).
+
+    The writes run in one transaction under `WRITE_TIMEOUT`: an exclusive lock on `sync_incidents`
+    (a backup, a migration) or a stalled database then raises instead of holding the round, and the
+    caller keeps every round in its wait list for the next one."""
     from psycopg.types.json import Jsonb
 
-    for at, jobs in rows:
-        conn.execute("insert into sync_incidents (round_id, round_at, jobs)"
-                     " values (%s, %s, %s) on conflict (round_id) do nothing",
-                     (at, datetime.fromisoformat(at), Jsonb(jobs)))
+    with conn.transaction():
+        conn.execute("select set_config('lock_timeout', %s, true), set_config('statement_timeout', %s, true)",
+                     (WRITE_TIMEOUT, WRITE_TIMEOUT))
+        for at, jobs in rows:
+            conn.execute("insert into sync_incidents (round_id, round_at, jobs)"
+                         " values (%s, %s, %s) on conflict (round_id) do nothing",
+                         (at, datetime.fromisoformat(at), Jsonb(jobs)))
     return True
 
 

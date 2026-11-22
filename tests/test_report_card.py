@@ -690,3 +690,86 @@ def test_a_sync_round_from_before_the_opening_is_not_an_incident(conn, page_conn
     assert not [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "sync_failed"]
     # The banner is current state, so it still says the latest round failed; the log starts at the opening.
     assert [a["kind"] for a in snap["alerts"]] == ["sync_failed"]
+
+
+def test_the_log_survives_a_missing_optional_table(conn, page_conn, opened):
+    """A database without migration 026 has no `sync_incidents`, and one without 021 no
+    `tracking_checks`: either source counts as no incidents and the panel's other incidents stay.
+    Each optional read runs in its own savepoint (`_error_steps`' pattern), so one missing table
+    cannot abort the panel's transaction and hide every incident."""
+    conn.execute("insert into action_log (at, kind, tool, arguments, outcome, detail)"
+                 " values (%s, 'write', 'submit_desired_state', '{}', 'refused', 'no')",
+                 (OPEN + timedelta(hours=1),))
+    assert worker.record_rounds([_round(OPEN + timedelta(hours=2))], conn)
+    conn.execute("drop table sync_incidents")          # a database without migration 026
+    data = dashboard.snapshot(page_conn, NOW)["incidents"]["data"]
+    assert data["total"] == 1 and [r["kind"] for r in data["rows"]] == ["refused"]
+    conn.execute("drop table tracking_checks")         # a database without migration 021
+    data = dashboard.snapshot(page_conn, NOW)["incidents"]["data"]
+    assert data["total"] == 1 and [r["kind"] for r in data["rows"]] == ["refused"]
+
+
+def test_a_locked_sync_incidents_table_cannot_stall_the_round(monkeypatch, conn, page_conn, schema_url, opened):
+    """An exclusive lock on `sync_incidents` (a backup, a migration) must not hang the sync: the
+    write waits at most `worker.WRITE_TIMEOUT`, gives up, and the round stays in the pending list
+    for a later round to write (`record_failed_round`)."""
+    import threading
+    import time as time_mod
+    import vending.db as db_mod
+    url, schema = schema_url
+    holder = psycopg.connect(url, connect_timeout=3,
+                             options=db_mod.session_options(url, f"-c search_path={schema}"))
+    try:
+        holder.execute("lock table sync_incidents in access exclusive mode")
+        monkeypatch.setattr(db_mod, "connect", lambda: _OneConn(conn))
+        monkeypatch.setattr(worker, "WRITE_TIMEOUT", "300ms")
+        state = worker.State()
+        state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+        state.rounds, state.last_round_at = 1, (OPEN + timedelta(hours=1)).isoformat()
+        waited: list = []
+        lines: list[str] = []
+        outcome: dict = {}
+
+        def call():
+            began = time_mod.monotonic()
+            worker.record_failed_round(state, waited, log=lines.append)
+            outcome["seconds"] = time_mod.monotonic() - began
+
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        thread.join(60)
+        assert not thread.is_alive(), "the incident write stalled on the lock"
+        assert outcome["seconds"] < 30, outcome
+        assert waited and waited[0][1][0]["exit_code"] == 3, "the round stayed in the pending list"
+        assert any("57014" in line for line in lines), lines   # the write gave up on its timeout
+        holder.rollback()                                      # the lock is gone
+        assert page_conn.execute("select count(*) from sync_incidents").fetchone()[0] == 0
+        # A later round writes the waited one, as it would after any database refusal.
+        state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
+        state.rounds, state.last_round_at = 2, (OPEN + timedelta(hours=2)).isoformat()
+        worker.record_failed_round(state, waited, log=lambda _: None)
+        assert waited == []
+        assert page_conn.execute("select count(*) from sync_incidents").fetchone()[0] == 1
+    finally:
+        holder.rollback()
+        holder.close()
+
+
+def test_a_check_is_windowed_by_when_it_was_answered(conn, page_conn, opened):
+    """The banner and the log use the same event time (`answered_at`, falling back to `sent_at`):
+    a check sent before the opening but answered after it is a competition incident in both, and
+    the log's row carries the moment it was answered."""
+    sent = OPEN - timedelta(hours=2)
+    answered = OPEN + timedelta(hours=1)
+    conn.execute(
+        "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+        " answered_at, status, answer, used_check, results)"
+        " values (%s, '2026-12-01', 'test', 's0', %s, '{}', %s, 200, '{}', true, %s)",
+        (sent, sent, answered,
+         Jsonb({"cash": "outside", "sales_tax_owed": "within", "coil": "within", "back_stock": "within"})))
+    snap = dashboard.snapshot(page_conn, NOW)
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "tracking_outside" and alert["at"] == answered
+    row, = [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "tracking_outside"]
+    assert row["at"] == answered and "cash" in row["note"]
+    assert snap["incidents"]["data"]["total"] == 1

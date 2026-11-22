@@ -1989,7 +1989,9 @@ def test_run_and_tracking_alerts_stay_inside_the_ledger_window(conn, page_conn, 
 
 def test_tracking_results_are_read_through_the_allowlist(conn, page_conn, open_ledger):
     """`results` is the bridge's JSON: an array there must not crash the incident log (which would
-    hide all of it), and nothing undocumented reaches the public JSON."""
+    hide all of it), and nothing undocumented reaches the public JSON. A newest check whose results
+    cannot be read names nothing and is skipped, so it cannot clear a known `outside` alert: the
+    newest valid check decides the banner."""
     at = MONDAY - timedelta(hours=2)
     conn.execute(
         "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
@@ -2004,10 +2006,14 @@ def test_tracking_results_are_read_through_the_allowlist(conn, page_conn, open_l
         (earlier, earlier, earlier + timedelta(minutes=5),
          Jsonb({"cash": "outside", "smuggled": "outside", "coil": "within"})))
     snap = dashboard.snapshot(page_conn, MONDAY)
-    # The newest check decides the banner; its results aren't the documented object, so it names nothing.
-    assert snap["alerts"] == []
-    assert snap["tracking"]["ok"] and snap["tracking"]["data"]["results"] == {}
-    # The log survives the array and reads the older check through the same allowlist.
+    # The newest check's results aren't the documented object, so it names nothing and is skipped;
+    # the newest valid check decides, and its verdicts survive the same allowlist (`smuggled` doesn't).
+    [alert] = snap["alerts"]
+    assert alert["kind"] == "tracking_outside"
+    assert alert["text"].startswith("The bridge's tracking check said cash outside")
+    assert snap["tracking"]["ok"]
+    assert snap["tracking"]["data"]["results"] == {"cash": "outside", "coil": "within"}
+    # The log survives the array and reads the same check through the same allowlist.
     row, = [r for r in snap["incidents"]["data"]["rows"] if r["kind"] == "tracking_outside"]
     assert "cash" in row["note"] and "smuggled" not in row["note"]
     assert snap["incidents"]["data"]["total"] == 1

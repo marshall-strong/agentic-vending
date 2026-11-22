@@ -619,12 +619,17 @@ def _sync_incidents(conn: psycopg.Connection, since: datetime, now: datetime) ->
     """The worker's failed rounds (`sync_incidents`, migration 026), as (round_at, jobs) newest
     first, with their count. Before the migration there is no table, and that is no incidents.
     `jobs` is what the worker wrote from its own round: each job's name, exit code and outcome —
-    never error text — so the note here is fixed words by construction."""
+    never error text — so the note here is fixed words by construction.
+
+    The query runs in its own transaction (a savepoint inside the panel's), like `_error_steps`':
+    caught outside it, an `UndefinedTable` rolls back to the savepoint instead of aborting the
+    panel's transaction, where the next query would fail and the whole log would disappear."""
     import psycopg
     try:
-        rows = conn.execute("select round_at, jobs from sync_incidents"
-                            " where round_at >= %s and round_at <= %s"
-                            " order by round_at desc, id desc", (since, now)).fetchall()
+        with conn.transaction():
+            rows = conn.execute("select round_at, jobs from sync_incidents"
+                                " where round_at >= %s and round_at <= %s"
+                                " order by round_at desc, id desc", (since, now)).fetchall()
     except psycopg.errors.UndefinedTable:     # before migration 026
         return [], 0
     return rows, len(rows)
@@ -636,14 +641,20 @@ def _tracking_outside(conn: psycopg.Connection, since: datetime, now: datetime) 
     table, and that is no incidents. `results` is the bridge's JSON, so every row is read through
     the shared allowlist (`tracking.verdicts`), and a `results` that isn't the documented four-key
     object at all is skipped: an array or an extra key can neither crash this query nor hide the
-    log. The stored request and answer never reach the log."""
+    log. The stored request and answer never reach the log.
+
+    The window and the order are the check's event time, `answered_at` falling back to `sent_at` —
+    the same moment the banner names (`dashboard._tracking`), so a check sent before the opening
+    but answered after it is an incident here and not only there. Like `_sync_incidents`, the
+    query runs in its own transaction, so a missing table cannot abort the panel's."""
     import psycopg
     where = ("from tracking_checks where results is not null and jsonb_typeof(results) = 'object'"
-             " and sent_at >= %s and sent_at <= %s")
+             " and coalesce(answered_at, sent_at) >= %s and coalesce(answered_at, sent_at) <= %s")
     try:
-        rows = conn.execute(f"select id, coalesce(answered_at, sent_at) as at, results {where}"
-                            " order by coalesce(answered_at, sent_at) desc, id desc",
-                            (since, now)).fetchall()
+        with conn.transaction():
+            rows = conn.execute(f"select id, coalesce(answered_at, sent_at) as at, results {where}"
+                                " order by coalesce(answered_at, sent_at) desc, id desc",
+                                (since, now)).fetchall()
     except psycopg.errors.UndefinedTable:     # before migration 021
         return [], 0
     checks = [(id_, at, v) for id_, at, v in ((r[0], r[1], tracking.verdicts(r[2])) for r in rows)

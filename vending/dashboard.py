@@ -900,22 +900,27 @@ def _catalog_counts(catalog: dict) -> dict:
 
 
 def _tracking(conn: psycopg.Connection) -> dict | None:
-    """The newest answered tracking check (`tracking_checks`, migration 021) and which of its four
-    verdicts said `outside`, or None when none has been answered yet. Only the verdicts and times
-    are read: the stored request and answer are the bridge's, and never shown or sent."""
+    """The newest answered tracking check (`tracking_checks`, migration 021) whose verdicts can be
+    read, and which of them said `outside`, or None when no readable check has been answered yet.
+    A newest check whose `results` aren't the bridge's documented verdicts names nothing and is
+    skipped, so a corrupt or undocumented answer cannot clear a known `outside` alert: the newest
+    valid check decides, the same one the incident log reads. Only the verdicts and times are read:
+    the stored request and answer are the bridge's, and never shown or sent."""
     rows = _rows(conn, "select id, sent_at, answered_at, results from tracking_checks"
-                       " where results is not null"
-                       " order by coalesce(answered_at, sent_at) desc, id desc limit 1")
-    if not rows:
-        return None
-    row = rows[0]
-    # `results` is the bridge's JSON, so it goes through the shared allowlist (`tracking.verdicts`):
-    # only the four documented keys, each only `within`/`outside`, reach the public JSON and the
-    # banner, and a `results` that isn't that object at all names nothing.
-    results = tracking.verdicts(row["results"])
-    return {"checked_at": row["answered_at"] or row["sent_at"],
-            "outside": [k for k in tracking.RESULTS if results.get(k) == "outside"],
-            "results": results}
+                       " where results is not null and jsonb_typeof(results) = 'object'"
+                       " order by coalesce(answered_at, sent_at) desc, id desc limit 5")
+    for row in rows:
+        # `results` is the bridge's JSON, so it goes through the shared allowlist (`tracking.verdicts`):
+        # only the four documented keys, each only `within`/`outside`, reach the public JSON and the
+        # banner. A row the allowlist leaves empty names nothing and is skipped; a real check is
+        # stored with all four (`tracking._results`), so the first row usually decides.
+        results = tracking.verdicts(row["results"])
+        if not results:
+            continue
+        return {"checked_at": row["answered_at"] or row["sent_at"],
+                "outside": [k for k in tracking.RESULTS if results.get(k) == "outside"],
+                "results": results}
+    return None
 
 
 def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
@@ -1262,7 +1267,9 @@ def outage_page(message: str, alerts: list[dict]) -> str:
     """The page `/dashboard` answers with when the database can't be read: why the rest is missing,
     plus the failure banner the worker knows on its own (`outage_alerts`). The page's refresh
     handler swaps this banner in during an outage (`SCRIPT`), so a failed sync round shows without
-    Postgres; an outage with nothing failing carries no banner."""
+    Postgres. It marks the page (`data-sync-ok`): the handler tells this outage page from any other
+    error reply, and an outage with nothing failing — a recovered sync round, the database still
+    down — clears a stale banner instead of throwing and keeping it."""
     body = (f'<header class="top">{mascot_svg("problem")}<h1>Agent dashboard</h1>'
             f'<span class="verdict problem">No data</span></header>'
             f'<ul class="attention"><li class="bad"><span class="dot">!</span><span>'
@@ -1272,7 +1279,7 @@ def outage_page(message: str, alerts: list[dict]) -> str:
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">'
             f'<title>Problem &middot; Agent dashboard</title>'
-            f'<style>{STYLE}</style></head><body><main>{_alerts_html(alerts)}{body}</main></body></html>')
+            f'<style>{STYLE}</style></head><body><main data-sync-ok="1">{_alerts_html(alerts)}{body}</main></body></html>')
 
 
 def verdict(items: list[dict]) -> str:
@@ -2781,16 +2788,23 @@ SCRIPT = """(function () {
       if (!r.ok) return r.text().then(function (html) {
         // The database is down (503). The outage page still carries the worker's own banner, so a
         // failed sync round shows without Postgres: swap just the banner in and keep the rest of
-        // the page as it is. No banner there — nothing is failing that the worker can name.
+        // the page as it is. The outage page marks itself (data-sync-ok), so an outage where the
+        // recovered sync names nothing clears the stale banner; any other error reply (a proxy's)
+        // isn't ours to read, and what is shown stays.
         var doc = new DOMParser().parseFromString(html, 'text/html');
+        if (!doc.querySelector('[data-sync-ok]')) throw new Error(r.status);
         var banner = doc.querySelector('.failbanner');
-        if (!banner) throw new Error(r.status);
-        return {failbanner: banner.innerHTML};
+        return {failbanner: banner ? banner.innerHTML : ''};
       });
       return r.text().then(function (html) { return {page: html}; });
     }).then(function (got) {
       if (got.failbanner !== undefined) {
         var main0 = document.querySelector('main'), box = main0.querySelector('.failbanner');
+        if (!got.failbanner) {
+          if (box) box.remove();
+          failed = true; times();
+          return;
+        }
         if (!box) {
           box = document.createElement('div');
           box.className = 'failbanner'; box.setAttribute('role', 'alert');

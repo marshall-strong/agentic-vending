@@ -1613,15 +1613,19 @@ def test_when_the_database_is_down_the_worker_still_names_its_failed_syncs(monke
     assert '<div class="failbanner" role="alert">' in body
     assert "Sync round failed" in body and "sync_history" in body and "exit 3" in body
     assert "Can't read the database" in body
+    assert 'data-sync-ok="1"' in body
     status, _, body = _get(site, "/dashboard/state.json")
     data = json.loads(body)
     assert status == 503 and SECRET not in body
     assert [a["kind"] for a in data["alerts"]] == ["sync_failed"]
     assert "`sync_history` exit 3" in data["alerts"][0]["text"]
     # The refresh handler swaps only the banner in an outage, and the error still reaches the log.
-    assert "failbanner" in dashboard.SCRIPT
+    assert "failbanner" in dashboard.SCRIPT and "data-sync-ok" in dashboard.SCRIPT
     assert SECRET in capsys.readouterr().err
-    # A worker whose latest round passed: the outage names nothing.
+    # A worker whose latest round passed: the outage names nothing. It still marks itself, so the
+    # page's refresh handler can tell a marked outage with no banner from another error page and
+    # clear a stale banner instead of keeping it.
     state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
-    assert '<div class="failbanner"' not in _get(site, "/dashboard")[2]
+    body = _get(site, "/dashboard")[2]
+    assert '<div class="failbanner"' not in body and 'data-sync-ok="1"' in body
     assert json.loads(_get(site, "/dashboard/state.json")[2])["alerts"] == []
