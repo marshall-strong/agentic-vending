@@ -52,12 +52,18 @@ database clock again, still inside the transaction. A write can wait on a lock a
 holds. If 00:00 Eastern on Mon 30 Nov passes while it waits, the reset refuses with the same
 "window closed" message and nothing changes.
 
-The database checks the window too, at commit (migration 022). A pause after the last clock read, or
-a caller's transaction that commits later, can't commit the reset after 00:00 Eastern on Mon 30 Nov:
-the commit fails with "the reset window closed", and nothing changes.
+The database checks the window too, at commit (migration 022). A pause after the last clock read
+can't commit the reset after 00:00 Eastern on Mon 30 Nov: the commit fails with "the reset window
+closed", and nothing changes. The cutoff in the database is fixed in the migration; no setting moves it.
+
+The reset runs in its own transaction. On a connection that already has one open, it refuses and
+changes nothing, so nobody can start it before midnight and commit it after. The CLI always runs it
+on its own.
 
 **The agent's notes** count from the real opening too. Until it is recorded, no run's notes carry
-over to the next run. After it, only notes from runs since the opening do (`docs/agent.md`).
+over to the next run. After it, only notes from runs that started at or after both the opening and the
+moment our slots (the server's assignment) were first read carry over (`docs/agent.md`). So an opening
+backdated before the 20 Nov redraw still can't bring back notes from before it.
 
 ## The steps
 
@@ -68,7 +74,8 @@ over to the next run. After it, only notes from runs since the opening do (`docs
    ```
 
 2. **Dry run.** It changes nothing and prints what it would do. Check it names entry 1, the test
-   opening, and nothing else:
+   opening, and nothing else. It lists what is dated up to the time it prints, which is what falls
+   before an opening recorded then. Anything dated later is counted apart and still counts:
 
    ```
    python -m vending.ledger reset-test-opening --by NAME
@@ -116,23 +123,56 @@ depends on how far the steps got:
 - **Step 3 ran, but step 4 didn't, and the fill request went in:** record the real opening with a
   time in the past. The opening's time decides what counts. Key dates counts the fill request by when
   it was sent, and stock and spend count its receipt by the receipt's time. So choose a time:
+  - after the 20 Nov redraw: when our slots (the server's assignment) were first read, the
+    `first_read_at` of `slot_assignment`,
   - after the test activity: the last test purchase request and its receipt, and
   - at or before the fill request was sent, which also puts it before the fill's receipt.
 
-  Find the fill request's `submitted_at` in `purchase_requests`, on the
-  [DB explorer](db-explorer.md) (read only, times in Eastern). For example, if the last test
-  purchase was on 28 Nov and the fill request went in at 20:00 on Sun 29 Nov, use 19:00. Don't use
-  a time after the request: an opening at 23:00 leaves the 20:00 fill out of Key dates. Give the
-  time with its offset (a time without one is read as UTC):
+  Read the times on the [DB explorer](db-explorer.md) (read only, times in Eastern):
+  `first_read_at` in the `slot_assignment` table, and the requests' `submitted_at` in
+  `purchase_requests`. For example, if the last test purchase was on 28 Nov and the fill request went
+  in at 20:00 on Sun 29 Nov, use 19:00. Don't use a time after the request: an opening at 23:00 leaves
+  the 20:00 fill out of Key dates. Don't use a time before the redraw, such as 18 Nov: that counts
+  pre-redraw test activity in the books. Give the time with its offset (a time without one is read
+  as UTC):
 
   ```
   python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T19:00:00-05:00
   ```
 
-  Then check:
-  - The dashboard's Key dates panel shows **Fill request sent** as done, with the fill's time. If it
-    says "no purchase request since the opening", the opening is after the request. Ask the team.
-  - Step 5. Once the receipt is in, `ledger show` lists the fill's receipt.
+  Then check that the opening is at or before the fill request, and that the books hold the fill's
+  receipt. Before 00:00 Eastern on Thu 3 Dec, the dashboard's Key dates panel shows **Fill request
+  sent** as done, with the fill's time. If it says "no purchase request since the opening", the
+  opening is after the request: ask the team. From the start the panel no longer shows that check,
+  so check the records instead. This works on any date:
+
+  1. The opening and the requests since it. On the DB explorer: `ledger_entries` (the row with kind
+     `opening`) and `purchase_requests`. Or in psql:
+
+     ```sql
+     select at at time zone 'America/New_York' as opening_eastern
+       from ledger_entries where kind = 'opening';
+
+     select request_id, submitted_at at time zone 'America/New_York' as sent_eastern,
+            off_cycle, status, total_paid,
+            fulfilled_at at time zone 'America/New_York' as fulfilled_eastern
+       from purchase_requests where status <> 'rejected'
+      order by submitted_at;
+     ```
+
+     The fill request is the first one that isn't off-cycle and was sent at or after the opening.
+     Its `sent_eastern` must be at or after `opening_eastern`. If it is before, ask the team.
+  2. The fill's receipt total, once its status is `fulfilled` (put its `request_id` in):
+
+     ```sql
+     select count(*) as lines, sum(total_paid) as paid
+       from purchase_lines where request_id = 'REQUEST_ID';
+     ```
+
+  3. `python -m vending.ledger show`: Receipts is that `paid` total, plus any later receipts. It is
+     not 0.00 once the fill is in, so step 5's "receipts 0.00" doesn't apply here. The opening
+     capital line shows the time you gave. Token spend and the development-spend note are as in
+     step 5.
 - **Step 3 never ran:** the 11 Nov test opening is still the opening, so the books count from
   11 Nov. Run 2's model spend is in the balance, and the 12 Nov test receipt is in purchases and
   stock. Ask the team before anything else. A fix then is a person's decision, recorded in the
@@ -147,7 +187,7 @@ calls, one test receipt). The CLI prints times in Eastern.
 $ python -m vending.ledger reset-test-opening --by kevin
 Dry run: nothing was changed. With --yes this moves one entry out of the books, into ledger_entries_archive:
      1  2026-11-11 14:00  opening         600.00  opening capital (test state, 11 Nov; to be reset before launch)  by marshall
-Nothing else moves. Once the real opening is recorded, these fall before it:
+Nothing else moves. Record the real opening now (step 4, without --at), and these, dated from 2026-11-11 to 2026-11-29 15:00 Eastern, fall before it:
   model calls since 2026-11-11: 2 entries, 0.48 spent. Development spend: on the dev-spend page, not in the balance
   receipts since 2026-11-11: 1 lines, 12.37 paid. Test purchases: not in the balance, the P&L or stock
   midweek visits since 2026-11-11: 0, 0.00 in fees. Not in the balance or the P&L
