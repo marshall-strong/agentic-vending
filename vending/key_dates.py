@@ -12,7 +12,8 @@ Before the start each date shows with a status computed from our own records whe
   (`product_requests`), labelled "Catalog queue clear", since that can't say the fill's products are in.
 - **First-fill plan picked**: a picked row in `first_fill_plans` (`vending.plan_store pick`), made for
   the current slot assignment.
-- **Ledger opening recorded**: the opening entry (`vending.ledger open`).
+- **Ledger opening recorded**: the opening entry (`vending.ledger open`). The 11 Nov test opening
+  isn't it: until it is reset (#215, `docs/ledger-reset.md`) this step is due.
 - **Fill request sent**: the first purchase request, not rejected, sent at or after the ledger's
   opening and before the start. A request before the opening is a test purchase, so with no opening
   it can't tell; a request from the start on is a restock, never the fill.
@@ -20,6 +21,10 @@ Before the start each date shows with a status computed from our own records whe
   makes (`vending.slots`), with `last_checked_at` from the lock through the snapshot's time.
 - **Restock request sent**: a purchase request that isn't off-cycle, isn't rejected, isn't the
   fill request, and was sent in the week to the cutoff.
+
+The fill and restock checks, and the read of the requests behind them, count from one competition
+opening (`competition_opening`): the ledger's opening, or none while that is the 11 Nov test one. So a
+test purchase since the test opening is never the fill or a restock.
 
 A date with no record behind it (the stocking day, the tax calculation) only counts down.
 
@@ -150,16 +155,18 @@ def read(conn: psycopg.Connection, now: datetime, opening: datetime | None, ours
         valid = True
     except SlotsNotRecorded:
         valid = False
+    from vending import ledger
+
+    test = opening is not None and ledger.is_test_opening(ledger.opening(conn))
+    facts = {"opening": opening, "test_opening": test}
+    counted_from = competition_opening(facts)
     requests = []
-    if opening is not None:
+    if counted_from is not None:
         requests = cur.execute(
             "select request_id, submitted_at, off_cycle, status from purchase_requests"
             " where status <> 'rejected' and submitted_at >= %s and submitted_at <= %s"
-            " order by submitted_at, request_id", (opening, now)).fetchall()
-    from vending import ledger
-
-    return {"opening": opening,
-            "test_opening": opening is not None and ledger.is_test_opening(ledger.opening(conn)),
+            " order by submitted_at, request_id", (counted_from, now)).fetchall()
+    return {**facts,
             "plan": plan,
             "slots_checked_at": assignment and assignment.last_checked_at,
             "slots_valid": valid,
@@ -279,12 +286,20 @@ TEST_OPENING_TEXT = ("only the 11 Nov test opening: reset it, then record the re
                      "(python -m vending.ledger reset-test-opening, then open; docs/ledger-reset.md)")
 
 
+def competition_opening(facts: dict) -> datetime | None:
+    """The opening the competition counts from: the ledger's, or None while that is the 11 Nov test one.
+
+    The one opening the request read, the fill check and the restock check use (Sol review of #222, round 2,
+    finding 3): a request since the test opening is a test purchase, never the fill or a restock."""
+    return None if facts.get("test_opening") else facts["opening"]
+
+
 def _ledger_opening(kd: KeyDate, now: datetime, ctx: dict) -> dict:
+    if ctx["facts"].get("test_opening"):
+        return _open(kd, now, TEST_OPENING_TEXT)
     opening = ctx["facts"]["opening"]
     if opening is None:
         return _open(kd, now, "not recorded: python -m vending.ledger open")
-    if ctx["facts"].get("test_opening"):
-        return _open(kd, now, TEST_OPENING_TEXT)
     return _done(f"{'opened' if opening <= now else 'opens'} {moment_text(opening)}")
 
 
@@ -299,7 +314,7 @@ def _fill_request(kd: KeyDate, now: datetime, ctx: dict) -> dict:
     if facts.get("test_opening"):
         return {"status": "waiting", "pill": "waiting",
                 "text": "counts from the real opening: a request since the 11 Nov test opening is a test purchase"}
-    if facts["opening"] is None:
+    if competition_opening(facts) is None:
         return {"status": "waiting", "pill": "waiting",
                 "text": "counts from the ledger opening: a request before it is a test purchase"}
     fill = _fill(facts)
@@ -335,7 +350,10 @@ def _slots_confirmed(kd: KeyDate, now: datetime, ctx: dict) -> dict:
 
 def _restock_request(kd: KeyDate, now: datetime, ctx: dict) -> dict:
     facts = ctx["facts"]
-    if facts["opening"] is None:
+    if facts.get("test_opening"):
+        return _open(kd, now, "only the 11 Nov test opening, so no request counts yet: a request since it is a "
+                              "test purchase")
+    if competition_opening(facts) is None:
         return _open(kd, now, "no ledger opening yet, so no request counts")
     fill = _fill(facts)
     since = kd.due - timedelta(days=7)

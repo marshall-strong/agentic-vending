@@ -497,6 +497,12 @@ def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None =
     (`stock.receipts_count_from`). The guards (`reset_refusal`) are read inside the transaction, after
     `RESET_LOCK` and with the opening row locked, and the clock is read after the lock, so two people
     running it at once can't both move something, and a reset that waited can't pass the window.
+
+    The clock is read again after the last write, inside the transaction. A write can wait on a lock that
+    another connection holds (`LOCK TABLE action_log`), and if 00:00 Eastern on Mon 30 Nov passes while it
+    waits, the reset raises the same "window closed" `LedgerError` and everything rolls back (Sol review,
+    round 2, finding 1). Only the commit itself comes after that last read. `now`, for tests, fixes both
+    readings; without it both are the database clock (`db_now`).
     """
     if not by.strip():
         raise LedgerError("a reset needs the name of who ran it (--by)")
@@ -505,7 +511,10 @@ def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None =
         row = conn.execute("select id, at, kind, amount_cents, detail, reference, recorded_by from ledger_entries"
                            " where kind = 'opening' for update").fetchone()
         opened = None if row is None else Entry(row[0], row[1], row[2], Fraction(row[3]), row[4], row[5], row[6])
-        why = reset_refusal(opened, now or db_now(conn), already=_already_reset(conn))
+        def clock() -> datetime:
+            return now if now is not None else db_now(conn)
+
+        why = reset_refusal(opened, clock(), already=_already_reset(conn))
         if why:
             raise LedgerError(why)
         conn.execute(
@@ -522,6 +531,10 @@ def reset_test_opening(conn: psycopg.Connection, by: str, now: datetime | None =
              f"test opening {money(opened.amount_cents)} of {opened.at.astimezone(EASTERN):%Y-%m-%d} (entry "
              f"{opened.id}) moved to "
              f"ledger_entries_archive by {by.strip()}"))
+        # After the last write: a write that waited past the window must not commit.
+        late = reset_refusal(opened, clock())
+        if late:
+            raise LedgerError(late)
     return opened
 
 

@@ -47,7 +47,10 @@ opening is never moved, whatever its detail says.
 5. The opening isn't that exact entry.
 
 It reads these guards inside its transaction, after taking a lock and with the opening row locked,
-so two people running it at once can't both move something.
+so two people running it at once can't both move something. After its last write it reads the
+database clock again, still inside the transaction. A write can wait on a lock another connection
+holds. If 00:00 Eastern on Mon 30 Nov passes while it waits, the reset refuses with the same
+"window closed" message and nothing changes.
 
 ## The steps
 

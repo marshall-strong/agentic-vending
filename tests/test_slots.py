@@ -143,18 +143,26 @@ def test_the_same_answer_again_only_moves_last_checked(empty):
     assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (AFTER,)
 
 
-def test_assigned_since_is_when_the_answer_was_stored_not_when_it_was_asked_for(empty):
-    """`slots record` asks at `now`, then stores. A run in between saw the old slots (#216, Sol finding 3)."""
-    assert slots.assigned_since(empty) is None
+def test_the_revision_changes_with_our_slots_and_never_comes_back(empty):
+    """Migration 023: agent notes are reused only on the revision they were written on (#216)."""
+    assert slots.usable_revision(empty) is None
     slots.record(empty, ANSWER, NOW)
-    stored = empty.execute("select stored_at from slot_assignment").fetchone()[0]
-    assert stored > NOW and slots.assigned_since(empty) == stored       # the database clock, after the ask
-    slots.record(empty, ANSWER, NOW + timedelta(days=1))                 # unchanged: still the same assignment
-    assert slots.assigned_since(empty) == stored
-    slots.record(empty, MOVED, NOW + timedelta(days=2))                  # changed: from when it was stored
-    assert slots.assigned_since(empty) > stored
-    empty.execute("update slot_assignment set stored_at = null")         # written before migration 023, or by hand
-    assert slots.assigned_since(empty) == NOW + timedelta(days=2)
+    first = slots.usable_revision(empty)
+    assert first is not None
+    slots.record(empty, ANSWER, NOW + timedelta(days=1))                 # unchanged: the same assignment
+    empty.execute("update slot_assignment set first_read_at = first_read_at - interval '1 day'")
+    assert slots.usable_revision(empty) == first
+    slots.record(empty, MOVED, NOW + timedelta(days=2))                  # changed: a new revision
+    moved = slots.usable_revision(empty)
+    assert moved > first
+    empty.execute("update slot_assignment set slots = %s", (list(TEST_SLOTS),))   # by hand: new too
+    assert slots.usable_revision(empty) > moved
+    by_hand = slots.usable_revision(empty)
+    empty.execute("delete from slot_assignment")                         # cleared and recorded again: new
+    slots.record(empty, ANSWER, NOW + timedelta(days=3))
+    assert slots.usable_revision(empty) > by_hand
+    empty.execute("update slot_assignment set device_id = 'vmc2'")       # one readers refuse: none usable
+    assert slots.usable_revision(empty) is None
 
 
 def test_an_unchanged_check_is_logged_only_when_it_confirms_the_assignment(empty):

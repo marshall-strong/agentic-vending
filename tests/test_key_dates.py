@@ -328,7 +328,10 @@ def test_with_only_the_test_opening_no_request_counts_for_the_fill_or_the_restoc
             assert check(r["fill_request"], "fill_request")["status"] == "waiting"
         assert check(r["first_restock_request"], "restock_request")["status"] != "done"
     facts = key_dates.read(page_conn, et(11, 29, 21), ledger.opening(page_conn).at, TEST_SLOTS)
-    assert facts["opening"] is None and facts["test_opening"] and facts["requests"] == []
+    assert facts["test_opening"] and key_dates.competition_opening(facts) is None and facts["requests"] == []
+    # Built from facts alone (a snapshot, or a test), the checks still count from no opening.
+    r = rows(et(11, 30, 12), {**facts, "requests": [request("TEST-28NOV", et(11, 28, 11))]})
+    assert check(r["first_restock_request"], "restock_request")["status"] != "done"
 
 
 def test_after_a_rejected_fill_the_first_restock_still_counts(conn, page_conn, monkeypatch):

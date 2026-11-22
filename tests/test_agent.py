@@ -385,14 +385,14 @@ def test_a_live_run_reads_only_live_notes(connect, conn):
 def test_notes_from_before_the_current_slot_assignment_are_left_out(connect, conn):
     """Run 2's notes name our slots from before the 20 Nov redraw; the next run must not read them (#216)."""
     go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
-    # The assignment changes after that run: `slots record` moves first_read_at to when it was read.
-    conn.execute("update slot_assignment set first_read_at = (select max(started_at) from agent_runs)"
-                 " + interval '1 microsecond'")
+    # The assignment changes after that run, as `slots record` changes it: a new revision.
+    from tests.test_slots import LEFT
+    conn.execute("update slot_assignment set slots = %s", (list(LEFT),))
     client = Script(answer(notes="New notes."))
     go(connect, client, Tools())
     opening = client.sent[0]["messages"][0]["content"]
     assert "Fill slot 15" not in opening
-    assert "written before our current slot assignment was recorded" in opening
+    assert "written on an earlier slot assignment than the one stored now" in opening
     client = Script(answer())
     go(connect, client, Tools())                                    # notes written since then carry on
     assert "New notes." in client.sent[0]["messages"][0]["content"]
@@ -413,10 +413,21 @@ def test_notes_from_a_run_while_slots_record_waits_on_the_server_are_left_out(co
     go(connect, client, Tools())
     opening = client.sent[0]["messages"][0]["content"]
     assert "Fill slot 15" not in opening
-    assert "written before our current slot assignment was recorded" in opening
+    assert "written on an earlier slot assignment than the one stored now" in opening
     client = Script(answer())
     go(connect, client, Tools())                                      # a run on the new slots carries on
     assert "New notes." in client.sent[0]["messages"][0]["content"]
+
+
+def test_notes_from_a_run_with_no_recorded_revision_are_left_out(connect, conn):
+    """A run from before migration 023, or one that started with no assignment stored, recorded no revision.
+    Once a revision exists, its notes never carry over: nothing says which slots they were written on."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    conn.execute("update agent_runs set slots_revision = null")
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "earlier slot assignment" in opening
 
 
 def test_notes_from_a_run_that_read_the_assignment_before_a_change_committed_are_left_out(connect, conn, schema_url):
@@ -429,8 +440,10 @@ def test_notes_from_a_run_that_read_the_assignment_before_a_change_committed_are
     recorder = open_in(*schema_url)
     try:
         recorder.autocommit = False
+        recorder.execute("select 1")       # an open transaction, so `record`'s own block doesn't commit
         asked_at = slots.clock(recorder)
         assert slots.record(recorder, MOVED, now=asked_at, lock=asked_at + timedelta(days=365)) == "changed"
+        assert recorder.info.transaction_status.name == "INTRANS"           # written, not committed
         go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())   # reads the old slots meanwhile
         recorder.commit()
     finally:
