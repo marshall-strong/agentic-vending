@@ -9,7 +9,7 @@
 -- At most one row per Saturday-to-Friday week (Eastern): the unique index is the cap, so
 -- restarts and racing replicas cannot double it (`vending.midweek_wake.record`).
 --
--- Numbered 025 because 022 and 023 (PR #222) and 024 (PR #224) are taken; the migrator
+-- Numbered 027 because 022-023 (PR #222), 024 (PR #224), 025 (PR #223) and 026 (PR #228) are taken; the migrator
 -- applies any file not yet applied, so the order PRs merge in doesn't matter.
 --
 -- `requested_at` is when `request_midweek_run` asked for a midweek agent run. Until the

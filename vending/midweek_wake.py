@@ -29,7 +29,7 @@ our slots (the server's assignment, `vending.slots.our_slots`):
   check decides with fresher data. A class day counts only when the slot would sit
   empty from its start, the same convention the projection uses (`vending.demand`).
 
-**One wake-up a week.** The row goes in `midweek_wakeups` (migration 025), keyed by
+**One wake-up a week.** The row goes in `midweek_wakeups` (migration 027), keyed by
 the Saturday that starts the Saturday-to-Friday week (Eastern), with a unique index:
 restarts and racing replicas cannot double the cap. The dashboard's Needs attention
 and the agent's briefing (`vending.briefing`) show the row, so the next run sees why.
