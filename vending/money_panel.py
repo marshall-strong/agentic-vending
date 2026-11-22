@@ -36,9 +36,10 @@ import psycopg
 from vending import config, ledger
 from vending.slots import SlotsNotRecorded
 
-# Proposed in #113 ("Opening capital plan"), not yet agreed: how the $600 is split.
+# Proposed in #113 ("Opening capital plan"), not yet agreed: how the $600 is split. The first fill's line is
+# $400 since 22 Nov (Kevin, #230), up from #113's $366.
 PROPOSED_SPLIT: tuple[tuple[str, int], ...] = (
-    ("First fill (most-we-pay)", 36_600),
+    ("First fill (most-we-pay)", 40_000),
     ("Midweek visits (2 x $25)", 5_000),
     ("Model spend (9 weeks x $1)", 900),
     ("Product-switch reserve", 6_800),

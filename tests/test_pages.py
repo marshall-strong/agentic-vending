@@ -1001,7 +1001,7 @@ def test_first_fill_html_and_json_agree_on_the_read_only_page(site, schema_url, 
     assert '<div class="why">Made-up fixture reason.</div>' in plan_html
     assert slot15["checks"]["legal_price"] is True
     assert plan["slots"][2]["checks"]["legal_price"] is False and "price refused" in plan_html
-    assert plan["fill_cap_cents"] == 36600 and "against the proposed $366.00 cap" in plan_html
+    assert plan["fill_cap_cents"] == 40000 and "against the proposed $400.00 cap" in plan_html
     assert "Code checks" in plan_html and "Floor $1.85" in plan_html and "Fill cost share" in plan_html
     assert "private" not in plan_html and "first-fill.json" not in body
     assert "Interloper" not in plan_html and "projection" not in plan

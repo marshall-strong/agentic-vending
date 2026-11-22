@@ -1483,7 +1483,7 @@ def test_the_plan_cell_says_first_fill_before_the_lock_and_next_restock_after(co
     p = before["plan"]["data"]
     cell = status_cells(before)[5]
     assert ">For the first fill<" in cell and "Friday" not in cell
-    assert f"20 slots &middot; {dashboard._cents(p['fill_most_cents'])} of $366" in cell and "not picked" not in cell
+    assert f"20 slots &middot; {dashboard._cents(p['fill_most_cents'])} of $400" in cell and "not picked" not in cell
     # Neither "day-one" nor "round" is anywhere on the page, before or after the lock.
     for snap in (before, after):
         text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", dashboard.render(snap), flags=re.S)
