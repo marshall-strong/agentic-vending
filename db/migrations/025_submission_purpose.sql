@@ -8,4 +8,11 @@
 --
 -- Null: an agent's request. Numbered 025: 022 to 024 are on other open branches.
 
+-- A submit in flight reads purchase_submissions in its gate transaction, then
+-- inserts its attempt on a second connection. If this ALTER queued behind the
+-- read, that insert would queue behind the ALTER, and neither could finish.
+-- So give up fast instead: the migration fails with "lock timeout" and nothing
+-- changes. Run it again once no submit is running (docs/deploy.md).
+set local lock_timeout = '2s';
+
 alter table purchase_submissions add column purpose text check (purpose in ('fill'));

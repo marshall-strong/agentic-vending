@@ -61,23 +61,30 @@ python -m vending.fill --submit --hash HASH --accept-deviations --by NAME   # se
    cutoff is Sun 29 Nov 23:59.
 3. Read "Differs from the pick", if the preview shows it. The command buys from the sourcing table's
    checked rows, so a product can come out in another pack size, another number of packs or units, or
-   a higher most-we-pay cost than the pick. Each product that differs is listed, with what the pick
-   buys and what the request buys. The send refuses with `pick_deviation` unless you add
+   a higher most-we-pay cost than the pick. The stocker may buy a product's alternate instead of its
+   primary, so each is compared on its own. Each one that differs is listed, with what the pick buys
+   and what that choice buys. The send refuses with `pick_deviation` unless you add
    `--accept-deviations`, and `action_log` records the flag and the list. Or load and pick a revised plan.
-4. Send it with the hash from step 1. If anything changed since the preview (plan, price, pack or
-   balance), the hash no longer matches, and the command refuses with `plan_changed`. Run the
-   preview again. The hash also covers the picked plan's ID and our slots (the server's assignment),
-   so a hash from another plan or assignment never sends this one.
+4. Send it with the hash from step 1. The hash covers the request (its lines, the worst-case cost
+   and the visit fee), the picked plan's ID and our slots (the server's assignment). If any of those
+   changed since the preview, the command refuses with `plan_changed`; run the preview again. A hash
+   from another plan or assignment never sends this one. The hash does not cover spendable cash or
+   the price ceiling. Those are checked again at the send, right before the POST (below).
 
-While the send runs, it holds the pick, the slot assignment, the sourcing table, our catalog copy and
-the ledger. A `plan_store pick`, a new slot assignment, a `sourcing set` or a change to the ledger's
-opening waits until the send is over. So the checked prices and the opening that the checks read are
-the ones the planner reads. The checks also run again on the exact rows and opening the planner was
-given. Right before the POST, the command reads the pick and our slots again and refuses with
-`pick_changed` if either changed.
+While the send runs, it holds the pick, the slot assignment, the sourcing table, our catalog copy,
+the ledger, `config` and the receipt sync's lock. A `plan_store pick`, a new slot assignment, a
+`sourcing set`, a change to the ledger's opening, a `config set` (such as a price ceiling) or the
+receipt sync waits until the send is over. That is a few seconds, plus the POST. The checks also run
+again on the exact rows and opening the planner was given.
 
-The deadline is checked right before the POST too, once the attempt is saved in
-`purchase_submissions`. It comes from the Key dates panel (`vending.key_dates.FILL_REQUEST`). From
+Once the attempt is saved in `purchase_submissions`, right before the POST, the command runs the whole
+preview again: the planner over the current rows, every guard, the differences from the pick and the
+balance. The pick and our slots must be the ones it planned (`pick_changed`), the hash the approved
+one (`plan_changed`), and the request body byte for byte the one about to be sent
+(`request_changed`). Any refusal marks the attempt never filed, and nothing is sent. So a price
+ceiling lowered, or less cash after a receipt, since the preview stops the send.
+
+The deadline is checked in that last check too. It comes from the Key dates panel (`vending.key_dates.FILL_REQUEST`). From
 00:00 ET Mon 30 Nov the command refuses with `fill_deadline`, unless you add `--late`. A send that
 crosses midnight while it runs is stopped there, and its attempt is marked never filed (nothing was
 sent). A late request may be denied, but it may not be, so a person can still choose to send it. The
@@ -108,8 +115,10 @@ It refuses, with every reason and nothing sent, when:
 - a product's alternate has no checked price (`no_checked_price`). The request sends the alternate
   too, so the command refuses rather than drop it. Check its price or remove it
   (`python -m vending.sourcing remove SKU --alternate --by NAME`);
-- the ledger has no opening, an opening dated after now, or only the test opening from before the fall
-  cut (`test_opening`, #215);
+- the ledger has no opening, an opening dated after now, or the 11 Nov test opening (`test_opening`,
+  #215). The test opening is told by its ledger entry (entry 1, dated 11 Nov in Eastern time, with its
+  exact detail; `ledger.is_test_opening`, as in #222), or by any opening dated on or before 11 Nov. It
+  does not depend on the fall cut, which can move;
 - a request was sent since the opening, or by this command at any time, and was not rejected by the
   bridge (`fill_already_sent`). The command's own attempts carry `purpose = 'fill'` in
   `purchase_submissions`, saved before the POST and kept when the attempt is settled or resolved by

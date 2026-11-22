@@ -101,6 +101,7 @@ from psycopg.types.json import Jsonb
 from vending import config, counters, db, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.start import EASTERN
 from vending.tools.sales_history import tax_cents
 
 KINDS = ("opening", "capital", "tokens", "adjustment", "tax_remitted")
@@ -378,6 +379,24 @@ def entries(conn: psycopg.Connection, start: datetime | None = None, end: dateti
 def opening(conn: psycopg.Connection) -> Entry | None:
     found = [e for e in entries(conn) if e.kind == "opening"]
     return found[0] if found else None
+
+
+# --- The test opening (#215) -------------------------------------------------------
+
+# The one entry the reset may move: the test opening on the team ledger, exactly as it was recorded on
+# 11 Nov. Matching on all three, not on the word "test", means the real opening can never be moved,
+# whatever its detail says (Sol review, finding 1).
+# The same names and values as PR #222 (`reset-test-opening`), so the fill (#214) tells the test opening
+# by the entry itself, not by the fall cut.
+TEST_OPENING_ID = 1
+TEST_OPENING_DATE = date(2026, 11, 11)                  # its date in Eastern time
+TEST_OPENING_DETAIL = "opening capital (test state, 11 Nov; to be reset before launch)"
+
+
+def is_test_opening(opened: Entry | None) -> bool:
+    """True if `opened` is the 11 Nov test opening the reset moves (id, Eastern date and detail). Pure."""
+    return opened is not None and (opened.id, opened.at.astimezone(EASTERN).date(), opened.detail) == (
+        TEST_OPENING_ID, TEST_OPENING_DATE, TEST_OPENING_DETAIL)
 
 
 def _development(e: Entry, opened: Entry | None) -> bool:

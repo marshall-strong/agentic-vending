@@ -108,18 +108,19 @@ def settle(side: psycopg.Connection, row: int, status: str, *, request_id: str |
                    body, plan_hash=plan_hash, visit_fee_cents=fee)
 
 
-def open_rows(conn: psycopg.Connection) -> list[tuple]:
-    """(id, at, status, line count, detail) for every submission a person still has to settle."""
+def open_rows(conn: psycopg.Connection, except_row: int | None = None) -> list[tuple]:
+    """(id, at, status, line count, detail) for every submission a person still has to settle.
+    `except_row` leaves out one row: the fill's own attempt, when it checks everything again before its POST."""
     return conn.execute(
         "select id, at, status, jsonb_array_length(body->'lines'), detail from purchase_submissions"
-        " where status = any(%s) order by id",
-        (list(OPEN),),
+        " where status = any(%s) and id is distinct from %s order by id",
+        (list(OPEN), except_row),
     ).fetchall()
 
 
-def unresolved(conn: psycopg.Connection) -> Refusal | None:
+def unresolved(conn: psycopg.Connection, except_row: int | None = None) -> Refusal | None:
     """The refusal both preview and submit raise while any submission is still open, naming every one."""
-    rows = open_rows(conn)
+    rows = open_rows(conn, except_row)
     if not rows:
         return None
     named = ", ".join(f"{row} ({status} since {at:%Y-%m-%d %H:%M} UTC)" for row, at, status, _, _ in rows)

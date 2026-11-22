@@ -142,6 +142,11 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 python -m vending.db migrate
 ```
 
+Apply migration 025 (`purchase_submissions.purpose`, for `python -m vending.fill`) while no submit
+runs: the agent paused (`python -m vending.halt on --by NAME`) and no fill being sent. It waits at
+most 2 seconds for its lock. If a submit holds the table, it fails with "lock timeout" and changes
+nothing; run it again once the submit is over.
+
 Apply migration 020 before deploying the dashboard that reads the first-fill plan. Use the same
 owner login that ran `python -m vending.pages grant` so the page login inherits read access.
 From a laptop with the plan files and the writer login, load the plan and pick the ID it prints.

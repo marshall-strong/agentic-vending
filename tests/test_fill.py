@@ -344,8 +344,9 @@ def test_an_unchecked_alternate_is_refused_with_nothing_sent(db, fake, schema_ur
     # preview lists that and the send needs --accept-deviations (round 2, finding 4).
     sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", expected_cents=1400, max_cents=1500), NOW)
     out, plan_hash = previewed(schema_url, fake, capsys)
-    assert "- COKE20: the pick buys 6 x 12 (72 units, at most $78.00); this request buys 6 x 12 (72 units, at most " \
-           "$90.00)" in out
+    assert "- COKE20 (alternate, Walmart): the pick buys 6 x 12 (72 units, at most $78.00); the alternate buys " \
+           "6 x 12 (72 units, at most $90.00)" in out
+    assert "- COKE20: " not in out   # the primary buys what the pick buys
     assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter",
                "--accept-deviations") == 0
     [posted] = fake.posts
@@ -526,9 +527,13 @@ def test_the_guards_run_on_the_rows_the_planner_used(db, fake, schema_url, capsy
     assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 1
     assert "no_checked_price" in capsys.readouterr().err and fake.posts == []
     monkeypatch.setattr(sourcing, "listed_options", real_rows)
-    real_balance = ledger.balance
-    monkeypatch.setattr(ledger, "balance", lambda conn, as_of=None: replace(
-        real_balance(conn, as_of), opening_at=TEST_OPENING_AT))
+    # The planner was given the test opening's entry (round 3: the entry, not its date, tells it).
+    from vending import planning
+
+    real_gather = planning.gather
+    monkeypatch.setattr(planning, "gather", lambda *a, **k: (lambda g: replace(g, opening=replace(
+        g.opening, id=ledger.TEST_OPENING_ID, at=TEST_OPENING_AT, detail=ledger.TEST_OPENING_DETAIL)))(
+        real_gather(*a, **k)))
     assert run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter") == 1
     assert "test_opening" in capsys.readouterr().err and fake.posts == []
     assert db.execute("select count(*) from purchase_submissions").fetchone() == (0,)
@@ -667,3 +672,207 @@ def test_a_request_that_buys_what_the_pick_buys_needs_no_approval(db, fake, sche
     seed(db, fake)
     out, _ = previewed(schema_url, fake, capsys)
     assert "Differs from the pick" not in out and "--accept-deviations" not in out
+
+
+# --- Sol review, round 3 --------------------------------------------------------------------------
+
+def _no_input_locks(monkeypatch):
+    """The submit's locks off, so a second connection's change lands mid-submit: a writer the locks miss. What
+    stops the send then is the full check right before the POST, not the locks."""
+    monkeypatch.setattr(fill, "hold_inputs", lambda conn: None, raising=False)
+
+
+def _changed_once_saved(monkeypatch, schema_url, change):  # noqa: F811
+    """Runs `change` on a second connection right after the attempt is saved, before the POST."""
+    from vending import submissions
+
+    real_save = submissions.save_sending
+
+    def saved_then_changed(*args, **kwargs):
+        row = real_save(*args, **kwargs)
+        with open_in(*schema_url) as other:
+            change(other)
+        return row
+
+    monkeypatch.setattr(submissions, "save_sending", saved_then_changed)
+
+
+def _lower_the_ceiling(conn):
+    from vending import config
+
+    config.set_value(conn, "price_ceiling_cents", 200, "Test Changer")
+
+
+def _old_request(conn):
+    """A request from before the opening, fulfilled with no lines yet: its receipt costs nothing so far."""
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status)"
+                 " values ('pr-old', '2026-11-20T15:00:00Z', false, '{}', 'fulfilled')")
+
+
+def _receipt_sync_spends_the_cash(conn):
+    """The receipt sync reads `pr-old` again: its receipt, dated after the opening, paid $590.00."""
+    from tests.test_sync_requests import fulfilled, receipt
+    from vending.purchase_requests import store
+
+    store(conn, "pr-old", fulfilled("pr-old", receipt(total_paid="590.00", resolved_at="2026-11-29T15:00:00Z"),
+                                    fulfilled_at="2026-11-29T15:30:00Z", total_paid="590.00"), NOW)
+
+
+@pytest.mark.parametrize("change", [_lower_the_ceiling, _receipt_sync_spends_the_cash],
+                         ids=["lower ceiling", "receipt sync"])
+def test_a_change_after_the_attempt_is_saved_stops_the_post(db, fake, schema_url, capsys, monkeypatch,  # noqa: F811
+                                                            change):
+    """Round 3, blocker 1: once the attempt was saved, only the deadline was checked again. A lowered price
+    ceiling, or a receipt sync that left less cash than the request's total, still posted. The whole preview
+    now runs again right before the POST, and the body must be the one approved."""
+    seed(db, fake)
+    _old_request(db)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash
+    _no_input_locks(monkeypatch)
+    _changed_once_saved(monkeypatch, schema_url, change)
+    rc = run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter")
+    err = capsys.readouterr().err
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert ("above_ceiling" if change is _lower_the_ceiling else "insufficient_balance") in err
+    [(status, detail)] = db.execute("select status, detail from purchase_submissions").fetchall()
+    assert status == "not_filed" and detail.startswith("nothing sent: ")
+
+
+def test_a_changed_body_after_the_attempt_is_saved_stops_the_post(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Round 3, blocker 1: the body re-planned before the POST must be byte-identical to the approved one. A
+    load changed mid-submit gives another body, so nothing is sent."""
+    seed(db, fake)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    _no_input_locks(monkeypatch)
+    plan = plan_json()
+    plan["day_one"][1]["units"] = 6
+    _changed_once_saved(monkeypatch, schema_url,
+                        lambda other: other.execute("update first_fill_plans set plan = %s", (Jsonb(plan),)))
+    rc = run(schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter")
+    err = capsys.readouterr().err
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert "plan_changed" in err and "pick_changed" in err
+    assert db.execute("select status from purchase_submissions").fetchall() == [("not_filed",)]
+
+
+def test_config_and_receipt_writes_wait_for_the_post(db, fake, schema_url, capsys):  # noqa: F811
+    """Round 3, blocker 1: from the check before the POST through the POST, a config change and a receipt sync
+    wait for the submit, so what was checked is what is sent."""
+    import threading
+
+    from tests.test_sync_requests import fulfilled, receipt
+    from vending import config
+    from vending.purchase_requests import store
+
+    seed(db, fake)
+    _old_request(db)
+    _, plan_hash = previewed(schema_url, fake, capsys)
+    fake.hold = threading.Event()
+    result, blocked = {}, {}
+    sender = threading.Thread(target=lambda: result.update(code=run(
+        schema_url, fake, "--submit", "--hash", plan_hash, "--by", "Test Submitter")))
+    sender.start()
+    try:
+        assert fake.received.wait(30)
+        with open_in(*schema_url) as other:
+            other.execute("set lock_timeout = '500ms'")
+            for name, write in (
+                    ("config", lambda: config.set_value(other, "price_ceiling_cents", 200, "Test Changer")),
+                    ("receipts", lambda: store(other, "pr-old", fulfilled("pr-old", receipt(), total_paid="12.37"),
+                                               NOW))):
+                try:
+                    write()
+                    blocked[name] = False
+                except psycopg.errors.LockNotAvailable:
+                    blocked[name] = True
+    finally:
+        fake.hold.set()
+        sender.join(30)
+    assert blocked == {"config": True, "receipts": True}
+    assert result == {"code": 0} and len(fake.posts) == 1
+
+
+def test_the_11_nov_test_opening_is_refused_whatever_the_fall_cut(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Round 3, blocker 2: with FALL_CUTOFF moved to 10 Nov, the 11 Nov test opening was after the cut, so the
+    fill took it for the real one. The test opening is now told by its ledger entry (`ledger.is_test_opening`)."""
+    monkeypatch.setenv("FALL_CUTOFF", "2026-11-10T00:00:00-05:00")
+    seed(db, fake, opened=None)
+    detail = "opening capital (test state, 11 Nov; to be reset before launch)"
+    entry = ledger.record(db, "opening", 60000, detail, "Test Treasurer", TEST_OPENING_AT)
+    db.execute("update ledger_entries set id = 1 where id = %s", (entry.id,))
+    out, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash is None and "test_opening: " in out
+    rc = run(schema_url, fake, "--submit", "--hash", plan_hash or "0" * 64, "--by", "Test Submitter")
+    capsys.readouterr()
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert "test_opening" in codes(db)
+
+
+def test_is_test_opening_matches_the_entry_and_nothing_else():
+    """The same names and rule as PR #222's: id, Eastern date and detail, all three."""
+    from datetime import date
+    from fractions import Fraction
+
+    assert (ledger.TEST_OPENING_ID, ledger.TEST_OPENING_DATE, ledger.TEST_OPENING_DETAIL) == (
+        1, date(2026, 11, 11), "opening capital (test state, 11 Nov; to be reset before launch)")
+
+    def entry(**over):
+        base = dict(id=ledger.TEST_OPENING_ID, at=TEST_OPENING_AT, kind="opening", amount_cents=Fraction(60000),
+                    detail=ledger.TEST_OPENING_DETAIL, reference=None, recorded_by="Test Treasurer")
+        return ledger.Entry(**{**base, **over})
+
+    assert ledger.is_test_opening(entry())
+    assert not ledger.is_test_opening(None)
+    assert not ledger.is_test_opening(entry(id=2))
+    assert not ledger.is_test_opening(entry(detail="opening capital"))
+    assert not ledger.is_test_opening(entry(at=OPENED))
+
+
+ALT16 = dict(store="Walmart", units_per_pack=16, expected_cents=1400, max_cents=1500)
+
+
+def test_an_alternate_with_other_packs_than_the_pick_needs_approval(db, fake, schema_url, capsys):  # noqa: F811
+    """Round 3, major 3: only the primary's packs were compared. A Walmart 16-pack alternate buys 5 x 16 (80
+    units) where the pick buys 6 x 12 (72); its $75.00 worst case is under the pick's $78.00, so nothing said so
+    and it posted. Every choice the stocker may use is compared now."""
+    seed(db, fake)
+    sourcing.set_option(db, option("COKE20", "alternate", **ALT16), NOW)
+    out, plan_hash = previewed(schema_url, fake, capsys)
+    assert plan_hash
+    argv = ["--submit", "--hash", plan_hash, "--by", "Test Submitter"]
+    rc = run(schema_url, fake, *argv)
+    capsys.readouterr()
+    assert (rc, len(fake.posts)) == (1, 0)
+    assert codes(db) == ["pick_deviation"]
+    assert ("- COKE20 (alternate, Walmart): the pick buys 6 x 12 (72 units, at most $78.00); the alternate buys "
+            "5 x 16 (80 units, at most $75.00)") in out
+    assert run(schema_url, fake, *argv, "--accept-deviations") == 0
+    [posted] = fake.posts
+    assert posted["lines"][0]["alternate"]["units_per_pack"] == 16
+
+
+def test_migration_025_gives_up_fast_rather_than_queue_behind_a_submit(schema_url):  # noqa: F811
+    """Round 3, major 4: 025's ALTER waited behind a submit's open read of purchase_submissions, and the submit's
+    insert of its attempt then queued behind the ALTER: neither could finish. 025 now gives up after its short
+    lock_timeout, and a retry once nothing is submitting applies it."""
+    import time
+
+    from vending import db as vending_db
+
+    with open_in(*schema_url) as conn, open_in(*schema_url) as submit:
+        # Without 025's own limit this would wait forever: fail the test instead of hanging it.
+        conn.execute("set statement_timeout = '20s'")
+        conn.execute("alter table purchase_submissions drop column purpose")
+        conn.execute("delete from schema_migrations where version = '025_submission_purpose.sql'")
+        with submit.transaction():
+            # What a submit in flight holds: its gate transaction has read purchase_submissions.
+            submit.execute("select count(*) from purchase_submissions").fetchone()
+            began = time.monotonic()
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                vending_db.migrate(conn)
+            assert time.monotonic() - began < 10
+        assert vending_db.migrate(conn) == ["025_submission_purpose.sql"]
+        assert conn.execute("select count(*) from information_schema.columns where table_name ="
+                            " 'purchase_submissions' and column_name = 'purpose' and table_schema = current_schema()"
+                            ).fetchone() == (1,)

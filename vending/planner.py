@@ -744,7 +744,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     if refusals:
         return plan
     week = _week_of(now.astimezone(_tz(config.timezone)), config.week_starts)
-    # What it could cost goes in too: a new visit fee leaves the request body as it was.
+    # What it could cost goes in too: a new visit fee leaves the request body as it was. Spendable cash and the
+    # price ceiling are not in it: the gates above check them each time the planner runs, and the day-one fill
+    # (`vending.fill`) runs the planner again right before its POST.
     body = json.dumps({"week": week.isoformat(), "request": plan.request(),
                        "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents}, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),

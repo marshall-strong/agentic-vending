@@ -24,15 +24,18 @@ and nothing sent:
 - `no_checked_price`: a product with no sourcing row, or a primary or alternate row with no checked price.
   The request sends the alternate too, so an unchecked one is refused, not dropped: dropping it would send a
   request the person never saw. Check its price (`sourcing set SKU --alternate`) or remove it;
-- `test_opening`: the ledger's opening is from before the fall cut, the test opening of 11 Nov (#215);
+- `test_opening`: the ledger's opening is the 11 Nov test opening (#215): that entry itself
+  (`ledger.is_test_opening`: entry 1, dated 11 Nov in Eastern time, with its exact detail), or any opening dated
+  on or before 11 Nov. Not the fall cut, which can move;
 - `fill_already_sent`: a request since the opening, or any request this command sent, was accepted and not
   rejected by the bridge, so the fill has gone. This command's own attempts carry `purpose = 'fill'` on their
   `purchase_submissions` row, saved before the POST and kept by `settle` and `submissions resolve`. So they
   count whenever they were sent, and neither an opening recorded again after the fill nor an interruption
   before `action_log` is written can hide one;
-- `pick_deviation` (submit only): the request buys other packs, units or a higher most-we-pay cost than the
-  pick (`deviations`), for example a checked 16-pack where the pick bought 12-packs. The preview lists each
-  one. `--accept-deviations` sends it anyway, and the log records the flag and the list;
+- `pick_deviation` (submit only): a choice the stocker may use, the primary or the alternate, buys other
+  packs, units or a higher most-we-pay cost than the pick (`deviations`), for example a checked 16-pack where
+  the pick bought 12-packs. The preview lists each one. `--accept-deviations` sends it anyway, and the log
+  records the flag and the list;
 - `inputs_changed` (submit only): the sourcing rows or the opening stored now are not the ones the planner
   was given. The submit holds those tables, so this is a second line.
 
@@ -49,22 +52,29 @@ slot, sized for all of them, and a back-stock line for each other slot that load
 purchases" in `vending.planner`.
 
 The submit needs `--hash`, the hash the preview printed, and refuses
-(`plan_changed`) when the plan now hashes to anything else: a changed plan,
-price, pack or balance can't slip through. The hash covers the planner's hash of
-the request, the picked plan's ID and our slots (the server's assignment), so a
-hash from one plan or assignment never sends another (`approval_hash`). Who
-submitted it, and the plan's ID, go in `action_log` (tool `fill.submit`) with
-the submit's reply.
+(`plan_changed`) when the plan now hashes to anything else. The hash covers the
+request (its lines, the worst-case cost and the visit fee), the picked plan's ID
+and our slots (the server's assignment), so a hash from one plan or assignment
+never sends another (`approval_hash`). It does not cover spendable cash or the
+price ceiling: those are checked again at the send, as below. Who submitted it,
+and the plan's ID, go in `action_log` (tool `fill.submit`) with the submit's reply.
 
 The submit holds the pick, the slot assignment, the sourcing table, our catalog
-copy and the ledger for its whole transaction: a `plan_store pick`, a new
-assignment, a `sourcing set` or a re-dated opening waits until the send is over.
-Right before the POST it reads the pick and our slots again and refuses
-(`pick_changed`) if either is not what it planned.
+copy, the ledger, `config` and the receipt sync's lock for its whole transaction
+(`hold_inputs`): a `plan_store pick`, a new assignment, a `sourcing set`, a
+re-dated opening, a `config set` or a receipt read back by the sync waits until
+the send is over, a few seconds plus the POST.
+
+Once the attempt is saved, right before the POST, it runs the whole preview
+again (`_final_check`): the planner over the current rows, every guard, the
+deviations and the balance. The pick and our slots must be the ones it planned
+(`pick_changed`), the hash the approved one (`plan_changed`) and the request
+body byte for byte the one about to be sent (`request_changed`). Any refusal
+marks the saved attempt `not_filed`, and nothing is sent.
 
 The request is due by 23:59 ET on Sun 29 Nov (`key_dates.FILL_REQUEST`). The
-submit checks the clock before it saves the attempt, and again once the attempt
-is saved, right before the POST. From midnight on it refuses (`fill_deadline`)
+submit checks the clock before it saves the attempt, and again in the final
+check, right before the POST. From midnight on it refuses (`fill_deadline`)
 unless `--late` is given; a refusal at the second check marks the saved attempt
 `not_filed`, since nothing was sent. A late request may be denied, but it may
 not be, so a person can still choose to send it. The log records `late`. The
@@ -90,8 +100,8 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg.types.json import set_json_loads
 
-from vending import (db, key_dates, ledger, plan_rounds, planner, planning, settings, slots, sourcing, start,
-                     submissions)
+from vending import (db, key_dates, ledger, plan_rounds, planner, planning, purchase_requests, settings, slots,
+                     sourcing, submissions)
 from vending.bridge import Bridge
 from vending.pricing import Refusal
 from vending.tools import desired_state as schema
@@ -113,6 +123,8 @@ PLAN_CHANGED = "plan_changed"
 PAST_DEADLINE = "fill_deadline"
 INPUTS_CHANGED = "inputs_changed"
 DEVIATION = "pick_deviation"
+REQUEST_CHANGED = "request_changed"
+CANNOT_PLAN = "cannot_plan"
 PURPOSE = "fill"            # `purchase_submissions.purpose` for the fill's attempts
 
 
@@ -197,8 +209,10 @@ def desired_state(checked: plan_rounds.Round) -> schema.DesiredState:
         for s in checked.slots.values()])
 
 
-def checks(conn: psycopg.Connection, pick: Picked, ours: tuple[str, ...]) -> list[Refusal]:
-    """This command's own refusals. The planner's come from `planning.plan`."""
+def checks(conn: psycopg.Connection, pick: Picked, ours: tuple[str, ...],
+           except_row: int | None = None) -> list[Refusal]:
+    """This command's own refusals. The planner's come from `planning.plan`. `except_row` is the submit's own
+    saved attempt, left out of the open-submission check when everything is checked again before the POST."""
     refusals = []
     if pick.round is None:
         refusals.append(Refusal(PLAN_ASSIGNMENT, (
@@ -208,14 +222,14 @@ def checks(conn: psycopg.Connection, pick: Picked, ours: tuple[str, ...]) -> lis
         skus = sorted({s.sku for s in pick.round.slots.values() if s.sku})
         refusals.extend(_unpriced(sourcing.options_for(conn, skus), pick.round))
     opened = ledger.opening(conn)
-    refusals.extend(_test_opening(opened.at if opened is not None else None))
+    refusals.extend(_test_opening(opened))
     if sent := _sent(conn, opened.at if opened is not None else None):
         named = ", ".join(f"{rid} ({status})" for rid, status in sent)
         refusals.append(Refusal(ALREADY_SENT, (
             f"request {named} was sent as the fill or since the ledger's opening and wasn't rejected, so the "
             "day-one fill has gone; it can be sent again only if the bridge rejects it")))
     # The agent's submit refuses this too; here it also stops a preview from looking clean.
-    if unresolved := submissions.unresolved(conn):
+    if unresolved := submissions.unresolved(conn, except_row):
         refusals.append(unresolved)
     return refusals
 
@@ -225,27 +239,32 @@ def input_refusals(checked: plan_rounds.Round, gathered: planning.Gathered) -> l
     the opening its balance counted from. Re-reading the tables instead could pass rows the planner never used."""
     skus = {s.sku for s in checked.slots.values() if s.sku}
     return [*_unpriced([o for o in gathered.sourcing_rows if o.sku in skus], checked),
-            *_test_opening(gathered.opening_at)]
+            *_test_opening(gathered.opening)]
 
 
 def _inputs_changed(conn: psycopg.Connection, gathered: planning.Gathered) -> list[Refusal]:
     """A refusal if the sourcing rows or the opening read now are not what the planner was given. The submit holds
     those tables, so this is a second line: it should never fire."""
-    opened = ledger.opening(conn)
     if (tuple(sourcing.listed_options(conn)) == tuple(gathered.sourcing_rows)
-            and (opened.at if opened is not None else None) == gathered.opening_at):
+            and ledger.opening(conn) == gathered.opening):
         return []
     return [Refusal(INPUTS_CHANGED, (
         "the sourcing table or the ledger's opening changed while this submit ran, so what was planned is not "
         "what is stored now. Nothing was sent. Preview again and submit what it shows."))]
 
 
-def _test_opening(opened_at: datetime | None) -> list[Refusal]:
-    if opened_at is None or opened_at >= start.fall_cut():
+def _test_opening(opened: ledger.Entry | None) -> list[Refusal]:
+    """A refusal while the opening is the 11 Nov test opening: that entry itself (`ledger.is_test_opening`), or
+    any opening dated on or before its day. Not the fall cut: `FALL_CUTOFF` can move (round 3, finding 2)."""
+    if opened is None:
+        return []
+    day = opened.at.astimezone(EASTERN).date()
+    if not (ledger.is_test_opening(opened) or day <= ledger.TEST_OPENING_DATE):
         return []
     return [Refusal(TEST_OPENING, (
-        f"the ledger's opening is dated {opened_at.astimezone(EASTERN):%Y-%m-%d}, before the fall cut, so it is "
-        "the test opening, not the real one (#215); reset it and record the real opening first"))]
+        f"the ledger's opening is dated {day:%Y-%m-%d} (entry {opened.id}), so it is the 11 Nov test opening, not "
+        "the real one (#215); reset it (python -m vending.ledger reset-test-opening, #222) and record the real "
+        "opening first"))]
 
 
 def _sent(conn: psycopg.Connection, opened_at: datetime | None) -> list[tuple[str, str]]:
@@ -265,11 +284,14 @@ def _sent(conn: psycopg.Connection, opened_at: datetime | None) -> list[tuple[st
 
 
 def deviations(plan: planner.Plan, checked: plan_rounds.Round) -> list[str]:
-    """Where the request buys other packs, units or a higher most-we-pay cost than the pick, one line per product.
+    """Where a choice the stocker may use buys other packs, units or a higher most-we-pay cost than the pick: one
+    line for each product's primary, and one for its alternate.
 
     The pick's packs come from its round's pack list (`plan_rounds`). The planner buys from the sourcing table's
-    checked rows, which may have another pack size or price. A product the pick has no pack for can't be
-    compared, so it is listed too. A lower cost is not listed."""
+    checked rows, which may have another pack size or price. The stocker may buy the alternate instead of the
+    primary, so it is compared on its own too: pack count, pack size, units and its own most-we-pay cost (round 3,
+    finding 3). A product the pick has no pack for can't be compared, so it is listed too. A lower cost is not
+    listed."""
     picked = {p.sku: p for p in checked.purchases}
     bought: dict[str, list[planner.Purchase]] = {}
     for ln in plan.lines:
@@ -278,28 +300,39 @@ def deviations(plan: planner.Plan, checked: plan_rounds.Round) -> list[str]:
     found = []
     for sku in sorted({s.sku for s in checked.slots.values() if s.sku} | set(bought)):
         mine = bought.get(sku, [])
-        packs = sum(p.primary.packs for p in mine)
-        sizes = sorted({p.primary.units_per_pack for p in mine})
-        units = sum(p.primary.packs * p.primary.units_per_pack for p in mine)
-        # The worst case, as the plan's cost counts it: the dearer of the primary and the alternate.
-        most = sum(max(p.primary.packs * p.primary.max_price_per_pack_cents,
-                       p.alternate.packs * p.alternate.max_price_per_pack_cents if p.alternate else 0)
-                   for p in mine)
-        here = "none"
-        if mine:
-            bought_as = f"{packs} x {sizes[0]}" if len(sizes) == 1 else f"{packs} packs"
-            here = f"{bought_as} ({units} units, at most {_usd(most)})"
+        primary = _bought([p.primary for p in mine])
         pick = picked.get(sku)
         if pick is None:
             found.append(f"{sku}: the pick has no pack for it, so its packs and cost can't be compared; this request "
-                         f"buys {here}")
+                         f"buys {primary[-1]}")
             continue
         theirs = (f"{pick.packs} x {pick.units_per_pack} ({pick.packs * pick.units_per_pack} units, at most "
                   f"{_usd(pick.most_cents)})")
-        same = (packs, sizes, units) == (pick.packs, [pick.units_per_pack], pick.packs * pick.units_per_pack)
-        if not same or most > pick.most_cents:
-            found.append(f"{sku}: the pick buys {theirs}; this request buys {here}")
+        if _differs(primary, pick):
+            found.append(f"{sku}: the pick buys {theirs}; this request buys {primary[-1]}")
+        alternates = [p.alternate for p in mine if p.alternate is not None]
+        if alternates and _differs(alternate := _bought(alternates), pick):
+            stores = ", ".join(sorted({a.store for a in alternates}))
+            found.append(f"{sku} (alternate, {stores}): the pick buys {theirs}; the alternate buys {alternate[-1]}")
     return found
+
+
+def _bought(options: Sequence[planner.PlannedPurchase]) -> tuple[int, list[int], int, int, str]:
+    """(packs, pack sizes, units, most-we-pay cents, as text) of one choice, summed over the lines that buy it."""
+    packs = sum(o.packs for o in options)
+    sizes = sorted({o.units_per_pack for o in options})
+    units = sum(o.packs * o.units_per_pack for o in options)
+    most = sum(o.packs * o.max_price_per_pack_cents for o in options)
+    if not options:
+        return packs, sizes, units, most, "none"
+    bought_as = f"{packs} x {sizes[0]}" if len(sizes) == 1 else f"{packs} packs"
+    return packs, sizes, units, most, f"{bought_as} ({units} units, at most {_usd(most)})"
+
+
+def _differs(choice: tuple[int, list[int], int, int, str], pick: plan_rounds.Purchase) -> bool:
+    packs, sizes, units, most, _ = choice
+    return ((packs, sizes, units) != (pick.packs, [pick.units_per_pack], pick.packs * pick.units_per_pack)
+            or most > pick.most_cents)
 
 
 def _unpriced(options: Sequence[sourcing.Option], checked: plan_rounds.Round) -> list[Refusal]:
@@ -361,11 +394,12 @@ def day_one_warnings(plan: planner.Plan, now: datetime, visit: date = DAY_ONE_VI
 
 
 def preview(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
-            visit: date = DAY_ONE_VISIT) -> Preview:
-    """The picked plan planned on live data, as `preview_desired_state` would, plus this command's checks."""
+            visit: date = DAY_ONE_VISIT, *, except_row: int | None = None) -> Preview:
+    """The picked plan planned on live data, as `preview_desired_state` would, plus this command's checks.
+    `except_row`: see `checks`. The submit runs this again right before its POST (`_final_check`)."""
     ours = slots.our_slots(conn)
     pick = picked(conn, ours)
-    own = checks(conn, pick, ours)
+    own = checks(conn, pick, ours, except_row)
     late = (now or ledger.db_now(conn)) >= fill_deadline()
     deadline = [f"past the fill request deadline ({_deadline_text()}): a late request may be denied; to send it "
                 "anyway, add --late to the submit"] if late else []
@@ -387,16 +421,15 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
            accept_deviations: bool = False) -> submit_tool.SubmitReply:
     """Send the picked plan through the agent's submit, inside the write gate. Raises `Refused` with every reason.
 
-    The checks run again inside the gate's transaction, holding the halt lock, so nothing can change between
-    them and the send. The transaction also holds the pick and the slot assignment, so a repick or a new
-    assignment waits until the send is over; right before the POST, the pick, our slots, the hash and the
-    deadline are checked once more (`_before_send`). With any refusal, the planner still runs so its refusals
-    are reported too, but nothing is sent. `late` sends after the deadline anyway.
+    The checks run again inside the gate's transaction, holding the halt lock and every lock `hold_inputs`
+    takes, until the send is over. Before the attempt is saved, the pick, our slots, the hash and the deadline
+    are checked (`_before_send`), and the guards run on the rows the planner was given (`input_refusals`). With
+    any refusal, the planner still runs so its refusals are reported too, but nothing is sent. `late` sends
+    after the deadline anyway. A request that buys other packs than the pick (`deviations`) is refused unless
+    `accept_deviations`.
 
-    It also holds the sourcing table, our catalog copy and the ledger, so a checked price or the opening can't
-    change between the checks and the planner, and the guards run again on the rows the planner was given
-    (`input_refusals`). Once the attempt is saved, the deadline is checked one last time, right before the POST.
-    A request that buys other packs than the pick (`deviations`) is refused unless `accept_deviations`.
+    Once the attempt is saved, right before the POST, the whole preview runs again and the body must be the
+    approved one, byte for byte (`_final_check`); a refusal there marks the attempt `not_filed`.
     """
     if not by.strip():
         raise ValueError("--by needs your name")
@@ -410,12 +443,7 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
         arguments["accept_deviations"] = True
 
     def action(conn: psycopg.Connection) -> submit_tool.SubmitReply:
-        # A pick (`plan_store pick`) and a new slot assignment (`slots record`) wait for this transaction.
-        conn.execute("lock table first_fill_plans in share mode")
-        conn.execute("select 1 from slot_assignment where id = 1 for share")
-        # So do changes to a checked price, the catalog that lists it, and the ledger's opening: what the checks
-        # read is what the planner reads (round 2, finding 1).
-        conn.execute("lock table sourcing_options, catalog_products, ledger_entries in share mode")
+        hold_inputs(conn)
         ours = slots.our_slots(conn)
         pick = picked(conn, ours)
         arguments.update(plan_id=pick.id, label=pick.label)
@@ -443,15 +471,80 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
                         "run the same command with --accept-deviations; or load and pick a revised plan.")))
             return _unique(found)
 
-        def before_post(side: psycopg.Connection) -> list[Refusal]:
-            # After the attempt is saved: the clock is read again, right before the POST (round 2, finding 3).
-            return _deadline(side, now, late)
+        def before_post(side: psycopg.Connection, row: int, body: dict) -> list[Refusal]:
+            # After the attempt is saved, right before the POST: the whole preview again, on this transaction,
+            # which still holds every lock `hold_inputs` took (round 3, finding 1).
+            return _final_check(conn, bridge, pick, ours, expected, row, body, now, late=late,
+                                accept_deviations=accept_deviations)
 
         return submit_tool.submit_desired_state(desired, bridge, connect, now, pool=True, before_send=before_send,
                                                 before_post=before_post, purpose=PURPOSE)(conn)
 
     # The gate logs `arguments` after the action has filled in the plan's ID.
     return run_write(conn, TOOL, arguments, action)
+
+
+def hold_inputs(conn: psycopg.Connection) -> None:
+    """Lock, until the submit's transaction ends, everything its checks read that a person or a sync could change.
+
+    Held from the first check through the POST and the settle: a few seconds of local reads, plus the POST,
+    which the bridge client bounds by its timeout. While they are held, these wait for the send to end: a pick
+    (`plan_store pick`), a new slot assignment (`slots record`), a `sourcing set`, a catalog sync, a ledger entry
+    (the opening, a model call's cost), a `config set` (a price ceiling) and the receipt sync's `store`, which
+    takes the same advisory lock (`purchase_requests.RECEIPTS_LOCK`). The fill is run once, by a person, so a
+    sync that waits a few seconds costs nothing. The receipt lock is taken first; nothing that takes it waits on
+    the tables locked after it.
+
+    The side connection that saves and settles the attempt writes only `purchase_submissions` and
+    `purchase_requests`. Neither is locked here, so it never waits on this transaction.
+
+    The write gate already holds the halt row. A halt turned on in the same instant this runs can meet the
+    config lock in a deadlock; Postgres then cancels one of the two. These locks come before anything is saved,
+    so if it cancels the fill, nothing was saved or sent."""
+    conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (purchase_requests.RECEIPTS_LOCK,))
+    conn.execute("lock table first_fill_plans in share mode")
+    conn.execute("select 1 from slot_assignment where id = 1 for share")
+    # What the checks read is what the planner reads (round 2, finding 1), and what the last check reads is what
+    # is sent (round 3, finding 1).
+    conn.execute("lock table sourcing_options, catalog_products, ledger_entries, config in share mode")
+
+
+def _final_check(conn: psycopg.Connection, bridge: Callable[[], Bridge], pick: Picked, ours: tuple[str, ...],
+                 expected: str, row: int, body: dict, now: datetime | None, *, late: bool,
+                 accept_deviations: bool) -> list[Refusal]:
+    """Everything the preview checks, run again once the attempt is saved, right before the POST.
+
+    The planner runs over the current rows with every guard, the deviations and the balance. Then the plan must
+    still be the one approved: the same pick and our slots, the same approval hash, and a request body
+    byte-identical to `body`, the one about to be sent. The submit's own saved attempt (`row`) is left out of
+    the open-submission check. Any refusal settles the attempt `not_filed`, and nothing is sent."""
+    try:
+        p = preview(conn, bridge(), now, except_row=row)
+    except NoPick:
+        p = None
+    found: list[Refusal] = []
+    if p is None or p.picked.row != pick.row or p.ours != ours:
+        found.append(Refusal(PICK_CHANGED, (
+            f"the picked plan or our slots (the server's assignment) changed while this submit ran; it planned "
+            f"plan #{pick.id} (round {pick.label}). Nothing was sent. Preview again and submit what it shows.")))
+    if p is not None:
+        found.extend(p.refusals)
+        if p.blocked:
+            found.append(Refusal(CANNOT_PLAN, f"{p.blocked}. Nothing was sent."))
+        if p.ok and p.approval != expected:
+            found.append(Refusal(PLAN_CHANGED, (
+                f"the plan now hashes to {p.approval}, not {expected} as previewed. Nothing was sent. Preview "
+                "again and submit what it shows.")))
+        if p.ok and json.dumps(p.plan.request()) != json.dumps(body):
+            found.append(Refusal(REQUEST_CHANGED, (
+                "the request planned now is not byte for byte the one about to be sent. Nothing was sent. Preview "
+                "again and submit what it shows.")))
+        if p.deviations and not accept_deviations:
+            found.append(Refusal(DEVIATION, (
+                f"the request doesn't buy what the pick buys: {'; '.join(p.deviations)}. To send it as planned, "
+                "run the same command with --accept-deviations; or load and pick a revised plan.")))
+    found.extend(_deadline(conn, now, late))
+    return _unique(found)
 
 
 def _before_send(conn: psycopg.Connection, plan: planner.Plan, pick: Picked, ours: tuple[str, ...], expected: str,
