@@ -112,8 +112,8 @@ Then the fill request can go in.
 - **Step 2 or 3 refuses:** read the message. It names the guard. Don't edit the database by hand.
   Ask the team.
 - **Step 4 fails after step 3:** the ledger has no opening. Fix the cause (it names it). If the fill
-  request has not gone in, run step 4 again. If it has gone in, for any reason, don't run step 4
-  without `--at`: go to [If the fill went in first](#if-the-fill-went-in-first). The test opening is
+  request has not gone in, run step 4 again. If it has gone in, for any reason, don't run step 4:
+  go to [If the fill went in first](#if-the-fill-went-in-first). The test opening is
   safe in the archive.
 - **The wrong amount went in at step 4:** the reset refuses the real opening, by design. Record
   the difference as an adjustment with a detail saying why, or ask the team before anything else.
@@ -139,19 +139,22 @@ reason: the window closed, step 4 failed and was retried later, or the steps ran
 doesn't matter whether it is before or after midnight. An opening recorded now, without `--at`, would
 fall after the fill, and the fill would drop out of Key dates and its receipt out of the books.
 
-The opening has to be dated in the past, in one interval. A command finds it for you. It reads each
-bound with the same clock the books use, so you don't need any SQL. (The [DB explorer](db-explorer.md)
-has no SQL box, and hand-written SQL kept getting those clocks wrong.)
+The opening has to be dated in the past, in one interval. A command finds it and records it for you.
+It reads each bound with the same clock the books use, so you don't need any SQL. (The
+[DB explorer](db-explorer.md) has no SQL box, and hand-written SQL kept getting those clocks wrong.)
+Don't type a time into `open --at` yourself: a model call or receipt recorded between reading the
+time and recording it would land in the real books.
 
-1. **Find the interval.** Give the fill's request ID, as `purchase_requests` stores it (the DB
+1. **Preview the interval.** Give the fill's request ID, as `purchase_requests` stores it (the DB
    explorer lists them, with `submitted_at` in Eastern). This command changes nothing:
 
    ```
    python -m vending.ledger safe-opening --fill REQUEST_ID
    ```
 
-   It prints the latest test-period record, the interval, and a suggested opening (the next whole
-   minute after that record) with the exact `open` command to run. The opening must be:
+   It prints the latest test-period record, the earliest moment the fill counts from, the interval,
+   a suggested opening (the next whole minute after that record), and the `open --recover` command
+   for step 2. The opening must be:
 
    - after our slot assignment was first read (`first_read_at`, the 20 Nov redraw);
    - after every row in `ledger_entries`. With no opening yet, every row there is test-period, a
@@ -161,7 +164,10 @@ has no SQL box, and hand-written SQL kept getting those clocks wrong.)
      with no lines at its `fulfilled_at`);
    - after every test request was sent. A test request is any other request sent at or before the
      fill;
-   - at or before the fill's `submitted_at`.
+   - at or before the fill's `submitted_at`, and at or before the fill's own receipt lines and visit
+     on those same clocks. Door times are to the minute, so a fill stocked at once can count from
+     14:00:00 when it was sent at 14:00:35: the opening can't be after 14:00:00. A fill not stocked
+     yet is held to the minute it was sent for the same reason.
 
    **It refuses**, and changes nothing, when:
 
@@ -172,30 +178,39 @@ has no SQL box, and hand-written SQL kept getting those clocks wrong.)
      ask the team);
    - the request isn't the fill: unknown, rejected, or sent at or after the start (a restock).
 
-   **If it says no time works** (exit 1), a test-period record stands at or after the fill. The
-   message names it. Don't record the one-time opening. Ask the team.
+   **If it says no time works** (exit 1), a test-period record stands at or after the moment the fill
+   counts from. The message names both. Don't record the one-time opening. Ask the team.
 
-2. **Record the opening** with the time it suggested, exactly as it printed it (the time carries its
-   offset):
+2. **Record the opening** with the command it printed. Run it without `--yes` first: that previews
+   the opening and records nothing. Then with `--yes`:
 
    ```
-   python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T19:31:00-05:00
+   python -m vending.ledger open --recover --fill REQUEST_ID --by NAME
+   python -m vending.ledger open --recover --fill REQUEST_ID --by NAME --yes
    ```
+
+   With `--yes` it works the interval out again and records the opening (600.00 unless you give
+   `--amount`) at the suggested time, in one transaction. While it does, model calls, receipts and
+   requests wait for it, so nothing recorded since step 1 is missed. A record made since step 1 can
+   move the time later, or leave no time: then it refuses, records nothing and says why. It refuses
+   for the same reasons as step 1.
 
 3. **Check.**
    - Before 00:00 Eastern on Thu 3 Dec, the dashboard's Key dates panel shows **Fill request sent**
      as done, with the fill's time. If it says "no purchase request since the opening", ask the team.
-     From the start that check is gone from the panel; `safe-opening` already checked the same rule.
-   - `python -m vending.ledger show`: the opening capital line shows the time you gave, token spend
-     0.00, and a note that the earlier model calls are development spend. Receipts is the fill's
-     total once it is fulfilled, plus any later receipts, so step 5's "receipts 0.00" doesn't apply.
+     From the start that check is gone from the panel; `open --recover` already checked the same rule.
+   - `python -m vending.ledger show`: the opening capital line shows the time it recorded, token
+     spend 0.00, and a note that the earlier model calls are development spend. Receipts is the
+     fill's total once it is fulfilled, plus any later receipts, so step 5's "receipts 0.00" doesn't
+     apply.
    - `python -m vending.ledger safe-opening --fill REQUEST_ID` now refuses: the ledger has an
      opening.
 
 For example, the reset ran at 15:00 Eastern on Sun 29 Nov, a live run made a model call at 19:30,
 and the fill went in at 20:00. `safe-opening` names the 19:30 call and suggests 19:31. An opening at
 19:00 would put that call in the real books, and one at 23:00 would leave the 20:00 fill out of Key
-dates.
+dates. If the run makes another call before step 2, that call is dated after the fill:
+`open --recover` sees it, finds no time, and refuses. Ask the team then.
 
 ## Example
 
