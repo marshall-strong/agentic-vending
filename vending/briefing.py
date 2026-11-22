@@ -363,8 +363,8 @@ def _requests(conn, b: Briefing) -> None:
     if b.requests.unresolved_submission_count:
         named = ", ".join(f"{row} ({status})" for row, status in unresolved)
         _alert(b, "submission_unresolved", f"ORDERS BLOCKED: submission {named} may already be on the bridge, so "
-               "no purchase request can be sent; do not resend. A person runs `python -m vending.submissions check`, "
-               "then `resolve` if it can't tell", "preview_desired_state")
+               "no purchase request can be sent; do not resend. A person finds out whether the bridge filed it, then "
+               "runs `python -m vending.submissions resolve`", "preview_desired_state")
 
 
 def build(conn: psycopg.Connection, now: datetime | None = None) -> Briefing:

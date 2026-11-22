@@ -1,34 +1,37 @@
 """The record of every purchase request we tried to send, and how to settle one left open.
 
     python -m vending.submissions list
-    python -m vending.submissions check                                         # ask the bridge first
     python -m vending.submissions resolve 7 --request-id pr_abc123 --by kevin   # the bridge filed it
     python -m vending.submissions resolve 7 --not-filed --by kevin              # it never did
+    python -m vending.submissions check                                         # see below
 
 `submit_desired_state` commits a `sending` row here before it POSTs, keeps
 the bridge's answer on it the moment it arrives (`save_answer`), and settles
-it after, on the same connection. A row left `sending` (a crash in
-between) or `unknown` (sent, but no usable answer) may or may not exist on the
-bridge, and both the tool and `preview_desired_state` refuse
-(`submission_unresolved`) until a person settles it.
+it after, on the same connection. Only the bridge's documented `201`, whole,
+settles a row by itself (`accepted`); a failure to connect settles it as
+`not_filed`. Every other answer leaves it `unknown`: a `4xx` or `5xx`, even one
+shaped like the bridge's refusal, a redirect, a body cut off, slow, encoded or
+not plain JSON, or no answer. A row left `sending` (a crash in between) or
+`unknown` may or may not exist on the bridge, and both the tool and
+`preview_desired_state` refuse (`submission_unresolved`) until a person settles
+it with `resolve`.
 
-`check` settles what the bridge can answer by itself, and a live agent run does
-the same before it starts. It looks up an open row only by a request ID the row
-already holds (in `request_id`, or as `id` in the stored `response`), and only
-an answer naming that request settles it, as `accepted`. A request ID is only
-ever bound to one attempt: one that another submission or a request we already
-recorded holds (`IdTaken`) settles nothing, by `settle`, `check` or
-`resolve`, since that request is not this attempt's. Anything else leaves
-the row open, a `404` included: the bridge has no answer that means "never
-filed", and another request reading fine doesn't show this one would. A lost
-reply (the POST arrived, no answer came back) leaves no ID, and the bridge has
-no lookup by anything else and no idempotency key, so those rows always need a
-person.
+`check`, which a live agent run also does before it starts, settles only a row
+whose POST got that validated `201` (`created_id`, saved before settling) but
+was never settled (a crash or a database error in between). It reads
+`GET /api/v1/purchase-requests/{created_id}`, and only an answer for that ID,
+in the documented shape, settles the row as `accepted`. Anything else leaves
+the row open, a `404` included. A request ID is only ever bound to one attempt:
+one that another submission or a request we already recorded holds (`IdTaken`)
+settles nothing, by `settle`, `check` or `resolve`. A row without `created_id`
+always needs a person, even if its answer names a request: that answer wasn't
+the bridge's acceptance, so the request it names may not be this attempt's.
 
-To settle one, find out whether the bridge filed it. If the request ID is known
-(the server log has a `LOST ANSWER` line, or the row's `response` holds it),
-the bridge's Swagger page has `GET /api/v1/purchase-requests/{id}`. If it isn't,
-**ask the instructors first**: the bridge has no route that lists our requests,
+To settle one, find out whether the bridge filed it. If a request ID is known
+(the server log has a `LOST ANSWER` line, or the row's `response` holds one),
+the bridge's Swagger page has `GET /api/v1/purchase-requests/{id}`; check that
+its lines are this row's `body`. If no ID is known, the POST got a refusal, or
+the lines don't match, **ask the instructors first**: the bridge has no route that lists our requests,
 and a resend of a request that was filed would order twice. The request would
 carry the lines in the row's `body`.
 
@@ -65,10 +68,12 @@ from vending.purchase_requests import record
 from vending.write_gate import log
 
 OPEN = ("sending", "unknown")
-RESOLVE_HINT = ("a person must run python -m vending.submissions check; if it can't tell, find out whether the "
-                "bridge filed it (ask the instructors if the request ID is unknown), then run: "
-                "python -m vending.submissions resolve {row} ...")
+RESOLVE_HINT = ("a person must find out whether the bridge filed it (ask the instructors if no request ID is "
+                "known), then run: python -m vending.submissions resolve {row} --request-id ID --by NAME, or "
+                "--not-filed --by NAME")
 AUTO_BY = "auto-check"     # `resolved_by` for a row `check` settled from the bridge's own answer
+# The statuses `GET /api/v1/purchase-requests/{id}` documents (`PurchaseRequestDetail`).
+REQUEST_STATUSES = frozenset({"pending", "rejected", "fulfilled"})
 
 
 class IdTaken(ValueError):
@@ -121,14 +126,15 @@ def save_sending(side: psycopg.Connection, plan_hash: str, body: dict,
     return row
 
 
-def save_answer(side: psycopg.Connection, row: int, answer: object) -> None:
+def save_answer(side: psycopg.Connection, row: int, answer: object, *, created_id: str | None = None) -> None:
     """Keep the bridge's answer to the POST on a row still `sending`, before anything else is done with it.
 
-    It commits at once (`side` is autocommit), on its own, so a request ID the bridge sent is on the row even
-    if settling fails after: `check` reads it from `response` and looks it up. It never settles the row.
+    `created_id` is the request ID of a validated `201` (`submit.accepted`), and None for any other answer.
+    It commits at once (`side` is autocommit), on its own, so the ID is on the row even if settling fails
+    after: `check` looks up `created_id`, and only that. It never settles the row.
     """
-    side.execute("update purchase_submissions set response = %s where id = %s and status = 'sending'",
-                 (None if answer is None else Jsonb(answer), row))
+    side.execute("update purchase_submissions set response = %s, created_id = %s where id = %s"
+                 " and status = 'sending'", (None if answer is None else Jsonb(answer), created_id, row))
 
 
 def settle(side: psycopg.Connection, row: int, status: str, *, request_id: str | None = None,
@@ -225,33 +231,40 @@ class Checked:
     why: str
 
 
-def known_request_id(request_id: str | None, response: Any) -> str | None:
-    """The bridge's ID for a row, if the row holds one: its `request_id`, or `id` in the answer it kept."""
-    found = request_id or (response.get("id") if isinstance(response, dict) else None)
-    return found.strip() if isinstance(found, str) and found.strip() else None
+def answers_for(answer: Any, request_id: str) -> str:
+    """Why `answer` (a `GET` of `request_id`) isn't the bridge's record of that request; "" if it is:
+    a JSON object naming `request_id`, with a documented status and a creation time."""
+    if not isinstance(answer, dict):
+        return "the bridge's answer isn't a JSON object"
+    if answer.get("id") != request_id:
+        return f"the bridge's answer doesn't name {request_id}"
+    if answer.get("status") not in REQUEST_STATUSES:
+        return f"the bridge's answer for {request_id} has no documented status"
+    if not (isinstance(answer.get("created_at"), str) and answer["created_at"].strip()):
+        return f"the bridge's answer for {request_id} has no creation time"
+    return ""
 
 
 def check(conn: psycopg.Connection, bridge: Callable[[], Any], *,
           lock_timeout_ms: int | None = None) -> list[Checked]:
     """Settle each open row the bridge can answer for by itself. Returns one `Checked` per open row.
 
-    It never sends anything, and it settles only on the bridge's own answer naming the request:
-    when in doubt the row stays open. It never settles a row as `not_filed`. The bridge is read
-    first, outside any lock; then each row is settled through `resolve`, which takes the halt lock
-    and refuses a row someone settled meanwhile. `bridge` is called only if some open row holds a
-    request ID.
+    Only a row with `created_id` (its POST got a validated `201`) is looked up, by that ID, and only a
+    `GET` answer for it in the documented shape (`answers_for`) settles it, as `accepted`. When in doubt
+    the row stays open. It never sends anything and never settles a row as `not_filed`. The bridge is
+    read first, outside any lock; then each row is settled through `resolve`, which takes the halt lock
+    and refuses a row someone settled meanwhile. `bridge` is called only if some open row has `created_id`.
     """
     from vending.bridge import BridgeError, BridgeNotFound
 
-    rows = conn.execute("select id, status, request_id, response from purchase_submissions"
+    rows = conn.execute("select id, status, created_id from purchase_submissions"
                         " where status = any(%s) order by id", (list(OPEN),)).fetchall()
     client = None
     results = []
-    for row, status, request_id, response in rows:
-        found = known_request_id(request_id, response)
+    for row, status, found in rows:
         if found is None:
-            results.append(Checked(row, status, "it holds no request ID, and the bridge can't find a request "
-                                                "by anything else"))
+            results.append(Checked(row, status, "its POST got no validated 201, so only a person can tell "
+                                                "whether the bridge filed it"))
             continue
         try:
             client = client or bridge()
@@ -264,10 +277,10 @@ def check(conn: psycopg.Connection, bridge: Callable[[], Any], *,
         except Exception as error:      # no bridge address or key set, say: the row just stays open
             settle_as, why = None, f"the bridge couldn't be asked ({type(error).__name__})"
         else:
-            if isinstance(answer, dict) and answer.get("id") == found:
-                settle_as, why = found, f"the bridge has request {found} ({answer.get('status') or 'no status'})"
+            if problem := answers_for(answer, found):
+                settle_as, why = None, problem
             else:
-                settle_as, why = None, f"the bridge's answer for {found} doesn't name that request"
+                settle_as, why = found, f"the bridge has request {found} ({answer['status']})"
         if settle_as is None:
             results.append(Checked(row, status, why))
             continue
@@ -284,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vending.submissions", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("list", help="submissions still waiting for a person to check the bridge")
-    sub.add_parser("check", help="settle what the bridge can answer by itself, from a request ID a row holds")
+    sub.add_parser("check", help="settle a row whose POST got a validated 201 but was never settled")
     resolver = sub.add_parser("resolve", help="settle one submission")
     resolver.add_argument("row", type=int, help="the submission number, from `list`")
     outcome = resolver.add_mutually_exclusive_group(required=True)

@@ -1,4 +1,4 @@
-"""`vending.submissions.check`: settling an open submission from the bridge's own answer (#217).
+"""`vending.submissions.check`: settling an open submission whose POST got a validated `201` (#217).
 The bridge is faked; rows land in a throwaway schema."""
 
 from datetime import datetime, timedelta, timezone
@@ -16,6 +16,11 @@ NOW = datetime(2026, 12, 7, 15, 0, tzinfo=timezone.utc)
 BODY = {"lines": [], "off_cycle": False}
 
 
+def found(request_id, status="pending", **fields):
+    """The bridge's `GET` answer for a request, in its documented shape."""
+    return {"id": request_id, "status": status, "created_at": "2026-12-07T13:00:00Z", **fields}
+
+
 class Lookup:
     """A fake bridge that answers only `purchase_request`, from `known`; any other ID is a 404."""
 
@@ -27,22 +32,23 @@ class Lookup:
 
     def purchase_request(self, request_id):
         self.asked.append(request_id)
-        found = self.known.get(request_id, BridgeNotFound(f"404 Not Found from /{request_id}"))
-        if isinstance(found, Exception):
-            raise found
-        return found
+        answer = self.known.get(request_id, BridgeNotFound(f"404 Not Found from /{request_id}"))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
-def row(conn, *, status="unknown", response=None, age=timedelta(hours=2)):
+def row(conn, *, status="sending", created_id=None, response=None, age=timedelta(hours=2)):
+    """A submission left open. `created_id` is set only when its POST got a validated 201."""
     return conn.execute(
-        "insert into purchase_submissions (at, plan_hash, body, status, response)"
-        " values (%s, 'h', %s, %s, %s) returning id",
-        (NOW - age, Jsonb(BODY), status, None if response is None else Jsonb(response))).fetchone()[0]
+        "insert into purchase_submissions (at, plan_hash, body, status, response, created_id)"
+        " values (%s, 'h', %s, %s, %s, %s) returning id",
+        (NOW - age, Jsonb(BODY), status, None if response is None else Jsonb(response), created_id)).fetchone()[0]
 
 
 def ours(conn, request_id="pr-old"):
-    """An earlier request of ours the bridge filed: the control that shows the lookup route works."""
-    submissions.resolve(conn, row(conn, status="sending", age=timedelta(days=3)), request_id, "kevin")
+    """An earlier request of ours the bridge filed."""
+    submissions.resolve(conn, row(conn, age=timedelta(days=3)), request_id, "kevin")
 
 
 def state(conn, id):
@@ -50,9 +56,9 @@ def state(conn, id):
                         (id,)).fetchone()
 
 
-def test_a_request_the_bridge_has_is_settled_accepted_once(conn):
-    id = row(conn, response={"id": "pr-1"})
-    bridge = Lookup({"pr-1": {"id": "pr-1", "status": "pending"}})
+def test_a_validated_201_never_recorded_is_settled_accepted_once(conn):
+    id = row(conn, created_id="pr-1", response=found("pr-1"))
+    bridge = Lookup({"pr-1": found("pr-1")})
     [checked] = submissions.check(conn, bridge)
     assert (checked.status, state(conn, id)) == ("accepted", ("accepted", "pr-1", "auto-check"))
     assert conn.execute("select count(*) from purchase_requests where request_id = 'pr-1'").fetchone() == (1,)
@@ -61,37 +67,42 @@ def test_a_request_the_bridge_has_is_settled_accepted_once(conn):
     assert submissions.check(conn, bridge) == [] and bridge.asked == ["pr-1"]
 
 
-def test_a_404_never_settles_a_row_as_not_filed(conn):
-    """A `404` for the ID a row holds isn't proof the request was never filed: another request reading fine
-    doesn't show this one would be visible, and the bridge has no answer that says "never filed". So the row
-    stays open for a person, however old it is."""
-    ours(conn)
-    id = row(conn, response={"id": "pr-1"}, age=timedelta(days=2))
-    [checked] = submissions.check(conn, Lookup({"pr-old": {"id": "pr-old"}}))
-    assert checked.status == "unknown" and "404" in checked.why
-    assert state(conn, id) == ("unknown", None, None)
-    assert submissions.unresolved(conn).code == "submission_unresolved"
-
-
-@pytest.mark.parametrize("setup, known", [
-    pytest.param(lambda c: row(c, response={"id": "pr-1"}, age=timedelta(minutes=5)), {},
-                 id="a 404 for a young row"),
-    pytest.param(lambda c: row(c, response={"id": "pr-1"}), {}, id="a 404 with no other request to compare"),
-    pytest.param(lambda c: row(c, response={"id": "pr-1"}), {"pr-1": BridgeError("503")}, id="bridge down"),
-    pytest.param(lambda c: row(c, response={"id": "pr-1"}), {"pr-1": {"id": "pr-2"}}, id="answer names another"),
-    pytest.param(lambda c: row(c), {}, id="no request ID"),
-    pytest.param(lambda c: row(c, status="sending"), {}, id="still sending, no ID"),
+@pytest.mark.parametrize("response", [
+    pytest.param({"id": "pr-old-untracked", "status": "pending", "created_at": "2026-12-01T12:00:00Z"},
+                 id="an ambiguous answer naming a request"),
+    pytest.param(None, id="no answer"),
 ])
-def test_anything_unsure_stays_open(conn, setup, known):
-    id = setup(conn)
-    before = state(conn, id)
+def test_a_row_without_a_validated_201_is_never_looked_up(conn, response):
+    """Sol round 3, finding 3: an answer that wasn't the documented acceptance may name an unrelated request,
+    and the bridge confirming that request exists doesn't make it this attempt's. Only a person settles it."""
+    id = row(conn, status="unknown", response=response)
+    bridge = Lookup({"pr-old-untracked": found("pr-old-untracked")})
+    [checked] = submissions.check(conn, bridge)
+    assert checked.status == "unknown" and "no validated 201" in checked.why
+    assert state(conn, id) == ("unknown", None, None) and bridge.asked == []
+    assert conn.execute("select count(*) from purchase_requests").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("known", [
+    pytest.param({"pr-1": {"id": "pr-1"}}, id="only the id"),
+    pytest.param({"pr-1": found("pr-1", status="lost")}, id="an undocumented status"),
+    pytest.param({"pr-1": {"id": "pr-1", "status": "pending"}}, id="no creation time"),
+    pytest.param({"pr-1": found("pr-2")}, id="another request"),
+    pytest.param({"pr-1": ["pr-1"]}, id="not an object"),
+    pytest.param({"pr-1": BridgeError("503")}, id="bridge down"),
+    pytest.param({}, id="404"),
+])
+def test_a_get_that_doesnt_answer_for_the_id_leaves_the_row_open(conn, known):
+    """Sol round 3, finding 3: a `GET` with only the ID cleared the row. Only the documented record of that
+    request settles it; a `404` doesn't prove it was never filed."""
+    id = row(conn, created_id="pr-1")
     [checked] = submissions.check(conn, Lookup(known))
-    assert checked.status == before[0] and checked.status in submissions.OPEN and state(conn, id) == before
+    assert checked.status == "sending" and state(conn, id) == ("sending", None, None)
     assert submissions.unresolved(conn).code == "submission_unresolved"
 
 
-def test_no_bridge_is_built_when_no_row_holds_an_id(conn):
-    row(conn)
+def test_no_bridge_is_built_when_no_row_has_a_validated_201(conn):
+    row(conn, status="unknown", response={"id": "pr-1"})
 
     def bridge():
         raise AssertionError("built")
@@ -99,12 +110,12 @@ def test_no_bridge_is_built_when_no_row_holds_an_id(conn):
 
 
 def test_a_bridge_that_cant_be_built_leaves_the_row_open(conn):
-    id = row(conn, response={"id": "pr-1"})
+    id = row(conn, created_id="pr-1")
 
     def bridge():
         raise RuntimeError("DEX_BASE_URL isn't set")
     [checked] = submissions.check(conn, bridge)
-    assert checked.status == "unknown" and state(conn, id)[0] == "unknown"
+    assert checked.status == "sending" and state(conn, id)[0] == "sending"
 
 
 def test_cli_check_says_what_it_settled_and_what_still_needs_a_person(conn, schema_url, monkeypatch, capsys):
@@ -112,14 +123,14 @@ def test_cli_check_says_what_it_settled_and_what_still_needs_a_person(conn, sche
     from vending import bridge as bridge_module
     from vending import db as db_module
 
-    accepted, blocked = row(conn, response={"id": "pr-1"}), row(conn)
+    accepted, blocked = row(conn, created_id="pr-1"), row(conn, status="unknown")
     monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
-    monkeypatch.setattr(bridge_module, "Bridge", Lookup({"pr-1": {"id": "pr-1"}}))
+    monkeypatch.setattr(bridge_module, "Bridge", Lookup({"pr-1": found("pr-1")}))
     assert submissions.main(["check"]) == 1
     out = capsys.readouterr().out
     assert f"{accepted}  settled as accepted" in out and f"{blocked}  still unknown" in out
     assert f"resolve {blocked}" in out
-    submissions.resolve(conn, blocked, None, "kevin")
+    assert submissions.main(["resolve", str(blocked), "--not-filed", "--by", "kevin"]) == 0
     assert submissions.main(["check"]) == 0
     assert "Nothing to settle" in capsys.readouterr().out
 
@@ -129,23 +140,27 @@ def test_a_request_id_already_ours_never_settles_another_row(conn):
     make it this attempt's. Settling the row onto it would leave no new pending request, and the next run would
     send the same order again, so the row stays open for a person, even when the bridge confirms the ID."""
     ours(conn, "pr-old")
-    id = row(conn, response={"id": "pr-old"})
-    bridge = Lookup({"pr-old": {"id": "pr-old", "status": "pending"}})
-    [checked] = submissions.check(conn, bridge)
-    assert checked.status == "unknown" and "IdTaken" in checked.why
-    assert state(conn, id) == ("unknown", None, None)
+    id = row(conn, created_id="pr-old")
+    [checked] = submissions.check(conn, Lookup({"pr-old": found("pr-old")}))
+    assert checked.status == "sending" and "IdTaken" in checked.why
+    assert state(conn, id) == ("sending", None, None)
     with pytest.raises(submissions.IdTaken, match="submission 1 already holds"):
         submissions.resolve(conn, id, "pr-old", "kevin")
     assert submissions.unresolved(conn).code == "submission_unresolved"
 
 
-def test_save_answer_keeps_the_id_on_a_row_still_sending_and_never_settles_it(conn):
-    id = row(conn, status="sending")
-    submissions.save_answer(conn, id, {"id": "pr-7", "status": "pending"})
+def test_save_answer_keeps_the_answer_and_created_id_on_a_row_still_sending_and_never_settles_it(conn):
+    id = row(conn)
+    submissions.save_answer(conn, id, found("pr-7"), created_id="pr-7")
     assert state(conn, id) == ("sending", None, None)
-    assert submissions.known_request_id(None, conn.execute(
-        "select response from purchase_submissions where id = %s", (id,)).fetchone()[0]) == "pr-7"
+    assert conn.execute("select created_id, response->>'id' from purchase_submissions where id = %s",
+                        (id,)).fetchone() == ("pr-7", "pr-7")
+    # An answer that wasn't a validated 201 is kept without an ID to look up.
+    other = row(conn)
+    submissions.save_answer(conn, other, {"id": "pr-8"})
+    assert conn.execute("select created_id from purchase_submissions where id = %s", (other,)).fetchone() == (None,)
     # A row already settled is left as it is.
-    done = row(conn, status="refused")
-    submissions.save_answer(conn, done, {"id": "pr-8"})
-    assert conn.execute("select response from purchase_submissions where id = %s", (done,)).fetchone() == (None,)
+    done = row(conn, status="not_filed")
+    submissions.save_answer(conn, done, {"id": "pr-9"}, created_id="pr-9")
+    assert conn.execute("select response, created_id from purchase_submissions where id = %s",
+                        (done,)).fetchone() == (None, None)

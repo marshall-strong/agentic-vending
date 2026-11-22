@@ -4,8 +4,8 @@
 sync jobs and the write tools use. Only `poll`, which `vending.visit_polls` calls
 around a visit, reads the machine live. The sync
 jobs read stored history and our purchase requests through it, with retries;
-`submit_desired_state` and `request_catalog_product` send their one POST through
-`post`, and `vending.tracking` sends our books through `check_books`, each never
+`request_catalog_product` sends its one POST through `post`, `submit_desired_state`
+through `post_answer`, and `vending.tracking` sends our books through `check_books`, each never
 retried, and `/health` tells a bad poll from an outage.
 
 Read failures are retried, then end in one of two ways. `BridgeUnreachable`
@@ -19,8 +19,9 @@ proxy can answer `502` to every request until the node has joined the tailnet.
 **No poll bytes in a message.** What the bridge sends back can hold the machine's whole document, and the
 worker's logs and `/health` are read by people (`docs/integrity.md`, "Logs carry no poll bytes"). So no
 error here quotes a body, a snippet, a bad status line or a header. A message holds the status, sizes and
-a reason this module wrote ("short read: 1234 of 2000 bytes"). The exceptions are `post`, whose answer to
-our own purchase or catalog request is the reason the write tool shows the agent, and `check_books`, whose
+a reason this module wrote ("short read: 1234 of 2000 bytes"). The exceptions are `post` and
+`post_answer`, whose answer to our own purchase or catalog request is the reason the write tool shows the
+agent, and `check_books`, whose
 answer is about our own books.
 """
 
@@ -29,6 +30,8 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -53,9 +56,13 @@ RETRIES = 4
 # The tracking check (`check_books`), and how much of an error answer it keeps: enough for a list of items.
 TRACKING_PATH = "/api/v1/tracking/check"
 TRACKING_ERROR_BYTES = 8192
-# How much of a purchase POST's error answer `post_answer` keeps: the bridge's whole refusal, every line's problem included. A
-# refusal longer than this is cut off, and `submit_desired_state` never reads a cut-off answer as a refusal.
-POST_ERROR_BYTES = 65536
+# A purchase POST (`post_answer`): the longest it may take in all, from the first byte sent to the last byte of
+# the answer, and the most it reads of an answer. Reaching either ends it as `BridgeNoAnswer`, so the attempt is
+# `unknown`. The bridge's acceptance is a few hundred bytes.
+PURCHASE_DEADLINE_SECONDS = 30
+PURCHASE_ANSWER_BYTES = 65536
+# How much of an answer `PostAnswer.text` keeps, for the record and the message.
+PURCHASE_TEXT_CHARS = 500
 
 
 class LiveRead(NamedTuple):
@@ -122,14 +129,11 @@ class BridgeError(RuntimeError):
 
 
 class BridgeAnswered(BridgeError):
-    """An HTTP error status from a single, unretried call (`products`, `post`).
+    """An HTTP error status from a single, unretried call (`products`, `post`)."""
 
-    `complete` is True only when `detail` is the whole body the bridge sent, read to its end and valid UTF-8:
-    never when it was cut off, longer than the call keeps, or unreadable."""
-
-    def __init__(self, status: int, detail: str, *, complete: bool = False):
+    def __init__(self, status: int, detail: str):
         super().__init__(f"{status}: {detail}")
-        self.status, self.detail, self.complete = status, detail, complete
+        self.status, self.detail = status, detail
 
 
 class BridgeNoAnswer(BridgeError):
@@ -198,14 +202,65 @@ class Bridge:
         """
         return json.loads(self._once("POST", path, body, keep_body=True, redirects=False))
 
-    def post_answer(self, path: str, body: dict) -> tuple[int | None, Any]:
-        """`post`, with the success status the answer came with (None if the reply gave none):
-        `submit_desired_state` accepts a purchase request only on the `201` the bridge documents. An error
-        answer keeps up to `POST_ERROR_BYTES` of its body, and says whether that was all of it."""
-        answered: dict[str, Any] = {}
-        data = self._once("POST", path, body, keep_body=True, kept_bytes=POST_ERROR_BYTES, redirects=False,
-                          answered=answered)
-        return answered.get("status"), json.loads(data)
+    def post_answer(self, path: str, body: dict) -> PostAnswer:
+        """A purchase POST, once, never retried, never redirected: whatever HTTP answer came back, whole.
+
+        Raises `BridgeUnreachable` only when connecting failed (the name didn't resolve, the connection was
+        refused, TCP or TLS failed or timed out): nothing of the request had been written, so nothing left.
+        Raises `BridgeNoAnswer` for anything once connected that isn't a whole answer: an error while writing
+        or reading, a body cut off or badly framed, an answer longer than `PURCHASE_ANSWER_BYTES`, or no whole
+        answer within `PURCHASE_DEADLINE_SECONDS` of starting to send (a total, not a gap between bytes).
+        Every other answer, a `3xx`, `4xx` or `5xx` included, comes back as a `PostAnswer`; `submit_desired_state`
+        settles a request only on the documented `201`.
+
+        It uses `http.client` directly, not urllib, so no redirect is followed and connecting is its own step.
+        """
+        url = urllib.parse.urlsplit(self.base_url + path)
+        target = (url.path or "/") + (f"?{url.query}" if url.query else "")
+        kind = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
+        conn = kind(url.hostname, url.port, timeout=TIMEOUT_SECONDS)
+        try:
+            conn.connect()
+        except OSError as error:      # a bad name, a refused connection, a TCP or TLS failure or timeout
+            conn.close()
+            raise BridgeUnreachable(
+                f"Could not connect to {self.base_url} ({type(error).__name__}): nothing was sent. "
+                "Is Tailscale connected?") from None
+        expired = threading.Event()
+
+        def cut() -> None:            # the deadline: end the exchange wherever it is, writing or reading
+            expired.set()
+            try:
+                conn.sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
+
+        timer = threading.Timer(PURCHASE_DEADLINE_SECONDS, cut)
+        timer.daemon = True
+        timer.start()
+        response = None
+        try:
+            conn.request("POST", target, body=json.dumps(body).encode(),
+                         headers={"X-API-Key": self.api_key, "Content-Type": "application/json",
+                                  "Accept": "application/json", "Accept-Encoding": "identity"})
+            response = conn.getresponse()
+            data = _read_capped(response, PURCHASE_ANSWER_BYTES)
+        except _TooLong:
+            raise BridgeNoAnswer(f"its {response.status} answer ran past {PURCHASE_ANSWER_BYTES} bytes: "
+                                 "it may have arrived") from None
+        except (OSError, http.client.HTTPException, ValueError) as error:
+            started = "" if response is None else f" (a {response.status} answer had started)"
+            if expired.is_set():
+                raise BridgeNoAnswer(f"no whole answer within {PURCHASE_DEADLINE_SECONDS:g} s{started}: "
+                                     "it may have arrived") from None
+            raise BridgeNoAnswer(f"{type(error).__name__} once connected{started}: it may have arrived") from None
+        finally:
+            timer.cancel()
+            conn.close()
+        if expired.is_set():          # a read the deadline ended can look like the end of the answer
+            raise BridgeNoAnswer(f"no whole answer within {PURCHASE_DEADLINE_SECONDS:g} s: it may have arrived")
+        parsed, problem = _strict_json(response, data)
+        return PostAnswer(response.status, parsed, problem, _printable(data[:PURCHASE_TEXT_CHARS]))
 
     def check_books(self, body: dict) -> dict:
         """Our books as of one poll (`POST /api/v1/tracking/check`), once, never retried: the bridge
@@ -246,12 +301,10 @@ class Bridge:
 
     def _once(self, method: str, path: str, body: dict | None = None, expect_json: bool = True,
               timeout: float | None = None, headers_out: dict[str, str] | None = None,
-              keep_body: bool = False, kept_bytes: int = 300, redirects: bool = True,
-              answered: dict[str, Any] | None = None) -> bytes:
+              keep_body: bool = False, kept_bytes: int = 300, redirects: bool = True) -> bytes:
         """One try. `keep_body` puts the first `kept_bytes` of an error answer in `BridgeAnswered.detail`:
         only for `post` and `check_books`, whose answers concern our own request. Any other answer can hold
-        a poll, so only its status is kept. `redirects=False` raises a redirect as `BridgeAnswered`. `answered`
-        gets the success status, as `status`."""
+        a poll, so only its status is kept. `redirects=False` raises a redirect as `BridgeAnswered`."""
         headers = {"X-API-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -264,21 +317,13 @@ class Bridge:
             with opener(request, timeout=timeout or TIMEOUT_SECONDS) as response:
                 status = getattr(response, "status", None)
                 data = response.read()
-                if answered is not None:
-                    answered["status"] = status
                 if headers_out is not None:    # names lower-cased: HTTP header names have no case
                     headers_out.update({k.lower(): v for k, v in response.headers.items()})
         except urllib.error.HTTPError as error:
             # The status is the answer; a body cut off or slow to arrive mustn't turn it into a crash.
-            if keep_body:
-                start, complete = _start_of_body(error, kept_bytes)
-                try:
-                    detail = start.decode()
-                except UnicodeDecodeError:
-                    detail, complete = start.decode(errors="replace"), False
-            else:
-                detail, complete = status_phrase(error.code), False
-            raise BridgeAnswered(error.code, detail, complete=complete) from None
+            detail = (_start_of_body(error, kept_bytes).decode(errors="replace") if keep_body
+                      else status_phrase(error.code))
+            raise BridgeAnswered(error.code, detail) from None
         except urllib.error.URLError as error:
             # urllib raises URLError only while connecting or sending. Only a failure raised inside connect
             # proves the bridge got nothing; any error once connected may come after it read the request.
@@ -461,20 +506,80 @@ def _before_connected(reason: object) -> bool:
     return False
 
 
-def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> tuple[bytes, bool]:
-    """The start of an error response, at most `size` bytes, and whether that is all of it: False when the
-    body runs on past `size`, is shorter than its `Content-Length` says, or reading it failed. A read with a
-    limit doesn't raise when the connection ends early; it just returns less, so the length is checked here."""
+def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
+    """The start of an error response, for the message. It can be cut off too."""
     try:
-        data = error.read(size + 1)
-    except (OSError, http.client.HTTPException, AttributeError):    # AttributeError: an error with no body
-        return b"", False
-    declared = error.headers.get("Content-Length") if error.headers else None
+        return error.read(size)
+    except (OSError, http.client.HTTPException):
+        return b""
+
+
+class PostAnswer(NamedTuple):
+    """A purchase POST's whole answer (`Bridge.post_answer`). `body` is the parsed JSON, or None. `problem` is
+    "" only when the answer has a `Content-Length` or is chunked, is `application/json` (UTF-8), not
+    content-encoded, and strict JSON with no repeated key; otherwise it says why not. `text` is the start of the raw body, for the record."""
+    status: int
+    body: Any
+    problem: str
+    text: str
+
+
+def _printable(data: bytes) -> str:
+    """Bytes as text a person can read and Postgres can store: undecodable bytes and control characters (a NUL
+    included) become U+FFFD; line breaks and tabs stay."""
+    keep = (chr(10), chr(9))
+    return "".join(c if c.isprintable() or c in keep else chr(0xFFFD) for c in data.decode(errors="replace"))
+
+
+class _TooLong(Exception):
+    pass
+
+
+def _read_capped(response: http.client.HTTPResponse, limit: int) -> bytes:
+    """The whole body, at most `limit` bytes (`_TooLong` past that). `read1` reads the socket at most once per
+    call, so a slow body can't hold a read past the deadline's cut. A body shorter than its `Content-Length`
+    raises `IncompleteRead`; a badly framed chunked one raises from `http.client`."""
+    chunks, size = [], 0
+    while True:
+        chunk = response.read1(min(65536, limit + 1 - size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > limit:
+            raise _TooLong
+    if response.length:           # it said there was more
+        raise http.client.IncompleteRead(b"".join(chunks), response.length)
+    return b"".join(chunks)
+
+
+def _no_repeats(pairs: list[tuple[str, Any]]) -> dict:
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("a key appears twice")
+    return dict(pairs)
+
+
+def _no_constant(name: str) -> Any:
+    raise ValueError(f"{name} isn't JSON")
+
+
+def _strict_json(response: http.client.HTTPResponse, data: bytes) -> tuple[Any, str]:
+    """(the parsed body, "") or (None, why the answer isn't plain JSON)."""
+    if response.getheader("Content-Length") is None and not response.chunked:
+        return None, "its body has no length and isn't chunked, so nothing shows it arrived whole"
+    content_type = response.getheader("Content-Type") or ""
+    media, _, params = content_type.partition(";")
+    charset = params.strip().lower().replace(" ", "")
+    if media.strip().lower() != "application/json" or charset not in ("", "charset=utf-8"):
+        return None, f"its Content-Type is {content_type[:60]!r}, not application/json"
+    encoding = (response.getheader("Content-Encoding") or "identity").strip().lower()
+    if encoding != "identity":
+        return None, f"its body is content-encoded ({encoding[:30]})"
     try:
-        whole = declared is None or int(declared) == len(data)
-    except ValueError:
-        whole = False
-    return data[:size], whole and len(data) <= size
+        return json.loads(data.decode("utf-8"), object_pairs_hook=_no_repeats, parse_constant=_no_constant), ""
+    except (UnicodeDecodeError, ValueError) as error:
+        return None, f"its body isn't strict JSON ({type(error).__name__})"
 
 
 def _retry_after(error: urllib.error.HTTPError) -> float | None:

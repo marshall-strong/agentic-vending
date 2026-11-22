@@ -1,11 +1,15 @@
-"""Two live agent runs in a row, through the real agent, the MCP server, the write gate and Postgres, against the
+"""Live agent runs in a row, through the real agent, the MCP server, the write gate and Postgres, against the
 loopback fake bridge from `tests/test_desired_state.py` (#217). Only the model is scripted.
 
-Whatever the first run's POST got back, the bridge must see one purchase POST across both runs unless the bridge
-itself said, in full and in its documented words, that nothing was ordered. When in doubt the row stays open and
-the second run is blocked. Each run checks open submissions before its model starts, as a real live run does."""
+Only the bridge's documented `201`, whole, settles a submission by itself. Every other answer to the POST leaves
+the row `unknown`, so the bridge sees one POST across two runs: the second run's preview is refused
+`submission_unresolved` and it sends nothing. A person's `python -m vending.submissions resolve` then unblocks
+the next run. Each run checks open submissions before its model starts, as a real live run does."""
 
+import gzip
+import http.client
 import json
+import sys
 from contextlib import asynccontextmanager
 
 import pytest
@@ -16,12 +20,14 @@ pytest.importorskip("anthropic")
 import anyio  # noqa: E402
 from mcp.shared.memory import create_connected_server_and_client_session  # noqa: E402
 
-from tests.conftest import open_in  # noqa: E402
+from tests.conftest import open_in, store_poll  # noqa: E402
 from tests.test_agent import Script, answer, tool_turn, use  # noqa: E402
 from tests.test_desired_state import NOW, coke_sourcing, desired, fake, restock_15  # noqa: E402,F401
 from tests.test_server import db  # noqa: E402,F401
 from tests.test_submit import monday, prepared  # noqa: E402,F401
 from vending import agent, server, submissions  # noqa: E402
+from vending import bridge as bridge_module  # noqa: E402
+from vending import db as db_module  # noqa: E402
 
 BODY = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()]).model_dump(mode="json")
 PENDING = {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}
@@ -36,25 +42,53 @@ def mcp_tools():
     return opened
 
 
-def live_run(schema_url, fake):  # noqa: F811
-    """One live run whose model previews the restock, then submits it, then answers."""
-    client = Script(tool_turn(use("preview_desired_state", {"desired": BODY}, id="p1")),
-                    tool_turn(use("submit_desired_state", {"desired": BODY}, id="s1")),
-                    answer("submit"), answer("submit"))
-    return anyio.run(lambda: agent.run(live=True, connect=lambda: open_in(*schema_url), client=client,
+def live_run(schema_url, fake, *turns):  # noqa: F811
+    """One live run. By default its model previews the restock, submits it in the next turn, then answers."""
+    turns = turns or (tool_turn(use("preview_desired_state", {"desired": BODY}, id="p1")),
+                      tool_turn(use("submit_desired_state", {"desired": BODY}, id="s1")),
+                      answer("submit"))
+    return anyio.run(lambda: agent.run(live=True, connect=lambda: open_in(*schema_url), client=Script(*turns),
                                        now=lambda: NOW, open_tools=mcp_tools(), bridge=fake.client))
+
+
+def retry_run(schema_url, fake):  # noqa: F811
+    """A live run that previews and submits, then previews and submits once more if it is allowed to."""
+    return live_run(schema_url, fake,
+                    tool_turn(use("preview_desired_state", {"desired": BODY}, id="p1")),
+                    tool_turn(use("submit_desired_state", {"desired": BODY}, id="s1")),
+                    tool_turn(use("preview_desired_state", {"desired": BODY}, id="p2")),
+                    tool_turn(use("submit_desired_state", {"desired": BODY}, id="s2")),
+                    answer("submit"))
 
 
 def rows(db):  # noqa: F811
     return db.execute("select status, request_id from purchase_submissions order by id").fetchall()
 
 
-def two_runs(db, fake, schema_url):  # noqa: F811
-    prepared(db)
-    live_run(schema_url, fake)
-    first = rows(db)
-    live_run(schema_url, fake)
-    return first
+def results(db, run_id, tool):  # noqa: F811
+    """What `tool` gave back to the model in run `run_id`, in order."""
+    return [content for (content,) in db.execute(
+        "select content from agent_steps where run_id = %s and kind = 'tool_result' and tool = %s order by id",
+        (run_id, tool)).fetchall()]
+
+
+def assert_blocked(db, run_id):  # noqa: F811
+    """The run got as far as its preview, which was refused for the open submission, and it sent nothing."""
+    [previewed] = results(db, run_id, "preview_desired_state")
+    assert "submission_unresolved" in previewed
+    [submitted] = results(db, run_id, "submit_desired_state")
+    assert submitted.startswith("Not sent")
+
+
+def resolve_by_person(schema_url, monkeypatch, row, *how):
+    """`python -m vending.submissions resolve ROW ... --by kevin`, as a person types it."""
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    assert submissions.main(["resolve", str(row), *how, "--by", "kevin"]) == 0
+
+
+def answer_with_201(fake):  # noqa: F811
+    fake.answer, fake.raw, fake.cut, fake.drop, fake.redirect, fake.chunked = (201, PENDING), None, False, False, None, False
+    fake.content_type, fake.headers, fake.drip = "application/json", {}, 0.0
 
 
 def error_body(error_type, **fields):
@@ -65,95 +99,120 @@ LINE = {"index": 0, "slot": "15", "choice": "primary", "sku": "COKE20", "error_t
         "reason": "the alternate is the primary"}
 
 
-# --- 1. Only a complete, documented refusal closes the row as refused --------------------------------
+def raw(fake, status, body, **settings):  # noqa: F811
+    fake.answer = (status, {})
+    fake.raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+    for name, value in settings.items():
+        setattr(fake, name, value)
 
-@pytest.mark.parametrize("status, raw", [
-    pytest.param(422, None, id="422 cut off part way"),
-    pytest.param(422, b"", id="422 with no body"),
-    pytest.param(429, b"", id="429 with no body"),
-    pytest.param(403, b"<html>Forbidden</html>", id="403 from a proxy"),
-    pytest.param(429, json.dumps(error_body("too_many_open_requests", id="pr-9")).encode(),
-                 id="429 naming a request"),
-    pytest.param(429, json.dumps(error_body("too_many_open_requests", status="pending")).encode(),
-                 id="429 shaped like a filed request"),
-    pytest.param(429, json.dumps(error_body("something_new")).encode(), id="429 of a type it doesn't document"),
-    pytest.param(422, json.dumps({"detail": {"error_type": "invalid_lines"}}).encode(), id="422 not in its schema"),
-    pytest.param(422, json.dumps(error_body("invalid_lines", items=[LINE], id="pr-9")).encode(),
-                 id="invalid lines naming a request"),
-    pytest.param(422, json.dumps(error_body("too_many_open_requests")).encode(), id="422 with a 429's type"),
-])
-def test_a_refusal_the_bridge_doesnt_document_in_full_never_lets_a_later_run_send_again(
-        db, fake, schema_url, status, raw):  # noqa: F811
-    if raw is None:
-        fake.answer, fake.cut = (status, {}), True
-    else:
-        fake.answer, fake.raw = (status, {}), raw
-    first = two_runs(db, fake, schema_url)
-    assert first == [("unknown", None)]
-    assert len(fake.posts) == 1 and rows(db) == [("unknown", None)]
+
+# --- 1. No answer but a validated 201 settles anything: two runs, one POST, then a person -----------
+
+REFUSAL_SHAPED = [
+    pytest.param(lambda f: (setattr(f, "answer", (422, {})), setattr(f, "cut", True)), id="truncated 422"),
+    pytest.param(lambda f: raw(f, 422, error_body("invalid_lines", items=[LINE]), chunked=True), id="chunked 422"),
+    pytest.param(lambda f: raw(f, 422, error_body("invalid_lines", items=[LINE]), content_type="text/plain"),
+                 id="text/plain 422"),
+    pytest.param(lambda f: raw(f, 429, b'{"error": "x", "error_type": "too_many_open_requests", '
+                                       b'"error_type": "too_many_open_requests"}'), id="duplicate keys 429"),
+    pytest.param(lambda f: raw(f, 422, {"detail": [{"loc": "body", "msg": "Field required", "type": "missing"}]}),
+                 id="bad loc 422"),
+    pytest.param(lambda f: raw(f, 422, gzip.compress(json.dumps(error_body("invalid_lines", items=[LINE])).encode()),
+                               headers={"Content-Encoding": "gzip"}), id="gzip 422"),
+    pytest.param(lambda f: raw(f, 422, error_body("invalid_lines", items=[LINE], detail=None)),
+                 id="documented 422 invalid lines"),
+    pytest.param(lambda f: raw(f, 422, error_body("insufficient_funds", id="pr-rejected")),
+                 id="documented 422 insufficient funds"),
+    pytest.param(lambda f: raw(f, 422, {"detail": [{"loc": ["body", "lines"], "msg": "Field required",
+                                                    "type": "missing"}]}), id="documented 422 validation"),
+    pytest.param(lambda f: raw(f, 429, error_body("too_many_open_requests")), id="documented 429"),
+    pytest.param(lambda f: raw(f, 429, error_body("submissions_locked", next_submission_from="2026-11-10T05:00:00Z")),
+                 id="documented 429 locked"),
+    pytest.param(lambda f: raw(f, 403, error_body("forbidden")), id="documented 403"),
+    pytest.param(lambda f: raw(f, 503, {"detail": "down"}), id="503"),
+    pytest.param(lambda f: setattr(f, "redirect", "/api/v1/purchase-requests/pr-1"), id="303 redirect"),
+    pytest.param(lambda f: setattr(f, "drop", True), id="closed with no reply"),
+    pytest.param(lambda f: raw(f, 201, PENDING, content_type="text/plain"), id="201 as text/plain"),
+    pytest.param(lambda f: raw(f, 201, gzip.compress(json.dumps(PENDING).encode()),
+                               headers={"Content-Encoding": "gzip"}), id="201 gzip"),
+    pytest.param(lambda f: raw(f, 201, b'{"id": "pr-1", "id": "pr-2", "status": "pending", '
+                                       b'"created_at": "2026-11-09T12:00:00Z"}'), id="201 duplicate keys"),
+    pytest.param(lambda f: raw(f, 200, PENDING), id="200, not 201"),
+    pytest.param(lambda f: raw(f, 201, {"id": "pr-1"}), id="201 with no status or time"),
+    pytest.param(lambda f: raw(f, 201, {**PENDING, "status": "rejected"}), id="201 rejected"),
+]
+
+
+@pytest.mark.parametrize("answer_", REFUSAL_SHAPED)
+def test_only_a_validated_201_settles_so_two_runs_post_once_until_a_person_resolves(
+        db, fake, schema_url, monkeypatch, answer_):  # noqa: F811
+    prepared(db)
+    answer_(fake)
+    first_run, _ = live_run(schema_url, fake)
+    assert rows(db) == [("unknown", None)]
+    [submitted] = results(db, first_run, "submit_desired_state")
+    assert "submission_unresolved" not in submitted and len(fake.posts) == 1     # the first run did send
+    second_run, second = live_run(schema_url, fake)
+    assert_blocked(db, second_run)
+    assert len(fake.posts) == 1 and rows(db) == [("unknown", None)] and fake.looked_up == []
     assert submissions.unresolved(db).code == "submission_unresolved"
-
-
-@pytest.mark.parametrize("status, body", [
-    pytest.param(422, error_body("invalid_lines", items=[LINE], detail=None), id="invalid lines"),
-    pytest.param(422, error_body("insufficient_funds", id="pr-rejected"), id="insufficient funds"),
-    pytest.param(422, {"detail": [{"loc": ["body", "lines"], "msg": "Field required", "type": "missing"}]},
-                 id="FastAPI validation"),
-    pytest.param(429, error_body("too_many_open_requests"), id="too many open requests"),
-    pytest.param(429, error_body("submissions_locked", next_submission_from="2026-11-10T05:00:00Z"),
-                 id="submissions locked"),
-    pytest.param(403, error_body("forbidden"), id="403"),
-])
-def test_a_documented_refusal_is_refused_and_a_later_run_may_send(db, fake, schema_url, status, body):  # noqa: F811
-    """The control: the bridge's own documented refusal does close the row, so the second run sends again,
-    and the bridge refuses it again. The test above can tell the two apart."""
-    fake.answer = (status, body)
-    first = two_runs(db, fake, schema_url)
-    assert first == [("refused", None)]
-    assert len(fake.posts) == 2 and rows(db) == [("refused", None), ("refused", None)]
-
-
-# --- 2. Only a documented 201 with a pending request, under an ID not used yet, is accepted -------------
-
-@pytest.mark.parametrize("answer_", [
-    pytest.param((200, {"id": "r1"}), id="200 naming a request already fulfilled"),
-    pytest.param((201, {"id": "r1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}),
-                 id="201 naming a request already fulfilled"),
-    pytest.param((200, PENDING), id="200, not 201"),
-    pytest.param((201, {"id": "pr-1"}), id="201 with no status or time"),
-    pytest.param((201, {**PENDING, "status": "rejected"}), id="201 rejected"),
-    pytest.param((201, {**PENDING, "id": 7}), id="201 with a number for an ID"),
-])
-def test_a_success_answer_out_of_its_schema_never_lets_a_later_run_send_again(
-        db, fake, schema_url, answer_):  # noqa: F811
-    fake.answer = answer_
-    first = two_runs(db, fake, schema_url)
-    assert [status for status, _ in first] == ["unknown"]
-    assert len(fake.posts) == 1 and [status for status, _ in rows(db)] == ["unknown"]
-    # r1 is the fixture's own fulfilled request: still recorded once, still fulfilled.
-    assert db.execute("select status from purchase_requests where request_id = 'r1'").fetchall() == [("fulfilled",)]
-    assert db.execute("select count(*) from purchase_requests where status = 'pending'").fetchone() == (0,)
-
-
-def test_a_request_id_the_bridge_names_twice_is_never_settled_onto_a_new_attempt(db, fake, schema_url):  # noqa: F811
-    """Even when the bridge confirms r1 on the second run's check, r1 is the fulfilled request it already was,
-    not this attempt: the row stays open for a person."""
-    fake.answer = (201, {"id": "r1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
-    fake.lookups = {"r1": {"id": "r1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}}
-    two_runs(db, fake, schema_url)
-    assert fake.looked_up == ["r1"]
-    assert len(fake.posts) == 1 and [status for status, _ in rows(db)] == ["unknown"]
+    # A person finds out the bridge never filed it, and says so: the next run sends again.
+    resolve_by_person(schema_url, monkeypatch, 1, "--not-filed")
+    answer_with_201(fake)
+    live_run(schema_url, fake)
+    assert len(fake.posts) == 2 and rows(db) == [("not_filed", None), ("accepted", "pr-1")]
 
 
 def test_a_documented_201_is_accepted_and_the_next_run_waits_for_it(db, fake, schema_url):  # noqa: F811
-    first = two_runs(db, fake, schema_url)
-    assert first == [("accepted", "pr-1")]
+    prepared(db)
+    live_run(schema_url, fake)
+    assert rows(db) == [("accepted", "pr-1")]
+    second_run, _ = live_run(schema_url, fake)
+    [previewed] = results(db, second_run, "preview_desired_state")
+    assert "pending" in previewed           # the request just filed, still open, refuses a new plan
     assert len(fake.posts) == 1 and rows(db) == [("accepted", "pr-1")]
 
 
-# --- 3. The ID of an accepted request is on the row before anything else can fail ------------------
+def test_a_chunked_201_is_still_the_documented_acceptance(db, fake, schema_url):  # noqa: F811
+    prepared(db)
+    raw(fake, 201, PENDING, chunked=True)
+    live_run(schema_url, fake)
+    assert rows(db) == [("accepted", "pr-1")]
 
-def test_a_201_whose_recording_fails_is_settled_by_the_next_runs_check(db, fake, schema_url, monkeypatch):  # noqa: F811
+
+def test_a_request_id_the_bridge_names_twice_is_never_settled_onto_a_new_attempt(db, fake, schema_url):  # noqa: F811
+    """r1 is the fixture's fulfilled request. A 201 naming it isn't this attempt's, even when the bridge confirms
+    r1 on the next run's check: the row stays open for a person."""
+    prepared(db)
+    fake.answer = (201, {**PENDING, "id": "r1"})
+    fake.lookups = {"r1": {**PENDING, "id": "r1"}}
+    live_run(schema_url, fake)
+    second_run, _ = live_run(schema_url, fake)
+    assert_blocked(db, second_run)
+    assert len(fake.posts) == 1 and [status for status, _ in rows(db)] == ["unknown"]
+    assert db.execute("select status from purchase_requests where request_id = 'r1'").fetchall() == [("fulfilled",)]
+
+
+# --- 2. Startup recovery settles only a validated 201 it never recorded (Sol round 3, finding 3) ------
+
+def test_an_id_from_an_ambiguous_answer_is_never_looked_up_or_attached(db, fake, schema_url):  # noqa: F811
+    """Sol's case: a 200 naming an unrelated older request. The bridge confirms that request exists, but the
+    answer wasn't the documented acceptance, so the request may not be this attempt's: the next run's check
+    never looks it up, never marks the row accepted, and the row waits for a person."""
+    prepared(db)
+    raw(fake, 200, {"id": "pr-old-untracked", "status": "pending", "created_at": "2026-11-01T12:00:00Z"})
+    fake.lookups = {"pr-old-untracked": {"id": "pr-old-untracked", "status": "pending",
+                                         "created_at": "2026-11-01T12:00:00Z"}}
+    live_run(schema_url, fake)
+    second_run, _ = live_run(schema_url, fake)
+    assert fake.looked_up == []
+    assert_blocked(db, second_run)
+    assert len(fake.posts) == 1 and rows(db) == [("unknown", None)]
+    assert db.execute("select created_id from purchase_submissions").fetchone() == (None,)
+    assert db.execute("select count(*) from purchase_requests where request_id = 'pr-old-untracked'").fetchone() == (0,)
+
+
+def fail_first_record(monkeypatch):
     real, failed = submissions.record, []
 
     def fails_once(*args, **kwargs):
@@ -163,22 +222,111 @@ def test_a_201_whose_recording_fails_is_settled_by_the_next_runs_check(db, fake,
         return real(*args, **kwargs)
 
     monkeypatch.setattr(submissions, "record", fails_once)
+    return failed
+
+
+def test_a_validated_201_whose_recording_failed_is_settled_by_the_next_runs_check(
+        db, fake, schema_url, monkeypatch):  # noqa: F811
+    failed = fail_first_record(monkeypatch)
     fake.lookups = {"pr-1": PENDING}
     prepared(db)
     live_run(schema_url, fake)
-    # The settle failed, but the bridge's answer, with its ID, is on the row.
+    # The settle failed, but the validated 201's ID is on the row, as `created_id`.
     assert failed and rows(db) == [("sending", None)]
-    assert db.execute("select response->>'id' from purchase_submissions").fetchone() == ("pr-1",)
+    assert db.execute("select created_id from purchase_submissions").fetchone() == ("pr-1",)
     live_run(schema_url, fake)
-    # The second run's check looked it up and settled it; its submit then saw the request pending.
     assert fake.looked_up == ["pr-1"]
     assert len(fake.posts) == 1 and rows(db) == [("accepted", "pr-1")]
+    assert db.execute("select resolved_by from purchase_submissions").fetchone() == (submissions.AUTO_BY,)
     assert db.execute("select status from purchase_requests where request_id = 'pr-1'").fetchone() == ("pending",)
 
 
-def test_a_reply_lost_whole_still_needs_a_person(db, fake, schema_url):  # noqa: F811
-    """No ID came back at all: nothing to look up, so the row stays open and the second run is blocked."""
-    fake.drop = True
-    first = two_runs(db, fake, schema_url)
-    assert first == [("unknown", None)]
-    assert len(fake.posts) == 1 and fake.looked_up == [] and rows(db) == [("unknown", None)]
+@pytest.mark.parametrize("lookup", [
+    pytest.param({"id": "pr-1"}, id="only the id"),
+    pytest.param({**PENDING, "status": "lost"}, id="an undocumented status"),
+    pytest.param({**PENDING, "id": "pr-2"}, id="another request"),
+    pytest.param(None, id="404"),
+])
+def test_a_get_that_doesnt_answer_for_the_id_leaves_the_row_open(db, fake, schema_url, monkeypatch, lookup):  # noqa: F811
+    fail_first_record(monkeypatch)
+    fake.lookups = {} if lookup is None else {"pr-1": lookup}
+    prepared(db)
+    live_run(schema_url, fake)
+    second_run, _ = live_run(schema_url, fake)
+    assert fake.looked_up == ["pr-1"]
+    assert_blocked(db, second_run)
+    assert len(fake.posts) == 1 and rows(db) == [("sending", None)]
+
+
+# --- 3. A slow or huge answer is no answer, the success path included (Sol round 3, finding 5) --------
+
+def test_a_201_dripped_past_the_deadline_is_unknown(db, fake, schema_url, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(bridge_module, "PURCHASE_DEADLINE_SECONDS", 1)
+    prepared(db)
+    raw(fake, 201, PENDING, drip=0.1)        # each byte well inside the read timeout; all of them, about 7 s
+    first_run, _ = live_run(schema_url, fake)
+    [submitted] = results(db, first_run, "submit_desired_state")
+    assert "within 1 s" in submitted and rows(db) == [("unknown", None)]
+    second_run, _ = live_run(schema_url, fake)
+    assert_blocked(db, second_run)
+    assert len(fake.posts) == 1
+
+
+def test_a_201_past_the_size_cap_is_unknown(db, fake, schema_url, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(bridge_module, "PURCHASE_ANSWER_BYTES", 40)
+    prepared(db)
+    raw(fake, 201, PENDING)
+    first_run, _ = live_run(schema_url, fake)
+    assert rows(db) == [("unknown", None)]
+    second_run, _ = live_run(schema_url, fake)
+    assert_blocked(db, second_run)
+    assert len(fake.posts) == 1
+
+
+# --- 4. The only two retries: proven before any byte left -------------------------------------------
+
+def test_a_failed_connect_allows_one_retry_in_the_run(db, fake, schema_url, monkeypatch):  # noqa: F811
+    """Connecting for the first purchase POST fails. Nothing left, so the run previews again and sends once."""
+    real, failed = http.client.HTTPConnection.connect, []
+
+    def connect(self):
+        if not failed and sys._getframe(1).f_code.co_name == "post_answer":
+            failed.append(True)
+            raise ConnectionRefusedError("simulated: refused while connecting")
+        return real(self)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", connect)
+    prepared(db)
+    run_id, out = retry_run(schema_url, fake)
+    assert failed and len(fake.posts) == 1
+    assert rows(db) == [("not_filed", None), ("accepted", "pr-1")]
+    assert out.status == "submitted" and "may submit once more" in results(db, run_id, "submit_desired_state")[0]
+
+
+def test_plan_changed_allows_one_retry_in_the_run(db, fake, schema_url, monkeypatch):  # noqa: F811
+    """Six more sold between the preview and the submit: our own check refuses `plan_changed` before any POST."""
+    from vending.tools import submit as submit_module
+
+    real, moved = submit_module.planning.plan, []
+
+    def plan(conn, *args, **kwargs):
+        if not moved and sys._getframe(1).f_code.co_filename == submit_module.__file__:    # the submit's own plan
+            moved.append(True)
+            store_poll(conn, "b", "2026-11-09T10:00:00+00:00", {"15": (250, 106)})
+        return real(conn, *args, **kwargs)
+
+    monkeypatch.setattr(submit_module.planning, "plan", plan)
+    prepared(db)
+    run_id, out = retry_run(schema_url, fake)
+    first = results(db, run_id, "submit_desired_state")[0]
+    assert moved and "plan_changed" in first and "may submit once more" in first
+    assert len(fake.posts) == 1 and rows(db) == [("accepted", "pr-1")] and out.status == "submitted"
+
+
+@pytest.mark.parametrize("answer_", [REFUSAL_SHAPED[6], REFUSAL_SHAPED[9]])
+def test_a_documented_refusal_allows_no_retry_in_the_run(db, fake, schema_url, answer_):  # noqa: F811
+    prepared(db)
+    answer_(fake)
+    run_id, out = retry_run(schema_url, fake)
+    assert len(fake.posts) == 1 and rows(db) == [("unknown", None)] and out.status == "failed"
+    assert results(db, run_id, "submit_desired_state")[1].startswith("Not sent")

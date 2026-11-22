@@ -116,9 +116,9 @@ def test_an_open_submission_says_orders_are_blocked_and_what_to_run(conn, page_c
     snap = dashboard.snapshot(page_conn)
     [blocked] = [a for a in snap["attention"] if "Orders are blocked" in a["text"]]
     assert blocked["level"] == "bad" and "(unknown, 3 h ago)" in blocked["text"]
-    assert "python -m vending.submissions check" in blocked["text"] and "raw bridge text" not in blocked["text"]
+    assert "python -m vending.submissions resolve " in blocked["text"] and "raw bridge text" not in blocked["text"]
     page = dashboard.render(snap)
-    assert "Orders are blocked" in page and "<code>python -m vending.submissions check</code>" in page
+    assert "Orders are blocked" in page and "<code>python -m vending.submissions resolve " in page
     conn.execute("update purchase_submissions set status = 'not_filed'")
     assert not any("Orders are blocked" in a["text"] for a in dashboard.snapshot(page_conn)["attention"])
 

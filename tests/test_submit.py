@@ -115,29 +115,29 @@ def test_not_ready_is_a_failure_not_a_refusal(db, fake):  # noqa: F811
     assert db.execute("select outcome from action_log where tool = 'submit_desired_state'").fetchall() == [("failed",)]
 
 
-def test_a_4xx_from_the_bridge_is_refused_with_its_reason(db, fake):  # noqa: F811
-    prepared(db)
-    fake.answer = (422, {"error": "invalid lines", "error_type": "invalid_lines", "items": [
+@pytest.mark.parametrize("answer", [
+    (422, {"error": "invalid lines", "error_type": "invalid_lines", "items": [
         {"index": 0, "slot": "15", "choice": "alternate", "sku": "COKE20", "error_type": "alternate_same_as_primary",
-         "reason": "the alternate is the primary"}]})
-    reply = submit()
-    assert not reply["success"] and "422" in reply["message"] and "alternate_same_as_primary" in reply["message"]
-    assert db.execute("select status from purchase_submissions").fetchall() == [("refused",)]
-    assert db.execute("select count(*) from purchase_requests where status = 'pending'").fetchone() == (0,)
-    # Certainly not filed, so a corrected plan may be sent.
-    fake.answer = (201, {"id": "pr-2", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
-    assert submit()["success"] and len(fake.posts) == 2
-
-
-def test_too_many_open_requests_is_a_refusal(db, fake):  # noqa: F811
+         "reason": "the alternate is the primary"}]}),
+    (429, {"error": "too many open requests", "error_type": "too_many_open_requests"}),
+    (403, {"error": "forbidden", "error_type": "instructor_key"}),
+], ids=["422", "429", "403"])
+def test_the_bridges_documented_refusal_is_unknown_with_its_words_until_a_person_resolves(db, fake, answer):  # noqa: F811
+    """#217: even the bridge's documented refusal settles nothing by itself. Its words reach the agent and the
+    record, but the row stays `unknown` and every submit is refused until a person resolves it."""
     prepared(db)
-    fake.answer = (429, {"error": "too many open requests", "error_type": "too_many_open_requests"})
+    fake.answer = answer
     reply = submit()
-    assert codes(reply) == ["too_many_open_requests"]
-    # It came back from the bridge, after the POST, so it carries the submission number: the agent's sign
-    # that this refusal isn't one from before sending, and allows no retry.
-    assert reply["submission"] == 1
-    assert db.execute("select status from purchase_submissions").fetchall() == [("refused",)]
+    assert not reply["success"] and reply["status"] == "unknown" and reply["submission"] == 1
+    assert str(answer[0]) in reply["message"] and answer[1]["error_type"] in reply["message"]
+    assert "resolve 1" in reply["message"] and not reply["refusals"]
+    assert db.execute("select status, response from purchase_submissions").fetchall() == [("unknown", answer[1])]
+    assert db.execute("select count(*) from purchase_requests where status = 'pending'").fetchone() == (0,)
+    fake.answer = (201, {"id": "pr-2", "status": "pending", "created_at": "2026-11-09T12:00:00Z"})
+    assert codes(submit()) == ["submission_unresolved"] and len(fake.posts) == 1
+    # A person finds it was never filed: a corrected plan may be sent.
+    submissions.resolve(db, 1, None, "kevin")
+    assert submit()["success"] and len(fake.posts) == 2
 
 
 @pytest.mark.parametrize("answer", [(503, {"detail": "down"}), (201, {"status": "pending"})])
@@ -219,7 +219,7 @@ def test_a_cut_off_answer_is_unknown_not_a_crash(db, fake):  # noqa: F811
     fake.cut = True
     reply = submit()
     assert not reply["success"] and reply["status"] == "unknown"
-    assert "short read:" in reply["message"] and "Don't submit again" in reply["message"]
+    assert "IncompleteRead" in reply["message"] and "Don't submit again" in reply["message"]
     assert db.execute("select status from purchase_submissions").fetchall() == [("unknown",)]
 
 
@@ -267,9 +267,8 @@ def test_a_plan_refused_for_other_reasons_is_not_also_called_changed(db, fake): 
 
 @pytest.mark.parametrize("status", [403, 422, 429, 503])
 def test_an_error_answer_cut_off_part_way_is_unknown_and_blocks_the_next_submit(db, fake, status):  # noqa: F811
-    """A refusal's status alone isn't the bridge's refusal: its body may name a request, and a cut-off body
-    can't be read. So even a cut-off 422 is `unknown`, and nothing more is sent until it is settled.
-    `tests/test_submit_runs.py` runs the same through two live agent runs."""
+    """A cut-off answer is no answer, whatever its status: `unknown`, and nothing more is sent until a person
+    settles it. `tests/test_submit_runs.py` runs the same through two live agent runs."""
     prepared(db)
     fake.answer, fake.cut = (status, {}), True
     reply = submit()
@@ -335,7 +334,8 @@ def test_unreachable_bridge_is_not_filed(db, fake, monkeypatch):  # noqa: F811
 
     monkeypatch.setattr(server, "bridge", lambda: HalfDead(real.base_url, "test-key"))
     reply = submit()
-    assert not reply["success"] and "Couldn't reach the bridge" in reply["message"]
+    assert not reply["success"] and reply["status"] == "not_filed" and reply["submission"] == 1
+    assert "Couldn't connect to the bridge" in reply["message"] and "nothing was sent" in reply["message"]
     assert db.execute("select status from purchase_submissions").fetchall() == [("not_filed",)]
 
 
@@ -359,8 +359,8 @@ def test_a_post_answered_with_a_redirect_is_never_sent_twice(db, fake):  # noqa:
 @pytest.mark.parametrize("error", [ConnectionRefusedError, socket.gaierror, ConnectionResetError,
                                    BrokenPipeError, TimeoutError])
 def test_a_send_error_after_the_post_arrived_is_never_sent_twice(db, fake, monkeypatch, error):  # noqa: F811
-    """urllib wraps an error while sending in `URLError`. One raised after the body left is no proof it didn't
-    arrive, whatever its type."""
+    """An error raised once connected is no proof the request didn't arrive, whatever its type: only a failed
+    connect is."""
     prepared(db)
     real = http.client.HTTPConnection.send
     posting = []
@@ -385,21 +385,13 @@ def test_a_send_error_after_the_post_arrived_is_never_sent_twice(db, fake, monke
 
 @pytest.mark.parametrize("status", [400, 404, 405, 409])
 def test_a_4xx_the_bridge_doesnt_document_for_this_route_is_unknown(db, fake, status):  # noqa: F811
-    """The route documents 403, 422 and 429 as refusals. Any other status may not be the bridge's own answer."""
+    """Like every answer but the documented 201, these leave the row `unknown`."""
     prepared(db)
     fake.answer = (status, {"detail": "?"})
     first = submit(preview()["plan_hash"])
     second = submit(preview().get("plan_hash"))
     assert len(fake.posts) == 1 and first["status"] == "unknown" and str(status) in first["message"]
     assert codes(second) == ["submission_unresolved"]
-
-
-def test_a_403_is_a_refusal(db, fake):  # noqa: F811
-    prepared(db)
-    fake.answer = (403, {"error": "forbidden", "error_type": "instructor_key"})
-    reply = submit()
-    assert reply["status"] == "refused" and reply["submission"] == 1
-    assert db.execute("select status from purchase_submissions").fetchall() == [("refused",)]
 
 
 @pytest.mark.parametrize("lost", ["closed before any reply", "read timeout"])
@@ -425,7 +417,7 @@ def test_a_lost_reply_stays_blocked_for_later_runs(db, fake, monkeypatch, lost):
         ("unknown", None, None)]
     # A later live run checks before its model starts; this row holds nothing to look up.
     [checked] = submissions.check(db, fake.client)
-    assert checked.status == "unknown" and "holds no request ID" in checked.why
+    assert checked.status == "unknown" and "no validated 201" in checked.why
     fake.drop, fake.hold = False, None
     second = submit(preview().get("plan_hash"))
     assert codes(second) == ["submission_unresolved"] and len(fake.posts) == 1

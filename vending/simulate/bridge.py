@@ -28,7 +28,7 @@ from fractions import Fraction
 from typing import Any
 
 from vending import tracking
-from vending.bridge import TRACKING_PATH, BridgeAnswered
+from vending.bridge import TRACKING_PATH, BridgeAnswered, PostAnswer
 from vending.simulate import world
 from vending.simulate.world import BY_SKU, Machine
 from vending.slots import DEVICE_ID, our_team
@@ -135,7 +135,10 @@ class SimBridge:
     def post(self, path: str, body: dict) -> dict:
         self.calls.append(("POST", path))
         if path == "/api/v1/purchase-requests":
-            return self._purchase(body)
+            answer = self._purchase(body)
+            if answer.status != 201:
+                raise BridgeAnswered(answer.status, answer.text)
+            return answer.body
         if path == TRACKING_PATH:
             self.calls.pop()                    # `check_books` notes its own call
             return self.check_books(body)
@@ -145,17 +148,18 @@ class SimBridge:
             return {"id": request_id, "status": "pending"}
         raise BridgeAnswered(404, f"no route {path}")
 
-    def post_answer(self, path: str, body: dict) -> tuple[int, dict]:
-        """`post`, with the status the real bridge sends: `201` for a filed purchase request, `200` otherwise."""
-        answer = self.post(path, body)
-        return (201 if path == "/api/v1/purchase-requests" else 200), answer
+    def post_answer(self, path: str, body: dict) -> PostAnswer:
+        """A purchase POST's whole answer, as the real bridge's `post_answer` gives it: the documented `201`, or
+        the bridge's documented refusal (`422`, `429`), which `submit_desired_state` leaves `unknown`."""
+        if path != "/api/v1/purchase-requests":
+            return PostAnswer(200, self.post(path, body), "", "")
+        self.calls.append(("POST", path))
+        return self._purchase(body)
 
-    def _purchase(self, body: dict) -> dict:
-        # Refusals carry the bridge's documented body (`PurchaseRequestError`), whole: anything else is `unknown`.
+    def _purchase(self, body: dict) -> PostAnswer:
         if any(r.status == "pending" for r in self.requests.values()):
             self.refused.append({"at": self.now().isoformat(), "status": 429, "body": body})
-            raise BridgeAnswered(429, json.dumps({"error": "too many open requests",
-                                                  "error_type": "too_many_open_requests"}), complete=True)
+            return _json_answer(429, {"error": "too many open requests", "error_type": "too_many_open_requests"})
         problems = self._check(body)
         if problems:
             self.refused.append({"at": self.now().isoformat(), "status": 422, "problems": problems, "body": body})
@@ -163,11 +167,10 @@ class SimBridge:
             items = [{"index": p["line"], "slot": str(lines[p["line"]].get("slot")), "choice": None,
                       "sku": p.get("sku"), "error_type": p["error_type"], "reason": p["error_type"].replace("_", " ")}
                      for p in problems]
-            raise BridgeAnswered(422, json.dumps({"error": "invalid lines", "error_type": "invalid_lines",
-                                                  "items": items}), complete=True)
+            return _json_answer(422, {"error": "invalid lines", "error_type": "invalid_lines", "items": items})
         request_id = f"pr_sim_{len(self.requests) + 1:03d}"
         self.requests[request_id] = Filed(request_id, body, self.now())
-        return {"id": request_id, "status": "pending", "created_at": _iso(self.now())}
+        return _json_answer(201, {"id": request_id, "status": "pending", "created_at": _iso(self.now())})
 
     def _check(self, body: dict) -> list[dict]:
         """The bridge's line checks (docs/dex-bridge.md): every problem at once."""
@@ -447,3 +450,7 @@ class Worker:
         if st.sku != sku:
             st.units = 0
         return 0, None
+
+
+def _json_answer(status: int, body: dict) -> PostAnswer:
+    return PostAnswer(status, body, "", json.dumps(body)[:500])

@@ -742,23 +742,41 @@ def test_a_retry_waits_for_a_new_preview_in_an_earlier_turn(connect, conn):
     assert out.status == "failed"
 
 
+NOT_CONNECTED = {"success": False, "status": "not_filed", "submission": 1,
+                 "message": "Couldn't connect to the bridge (ConnectionRefusedError): nothing was sent."}
+
+
+def test_a_failed_connect_allows_one_retry_after_a_new_preview(connect, conn):
+    client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")),
+                    answer("submit", reason="restock 15"))
+    tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [NOT_CONNECTED, SENT])
+    run_id, out = go(connect, client, tools, live=True)
+    assert len(sent_submits(tools)) == 2 and "may submit once more" in last_result(client, 2)
+    assert stored(conn, run_id)[1] == "submitted" and stored(conn, run_id)[-1] == "req_9"
+
+
 @pytest.mark.parametrize("first", [
+    {"success": False, "status": "unknown", "submission": 1,
+     "message": "Sent, and no answer settles it (the bridge answered 422, and only the 201 it documents settles "
+                "a request. It said: {\"error\": \"invalid lines\"})"},
+    {"success": False, "status": "unknown", "submission": 1, "message": "refused",
+     "refusals": [{"code": "plan_changed", "message": "a POST's reply carrying plan_changed"}]},
     {"success": False, "status": "refused", "submission": 1, "message": "The bridge refused the request (422)"},
-    {"success": False, "status": "not_filed", "submission": 1, "message": "Couldn't reach the bridge"},
-    {"success": False, "status": "refused", "submission": 1, "message": "refused",
-     "refusals": [{"code": "too_many_open_requests", "message": "wait"}]},
-], ids=["bridge 4xx", "not filed", "429 refusal"])
-def test_a_reply_from_after_the_post_never_allows_a_retry(connect, conn, first):
-    """Only a refusal from before the POST (no submission number) allows the retry. Once a POST went out,
-    even a reply saying nothing was ordered ends the run's submits: when in doubt, never send twice. This is the
-    same-run latch; `tests/test_submit_runs.py` sends each kind of answer through two live runs against the
-    real server and a loopback bridge, and counts the POSTs across both."""
+    {"success": False, "message": "Refused", "refusals": [{"code": "below_floor", "message": "too cheap"}]},
+    {"success": False, "message": "Refused", "refusals": [
+        {"code": "plan_changed", "message": "moved"}, {"code": "submission_unresolved", "message": "open"}]},
+], ids=["a 4xx to the POST", "a POST reply carrying plan_changed", "a status no longer sent",
+        "a refusal before the POST that isn't plan_changed", "plan_changed with another refusal"])
+def test_only_plan_changed_or_a_failed_connect_allows_a_retry(connect, conn, first):
+    """Only our own `plan_changed` alone (no submission number) and `not_filed` (connecting failed) prove no
+    byte left. Anything else ends the run's submits: when in doubt, never send twice. This is the same-run latch;
+    `tests/test_submit_runs.py` sends each kind of answer through two live runs against the real server and a
+    loopback bridge, and counts the POSTs across both."""
     client = Script(preview(), tool_turn(submit()), preview(id="p2"), tool_turn(submit(id="s2")), answer("submit"))
     tools = live_tools([PREVIEWED, PREVIEWED_AGAIN], [first, SENT])
     run_id, out = go(connect, client, tools, live=True)
     assert len(sent_submits(tools)) == 1 and out.status == "failed"
-    assert "can't submit again" in last_result(client, 2) and "already submitted" in last_result(client, 4)
-    assert "nothing was bought" in out.detail and out.unresolved is None
+    assert "may submit once more" not in last_result(client, 2) and "already submitted" in last_result(client, 4)
 
 
 @pytest.mark.parametrize("first", [
@@ -796,14 +814,19 @@ class Lookup:
         return found
 
 
-def open_row(conn, *, response=None):
-    """A submission left `unknown` two hours ago, holding `response` if given."""
+def open_row(conn, *, response=None, created_id=None):
+    """A submission left open two hours ago: `sending` with `created_id` (its POST got a validated 201 that was
+    never recorded), otherwise `unknown`, holding `response` if given."""
     from psycopg.types.json import Jsonb
 
     return conn.execute(
-        "insert into purchase_submissions (at, plan_hash, body, status, response) values"
-        " (now() - interval '2 hours', 'h', %s, 'unknown', %s) returning id",
-        (Jsonb({"lines": [], "off_cycle": False}), None if response is None else Jsonb(response))).fetchone()[0]
+        "insert into purchase_submissions (at, plan_hash, body, status, response, created_id) values"
+        " (now() - interval '2 hours', 'h', %s, %s, %s, %s) returning id",
+        (Jsonb({"lines": [], "off_cycle": False}), "unknown" if created_id is None else "sending",
+         None if response is None else Jsonb(response), created_id)).fetchone()[0]
+
+
+LOST = {"id": "pr-lost", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}
 
 
 def check_steps(conn, run_id):
@@ -811,12 +834,13 @@ def check_steps(conn, run_id):
                         (run_id,)).fetchall()
 
 
-def test_a_live_run_settles_an_open_row_that_holds_a_request_id(connect, conn):
-    """A row that holds the bridge's ID (a person stored it, say) is settled from the bridge's answer. A real lost
-    reply holds none: `tests/test_submit.py::test_a_lost_reply_stays_blocked_for_later_runs` sends one through
-    the submit tool, and `test_a_live_run_leaves_a_lost_reply_it_cant_tell_open` below is its startup check."""
-    row = open_row(conn, response={"id": "pr-lost"})
-    bridge = Lookup({"pr-lost": {"id": "pr-lost", "status": "pending"}})
+def test_a_live_run_settles_a_validated_201_it_never_recorded(connect, conn):
+    """A row whose POST got a validated 201 (`created_id`) but was never settled is settled from the bridge's
+    record of that ID. A lost reply holds none: `tests/test_submit.py::test_a_lost_reply_stays_blocked_for_later_runs`
+    sends one through the submit tool, and `test_a_live_run_leaves_a_lost_reply_it_cant_tell_open` below is its
+    startup check."""
+    row = open_row(conn, response=LOST, created_id="pr-lost")
+    bridge = Lookup({"pr-lost": LOST})
     run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
     assert conn.execute("select status, request_id, resolved_by from purchase_submissions where id = %s",
                         (row,)).fetchone() == ("accepted", "pr-lost", "auto-check")
@@ -828,17 +852,18 @@ def test_a_live_run_settles_an_open_row_that_holds_a_request_id(connect, conn):
     assert conn.execute("select count(*) from purchase_requests where request_id = 'pr-lost'").fetchone() == (1,)
 
 
-def test_a_live_run_leaves_a_lost_reply_it_cant_tell_open(connect, conn):
-    row = open_row(conn)     # a timeout: no request ID to look up
-    bridge = Lookup({})
+@pytest.mark.parametrize("response", [None, LOST], ids=["a lost reply", "an ambiguous answer naming a request"])
+def test_a_live_run_leaves_a_row_without_a_validated_201_open(connect, conn, response):
+    row = open_row(conn, response=response)
+    bridge = Lookup({"pr-lost": LOST})
     run_id, out = go(connect, Script(answer("skip")), Tools(LIVE_TOOLS), live=True, bridge=bridge)
     assert conn.execute("select status from purchase_submissions where id = %s", (row,)).fetchone() == ("unknown",)
     [(content, is_error)] = check_steps(conn, run_id)
-    assert is_error and "holds no request ID" in content and bridge.asked == []
+    assert is_error and "no validated 201" in content and bridge.asked == []
 
 
 def test_a_dry_run_never_checks_the_bridge(connect, conn):
-    open_row(conn, response={"id": "pr-lost"})
-    bridge = Lookup({"pr-lost": {"id": "pr-lost"}})
+    open_row(conn, response=LOST, created_id="pr-lost")
+    bridge = Lookup({"pr-lost": LOST})
     go(connect, Script(answer("skip")), Tools(), bridge=bridge)
     assert bridge.asked == []

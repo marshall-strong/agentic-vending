@@ -49,8 +49,13 @@ class FakeBridge:
         self.drop = False            # close the connection once the POST has arrived, before any reply
         self.other_gets: list[str] = []  # GETs of anything but the catalog (a followed redirect, say)
         self.received = threading.Event()  # set once a POST has arrived
+        self.stopping = threading.Event()  # set at teardown, to end a drip
         self.hold: threading.Event | None = None  # if set, a POST isn't answered until this is
         self.raw: bytes | None = None  # answer the POST (with `answer`'s status) with exactly these bytes as its body
+        self.content_type: str | None = "application/json"  # the `Content-Type` sent with `raw` (None: none)
+        self.headers: dict[str, str] = {}  # more headers sent with `raw`
+        self.chunked = False         # send `raw` chunked (one chunk), not with a Content-Length
+        self.drip = 0.0              # send `raw` a byte at a time, this many seconds apart
         self.lookups: dict[str, dict] = {}  # what `GET /api/v1/purchase-requests/{id}` answers, by ID; others are 404
         self.looked_up: list[str] = []  # every ID asked for that way (in `other_gets` too)
         fake = self
@@ -104,9 +109,29 @@ class FakeBridge:
                     return
                 if fake.raw is not None:
                     self.send_response(fake.answer[0])
-                    self.send_header("Content-Length", str(len(fake.raw)))
+                    if fake.content_type is not None:
+                        self.send_header("Content-Type", fake.content_type)
+                    for name, value in fake.headers.items():
+                        self.send_header(name, value)
+                    data = fake.raw
+                    if fake.chunked:
+                        self.send_header("Transfer-Encoding", "chunked")
+                        data = f"{len(data):x}".encode() + b"\r\n" + data + b"\r\n0\r\n\r\n"
+                    else:
+                        self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
-                    self.wfile.write(fake.raw)
+                    if not fake.drip:
+                        self.wfile.write(data)
+                        return
+                    self.wfile.flush()
+                    for byte in data:
+                        if fake.stopping.wait(fake.drip):
+                            return
+                        try:
+                            self.wfile.write(bytes([byte]))
+                            self.wfile.flush()
+                        except OSError:
+                            return
                     return
                 if fake.cut:
                     data = b'{"id": "pr-1", "status": "pen'
@@ -133,6 +158,7 @@ def fake(db, monkeypatch):  # noqa: F811
     bridge = FakeBridge()
     monkeypatch.setattr(server, "bridge", bridge.client)
     yield bridge
+    bridge.stopping.set()
     bridge.server.shutdown()
     bridge.server.server_close()
 

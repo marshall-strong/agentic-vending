@@ -1065,9 +1065,9 @@ def attention(snap: dict) -> list[dict]:
         first = open_submissions["data"][0]
         named = ", ".join(f"{r['id']} ({r['status']}, {_span(now - r['at'])} ago)" for r in open_submissions["data"])
         add("bad", f"Orders are blocked: purchase submission {named} may already be on the bridge, so the agent "
-                   "can't send another request until a person settles it. Run "
-                   "`python -m vending.submissions check`; if it can't tell, ask the instructors whether the "
-                   f"request exists, then run `python -m vending.submissions resolve {first['id']} "
+                   "can't send another request until a person settles it. Find out whether the bridge filed it "
+                   "(ask the instructors if no request ID is known), then run "
+                   f"`python -m vending.submissions resolve {first['id']} "
                    "--request-id ID --by NAME` or `--not-filed --by NAME`.")
 
     catalog = snap["catalog_requests"]
