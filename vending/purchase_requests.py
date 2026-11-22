@@ -91,8 +91,8 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
 
     An answer whose `updated_at` is older than the stored one is ignored too: a slow read can arrive after
     the bridge corrected the receipt, and it must not put the old receipt back. So is a fulfilled answer
-    with no `updated_at` once we hold a receipt that has one. An answer with the same status and the same
-    `updated_at` as the stored one is the same revision: stored again if it is the same answer, or the same
+    with no `updated_at` once we hold a receipt that has one. A fulfilled answer with the same
+    `updated_at` as the stored receipt is the same revision: stored again if it is the same answer, or the same
     answer with more `later_losses` (the bridge adds them to a fulfilled request; the spec doesn't say it
     changes `updated_at`). Any other difference within one revision is kept out: we can't tell which is
     newer, so the stored one stays. The request's row is locked while this is decided, so two reads that
@@ -204,7 +204,7 @@ def _kept_out(request_id: str, status: str, empty: bool, changed_at: datetime | 
     if was_changed > changed_at:
         return "older", (f"{request_id}: the bridge's answer last changed {_eastern(changed_at)}, older than the "
                          f"one stored ({_eastern(was_changed)}); kept the stored receipt")
-    if (was_changed == changed_at and was == status and was_answer is not None
+    if (was_changed == changed_at and was == status == "fulfilled" and was_answer is not None
             and not _same_but_more_losses(was_answer, response)):
         return "same_revision", (
             f"{request_id}: the bridge sent an answer with the same updated_at as the stored one "

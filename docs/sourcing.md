@@ -95,8 +95,8 @@ no web access is needed, and the price is never older than our last purchase of 
   fulfilled answer that lists no lines never replaces the stored lines. A fulfilled answer with no
   `updated_at` (or an older one), after we hold a receipt that has one, is ignored the same way,
   with one warning.
-- **Same `updated_at`, different answer.** An answer with the same status and `updated_at` as the
-  stored one is the same revision. It is stored again if it is the same answer, or the same answer
+- **Same `updated_at`, different answer.** A fulfilled answer with the same `updated_at` as the
+  stored receipt is the same revision. It is stored again if it is the same answer, or the same answer
   with more `later_losses` (the bridge adds those to a filled request, and its spec doesn't say
   they change `updated_at`). Any other difference is kept out with one warning: we can't tell
   which answer is newer, so the stored one stays and a person checks it against the bridge.
