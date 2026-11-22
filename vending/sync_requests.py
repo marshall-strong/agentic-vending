@@ -37,11 +37,14 @@ schema.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from vending import db, receipt_prices
 from vending.bridge import Bridge, BridgeError, BridgeRateLimited, BridgeUnreachable
@@ -50,6 +53,8 @@ from vending.purchase_requests import store
 # Long enough to cover a closet count after the next weekly visit or two.
 # Units can sit in the closet for weeks, so raise it if losses turn up late.
 RECHECK_DAYS = 30
+# `action_log` tool of a reason a receipt line gave no price, one row per reason and revision of the receipt.
+SKIPPED_TOOL = "receipt_prices.skipped"
 
 
 @dataclass
@@ -96,8 +101,6 @@ def sync(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
             report.failed += 1
             log(f"{request_id}: could not read ({error}); skipped")
             continue
-        was = conn.execute("select status from purchase_requests where request_id = %s", (request_id,)).fetchone()
-        before = receipt_prices.priced_lines(conn, request_id) if was is not None and was[0] == "fulfilled" else None
         try:
             stored = store(conn, request_id, response, now)
         except ValueError as error:
@@ -118,20 +121,23 @@ def sync(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None,
         if stored.new_losses:
             log(f"{request_id}: {stored.new_losses} new later losses")
         if stored.status == "fulfilled":
-            # Skipped lines are named on the read that finds the request fulfilled, and again on a read that
-            # changes its receipt (a correction can bring a new reason), not on every re-read.
-            quiet = before is not None and receipt_prices.priced_lines(conn, request_id) == before
-            _refresh_prices(conn, request_id, now, report, log, quiet=quiet)
+            _refresh_prices(conn, request_id, now, report, log)
     return report
 
 
-def _refresh_prices(conn: psycopg.Connection, request_id: str, now: datetime, report: Report, log,
-                    quiet: bool = False) -> None:
+def _refresh_prices(conn: psycopg.Connection, request_id: str, now: datetime, report: Report, log) -> None:
     """Sourcing prices from this receipt (`vending.receipt_prices`). A database error is logged by its class
-    only and counted; the stored receipt stays, and the next read or `python -m vending.receipt_prices` retries."""
+    only and counted; the stored receipt stays, and the next read or `python -m vending.receipt_prices` retries.
+
+    Why a line gave no price is named once per revision of the receipt: the first time pricing reads that
+    revision and finishes, not on every hourly re-read. Each reason is recorded in `action_log` in the same
+    transaction as the pricing, so a read whose pricing failed (a lock timeout, say) records nothing, and the
+    next read that prices it names the reason."""
     try:
         with conn.transaction():
             applied = receipt_prices.apply(conn, request_id, now)
+            # The request is still locked by `apply`, so these are the lines it priced.
+            new_reasons = _first_time_skipped(conn, request_id, applied.skipped)
     except psycopg.Error as error:
         report.price_failures += 1
         log(f"{request_id}: receipt prices not applied ({type(error).__name__}); "
@@ -140,8 +146,29 @@ def _refresh_prices(conn: psycopg.Connection, request_id: str, now: datetime, re
     report.prices_updated += len(applied.updated)
     for text in applied.updated:
         log(f"sourcing price from receipt: {text}")
-    for text in [] if quiet else applied.skipped:
+    for text in new_reasons:
         log(text)
+
+
+def _first_time_skipped(conn: psycopg.Connection, request_id: str, reasons: list[str]) -> list[str]:
+    """The reasons not yet recorded for this revision of the request's receipt, now recorded in `action_log`."""
+    if not reasons:
+        return []
+    revision = hashlib.sha256(json.dumps(receipt_prices.priced_lines(conn, request_id), sort_keys=True,
+                                         separators=(",", ":"), default=str).encode()).hexdigest()
+    new = []
+    for text in dict.fromkeys(reasons):
+        seen = conn.execute(
+            "select 1 from action_log where tool = %s and arguments->>'request_id' = %s"
+            " and arguments->>'revision_sha256' = %s and detail = %s limit 1",
+            (SKIPPED_TOOL, request_id, revision, text)).fetchone()
+        if seen:
+            continue
+        conn.execute(
+            "insert into action_log (kind, tool, arguments, outcome, detail) values ('read', %s, %s, 'done', %s)",
+            (SKIPPED_TOOL, Jsonb({"request_id": request_id, "revision_sha256": revision}), text))
+        new.append(text)
+    return new
 
 
 def main(argv: list[str] | None = None) -> int:

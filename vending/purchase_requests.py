@@ -39,6 +39,9 @@ IGNORED_TOOL = "purchase_requests.ignored"
 # exponent alone (`_money`), never by Decimal arithmetic, which overflows on 1e1000000.
 _MOST_WHOLE_DIGITS = 9
 _MOST_PLACES = 10
+# Bridge times outside these can't be ours, and the ends of Python's range overflow in another time zone.
+_EARLIEST = datetime(2020, 1, 1, tzinfo=timezone.utc)
+_LATEST = datetime(2100, 1, 1, tzinfo=timezone.utc)
 
 
 class _NotReal(ValueError):
@@ -95,8 +98,10 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     `updated_at` as the stored receipt is the same revision: stored again if it is the same answer, or the same
     answer with more `later_losses` (the bridge adds them to a fulfilled request; the spec doesn't say it
     changes `updated_at`). Any other difference within one revision is kept out: we can't tell which is
-    newer, so the stored one stays. The request's row is locked while this is decided, so two reads that
-    race can't both win.
+    newer, so the stored one stays. A newer revision is kept out too when it drops or changes a later loss
+    we stored (`_losses_shrank`): the bridge only adds to that list, and replacing the lines would delete
+    the loss and put its units back in the stock count. The request's row is locked while this is decided,
+    so two reads that race can't both win.
 
     An amount that can't be real (1e30 dollars, or more than 10 decimal places) is stored as unknown, with a
     warning, and the rest of the receipt is kept: the fill happened, and the stock count needs its lines.
@@ -141,6 +146,8 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
         if status == "pending" and was != "pending":
             return Stored(was)
         kept = _kept_out(request_id, status, empty, changed_at, response, was, was_changed, was_answer)
+        if kept is None and status == was == "fulfilled":
+            kept = _losses_shrank(conn, request_id, changed_at, losses)
         if kept is not None:
             reason, warning = kept
             if not _first_time_kept_out(conn, request_id, response, reason, warning):
@@ -211,6 +218,35 @@ def _kept_out(request_id: str, status: str, empty: bool, changed_at: datetime | 
             f"({_eastern(changed_at)}) but different contents, so we can't tell which is newer; kept the "
             "stored receipt. A person should check it against the bridge")
     return None
+
+
+def _losses_shrank(conn: psycopg.Connection, request_id: str, changed_at: datetime | None,
+                   losses: list[tuple]) -> tuple[str, str] | None:
+    """Why a fulfilled answer must not replace the stored receipt's later losses, or None when it may.
+
+    The bridge only adds to a line's `later_losses`, oldest first, so each stored line's losses must start that
+    line's list in the answer. Replacing the lines deletes the stored losses, so an answer that drops or changes
+    one would put units back in the count that were broken or missing."""
+    def by_line(rows) -> dict[int, list[tuple]]:
+        found: dict[int, list[tuple]] = {}
+        for line_no, *loss in rows:
+            found.setdefault(line_no, []).append(tuple(loss))
+        return found
+
+    stored = by_line(conn.execute(
+        "select line_no, location, sku, units, note, recorded_at from purchase_line_losses"
+        " where request_id = %s order by line_no, position", (request_id,)).fetchall())
+    answer = by_line((line_no, location, sku, units, note, at)
+                     for _, line_no, _position, location, sku, units, note, at in losses)
+    short = sorted(line_no for line_no, old in stored.items() if answer.get(line_no, [])[:len(old)] != old)
+    if not short:
+        return None
+    said = f"last changed {_eastern(changed_at)}" if changed_at else "no updated_at"
+    lines = ", ".join(str(n) for n in short)
+    return "losses_shrank", (
+        f"{request_id}: the bridge's answer ({said}) lists fewer later losses than the stored receipt, or different "
+        f"ones, on line{'' if len(short) == 1 else 's'} {lines}; kept the stored receipt. Later losses only grow, "
+        "so a person should check it against the bridge")
 
 
 def _same_but_more_losses(stored: dict, answer: dict) -> bool:
@@ -435,13 +471,22 @@ def _money(value: str | int | None) -> Decimal | None:
 def _when(value: str | None) -> datetime | None:
     """A bridge timestamp. One without a zone is taken as UTC, which is what the bridge stores.
 
-    Anything but text is `ValueError`, so a malformed time fails its own request, never the whole sync."""
+    Anything but text is `ValueError`, so a malformed time fails its own request, never the whole sync. So is a
+    time outside 2020-2099 UTC: year 1 or 9999 parses, but can't be written in Eastern time (OverflowError), and
+    no receipt of ours is from then."""
     if value is None:
         return None
     if not isinstance(value, str):
         raise ValueError(f"not a time: {value!r}")
     moment = datetime.fromisoformat(value)
-    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    moment = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    try:
+        utc = moment.astimezone(timezone.utc)
+    except OverflowError:
+        utc = None
+    if utc is None or not _EARLIEST <= utc < _LATEST:
+        raise ValueError(f"not a time the bridge could mean: {value!r}")
+    return moment
 
 
 def get_purchase_requests(conn: psycopg.Connection, pending_only: bool = False) -> list[dict]:

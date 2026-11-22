@@ -85,8 +85,9 @@ no web access is needed, and the price is never older than our last purchase of 
 - **A newer price wins.** A row checked after the receipt keeps its price. Reading the same
   receipt again changes nothing.
 - **Corrections.** A corrected receipt (a newer revision from the bridge) replaces the price it
-  set, but only while its line is still newer than the row's last hand check. If the correction
-  moves the line's time back to or before that check, the hand price comes back.
+  set, but only while its line is still the newest price for the row. If the correction moves the
+  line's time back, the newest of three wins: the correction, the row's last hand check, and the
+  price any other fulfilled receipt gives that row (within its max). A hand check wins a tie.
 - **A fill is never undone automatically.** The bridge describes rejection only before a request
   is filled. So a rejected answer for a request we hold as fulfilled, with or without a newer
   `updated_at`, is not stored. The receipt, its stock and its prices stay. The sync logs one
@@ -100,11 +101,13 @@ no web access is needed, and the price is never older than our last purchase of 
   with more `later_losses` (the bridge adds those to a filled request, and its spec doesn't say
   they change `updated_at`). Any other difference is kept out with one warning: we can't tell
   which answer is newer, so the stored one stays and a person checks it against the bridge.
+- **Later losses only grow.** A newer answer that drops or changes a later loss we stored is kept
+  out with one warning, so a loss already counted never goes back into stock.
 - **Each answer kept out is recorded once** in `action_log` (tool `purchase_requests.ignored`),
   with the reason and the warning itself, so the warning is on record even if the sync's own log
   is lost.
-- **A malformed answer** (a time that is a number, `lines` that isn't a list, a receipt that isn't
-  an object, a count that isn't a whole number) fails that request only, with its reason logged.
+- **A malformed answer** (a time that is a number or outside 2020-2099, `lines` that isn't a list, a
+  receipt that isn't an object, a count that isn't a whole number) fails that request only, with its reason logged.
   The stored receipt stays and the sync reads the next request.
 - **A price a correction stops giving** (the line became unavailable or a substitution) is not
   taken back. The row keeps it, and the sync says so once, so a person can check it.
@@ -113,13 +116,15 @@ no web access is needed, and the price is never older than our last purchase of 
   at once, in one fixed order, so two receipts that list the same drinks in a different order
   wait for each other instead of deadlocking. `python -m vending.sourcing import` locks every row
   of its file's drinks the same way before it writes any, so an import and a receipt wait for each
-  other too. A change a person makes at the same time is kept.
+  other too. Each drink also takes its own lock first, in the same order, so two imports adding the
+  same new rows in a different order wait too. A change a person makes at the same time is kept.
 - **Skipped, and the reason logged:** a line loaded from the closet or not bought, a
   substitution (the receipt's SKU isn't the one we asked for), a missing amount or pack size,
   zero packs, units that don't add up, a pack price above the row's max (a person raises the max),
-  and a drink bought at a store or pack size the table has no row for. The sync logs the reasons
-  when it first finds the request fulfilled, and again when a corrected receipt changes its lines.
-  A re-read that changes nothing logs nothing.
+  and a drink bought at a store or pack size the table has no row for. The sync logs each reason
+  once per revision of the receipt, the first time it prices that revision, and records it in
+  `action_log` (tool `receipt_prices.skipped`) with the pricing. A pricing that fails (a lock
+  timeout, say) records nothing, so the next read names the reason.
 - **An amount that can't be real** (a billion dollars or more, more than 10 decimal places, or
   not a finite number) is stored as unknown, with a warning in the sync log once per revision of
   the receipt. The rest of the receipt is kept, so the fill still counts for stock. That line

@@ -4,6 +4,7 @@ like the bridge's, stored through `vending.purchase_requests.store`, on a throwa
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -13,6 +14,7 @@ from tests.conftest import conn, open_in  # noqa: E402,F401 - migrated schema wi
 from tests.test_sync_requests import BODY, FakeBridge, fulfilled, later, pending, receipt, submit  # noqa: E402
 from vending import receipt_prices, sourcing  # noqa: E402
 from vending.purchase_requests import store  # noqa: E402
+from vending.stock import stock  # noqa: E402
 from vending.sync_requests import sync  # noqa: E402
 
 NOW = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
@@ -804,3 +806,150 @@ def test_the_kept_out_row_holds_the_reason_and_the_warning(coke):
     late = fulfilled("r1", receipt(total_paid="12.00"), fulfilled_at="2026-11-01T10:00:00Z")
     late_warned = store(coke, "r1", late, NOW).warnings
     assert kept_out_rows(coke) == [("rejected_after_fill", warned[0]), ("older", late_warned[0])]
+
+
+# Sol review, round 5.
+
+def test_a_newer_answer_with_fewer_later_losses_is_kept_out(coke, schema_url):
+    """Round 5, finding 1: the stored receipt has a later loss (8 loaded, 1 lost later: 7 in the coil). A newer
+    answer without that loss replaced the lines and took the loss with them, so the coil read 8. Later losses only
+    grow, so that answer is kept out with one stored warning, read through another connection too."""
+    submit(coke, "r1")
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt(later_losses=[later(1)]))}), now=NOW, log=said.append)
+    assert stock(coke).slots[0].units == 7
+    shrunk = fulfilled("r1", receipt(), updated_at="2026-11-08T10:00:00Z")
+    with open_in(*schema_url) as other:
+        for hours in (1, 2):
+            report = sync(other, FakeBridge({"r1": shrunk}), now=NOW + timedelta(hours=hours), log=said.append)
+            assert (report.fulfilled, report.failed) == (1, 0), said
+    assert stock(coke).slots[0].units == 7
+    assert coke.execute("select count(*) from purchase_line_losses").fetchone()[0] == 1
+    warned = [line for line in said if "fewer later losses" in line]
+    assert len(warned) == 1 and "line 0" in warned[0], said
+    assert [reason for reason, _ in kept_out_rows(coke)] == ["losses_shrank"]
+    # A newer answer that keeps the loss and adds one is stored as usual.
+    grown = fulfilled("r1", receipt(later_losses=[later(1), later(2, "back_stock", "2026-11-08T11:00:00Z")]),
+                      updated_at="2026-11-08T12:00:00Z")
+    report = sync(coke, FakeBridge({"r1": grown}), now=NOW + timedelta(hours=3), log=said.append)
+    assert report.new_losses == 1
+    assert coke.execute("select count(*) from purchase_line_losses").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("field", ["updated_at", "resolved_at", "recorded_at"])
+@pytest.mark.parametrize("when", ["0001-01-01T00:00:00Z", "9999-12-31T23:59:59-23:59", "1999-12-31T23:59:59Z",
+                                  "2100-01-01T00:00:00Z"], ids=["year 1", "year 9999", "1999", "2100"])
+def test_a_time_out_of_range_fails_that_request_only(coke, field, when):
+    """Round 5, finding 2: `updated_at` of year 1 parsed, then writing it in Eastern time overflowed, and the
+    OverflowError stopped the whole sync. A time outside 2020-2099 is now that request's validation error."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1", days_ago=3)
+    submit(coke, "r2", days_ago=2)
+    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt()), "r2": pending("r2")}), now=NOW, log=quietly)
+    bad = fulfilled("r1", receipt(total_paid="12.99"), updated_at="2026-11-08T10:00:00Z")
+    if field == "updated_at":
+        bad["updated_at"] = when
+    elif field == "resolved_at":
+        bad["lines"][0]["receipt"]["resolved_at"] = when
+    else:
+        bad["lines"][0]["receipt"]["later_losses"] = [later(1, at=when)]
+    good = fulfilled("r2", receipt(total_paid="12.99", resolved_at="2026-11-08T16:00:00Z"))
+    said: list[str] = []
+    report = sync(coke, FakeBridge({"r1": bad, "r2": good}), now=NOW + timedelta(hours=1), log=said.append)
+    assert (report.checked, report.failed) == (1, 1), said
+    assert any(line.startswith("r1: ") and "kept what we had" in line for line in said), said
+    assert stocked(coke)[1][0][3] == Decimal("12.37")
+    assert row(coke).expected_cents == 1299 and row(coke).note.startswith("receipt r2:")
+
+
+def test_a_skip_reason_is_named_after_a_lock_timeout_stops_its_first_pricing(coke, schema_url):
+    """Round 5, finding 3: the correction (above the max) was stored, but pricing it hit a lock timeout. The next
+    read saw the same stored lines and stayed quiet, so the reason was never named. Each reason is now recorded
+    when pricing reads that revision, and named once."""
+    table_row(coke, NOW - timedelta(days=9))
+    submit(coke, "r1")
+    said: list[str] = []
+    sync(coke, FakeBridge({"r1": fulfilled("r1", receipt())}), now=NOW, log=said.append)
+    corrected = fulfilled("r1", receipt(total_paid="13.99"), updated_at="2026-11-08T10:00:00Z")
+    coke.execute("set lock_timeout = '300ms'")
+    try:
+        with open_in(*schema_url) as other:
+            with other.transaction():
+                other.execute("select 1 from sourcing_options where sku = 'COKE20' for update")
+                report = sync(coke, FakeBridge({"r1": corrected}), now=NOW, log=said.append)
+        assert report.price_failures == 1, said
+        assert any("receipt prices not applied (LockNotAvailable)" in line for line in said), said
+    finally:
+        coke.execute("reset lock_timeout")
+    for hours in (1, 2):
+        sync(coke, FakeBridge({"r1": corrected}), now=NOW + timedelta(hours=hours), log=said.append)
+    assert sum("above the primary row's max $13.50" in line for line in said) == 1, said
+
+
+def test_two_imports_adding_the_same_new_rows_in_opposite_order_do_not_deadlock(coke, schema_url, monkeypatch):
+    """Round 5, finding 4: neither SKU has a row yet, so `lock_skus` found nothing to lock. One import inserted
+    COKE20 then PEPSI20, the other PEPSI20 then COKE20, and each waited on the other's insert. Both now take a lock
+    per SKU, in one order, before writing; the second waits and then writes."""
+    def rows(order, by):
+        return [sourcing.Option(sku=sku, rank="primary", store="Costco", units_per_pack=12, expected_cents=1199,
+                                max_cents=1400, url=None, pack_description=None, checked_at=NOW - timedelta(days=8),
+                                checked_by=by, note="import") for sku in order]
+    holding, errors = threading.Event(), []
+    real = sourcing.set_option
+
+    def slow(conn, o, now=None):
+        outcome = real(conn, o, now)
+        if threading.current_thread().name == "first" and not holding.is_set():
+            holding.set()
+            time.sleep(2)            # long enough for the other import to take what it can, and Postgres to see a cycle
+        return outcome
+
+    monkeypatch.setattr(sourcing, "set_option", slow)
+
+    def run(conn, order, by):
+        def work():
+            try:
+                sourcing.import_rows(conn, rows(order, by), NOW)
+            except BaseException as error:  # noqa: BLE001 - reported below
+                errors.append(error)
+        return work
+
+    with open_in(*schema_url) as other:
+        first = threading.Thread(target=run(coke, ("COKE20", "PEPSI20"), "Kevin"), name="first")
+        first.start()
+        assert holding.wait(30)
+        second = threading.Thread(target=run(other, ("PEPSI20", "COKE20"), "Meaghan"), name="second")
+        second.start()
+        first.join(60)
+        second.join(60)
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == [], errors
+    assert {sourcing._row(coke, sku, "primary").checked_by for sku in ("COKE20", "PEPSI20")} == {"Meaghan"}
+
+
+@pytest.mark.parametrize("hand, expected, by", [
+    (datetime(2026, 11, 1, 12, tzinfo=timezone.utc), 1237, "receipt"),     # r1 (7 Nov) is the newest left
+    (datetime(2026, 11, 7, 20, tzinfo=timezone.utc), 1149, "Kevin"),       # the hand check (after r1) is
+], ids=["older receipt is newest", "hand check is newest"])
+def test_a_correction_that_backdates_takes_the_newest_eligible_price(coke, hand, expected, by):
+    """Round 5, finding 5: r1 (7 Nov, $12.37) priced the row, then r2 (8 Nov, $12.99). A correction moves r2 to 5 Nov
+    and $11.95. The row took $11.95 dated 5 Nov, though r1's 7 Nov price is newer. Now the newest of the correction,
+    the hand check and every other fulfilled receipt for that row wins."""
+    table_row(coke, hand)
+    fill(coke, "r1")
+    receipt_prices.apply(coke, "r1", NOW)
+    fill(coke, "r2", receipt(total_paid="12.99", resolved_at="2026-11-08T16:00:00Z"))
+    receipt_prices.apply(coke, "r2", NOW)
+    assert row(coke).expected_cents == 1299
+    store(coke, "r2", fulfilled("r2", receipt(total_paid="11.95", resolved_at="2026-11-05T16:00:00Z"),
+                                updated_at="2026-11-09T10:00:00Z"), NOW)
+    dry = receipt_prices.apply(coke, "r2", NOW, dry_run=True)
+    applied = receipt_prices.apply(coke, "r2", NOW)
+    assert dry == applied and len(applied.updated) == 1, applied
+    o = row(coke)
+    assert (o.expected_cents, o.checked_by) == (expected, by), applied
+    if by == "receipt":
+        assert o.checked_at == RESOLVED and o.note.startswith("receipt r1: paid $12.37"), o
+        assert "from r1" in applied.updated[0], applied
+    for request_id in ("r1", "r2"):
+        assert receipt_prices.apply(coke, request_id, NOW).updated == []        # and it stays

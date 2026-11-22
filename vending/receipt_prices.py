@@ -52,8 +52,9 @@ receipt already set to this price. So re-reading a receipt changes nothing, and 
 read after a newer one does nothing.
 
 **Corrections.** A corrected receipt (same request, newer revision) replaces the price it set, but
-only while its line is still newer than the row's last hand check. If the correction moves the
-line's time back to or before that check, the hand price (from `action_log`) is put back.
+only while its line is still the newest price for the row. If the correction moves the line's time
+back, the newest of three wins: the correction, the row's last hand check (from `action_log`), and
+the price any other fulfilled receipt gives that row (within its max). A hand check wins a tie.
 
 **Never taken back.** Only fulfilled receipts are read. A fulfilled receipt is never undone here: a
 later rejection is kept out by `vending.purchase_requests.store`, with a warning, and the prices it
@@ -332,7 +333,7 @@ def _apply_group(conn: psycopg.Connection, request_id: str, paid: _Paid, now: da
                 result.kept.append(f"{o.sku} {o.rank}: kept {_price(o)} checked {sourcing.day(o.checked_at)}"
                                    f" by {o.checked_by}, newer than {request_id}")
                 continue
-            if mine and paid.at < o.checked_at and _put_back_hand(conn, request_id, o, paid, now, rows, result):
+            if mine and paid.at < o.checked_at and _backdated(conn, request_id, o, paid, now, rows, result):
                 continue
             if cents > o.max_cents:
                 result.skipped.append(
@@ -348,13 +349,33 @@ def _apply_group(conn: psycopg.Connection, request_id: str, paid: _Paid, now: da
                                   f"(was {_price(o)}, checked {sourcing.day(o.checked_at)})")
 
 
-def _put_back_hand(conn: psycopg.Connection, request_id: str, o: sourcing.Option, paid: _Paid, now: datetime,
-                   rows: _Rows, result: Applied) -> bool:
-    """A correction moved this receipt's time back. If the row's last hand check is now as new or newer, put
-    that hand price back and return True; otherwise False, and the correction applies as usual."""
+def _backdated(conn: psycopg.Connection, request_id: str, o: sourcing.Option, paid: _Paid, now: datetime,
+               rows: _Rows, result: Applied) -> bool:
+    """A correction moved this receipt's time back, so another price may now be the newest for the row: the
+    row's last hand check, or another fulfilled receipt's. The newest wins; a hand check wins a tie with a
+    receipt, and this correction wins a tie with another receipt. If that is not this correction, write it and
+    return True; otherwise False, and the correction applies as usual."""
     hand = _hand_price(conn, o, rows)
-    if hand is None or hand[1] < paid.at:
+    other = _newest_other_receipt(conn, request_id, o, now)
+    if hand is not None and hand[1] >= paid.at and (other is None or hand[1] >= other[1].at):
+        return _put_back_hand(request_id, o, hand, now, conn, rows, result)
+    if other is None or other[1].at <= paid.at:
         return False
+    other_id, other_paid = other
+    cents = other_paid.pack_cents()
+    try:
+        rows.set_price(conn, o, cents, other_paid.at, sourcing.RECEIPT_BY, note_for(other_id, other_paid), now)
+    except sourcing.SourcingError as error:
+        result.skipped.append(f"{o.sku} {o.rank}: the corrected receipt of {request_id} is dated before {other_id}'s "
+                              f"{_money(cents)}, but that price can't be taken: {error}")
+        return True
+    result.updated.append(f"{o.sku} {o.rank}: {_money(cents)} a pack from {other_id}, newer than the corrected "
+                          f"receipt of {request_id} (was {_price(o)}, checked {sourcing.day(o.checked_at)})")
+    return True
+
+
+def _put_back_hand(request_id: str, o: sourcing.Option, hand: tuple, now: datetime, conn: psycopg.Connection,
+                   rows: _Rows, result: Applied) -> bool:
     cents, at, by, note = hand
     try:
         rows.set_price(conn, o, cents, at, by, note, now)
@@ -365,6 +386,30 @@ def _put_back_hand(conn: psycopg.Connection, request_id: str, o: sourcing.Option
     result.updated.append(f"{o.sku} {o.rank}: put back {_price_of(cents)} checked {sourcing.day(at)} by {by}, "
                           f"newer than the corrected receipt of {request_id} (was {_price(o)})")
     return True
+
+
+def _newest_other_receipt(conn: psycopg.Connection, request_id: str, o: sourcing.Option, now: datetime) \
+        -> tuple[str, _Paid] | None:
+    """The newest price another fulfilled receipt gives this row, as `apply` would take it: (request, its lines),
+    or None. Only a price the row may hold counts: in cents, within its max, and not in the future.
+
+    The other requests aren't locked: locking them here, while this request and the SKU's rows are held, could
+    deadlock with their own `apply`. A correction of one stored meanwhile is applied by its own `apply`, which
+    waits for these rows and then corrects whatever this wrote from it."""
+    found: tuple[str, _Paid] | None = None
+    for (other_id,) in conn.execute(
+            "select distinct l.request_id from purchase_lines l join purchase_requests r using (request_id)"
+            " where r.status = 'fulfilled' and l.request_id <> %s and l.sku = %s and l.source = 'purchase'"
+            " order by l.request_id", (request_id, o.sku)).fetchall():
+        for paid in _paid_groups(conn, other_id, Applied()).values():
+            if not _matches(o, paid) or paid.at is None or paid.at > now:
+                continue
+            cents = _cents(paid)
+            if cents <= 0 or cents > o.max_cents:
+                continue
+            if found is None or paid.at > found[1].at:
+                found = (other_id, paid)
+    return found
 
 
 def _hand_price(conn: psycopg.Connection, o: sourcing.Option, rows: _Rows) \

@@ -242,9 +242,9 @@ def set_option(conn: psycopg.Connection, o: Option, now: datetime | None = None)
 def import_rows(conn: psycopg.Connection, rows: list[Option], now: datetime | None = None) -> list[str]:
     """Add or replace these rows, all or nothing. Returns each row's "added" or "replaced", in order.
 
-    Every existing row of the file's SKUs is locked first, in (sku, rank) order (`lock_skus`), as a receipt
-    refresh locks them. Writing them in the file's order instead could hold one row a refresh wants while
-    waiting on another the refresh holds."""
+    Every SKU in the file, and every existing row of it, is locked first (`lock_skus`), as a receipt refresh
+    locks them. Writing them in the file's order instead could hold one row a refresh or another import wants
+    while waiting on another that one holds, even a row neither has inserted yet."""
     unknown = sorted({o.sku for o in rows} - in_catalog(conn, [o.sku for o in rows]))
     if unknown:
         raise SourcingError(f"nothing imported. Not in our catalog copy, or delisted: {', '.join(unknown)}")
@@ -257,8 +257,17 @@ def lock_skus(conn: psycopg.Connection, skus: set[str]) -> None:
     """Lock every row of these SKUs in one statement, in (sku, rank) order, until the caller's transaction ends.
 
     Everything that writes several rows at once (`import_rows`, `vending.receipt_prices.apply`) locks them this
-    way before touching any, so two of them wait for each other instead of deadlocking."""
+    way before touching any, so two of them wait for each other instead of deadlocking.
+
+    A SKU with no row yet has nothing to lock, and two imports inserting the same new rows in opposite orders
+    would each wait on the other's insert. So each SKU first takes a transaction advisory lock, one key per SKU,
+    taken in key order: two SKUs whose keys collide share one lock, and the order is still the same for all."""
     if skus:
+        keys = [key for (key,) in conn.execute(
+            "select distinct hashtext('sourcing:' || sku) as key from unnest(%s::text[]) as sku order by key",
+            (sorted(skus),)).fetchall()]
+        for key in keys:
+            conn.execute("select pg_advisory_xact_lock(%s)", (key,))
         conn.execute("select 1 from sourcing_options where sku = any(%s) order by sku, rank for update",
                      (sorted(skus),))
 
