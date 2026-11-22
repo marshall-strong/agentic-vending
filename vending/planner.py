@@ -87,6 +87,10 @@ SWITCH = "switch"
 PURCHASE = "purchase"
 BACK_STOCK = "back_stock"
 
+# The floor part for units already in a slot that stay there (`FloorPart.source`). Every other part
+# is a cost of units this visit loads: the closet's lots drawn, or a purchase option's max per unit.
+ON_HAND = "on hand"
+
 # A price as the agent or the database hands it over. See `to_cents`.
 Price = str | Decimal | int
 
@@ -569,7 +573,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         if s.staying and (s.need or s.price_changed):
             # Units staying in the slot sell at its new price too, so each cost among them sets a floor.
             for units, cost in s.state.layers or ((s.staying, s.state.unit_cost),):
-                _add_part(s, "on hand", cost, config, warnings, units)
+                _add_part(s, ON_HAND, cost, config, warnings, units)
         if not s.need:
             continue
         if check := capacity.fill_check(s.fill_to, capacities[s.product]):

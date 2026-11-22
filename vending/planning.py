@@ -109,13 +109,6 @@ def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...], *, stale_uns
     return value
 
 
-def pending_requests(conn: psycopg.Connection) -> tuple[planner.PendingRequest, ...]:
-    """The purchase requests still open, oldest first. The planner submits no new request
-    while one is open (`request_pending`), and neither does the midweek wake check."""
-    return tuple(planner.PendingRequest(r) for (r,) in conn.execute(
-        "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
-
-
 def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
     """The current state from our database. `catalog` is the product list from `read_catalog`.
     "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`)."""
@@ -164,7 +157,8 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # One lot per layer, oldest first: the planner draws them in that order, as the stock replay does.
     closet = tuple(planner.ClosetStock(c.product, units, cost)
                    for c in counted.closet for units, cost in c.layers or ((c.units, c.unit_cost),))
-    pending = pending_requests(conn)
+    pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
+        "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
     products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))
                      for p in catalog if p.get("sku"))
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
@@ -244,7 +238,13 @@ def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
 
 def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
          now: datetime | None = None) -> tuple[planner.Plan, Gathered]:
-    """Run the planner on live data. Raises `NotReady` when a person has to act first.
+    """Run the planner on live data. Raises `NotReady` when a person has to act first."""
+    gathered = gather_live(conn, bridge, now)
+    return plan_gathered(gathered, desired), gathered
+
+
+def gather_live(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None) -> Gathered:
+    """The catalog (our synced copy first, `read_catalog`) and everything else `gather` reads.
 
     The halt switch is checked before the catalog is read, so that halted with
     the bridge down tells the agent to stop, not to check Tailscale.
@@ -258,12 +258,19 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
             raise NotReady(f"{HALTED_HINT} (and {blocked})") from None
         raise
     gathered = gather(conn, catalog, now)
-    gathered = replace(gathered, notes=(*catalog_notes, *gathered.notes))
+    return replace(gathered, notes=(*catalog_notes, *gathered.notes))
+
+
+def plan_gathered(gathered: Gathered, desired: schema.DesiredState) -> planner.Plan:
+    """The planner's answer for `desired` on what `gather_live` read. Pure: no database, no bridge.
+
+    The preview, the submit and the midweek wake check (`vending.midweek_wake`) all plan through
+    here, so the same desired state always gets the same lines, cost and refusals."""
     result = planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now)
     stale = _stale_table_prices(gathered.sourcing_rows, result, desired, gathered.now)
     if stale:
         result = replace(result, warnings=(*result.warnings, *stale))
-    return result, gathered
+    return result
 
 
 def _stale_table_prices(rows: tuple[sourcing.Option, ...], result: planner.Plan, desired: schema.DesiredState,

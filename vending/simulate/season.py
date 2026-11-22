@@ -22,7 +22,7 @@ from typing import Any
 import anyio
 import psycopg
 
-from vending import agent, config, db, ledger, midweek_wake, planning, sourcing, stock, sync_catalog, sync_history, sync_requests
+from vending import agent, config, db, ledger, midweek_wake, sourcing, stock, sync_catalog, sync_history, sync_requests
 from vending import slots as slot_assignment
 from vending.harness import Harness
 from vending.simulate import world
@@ -396,14 +396,9 @@ def handle(conn: psycopg.Connection, st: State, ev: Event, opts: dict) -> None:
         pending = any(r.status == "pending" for r in st.bridge.requests.values())
         # The Monday check-in's gate is the midweek wake's own decision (#219), not a count of
         # empty slots: a visit runs only when a slot would sell out before Friday's restock and
-        # a paid visit would still pay (docs/restock-policy.md, rule 2). A count of empty slots
-        # reads four cheap slow sellers as worth the $25 the wake's numbers refuse.
-        try:
-            wake = None if pending else midweek_wake.evaluate(conn, now, log=lambda *_: None)
-        except planning.NotReady:
-            wake = None
-        if wake is not None and midweek_wake.blocked(conn, wake, now=now, log=lambda *_: None):
-            wake = None
+        # the planner's plan for a paid visit would still pay (docs/restock-policy.md, rule 2).
+        # `eligible` is the worker's own path: halt, the open request and the balance included.
+        wake = None if pending else midweek_wake.eligible(conn, now, log=lambda *_: None)
         st.log.append({"at": now.isoformat(), "kind": "check_in", "empty_by_receipts": empty,
                        "pending": pending, "wake": list(wake.slots) if wake else None})
         if wake is not None:

@@ -536,16 +536,17 @@ def seed_ledger(conn) -> None:
 def seed_midweek_wake(conn) -> None:
     """This week's wake-up (#219), decided Monday 7 Dec after the sync round, requested then too.
 
-    Made-up slots from SELECTIONS. The reason is the shape `vending.midweek_wake.decide`
-    writes: which slots, their projection, the saved margin against the fee, the rule."""
+    Made-up slots and numbers from SELECTIONS. The reason is the shape `vending.midweek_wake.decide`
+    writes: which slots, their projection, the planner's cost, the saved margin against the fee, the rule."""
     conn.execute(
         "insert into midweek_wakeups (week_start, decided_at, reason, slots, saved_margin_cents,"
         " requested_at, requested_by) values (%s, %s, %s, %s, %s, %s, %s)",
         (_utc(5, 0).date(), _utc(7, 15, 5),
          "Slots 16, 17 and 25 are projected to sell out before Friday's restock (16: empty now; "
-         "17: 0.8 class days of stock at 1.4 a class day; 25: empty now). A midweek visit requested "
-         "now plans on Wednesday afternoon and would save $31.02 before Friday, more than the $25.00 "
-         "fee (docs/restock-policy.md, section 2).",
+         "17: 1 on hand at 1.4 a class day; 25: empty now). A midweek visit requested now plans on "
+         "Wednesday afternoon; the planner prices it at up to $85.84 with the $25.00 fee, and the "
+         "sales it would save before Friday are worth $31.02 in margin at the most we pay, more than "
+         "the fee (docs/restock-policy.md, section 2).",
          ["16", "17", "25"], 3102, _utc(7, 15, 5), "midweek_wake"))
 
 

@@ -1,59 +1,64 @@
 """Wake the agent midweek when a slot is about to sell out before Friday (#219).
 
     python -m vending.midweek_wake            # one pass: decide, record, ask for the run
-    python -m vending.midweek_wake --check    # decide only; prints the decision, writes nothing
+    python -m vending.midweek_wake --check    # the same pass, writing nothing; says what it would do
 
 **Off by default.** The worker runs this job each round only when `MIDWEEK_WAKE=on`
 (environment or `.env`; the value `on`, any case). Unset, the job does nothing and
 opens no database connection. The CLI checks the same setting, so one switch gates
 the whole module.
 
-**The decision** is the team's midweek rule, as the planner already reads it
-(docs/restock-policy.md, section 2; #110 item 3). After each sync round, for each of
-our slots (the server's assignment, `vending.slots.our_slots`):
+**The decision reuses the planner** (docs/restock-policy.md, section 2). After each
+sync round, on a Monday or Tuesday Eastern:
 
-- the projection is the one the agent already plans with (`vending.demand`, shown by
-  `get_machine_state` and the briefing): class days of stock left at the slot's own
-  in-stock rate, a day the slot sat empty left out. Days left is units on hand over
-  the rate, unrounded: the display string rounds, and a rounded 3.0 must not decide
-  what an exact 3.03 leaves working (#219 review). Never guessed: a slot with no
-  usable projection, price, column capacity or load price is skipped;
-- a slot counts when it is projected to be empty before this week's Friday restock,
-  and the sales a paid midweek visit would save beat the visit fee
-  (`config.midweek_fee_cents`, $25): saved margin = sum over those slots of
-  (units one visit can load × margin per unit), where the loadable units are the
-  saved class days' demand capped at one column of the slot's product (the planner's
-  capacity inputs, `vending.capacity`), and margin per unit is shelf price ÷ (1 + tax)
-  − what loading that unit costs: the closet's oldest layers first
-  (`stock.visit_load_prices`), then new stock at the primary sourcing option's price;
-- the check runs only from the competition's start Eastern (`start.on_or_after_start`):
-  fall data never wakes anybody; and it records nothing when the planner would refuse
-  the visit it asks for — an open purchase request (`request_pending`) or a spendable
-  balance under the fee plus the units to load (`insufficient_balance`) leaves the
-  week open for a later round;
-- the insert and the run request are one transaction, so a crash between them cannot
-  leave a week recorded with its request missing;
-- class days saved counts the class days after the visit's planned landing, which
-  is two class days after the request (a Monday request plans on Wednesday: 2 days
-  saved; Tuesday: 1; later: none), so the check decides only on a Monday or Tuesday,
-  Eastern — later in the week no visit can still pay, and on the weekend the Monday
-  check decides with fresher data. A class day counts only when the slot would sit
-  empty from its start, the same convention the projection uses (`vending.demand`).
+1. **Which slots are at risk** comes from the projection the agent plans with
+   (`vending.demand`, shown by `get_machine_state`): each of our slots (the server's
+   assignment, `vending.slots.our_slots`) at its in-stock rate against the units on
+   hand now, unrounded. Demand before the visit lands is the rest of today
+   (`demand.share_left`: a 7:30 AM check still has 99% of Monday to sell) plus the
+   class days through the landing, two class days after the request (Monday's request
+   plans on Wednesday afternoon). A slot is at risk when what is left at the landing
+   falls short of the class days from the landing to Friday's restock. Units lost
+   before the landing are lost either way; only the shortfall after it can be saved.
+2. **What a visit would load and cost** is the planner's answer, not a sum done here:
+   a candidate off-cycle desired state restocks each at-risk slot with the product and
+   shelf price it has now, filled to its column, every other slot kept, and runs
+   through `planning.plan_gathered` on what `planning.gather_live` reads: the
+   preview's own path, with a bridge that refuses every call, and no submit. That
+   gives whole packs, the configured fee, the closet drawn only for the same product,
+   its oldest layers first, and every gate. Any refusal (halt, an open request, the
+   balance, an infeasible slot) records nothing and leaves the week open.
+3. **Saved margin** = for each restocked at-risk slot, the units the visit actually
+   saves (its shortfall after the landing, capped at the units the plan loads into it)
+   times shelf price / (1 + tax) less the planner's unit cost for what it loads, at
+   the most we pay (`FloorPart.unit_cost`: each purchase option's max per unit, or the
+   closet lots it draws; the dearest of them). A unit the visit loads that doesn't sell
+   by Friday keeps its cost (A5), so it is no loss and counts nothing.
+4. **Wake** only when the saved margin beats the visit's own cost as the planner
+   defines it (`Cost.visit_fee_cents`, config `midweek_fee_cents`). The purchases are
+   stock that keeps its cost (A5), not a cost of the visit; whether the balance can pay
+   for them is the planner's `insufficient_balance` gate in step 2.
+
+Nothing runs before the competition's start Eastern (`start.on_or_after_start`): fall
+data never wakes anybody. A stale poll, no rate, no price or an unknown cost for what
+the visit loads skips rather than guesses.
 
 **One wake-up a week.** The row goes in `midweek_wakeups` (migration 027), keyed by
 the Saturday that starts the Saturday-to-Friday week (Eastern), with a unique index:
-restarts and racing replicas cannot double the cap. The dashboard's Needs attention
-and the agent's briefing (`vending.briefing`) show the row, so the next run sees why.
+restarts and racing replicas cannot double the cap. The insert and the run request
+are one transaction. `eligible` is the one path to a wake: the worker's pass (`check`),
+`--check` and the simulator all go through it. The dashboard's Needs attention and the
+agent's briefing (`vending.briefing`) show the row, so the next run sees why.
 
 **Starting the run.** `request_midweek_run` is the hook. Today it records the request
 on this week's row and logs it; it starts nothing. The scheduled agent (#224) should
-call it — or read `current` for a row with no `requested_at` — once both PRs merge,
+call it, or read `current` for a row with no `requested_at`, once both PRs merge,
 and start `vending.agent.run` with the row's reason in its briefing.
 
-The decision itself is pure: `decide` takes gathered facts and a clock, and touches
-no database. `evaluate` gathers the same stored facts the agent reads; `record` and
-`request_midweek_run` write. Nothing here calls a model, stocks the machine, or
-reads anything but our own side.
+`window`, `at_risk` and `decide` are pure: `decide` takes the gathered facts and a
+clock and touches no database. `evaluate` gathers; `record` and `request_midweek_run`
+write. Nothing here calls a model or the bridge, stocks the machine, or reads anything
+but our own side.
 """
 
 from __future__ import annotations
@@ -64,21 +69,22 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from fractions import Fraction
-from typing import Iterable
+from typing import Callable, Iterable
 
-from vending import capacity, class_days, db, ledger, planning, settings, sourcing, start, stock
-from vending.ledger import DEFAULT_MIDWEEK_FEE_CENTS
-from vending.pricing import DEFAULT_TAX_PERCENT
+from vending import class_days, db, demand, ledger, planner, planning, settings, start
+from vending.bridge import BridgeError
 from vending.start import EASTERN
+from vending.tools import desired_state as schema
 from vending.tools import machine_state
 
 SETTING = "MIDWEEK_WAKE"
 ON = "on"
 # The planned visit lands two class days after the request (docs/restock-policy.md, section 2):
-# Monday's request plans on Wednesday (2 class days saved before Friday), Tuesday's on Thursday
-# (1), and later in the week none, so nothing pays past Tuesday.
+# Monday's request plans on Wednesday afternoon, Tuesday's on Thursday, and later in the week the
+# landing is on or past Friday's restock, so nothing pays past Tuesday.
 LANDING_AFTER_CLASS_DAYS = 2
-# The Eastern weekdays that may still start a paying visit: Monday and Tuesday.
+# The Eastern weekdays that may still start a paying visit: Monday and Tuesday. On a weekend the
+# Monday check decides with fresher data.
 DECIDE_WEEKDAYS = (0, 1)
 BY = "midweek_wake"
 
@@ -88,26 +94,37 @@ def enabled() -> bool:
     return (settings.get(SETTING) or "").strip().lower() == ON
 
 
+def _quiet(*_args) -> None:
+    return None
+
+
 @dataclass(frozen=True)
 class Outlook:
-    """One slot's projection and money, gathered (`evaluate`). Pure data; nothing guessed.
+    """One slot's projection, as the agent sees it (`get_machine_state`). None means unknown.
 
-    `units_per_class_day` is the rate the agent plans with (`vending.demand`, as
-    `get_machine_state` shows it) and `class_days_left` is the same rate against the
-    unrounded units on hand -- never the display string, whose rounding can flip the
-    decision (#219 review). `capacity` is the column one visit can load into the slot
-    (the planner's capacity inputs, `vending.capacity`) and `new_unit_cents` the
-    sourcing price per unit of new stock for the slot's product. The closet's shared
-    layers reach `decide` once for the whole machine, so they are priced into one
-    slot's load, never into all of them. Any None means unknown, and `decide` skips
-    the slot rather than guess.
+    `units_per_class_day` is the in-stock rate (`vending.demand`); `on_hand` the units on
+    the rails now: a person's count when it is newer, else the receipts' replay.
     """
     slot: str
     units_per_class_day: Decimal | None
-    class_days_left: Fraction | Decimal | None   # exact: units on hand / rate, unrounded
-    price_cents: int | None
-    capacity: int | None = None
-    new_unit_cents: Fraction | None = None
+    on_hand: int | None
+
+
+@dataclass(frozen=True)
+class Window:
+    """When a visit requested now would land, in class days of demand."""
+    landing_day: date
+    before_landing: Fraction    # the rest of today, plus the class days through the landing day
+    after_landing: Fraction     # the class days after the landing, through Friday's restock
+
+
+@dataclass(frozen=True)
+class AtRisk:
+    """A slot projected to run short after the landing, with no visit."""
+    slot: str
+    rate: Fraction
+    on_hand: int
+    short: Fraction             # units it would miss between the landing and Friday's restock
 
 
 @dataclass(frozen=True)
@@ -117,97 +134,153 @@ class Wake:
     reason: str
     slots: tuple[str, ...]
     saved_margin_cents: int            # exact, rounded half up to the whole cent for the record
-    visit_cost_cents: Fraction = Fraction(0)   # the fee with tax, plus the units it loads
+    visit_cost_cents: int = 0          # the planner's most the visit could cost, fee included
 
 
-def decide(now: datetime, outlooks: Iterable[Outlook], *,
-           closet_layers: tuple[tuple[Fraction, Fraction], ...] = (),
-           fee_cents: int = DEFAULT_MIDWEEK_FEE_CENTS,
-           tax_percent: int = DEFAULT_TAX_PERCENT) -> Wake | None:
-    """Whether a paid midweek visit now would pay for slots about to sell out. Pure.
+def window(now: datetime) -> Window | None:
+    """The demand before and after a visit requested at `now` would land. Pure.
 
-    None when nothing is projected to empty before Friday's restock, when no visit
-    could still pay (past Tuesday, Eastern; the team's rule, #110 item 3), or when
-    the saved margin doesn't beat the fee. `now` must carry a time zone: a naive
-    clock is a guess about which day it is. `closet_layers` is the machine closet's
-    shared stock, oldest layer first: the visit draws those units once, whatever
-    slots they end up in, so the same $3 can is never priced into two loads.
+    None off a Monday or Tuesday Eastern, or when the landing falls on or past Friday's
+    restock. Today counts only when it is a class day, and only for the share of its
+    sales still to come (`demand.share_left`). `now` must carry a time zone: a naive
+    clock is a guess about which day it is.
     """
     if now.tzinfo is None:
         raise ValueError("midweek_wake now must have a time zone")
-    now_local = now.astimezone(EASTERN)
-    if now_local.weekday() not in DECIDE_WEEKDAYS:
+    local = now.astimezone(EASTERN)
+    if local.weekday() not in DECIDE_WEEKDAYS:
         return None
-    week_start = ledger.week_of(now_local)
-    friday = week_start + timedelta(days=6)      # this week's Friday restock
-    walk: list[date] = []
-    day = now_local.date() + timedelta(days=1)
+    friday = ledger.week_of(local) + timedelta(days=6)      # this week's Friday restock
+    walk, day = [], local.date() + timedelta(days=1)
     while day <= friday:
         if class_days.is_class_day(day):
             walk.append(day)
         day += timedelta(days=1)
     if len(walk) <= LANDING_AFTER_CLASS_DAYS:
-        return None    # the planned landing is on or past the restock: no class day left to save
-    landing_day = walk[LANDING_AFTER_CLASS_DAYS - 1]
-    chosen: list[tuple[Outlook, int, Fraction]] = []
-    total = Fraction(0)
-    visit_cost = Fraction(fee_cents) * (1 + Fraction(tax_percent, 100))   # the fee, taxed like a sale
-    closet = list(closet_layers)                 # (units, cents per unit), oldest first, shared
+        return None    # the landing is on or past the restock: no class day left to save
+    today = demand.share_left(local.hour, local.minute) if class_days.is_class_day(local.date()) else Fraction(0)
+    return Window(walk[LANDING_AFTER_CLASS_DAYS - 1], today + LANDING_AFTER_CLASS_DAYS,
+                  Fraction(len(walk) - LANDING_AFTER_CLASS_DAYS))
+
+
+def at_risk(win: Window, outlooks: Iterable[Outlook]) -> list[AtRisk]:
+    """The slots that would run short after the landing, by slot. Pure; unknowns are skipped."""
+    risks = []
     for o in sorted(outlooks, key=lambda o: o.slot):
-        if (o.units_per_class_day is None or o.class_days_left is None or o.price_cents is None
-                or o.capacity is None):
+        if o.units_per_class_day is None or o.on_hand is None or o.units_per_class_day <= 0:
             continue
-        # The exact projection, unrounded: the decision must not turn on a display's
-        # rounding (#219 review). Days left is units on hand divided by the rate.
         rate = Fraction(o.units_per_class_day)
-        days_left = Fraction(o.class_days_left)
-        # Class days after the planned landing that the slot would sit empty from the start
-        # of, counting class days after today (a class day counts when the slot held stock
-        # as it began, `vending.demand`).
-        saved = sum(1 for index in range(LANDING_AFTER_CLASS_DAYS + 1, len(walk) + 1)
-                    if days_left <= index - 1)
-        if saved == 0:
+        on_hand = max(o.on_hand, 0)
+        left = max(Fraction(0), on_hand - rate * win.before_landing)
+        short = rate * win.after_landing - left
+        if short > 0:
+            risks.append(AtRisk(o.slot, rate, on_hand, short))
+    return risks
+
+
+def candidate(risks: Iterable[AtRisk], gathered: planning.Gathered,
+              log: Callable[..., None] = _quiet) -> tuple[schema.DesiredState, tuple[str, ...]]:
+    """The off-cycle desired state a visit would carry: each at-risk slot restocked with the
+    product and shelf price it has now, filled to its column (the planner's default), every
+    other slot kept. Returns it with the slots it restocks. A slot whose product or price the
+    planner doesn't know is kept and logged: restocking it would be a guess."""
+    states = {s.slot: s for s in gathered.current.slots}
+    wanted = {r.slot for r in risks}
+    rows, restocked = [], []
+    for slot in gathered.config.slots:
+        s = states.get(slot)
+        if slot in wanted and s is not None and s.contents_known and s.product and s.price_cents:
+            rows.append(schema.DesiredSlot(slot=slot, product=s.product, sale_price=_price(s.price_cents)))
+            restocked.append(slot)
             continue
-        # One visit loads at most one column into the slot (`vending.capacity`, the planner's
-        # capacity inputs): the credit counts what it can load, never more.
-        loadable = min(saved * rate, Fraction(o.capacity))
-        closet_units = sum((units for units, _ in closet), Fraction(0))
-        if loadable > closet_units and o.new_unit_cents is None:
-            continue                             # needs new stock and new stock has no price
-        # What the load costs: the closet's oldest layers first (`first_in_first_out`'s
-        # order, `stock.closet`), then new stock at the sourcing price per unit.
-        left, load_cost = loadable, Fraction(0)
-        while left > 0 and closet:
-            units, unit_cents = closet[0]
-            grab = min(left, units)
-            load_cost += grab * unit_cents
-            left -= grab
-            if grab == units:
-                closet.pop(0)
-            else:
-                closet[0] = (units - grab, unit_cents)
-        if left > 0:
-            load_cost += left * o.new_unit_cents
-        # margin per unit is shelf price / (1 + tax); the load costs what it prices above
-        a_unit = Fraction(o.price_cents) / (1 + Fraction(tax_percent, 100))
-        total += loadable * a_unit - load_cost
-        visit_cost += load_cost
-        chosen.append((o, saved, loadable))
-    if not chosen or total <= fee_cents:
+        if slot in wanted:
+            log(f"midweek_wake: slot {slot} is at risk, but the planner doesn't know its product or price, "
+                "so a visit can't be planned for it; it is left out")
+        rows.append(schema.DesiredSlot(slot=slot, keep=True))
+    return schema.DesiredState(slots=rows, off_cycle=True), tuple(restocked)
+
+
+def decide(now: datetime, outlooks: Iterable[Outlook], gathered: planning.Gathered | None,
+           log: Callable[..., None] = _quiet) -> Wake | None:
+    """Whether a paid midweek visit now would pay, by the planner's own plan for it. Pure.
+
+    `gathered` is what `planning.gather_live` read (or a test's stand-in); it may be None
+    only when nothing is at risk. None, logged, when nothing is at risk, when the planner
+    refuses the visit, or when the saved margin doesn't beat the planner's visit fee.
+    """
+    win = window(now)
+    if win is None:
+        log("midweek_wake: a visit requested now could not land with a class day left before "
+            "Friday's restock (only a Monday or Tuesday request can)")
         return None
-    saved_cents = _whole_cents(total)
-    parts = "; ".join(
-        f"{o.slot}: empty now" if Fraction(o.class_days_left) == 0 else
-        f"{o.slot}: {_number(Fraction(o.class_days_left))} class days of stock at "
-        f"{_number(o.units_per_class_day)} a class day" for o, _, _ in chosen)
-    names = ", ".join(o.slot for o, _, _ in chosen[:-1])
-    names = f"{names} and {chosen[-1][0].slot}" if names else chosen[0][0].slot
-    reason = (f"Slots {names} are projected to sell out before Friday's restock ({parts}). "
-              f"A midweek visit requested now plans on {landing_day:%A} afternoon and would save $"
-              f"{ledger.money(saved_cents)} before Friday, more than the ${ledger.money(fee_cents)} "
-              "fee (docs/restock-policy.md, section 2).")
-    return Wake(week_start, reason, tuple(o.slot for o, _, _ in chosen),
-                saved_cents, visit_cost)
+    risks = at_risk(win, outlooks)
+    if not risks:
+        log("midweek_wake: no slot is projected to sell out before Friday's restock")
+        return None
+    if gathered is None:
+        raise ValueError("midweek_wake.decide needs the gathered facts when a slot is at risk")
+    desired, restocked = candidate(risks, gathered, log)
+    if not restocked:
+        return None
+    plan = planning.plan_gathered(gathered, desired)
+    if not plan.ok:
+        why = "; ".join(f"{r.code}: {r.message}" for r in plan.refusals)
+        log(f"midweek_wake: the planner refuses the visit ({why}); nothing is recorded, so a later "
+            "round this week decides again")
+        return None
+    lines = {line.slot: line for line in plan.lines}
+    floors = {f.slot: f for f in plan.floors}
+    unknown = {c.product for c in gathered.current.closet if c.units > 0 and c.unit_cost is None}
+    taxed = 1 + Fraction(gathered.config.tax_percent, 100)
+    saved, counted = Fraction(0), []
+    for r in risks:
+        line = lines.get(r.slot)
+        if r.slot not in restocked or line is None:
+            continue
+        basis = _unit_cost(line, floors.get(r.slot), unknown)
+        if basis is None:
+            log(f"midweek_wake: slot {r.slot}: the cost of what the visit loads is unknown, so the "
+                "sales it saves are counted at nothing")
+            continue
+        avoided = min(Fraction(line.units_to_load), r.short)
+        saved += avoided * (Fraction(line.sale_price_cents) / taxed - basis)
+        counted.append(r)
+    fee = plan.cost.visit_fee_cents
+    if not counted or saved <= fee:
+        log(f"midweek_wake: a visit would save ${ledger.money(_whole_cents(max(saved, Fraction(0))))} "
+            f"in margin before Friday, not more than the ${ledger.money(fee)} fee; no wake-up")
+        return None
+    saved_cents = _whole_cents(saved)
+    names = [r.slot for r in counted]
+    listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    parts = "; ".join(f"{r.slot}: empty now" if r.on_hand == 0 else
+                      f"{r.slot}: {r.on_hand} on hand at {_number(r.rate)} a class day" for r in counted)
+    reason = (f"{'Slot' if len(names) == 1 else 'Slots'} {listed} "
+              f"{'is' if len(names) == 1 else 'are'} projected to sell out before Friday's restock "
+              f"({parts}). A midweek visit requested now plans on {win.landing_day:%A} afternoon; the "
+              f"planner prices it at up to ${ledger.money(plan.cost.max_cents)} with the "
+              f"${ledger.money(fee)} fee, and the sales it would save before Friday are worth "
+              f"${ledger.money(saved_cents)} in margin at the most we pay, more than the fee "
+              "(docs/restock-policy.md, section 2).")
+    return Wake(ledger.week_of(now.astimezone(EASTERN)), reason, tuple(names), saved_cents,
+                plan.cost.max_cents)
+
+
+def _unit_cost(line: planner.Line, floor: planner.SlotFloor | None, unknown: set[str]) -> Fraction | None:
+    """The planner's cost per unit for what `line` loads, at the most we pay, or None when unknown.
+
+    The floor's parts other than units staying put (`planner.ON_HAND`) are exactly what the
+    line loads: each purchase option's max per unit, or each closet lot it draws. The dearest
+    is the basis. A closet lot of unknown cost leaves no part, so a back-stock line for a
+    product with one is unknown rather than priced off the lots that are known."""
+    if line.source == planner.BACK_STOCK and line.product in unknown:
+        return None
+    costs = [p.unit_cost for p in (floor.parts if floor else ()) if p.source != planner.ON_HAND]
+    return max(costs) if costs else None
+
+
+def _price(cents: int) -> str:
+    return f"{cents // 100}.{cents % 100:02d}"
 
 
 def _whole_cents(value: Fraction) -> int:
@@ -216,34 +289,41 @@ def _whole_cents(value: Fraction) -> int:
                .quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def _number(value: Decimal | Fraction) -> str:
-    """A Decimal or Fraction as plain text without trailing zeros: 2.50 -> '2.5', 10.0 -> '10'."""
-    d = value if isinstance(value, Decimal) else (
-        Decimal(value.numerator) / Decimal(value.denominator)).quantize(Decimal("0.01"))
+def _number(value: Fraction) -> str:
+    """A Fraction as plain text to two places without trailing zeros: 2.50 -> '2.5', 10 -> '10'."""
+    d = (Decimal(value.numerator) / Decimal(value.denominator)).quantize(Decimal("0.01"))
     return f"{d:f}".rstrip("0").rstrip(".") or "0"
+
+
+class _NoBridge:
+    """Stands in for the bridge: the wake check reads only our stored catalog, never the bridge."""
+
+    def products(self):
+        raise BridgeError("the midweek wake check never calls the bridge; run the catalog sync "
+                          "(python -m vending.sync_catalog) so our copy of the catalog is filled")
 
 
 def evaluate(conn, now: datetime | None = None, log=print) -> Wake | None:
     """Decide from the same stored facts the agent reads. Read-only.
 
-    Uses `get_machine_state` for the projection (polls, receipts, a person's count
-    and the rate), the receipts for what a visit's load costs (`vending.stock`, the
-    closet's oldest layers first, then the sourcing price for new stock) and the
-    planner's capacity inputs for the column it can load (`vending.capacity`). Days
-    left is units on hand over the rate, unrounded: the display string rounds, and
-    its rounding must not decide (#219 review). Skips when the latest poll is
-    stale: an old poll overstates what is on the rails, and the sync's own jobs own
-    that failure. Refuses before the competition starts: fall data must not wake
-    anybody. Raises `planning.NotReady` when a person has to act first (our slots
-    not recorded, a bad config setting). Every outcome is logged: a None here means
-    "nothing to record", and the log says which skip or no it was.
+    The projection comes from `get_machine_state` (polls, receipts, a person's count and
+    the rate); the plan from `planning.gather_live` and `planning.plan_gathered`, the
+    preview's path, with the bridge refused. Skips when the latest poll is stale (an old
+    poll overstates what is on the rails) or the halt switch is on (the planner would
+    refuse; the week stays open for when it is off). Refuses before the competition
+    starts. Raises `planning.NotReady` when a person has to act first. Every outcome is
+    logged: a None says "nothing to record", and the log says which skip or no it was.
     """
     now = now or ledger.db_now(conn)
     if not start.on_or_after_start(now):
         log(f"midweek_wake: the competition starts {start.START.day} {start.START:%b} Eastern; "
             "no midweek check before it")
         return None
-    cfg = planning.planner_config(conn)     # our slots, the fee and the tax; NotReady when unready
+    cfg = planning.planner_config(conn)     # our slots; NotReady when unready
+    if cfg.halted:
+        log(f"midweek_wake: skipped, {planning.HALTED_HINT}; nothing is recorded, so the week can "
+            "still wake once it is off")
+        return None
     state = machine_state.get_machine_state(conn, now=now)
     if not state.success:
         log(f"midweek_wake: skipped, {state.message}")
@@ -253,67 +333,37 @@ def evaluate(conn, now: datetime | None = None, log=print) -> Wake | None:
         log(f"midweek_wake: skipped, the latest poll is stale (over {hours:.0f} hours old), so what "
             "is on the rails is not known well enough to project a sell-out")
         return None
-    columns, new_prices, closet_layers = _visit_inputs(conn, cfg.capacity_overrides)
-    if closet_layers is None:
-        log("midweek_wake: skipped, the closet holds units whose paid cost is not known, so a "
-            "visit's load cannot be priced")
-        return None
-    outlooks = [Outlook(slot=s.slot,
-                        units_per_class_day=None if s.units_per_class_day is None else Decimal(s.units_per_class_day),
-                        class_days_left=_days_left(s),
-                        price_cents=None if s.price is None else int(ledger.dollars_to_cents(s.price)),
-                        capacity=columns.get(s.slot),
-                        new_unit_cents=new_prices.get(s.slot))
+    outlooks = [Outlook(s.slot,
+                        None if s.units_per_class_day is None else Decimal(s.units_per_class_day),
+                        s.counted_on_hand if s.counted_on_hand is not None else s.stock_on_hand)
                 for s in state.data]
-    wake = decide(now, outlooks, closet_layers=closet_layers,
-                  fee_cents=cfg.midweek_fee_cents, tax_percent=cfg.tax_percent)
-    if wake is None:
-        log("midweek_wake: no slot is projected to sell out before Friday's restock "
-            "with a visit that would pay")
-    return wake
+    win = window(now)
+    if win is None or not at_risk(win, outlooks):
+        return decide(now, outlooks, None, log)    # logs why, before anything else is gathered
+    return decide(now, outlooks, planning.gather_live(conn, _NoBridge(), now), log)
 
 
-def _days_left(s) -> Fraction | None:
-    """The slot's exact days left: units on hand over the rate, unrounded, None without either."""
-    if s.units_per_class_day is None or s.units_per_class_day == 0:
-        return None                             # no usable rate, or it never empties
-    on_hand = s.counted_on_hand if s.counted_on_hand is not None else s.stock_on_hand
-    if on_hand is None:
-        return None
-    return Fraction(on_hand) / Fraction(Decimal(s.units_per_class_day))
+def eligible(conn, now: datetime | None = None, log=print) -> Wake | None:
+    """The one path to a wake: the start, this week's row, then `evaluate` (halt, the
+    projection, and the planner's gates: an open request, the balance, feasibility).
 
-
-def _visit_inputs(conn, overrides):
-    """The visit's inputs, gathered once: each slot's column and sourcing price per unit,
-    and the closet's priced layers oldest first.
-
-    The column comes from the planner's capacity inputs (`capacity.for_product`: a
-    person's count override, else the loading chart for the catalog size). The price
-    comes from the primary sourcing option (its pack price over its units per pack,
-    max when no price was seen). The closet's layers are shared across the slots the
-    visit may load, so they reach `decide` once for the machine. When any closet unit's
-    paid cost is unknown the load cannot be priced, and the closet comes back None.
+    The worker's pass (`check`) records what this returns; `--check` prints it. None,
+    logged, when nothing would be recorded.
     """
-    counts = stock.stock(conn)
-    skus = sorted({c.product for c in counts.slots})
-    sizes = dict(conn.execute("select sku, size from catalog_products where sku = any(%s)",
-                              (skus,)).fetchall()) if skus else {}
-    prices: dict[str, Fraction] = {}
-    for o in sourcing.options_for(conn, skus):
-        if o.sku not in prices and o.rank == sourcing.RANKS[0]:   # options_for: primary first
-            pack = o.expected_cents if o.expected_cents is not None else o.max_cents
-            prices[o.sku] = Fraction(pack, o.units_per_pack)      # the price of one unit
-    columns, new_prices = {}, {}
-    for s in counts.slots:
-        columns[s.slot] = capacity.for_product(s.product, sizes.get(s.product), overrides)
-        new_prices[s.slot] = prices.get(s.product)
-    layers: list[tuple[Fraction, Fraction]] = []
-    for c in stock.closet(conn):
-        if c.units and c.unit_cost is None:      # a pulled product's cost is unknown: a guess
-            return columns, new_prices, None
-        if c.units:
-            layers.append((Fraction(c.units), c.unit_cost))
-    return columns, new_prices, tuple(layers)
+    now = now or ledger.db_now(conn)
+    if not start.on_or_after_start(now):
+        log(f"midweek_wake: the competition starts {start.START.day} {start.START:%b} Eastern; "
+            "no midweek check before it")
+        return None
+    if current(conn, now) is not None:
+        log(f"midweek_wake: week {ledger.week_of(now.astimezone(EASTERN))} already has its "
+            "wake-up; nothing to do")
+        return None
+    try:
+        return evaluate(conn, now, log=log)
+    except planning.NotReady as skip:
+        log(f"midweek_wake: skipped, {skip}")
+        return None
 
 
 def current(conn, now: datetime | None = None) -> dict | None:
@@ -369,64 +419,19 @@ def request_midweek_run(conn, reason: str, *, by: str | None = None,
     return True
 
 
-def blocked(conn, wake: Wake, *, now: datetime | None = None, log=print) -> bool:
-    """Whether the visit behind a wake couldn't happen now, by the planner's own two gates.
-
-    The planner submits no new purchase request while one is still open (`request_pending`,
-    `vending.planning.pending_requests`) and refuses a buy the spendable balance can't cover
-    (`insufficient_balance`, the same `ledger.balance` figure `planning.gather` gives it). A
-    visit that would be refused can't follow this wake, so the caller records nothing and a
-    later round in the week decides again on fresh facts.
-    """
-    now = now or ledger.db_now(conn)
-    pending = planning.pending_requests(conn)
-    if pending:
-        log(f"midweek_wake: purchase request {pending[0].request_id} is still open, so the planner "
-            "would not submit a midweek visit; this wake records nothing")
-        return True
-    balance = ledger.balance(conn, now)
-    if balance is None:
-        log("midweek_wake: the ledger has no opening entry, so there is no spendable balance "
-            "to cover the visit; this wake records nothing")
-        return True
-    if balance.spendable_cents < wake.visit_cost_cents:
-        log(f"midweek_wake: the visit would cost ${ledger.money(wake.visit_cost_cents)} "
-            f"with the fee and its units, more than the spendable balance "
-            f"(${ledger.money(balance.spendable_cents)}); the planner would refuse it, "
-            "so this wake records nothing")
-        return True
-    return False
-
-
 def check(conn, now: datetime | None = None, log=print) -> bool:
-    """One pass: decide, record this week's wake-up if there is one, ask for the run.
+    """One pass: decide (`eligible`), record this week's wake-up if there is one, ask for the run.
 
-    True when this pass recorded a wake-up. Before the competition starts it does
-    nothing at all: fall data must not wake anybody. A week that already has its
-    wake-up is left alone, a week that decides nothing is left untouched, and a wake
-    whose visit the planner would refuse (an open request, a balance under the cost)
-    records nothing, so a later round can decide again. The insert and the run
-    request are one transaction: a crash between them must not leave a week recorded
-    with its request missing (#219 review).
+    True when this pass recorded a wake-up. Everything that records nothing (before the
+    start, a week already woken, the halt switch, a stale poll, nothing at risk, a planner
+    refusal, a margin under the fee) leaves the week open for a later round. The insert
+    and the run request are one transaction: a crash between them must not leave a week
+    recorded with its request missing (#219 review).
     """
     now = now or ledger.db_now(conn)
-    if not start.on_or_after_start(now):
-        log(f"midweek_wake: the competition starts {start.START.day} {start.START:%b} Eastern; "
-            "no midweek check before it")
-        return False
-    if current(conn, now) is not None:
-        log(f"midweek_wake: week {ledger.week_of(now.astimezone(EASTERN))} already has its "
-            "wake-up; nothing to do")
-        return False
-    try:
-        wake = evaluate(conn, now, log=log)
-    except planning.NotReady as skip:
-        log(f"midweek_wake: skipped, {skip}")
-        return False
+    wake = eligible(conn, now, log=log)
     if wake is None:
-        return False                         # evaluate logged why: stale, no polls, or nothing projected
-    if blocked(conn, wake, now=now, log=log):
-        return False
+        return False                         # eligible logged why
     with conn.transaction():
         if record(conn, wake) is None:       # a replica recorded it first; the index held the cap
             log("midweek_wake: another run recorded this week's wake-up; nothing to do")
@@ -468,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
                                                  "before Friday's restock and a midweek visit "
                                                  "would pay (#219). Off unless MIDWEEK_WAKE=on.")
     parser.add_argument("--check", action="store_true",
-                        help="decide only: print the decision, write nothing")
+                        help="run the worker's pass without writing: print what it would record")
     args = parser.parse_args(argv)
     if not enabled():
         print(f"midweek_wake: {SETTING} is off; set it to on to run this")
@@ -477,9 +482,9 @@ def main(argv: list[str] | None = None) -> int:
         with db.connect() as conn:
             if _refuse_behind(conn):
                 return 2
-            wake = evaluate(conn)
+            wake = eligible(conn)     # the worker's own path: the week, halt, the planner's gates
         print("would record: " + wake.reason if wake else
-              "no slot is projected to sell out before Friday's restock with a visit that would pay")
+              "would not record a wake-up this round (the line above says why)")
         return 0
     return job()
 
