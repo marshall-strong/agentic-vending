@@ -67,7 +67,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from fractions import Fraction
-from typing import Any
+from typing import Any, NamedTuple
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -153,6 +153,30 @@ class TooManyTries(RuntimeError):
     sent. Counted under the reservation's lock, so two replicas cannot both pass the check."""
 
 
+class StaleFigures(RuntimeError):
+    """The figures are as of a poll older than the caller's freshness limit by the moment of the
+    send (`tracking_daily.STALE_POLL`), so the history sync may have stopped; nothing was sent.
+    Checked under the reservation's lock, so a worker that prepared the send a while ago cannot
+    spend the day's check on out-of-date books."""
+
+
+class BackingOff(RuntimeError):
+    """A transient refusal today is still within its backoff, so the next try waits; nothing was
+    sent. The wait is counted under the reservation's lock, so a replica that passed its own checks
+    before another's refusal was stored still waits it out."""
+
+
+class DailyTries(NamedTuple):
+    """The worker's daily bounds, enforced under the send's reservation lock: the `sent_by` name,
+    the limit on tries that don't settle on their own, the limit on refusals that do, and the
+    backoff between those refusals (the first wait, its cap) (`tracking_daily`)."""
+    by: str
+    tries: int
+    transient: int
+    backoff: timedelta
+    backoff_cap: timedelta
+
+
 @dataclass(frozen=True)
 class Figures:
     """Our four figures as of one poll, and what a person should know about them."""
@@ -205,6 +229,12 @@ def daily_from() -> datetime:
 
 def eastern_day(moment: datetime) -> date:
     return moment.astimezone(EASTERN).date()
+
+
+def backoff_wait(count: int, first: timedelta, cap: timedelta) -> timedelta:
+    """How long after the day's `count`-th transient refusal the next try waits: `first` after the
+    first, doubling up to `cap` (`tracking_daily.BACKOFF`, `BACKOFF_CAP`)."""
+    return min(first * 2 ** (count - 1), cap)
 
 
 # --- The figures --------------------------------------------------------------------------------------
@@ -343,8 +373,8 @@ def blocking(conn: psycopg.Connection, day: date) -> list[tuple[int, int | None,
 
 def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
          now: datetime | Callable[[], datetime] | None = None, once_a_day: bool = False,
-         window: tuple[time, time] | None = None,
-         daily_tries: tuple[str, int, int] | None = None) -> Outcome:
+         window: tuple[time, time] | None = None, daily_tries: DailyTries | None = None,
+         stale: timedelta | None = None) -> Outcome:
     """Send `found` once, never retried, storing the request first and the answer after.
 
     `now` stamps the reservation (default the database clock at that moment); a callable is asked
@@ -354,9 +384,12 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
 
     Everything is re-checked under the send's advisory lock, with the clock of that moment, so a
     caller that started a while ago cannot send on stale facts: `window` (Eastern start and cutoff)
-    raises `WindowClosed` when the moment to send has passed; `daily_tries` (`sent_by`, the limit on
-    tries that don't settle on their own, the limit on transient refusals) raises `TooManyTries`
-    when the day's tries are spent. Both before anything is recorded."""
+    raises `WindowClosed` when the moment to send has passed; `stale` raises `StaleFigures` when the
+    poll the figures are as of is older than the limit at that moment; `daily_tries` raises
+    `TooManyTries` when the day's tries are spent and `BackingOff` while the newest transient
+    refusal is still within its backoff. All before anything is recorded. The lock is the
+    transaction's, so it releases when the reservation commits and the request goes out; a second
+    replica that acquires it after that sees the reservation (`blocking`) and refuses."""
     if not by or not by.strip():
         raise ValueError("a send needs a name, for the record")
     fixed = now
@@ -371,8 +404,13 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
             raise WindowClosed(f"the send window ({window[0]:%H:%M}-{window[1]:%H:%M} Eastern) closed while the "
                                f"check was being prepared; it was ready at {local:%H:%M}, so nothing was sent")
         day = eastern_day(moment)
+        if stale is not None and moment - found.as_of_time > stale:
+            raise StaleFigures(
+                f"the figures are as of the poll at {found.as_of_time.astimezone(EASTERN):%Y-%m-%d %H:%M} "
+                f"Eastern, over {int(stale.total_seconds() // 3600)} hours before the send, so the history "
+                "sync may have stopped; nothing was sent")
         if daily_tries is not None:
-            _check_tries(conn, day, daily_tries)
+            _check_tries(conn, day, moment, daily_tries)
         if once_a_day or moment >= daily_from():
             earlier = blocking(conn, day)
             if earlier:
@@ -423,21 +461,37 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
     return _answered(conn, stamp, row_id, status, answer, error_type, used, found.as_of)
 
 
-def _check_tries(conn: psycopg.Connection, day: date, daily_tries: tuple[str, int, int]) -> None:
-    """`TooManyTries` when the day's tries are spent: `blocking` already refuses a day whose check is
-    used or may be, so what is left to bound is tries that never block anything. A transient refusal
-    (`TRANSIENT_REFUSALS`) settles on its own, so it has its own, larger bound."""
-    by, tries_limit, transient_limit = daily_tries
-    rows = conn.execute("select used_check, error_type from tracking_checks"
-                        " where eastern_day = %s and sent_by = %s", (day, by)).fetchall()
-    transient = [row for row in rows if row[0] is False and row[1] in TRANSIENT_REFUSALS]
-    if len(transient) >= transient_limit:
-        raise TooManyTries(f"{by} has had {len(transient)} transient refusals today ({day}, Eastern), up to its "
-                           f"limit of {transient_limit}, so no more until tomorrow")
+def _check_tries(conn: psycopg.Connection, day: date, moment: datetime, daily_tries: DailyTries) -> None:
+    """`TooManyTries` when the day's tries are spent, `BackingOff` while the day's newest transient
+    refusal is still within its backoff, and `BackingOff` while one of the day's sends has no answer
+    recorded yet (a concurrent send's outcome is unknown, so this one waits for it). All three are
+    counted here, inside the reservation's transaction and with the clock of the send, so two
+    replicas cannot together exceed the limits or slip past the waits: one that passed its own
+    checks before another's refusal was stored still waits it out. `blocking` already refuses a day
+    whose check is used or may be, so what is left to bound is tries that never block anything. A
+    transient refusal (`TRANSIENT_REFUSALS`) settles on its own, so it has its own, larger bound."""
+    by, tries_limit, transient_limit, backoff, backoff_cap = daily_tries
+    rows = conn.execute("select id, sent_at, used_check, error_type from tracking_checks"
+                        " where eastern_day = %s and sent_by = %s order by sent_at, id", (day, by)).fetchall()
+    transient = [(id_, sent, error) for id_, sent, used, error in rows
+                 if used is False and error in TRANSIENT_REFUSALS]
     tries = len(rows) - len(transient)
     if tries >= tries_limit:
         raise TooManyTries(f"{by} has made {tries} tries today ({day}, Eastern) that don't settle on their own, "
                            f"up to its limit of {tries_limit}, so no more until tomorrow")
+    if len(transient) >= transient_limit:
+        raise TooManyTries(f"{by} has had {len(transient)} transient refusals today ({day}, Eastern), up to its "
+                           f"limit of {transient_limit}, so no more until tomorrow")
+    waiting = next((id_ for id_, sent, used, error in rows if used is None), None)
+    if waiting is not None:
+        raise BackingOff(f"a send's answer is still being recorded or was left unfinished (#{waiting}); nothing "
+                         "is sent until its outcome is known")
+    if transient:
+        wait = backoff_wait(len(transient), backoff, backoff_cap)
+        newest = transient[-1][1]
+        if moment < newest + wait:
+            raise BackingOff(f"the books aren't ready yet ({len(transient)} transient refusals today); backing "
+                             f"off until {(newest + wait).astimezone(EASTERN):%H:%M} Eastern")
 
 
 def _results(answer: Any, as_of: str) -> dict[str, str] | None:

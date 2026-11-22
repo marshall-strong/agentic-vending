@@ -170,6 +170,13 @@ def _judge_notes(col: Callable[[str], sql.Composable]) -> sql.Composable:
         "  from jsonb_each({notes}) as e) end").format(notes=col("judge_notes"), fixed=fixed)
 
 
+# What /db shows in place of a tracking check's answer and its error type (#218): `answer` holds the
+# bridge's own JSON (its `error`, `detail` and `items`, which can quote what it received), and
+# `error_type` is kept as the bridge sent it. The four verdicts and our own words for a refusal
+# (`tracking_daily.panel`) stay visible.
+TRACKING_OTHER = "(the bridge's own words for a check aren't shown on this public page; they are in the database)"
+
+
 # What the public explorer leaves out besides, by table name. The dashboard's own list is
 # `dashboard.hide_errors`.
 HIDE = {
@@ -181,6 +188,8 @@ HIDE = {
     "purchase_submissions": db_explorer.Project("detail", ("status",), _submission_detail, SUBMISSION_OTHER),
     # A step the model was told had failed holds the raw error (#165).
     "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),
+    # The bridge's own words for a tracking check (#218); every row, whatever its status.
+    "tracking_checks": db_explorer.Hide("", "", ("answer", "error_type"), TRACKING_OTHER),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
     **TOTALS,

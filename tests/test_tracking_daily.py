@@ -169,6 +169,64 @@ def test_the_cutoff_is_enforced_again_when_the_send_is_ready(conn):
     assert "window" in lines[-1]
 
 
+def test_a_poll_that_ages_past_the_limit_before_the_send_is_refused(conn):
+    """A delayed worker: the job's checks pass at 06:05 Eastern on a poll of 05:00, but the send is
+    only ready at 11:05, when that poll is over the six-hour limit. The poll's age is checked again
+    under the send's reservation lock, with the clock of that moment, so nothing is sent."""
+    books(conn)
+    stamps = iter([NOW, NOW + timedelta(hours=5), NOW + timedelta(hours=5, minutes=5)])
+    bridge = FakeBridge(answer("p1"))
+    code, lines = run(conn, bridge, now=lambda: next(stamps))
+    assert (code, bridge.sent, sends(conn)) == (1, [], [])
+    assert "history sync may have stopped" in lines[-1]
+
+
+def test_fridays_figures_are_not_sent_on_saturday_morning(conn):
+    """A job ready to send on Friday evening whose send is only ready on Saturday morning: the day
+    and the poll's age are decided again under the send's lock, with the clock of that moment, so
+    Friday's poll cannot spend Saturday's check."""
+    books(conn)
+    poll(conn, "p3", "2026-12-05T01:30:00+00:00")     # 20:30 Eastern Friday, fresh that evening
+    stamps = iter([utc("2026-12-05T02:55:00+00:00"),       # 21:55 Eastern Friday: due, the poll is fresh
+                   utc("2026-12-06T11:05:00+00:00"),       # 06:05 Eastern Saturday: the reservation
+                   utc("2026-12-06T11:15:00+00:00")])
+    bridge = FakeBridge(answer("p3"))
+    code, lines = run(conn, bridge, now=lambda: next(stamps))
+    assert (code, bridge.sent, sends(conn)) == (1, [], [])
+    assert "history sync may have stopped" in lines[-1]
+
+
+def test_two_replicas_racing_cannot_bypass_the_backoff(schema_url):
+    """Two replicas pass their quiet checks together, before either has stored a transient refusal,
+    and race to reserve. The backoff after the first one's refusal is counted again inside the
+    reservation's transaction, under its lock, with two database connections, so only one post goes
+    out and the other waits out the hour."""
+    barrier = threading.Barrier(2)
+    bridges = [FakeBridge(refused(409, "tracking_not_started")), FakeBridge(refused(409, "tracking_not_started"))]
+    with open_in(*schema_url) as setup:
+        books(setup)
+    codes, lines = [], []
+
+    def replica(n: int):
+        with open_in(*schema_url) as conn:
+            def gated():                       # both replicas passed every quiet check before either sent
+                barrier.wait(10)
+                return bridges[n]
+            codes.append(tracking_daily.run(conn, gated, now=NOW, log=lines.append))
+
+    threads = [threading.Thread(target=replica, args=(n,)) for n in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+    with open_in(*schema_url) as conn:
+        rows = sends(conn)
+    assert sorted(codes) == [0, 0]
+    assert len(bridges[0].sent) + len(bridges[1].sent) == 1 and len(rows) == 1
+    assert rows[0][2] == "p1" and rows[0][4] is False
+    assert sum("backing off" in line or "still being recorded" in line for line in lines) == 1
+
+
 def test_the_answer_is_stamped_when_it_is_stored(conn):
     """The reservation and the answer carry their own times: a job that runs long does not record the
     answer under the time it started."""
@@ -385,6 +443,36 @@ def test_a_check_with_no_usable_answer_is_an_incident_and_shows_no_verdicts(conn
     assert "may have used" in row["note"]
     html = tracking_daily.panel_html({"ok": True, "data": tracking_daily.panel(conn, NOW)})
     assert "No verdicts" in html and "pill" not in html
+
+
+def test_a_reservation_left_unanswered_by_a_crash_becomes_an_incident(conn):
+    """The worker crashed after the reservation committed and before any answer was recorded: the
+    day is blocked, and nothing showed in the incident log. Past a grace period the log shows it:
+    a tracking check may have been used; check with the instructors."""
+    from vending import report_card
+
+    books(conn)
+    sent = NOW - timedelta(hours=1)
+    conn.execute("insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request)"
+                 " values (%s, '2026-12-04', %s, 'p1', %s, '{}')",
+                 (sent, tracking_daily.WORKER, SETTLED))
+    data = report_card.incidents(conn, NOW)
+    [row] = [r for r in data["rows"] if r["kind"].startswith("check")]
+    assert row["kind"] == "check_unresolved" and not row["error"]
+    assert "may have been used" in row["note"] and "instructors" in row["note"]
+    assert data["total"] >= 1
+    assert "Check unresolved" in report_card.incidents_html({"ok": True, "data": data})
+
+
+def test_a_fresh_reservation_is_not_yet_an_incident(conn):
+    """A send still being recorded (the answer within the grace period) is not an incident."""
+    from vending import report_card
+
+    books(conn)
+    conn.execute("insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request)"
+                 " values (%s, '2026-12-04', %s, 'p1', %s, '{}')",
+                 (NOW - timedelta(minutes=5), tracking_daily.WORKER, SETTLED))
+    assert not [r for r in report_card.incidents(conn, NOW)["rows"] if r["kind"].startswith("check")]
 
 
 def test_the_panel_says_when_the_daily_send_is_off(conn, monkeypatch):

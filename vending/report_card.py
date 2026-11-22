@@ -69,6 +69,11 @@ PLAN_LOOKBACK = timedelta(days=14)
 NOTE_CHARS = 160
 # A live run still `running` this long after it started is taken as dead (the dashboard's STALE_RUN).
 STALE_RUN = timedelta(hours=2)
+# A tracking check sent this long ago with no answer recorded: the worker crashed after the
+# reservation committed, so the day's check may have been spent with nothing in the log. The
+# bridge's client gives up after `vending.bridge.TIMEOUT_SECONDS`, so a live send resolves long
+# before this.
+UNRESOLVED_AFTER = timedelta(minutes=15)
 # Every slot needs a reason to pass the replayer's "valid plan" check, but the agent writes reasons
 # only for the slots its plan changes (`vending.agent.recorded_plan`).
 NO_REASON = "(no reason recorded: the plan leaves this slot as it was)"
@@ -570,12 +575,16 @@ def incidents(conn: psycopg.Connection, now: datetime, weeks: dict | None = None
                          f"The model was told {n} tool call{'s' if n != 1 else ''} failed. See How it decided under Runs."))
     checked, checks = _tracking(conn, since, now)
     total += checked
-    for id_, sent, as_of_time, status, results, error_type in checks:
+    for id_, sent, as_of_time, status, results, error_type, answered in checks:
         outside = [k for k in TRACKING_FIGURES if isinstance(results, dict) and results.get(k) == "outside"]
         if outside:
             rows.append(_row(sent, "books_outside", f"Tracking check {id_}",
                              f"The bridge's books differ from ours on {', '.join(TRACKING_FIGURES[k] for k in outside)}, "
                              f"as of the poll at {_when(as_of_time)}. It never says by how much."))
+        elif answered is None:
+            rows.append(_row(sent, "check_unresolved", f"Tracking check {id_}",
+                             "No answer was recorded for it: the worker may have crashed after sending. "
+                             "A tracking check may have been used; check with the instructors."))
         else:
             rows.append(_row(sent, "check_unanswered", f"Tracking check {id_}",
                              "No usable answer: it may have used that day's check, and its verdicts are unknown."
@@ -617,19 +626,23 @@ TRACKING_FIGURES = {"cash": "cash", "sales_tax_owed": "sales tax owed", "coil": 
 
 
 def _tracking(conn: psycopg.Connection, since: datetime, now: datetime) -> tuple[int, list[tuple]]:
-    """How many tracking checks sent from `since` to `now` read `outside` on a figure, or may have used the
-    day's check with no verdicts, and the newest `INCIDENTS_SHOWN` of them as (id, sent_at, as_of_time,
-    status, results, error_type). Only stored verdicts and our own codes are read, never the bridge's text."""
+    """How many tracking checks sent from `since` to `now` read `outside` on a figure, may have used the
+    day's check with no verdicts, or have no answer recorded at all past `UNRESOLVED_AFTER` (the worker
+    crashed after the reservation committed), and the newest `INCIDENTS_SHOWN` of them as (id, sent_at,
+    as_of_time, status, results, error_type, answered_at). Only stored verdicts and our own codes are
+    read, never the bridge's text."""
     import psycopg
     where = ("from tracking_checks where sent_at >= %s and sent_at <= %s and"
              " (jsonb_path_exists(coalesce(results, '{}'), '$.* ? (@ == \"outside\")')"
              "  or (used_check is distinct from false and results is null and answered_at is not null"
-             "      and status is distinct from 429))")
+             "      and status is distinct from 429)"
+             "  or (answered_at is null and sent_at <= %s))")
     try:
         with conn.transaction():
-            count = conn.execute(f"select count(*) {where}", (since, now)).fetchone()[0]
-            rows = conn.execute(f"select id, sent_at, as_of_time, status, results, error_type {where}"
-                                " order by sent_at desc, id desc limit %s", (since, now, INCIDENTS_SHOWN)).fetchall()
+            count = conn.execute(f"select count(*) {where}", (since, now, now - UNRESOLVED_AFTER)).fetchone()[0]
+            rows = conn.execute(f"select id, sent_at, as_of_time, status, results, error_type, answered_at {where}"
+                                " order by sent_at desc, id desc limit %s",
+                                (since, now, now - UNRESOLVED_AFTER, INCIDENTS_SHOWN)).fetchall()
             return count, rows
     except psycopg.errors.UndefinedTable:     # before migration 021
         return 0, []
@@ -673,7 +686,8 @@ _KIND = {"refused": ("Refused", "warn"), "failed": ("Failed", "bad"), "halt_on":
          "halt_off": ("Halt off", "info"), "halt": ("Halt switch", "info"), "run_failed": ("Run failed", "bad"),
          "run_halted": ("Run halted", "warn"), "run_stuck": ("Run stuck", "bad"),
          "tool_errors": ("Tool errors", "warn"), "week_failed": ("Week failed", "bad"),
-         "books_outside": ("Books outside", "bad"), "check_unanswered": ("Check unanswered", "warn")}
+         "books_outside": ("Books outside", "bad"), "check_unanswered": ("Check unanswered", "warn"),
+         "check_unresolved": ("Check unresolved", "warn")}
 
 
 def _pill(text: str, tone: str) -> str:

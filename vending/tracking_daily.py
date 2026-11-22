@@ -14,9 +14,13 @@ want to send the first ones by hand from 30 Nov. So it is off by default, like t
 finds the books settled. Early morning is when they are: no visit happens overnight, the overnight
 rounds have synced yesterday's receipts, and David's Saturday 23:59 tax calculation is in by Sunday
 morning. The check is as of the newest good poll of ours taken before the current hour began: the
-bridge folds polls into its books on the hour, so that poll is already folded in. The window is
-enforced again at the send itself, under its reservation lock, with the clock of that moment, so a
-job that runs long cannot send after 22:00, or under yesterday's date.
+bridge folds polls into its books on the hour, so that poll is already folded in. The send's facts
+are decided again at the send itself, under its reservation lock, with the clock of that moment, so
+a job that runs long cannot send on the facts of when it started: not after 22:00, not under
+yesterday's date, not as of a poll that has aged past `STALE_POLL` (six hours), and not while
+another replica's transient refusal is still backing off. The figures are computed before the lock,
+in one repeatable-read transaction of their own; the lock checks their poll's age, reserves, and
+releases for the request.
 
 **Never twice a day.** Before it sends, the job asks the database whether today's check is used or may
 be (`tracking.blocking`): any send that day, by the worker or a person, that the bridge answered, or
@@ -25,8 +29,9 @@ All of it is in `tracking_checks`, so a worker restart changes nothing. A send t
 before checking (for example `409 not_reconciled_yet`) leaves the day open, so the next round tries
 again. A refusal that settles on its own (`not_reconciled_yet`, `tracking_not_started`) backs off:
 an hour after the first, doubling to four, at most `MAX_TRANSIENT` a day. Any other refusal or a
-send with no answer stops after `MAX_TRIES` tries, counted under the lock, so two replicas cannot
-together exceed it. However it retries, one successful send a day is the most there ever is.
+send with no answer stops after `MAX_TRIES` tries. The tries, the transient cap and the backoff are
+all counted under the send's lock, so two replicas cannot together exceed them or slip past the
+wait. However it retries, one successful send a day is the most there ever is.
 
 **Skips.** No ledger opening yet, or no poll of ours since it: the job logs a line and exits 0. The
 manual command refuses the same way (`tracking.CantCompute`). After the opening, figures that can't be
@@ -59,6 +64,7 @@ BACKOFF = timedelta(hours=1)     # after the first transient refusal, before the
 BACKOFF_CAP = timedelta(hours=4) # the backoff doubles from `BACKOFF` up to this
 WORKER = "worker (daily)"        # `sent_by` on the worker's sends
 STALE_POLL = timedelta(hours=6)  # an older newest poll means the history sync has stopped
+DAILY_TRIES = tracking.DailyTries(WORKER, MAX_TRIES, MAX_TRANSIENT, BACKOFF, BACKOFF_CAP)
 CHECKS_SHOWN = 7
 
 # Where the agent looks next for each figure.
@@ -107,10 +113,16 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     have been; 2: a setting is wrong; 3: sent, but it may have used the day's check with no verdicts.
 
     `now` pins the clock for the job's own checks (default the database clock). The send itself is
-    stamped and re-checked with the clock of each moment (`vending.tracking.send`): the window and
-    the Eastern day under its reservation lock, and the answer with its own time, so a job that runs
-    long cannot send on the facts of when it started. A callable `now` is asked once for the job's
-    checks and again for each stamp of the send (a test's way to move the clock mid-send)."""
+    stamped and re-checked with the clock of each moment (`vending.tracking.send`): under its
+    reservation lock it decides the Eastern day, the window, whether the poll the figures are as of
+    is still fresh enough, the day's tries and their backoff, and whether the day's check is used or
+    may be, and the answer carries its own time. The figures are computed before the lock, in one
+    repeatable-read transaction of their own; the lock validates their poll's age at the moment it
+    reserves, then releases for the request. So a job that runs long cannot send on the facts of
+    when it started: a poll that aged past the limit, or Friday's figures on Saturday morning, is
+    refused, and a replica that passed its own checks before another's refusal was stored still
+    waits out the backoff. A callable `now` is asked once for the job's checks and again for each
+    stamp of the send (a test's way to move the clock mid-send)."""
     try:
         if not enabled():
             log(f"tracking_daily: off. Set {MODE_SETTING}=on to send one check a day.")
@@ -139,7 +151,7 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
         log(f"tracking_daily: {tries} tries today that don't settle on their own, so no more until tomorrow. "
             "See: python -m vending.tracking show")
         return 1
-    wait = _backoff(transient)
+    wait = tracking.backoff_wait(transient, BACKOFF, BACKOFF_CAP) if transient else None
     if transient >= MAX_TRANSIENT or (transient and now < last_transient + wait):
         log(f"tracking_daily: the books aren't ready yet ({transient} transient refusals today); backing off "
             f"until {(last_transient + wait).astimezone(EASTERN):%H:%M} Eastern.")
@@ -152,11 +164,7 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     if found is None:
         log("tracking_daily: skipped, no poll of ours since the ledger's opening is in the bridge's books yet.")
         return 0
-    session, taken = found
-    if now - taken > STALE_POLL:
-        log(f"tracking_daily: the newest poll is from {taken.astimezone(EASTERN):%Y-%m-%d %H:%M} Eastern, over "
-            f"{STALE_POLL.seconds // 3600} hours ago, so the history sync may have stopped. Nothing sent.")
-        return 1
+    session = found[0]
     try:
         figures = tracking.figures(conn, session)
     except (tracking.CantCompute, SlotsNotRecorded) as error:
@@ -164,13 +172,19 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
         return 1
     try:
         outcome = tracking.send(conn, (bridge or _bridge)(), figures, WORKER, now=stamp, once_a_day=True,
-                                window=(start, LAST_SEND), daily_tries=(WORKER, MAX_TRIES, MAX_TRANSIENT))
+                                window=(start, LAST_SEND), daily_tries=DAILY_TRIES, stale=STALE_POLL)
     except tracking.AlreadyChecked as error:
         log(f"tracking_daily: {error}")
         return 0
     except tracking.WindowClosed as error:
         log(f"tracking_daily: {error}")
         return 1
+    except tracking.StaleFigures as error:
+        log(f"tracking_daily: {error}")
+        return 1
+    except tracking.BackingOff as error:
+        log(f"tracking_daily: {error}.")
+        return 0
     except tracking.TooManyTries as error:
         log(f"tracking_daily: {error}. See: python -m vending.tracking show")
         return 1
@@ -202,12 +216,6 @@ def _bridge():
     from vending.bridge import Bridge
 
     return Bridge()
-
-
-def _backoff(transient: int) -> timedelta:
-    """How long after the newest transient refusal the next try waits: an hour after the first,
-    doubling to a four hour cap."""
-    return min(BACKOFF * 2 ** (transient - 1), BACKOFF_CAP)
 
 
 def tries_today(conn: psycopg.Connection, day) -> tuple[int, int, datetime | None]:
