@@ -2,6 +2,8 @@
 opening on 11 Nov, run 2's model spend and the 12 Nov test receipt), then the 29 Nov runbook:
 dry run, reset, `ledger open`, check."""
 
+import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 from fractions import Fraction
 
@@ -230,6 +232,44 @@ def test_the_reset_window_closes_at_midnight_eastern_on_30_nov(conn):
         ledger.plan_reset(conn, closes + timedelta(hours=12))
     assert ledger.opening(conn).detail == TEST_DETAIL and ledger.archived(conn) == []
     assert ledger.reset_test_opening(conn, "kevin", closes - timedelta(seconds=1)).id == 1
+
+
+def test_a_reset_that_waits_past_midnight_on_its_last_write_rolls_back(conn, schema_url, monkeypatch):
+    """Sol review, round 2, finding 1: the window is checked, then the audit insert waits on a lock held by
+    another connection until after 00:00 Eastern on Mon 30 Nov. The reset must not commit then."""
+    seed(conn)
+    times = [RESET_CLOSES - timedelta(seconds=1)]
+    monkeypatch.setattr(ledger, "db_now", lambda c: times[-1])       # the database clock, moved by the test
+    blocker = open_in(*schema_url)
+    blocker.autocommit = False
+    blocker.execute("lock table action_log in access exclusive mode")
+    result = {}
+
+    def reset():
+        with open_in(*schema_url) as c:
+            try:
+                result["moved"] = ledger.reset_test_opening(c, "kevin")
+            except LedgerError as error:
+                result["error"] = str(error)
+
+    worker = threading.Thread(target=reset)
+    try:
+        worker.start()
+        for _ in range(200):                     # until the reset waits on the audit insert
+            if conn.execute("select count(*) from pg_stat_activity where wait_event_type = 'Lock'"
+                            " and query ilike '%%insert into action_log%%'").fetchone()[0]:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("the reset never waited on action_log")
+        times.append(RESET_CLOSES)               # midnight passes while it waits
+    finally:
+        blocker.rollback()
+        blocker.close()
+        worker.join(30)
+    assert "moved" not in result and "window closed" in result["error"]
+    assert ledger.opening(conn).detail == TEST_DETAIL and ledger.archived(conn) == []
+    assert conn.execute("select count(*) from action_log where tool = 'ledger.reset_test_opening'").fetchone() == (0,)
 
 
 def test_show_dates_the_opening_in_eastern(schema_url, monkeypatch, capsys):

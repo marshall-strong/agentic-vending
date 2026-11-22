@@ -311,6 +311,26 @@ def test_the_first_restock_after_the_fill_counts_from_the_database(conn, page_co
     assert check(r["first_restock_request"], "restock_request")["text"] == "sent Tue 1 Dec, 15:00, pending"
 
 
+def test_with_only_the_test_opening_no_request_counts_for_the_fill_or_the_restock(conn, page_conn, monkeypatch):
+    """Sol review of #222, round 2, finding 3: the 12 and 28 Nov test purchases stand, and the only opening is
+    the 11 Nov test one. Neither is the fill, and neither is the first restock."""
+    monkeypatch.setattr(dashboard, "lock_at", lambda: LOCK)
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (%s, %s, 'opening', 60000, %s, 'marshall')",
+                 (ledger.TEST_OPENING_ID, et(11, 11, 14), ledger.TEST_OPENING_DETAIL))
+    _request(conn, "TEST-12NOV", et(11, 12, 11))
+    _request(conn, "TEST-28NOV", et(11, 28, 11))
+    for now in (et(11, 29, 21), et(12, 2, 12)):
+        snap = dashboard.snapshot(page_conn, now)
+        r = {x["key"]: x for x in snap["key_dates"]["data"]["rows"]}
+        if "fill_request" in r:
+            assert check(r["fill_request"], "ledger_opening")["status"] in ("due", "overdue")
+            assert check(r["fill_request"], "fill_request")["status"] == "waiting"
+        assert check(r["first_restock_request"], "restock_request")["status"] != "done"
+    facts = key_dates.read(page_conn, et(11, 29, 21), ledger.opening(page_conn).at, TEST_SLOTS)
+    assert facts["opening"] is None and facts["test_opening"] and facts["requests"] == []
+
+
 def test_after_a_rejected_fill_the_first_restock_still_counts(conn, page_conn, monkeypatch):
     # The Sunday fill was rejected, so the first request standing is Thursday's restock. A request from
     # the start on is never the fill, so it counts as this week's restock and the fill isn't done.

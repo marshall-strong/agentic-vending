@@ -419,6 +419,43 @@ def test_notes_from_a_run_while_slots_record_waits_on_the_server_are_left_out(co
     assert "New notes." in client.sent[0]["messages"][0]["content"]
 
 
+def test_notes_from_a_run_that_read_the_assignment_before_a_change_committed_are_left_out(connect, conn, schema_url):
+    """Sol review, round 2, finding 2: `slots record` writes the new assignment, and a run starts before that
+    commits, so it reads the old slots. Its notes are for the old slots, though it started after the write."""
+    from tests.conftest import open_in
+    from tests.test_slots import MOVED
+    from vending import slots
+
+    recorder = open_in(*schema_url)
+    try:
+        recorder.autocommit = False
+        asked_at = slots.clock(recorder)
+        assert slots.record(recorder, MOVED, now=asked_at, lock=asked_at + timedelta(days=365)) == "changed"
+        go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())   # reads the old slots meanwhile
+        recorder.commit()
+    finally:
+        recorder.close()
+    client = Script(answer(notes="New notes."))
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening
+    client = Script(answer())
+    go(connect, client, Tools())                                      # a run on the new slots carries on
+    assert "New notes." in client.sent[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("clear", ["delete from slot_assignment", "update slot_assignment set device_id = 'vmc2'"])
+def test_no_notes_carry_over_while_there_is_no_usable_assignment(connect, conn, clear):
+    """Sol review, round 2, finding 4: operators clear an invalid assignment before recording again. Until a usable
+    one is stored, no notes carry over: the slots they name may not be ours."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    conn.execute(clear)
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "No notes" in opening
+
+
 def test_the_server_never_gets_the_model_key(monkeypatch):
     for name in ("ANTHROPIC_API_KEY", "VENDING_ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.setenv(name, "not-a-real-key")
