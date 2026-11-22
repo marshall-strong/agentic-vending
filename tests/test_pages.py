@@ -1629,3 +1629,17 @@ def test_when_the_database_is_down_the_worker_still_names_its_failed_syncs(monke
     body = _get(site, "/dashboard")[2]
     assert '<div class="failbanner"' not in body and 'data-sync-ok="1"' in body
     assert json.loads(_get(site, "/dashboard/state.json")[2])["alerts"] == []
+
+
+def test_a_generic_500_is_not_marked_as_the_outage(monkeypatch, site):
+    """A bug drawing the page is not a database outage: the 500 carries neither the outage marker
+    (which would let the refresh handler swap a banner in) nor the worker's banner, so an open tab
+    keeps what it shows."""
+    def broken(*a, **k):
+        raise RuntimeError("a bug drawing the page")
+
+    monkeypatch.setattr(pages.dashboard, "snapshot", broken)
+    status, _, body = _get(site, "/dashboard")
+    assert status == 500 and 'data-sync-ok="1"' not in body and '<div class="failbanner"' not in body
+    status, _, body = _get(site, "/dashboard/state.json")
+    assert status == 500 and json.loads(body)["alerts"] == []

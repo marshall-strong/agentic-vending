@@ -1943,18 +1943,44 @@ def test_the_missed_run_hook_stays_quiet_until_a_schedule_is_recorded(page_conn)
 
 
 def test_a_retry_still_running_keeps_the_last_failure_banner(conn, page_conn, open_ledger):
-    """A retry that is still running must not clear the run-failed alert: the banner stays until a
-    later run FINISHES successfully."""
+    """A retry that is still running must not clear the alert of the run before it - neither a
+    finished run's failure (the banner stays until a later run FINISHES successfully) nor a run
+    left `running` past two hours (starting a retry doesn't resolve it; the retry finishing
+    does)."""
     failed = _live_run(conn)
+    conn.execute("update agent_runs set started_at = %s where id = %s",
+                 (MONDAY - timedelta(hours=8), failed))
     agent_runs.finish(conn, failed, "failed", detail=SECRET)
     retry = agent_runs.start(conn, mode="live", model="m")
-    conn.execute("update agent_runs set started_at = %s where id = %s", (MONDAY, retry))
+    conn.execute("update agent_runs set started_at = %s where id = %s",
+                 (MONDAY - timedelta(hours=1), retry))
     snap = dashboard.snapshot(page_conn, MONDAY)
     [alert] = [a for a in snap["alerts"] if a["kind"] == "run_failed"]
     assert alert["text"] == f"Run #{failed} failed. See Runs below."
     # The retry finishing successfully clears it.
     agent_runs.finish(conn, retry, "submitted")
     assert not [a for a in dashboard.snapshot(page_conn, MONDAY)["alerts"] if a["kind"] == "run_failed"]
+
+    later = MONDAY + timedelta(hours=5)
+    # A run left `running` past the stale bound banners too, and it is the newest thing that
+    # happened: before any retry, the stuck run itself carries the line. (It starts inside the
+    # ledger window, after the finished runs above.)
+    stuck = agent_runs.start(conn, mode="live", model="m")
+    conn.execute("update agent_runs set started_at = %s where id = %s",
+                 (MONDAY + timedelta(hours=2), stuck))
+    [alert] = [a for a in dashboard.snapshot(page_conn, later)["alerts"] if a["kind"] == "run_stuck"]
+    assert alert["text"].startswith(f"Run #{stuck} has said `running` for")
+    # Starting a retry doesn't clear it: the stuck row is still unresolved. The newest run is the
+    # retry, which used to hide the stuck one; the last finished run started before it.
+    after = agent_runs.start(conn, mode="live", model="m")
+    conn.execute("update agent_runs set started_at = %s where id = %s",
+                 (MONDAY + timedelta(hours=4), after))
+    [alert] = [a for a in dashboard.snapshot(page_conn, later)["alerts"] if a["kind"] == "run_stuck"]
+    assert alert["text"].startswith(f"Run #{stuck} has said `running` for")
+    assert not [a for a in dashboard.snapshot(page_conn, later)["alerts"] if a["kind"] == "run_failed"]
+    # The retry finishing successfully resolves the stuck run: the banner is clear.
+    agent_runs.finish(conn, after, "submitted")
+    assert dashboard.snapshot(page_conn, later)["alerts"] == []
 
 
 def test_run_and_tracking_alerts_stay_inside_the_ledger_window(conn, page_conn, open_ledger):

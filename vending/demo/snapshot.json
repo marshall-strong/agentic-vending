@@ -56,6 +56,7 @@
    },
    "status": "submitted"
   },
+  "stuck_run": null,
   "last_action": {
    "at": {
     "$datetime": "2026-12-09T14:53:00+00:00"

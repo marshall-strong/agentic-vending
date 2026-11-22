@@ -1,5 +1,6 @@
 """The weekly report card and the incident log (#48): `vending.report_card` on the dashboard."""
 
+import threading
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -663,20 +664,22 @@ def test_a_round_the_database_missed_is_recorded_after_a_later_round(monkeypatch
     import vending.db as db_mod
     waited: list = []
 
-    def down():
+    def down(**k):
         raise psycopg.OperationalError(SECRET)
 
     monkeypatch.setattr(db_mod, "connect", down)
     state = worker.State()
     state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
     state.rounds, state.last_round_at = 1, (OPEN + timedelta(hours=1)).isoformat()
-    worker.record_failed_round(state, waited, log=lambda _: None)
+    writer = worker.record_failed_round(state, waited, log=lambda _: None)
+    writer.join(60)
     assert len(waited) == 1 and waited[0][1][0]["exit_code"] == 3
     assert page_conn.execute("select count(*) from sync_incidents").fetchone()[0] == 0
-    monkeypatch.setattr(db_mod, "connect", lambda: _OneConn(conn))
+    monkeypatch.setattr(db_mod, "connect", lambda **k: _OneConn(conn))
     state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
     state.rounds, state.last_round_at = 2, (OPEN + timedelta(hours=2)).isoformat()
-    worker.record_failed_round(state, waited, log=print)
+    writer = worker.record_failed_round(state, waited, log=print)
+    writer.join(60)
     assert waited == []
     row, = page_conn.execute("select round_at, jobs from sync_incidents").fetchall()
     assert row[0] == OPEN + timedelta(hours=1) and row[1][0]["job"] == "sync_history"
@@ -711,35 +714,25 @@ def test_the_log_survives_a_missing_optional_table(conn, page_conn, opened):
 
 def test_a_locked_sync_incidents_table_cannot_stall_the_round(monkeypatch, conn, page_conn, schema_url, opened):
     """An exclusive lock on `sync_incidents` (a backup, a migration) must not hang the sync: the
-    write waits at most `worker.WRITE_TIMEOUT`, gives up, and the round stays in the pending list
-    for a later round to write (`record_failed_round`)."""
-    import threading
-    import time as time_mod
+    write runs off the scheduling path, its writer gives up at `worker.WRITE_TIMEOUT`, and the
+    round stays in the pending list for a later round to write (`record_failed_round`)."""
     import vending.db as db_mod
     url, schema = schema_url
     holder = psycopg.connect(url, connect_timeout=3,
                              options=db_mod.session_options(url, f"-c search_path={schema}"))
     try:
         holder.execute("lock table sync_incidents in access exclusive mode")
-        monkeypatch.setattr(db_mod, "connect", lambda: _OneConn(conn))
+        monkeypatch.setattr(db_mod, "connect", lambda **k: _OneConn(conn))
         monkeypatch.setattr(worker, "WRITE_TIMEOUT", "300ms")
         state = worker.State()
         state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
         state.rounds, state.last_round_at = 1, (OPEN + timedelta(hours=1)).isoformat()
         waited: list = []
         lines: list[str] = []
-        outcome: dict = {}
-
-        def call():
-            began = time_mod.monotonic()
-            worker.record_failed_round(state, waited, log=lines.append)
-            outcome["seconds"] = time_mod.monotonic() - began
-
-        thread = threading.Thread(target=call, daemon=True)
-        thread.start()
-        thread.join(60)
-        assert not thread.is_alive(), "the incident write stalled on the lock"
-        assert outcome["seconds"] < 30, outcome
+        writer = worker.record_failed_round(state, waited, log=lines.append)
+        assert writer is not None, "the round loop started the write in the background"
+        writer.join(60)
+        assert not writer.is_alive(), "the incident write stalled on the lock"
         assert waited and waited[0][1][0]["exit_code"] == 3, "the round stayed in the pending list"
         assert any("57014" in line for line in lines), lines   # the write gave up on its timeout
         holder.rollback()                                      # the lock is gone
@@ -747,12 +740,73 @@ def test_a_locked_sync_incidents_table_cannot_stall_the_round(monkeypatch, conn,
         # A later round writes the waited one, as it would after any database refusal.
         state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
         state.rounds, state.last_round_at = 2, (OPEN + timedelta(hours=2)).isoformat()
-        worker.record_failed_round(state, waited, log=lambda _: None)
+        writer = worker.record_failed_round(state, waited, log=lambda _: None)
+        writer.join(60)
         assert waited == []
         assert page_conn.execute("select count(*) from sync_incidents").fetchone()[0] == 1
     finally:
         holder.rollback()
         holder.close()
+
+
+def test_a_silent_database_cannot_stall_the_round_loop(monkeypatch):
+    """A connection that goes silent after login blocks every write on it, and no server-side
+    timeout can fire: the query never reaches a server. The incident write runs off the
+    scheduling path, on a connection bounded at the TCP layer (`worker.INCIDENT_TCP`), so the
+    round loop still schedules its next round while the writer waits."""
+    import vending.db as db_mod
+
+    gate = threading.Event()
+    asked: dict = {}
+
+    class Silent:
+        """A connection whose login succeeds and whose first execute never answers."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def transaction(self):
+            return self
+
+        def execute(self, *a, **k):
+            if not gate.is_set():
+                gate.wait()                     # silent: no answer ever comes
+            return None
+
+    def connect(**options):
+        asked.update(options)
+        return Silent()
+
+    monkeypatch.setattr(db_mod, "connect", connect)
+    monkeypatch.setattr(worker, "_slot_lock", lambda: None)
+    lines: list[str] = []
+    outcome: dict = {}
+
+    def sleep_until_next_round(seconds):
+        gate.set()                              # the loop got past the stuck write...
+        raise worker.Stopped()                  # ...to its next round: stop there
+
+    def run():
+        outcome["code"] = worker.main(["--every", "60", "--at-minute", "off", "--port", "0"],
+                                     jobs=[("sync_history", lambda: 3)],
+                                     sleep=sleep_until_next_round, log=lines.append)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(60)
+    assert not thread.is_alive(), "the round loop stalled on the incident write"
+    assert outcome.get("code") == 0
+    assert any("next round at" in line for line in lines), lines   # it scheduled the next round
+    assert not any("sync_incidents:" in line for line in lines), lines   # and logged no failure
+    # The writer was asked to connect with the TCP-level bounds, and it finished once the gate opened.
+    assert asked.get("keepalives") == 1 and "tcp_user_timeout" in asked, asked
+    with worker._INCIDENT_LOCK:
+        writer = worker._WRITER
+    writer.join(60)
+    assert not writer.is_alive()
 
 
 def test_a_check_is_windowed_by_when_it_was_answered(conn, page_conn, opened):

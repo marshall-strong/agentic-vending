@@ -265,6 +265,13 @@ def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None, p
                                       " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run and run["status"] == "running" and now - run["started_at"] > STALE_RUN:
         run["stale"] = True
+    # The latest run still `running` past the stale bound (`STALE_RUN`), whatever the newest run
+    # is: a run the worker probably lost stays on the banner while a retry runs, and only a run
+    # finishing resolves it (`build_alerts`).
+    stuck = _optional(conn, "select id, started_at from agent_runs"
+                            " where mode = 'live' and started_at <= %s and started_at < %s"
+                            " and status = 'running'"
+                            " order by started_at desc, id desc limit 1", (now, now - STALE_RUN))
     # The latest run that FINISHED, whatever it ended as. A failure banner stays until a later run
     # finishes successfully, so a retry that is still running must not hide the run before it.
     last_finished = _optional(conn, "select id, started_at, finished_at, status from agent_runs"
@@ -274,7 +281,8 @@ def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None, p
                            " order by at desc, id desc limit 1", (now, opening, list(PRE_OPENING_WRITES)))
     return {"halted": halted, "halt_changed_at": flag and flag["updated_at"],
             "halt_changed_by": flag and flag["updated_by"], "latest_run": run,
-            "last_finished": last_finished, "last_action": last, "next_cutoff": next_cutoff(now)}
+            "last_finished": last_finished, "stuck_run": stuck, "last_action": last,
+            "next_cutoff": next_cutoff(now)}
 
 
 def _our_slots(conn: psycopg.Connection) -> dict:
@@ -1172,6 +1180,11 @@ def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
 ALERT_LABELS = {"sync_failed": "Sync round failed", "run_failed": "Agent run failed",
                 "run_halted": "Agent run halted", "run_stuck": "Agent run stuck",
                 "tracking_outside": "Tracking check outside", "missed_run": "Scheduled run missed"}
+# Each banner line's group (`data-kind` on the line): during an outage the refresh handler
+# (`SCRIPT`) adds, replaces or removes only the sync line - the one the worker can name without
+# the database - and the run and tracking lines stay until a refresh that read the database.
+ALERT_GROUPS = {"sync_failed": "sync", "run_failed": "run", "run_halted": "run",
+                "run_stuck": "run", "tracking_outside": "tracking", "missed_run": "run"}
 
 
 def build_alerts(snap: dict) -> list[dict]:
@@ -1202,6 +1215,13 @@ def build_alerts(snap: dict) -> list[dict]:
     if run and run.get("stale"):
         alerts = [("run_stuck", run["started_at"], run["started_at"],
                    f"Run #{run['id']} has said `running` for {_span(snap['as_of'] - run['started_at'])}: "
+                   "the process probably died.")]
+    elif (stuck := status.get("stuck_run")) and not (done and done["started_at"] > stuck["started_at"]):
+        # The newest run isn't stuck (a newer one started), but an older run is still `running`
+        # past the stale bound and no run has finished since it started: the retry the team began
+        # doesn't resolve it - only a run finishing does.
+        alerts = [("run_stuck", stuck["started_at"], stuck["started_at"],
+                   f"Run #{stuck['id']} has said `running` for {_span(snap['as_of'] - stuck['started_at'])}: "
                    "the process probably died.")]
     elif run and run["status"] in ("failed", "halted"):
         kind, at, text = _run_alert(run, status)
@@ -1263,23 +1283,27 @@ def outage_alerts(syncs: dict | None) -> list[dict]:
     return build_alerts({"syncs": syncs, "status": {}, "tracking": None})
 
 
-def outage_page(message: str, alerts: list[dict]) -> str:
+def outage_page(message: str, alerts: list[dict], outage: bool = False) -> str:
     """The page `/dashboard` answers with when the database can't be read: why the rest is missing,
     plus the failure banner the worker knows on its own (`outage_alerts`). The page's refresh
-    handler swaps this banner in during an outage (`SCRIPT`), so a failed sync round shows without
-    Postgres. It marks the page (`data-sync-ok`): the handler tells this outage page from any other
-    error reply, and an outage with nothing failing — a recovered sync round, the database still
-    down — clears a stale banner instead of throwing and keeping it."""
+    handler swaps this banner's sync line in during an outage (`SCRIPT`), so a failed sync round
+    shows without Postgres. `outage` marks the page (`data-sync-ok`) when this is the worker's
+    real outage reply - the database couldn't be read, and the syncs handed over are the worker's
+    own - so the handler can tell it from any other error reply, and from an outage with nothing
+    failing (a recovered sync round, the database still down), which clears a stale line instead
+    of throwing and keeping it. A generic 500 - a bug drawing the page, not an outage - carries
+    neither the marker nor the banner, and what is shown stays."""
     body = (f'<header class="top">{mascot_svg("problem")}<h1>Agent dashboard</h1>'
             f'<span class="verdict problem">No data</span></header>'
             f'<ul class="attention"><li class="bad"><span class="dot">!</span><span>'
             f"Can't read the database: {_e(message)}. This page tries again every {REFRESH_SECONDS} s."
             '</span></li></ul>')
+    marker = ' data-sync-ok="1"' if outage else ""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">'
             f'<title>Problem &middot; Agent dashboard</title>'
-            f'<style>{STYLE}</style></head><body><main data-sync-ok="1">{_alerts_html(alerts)}{body}</main></body></html>')
+            f'<style>{STYLE}</style></head><body><main{marker}>{_alerts_html(alerts)}{body}</main></body></html>')
 
 
 def verdict(items: list[dict]) -> str:
@@ -2129,12 +2153,17 @@ def _attention_html(items: list[dict]) -> str:
 def _alerts_html(alerts: list[dict]) -> str:
     """The page-top failure banner (#220): one line per current failure, or nothing when all is
     well. The words are the code's own (`build_alerts`), the time is Eastern, and no failure's
-    text reaches it."""
+    text reaches it. Each line carries its group (`data-kind`): the refresh handler's outage swap
+    (`SCRIPT`) replaces only the sync line, the one the worker can name without the database."""
     if not alerts:
         return ""
-    lines = "".join(f'<p><b>{_e(ALERT_LABELS.get(a["kind"], a["kind"]))}</b> '
-                    f'{_code(_e(a["text"]))} {_time(a["at"], "et")}</p>' for a in alerts)
-    return f'<div class="failbanner" role="alert">{lines}</div>'
+
+    def line(a: dict) -> str:
+        kind = ALERT_GROUPS.get(a["kind"], "run")
+        label = _e(ALERT_LABELS.get(a["kind"], a["kind"]))
+        return f'<p data-kind="{kind}"><b>{label}</b> {_code(_e(a["text"]))} {_time(a["at"], "et")}</p>'
+
+    return f'<div class="failbanner" role="alert">{"".join(line(a) for a in alerts)}</div>'
 
 
 def _code(text: str) -> str:
@@ -2786,31 +2815,35 @@ SCRIPT = """(function () {
       // Signed out (the password's cookie ran out): reload, so the password page shows.
       if (r.redirected && new URL(r.url).pathname === '/login') { location.reload(); throw new Error('signed out'); }
       if (!r.ok) return r.text().then(function (html) {
-        // The database is down (503). The outage page still carries the worker's own banner, so a
-        // failed sync round shows without Postgres: swap just the banner in and keep the rest of
-        // the page as it is. The outage page marks itself (data-sync-ok), so an outage where the
-        // recovered sync names nothing clears the stale banner; any other error reply (a proxy's)
-        // isn't ours to read, and what is shown stays.
+        // The database is down (503). The outage page still carries the worker's own sync line, so
+        // a failed sync round shows without Postgres: swap just that line in and keep the rest of
+        // the page as it is. Only the worker's real outage reply marks itself (data-sync-ok); any
+        // other error reply (a proxy's 502, a 500 of ours) isn't ours to read, and what is shown
+        // stays.
         var doc = new DOMParser().parseFromString(html, 'text/html');
         if (!doc.querySelector('[data-sync-ok]')) throw new Error(r.status);
-        var banner = doc.querySelector('.failbanner');
-        return {failbanner: banner ? banner.innerHTML : ''};
+        var line = doc.querySelector('.failbanner [data-kind="sync"]');
+        return {syncline: line ? line.outerHTML : ''};
       });
       return r.text().then(function (html) { return {page: html}; });
     }).then(function (got) {
-      if (got.failbanner !== undefined) {
+      if (got.syncline !== undefined) {
+        // An outage names only the sync round: add, replace or remove just that line, and leave
+        // the run and tracking lines - which the outage cannot check - for a refresh that read
+        // the database.
         var main0 = document.querySelector('main'), box = main0.querySelector('.failbanner');
-        if (!got.failbanner) {
-          if (box) box.remove();
-          failed = true; times();
-          return;
+        var old = box && box.querySelector('[data-kind="sync"]');
+        if (old) old.remove();
+        if (got.syncline) {
+          if (!box) {
+            box = document.createElement('div');
+            box.className = 'failbanner'; box.setAttribute('role', 'alert');
+            main0.insertBefore(box, main0.firstChild);
+          }
+          box.innerHTML = got.syncline + box.innerHTML;   // the sync line goes first, as drawn
+        } else if (box && !box.innerHTML) {
+          box.remove();                                   // the last line went: no banner at all
         }
-        if (!box) {
-          box = document.createElement('div');
-          box.className = 'failbanner'; box.setAttribute('role', 'alert');
-          main0.insertBefore(box, main0.firstChild);
-        }
-        box.innerHTML = got.failbanner;
         failed = true; times();
         return;
       }

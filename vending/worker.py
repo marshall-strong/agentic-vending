@@ -116,9 +116,23 @@ class JobResult:
 PENDING_MAX = 48
 
 # How long the incident write (`record_rounds`) waits for a lock or for the database itself. A
-# timeout raises there, `record_failed_round` logs it and keeps the round in its wait list, and the
-# sync moves on to its next round — an exclusive lock on `sync_incidents` must not stall it.
+# timeout raises there, the writer logs it and keeps the round in its wait list, and the sync
+# moves on to its next round — an exclusive lock on `sync_incidents` must not stall it.
 WRITE_TIMEOUT = "5s"
+
+# TCP bounds on the incident writer's connection (libpq connect parameters): a connection that
+# goes silent after login — a dropped tunnel, a dead NAT — must die at the TCP layer instead of
+# blocking the write for the OS's retransmit time. No server-side timeout can do that: a query
+# that never reaches the server has no server to time it out. `tcp_user_timeout` bounds a stalled
+# send where the kernel supports it (libpq ignores it where it doesn't); the keepalives cover the
+# silent rest, about half a minute to a dead connection.
+INCIDENT_TCP = {"keepalives": 1, "keepalives_idle": 15, "keepalives_interval": 5,
+                "keepalives_count": 3, "tcp_user_timeout": 15000}
+
+# The one incident write in flight (`record_failed_round`): the round loop only queues and starts
+# the writer, so a database that never answers cannot stall the next round.
+_INCIDENT_LOCK = threading.Lock()
+_WRITER: threading.Thread | None = None
 
 
 @dataclass
@@ -177,30 +191,65 @@ def record_rounds(rows: list, conn) -> bool:
     return True
 
 
-def record_failed_round(state: State, pending: list, log: Callable[[str], None] = print) -> None:
+def record_failed_round(state: State, pending: list,
+                        log: Callable[[str], None] = print) -> threading.Thread | None:
     """Keep one `sync_incidents` row per failed round (migration 026), for the dashboard's incident
     log: a round that failed must stay listed after a later round passes, so the row is written when
     the round ends, not derived from the latest one. The row carries what /health shows (each job's
-    name, exit code, outcome), never error text. A round the database refuses — it is down, like the
-    round's own jobs were — waits in `pending` and is written after a later round. Recording is
-    best-effort: a failure is logged, and never stops the rounds."""
+    name, exit code, outcome), never error text.
+
+    The write runs off the scheduling path (`_write_incidents`): this queues the round and starts
+    the one background writer if none is in flight, and returns it — None when one is already
+    running, whose next run takes the new rows, or a later round starts a fresh writer. A round the
+    database refuses — it is down, like the round's own jobs were — waits in `pending` and is
+    written after a later round. Recording is best-effort: a failure is logged, and never stops the
+    rounds."""
     from vending import settings
 
     if not state.healthy and state.last_round_at:
-        pending.append((state.last_round_at,
-                        [{"job": r.job, "exit_code": r.exit_code, "outcome": r.outcome}
-                         for r in state.results]))
-        del pending[:-PENDING_MAX]
+        with _INCIDENT_LOCK:
+            pending.append((state.last_round_at,
+                            [{"job": r.job, "exit_code": r.exit_code, "outcome": r.outcome}
+                             for r in state.results]))
+            del pending[:-PENDING_MAX]
     if not pending or not settings.get("DATABASE_URL"):
+        return None
+    return start_incident_writer(pending, log)
+
+
+def start_incident_writer(pending: list,
+                          log: Callable[[str], None] = print) -> threading.Thread | None:
+    """Start the background writer for the queued rounds, unless one is already in flight: a
+    database that never answers then holds that one thread, and the rounds go on queueing for its
+    next run (or a later round's writer)."""
+    global _WRITER
+    with _INCIDENT_LOCK:
+        if _WRITER is not None and _WRITER.is_alive():
+            return None
+        _WRITER = threading.Thread(target=_write_incidents, args=(pending, log),
+                                   name="sync-incidents", daemon=True)
+        _WRITER.start()
+        return _WRITER
+
+
+def _write_incidents(pending: list, log: Callable[[str], None]) -> None:
+    """The background writer: take everything queued, write it under the same timeouts as before
+    (`record_rounds`), on a connection bounded at the TCP layer (`INCIDENT_TCP`), and put the rows
+    back at the front of the queue when the database refuses."""
+    with _INCIDENT_LOCK:
+        rows, pending[:] = pending[:], []
+    if not rows:
         return
     try:
         from vending.db import connect
 
-        with connect() as conn:
-            if record_rounds(pending, conn):
-                pending.clear()
+        with connect(**INCIDENT_TCP) as conn:
+            record_rounds(rows, conn)
     except Exception as problem:  # noqa: BLE001 - recording an incident must never stop the rounds
         log(f"sync_incidents: {_describe(problem)}")
+        with _INCIDENT_LOCK:
+            pending[:0] = rows
+            del pending[:-PENDING_MAX]
 
 
 def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: float | None = None,
@@ -681,6 +730,12 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         if server is not None:
             server.shutdown()
             server.server_close()
+        # Give an in-flight incident write a bounded chance to land before the process leaves (it
+        # is bounded at the TCP layer and by `WRITE_TIMEOUT`): a hung one dies with the process.
+        with _INCIDENT_LOCK:
+            writer = _WRITER
+        if writer is not None:
+            writer.join(30)
 
 
 if __name__ == "__main__":

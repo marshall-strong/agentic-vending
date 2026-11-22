@@ -26,6 +26,8 @@ class Node {
   get id() { return this.attrs.id || ""; }
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
+  get className() { return this.attrs["class"] || ""; }
+  set className(v) { this.attrs["class"] = String(v); }
   removeAttribute(k) { delete this.attrs[k]; }
   hasAttribute(k) { return k in this.attrs; }
   get classList() { const c = (this.attrs["class"] || "").split(/\s+/).filter(Boolean);
@@ -52,6 +54,12 @@ class Node {
     parse(html, this);
   }
   get innerHTML() { return serialize(this); }
+  get outerHTML() { const tag = this.tagName.toLowerCase();
+    const a = Object.entries(this.attrs).map(([k, v]) => ` ${k}="${String(v).replace(/"/g, "&quot;")}"`).join("");
+    return `<${tag}${a}>${this.text}${serialize(this)}</${tag}>`; }
+  get firstChild() { return this.children[0] || null; }
+  insertBefore(n, ref) { const i = ref ? this.children.indexOf(ref) : this.children.length;
+    this.children.splice(i < 0 ? this.children.length : i, 0, n); n.parentNode = this; return n; }
   focus() { if (document.contains(this)) document.activeElement = this; }
   blur() { document.activeElement = document.body; }
   remove() { const p = this.parentNode, i = p ? p.children.indexOf(this) : -1;
@@ -113,6 +121,7 @@ document.body = document.appendChild(new Node("body"));
 document.activeElement = document.body;
 document.hidden = false; document.title = "";
 document.addEventListener = on("document");
+document.createElement = tag => new Node(tag);
 document.getElementById = id => document.querySelector("#" + id);
 // A media query against the viewport's WIDTH: every (min-width) and (max-width) in it must hold.
 const media = q => [...q.matchAll(/\((min|max)-width:\s*(\d+)px\)/g)].every(([, k, n]) =>
@@ -232,46 +241,111 @@ def test_a_direct_pick_link_lands_on_the_close_up_at_tablet_width(tmp_path, widt
     ''', width=width, hash="#sel-46")
 
 
-def test_an_outage_clears_or_swaps_only_the_banner_and_an_unmarked_error_keeps_it(tmp_path):
-    """The refresh handler's outage behaviour, run under the same DOM stand-in: a marked outage page
-    (`data-sync-ok`) swaps its banner in, or clears the stale one when the recovered sync names
-    nothing, while the rest of the page stays; an error page without the marker changes nothing."""
-    run_script(tmp_path, r'''
+def test_an_outage_swaps_only_the_sync_line_and_an_unmarked_error_keeps_the_rest(tmp_path):
+    """The refresh handler's outage behaviour, run under the same DOM stand-in: an outage swaps
+    only the sync line in - the one line the worker can name without the database - and leaves
+    the run and tracking lines it cannot check, until a refresh that read the database replaces
+    the page. A marked outage with a recovered sync removes only the sync line; an error page
+    without the marker (a proxy's 502, a 500 of ours) changes nothing."""
+    at = NOW
+    seed = dashboard._alerts_html([
+        {"kind": "sync_failed", "at": at, "text": "`sync_history` exit 3"},
+        {"kind": "run_failed", "at": at, "text": "Run #9 failed. See Runs below."},
+        {"kind": "tracking_outside", "at": at,
+         "text": "The bridge's tracking check said cash outside"}])
+    failing = dashboard.outage_page(
+        "Can't read the database: the server closed the connection",
+        dashboard.outage_alerts({"rounds": 1, "last_round_at": at.isoformat(),
+                                 "results": [{"job": "sync_history", "exit_code": 9,
+                                              "outcome": "finished"}]}), outage=True)
+    recovered = dashboard.outage_page(
+        "Can't read the database: the server closed the connection",
+        dashboard.outage_alerts({"rounds": 1, "last_round_at": at.isoformat(),
+                                 "results": [{"job": "sync_history", "exit_code": 0,
+                                              "outcome": "finished"}]}), outage=True)
+    run_script(tmp_path, f'''
+      const SEED = {json.dumps(seed)};
+      const FAILING = {json.dumps(failing)};
+      const RECOVERED = {json.dumps(recovered)};
       var main = document.querySelector("main");
-      var clean = main.innerHTML;          // the page without any banner
-      // The page as last drawn carries a stale banner: the outage before the sync recovered.
-      main.innerHTML = '<div class="failbanner" role="alert"><p><b>Sync round failed</b> `sync_history` exit 3</p></div>'
-                       + clean;
-      const outage = (banner) => '<!doctype html><html><head><title>Problem</title></head><body><main data-sync-ok="1">'
-        + (banner ? '<div class="failbanner" role="alert"><p><b>Sync round failed</b> `sync_history` exit 9</p></div>' : '')
-        + clean + '</main></body></html>';
-      const serve = (ok, status, html) => { RESP = () => Promise.resolve(
-        {ok, status, redirected: false, text: () => Promise.resolve(html)}); };
+      const clean = main.innerHTML;          // the page without any banner
+      const serve = (ok, status, html) => {{ RESP = () => Promise.resolve(
+        {{ok, status, redirected: false, text: () => Promise.resolve(html)}}); }};
+      const kinds = () => Array.prototype.map.call(
+        document.querySelectorAll("main .failbanner [data-kind]"),
+        n => n.getAttribute("data-kind")).join(",");
+      const reseed = () => {{ main = document.querySelector("main"); main.innerHTML = SEED + clean; }};
 
-      // The outage still failing: only the banner is swapped in, the rest of the page stays.
-      serve(false, 503, outage(true));
+      // The page as last drawn carries all three lines: sync, run and tracking.
+      reseed();
+      assert(kinds() === "sync,run,tracking", "the page starts with all three: " + kinds());
+
+      // An outage whose sync still failed: only the sync line is swapped in, the rest stays.
+      serve(false, 503, FAILING);
       await refresh();
       var box = document.querySelector("main .failbanner");
-      assert(box && box.textContent.indexOf("exit 9") >= 0, "the outage banner was swapped in");
+      assert(box.textContent.indexOf("exit 9") >= 0, "the outage sync line was swapped in");
+      assert(kinds() === "sync,run,tracking", "one line each, still three: " + kinds());
       assert(document.querySelector("main .vm"), "the rest of the page survived the swap");
 
-      // Recovered sync, still no database: a marked outage page with no banner clears the stale one.
-      serve(false, 503, outage(false));
-      await refresh();
-      assert(!document.querySelector("main .failbanner"), "the marked outage cleared the stale banner");
-      assert(document.querySelector("main .vm"), "the rest of the page survived the clear");
-
-      // Another error page without the marker (a proxy's): what is shown stays.
-      main = document.querySelector("main");
-      main.innerHTML = '<div class="failbanner" role="alert"><p><b>Sync round failed</b> stale</p></div>' + main.innerHTML;
-      serve(false, 502, "<html><body><h1>502 Bad Gateway</h1></body></html>");
+      // Recovered sync, still no database: only the sync line goes; run and tracking stay.
+      serve(false, 503, RECOVERED);
       await refresh();
       box = document.querySelector("main .failbanner");
-      assert(box && box.textContent.indexOf("stale") >= 0, "an unmarked error page keeps what is shown");
+      assert(kinds() === "run,tracking", "only the sync line was cleared: " + kinds());
+      assert(box.textContent.indexOf("Run #9") >= 0 && box.textContent.indexOf("cash outside") >= 0,
+             "the lines the outage cannot check stayed: " + box.textContent);
+
+      // A database-backed refresh replaces the page: the run and tracking lines go with it.
+      RESP = null;
+      await refresh();
+      assert(!document.querySelector("main .failbanner"), "the real refresh cleared them");
+
+      // Another error page without the marker (a proxy's): what is shown stays.
+      reseed();
+      serve(false, 502, "<html><body><h1>502 Bad Gateway</h1></body></html>");
+      await refresh();
+      assert(kinds() === "sync,run,tracking", "an unmarked error page keeps what is shown: " + kinds());
+
+      // A generic 500 of ours is not the outage either: no marker, nothing changes.
+      serve(false, 500, "<html><body><h1>Agent dashboard</h1></body></html>");
+      await refresh();
+      assert(kinds() === "sync,run,tracking", "a 500 without the marker changes nothing: " + kinds());
 
       // The outage page never takes the page down: a fetch that throws is the old failed-refresh path.
       RESP = () => Promise.reject(new Error("gone"));
       await refresh();
       assert(document.querySelector("main .failbanner"), "a failed fetch keeps the last page");
+      RESP = null;
+    ''')
+
+
+def test_an_outage_puts_the_banner_on_a_page_without_one(tmp_path):
+    """The outage test above starts from a page that already carries a banner, so the handler's
+    first-banner insertion was never exercised. From a healthy page with no banner, the real
+    failed-round 503 body (`outage_page` over the worker's own failed round) must make the alert
+    appear - and leave the rest of the page alone."""
+    from vending import worker
+    state = worker.State()
+    state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+    state.rounds, state.last_round_at = 1, NOW.isoformat()
+    body = dashboard.outage_page("Can't read the database: connection refused",
+                                 dashboard.outage_alerts(state.public()), outage=True)
+    assert 'data-sync-ok="1"' in body   # the handler only reads a marked outage reply
+    run_script(tmp_path, f'''
+      const OUTAGE = {json.dumps(body)};
+      const serve = (ok, status, html) => {{ RESP = () => Promise.resolve(
+        {{ok, status, redirected: false, text: () => Promise.resolve(html)}}); }};
+      assert(!document.querySelector("main .failbanner"), "the healthy page starts with no banner");
+      serve(false, 503, OUTAGE);
+      await refresh();
+      const box = document.querySelector("main .failbanner");
+      assert(box, "the outage put the failure banner on the page");
+      assert(box.textContent.indexOf("sync_history") >= 0 && box.textContent.indexOf("exit 3") >= 0,
+             "the alert names the failed job: " + box.textContent);
+      assert(document.querySelector("main .vm"), "the rest of the page survived");
+      // The sync line goes back into the first position, where the page draws it.
+      assert(document.querySelector('main .failbanner [data-kind="sync"]') === box.children[0],
+             "the sync line is the banner's first line");
       RESP = null;
     ''')
