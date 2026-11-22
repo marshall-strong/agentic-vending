@@ -162,8 +162,8 @@ def test_the_default_jobs_never_migrate(monkeypatch):
 
     In production the worker runs these against the shared Azure database at every
     start and every hour, so a sync that migrated would change its schema on deploy.
-    The wake job refuses the same way when it is on; here it is switched on so this
-    covers it too.
+    The wake job refuses the same way when it is on and the slot check passed; here it
+    is switched on so this covers it too.
     """
     pytest.importorskip("psycopg")
     from vending import db
@@ -176,7 +176,15 @@ def test_the_default_jobs_never_migrate(monkeypatch):
     results = worker.run_round(worker.default_jobs(), log=lambda _: None)
     assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog", "sync_product_requests", "midweek_wake"]
     assert migrated == []
-    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 6
+    # The wake job runs only after a slot check that passed, so this round it skips (exit 0).
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 5 + [("finished", 0)]
+    # With the slot check passing, the wake job refuses the database that is behind too.
+    from vending import slots
+
+    monkeypatch.setattr(slots, "main", lambda argv: 0)
+    results = worker.run_round(worker.default_jobs(), log=lambda _: None)
+    assert migrated == []
+    assert [(r.job, r.exit_code) for r in results][-1] == ("midweek_wake", 2)
 
 
 # --- The home page at / (#54) -----------------------------------------------------

@@ -18,7 +18,7 @@ import pytest
 
 from tests.conftest import TEST_SLOTS, store_poll
 from tests.test_dashboard import fulfilled
-from vending import config, db, ledger, midweek_wake, planner, planning, settings, sourcing
+from vending import config, db, ledger, midweek_wake, planner, planning, settings, sourcing, submissions
 from vending.midweek_wake import Outlook, at_risk, decide, window
 
 # Monday 7 Dec 2026, noon Eastern (EST, UTC-5): inside the term, week of Sat 5 Dec.
@@ -214,6 +214,21 @@ def test_back_stock_of_unknown_cost_counts_nothing():
     assert any("cost of what the visit loads is unknown" in line for line in logged)
 
 
+def test_an_unused_lot_of_unknown_cost_leaves_the_drawn_lots_priced():
+    """Sol, round 3: two slots draw 16 known cans at 50 cents; 4 more WAKE-SKU of unknown cost
+    can't cover the third slot's 8, so it buys and those 4 stay unused. Only the lots a line
+    draws decide whether its cost is known, so the wake keeps its $26.57."""
+    closet = (planner.ClosetStock(SKU, 16, 50), planner.ClosetStock(SKU, 4, None))
+    wake = wake_for(FOUR[:3], closet=closet)
+    assert wake is not None
+    saved = 2 * Fraction("2.708") * (Fraction(PRICE) / Fraction(108, 100) - 50) + Fraction("2.708") * MARGIN
+    assert wake.saved_margin_cents == cents(saved) == 2657
+    plan = planning.plan_gathered(machine(FOUR[:3], closet=closet),
+                                  midweek_wake.candidate(at_risk(window(MONDAY), outlooks(FOUR[:3])),
+                                                         machine(FOUR[:3], closet=closet))[0])
+    assert [f.units_loaded_cost_unknown for f in plan.floors if f.slot in FOUR[:3]] == [0, 0, 0]
+
+
 def test_no_decision_after_tuesday_or_before_the_week():
     assert wake_for(FOUR, now=WEDNESDAY) is None                  # the landing is Friday: nothing to save
     assert wake_for(FOUR, now=SATURDAY_BEFORE) is None            # Monday decides, on fresher data
@@ -376,6 +391,23 @@ def test_a_balance_under_the_visit_blocks_the_wake(conn, capsys):
     assert midweek_wake.check(conn, now=MONDAY) is False
     assert midweek_wake.current(conn, MONDAY) is None
     assert "insufficient_balance" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("status", ["sending", "unknown"])
+def test_an_unresolved_submission_blocks_the_wake_until_it_is_settled(conn, capsys, status):
+    """Sol, round 3: preview and submit refuse while a submission is sending or unknown
+    (`submissions.unresolved`), so the wake must too, recording nothing. Once a person
+    settles it, a later round the same week still wakes."""
+    fast_week(conn)
+    row = conn.execute("insert into purchase_submissions (plan_hash, body, status)"
+                       " values ('h', %s::jsonb, %s) returning id",
+                       (json.dumps({"off_cycle": False, "lines": []}), status)).fetchone()[0]
+    assert midweek_wake.check(conn, now=MONDAY) is False
+    assert midweek_wake.current(conn, MONDAY) is None
+    assert "submission_unresolved" in capsys.readouterr().out
+    submissions.resolve(conn, row, None, "tester")
+    assert midweek_wake.check(conn, now=MONDAY + timedelta(minutes=30)) is True
+    assert midweek_wake.current(conn, MONDAY)["slots"] == list(FOUR)
 
 
 def test_an_empty_catalog_copy_skips_without_the_bridge(conn, capsys):
@@ -548,3 +580,28 @@ def test_worker_carries_the_job():
 
     assert worker.JOB_NAMES["midweek_wake"] == "Midweek wake-up check"
     assert [name for name, _ in worker.default_jobs()][-1] == "midweek_wake"   # after the syncs it reads
+
+
+def test_the_wake_waits_for_the_slot_check(monkeypatch):
+    """Sol, round 3: a round whose slot assignment check fails (exit 1) must not run the wake
+    check on slots nobody confirmed; the other syncs run as before."""
+    from vending import slots, sync_catalog, sync_history, sync_product_requests, sync_requests, worker
+
+    for module in (sync_history, sync_requests, sync_catalog, sync_product_requests):
+        monkeypatch.setattr(module, "main", lambda argv: 0)
+    monkeypatch.setenv("MIDWEEK_WAKE", "on")
+    ran = []
+    monkeypatch.setattr(midweek_wake, "job", lambda: ran.append("wake") or 0)
+    monkeypatch.setattr(slots, "main", lambda argv: 1)
+    jobs = worker.default_jobs()
+    results = worker.run_round(jobs, log=lambda _: None)
+    assert ran == []
+    assert [(r.job, r.exit_code) for r in results] == [
+        ("slots_check", 1), ("sync_history", 0), ("sync_requests", 0), ("sync_catalog", 0),
+        ("sync_product_requests", 0), ("midweek_wake", 0)]
+    monkeypatch.setattr(slots, "main", lambda argv: 0)
+    worker.run_round(jobs, log=lambda _: None)                    # the same job list, next round
+    assert ran == ["wake"]
+    monkeypatch.setattr(slots, "main", lambda argv: (_ for _ in ()).throw(RuntimeError("boom")))
+    worker.run_round(jobs, log=lambda _: None)                    # a crashed check gates it too
+    assert ran == ["wake"]

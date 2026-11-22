@@ -10,7 +10,8 @@ Each round runs, in order, `python -m vending.slots check`,
 only confirms our slot assignment: if the server gives a different one, or none
 is stored, it changes nothing and fails the round until a person runs
 `python -m vending.slots record` (`vending.slots`). The wake check runs after the
-syncs, so it reads what they just stored; it is off unless `MIDWEEK_WAKE=on`, and
+syncs, so it reads what they just stored, and only in a round whose `slots check`
+passed (it plans on our slots); it is off unless `MIDWEEK_WAKE=on`, and
 off it does nothing and opens no connection (`vending.midweek_wake`). The hourly rounds run at
 SYNC_AT_MINUTE (5) minutes past the hour, UTC, because the course staff's poller
 reads the machine on the hour: a new poll reaches the dashboard about five
@@ -93,14 +94,33 @@ Job = tuple[str, Callable[[], int]]
 def default_jobs() -> list[Job]:
     from vending import midweek_wake, slots, sync_catalog, sync_history, sync_product_requests, sync_requests
 
-    return [("slots_check", lambda: slots.main(["check"])),
+    # The wake check plans on our slots, so it runs only in a round whose slot check passed.
+    # The list is built once and reused every round: the check leaves its exit code here and
+    # the wake job takes it out, so a check that crashed, timed out or was skipped this round
+    # leaves nothing and the wake job skips. The syncs don't wait on it.
+    checked: dict[str, int] = {}
+
+    def slots_check() -> int:
+        checked.pop("code", None)
+        checked["code"] = code = slots.main(["check"])
+        return code
+
+    def wake() -> int:
+        if checked.pop("code", None) != 0:
+            if midweek_wake.enabled():
+                print("midweek_wake: skipped, our slot assignment check did not pass this round")
+            return 0
+        return midweek_wake.job()
+
+    return [("slots_check", slots_check),
             ("sync_history", lambda: sync_history.main([])),
             ("sync_requests", lambda: sync_requests.main([])),
             ("sync_catalog", lambda: sync_catalog.main([])),
             ("sync_product_requests", lambda: sync_product_requests.main([])),
-            # After the syncs, so the wake check reads what they just stored. Off unless
-            # MIDWEEK_WAKE=on: then the job does nothing and opens no connection (#219).
-            ("midweek_wake", midweek_wake.job)]
+            # After the syncs, so the wake check reads what they just stored, and only when the
+            # slot check passed. Off unless MIDWEEK_WAKE=on: then the job does nothing and opens
+            # no connection (#219).
+            ("midweek_wake", wake)]
 
 
 @dataclass

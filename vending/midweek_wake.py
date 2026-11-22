@@ -27,7 +27,9 @@ sync round, on a Monday or Tuesday Eastern:
    preview's own path, with a bridge that refuses every call, and no submit. That
    gives whole packs, the configured fee, the closet drawn only for the same product,
    its oldest layers first, and every gate. Any refusal (halt, an open request, the
-   balance, an infeasible slot) records nothing and leaves the week open.
+   balance, an infeasible slot) records nothing and leaves the week open, as does a
+   submission still sending or unknown (`submissions.unresolved`, the gate preview and
+   submit apply).
 3. **Saved margin** = for each restocked at-risk slot, the units the visit actually
    saves (its shortfall after the landing, capped at the units the plan loads into it)
    times shelf price / (1 + tax) less the planner's unit cost for what it loads, at
@@ -71,7 +73,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from fractions import Fraction
 from typing import Callable, Iterable
 
-from vending import class_days, db, demand, ledger, planner, planning, settings, start
+from vending import class_days, db, demand, ledger, planner, planning, settings, start, submissions
 from vending.bridge import BridgeError
 from vending.start import EASTERN
 from vending.tools import desired_state as schema
@@ -230,14 +232,13 @@ def decide(now: datetime, outlooks: Iterable[Outlook], gathered: planning.Gather
         return None
     lines = {line.slot: line for line in plan.lines}
     floors = {f.slot: f for f in plan.floors}
-    unknown = {c.product for c in gathered.current.closet if c.units > 0 and c.unit_cost is None}
     taxed = 1 + Fraction(gathered.config.tax_percent, 100)
     saved, counted = Fraction(0), []
     for r in risks:
         line = lines.get(r.slot)
         if r.slot not in restocked or line is None:
             continue
-        basis = _unit_cost(line, floors.get(r.slot), unknown)
+        basis = _unit_cost(floors.get(r.slot))
         if basis is None:
             log(f"midweek_wake: slot {r.slot}: the cost of what the visit loads is unknown, so the "
                 "sales it saves are counted at nothing")
@@ -266,16 +267,17 @@ def decide(now: datetime, outlooks: Iterable[Outlook], gathered: planning.Gather
                 plan.cost.max_cents)
 
 
-def _unit_cost(line: planner.Line, floor: planner.SlotFloor | None, unknown: set[str]) -> Fraction | None:
-    """The planner's cost per unit for what `line` loads, at the most we pay, or None when unknown.
+def _unit_cost(floor: planner.SlotFloor | None) -> Fraction | None:
+    """The planner's cost per unit for what a line loads, at the most we pay, or None when unknown.
 
     The floor's parts other than units staying put (`planner.ON_HAND`) are exactly what the
     line loads: each purchase option's max per unit, or each closet lot it draws. The dearest
-    is the basis. A closet lot of unknown cost leaves no part, so a back-stock line for a
-    product with one is unknown rather than priced off the lots that are known."""
-    if line.source == planner.BACK_STOCK and line.product in unknown:
+    is the basis. A lot of unknown cost that the line draws leaves no part, so the planner
+    counts those units (`SlotFloor.units_loaded_cost_unknown`) and the line is unknown rather
+    than priced off the lots that are known. Lots it doesn't draw don't matter."""
+    if floor is None or floor.units_loaded_cost_unknown:
         return None
-    costs = [p.unit_cost for p in (floor.parts if floor else ()) if p.source != planner.ON_HAND]
+    costs = [p.unit_cost for p in floor.parts if p.source != planner.ON_HAND]
     return max(costs) if costs else None
 
 
@@ -309,9 +311,10 @@ def evaluate(conn, now: datetime | None = None, log=print) -> Wake | None:
     The projection comes from `get_machine_state` (polls, receipts, a person's count and
     the rate); the plan from `planning.gather_live` and `planning.plan_gathered`, the
     preview's path, with the bridge refused. Skips when the latest poll is stale (an old
-    poll overstates what is on the rails) or the halt switch is on (the planner would
-    refuse; the week stays open for when it is off). Refuses before the competition
-    starts. Raises `planning.NotReady` when a person has to act first. Every outcome is
+    poll overstates what is on the rails), the halt switch is on (the planner would
+    refuse; the week stays open for when it is off), or a submission is still sending or
+    unknown (`submissions.unresolved`: preview and submit refuse then too). Refuses before
+    the competition starts. Raises `planning.NotReady` when a person has to act first. Every outcome is
     logged: a None says "nothing to record", and the log says which skip or no it was.
     """
     now = now or ledger.db_now(conn)
@@ -323,6 +326,12 @@ def evaluate(conn, now: datetime | None = None, log=print) -> Wake | None:
     if cfg.halted:
         log(f"midweek_wake: skipped, {planning.HALTED_HINT}; nothing is recorded, so the week can "
             "still wake once it is off")
+        return None
+    # The gate preview and submit apply: a submission still sending or unknown may already be
+    # on the bridge, so no visit can be submitted until a person settles it (#219, Sol round 3).
+    if open_submission := submissions.unresolved(conn):
+        log(f"midweek_wake: skipped, {open_submission.code}: {open_submission.message}; nothing is "
+            "recorded, so the week can still wake once it is settled")
         return None
     state = machine_state.get_machine_state(conn, now=now)
     if not state.success:
@@ -344,8 +353,8 @@ def evaluate(conn, now: datetime | None = None, log=print) -> Wake | None:
 
 
 def eligible(conn, now: datetime | None = None, log=print) -> Wake | None:
-    """The one path to a wake: the start, this week's row, then `evaluate` (halt, the
-    projection, and the planner's gates: an open request, the balance, feasibility).
+    """The one path to a wake: the start, this week's row, then `evaluate` (halt, an unsettled
+    submission, the projection, and the planner's gates: an open request, the balance, feasibility).
 
     The worker's pass (`check`) records what this returns; `--check` prints it. None,
     logged, when nothing would be recorded.
