@@ -2,6 +2,7 @@
 local fake bridge from `tests/test_desired_state.py`."""
 
 import http.client
+import json
 import socket
 import threading
 
@@ -446,6 +447,90 @@ def test_cli_lists_and_resolves(db, fake, schema_url, monkeypatch, capsys):  # n
     assert "not sending or unknown" in capsys.readouterr().err
     assert submissions.main(["list"]) == 0
     assert "Nothing to settle" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("given", ["", "   "])
+def test_an_empty_request_id_is_refused_and_the_row_stays_open(db, fake, schema_url, monkeypatch, capsys, given):  # noqa: F811
+    """Sol round 4, finding 3: `--request-id ""` is a typo, not `--not-filed`. It used to mark the row never
+    filed, which unblocks the next submit; now it exits nonzero and writes nothing."""
+    prepared(db)
+    fake.answer = (503, {"detail": "down"})
+    submit()
+    from vending import db as db_module
+    monkeypatch.setattr(db_module, "connect", lambda: open_in(*schema_url))
+    assert submissions.main(["resolve", "1", "--request-id", given, "--by", "kevin"]) == 1
+    assert "--request-id is empty" in capsys.readouterr().err
+    assert db.execute("select status, request_id, resolved_by from purchase_submissions").fetchall() == [
+        ("unknown", None, None)]
+    assert db.execute("select count(*) from action_log where tool = 'submissions.resolve'").fetchone() == (0,)
+    with pytest.raises(ValueError, match="empty"):
+        submissions.resolve(db, 1, given, "kevin")
+    assert codes(submit()) == ["submission_unresolved"] and len(fake.posts) == 1
+
+
+def test_a_fulfillment_committed_while_submit_reads_never_files_the_plan_twice(db, fake, monkeypatch):  # noqa: F811
+    """Sol round 4, finding 1. The receipt sync fulfills pr-1 on another connection after the second submit
+    has read the receipts but before it reads the pending requests (as the old order did). Read that way it
+    saw neither the delivery nor a pending request, and sent the same plan again. Pending requests are now
+    read first, so the request is still pending to it and the plan is refused."""
+    from vending import planning
+    prepared(db)
+    assert submit()["success"] and len(fake.posts) == 1
+    real = planning._latest_prices
+    fired = []
+
+    def fulfil_then_read(conn, slots):
+        if not fired:
+            fired.append(True)
+            store(db, "pr-1", fulfilled("pr-1", receipt(units_loaded=7, units_to_back_stock=4,
+                                                        resolved_at="2026-11-09T11:00:00Z")),
+                  NOW)
+        return real(conn, slots)
+
+    monkeypatch.setattr(planning, "_latest_prices", fulfil_then_read)
+    again = submit()
+    assert fired and not again["success"] and codes(again) == ["request_pending"]
+    assert len(fake.posts) == 1
+    assert db.execute("select status from purchase_requests where request_id = 'pr-1'").fetchone() == ("fulfilled",)
+
+
+def test_a_slow_body_after_connection_close_frees_the_write_lock_at_the_deadline(db, fake, schema_url, monkeypatch):  # noqa: F811
+    """Sol round 4, finding 2: a `201` with `Connection: close` whose headers come at once and whose body
+    drips. `http.client` drops `conn.sock`, so the deadline had no socket to shut and the submit held the
+    write lock for as long as the body took. It now ends at the deadline (here 2 s, not 30, to keep the test
+    short), the row is `unknown`, and the lock is free."""
+    import time
+
+    from vending import bridge as bridge_module
+    from vending.config import is_halted
+    from vending.tools import submit as submit_tool
+    from vending.write_gate import run_write
+    monkeypatch.setattr(bridge_module, "PURCHASE_DEADLINE_SECONDS", 2)
+    prepared(db)
+    fake.answer = (201, {})
+    fake.raw = json.dumps({"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}).encode()
+    fake.headers, fake.drip = {"Connection": "close"}, 0.25     # the body alone would take about 18 s
+    plan = desired(restock_15(fill_to=15), sourcing=[coke_sourcing()])
+    replies = []
+
+    def one():
+        with open_in(*schema_url) as conn:
+            action = submit_tool.submit_desired_state(plan, fake.client, lambda: open_in(*schema_url))
+            replies.append(run_write(conn, "submit_desired_state", {}, action))
+
+    started = time.monotonic()
+    thread = threading.Thread(target=one)
+    thread.start()
+    assert fake.received.wait(10)
+    time.sleep(max(0.0, started + 3.5 - time.monotonic()))      # the deadline plus a margin
+    with db.transaction():
+        db.execute("set local lock_timeout = '200ms'")
+        is_halted(db, lock=True)        # raises LockNotAvailable while the submit still holds it
+    thread.join(timeout=30)
+    [reply] = replies
+    assert reply.status == "unknown" and "within 2 s" in reply.message
+    assert db.execute("select status from purchase_submissions").fetchall() == [("unknown",)]
+    assert len(fake.posts) == 1
 
 
 def test_settle_never_overwrites_a_row_a_person_already_settled(db, schema_url):  # noqa: F811

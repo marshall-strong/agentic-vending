@@ -353,7 +353,8 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
     planner's codes: `plan_changed` (the lines, their worst-case cost or the visit fee changed
     since the preview: preview again) and `submission_unresolved`.
   - Something a person must fix first: `success: false`, "Can't submit yet:" and what to do.
-  - Accepted only on the documented `201`, whole: a body with a `Content-Length` or chunked, read
+  - Accepted only on the documented `201`, whole: a body whose `Content-Length` is one number equal to
+    its size, or chunked with exact framing (each chunk closed by CRLF, ending in the blank line), read
     in full within the 30-second total deadline and the 64 KB cap, `application/json`, not encoded,
     strict JSON with no repeated key, in the `PurchaseRequestPending` shape (`id`,
     `status: pending`, `created_at`), under an ID no other submission or recorded request holds.

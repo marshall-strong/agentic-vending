@@ -328,7 +328,8 @@ side connection opened before anything is sent:
    else, with `created_id` set only for a validated `201`, so that ID survives a settle that fails
    and the next run's check can look it up.
 4. It settles the row on that same connection, one of three ways. `accepted`: only the documented
-   `201`, whole (a `Content-Length` or chunked body read in full, `application/json`, not encoded,
+   `201`, whole (a body read in full whose `Content-Length` is one number equal to its size, or whose
+   chunks are framed exactly, ending in the blank line; `application/json`, not encoded,
    strict JSON with no repeated key, the `PurchaseRequestPending` shape with `status: pending`),
    under an ID no other submission or recorded request holds; the request goes into
    `purchase_requests` in the same transaction, so `python -m vending.sync_requests` reads it back
@@ -359,7 +360,8 @@ python -m vending.submissions resolve 7 --not-filed --by kevin              # it
 python -m vending.submissions check                                         # a validated 201 never recorded
 ```
 
-Resolving with a request ID also records it in `purchase_requests`. Both paths carry the midweek
+Resolving with a request ID also records it in `purchase_requests`. An empty `--request-id` (or only
+spaces) is refused and the row stays open: only `--not-filed` marks a row never filed. Both paths carry the midweek
 visit fee the plan quoted for an off-cycle request (`visit_fee_cents`, saved on the `sending` row
 before the POST), so the ledger charges what was agreed then even if `config.midweek_fee_cents`
 changes later. Every change is logged with the `--by` name.

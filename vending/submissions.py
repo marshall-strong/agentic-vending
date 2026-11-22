@@ -188,7 +188,9 @@ def unresolved(conn: psycopg.Connection) -> Refusal | None:
 
 def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str, *,
             lock_timeout_ms: int | None = None) -> str:
-    """Settle one open row as filed under `request_id`, or as never filed. Returns what was done.
+    """Settle one open row as filed under `request_id`, or as never filed (`request_id` None). Returns what
+    was done. A `request_id` that is given but empty or only spaces raises `ValueError` before anything is
+    written: it is a typo, not "never filed", and the row stays open.
 
     Waits for a submit in flight to finish first. With `lock_timeout_ms`, it gives
     up after that long and raises `psycopg.errors.LockNotAvailable`, so a caller
@@ -196,6 +198,11 @@ def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str
     """
     if not who.strip():
         raise ValueError("--by needs your name")
+    if request_id is not None:
+        request_id = request_id.strip()
+        if not request_id:
+            raise ValueError(f"--request-id is empty, so submission {row} was left open; give the bridge's "
+                             "request ID, or --not-filed if the bridge never filed it")
     with conn.transaction():
         if lock_timeout_ms is not None:
             conn.execute(f"set local lock_timeout = {int(lock_timeout_ms)}")
@@ -209,8 +216,7 @@ def resolve(conn: psycopg.Connection, row: int, request_id: str | None, who: str
         at, status, body, plan_hash, fee = found
         if status not in OPEN:
             raise ValueError(f"Submission {row} is {status}, not sending or unknown; nothing to settle.")
-        if request_id:
-            request_id = request_id.strip()
+        if request_id is not None:
             id_taken(conn, row, request_id)     # an IdTaken is a ValueError: `check` leaves the row open
             conn.execute("update purchase_submissions set status = 'accepted', request_id = %s, resolved_by = %s,"
                          " resolved_at = now() where id = %s", (request_id, who.strip(), row))
@@ -238,7 +244,8 @@ def answers_for(answer: Any, request_id: str) -> str:
         return "the bridge's answer isn't a JSON object"
     if answer.get("id") != request_id:
         return f"the bridge's answer doesn't name {request_id}"
-    if answer.get("status") not in REQUEST_STATUSES:
+    status = answer.get("status")
+    if not isinstance(status, str) or status not in REQUEST_STATUSES:     # `{}` can't even be looked up
         return f"the bridge's answer for {request_id} has no documented status"
     if not (isinstance(answer.get("created_at"), str) and answer["created_at"].strip()):
         return f"the bridge's answer for {request_id} has no creation time"

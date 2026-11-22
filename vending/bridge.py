@@ -219,6 +219,7 @@ class Bridge:
         target = (url.path or "/") + (f"?{url.query}" if url.query else "")
         kind = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
         conn = kind(url.hostname, url.port, timeout=TIMEOUT_SECONDS)
+        conn.response_class = _StrictResponse
         try:
             conn.connect()
         except OSError as error:      # a bad name, a refused connection, a TCP or TLS failure or timeout
@@ -226,13 +227,16 @@ class Bridge:
             raise BridgeUnreachable(
                 f"Could not connect to {self.base_url} ({type(error).__name__}): nothing was sent. "
                 "Is Tailscale connected?") from None
+        # Kept for the deadline: an answer with `Connection: close` makes `getresponse` drop `conn.sock` while
+        # the response goes on reading from the same socket, so `conn.sock` can't be what the deadline shuts.
+        sock = conn.sock
         expired = threading.Event()
 
         def cut() -> None:            # the deadline: end the exchange wherever it is, writing or reading
             expired.set()
             try:
-                conn.sock.shutdown(socket.SHUT_RDWR)
-            except (OSError, AttributeError):
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
                 pass
 
         timer = threading.Timer(PURCHASE_DEADLINE_SECONDS, cut)
@@ -256,10 +260,13 @@ class Bridge:
             raise BridgeNoAnswer(f"{type(error).__name__} once connected{started}: it may have arrived") from None
         finally:
             timer.cancel()
+            if response is not None:
+                response.close()
             conn.close()
+            sock.close()
         if expired.is_set():          # a read the deadline ended can look like the end of the answer
             raise BridgeNoAnswer(f"no whole answer within {PURCHASE_DEADLINE_SECONDS:g} s: it may have arrived")
-        parsed, problem = _strict_json(response, data)
+        parsed, problem = _framing(response, data) or _strict_json(response, data)
         return PostAnswer(response.status, parsed, problem, _printable(data[:PURCHASE_TEXT_CHARS]))
 
     def check_books(self, body: dict) -> dict:
@@ -516,8 +523,9 @@ def _start_of_body(error: urllib.error.HTTPError, size: int = 200) -> bytes:
 
 class PostAnswer(NamedTuple):
     """A purchase POST's whole answer (`Bridge.post_answer`). `body` is the parsed JSON, or None. `problem` is
-    "" only when the answer has a `Content-Length` or is chunked, is `application/json` (UTF-8), not
-    content-encoded, and strict JSON with no repeated key; otherwise it says why not. `text` is the start of the raw body, for the record."""
+    "" only when the answer has a `Content-Length` equal to its size or is chunked, framed exactly (`_framing`),
+    is `application/json` (UTF-8), not content-encoded, and strict JSON with no repeated key; otherwise it says
+    why not. `text` is the start of the raw body, for the record."""
     status: int
     body: Any
     problem: str
@@ -533,6 +541,52 @@ def _printable(data: bytes) -> str:
 
 class _TooLong(Exception):
     pass
+
+
+class _StrictResponse(http.client.HTTPResponse):
+    """A purchase answer whose chunked framing must be exact. `http.client` takes a body that ends at the
+    last chunk's `0` line without the blank line after it, or a chunk followed by any two bytes, as whole;
+    here either raises `IncompleteRead`, so the answer is no answer (`BridgeNoAnswer`), not a `201`."""
+
+    def _read_next_chunk_size(self) -> int:
+        line = self.fp.readline(http.client._MAXLINE + 1)
+        size = line[:-2].split(b";", 1)[0]
+        if not line.endswith(b"\r\n") or not re.fullmatch(rb"[0-9A-Fa-f]{1,16}", size):
+            self._close_conn()
+            raise http.client.IncompleteRead(b"")
+        return int(size, 16)
+
+    def _get_chunk_left(self) -> int | None:
+        if self.chunk_left == 0:      # a chunk's data has been read: the CRLF that closes it, exactly
+            if self._safe_read(2) != b"\r\n":
+                self._close_conn()
+                raise http.client.IncompleteRead(b"")
+            self.chunk_left = None
+        return super()._get_chunk_left()
+
+    def _read_and_discard_trailer(self) -> None:
+        # The answer ends at a blank line (CRLF), after any trailer lines; ending at the connection's close is
+        # not the end of the answer.
+        while True:
+            line = self.fp.readline(http.client._MAXLINE + 1)
+            if line == b"\r\n":
+                return
+            if not line.endswith(b"\r\n") or len(line) > http.client._MAXLINE:
+                raise http.client.IncompleteRead(b"")
+
+
+def _framing(response: http.client.HTTPResponse, data: bytes) -> tuple[None, str] | None:
+    """(None, why) if the body's length isn't shown exactly; None if it is. A chunked body was checked as it was
+    read (`_StrictResponse`). Otherwise `Content-Length` must be one plain number equal to the bytes read:
+    `http.client` treats a length it can't read (`invalid`, `-1`, two values) as none and reads to the close."""
+    if response.chunked:
+        return None
+    length = response.getheader("Content-Length")
+    if length is None:
+        return None, "its body has no length and isn't chunked, so nothing shows it arrived whole"
+    if not re.fullmatch(r"[0-9]{1,12}", length.strip()) or int(length) != len(data):
+        return None, f"its Content-Length {length[:30]!r} isn't the {len(data)} bytes that came"
+    return None
 
 
 def _read_capped(response: http.client.HTTPResponse, limit: int) -> bytes:
@@ -566,8 +620,6 @@ def _no_constant(name: str) -> Any:
 
 def _strict_json(response: http.client.HTTPResponse, data: bytes) -> tuple[Any, str]:
     """(the parsed body, "") or (None, why the answer isn't plain JSON)."""
-    if response.getheader("Content-Length") is None and not response.chunked:
-        return None, "its body has no length and isn't chunked, so nothing shows it arrived whole"
     content_type = response.getheader("Content-Type") or ""
     media, _, params = content_type.partition(";")
     charset = params.strip().lower().replace(" ", "")

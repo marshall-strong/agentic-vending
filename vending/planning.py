@@ -116,6 +116,16 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     settings = planner_config(conn)
     notes: list[str] = []
 
+    # Pending requests first, then the balance and receipts. The receipt sync fulfills a request in one
+    # transaction (its status and its lines together, `purchase_requests.store`), and each read here sees
+    # what had committed when it ran. Read in this order, a fulfillment that lands part way through either
+    # left the request pending when it was read (so the plan is refused, `request_pending`) or committed
+    # before, so the receipts read after it hold its lines. Read the other way round, the stock could miss
+    # the delivery and the request no longer be pending, and the same plan would be ordered twice (#217).
+    # A repeatable-read snapshot wouldn't help: the write gate's first statement waits for the halt lock,
+    # and the snapshot would date from before that wait, so it could miss the submit it waited for.
+    pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
+        "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
     balance = ledger.balance(conn, now)
     if balance is None:
         raise NotReady(ledger.OPEN_HINT)
@@ -157,8 +167,6 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # One lot per layer, oldest first: the planner draws them in that order, as the stock replay does.
     closet = tuple(planner.ClosetStock(c.product, units, cost)
                    for c in counted.closet for units, cost in c.layers or ((c.units, c.unit_cost),))
-    pending = tuple(planner.PendingRequest(r) for (r,) in conn.execute(
-        "select request_id from purchase_requests where status = 'pending' order by submitted_at"))
     products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))
                      for p in catalog if p.get("sku"))
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,

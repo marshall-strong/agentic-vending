@@ -164,3 +164,16 @@ def test_save_answer_keeps_the_answer_and_created_id_on_a_row_still_sending_and_
     submissions.save_answer(conn, done, {"id": "pr-9"}, created_id="pr-9")
     assert conn.execute("select response, created_id from purchase_submissions where id = %s",
                         (done,)).fetchone() == (None, None)
+
+
+@pytest.mark.parametrize("status", [{}, [], ["pending"], 1, None])
+def test_a_lookup_whose_status_isnt_a_string_leaves_that_row_open_and_checks_the_rest(conn, status):
+    """Sol round 4, finding 5: `status: {}` can't be looked up in a set of strings. It used to raise
+    `TypeError` and end the whole check; that row now stays open, and the next row is still settled."""
+    odd = row(conn, created_id="pr-odd")
+    good = row(conn, created_id="pr-good")
+    bridge = Lookup({"pr-odd": found("pr-odd", status=status), "pr-good": found("pr-good")})
+    first, second = submissions.check(conn, bridge)
+    assert (first.row, first.status) == (odd, "sending") and "no documented status" in first.why
+    assert (second.row, second.status) == (good, "accepted")
+    assert state(conn, odd) == ("sending", None, None) and bridge.asked == ["pr-odd", "pr-good"]

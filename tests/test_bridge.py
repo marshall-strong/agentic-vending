@@ -32,6 +32,7 @@ class Answer:
     location: str | None = None  # A `Location` header, for a redirect.
     headers: dict = field(default_factory=dict)  # Other headers to send.
     drip: float = 0  # With `wire`: seconds to wait before each byte of it.
+    drip_from: int = 0  # With `drip`: the bytes of `wire` before this are sent at once.
 
 
 DROP = Answer(wire=b"")
@@ -65,7 +66,9 @@ class Handler(BaseHTTPRequestHandler):
             if not answer.drip:
                 self.wfile.write(answer.wire)
                 return
-            for byte in answer.wire:          # not `time.sleep`: the `sleeps` fixture makes that instant
+            self.wfile.write(answer.wire[:answer.drip_from])
+            self.wfile.flush()
+            for byte in answer.wire[answer.drip_from:]:   # not `time.sleep`: the `sleeps` fixture makes that instant
                 if self.server.stop.wait(answer.drip):
                     return
                 try:
@@ -398,6 +401,7 @@ PURCHASES = "/api/v1/purchase-requests"
 JSON = {"Content-Type": "application/json"}
 CREATED = b'{"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}'
 CRLF = b"\r\n"
+LF = CRLF[1:]
 
 
 def head(status=201, headers=(("Content-Type", "application/json"),), length=None, body=CREATED):
@@ -484,8 +488,7 @@ def test_a_slow_drip_is_cut_at_the_total_deadline(bridge, monkeypatch, part):
     monkeypatch.setattr(bridge_module, "PURCHASE_DEADLINE_SECONDS", 1)
     if part == "body":
         wire = head()
-        cut = wire.index(CRLF + CRLF) + 4
-        answer = Answer(wire=wire[:cut] + wire[cut:], drip=0.1)
+        answer = Answer(wire=wire, drip=0.1, drip_from=wire.index(CRLF + CRLF) + 4)
     else:
         answer = Answer(wire=head(headers=[("X-Pad", "p" * 120), ("Content-Type", "application/json")]), drip=0.1)
     client = bridge({"POST " + PURCHASES: answer})
@@ -493,6 +496,60 @@ def test_a_slow_drip_is_cut_at_the_total_deadline(bridge, monkeypatch, part):
     with pytest.raises(bridge_module.BridgeNoAnswer, match="within 1 s"):
         client.post_answer(PURCHASES, {"lines": []})
     assert time.monotonic() - started < 4      # the whole answer would take over 10 s
+
+
+@pytest.mark.parametrize("close", [True, False], ids=["Connection: close", "kept alive"])
+def test_a_body_that_drips_after_whole_headers_is_cut_at_the_deadline(bridge, monkeypatch, close):
+    """The headers come at once and only the body drips. With `Connection: close`, `http.client` hands the
+    socket to the response and drops `conn.sock`, so the deadline must shut the socket it kept (#217)."""
+    monkeypatch.setattr(bridge_module, "PURCHASE_DEADLINE_SECONDS", 1)
+    headers = (("Content-Type", "application/json"),) + ((("Connection", "close"),) if close else ())
+    wire = head(headers=headers)
+    client = bridge({"POST " + PURCHASES: Answer(wire=wire, drip=0.1, drip_from=wire.index(CRLF + CRLF) + 4)})
+    started = time.monotonic()
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="within 1 s"):
+        client.post_answer(PURCHASES, {"lines": []})
+    assert time.monotonic() - started < 2.5     # the whole body would take about 7 s
+
+
+@pytest.mark.parametrize("length", ["invalid", "-1", "+68", "6_8", "68, 68", " "])
+def test_a_201_whose_length_cant_be_read_is_not_plain_json(bridge, length):
+    """`http.client` reads a `Content-Length` it can't parse as no length and reads to the close, so the body
+    would look whole. It isn't framed, so it isn't the documented acceptance."""
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(length=length.replace("68", str(len(CREATED)))))})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and got.body is None and "Content-Length" in got.problem
+
+
+@pytest.mark.parametrize("ending", [
+    pytest.param(b"0" + CRLF, id="no blank line after the last chunk"),
+    pytest.param(b"0", id="last chunk cut off"),
+    pytest.param(b"0" + CRLF + LF, id="bare LF for the blank line"),
+    pytest.param(b"0" + CRLF + b"X-Trailer: 1", id="trailer cut off"),
+])
+def test_a_chunked_201_that_doesnt_end_properly_is_no_answer(bridge, ending):
+    body = f"{len(CREATED):x}".encode() + CRLF + CREATED + CRLF + ending
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=CHUNKED, length=False, body=body))})
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="IncompleteRead"):
+        client.post_answer(PURCHASES, {"lines": []})
+
+
+@pytest.mark.parametrize("body", [
+    pytest.param(b"%x" % len(CREATED) + CRLF + CREATED + b"XX0" + CRLF + CRLF, id="chunk not closed by CRLF"),
+    pytest.param(b"0x%x" % len(CREATED) + CRLF + CREATED + CRLF + b"0" + CRLF + CRLF, id="size with 0x"),
+    pytest.param(b"%x" % len(CREATED) + LF + CREATED + CRLF + b"0" + CRLF + CRLF, id="size line ends in LF"),
+])
+def test_a_chunked_201_framed_loosely_is_no_answer(bridge, body):
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=CHUNKED, length=False, body=body))})
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="IncompleteRead"):
+        client.post_answer(PURCHASES, {"lines": []})
+
+
+def test_a_chunked_201_with_a_trailer_is_read_whole(bridge):
+    body = f"{len(CREATED):x};ext=1".encode() + CRLF + CREATED + CRLF + b"0" + CRLF + b"X-Trailer: 1" + CRLF + CRLF
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=CHUNKED, length=False, body=body))})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert (got.body, got.problem) == (json.loads(CREATED), "")
 
 
 def test_only_a_failed_connect_is_unreachable(sleeps):
