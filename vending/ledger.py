@@ -8,6 +8,7 @@
     python -m vending.ledger show
     python -m vending.ledger entries
     python -m vending.ledger reset-test-opening --by marshall [--yes]
+    python -m vending.ledger safe-opening --fill REQUEST_ID
 
 The balance is never a stored figure (build plan, section 5). It is:
 
@@ -85,6 +86,10 @@ so the real one can be recorded (#215, `docs/ledger-reset.md`). It is a dry run
 without `--yes`. It moves only that entry (entry 1, dated 11 Nov, with its exact
 detail), only once, and only before 00:00 Eastern on Mon 30 Nov.
 
+`safe-opening`, read only, is for when the fill request went in before the real
+opening was recorded: it prints the interval the opening must fall in and a time
+to give `open --at`, each bound read with the clock its reader uses.
+
 The CLI prints times in Eastern.
 
 The CLI never migrates: on a database that is behind it refuses to run and
@@ -108,7 +113,7 @@ from psycopg.types.json import Jsonb
 
 from vending import config, counters, db, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
-from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
+from vending.slots import DEVICE_ID, SlotsNotRecorded, assigned_at, our_slots
 from vending.start import EASTERN, START
 from vending.tools.sales_history import tax_cents
 
@@ -581,6 +586,102 @@ def archived(conn: psycopg.Connection) -> list[tuple[Entry, datetime, str]]:
                 " from ledger_entries_archive order by archived_at, id")]
 
 
+# --- A safe time for a late opening (#215, docs/ledger-reset.md, "If the fill went in first") -------
+
+@dataclass(frozen=True)
+class SafeOpening:
+    """When a real opening recorded after the fill went in may be dated, read only.
+
+    It must be strictly after `lower`, the latest of the test period's records (`lower_what` names it), and
+    at or before `fill_sent`, the fill request's `submitted_at`. `suggested` is the next whole minute after
+    `lower`, or `fill_sent` itself when that minute is past it. None: no time works.
+    """
+    fill_id: str
+    fill_sent: datetime
+    fill_status: str
+    lower: datetime
+    lower_what: str
+    suggested: datetime | None
+
+
+def safe_opening(conn: psycopg.Connection, fill_id: str) -> SafeOpening:
+    """The interval a real opening must fall in when the fill request went in before it was recorded.
+
+    Each bound uses the clock its reader uses, by calling the reader's own code, so the choice can't drift
+    from the books (Sol review of #222, round 6):
+
+    - after the stored slot assignment's `first_read_at` (the 20 Nov redraw: notes before it never carry over);
+    - after every ledger entry: with no opening, every row in `ledger_entries` is test-period (`balance`
+      counts entries at or after the opening);
+    - after every test request's receipt lines on the receipt clock (`stock.receipt_lines`: door close,
+      else `resolved_at` where door times clash), and its visit fee on the visit clock (`visit_times`,
+      `fulfilled_at` for a visit with no lines);
+    - after every test request's `submitted_at` (Key dates takes the first request since the opening as
+      the fill), and at or before the fill's own.
+
+    A test request is any other request sent at or before the fill. Raises `LedgerError`, changing
+    nothing, while one of them is still pending or a submission is unresolved (its receipt could come
+    later), when the ledger already has an opening, or when the fill can't be the fill.
+    """
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        return _safe_opening(conn, fill_id)
+    with conn.transaction():
+        conn.execute("set transaction isolation level repeatable read, read only")
+        return _safe_opening(conn, fill_id)
+
+
+def _safe_opening(conn: psycopg.Connection, fill_id: str) -> SafeOpening:
+    opened = opening(conn)
+    if is_test_opening(opened):
+        raise LedgerError("The 11 Nov test opening is still the opening: the reset (step 3) never ran. "
+                          "Don't record an opening; ask the team (docs/ledger-reset.md, \"Step 3 never ran\").")
+    if opened is not None:
+        raise LedgerError(f"The ledger already has an opening, at {_eastern(opened.at)}. This command only picks "
+                          "a time for one that isn't recorded yet. Check Key dates and python -m vending.ledger show.")
+    row = conn.execute("select submitted_at, status from purchase_requests where request_id = %s",
+                       (fill_id,)).fetchone()
+    if row is None:
+        raise LedgerError(f"No purchase request {fill_id}. Give the fill's request ID, as purchase_requests "
+                          "stores it.")
+    fill_sent, fill_status = row
+    if fill_status == "rejected":
+        raise LedgerError(f"Request {fill_id} was rejected, so it isn't the fill. Ask the team.")
+    if fill_sent >= START:
+        raise LedgerError(f"Request {fill_id} was sent {_eastern(fill_sent)}, at or after the start: a restock, "
+                          "not the fill. Ask the team.")
+    redraw = assigned_at(conn)
+    if redraw is None:
+        raise LedgerError("No slot assignment is stored, so the redraw's time is unknown. "
+                          "Run python -m vending.slots record first.")
+    unresolved = conn.execute(
+        "select id from purchase_submissions where status in ('sending', 'unknown') and at <= %s order by at, id",
+        (fill_sent,)).fetchall()
+    if unresolved:
+        raise LedgerError(f"Resolve or wait for submission {unresolved[0][0]} first: it may be a request we can't "
+                          "see yet (python -m vending.submissions resolve). Then run this again.")
+    tests = conn.execute(
+        "select request_id, submitted_at, status from purchase_requests where request_id <> %s and submitted_at <= %s"
+        " order by submitted_at, request_id", (fill_id, fill_sent)).fetchall()
+    pending = [request_id for request_id, _, status in tests if status == "pending"]
+    if pending:
+        raise LedgerError(f"Resolve or wait for request {pending[0]} first: it is a test-period request still "
+                          "pending, so its receipt could land later. Then run this again.")
+    test_ids = {request_id for request_id, _, _ in tests}
+    bounds = [(redraw, "our slot assignment first read (slot_assignment.first_read_at)")]
+    bounds += [(sent, f"request {request_id} sent") for request_id, sent, _ in tests]
+    bounds += [(e.at, f"ledger entry {e.id} ({e.kind}, {money(e.amount_cents)}): {e.detail}") for e in entries(conn)]
+    lines = stock.receipt_lines(conn)
+    bounds += [(line["at"], f"receipt line {line['line_no']} of request {line['request_id']}") for line in lines
+               if line["request_id"] in test_ids and line["at"] is not None]
+    bounds += [(at, f"midweek visit fee of request {request_id}") for request_id, at, _ in visit_times(conn, lines)
+               if request_id in test_ids and at is not None]
+    lower, lower_what = max(bounds, key=lambda bound: bound[0])
+    suggested = lower.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    if suggested > fill_sent:
+        suggested = fill_sent if lower < fill_sent else None
+    return SafeOpening(fill_id, fill_sent, fill_status, lower, lower_what, suggested)
+
+
 def _development(e: Entry, opened: Entry | None) -> bool:
     """A model call before the opening, or before any opening: development spend, not from the $600 (#104)."""
     return e.kind == "tokens" and (opened is None or e.at < opened.at)
@@ -1006,19 +1107,24 @@ def _visit_rows(conn: psycopg.Connection, start: datetime, end: datetime) -> lis
     visit timed before the opening brought test purchases and its fee is left
     out (`stock.receipts_count_from`).
     """
+    lo = stock.receipts_count_from(conn, start)
+    rows = [(at, cents) for _, at, cents in visit_times(conn) if at is not None and lo <= at <= end]
+    return sorted(rows, key=lambda row: row[0])
+
+
+def visit_times(conn: psycopg.Connection, lines: list[dict] | None = None) -> list[tuple[str, datetime | None, int]]:
+    """(request_id, when, fee) for every fulfilled off-cycle request, on the visit clock `_visit_rows` uses.
+
+    When is the request's first line on the receipt clock (`stock.request_times`), or its `fulfilled_at`
+    with no lines; None when it has neither, and then no window counts it. `lines` is
+    `stock.receipt_lines(conn)` when the caller has read it already."""
     fee = config.get_value(conn, "midweek_fee_cents", DEFAULT_MIDWEEK_FEE_CENTS)
     if not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
         fee = DEFAULT_MIDWEEK_FEE_CENTS
-    times = stock.request_times(stock.receipt_lines(conn))
-    lo = stock.receipts_count_from(conn, start)
-    rows = []
-    for request_id, fulfilled_at, cents in conn.execute(
-            "select request_id, fulfilled_at, coalesce(visit_fee_cents, %s) from purchase_requests"
-            " where off_cycle and status = 'fulfilled'", (fee,)):
-        at = times.get(request_id, fulfilled_at)
-        if at is not None and lo <= at <= end:
-            rows.append((at, int(cents)))
-    return sorted(rows, key=lambda row: row[0])
+    times = stock.request_times(stock.receipt_lines(conn) if lines is None else lines)
+    return [(request_id, times.get(request_id, fulfilled_at), int(cents)) for request_id, fulfilled_at, cents in
+            conn.execute("select request_id, fulfilled_at, coalesce(visit_fee_cents, %s) from purchase_requests"
+                         " where off_cycle and status = 'fulfilled' order by request_id", (fee,))]
 
 
 def _inventory(counted: stock.Stock) -> tuple[Fraction | None, Fraction | None, bool]:
@@ -1093,6 +1199,10 @@ def main(argv: list[str] | None = None) -> int:
                                 "unless --yes")
     reset.add_argument("--by", required=True, help="your name, for the log")
     reset.add_argument("--yes", action="store_true", help="make the change; without it, only say what would change")
+    safe = sub.add_parser("safe-opening",
+                          help="read only: when a late real opening may be dated, if the fill went in first "
+                               "(docs/ledger-reset.md)")
+    safe.add_argument("--fill", required=True, metavar="REQUEST_ID", help="the fill's request ID")
     sub.add_parser("show", help="the balance now")
     sub.add_parser("entries", help="every entry, oldest first, then any archived ones")
     args = parser.parse_args(argv)
@@ -1126,6 +1236,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Adjusted by {money(entry.amount_cents)}: {entry.detail}.")
             elif args.action == "reset-test-opening":
                 return _reset(conn, args.by, args.yes)
+            elif args.action == "safe-opening":
+                return _safe(conn, args.fill)
             elif args.action == "show":
                 return _show(conn)
             else:
@@ -1191,6 +1303,26 @@ def _reset(conn: psycopg.Connection, by: str, yes: bool) -> int:
               "python -m vending.ledger open --amount 600.00 --by NAME")
     else:
         print(f"To make the change: python -m vending.ledger reset-test-opening --by {by.strip() or 'NAME'} --yes")
+    return 0
+
+
+def _safe(conn: psycopg.Connection, fill_id: str) -> int:
+    """`safe-opening`: the interval and a suggested time, in Eastern. 1 when no time works."""
+    s = safe_opening(conn, fill_id)         # LedgerError when it refuses; main prints it
+
+    def at(moment: datetime) -> str:
+        return f"{moment.astimezone(EASTERN):%a %d %b %Y %H:%M:%S} Eastern"
+
+    print(f"Fill request {s.fill_id}: sent {at(s.fill_sent)}, {s.fill_status}.")
+    print(f"The latest test-period record: {s.lower_what}, at {at(s.lower)}.")
+    if s.suggested is None:
+        print("No time works: the opening must be after that and at or before the fill request, and that "
+              "record is at or after the fill. Don't record the opening. Ask the team.", file=sys.stderr)
+        return 1
+    print(f"The opening must be after {at(s.lower)} and at or before {at(s.fill_sent)}.")
+    print(f"Suggested opening: {at(s.suggested)}. Record it with:")
+    print(f"  python -m vending.ledger open --amount 600.00 --by NAME --at {s.suggested.astimezone(EASTERN).isoformat()}")
+    print("Then check Key dates (Fill request sent: done) and python -m vending.ledger show.")
     return 0
 
 

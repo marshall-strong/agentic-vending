@@ -89,7 +89,8 @@ backdated before the 20 Nov redraw still can't bring back notes from before it.
    ```
 
 4. **Record the real opening.** The amount is the $600.00 the brief gives
-   ([opening capital plan](opening-capital-plan.md)). Leave out `--at`: the opening is now.
+   ([opening capital plan](opening-capital-plan.md)). Leave out `--at`: the opening is now. If the
+   fill request has already gone in, stop: go to [If the fill went in first](#if-the-fill-went-in-first).
 
    ```
    python -m vending.ledger open --amount 600.00 --by NAME
@@ -110,8 +111,10 @@ Then the fill request can go in.
 
 - **Step 2 or 3 refuses:** read the message. It names the guard. Don't edit the database by hand.
   Ask the team.
-- **Step 4 fails after step 3:** the ledger has no opening. Fix the cause (it names it) and run
-  step 4 again. The test opening is safe in the archive.
+- **Step 4 fails after step 3:** the ledger has no opening. Fix the cause (it names it). If the fill
+  request has not gone in, run step 4 again. If it has gone in, for any reason, don't run step 4
+  without `--at`: go to [If the fill went in first](#if-the-fill-went-in-first). The test opening is
+  safe in the archive.
 - **The wrong amount went in at step 4:** the reset refuses the real opening, by design. Record
   the difference as an adjustment with a detail saying why, or ask the team before anything else.
 
@@ -120,98 +123,79 @@ Then the fill request can go in.
 From 00:00 Eastern on Mon 30 Nov the command refuses. Don't edit the database by hand. What to do
 depends on how far the steps got:
 
-- **Step 3 ran, but step 4 didn't, and the fill request went in:** record the real opening with a
-  time in the past. The opening's time decides what counts. Key dates counts the fill request by when
-  it was sent, stock and spend count its receipt by the receipt's time, and the balance counts every
-  ledger entry dated at or after the opening. So the opening has to fall in one interval:
-  - after the 20 Nov redraw: when our slots (the server's assignment) were first read, the
-    `first_read_at` of `slot_assignment`,
-  - strictly after the latest test-period ledger entry of any kind and the last test receipt's
-    effective time, and
-  - at or before the fill request's `submitted_at`, which also puts it before the fill's receipt.
-
-  Any kind: any row still in `ledger_entries`, a model call or an adjustment included — not just the
-  last test purchase. Until the real opening is recorded, every row there is test-period, including
-  a call the live run made after the reset. A receipt's effective time is its request's door close,
-  else the line's `resolved_at`; a test midweek visit's fee counts from the same clock, so one bound
-  covers both.
-
-  Read the ends of the interval on the [DB explorer](db-explorer.md) (read only, times in Eastern):
-  `first_read_at` in `slot_assignment` and the requests' `submitted_at` in `purchase_requests`,
-  plus, in psql or the explorer's SQL box:
-
-  ```sql
-  -- The latest test-period ledger entry, any kind.
-  select kind, at at time zone 'America/New_York' as at_eastern, detail
-    from ledger_entries order by at desc limit 5;
-
-  -- When each fulfilled receipt counts from (door close, else the line's resolution; a visit's fee
-  -- counts from the same clock). Leave out the fill's own row.
-  select r.request_id, r.off_cycle,
-         greatest(max(coalesce(r.door_closed_at, l.resolved_at)), r.fulfilled_at)
-           at time zone 'America/New_York' as counts_from_eastern
-    from purchase_requests r join purchase_lines l using (request_id)
-   where r.status = 'fulfilled'
-   group by r.request_id, r.fulfilled_at, r.off_cycle
-   order by counts_from_eastern desc limit 5;
-  ```
-
-  Pick a time strictly after the latest time those queries return (the fill's own row excepted) and
-  after `first_read_at`, and at or before the fill's `submitted_at`. For example, if the latest
-  test-period entry is a model call at 19:30 Eastern on Sun 29 Nov and the fill went in at 20:00,
-  use 19:45. An opening at 19:00 would put that call in the real books as $0.25 of token spend, and
-  an opening at 23:00 would leave the 20:00 fill out of Key dates. Don't use a time before the
-  redraw, such as 18 Nov: that counts pre-redraw test activity in the books. If no time meets all
-  of this — the latest test entry stands after the fill went in, say — the interval is empty. Stop:
-  don't record the one-time opening; ask the team. Give the time with its offset (a time without one
-  is read as UTC):
-
-  ```
-  python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T19:45:00-05:00
-  ```
-
-  Then check that the opening is at or before the fill request, and that the books hold the fill's
-  receipt. Before 00:00 Eastern on Thu 3 Dec, the dashboard's Key dates panel shows **Fill request
-  sent** as done, with the fill's time. If it says "no purchase request since the opening", the
-  opening is after the request: ask the team. From the start the panel no longer shows that check,
-  so check the records instead. This works on any date:
-
-  1. The opening and the requests since it. On the DB explorer: `ledger_entries` (the row with kind
-     `opening`) and `purchase_requests`. Or in psql:
-
-     ```sql
-     select at at time zone 'America/New_York' as opening_eastern
-       from ledger_entries where kind = 'opening';
-
-     select request_id, submitted_at at time zone 'America/New_York' as sent_eastern,
-            off_cycle, status, total_paid,
-            fulfilled_at at time zone 'America/New_York' as fulfilled_eastern
-       from purchase_requests where status <> 'rejected'
-      order by submitted_at;
-     ```
-
-     Verify the fill by its own `request_id`, the one the fill went in under: its `sent_eastern` must
-     be at or after `opening_eastern`. If it is before, ask the team. If you have to infer which
-     request is the fill, use the same rule as Key dates: the first request in the list that was sent
-     at or after the opening and before the start (00:00 Eastern on Thu 3 Dec); the query already
-     leaves rejected ones out. A request sent at or after the start is a restock, never the fill. If
-     the rule finds no fill — the Sunday fill rejected, say, so the first request standing is a
-     Thursday restock — don't count the restock as the fill: ask the team.
-  2. The fill's receipt total, once its status is `fulfilled` (put its `request_id` in):
-
-     ```sql
-     select count(*) as lines, sum(total_paid) as paid
-       from purchase_lines where request_id = 'REQUEST_ID';
-     ```
-
-  3. `python -m vending.ledger show`: Receipts is that `paid` total, plus any later receipts. It is
-     not 0.00 once the fill is in, so step 5's "receipts 0.00" doesn't apply here. The opening
-     capital line shows the time you gave. Token spend and the development-spend note are as in
-     step 5.
+- **Step 3 ran, but step 4 didn't, and the fill request went in:** go to
+  [If the fill went in first](#if-the-fill-went-in-first).
+- **Step 3 ran, step 4 didn't, and the fill hasn't gone in:** run step 4 now, without `--at`, then
+  send the fill.
 - **Step 3 never ran:** the 11 Nov test opening is still the opening, so the books count from
   11 Nov. Run 2's model spend is in the balance, and the 12 Nov test receipt is in purchases and
   stock. Ask the team before anything else. A fix then is a person's decision, recorded in the
   ledger with a detail saying why, not a reset.
+
+## If the fill went in first
+
+Use this section whenever the fill request was sent before the real opening was recorded, for any
+reason: the window closed, step 4 failed and was retried later, or the steps ran out of order. It
+doesn't matter whether it is before or after midnight. An opening recorded now, without `--at`, would
+fall after the fill, and the fill would drop out of Key dates and its receipt out of the books.
+
+The opening has to be dated in the past, in one interval. A command finds it for you. It reads each
+bound with the same clock the books use, so you don't need any SQL. (The [DB explorer](db-explorer.md)
+has no SQL box, and hand-written SQL kept getting those clocks wrong.)
+
+1. **Find the interval.** Give the fill's request ID, as `purchase_requests` stores it (the DB
+   explorer lists them, with `submitted_at` in Eastern). This command changes nothing:
+
+   ```
+   python -m vending.ledger safe-opening --fill REQUEST_ID
+   ```
+
+   It prints the latest test-period record, the interval, and a suggested opening (the next whole
+   minute after that record) with the exact `open` command to run. The opening must be:
+
+   - after our slot assignment was first read (`first_read_at`, the 20 Nov redraw);
+   - after every row in `ledger_entries`. With no opening yet, every row there is test-period, a
+     model call from the live run included;
+   - after every test request's receipt lines and midweek visit fee, at the times the balance and
+     stock use (door close, or the line's `resolved_at` when two visits' door times clash; a visit
+     with no lines at its `fulfilled_at`);
+   - after every test request was sent. A test request is any other request sent at or before the
+     fill;
+   - at or before the fill's `submitted_at`.
+
+   **It refuses**, and changes nothing, when:
+
+   - a test request is still pending, or a submission is unresolved: "Resolve or wait for request X
+     first". Its receipt could still land later. Wait for the sync to read it, or resolve the
+     submission (`python -m vending.submissions resolve`), then run the command again;
+   - the ledger already has an opening, or the 11 Nov test opening is still there (step 3 never ran:
+     ask the team);
+   - the request isn't the fill: unknown, rejected, or sent at or after the start (a restock).
+
+   **If it says no time works** (exit 1), a test-period record stands at or after the fill. The
+   message names it. Don't record the one-time opening. Ask the team.
+
+2. **Record the opening** with the time it suggested, exactly as it printed it (the time carries its
+   offset):
+
+   ```
+   python -m vending.ledger open --amount 600.00 --by NAME --at 2026-11-29T19:31:00-05:00
+   ```
+
+3. **Check.**
+   - Before 00:00 Eastern on Thu 3 Dec, the dashboard's Key dates panel shows **Fill request sent**
+     as done, with the fill's time. If it says "no purchase request since the opening", ask the team.
+     From the start that check is gone from the panel; `safe-opening` already checked the same rule.
+   - `python -m vending.ledger show`: the opening capital line shows the time you gave, token spend
+     0.00, and a note that the earlier model calls are development spend. Receipts is the fill's
+     total once it is fulfilled, plus any later receipts, so step 5's "receipts 0.00" doesn't apply.
+   - `python -m vending.ledger safe-opening --fill REQUEST_ID` now refuses: the ledger has an
+     opening.
+
+For example, the reset ran at 15:00 Eastern on Sun 29 Nov, a live run made a model call at 19:30,
+and the fill went in at 20:00. `safe-opening` names the 19:30 call and suggests 19:31. An opening at
+19:00 would put that call in the real books, and one at 23:00 would leave the 20:00 fill out of Key
+dates.
 
 ## Example
 
