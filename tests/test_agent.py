@@ -192,6 +192,7 @@ def test_a_dry_run_never_sends_a_write_the_model_makes_up(connect, conn):
 
 
 def test_notes_carry_from_one_run_to_the_next(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="Slot 3 is slow; pull it if under 2 a week.")), Tools())
     client = Script(answer())
     go(connect, client, Tools())
@@ -372,6 +373,7 @@ def test_turning_the_halt_on_mid_run_stops_before_the_next_model_call(connect, c
 
 
 def test_a_live_run_reads_only_live_notes(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="dry: would submit 15")), Tools())
     client = Script(answer())
     go(connect, client, Tools())                                    # a dry run reads it, labelled
@@ -380,6 +382,73 @@ def test_a_live_run_reads_only_live_notes(connect, conn):
     go(connect, client, Tools(LIVE_TOOLS), live=True)               # a live run never does
     opening = client.sent[0]["messages"][0]["content"]
     assert "would submit 15" not in opening and "No notes yet" in opening
+
+
+def open_books(conn, at=None):
+    """Record a real opening (not the 11 Nov test one), now by the database clock unless `at` is given.
+
+    Runs' `started_at` is the database clock, so an opening at `at` (default: now) splits the runs before it
+    from the runs after it."""
+    from vending import ledger
+
+    at = at or conn.execute("select clock_timestamp()").fetchone()[0]
+    return ledger.record(conn, "opening", 60000, "opening capital", "test", at)
+
+
+def test_no_notes_carry_over_before_a_real_opening(connect, conn):
+    """#216: notes count from the real opening. Before it, a run's notes may name slots that aren't ours."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "real ledger opening isn't recorded yet" in opening
+
+
+def test_the_11_nov_test_opening_is_not_a_real_opening_for_notes(connect, conn):
+    from vending import ledger
+
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (%s, %s, 'opening', 60000, %s, 'marshall')",
+                 (ledger.TEST_OPENING_ID, datetime(2026, 11, 11, 19, tzinfo=timezone.utc), ledger.TEST_OPENING_DETAIL))
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "real ledger opening isn't recorded yet" in opening
+
+
+def test_notes_from_runs_before_the_real_opening_are_dropped_and_later_ones_kept(connect, conn):
+    """Run 2's notes, from before the 20 Nov redraw, must not reach a run after the real opening (#216)."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())   # before the opening
+    open_books(conn)
+    client = Script(answer(notes="New notes."))
+    go(connect, client, Tools())                                         # the first run since the opening
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "first run since the ledger opening" in opening
+    client = Script(answer())
+    go(connect, client, Tools())                                         # notes since the opening carry on
+    assert "New notes." in client.sent[0]["messages"][0]["content"]
+
+
+def test_notes_from_before_the_slot_assignment_are_dropped_even_after_a_backdated_opening(connect, conn):
+    """Sol review of #222, round 4, finding 3: a recovery opening backdated before the redraw (18 Nov) must not
+    bring back a 19 Nov run's notes. Notes count from the later of the real opening and when our slots (the
+    server's assignment) were first read (`slot_assignment.first_read_at`)."""
+    conn.execute("update slot_assignment set first_read_at = %s", (datetime(2026, 11, 20, 17, tzinfo=timezone.utc),))
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
+    conn.execute("update agent_runs set started_at = %s", (datetime(2026, 11, 19, 17, tzinfo=timezone.utc),))
+    open_books(conn, datetime(2026, 11, 18, 17, tzinfo=timezone.utc))
+    client = Script(answer())
+    go(connect, client, Tools())
+    opening = client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "first run since the ledger opening" in opening
+
+
+def test_no_notes_carry_over_without_a_stored_slot_assignment(conn):
+    """Finding 3: with no assignment stored, nothing says which runs read the current one, so no notes carry."""
+    open_books(conn, datetime(2026, 11, 18, 17, tzinfo=timezone.utc))
+    conn.execute("delete from slot_assignment")
+    assert "slot assignment isn't recorded" in agent.last_notes(conn, live=False)
 
 
 def test_the_server_never_gets_the_model_key(monkeypatch):
@@ -483,6 +552,7 @@ def test_a_submit_call_that_raises_is_flagged_unresolved(connect, conn):
 # --- The rules card -----------------------------------------------------------------
 
 def test_the_system_prompt_is_the_rules_card_then_the_instructions(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="Slot 3 is slow.")), Tools())
     client = Script(tool_turn(use("get_machine_state")), answer())
     go(connect, client, Tools())

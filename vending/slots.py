@@ -203,6 +203,15 @@ def stored(conn: psycopg.Connection) -> Assignment | None:
     return None if row is None else Assignment(row[0], row[1], tuple(row[2]), row[3])
 
 
+def assigned_at(conn: psycopg.Connection) -> datetime | None:
+    """When the stored assignment was first read from the server (`first_read_at`), or None with none stored.
+
+    `record` sets it when the assignment changes, so a run that started before it may have read other slots
+    (`vending.agent.last_notes`)."""
+    row = conn.execute("select first_read_at from slot_assignment where id = 1").fetchone()
+    return None if row is None else row[0]
+
+
 def _usable(found: Assignment | None) -> Assignment:
     """`found`, or `SlotsNotRecorded` when nothing is stored or the stored row can't be our assignment."""
     if found is None:

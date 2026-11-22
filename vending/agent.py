@@ -55,7 +55,7 @@ import anyio
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending import agent_runs, db, settings
+from vending import agent_runs, db, ledger, settings, slots
 from vending.config import is_halted
 from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError
 from vending.tools.project_rules import RULES_DIR
@@ -243,15 +243,31 @@ def recorded_plan(plan: dict | None, answer: dict | None) -> dict | None:
 
 
 def last_notes(conn: psycopg.Connection, *, live: bool) -> str:
-    """The notes from the latest finished run, labelled with where they came from.
+    """The notes from the latest finished run since the real ledger opening and our current slot assignment,
+    labelled with where they came from.
 
     A live run reads only live runs' notes, so a dry run's "would submit" is never taken as done.
+    Notes carry over only from a run that started at or after both the real opening (`ledger.real_opening`)
+    and the moment our slots (the server's assignment) were first read (`slots.assigned_at`). A run before
+    either may name slots that aren't ours (#216). The assignment's time matters even after the opening:
+    an opening backdated in a recovery could fall before the assignment (Sol review of #222, round 4,
+    finding 3). With no real opening (none yet, or only the 11 Nov test one) or no stored assignment, no
+    notes carry over.
     """
+    opened = ledger.real_opening(conn)
+    if opened is None:
+        return ("(No notes: the real ledger opening isn't recorded yet, so earlier runs' notes are left out. "
+                "They may name slots that aren't ours.)")
+    assigned = slots.assigned_at(conn)
+    if assigned is None:
+        return ("(No notes: our slot assignment isn't recorded, so earlier runs' notes are left out. "
+                "They may name slots that aren't ours.)")
     modes = ["live"] if live else ["live", "dry-run"]
-    row = conn.execute("select mode, started_at, notes from agent_runs where mode = any(%s) and notes is not null"
-                       " and status <> 'running' order by started_at desc, id desc limit 1", (modes,)).fetchone()
+    row = conn.execute("select mode, started_at, notes from agent_runs"
+                       " where mode = any(%s) and notes is not null and status <> 'running' and started_at >= %s"
+                       " order by started_at desc, id desc limit 1", (modes, max(opened.at, assigned))).fetchone()
     if not row:
-        return "(No notes yet: this is the first run.)"
+        return "(No notes yet: this is the first run since the ledger opening and our current slot assignment.)"
     mode, started, notes = row
     kind = "the live run" if mode == "live" else "a dry run (nothing it planned was sent)"
     return f"(From {kind} on {started.astimezone(EASTERN):%A %d %B %H:%M} Eastern.)\n{notes}"
