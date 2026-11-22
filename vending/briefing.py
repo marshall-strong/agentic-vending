@@ -114,6 +114,18 @@ class Requests(BaseModel):
     turnaround: list[Turnaround] = Field(default_factory=list)
 
 
+class TrackingCheck(BaseModel):
+    """The newest tracking check the bridge answered with verdicts (`vending.tracking_daily.latest`).
+
+    The bridge compares our books with its own as of one poll: within $1 for money, 2 units for counts.
+    It never says by how much, which way or which slot."""
+    id: int
+    as_of_time: datetime
+    checked_at: datetime | None = None
+    results: dict[str, Literal["within", "outside"]]
+    unanswered_since: int = 0     # later sends with no verdicts (refused, or no usable answer)
+
+
 class Briefing(BaseModel):
     schema_version: int = 1
     snapshot_id: str = ""
@@ -135,6 +147,7 @@ class Briefing(BaseModel):
     closet_unavailable: str | None = None
     requests: Requests = Field(default_factory=Requests)
     stock_warning_count: int = 0
+    tracking: TrackingCheck | None = None
 
 
 def _age(now: datetime, at: datetime | None) -> str | None:
@@ -308,6 +321,24 @@ def _inventory(conn, b: Briefing, ours: tuple[str, ...]) -> None:
         _alert(b, "counts_stale", f"{weak} counts exceed 7d", "get_machine_state")
 
 
+def _tracking(conn, b: Briefing) -> None:
+    """The newest answered tracking check, however many refusals follow it; an alert for each figure
+    it read outside. `latest_answered` queries the answered check for itself, so refusals after it
+    cannot hide an `outside` verdict; the later sends are counted separately."""
+    from vending import tracking_daily
+
+    found = tracking_daily.latest_answered(conn, b.computed_at)
+    if found is None:
+        return
+    later = conn.execute("select count(*) from tracking_checks where (sent_at, id) > (%s, %s) and sent_at <= %s",
+                         (found["sent_at"], found["id"], b.computed_at)).fetchone()[0]
+    b.tracking = TrackingCheck(id=found["id"], as_of_time=found["as_of_time"], checked_at=found["checked_at"],
+                               results=found["verdicts"], unanswered_since=later)
+    for figure in found["outside"]:
+        _alert(b, f"books_outside_{figure}", f"tracking check #{found['id']} as of {_stamp(found['as_of_time'])}: "
+               f"bridge's {figure} differs by more than its tolerance", tracking_daily.LOOKUPS[figure])
+
+
 def _hours(delta: timedelta) -> Decimal:
     return (Decimal(delta.total_seconds()) / 3600).quantize(Decimal("0.1"), ROUND_HALF_UP)
 
@@ -397,6 +428,7 @@ def build(conn: psycopg.Connection, now: datetime | None = None) -> Briefing:
             _section(conn, b, "requests", "get_purchase_requests", lambda: _requests(conn, b))
             if any(a.code == "requests_unavailable" for a in b.alerts[before:]):
                 b.requests.unavailable = "request source unavailable"
+            _section(conn, b, "tracking", "get_account_balance", lambda: _tracking(conn, b))
             synced = _section(conn, b, "catalog", "get_catalog", lambda: conn.execute(
                 "select max(synced_at) from catalog_syncs").fetchone()[0])
             b.sources["catalog"] = _source(b.computed_at, synced, catalog.STALE_AFTER)
@@ -464,6 +496,14 @@ def render(b: Briefing) -> str:
     lines.append("Change current minus previous ($; unequal/partial periods are not a trend): " + ", ".join(
         f"{key} {_cell(value)}" for key, value in b.money_change.items()))
     lines.append(f"Spendable snapshot: ${b.spendable or '?'}; call get_account_balance every run.")
+    t = b.tracking
+    if t is None:
+        lines.append("Tracking check (bridge's books vs ours): none answered yet.")
+    else:
+        lines.append(f"Tracking check #{t.id} (bridge's books vs ours, as of poll {_stamp(t.as_of_time)}, checked "
+                     f"{_stamp(t.checked_at)}; within $1 / 2 units; never says by how much or which slot): "
+                     + ", ".join(f"{k} {'OUTSIDE' if v == 'outside' else v}" for k, v in t.results.items()) + "."
+                     + (f" {t.unanswered_since} later sends got no verdicts." if t.unanswered_since else ""))
     lines += ["", f"Assigned slots: {len(b.slots)}/{len(b.our_slots)}. Sales window {_stamp(b.sales_window_start)} to {_stamp(b.sales_window_end)}.",
               "Stock age = time since receipt movement/count; sales stop at poll. Cover = effective stock / observed units/day; zero rate -> ? with stock left.",
               "|Slot|Product (basis)|Price $|Stock (basis, age)|Units|/day|Cover d|Flags|",

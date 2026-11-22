@@ -5,7 +5,13 @@
 
 Each round runs, in order, `python -m vending.slots check`,
 `python -m vending.sync_history`, `python -m vending.sync_requests`,
-`python -m vending.sync_catalog` and `python -m vending.sync_product_requests`, in this process. `slots check` goes first. It
+`python -m vending.sync_catalog`, `python -m vending.sync_product_requests` and
+`python -m vending.tracking_daily`, in this process. The last sends the day's tracking check once it is
+due, only when `TRACKING_DAILY` is `on` (off by default; `vending.tracking_daily`), and only when
+the round's `slots check`, `sync_history` and `sync_requests` all finished (`worker.NEEDS`): the
+check reads the polls and receipts those syncs bring in, against the assignment `slots check`
+confirms, so one that failed, crashed or is still running would
+leave it reading stale books and spending the day's one check. `slots check` goes first. It
 only confirms our slot assignment: if the server gives a different one, or none
 is stored, it changes nothing and fails the round until a person runs
 `python -m vending.slots record` (`vending.slots`). The hourly rounds run at
@@ -91,15 +97,26 @@ from vending import gate, visits
 
 Job = tuple[str, Callable[[], int]]
 
+# A job here skips its round when a named earlier job of the same round didn't finish with 0
+# (failed, crashed, timed out, or still running from an earlier round): the tracking check reads
+# the polls and receipts its round's syncs bring in, so a sync that didn't finish would leave it
+# reading stale books and spending the day's one check on them, and a failed slot check leaves
+# the assignment unconfirmed, so the books it reads may be against slots that are no longer ours.
+# It tries again next round.
+NEEDS = {"tracking_daily": ("slots_check", "sync_history", "sync_requests")}
+
 
 def default_jobs() -> list[Job]:
-    from vending import slots, sync_catalog, sync_history, sync_product_requests, sync_requests
+    from vending import slots, sync_catalog, sync_history, sync_product_requests, sync_requests, tracking_daily
 
     return [("slots_check", lambda: slots.main(["check"])),
             ("sync_history", lambda: sync_history.main([])),
             ("sync_requests", lambda: sync_requests.main([])),
             ("sync_catalog", lambda: sync_catalog.main([])),
-            ("sync_product_requests", lambda: sync_product_requests.main([]))]
+            ("sync_product_requests", lambda: sync_product_requests.main([])),
+            # Last, so the day's check reads the polls and receipts this round brought in; NEEDS
+            # holds it back when one of those syncs didn't finish.
+            ("tracking_daily", lambda: tracking_daily.main([]))]
 
 
 @dataclass
@@ -156,12 +173,18 @@ def _describe(problem: BaseException) -> str:
 
 
 def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: float | None = None,
-              running: dict[str, threading.Thread] | None = None) -> list[JobResult]:
+              running: dict[str, threading.Thread] | None = None,
+              needs: dict[str, tuple[str, ...]] | None = None) -> list[JobResult]:
     """Run every job once, in order, even if one fails. Never raises.
 
     `timeout` is in seconds (None waits for ever). A job that overruns keeps
     going in a daemon thread and is recorded in `running`; pass the same dict
     each round so it is skipped until that thread ends.
+
+    With `needs` (the worker's `NEEDS`), a job named there is skipped, as "skipped",
+    when one of the jobs it names didn't finish with exit 0 this round: it would
+    read what that job never brought in. The skipped job is still a row on /health,
+    with no exit code, so the round shows it didn't run.
     """
     running = {} if running is None else running
     results = []
@@ -173,6 +196,15 @@ def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: floa
             results.append(JobResult(name, started.isoformat(), 0.0, None, "still running"))
             continue
         running.pop(name, None)
+        missing = None
+        if needs is not None:
+            missing = [r.job for r in results if r.job in needs.get(name, ())
+                       and (r.outcome != "finished" or r.exit_code != 0)]
+        if missing:
+            reason = f"skipped, {', '.join(missing)} didn't finish this round"
+            log(f"{started:%Y-%m-%d %H:%M:%S} {name}: {reason}")
+            results.append(JobResult(name, started.isoformat(), 0.0, None, "skipped", reason))
+            continue
         log(f"{started:%Y-%m-%d %H:%M:%S} {name}: starting")
         done: dict = {}
 
@@ -207,10 +239,11 @@ REPO = "https://github.com/marshall-strong/agentic-vending"
 PAGES_SETTING = "READONLY_DATABASE_URL"
 # The simulated seasons on the dashboard's demo copy (`vending.simulate.demo.ROOT`): files only, no database.
 SIMULATIONS = "/dashboard/demo/simulations"
-OUTCOMES = ("finished", "crashed", "timed out", "still running")
+OUTCOMES = ("finished", "crashed", "timed out", "still running", "skipped")
 JOB_NAMES = {"slots_check": "Our slot assignment", "sync_history": "Machine readings (sales history)",
              "sync_requests": "Purchase requests and receipts", "sync_catalog": "Product catalog",
-             "sync_product_requests": "Catalog requests: approved or rejected"}
+             "sync_product_requests": "Catalog requests: approved or rejected",
+             "tracking_daily": "Daily tracking check (off unless TRACKING_DAILY=on)"}
 
 
 def _eastern(moment: str | None) -> str:
@@ -650,7 +683,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         if threading.current_thread() is threading.main_thread():
             previous = signal.signal(signal.SIGTERM, _stop)
         while True:
-            state.results = run_round(jobs, log, args.timeout * 60, running)
+            state.results = run_round(jobs, log, args.timeout * 60, running, NEEDS)
             state.rounds += 1
             state.last_round_at = datetime.now(timezone.utc).isoformat()
             if args.once:

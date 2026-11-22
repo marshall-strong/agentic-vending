@@ -74,7 +74,7 @@ from psycopg.types.json import set_json_loads
 
 from vending import (capacity, db, leaderboards, machine_art, money_panel, plan_rounds, report_card, settings,
                      slot_counts, visits)
-from vending import agent_runs, agent_schedule, key_dates, pricing_panel
+from vending import agent_runs, agent_schedule, key_dates, pricing_panel, tracking_daily
 from vending import stock as stock_mod
 from vending import planner
 from vending.planner import IN_STORE_CUTOFF
@@ -851,8 +851,9 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
         run["detail"] = OLD_ASSIGNMENT
     for name, panel in snap.items():
         # Key dates' texts are fixed messages, dates and counts that name no selection; scoping them would
-        # hide the slot check's instructions exactly when no assignment can be read.
-        if name not in ("runs", "pricing", "report_cards", "key_dates") or not panel["ok"]:
+        # hide the slot check's instructions exactly when no assignment can be read. The tracking check's
+        # are our fixed words and the four verdicts (`tracking_daily.latest`), which name no selection either.
+        if name not in ("runs", "pricing", "report_cards", "key_dates", "tracking") or not panel["ok"]:
             snap[name] = _scope_text(panel, ours)
     if (cards := snap.get("report_cards")) and cards["ok"]:
         # Its text is the scorer's and ours, about a plan already cut to our assignment
@@ -951,6 +952,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
         "report_cards": cards,
         "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
             conn, now, cards["data"] if cards["ok"] else None))),
+        "tracking": _panel(lambda: _isolated(conn, lambda: tracking_daily.panel(conn, now))),
         "purchase_requests": ({"ok": True, "data": purchases["data"][0][:REQUEST_ROWS]}
                               if purchases["ok"] else purchases),
         "catalog_requests": catalog,
@@ -1100,6 +1102,11 @@ def attention(snap: dict) -> list[dict]:
         for level, text in money_panel.attention(money["data"]):
             add(level, text)
 
+    tracking = snap.get("tracking")
+    if tracking and tracking["ok"]:
+        for level, text in tracking_daily.attention(tracking["data"]):
+            add(level, text)
+
     plan = snap.get("plan") or {}
     if plan.get("ok") and plan["data"]:
         first_fill = "weekly_plan" in snap
@@ -1134,7 +1141,7 @@ def attention(snap: dict) -> list[dict]:
                       ("catalog_requests", "Catalog requests"), ("submissions", "Purchase submissions"),
                       ("money", "Money"),
                       ("leaderboards", "Leaderboards"), ("report_cards", "Report card"),
-                      ("incidents", "Incident log")):
+                      ("incidents", "Incident log"), ("tracking", "Tracking check")):
         if key in snap and not snap[key]["ok"]:
             add("info", f"{name} isn't available: {snap[key]['why']}")
 
@@ -2553,6 +2560,7 @@ STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 STYLE += pricing_panel.STYLE   # the pricing panel's own rules
 STYLE += leaderboards.STYLE
 STYLE += report_card.STYLE
+STYLE += tracking_daily.STYLE
 
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
@@ -2839,8 +2847,11 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
               if "report_cards" in snap else "")
     incidents = (f'<section id="incidents"><h2>Incident log <span class="hint">since the opening</span></h2>'
                  f'{report_card.incidents_html(snap["incidents"])}</section>' if "incidents" in snap else "")
+    tracking = (f'<section id="tracking"><h2>Tracking check <span class="hint">our books, checked by the bridge'
+                f' &middot; newest first</span></h2>{tracking_daily.panel_html(snap["tracking"])}</section>'
+                if "tracking" in snap else "")
     body = (head + _status_bar(snap, items, charts) + key_dates.html(snap.get("key_dates"))
-            + _cabinet_html(snap, items) + pricing + money
+            + _cabinet_html(snap, items) + pricing + money + tracking
             + _plan_section(snap)
             + report + incidents
             + '<div class="grid2">'

@@ -13,7 +13,8 @@ so the container joins it with Tailscale in userspace mode.
 `Dockerfile` builds one image with the package and the Tailscale binaries. Its default command
 is `python -m vending.worker`: every hour, at 5 minutes past (UTC), it runs `python -m vending.sync_history`,
 `python -m vending.sync_requests`, `python -m vending.sync_catalog` and
-`python -m vending.sync_product_requests` (which catalog requests were approved or rejected),
+`python -m vending.sync_product_requests` (which catalog requests were approved or rejected) and
+`python -m vending.tracking_daily` (the day's tracking check, only when turned on: see below),
 each with a 30-minute
 limit (`JOB_TIMEOUT_MINUTES`), and it answers `GET /health` on port 8080 with the last round's
 outcome per job (a `503` means the last round failed). Its root, `GET /`, is the same status as a
@@ -32,6 +33,24 @@ the last one, at whatever minute the container had started, so a poll could wait
 `SYNC_AT_MINUTE` changes the minute (`off` brings back an hour from the last round), and
 `SYNC_EVERY_MINUTES` the gap. With a minute set, the gap must divide 60 or be a multiple of it
 (15 gives :05, :20, :35 and :50).
+
+**The daily tracking check** (`vending/tracking_daily.py`, #218). The last job of each round sends our books
+to the bridge's tracking check once a day, from 06:00 Eastern, as of the newest poll already in the bridge's
+books. It is **off until the team turns it on**: it spends the day's one check at the course's bridge.
+
+| Setting | Default | |
+|---|---|---|
+| `TRACKING_DAILY` | `off` | `on` sends one check a day; `off` (or unset) sends none. Any other value fails the job |
+| `TRACKING_DAILY_AT` | `06:00` | The first Eastern time of day it may send (HH:MM, before 22:00). It sends in the first round from then that finds the books settled, and never from 22:00 |
+
+Turn it on: `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group
+--set-env-vars TRACKING_DAILY=on`. Turn it off the same way with `off`. From the competition start, it never
+sends twice in an Eastern day, by the worker or a person, even after a restart: every send is in `tracking_checks`.
+Before the start the course allows unlimited checks for testing, so a person may send again by hand; the
+worker still sends at most once a day. A sync that didn't finish holds the day's check back until the next
+round, so it never reads books the round's syncs never brought in. With no ledger
+opening yet it logs a line and skips. The verdicts show on the dashboard (Tracking check), an `outside` one
+in the incident log and the agent's briefing.
 
 **Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
 worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a
