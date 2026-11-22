@@ -636,7 +636,7 @@ def test_a_balance_that_drops_under_the_floor_after_the_preview_refuses_the_subm
     previewed = preview()
     assert previewed["success"] and previewed["cost"]["spendable_left_at_max"] == "574.63"
     # 530.00 of model spend lands between preview and submit: 587.63 - 530.00 - 13.00 leaves 44.63.
-    ledger.record_tokens(db, "530.00", "m", 1, 1, "live")
+    ledger.record_tokens(db, "530.00", "m", 1, 1, "live", at=NOW)
     reply = submit(expected_plan_hash=previewed["plan_hash"])
     assert codes(reply) == ["below_spendable_floor"] and fake.posts == []
     assert "$53.00 spendable floor" in reply["refusals"][0]["message"]
