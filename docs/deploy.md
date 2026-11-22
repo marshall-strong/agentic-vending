@@ -137,8 +137,10 @@ it fails before any model request, which the dashboard shows. To add it, put
 the script. Set them on the app:
 `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=dry-run`.
 A later deploy keeps them, because `--set-env-vars` only adds. To turn the runs down or off, change
-the database's setting (`python -m vending.config set agent_schedule_mode '"off"' --by <name>`):
-it reaches every replica at the next scheduled time, an old one still running during a deploy too.
+the database's setting (`python -m vending.config set agent_schedule_mode off --by <name>`, a bare
+word, so it works in every shell, Windows PowerShell 5.1 too): it reaches every replica at the next
+scheduled time, an old one still running during a deploy too, and a run that has been claimed but
+not started yet.
 The deploy of `c1505c2` on 11 Nov, from an older script, set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
 adds, so the script now passes `--remove-env-vars` for it when the app still has it (the list is
 `$Retired`). The `anthropic-api-key` secret itself stays in the app, unused by any variable; to

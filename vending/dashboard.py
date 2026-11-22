@@ -868,12 +868,17 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
                     price.update(_scope_text(fields, ours))
 
 
+# The worker's scheduled agent runs (`vending.agent_schedule`), read from the table, not the worker's /health,
+# so turning the schedule off hides none. Two reads, so neither crowds out the other: the newest row, however
+# old, and every failed, missed or halted row of the last week, with any still `running`. No `detail`: a
+# failed one's can hold an error. And the database's `agent_schedule_mode`, to say when it isn't a mode.
+SCHEDULED_COLUMNS = "due_at, mode, claimed_at, outcome, run_id"
+SCHEDULED_LATEST_SQL = f"select {SCHEDULED_COLUMNS} from agent_schedule order by due_at desc limit 1"
+SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS} from agent_schedule"
+                           " where (due_at > %s and outcome in ('failed', 'missed', 'halted')) or outcome = 'running'"
+                           " order by due_at desc limit 50")
+SCHEDULED_SETTING_SQL = "select value from config where key = %s"
 # Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
-# The worker's scheduled agent runs (`vending.agent_schedule`) of the last week, and any still `running`,
-# newest first. Read from the table, not the worker's /health, so turning the schedule off hides none.
-# No `detail`: a failed one's can hold an error.
-SCHEDULED_RUNS_SQL = ("select due_at, mode, claimed_at, outcome, run_id from agent_schedule"
-                      " where due_at > %s or outcome = 'running' order by due_at desc limit 20")
 CATALOG_REQUESTS_SQL = ("select id, requested_at, name, size, status, sku, decision_note"
                         " from product_requests order by requested_at desc, id desc")
 
@@ -911,8 +916,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False) -> 
                                        f" and started_at {comparison} %s",
                                  (live_since or now,))
     catalog = _panel(lambda: _rows(conn, CATALOG_REQUESTS_SQL))
-    scheduled = _panel(lambda: _isolated(conn, lambda: _rows(conn, SCHEDULED_RUNS_SQL,
-                                                              (now - agent_schedule.LOOKBACK,))))
+    scheduled = _panel(lambda: _isolated(conn, lambda: _scheduled(conn, now)))
     if live_since is None:
         spend = {"ok": True, "data": None}
     elif purchases["ok"]:
@@ -1144,8 +1148,18 @@ def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
     return f"The worker's latest hourly sync{when} failed: {jobs}.{meaning} See `/health`."
 
 
+def _scheduled(conn: psycopg.Connection, now: datetime) -> dict:
+    """The scheduled runs' panel: the newest row, the last week's problems, and whether the database's
+    `agent_schedule_mode` is one of the three words (`setting_ok`)."""
+    latest = _rows(conn, SCHEDULED_LATEST_SQL)
+    setting = _rows(conn, SCHEDULED_SETTING_SQL, (agent_schedule.DB_MODE_KEY,))
+    return {"latest": latest[0] if latest else None,
+            "incidents": _rows(conn, SCHEDULED_INCIDENTS_SQL, (now - agent_schedule.LOOKBACK,)),
+            "setting_ok": not setting or agent_schedule.valid_database_mode(setting[0]["value"])}
+
+
 # How Needs attention reads a scheduled agent run (`vending.agent_schedule`), by its outcome.
-SCHEDULED = {"failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started before its latest start"),
+SCHEDULED = {"failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started in its window"),
              "halted": ("warn", "was halted: the halt switch was on"), "skipped": ("info", "skipped"),
              "submitted": ("info", "submitted a purchase request"), "running": ("info", "is running now")}
 # Each of these stays in Needs attention for a week (`agent_schedule.LOOKBACK`), whatever ran after it.
@@ -1175,20 +1189,38 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
     return level, f"The scheduled {kind}{when} {what}{run}.{see}"
 
 
+SCHEDULE_UNAVAILABLE = ("Scheduled agent run status unavailable: the `agent_schedule` table couldn't be read "
+                        "just now. `python -m vending.agent_schedule` shows the rows.")
+
+
 def _scheduled_runs(panel: dict | None, syncs: dict | None, now: datetime) -> list[tuple[str, str]]:
-    """Needs attention's lines on the scheduled agent runs: a wrong setting (from the worker's /health),
-    every failed, missed or halted run of the last week and every stuck one (from `agent_schedule`), and the
-    latest run whatever its outcome. Nothing when the table is empty or not there yet."""
+    """Needs attention's lines on the scheduled agent runs: a wrong setting (from the worker's /health, or the
+    database's `agent_schedule_mode`), the newest run whatever its outcome and age, and every failed, missed
+    or halted run of the last week and every stuck one (from `agent_schedule`). A panel that couldn't be read
+    says so. Nothing when there is no panel (an old snapshot) or no row yet."""
     out: list[tuple[str, str]] = []
     schedule = (syncs or {}).get("agent_schedule")
     if isinstance(schedule, dict) and schedule.get("mode") == "invalid":
         out.append(("bad", "Scheduled agent runs are off because a setting is wrong (`AGENT_SCHEDULE_MODE`, "
                            "`AGENT_SCHEDULE` or `AGENT_SCHEDULE_FROM`). The container's log says which."))
-    if not panel or not panel.get("ok"):
+    if panel is None:
         return out
-    for i, row in enumerate(panel["data"]):
+    data = panel.get("data") if panel.get("ok") else None
+    if not isinstance(data, dict):
+        out.append(("warn", SCHEDULE_UNAVAILABLE))
+        return out
+    if data.get("setting_ok") is False:
+        out.append(("bad", agent_schedule.INVALID_IN_DB))
+    latest = data.get("latest")
+    seen = set()
+    if isinstance(latest, dict) and (line := _scheduled_line(latest, now)) is not None:
+        out.append(line)
+        seen.add(latest.get("due_at"))
+    for row in data.get("incidents") or []:
+        if row.get("due_at") in seen:
+            continue
         line = _scheduled_line(row, now)
-        if line is not None and (i == 0 or line[0] != "info"):
+        if line is not None and line[0] != "info":
             out.append(line)
     return out
 

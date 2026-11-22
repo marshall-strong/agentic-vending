@@ -2,6 +2,7 @@
 Anthropic API, the bridge or a real server process. Runs and spend land in a throwaway schema."""
 
 import json
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -675,33 +676,28 @@ def test_different_startup_snapshots_leave_system_prompt_byte_identical(connect,
 
 # --- One run at a time, and a deadline (#213) ---------------------------------------
 
-def _lock_free(conn, key):
-    """Whether `key` is free: takes it and gives it straight back."""
-    if not conn.execute("select pg_try_advisory_lock(%s)", (key,)).fetchone()[0]:
-        return False
-    conn.execute("select pg_advisory_unlock(%s)", (key,))
-    return True
+def _lock_free(conn):
+    """Whether the run lease is free."""
+    return conn.execute("select token from agent_run_lease").fetchone()[0] is None
 
 
-def test_a_run_never_overlaps_another_and_says_which_one_holds_it(connect, conn, schema_url):
-    from tests.conftest import open_in
-
-    from vending import agent_runs
+def test_a_run_never_overlaps_another_and_says_which_one_holds_it(connect, conn):
+    from vending import agent_runs, run_lease
 
     going = agent_runs.start(conn, mode="dry-run", model="by hand")
-    with open_in(*schema_url) as other:
-        assert other.execute("select pg_try_advisory_lock(%s)", (agent.RUN_LOCK,)).fetchone()[0]
-        client, tools = Script(), Tools()
-        run_id, out = go(connect, client, tools, live=True)
-        # Recorded, and nothing read, called or sent.
-        assert (out.status, out.detail) == ("skipped", f"{agent.BUSY} (agent run {going}).")
-        assert client.sent == [] and tools.calls == []
-        assert stored(conn, run_id)[:2] == ("live", "skipped") and stored(conn, run_id)[5] == out.detail
-        other.execute("select pg_advisory_unlock(%s)", (agent.RUN_LOCK,))
-    # Once the other run lets go, a run goes ahead, and gives the lock back at its end.
+    held = run_lease.take(conn, deadline=60)
+    assert run_lease.attach(conn, held.token, going)
+    client, tools = Script(), Tools()
+    run_id, out = go(connect, client, tools, live=True)
+    # Recorded, and nothing read, called or sent.
+    assert (out.status, out.detail) == ("skipped", f"{agent.BUSY} (agent run {going}).")
+    assert client.sent == [] and tools.calls == []
+    assert stored(conn, run_id)[:2] == ("live", "skipped") and stored(conn, run_id)[5] == out.detail
+    run_lease.give_back(conn, held.token)
+    # Once the other run lets go, a run goes ahead, and gives the lease back at its end.
     run_id, out = go(connect, Script(answer()), Tools())
     assert out.status == "skipped" and out.detail != f"{agent.BUSY} (agent run {going})."
-    assert _lock_free(conn, agent.RUN_LOCK)
+    assert _lock_free(conn)
 
 
 def test_a_run_that_breaks_gives_the_lock_back(connect, conn):
@@ -710,7 +706,7 @@ def test_a_run_that_breaks_gives_the_lock_back(connect, conn):
             raise RuntimeError("server died")
 
     go(connect, Script(tool_turn(use("get_pnl"))), Broken())
-    assert _lock_free(conn, agent.RUN_LOCK)
+    assert _lock_free(conn)
 
 
 def test_a_server_that_stops_answering_is_cut_off_at_the_deadline(connect, conn):
@@ -724,14 +720,21 @@ def test_a_server_that_stops_answering_is_cut_off_at_the_deadline(connect, conn)
     assert tools.calls, "the hung call was reached"
     assert (out.status, out.detail) == ("failed", "Stopped at the run's deadline (0.00833333 min).")
     assert stored(conn, run_id)[1] == "failed"
-    assert _lock_free(conn, agent.RUN_LOCK)
+    assert _lock_free(conn)
 
 
 def test_the_deadline_outlasts_a_model_request():
     assert agent.RUN_DEADLINE > agent.REQUEST_TIMEOUT * 2
-    from vending import agent_schedule
-    # The dashboard calls a scheduled run stuck only once the agent's deadline, and a last request, are past.
-    assert agent_schedule.STUCK_AFTER.total_seconds() >= agent.RUN_DEADLINE + agent.REQUEST_TIMEOUT
+    from vending import agent_schedule, run_lease
+    from vending.dashboard import _span
+    # A lease outlasts a model request and a tool call, so a run waiting on one keeps it.
+    assert run_lease.TTL.total_seconds() > agent.REQUEST_TIMEOUT + agent.TOOL_TIMEOUT.total_seconds()
+    assert run_lease.TTL.total_seconds() > 3 * run_lease.HEARTBEAT
+    # A request already sent at the deadline finishes within the lease's grace.
+    assert run_lease.GRACE.total_seconds() >= agent.REQUEST_TIMEOUT + 2 * agent.DB_TIMEOUT
+    # The worker lets go of a run, and the dashboard calls it stuck, only once its lease can't be held any more.
+    assert agent_schedule.STUCK_AFTER.total_seconds() >= agent.RUN_DEADLINE + run_lease.GRACE.total_seconds()
+    assert _span(agent_schedule.STUCK_AFTER) in agent_schedule.ABANDONED
 
 
 def test_every_mcp_request_has_a_read_timeout(monkeypatch):
@@ -772,3 +775,120 @@ def test_every_mcp_request_has_a_read_timeout(monkeypatch):
 
     assert anyio.run(open_it) == []
     assert made["read_timeout_seconds"] == agent.TOOL_TIMEOUT
+
+
+# --- Sol review, round 2: a run lease that outlives a connection, and bounded database work ---------
+
+def _lease(conn):
+    return conn.execute("select token, run_id from agent_run_lease").fetchone()
+
+
+class Blocking(Tools):
+    """A server whose first call waits until the test lets it go."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.reached, self.release = threading.Event(), threading.Event()
+
+    async def call(self, name, arguments):
+        self.reached.set()
+        await anyio.to_thread.run_sync(lambda: self.release.wait(20))
+        return await super().call(name, arguments)
+
+
+def _in_thread(target):
+    box = {}
+    thread = threading.Thread(target=lambda: box.setdefault("out", target()), daemon=True)
+    thread.start()
+    return thread, box
+
+
+def test_killing_a_runs_database_connections_never_lets_a_second_run_start(connect, conn):
+    """Round 2, blocker 2: the run lock was a session lock, so killing that backend freed it mid-run."""
+    tools = Blocking()
+    since = conn.execute("select clock_timestamp()").fetchone()[0]
+    first, box = _in_thread(lambda: go(connect, Script(tool_turn(use("get_pnl")), answer()), tools))
+    assert tools.reached.wait(10)
+    # Every connection opened since the test began, so the first run's, whatever it holds.
+    conn.execute("select pg_terminate_backend(pid) from pg_stat_activity"
+                 " where datname = current_database() and pid <> pg_backend_pid() and backend_start > %s", (since,))
+    client = Script()
+    second_id, second = go(connect, client, Tools())
+    assert second.status == "skipped" and client.sent == [], "a second run started while the first was going"
+    first_id = _lease(conn)[1]
+    assert (second.status, second.detail) == ("skipped", f"{agent.BUSY} (agent run {first_id}).")
+    assert client.sent == [] and second_id != first_id
+    tools.release.set()
+    first.join(20)
+    assert box["out"][0] == first_id and box["out"][1].status == "skipped"
+    assert _lease(conn) == (None, None)
+
+
+def test_a_run_that_lost_its_lease_sends_no_more_model_requests(connect, conn):
+    """Round 2, blocker 2: ownership is checked before every model request."""
+    class Steals(Tools):
+        async def call(self, name, arguments):
+            if name == "get_pnl":
+                conn.execute("update agent_run_lease set token = gen_random_uuid()")
+            return await super().call(name, arguments)
+    client = Script(tool_turn(use("get_pnl")), answer())
+    run_id, out = go(connect, client, Steals())
+    assert len(client.sent) == 1
+    assert (out.status, out.detail) == ("failed", agent.LOST_LEASE.format(turn=2))
+    assert stored(conn, run_id)[1] == "failed"
+
+
+def test_a_run_that_lost_its_lease_never_submits(connect, conn):
+    """Round 2, blocker 2: ownership is checked again just before a purchase request is sent."""
+    class StealsOnSecond(Script):
+        def create(self, **body):
+            if len(self.sent) == 1:
+                conn.execute("update agent_run_lease set token = gen_random_uuid()")
+            return super().create(**body)
+    tools = Tools(LIVE_TOOLS, replies={"preview_desired_state": PREVIEWED, "submit_desired_state": SENT})
+    client = StealsOnSecond(preview(), tool_turn(submit()), answer("submit"))
+    run_id, out = go(connect, client, tools, live=True)
+    assert "submit_desired_state" not in [name for name, _ in tools.calls]
+    assert out.status == "failed" and out.request_id is None and not out.submit_sent
+    assert out.detail == agent.LOST_LEASE_SUBMIT
+
+
+def test_an_expired_lease_is_taken_over_and_its_run_recorded(connect, conn):
+    """Round 2, blocker 2: a run whose process stopped renewing its lease is failed by the next run."""
+    from vending import agent_runs
+
+    stale = agent_runs.start(conn, mode="live", model="stalled")
+    conn.execute("update agent_run_lease set token = gen_random_uuid(), run_id = %s, taken_at = now() - interval '2 hours',"
+                 " renewed_at = now() - interval '1 hour', expires_at = now() - interval '1 minute',"
+                 " hard_until = now() + interval '1 hour'", (stale,))
+    run_id, out = go(connect, Script(answer()), Tools())
+    assert out.status == "skipped" and run_id != stale
+    status, detail = conn.execute("select status, detail from agent_runs where id = %s", (stale,)).fetchone()
+    assert status == "failed" and detail.startswith("Stopped: its run lease expired")
+    assert _lease(conn) == (None, None)
+
+
+def test_a_run_blocked_in_the_database_ends_and_lets_go(connect, conn, schema_url, monkeypatch):
+    """Round 2, major 4: behind an exclusive lock on agent_runs, a 50 ms run held the run lock past 500 ms."""
+    from tests.conftest import open_in
+
+    monkeypatch.setattr(agent, "DB_TIMEOUT", 0.3, raising=False)
+    with open_in(*schema_url) as other:
+        other.execute("begin")
+        other.execute("lock table agent_runs in access exclusive mode")
+        thread, box = _in_thread(lambda: go(connect, Script(answer()), Tools(), deadline=0.05))
+        thread.join(5)
+        blocked = thread.is_alive()
+        other.execute("rollback")
+    thread.join(20)
+    assert not blocked, "the run waited on the database past its timeouts"
+    run_id, out = box["out"]
+    assert run_id is None and out.status == "failed" and "couldn't be recorded" in out.detail
+    assert _lease(conn) == (None, None)
+
+
+def test_every_database_call_of_a_run_has_a_time_limit(connect, schema_url):
+    bounded = agent._bounded(connect, 1.5)
+    with bounded() as c:
+        assert c.execute("select current_setting('statement_timeout'), current_setting('lock_timeout')").fetchone() \
+            == ("1500ms", "1500ms")

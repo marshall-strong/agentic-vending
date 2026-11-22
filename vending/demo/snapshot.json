@@ -2748,7 +2748,11 @@
  },
  "scheduled_runs": {
   "ok": true,
-  "data": []
+  "data": {
+   "latest": null,
+   "incidents": [],
+   "setting_ok": true
+  }
  },
  "key_dates": {
   "ok": true,

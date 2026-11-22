@@ -94,7 +94,7 @@ SCHEDULE_MODES = ("off", "dry-run", "live")
 
 def _schedule_mode(value: Any) -> str | None:
     if value not in SCHEDULE_MODES:
-        return f"must be one of {', '.join(json.dumps(m) for m in SCHEDULE_MODES)} in quotes, not {json.dumps(value)}"
+        return f"must be off, dry-run or live, not {json.dumps(value)}"
     return None
 
 

@@ -263,10 +263,15 @@ class FakeAgent:
         self.then = then
         self.calls = []
 
-    def __call__(self, live):
+    def __call__(self, live, authorize=None):
+        if authorize is not None:       # as the real one does, once it holds the run lease
+            with open_in(*self.url) as c:
+                refused = authorize(c)
+            if refused is not None:
+                return None, SimpleNamespace(status="skipped", detail=refused)
         self.calls.append((self.clock() if self.clock else None, live))
         if self.gate is not None:
-            self.gate.wait(10)
+            self.gate.wait(getattr(self, "gate_timeout", 10))
         if self.raises is not None:
             raise self.raises
         with open_in(*self.url) as c:
@@ -305,7 +310,7 @@ def allowed(conn):
 
 def attention(conn, now, syncs=None):
     return [(a["level"], a["text"]) for a in dashboard.snapshot(conn, now=now, syncs=syncs)["attention"]
-            if a["text"].startswith(("The scheduled ", "Scheduled agent runs"))]
+            if a["text"].startswith(("The scheduled ", "Scheduled agent run"))]
 
 
 # The hard rule, again: the container's setting on, the database's not set, and nothing runs.
@@ -407,20 +412,28 @@ def test_a_run_never_starts_after_its_latest_start_even_when_the_lock_was_slow(s
     assert outcome == "missed" and "10:00 PM ET" in detail
 
 
-def test_the_clock_is_read_again_just_before_the_claim(schema_url, conn, allowed):
-    """The same, when it is the database's reads under the lock that are slow."""
+def test_the_clock_is_read_again_just_before_the_claim(schema_url, conn, allowed, monkeypatch):
+    """The same, when it is the work under the lock that is slow."""
     agent = FakeAgent(schema_url)
     clock = Clock(at(WED, 21, 59))
     sched = scheduler(schema_url, agent, clock=clock)
-    real = agent_schedule.database_mode
+    real = agent_schedule.due_times
 
-    def slow(conn_):
+    def slow(*a):
+        found = real(*a)
         clock.now = at(WED, 22, 0)
-        return real(conn_)
-    import unittest.mock
-    with unittest.mock.patch.object(agent_schedule, "database_mode", slow):
-        sched.tick(at(WED, 21, 59))
+        return found
+    monkeypatch.setattr(agent_schedule, "due_times", slow)
+    sched.tick(at(WED, 21, 59))
     assert agent.calls == [] and rows(conn)[0][2] == "missed"
+
+
+def test_a_tick_with_nothing_to_run_logs_no_error(schema_url, conn, allowed):
+    """It went on to start a run with no claim, and logged an AttributeError every time."""
+    logged = []
+    sched = scheduler(schema_url, FakeAgent(schema_url), log=logged.append)
+    tick(sched, at(WED, 13))
+    assert logged == [] and rows(conn) == [] and sched.next_due(at(WED, 13)) == at(WED, 14)
 
 
 def test_a_time_reached_late_but_before_its_latest_start_runs_late(schema_url, conn, allowed):
@@ -454,25 +467,16 @@ def test_a_worker_holding_the_lock_keeps_another_from_running(schema_url, conn, 
 
 
 def test_a_run_by_hand_and_a_scheduled_run_never_overlap(schema_url, conn, allowed):
-    """Finding 2: the agent's own entry point holds one lock for every run, by hand or scheduled."""
-    import anyio
-
-    from vending import agent
+    """Finding 2: the agent's own entry point holds one run lease for every run, by hand or scheduled."""
+    from vending import agent, run_lease
     from vending.config import set_halted
 
     set_halted(conn, False, "test")
-
-    def never(*a, **k):
-        raise AssertionError("a blocked run must not open the tools or call the model")
-
-    def real_entry_point(live):
-        return anyio.run(lambda: agent.run(live=live, connect=lambda: open_in(*schema_url), client=never,
-                                           open_tools=never))
     by_hand = agent_runs.start(conn, mode="dry-run", model="by hand")
-    with open_in(*schema_url) as hand:
-        assert hand.execute("select pg_try_advisory_lock(%s)", (agent.RUN_LOCK,)).fetchone()[0]
-        tick(scheduler(schema_url, real_entry_point), at(WED, 14))
-        hand.execute("select pg_advisory_unlock(%s)", (agent.RUN_LOCK,))
+    held = run_lease.take(conn, deadline=60)
+    assert run_lease.attach(conn, held.token, by_hand)
+    tick(scheduler(schema_url, _real_entry_point(schema_url)), at(WED, 14))
+    run_lease.give_back(conn, held.token)
     [(_, _, outcome, run_id, detail)] = rows(conn)
     assert (outcome, detail) == ("skipped", f"{agent.BUSY} (agent run {by_hand}).")
     assert conn.execute("select status, detail from agent_runs where id = %s", (run_id,)).fetchone() == \
@@ -488,6 +492,18 @@ def test_a_run_the_worker_was_stopped_in_is_failed_and_never_run_again(schema_ur
     assert agent.calls == []
     [(_, _, outcome, _, detail)] = rows(conn)
     assert (outcome, detail) == ("failed", agent_schedule.STOPPED)
+
+
+def test_a_running_row_is_left_alone_while_an_agent_run_holds_the_lease(schema_url, conn, allowed):
+    """The worker's connection dropped (so its lock went), but its run is still going: not swept."""
+    from vending import run_lease
+
+    conn.execute("insert into agent_schedule (due_at, latest_at, mode) values (%s, %s, 'dry-run')",
+                 (at(WED, 14), at(WED, 22)))
+    held = run_lease.take(conn, deadline=60)
+    tick(scheduler(schema_url, FakeAgent(schema_url)), at(WED, 14, 20))
+    assert rows(conn)[0][2] == "running"
+    run_lease.give_back(conn, held.token)
 
 
 @pytest.mark.parametrize("status", ["skipped", "halted", "failed", "submitted"])
@@ -601,7 +617,233 @@ def test_the_show_command_lists_the_rows(schema_url, conn, monkeypatch, capsys):
 
 
 def test_the_database_setting_is_checked_when_it_is_set(conn):
-    with pytest.raises(ValueError, match="agent_schedule_mode must be one of"):
+    with pytest.raises(ValueError, match="agent_schedule_mode must be off, dry-run or live"):
         db_mode(conn, "on")
     db_mode(conn, "dry-run")
     assert agent_schedule.database_mode(conn) == "dry-run"
+
+
+# --- Sol review, round 2 -------------------------------------------------------------------------------
+# Each test changes something from a second connection between two steps of a scheduled run.
+
+def _set_from_another_connection(schema_url, value):
+    """Commit `agent_schedule_mode` from a connection of its own: `None` deletes the row."""
+    with open_in(*schema_url) as other:
+        if value is None:
+            other.execute("delete from config where key = %s", (agent_schedule.DB_MODE_KEY,))
+        else:
+            db_mode(other, value)
+
+
+def _around_the_claim(monkeypatch, before=None, after=None):
+    """Run `before` just before the claim's insert, and `after` just after it."""
+    real = agent_schedule.record
+
+    def wrapped(conn_, *args, **kw):
+        claiming = (args[3] if len(args) > 3 else kw.get("outcome")) == "running"
+        if claiming and before is not None:
+            before()
+        out = real(conn_, *args, **kw)
+        if claiming and after is not None:
+            after()
+        return out
+    monkeypatch.setattr(agent_schedule, "record", wrapped)
+
+
+def _real_entry_point(schema_url):
+    """`vending.agent.run`, as the worker calls it, with nothing behind it: opening the tools or a model
+    request fails the run."""
+    import anyio
+
+    from vending import agent
+
+    def never(*a, **k):
+        raise AssertionError("a refused run must not open the tools or call the model")
+
+    def entry(live, authorize=None):
+        return anyio.run(lambda: agent.run(live=live, connect=lambda: open_in(*schema_url), client=never,
+                                           open_tools=never, authorize=authorize))
+    return entry
+
+
+@pytest.mark.parametrize("change, called, stored", [
+    ("dry-run", [False], ("dry-run", "skipped")),
+    ("off", [], ("off", "skipped")),
+    (None, [], ("off", "skipped")),
+])
+def test_a_mode_change_committed_just_before_the_claim_is_what_runs(schema_url, conn, allowed, monkeypatch,
+                                                                    change, called, stored):
+    """Round 2, blocker 1: the mode was read, then the claim inserted with the cached mode."""
+    agent = FakeAgent(schema_url)
+    _around_the_claim(monkeypatch, before=lambda: _set_from_another_connection(schema_url, change))
+    tick(scheduler(schema_url, agent, LIVE), at(WED, 14))
+    assert [live for _, live in agent.calls] == called
+    assert rows(conn)[0][1:3] == stored
+
+
+@pytest.mark.parametrize("change", ["dry-run", "off", None])
+def test_a_mode_change_after_the_claim_stops_the_run_before_anything_is_paid_for(schema_url, conn, allowed,
+                                                                                monkeypatch, change):
+    """Round 2, blocker 1: the agent checks again once it holds the run lease, before any model request."""
+    from vending.config import set_halted
+    set_halted(conn, False, "test")
+    _around_the_claim(monkeypatch, after=lambda: _set_from_another_connection(schema_url, change))
+    tick(scheduler(schema_url, _real_entry_point(schema_url), LIVE), at(WED, 14))
+    [(_, mode, outcome, run_id, detail)] = rows(conn)
+    assert (mode, outcome, run_id) == ("live", "skipped", None)
+    assert detail.startswith("Not started: agent_schedule_mode changed")
+    assert conn.execute("select count(*) from agent_runs").fetchone()[0] == 0
+
+
+def test_a_run_never_starts_when_the_latest_start_passes_during_the_claim(schema_url, conn, allowed, monkeypatch):
+    """Round 2, major 3: 9:59 PM when the claim began, 10:01 PM when it was inserted."""
+    agent = FakeAgent(schema_url)
+    clock = Clock(at(WED, 21, 59))
+    _around_the_claim(monkeypatch, before=lambda: setattr(clock, "now", at(WED, 22, 1)))
+    scheduler(schema_url, agent, clock=clock).tick(at(WED, 21, 59))
+    assert agent.calls == []
+    [(_, _, outcome, run_id, detail)] = rows(conn)
+    assert (outcome, run_id) == ("missed", None) and "10:00 PM ET" in detail
+
+
+def test_a_run_never_starts_when_the_latest_start_passes_before_it_holds_the_lease(schema_url, conn, allowed,
+                                                                                  monkeypatch):
+    """Round 2, major 3: claimed at 9:59 PM; by the time the agent held the run lease it was 10:01 PM."""
+    from vending.config import set_halted
+    set_halted(conn, False, "test")
+    clock = Clock(at(WED, 21, 59))
+    _around_the_claim(monkeypatch, after=lambda: setattr(clock, "now", at(WED, 22, 1)))
+    scheduler(schema_url, _real_entry_point(schema_url), clock=clock).tick(at(WED, 21, 59))
+    [(_, _, outcome, run_id, detail)] = rows(conn)
+    assert (outcome, run_id) == ("missed", None) and "10:00 PM ET" in detail and "claimed" in detail
+    assert conn.execute("select count(*) from agent_runs").fetchone()[0] == 0
+
+
+def test_a_run_that_never_ends_lets_go_of_the_schedule(schema_url, conn, allowed):
+    """Round 2, major 4: a run stuck in the database (or anywhere) held the schedule's lock for ever."""
+    gate = threading.Event()
+    agent = FakeAgent(schema_url, gate=gate)
+    agent.gate_timeout = 30
+    sched = scheduler(schema_url, agent, background=True)
+    tick(sched, at(WED, 14))
+    stuck = sched.thread
+    assert stuck.is_alive()
+    tick(sched, at(WED, 14) + agent_schedule.STUCK_AFTER - timedelta(minutes=1))     # not yet
+    assert rows(conn)[0][2] == "running"
+    tick(sched, at(WED, 14) + agent_schedule.STUCK_AFTER + timedelta(minutes=1))
+    [(_, _, outcome, _, detail)] = rows(conn)
+    assert outcome == "failed" and detail == agent_schedule.ABANDONED
+    with open_in(*schema_url) as other:              # the schedule's lock is free again
+        assert other.execute("select pg_try_advisory_lock(%s)", (agent_schedule.LOCK,)).fetchone()[0]
+        other.execute("select pg_advisory_unlock(%s)", (agent_schedule.LOCK,))
+    # The stuck run, when it ends at last, doesn't overwrite what was recorded; the next week runs.
+    gate.set()
+    stuck.join(10)
+    assert rows(conn)[0][2:] == ("failed", None, agent_schedule.ABANDONED)
+    agent.gate = None
+    tick(sched, at(WED + timedelta(days=7), 14))
+    sched.thread.join(10)
+    assert [r[2] for r in rows(conn)] == ["failed", "skipped"]
+
+
+def test_a_thread_that_cannot_start_is_a_failed_launch_and_lets_go(schema_url, conn, allowed):
+    """Round 2, major 5: Thread.start() raised, and the claim stayed `running` with the lock held."""
+    class NoThread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+        def is_alive(self):
+            return False
+    agent = FakeAgent(schema_url)
+    sched = scheduler(schema_url, agent, background=True)
+    sched.thread_factory = NoThread
+    tick(sched, at(WED, 14))
+    assert agent.calls == []
+    [(_, _, outcome, run_id, detail)] = rows(conn)
+    assert (outcome, run_id) == ("failed", None) and "RuntimeError" in detail and "start" in detail
+    with open_in(*schema_url) as other:
+        assert other.execute("select pg_try_advisory_lock(%s)", (agent_schedule.LOCK,)).fetchone()[0]
+        other.execute("select pg_advisory_unlock(%s)", (agent_schedule.LOCK,))
+    sched.thread_factory = threading.Thread
+    tick(sched, at(WED + timedelta(days=7), 14))
+    sched.thread.join(10)
+    assert [r[2] for r in rows(conn)] == ["failed", "skipped"]
+
+
+def _row(conn, due, outcome, mode="dry-run", run_id=None):
+    conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome, finished_at, run_id)"
+                 " values (%s, %s, %s, %s, case when %s = 'running' then null else now() end, %s)",
+                 (due, due + timedelta(hours=1), mode, outcome, outcome, run_id))
+
+
+def test_one_failure_stays_on_the_dashboard_behind_many_skipped_runs(schema_url, conn):
+    """Round 2, major 6: one failure, then 20 skipped runs the same week, and the failure vanished."""
+    start = at(WED, 0)
+    _row(conn, start, "failed")
+    for i in range(1, 21):
+        _row(conn, start + timedelta(hours=6 * i), "skipped")
+    lines = attention(conn, start + timedelta(days=6))
+    assert [level for level, _ in lines] == ["bad", "info"]
+    assert "Wed 02 Dec, 12:00 AM ET failed" in lines[0][1]
+
+
+def test_a_failure_older_than_a_week_that_is_still_the_newest_run_stays(schema_url, conn):
+    """Round 2, major 6: the newest run is always shown, however old."""
+    _row(conn, at(WED, 14), "failed")
+    [(level, text)] = attention(conn, at(WED + timedelta(days=9), 14))
+    assert level == "bad" and "failed" in text
+
+
+def test_an_unreadable_schedule_says_so():
+    """Round 2, major 6: a panel that couldn't be read was dropped without a word."""
+    [(level, text)] = dashboard._scheduled_runs({"ok": False, "why": "couldn't be read just now"}, None, at(WED, 14))
+    assert level == "warn" and "Scheduled agent run status unavailable" in text
+
+
+def test_the_mode_commands_in_the_docs_work_in_every_shell(schema_url, conn, monkeypatch, capsys):
+    """Round 2, major 7: Windows PowerShell 5.1 drops the quotes in '"dry-run"'. The docs use bare words,
+    which every shell passes as they are, and the command reads them."""
+    import shlex
+
+    from vending import db
+    monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+    texts = [(ROOT / "docs" / name).read_text(encoding="utf-8") for name in ("agent.md", "deploy.md")]
+    texts.append(agent_schedule.__doc__)
+    commands = [c for t in texts for c in re.findall(r"python -m vending\.config set agent_schedule_mode [^`\n]*", t)]
+    assert len(commands) >= 3, commands
+    for command in commands:
+        assert '"' not in command and "'" not in command, command
+        assert shlex.split(command)[5] in ("off", "dry-run", "live"), command
+    # PowerShell 5.1 passes '"dry-run"' as dry-run; bash passes it as "dry-run". Both are read as the word.
+    for argv_value, expected in (("dry-run", "dry-run"), ('"dry-run"', "dry-run"), ("off", "off"), ("live", "live")):
+        assert config.main(["set", agent_schedule.DB_MODE_KEY, argv_value, "--by", "test"]) == 0
+        assert agent_schedule.database_mode(conn) == expected
+    capsys.readouterr()
+    assert config.main(["set", agent_schedule.DB_MODE_KEY, "on", "--by", "test"]) == 1
+    assert "in quotes" not in capsys.readouterr().err
+
+
+def test_a_window_the_clocks_skip_is_recorded_with_the_reason(schema_url, conn, allowed):
+    """Round 2, minor 8: `sun 02:30-03:00` doesn't exist on the spring-forward Sunday."""
+    spring = Schedule("dry-run", (Entry(6, time(2, 30), time(3)),), date(2026, 3, 1))
+    agent = FakeAgent(schema_url)
+    sched = scheduler(schema_url, agent, spring, clock=Clock(datetime(2026, 3, 8, 7, tzinfo=timezone.utc)))
+    tick(sched, datetime(2026, 3, 8, 9, tzinfo=timezone.utc))
+    assert agent.calls == []
+    [(_, _, outcome, _, detail)] = rows(conn)
+    assert outcome == "missed" and detail == agent_schedule.CLOCKS_SKIP.format(day="Sun 08 Mar")
+
+
+def test_a_database_setting_of_the_wrong_type_is_off_and_shown(schema_url, conn, allowed):
+    """Round 2, minor 9: a stored [] raised TypeError, and the worker tried again every minute."""
+    conn.execute("update config set value = '[]' where key = %s", (agent_schedule.DB_MODE_KEY,))
+    assert agent_schedule.database_mode(conn) == "off"
+    agent = FakeAgent(schema_url)
+    logged = []
+    tick(scheduler(schema_url, agent, LIVE, log=logged.append), at(WED, 14))
+    assert agent.calls == [] and not any("trying again" in line for line in logged)
+    assert rows(conn)[0][1:3] == ("off", "skipped")
+    assert ("bad", agent_schedule.INVALID_IN_DB) in attention(conn, at(WED, 15))
