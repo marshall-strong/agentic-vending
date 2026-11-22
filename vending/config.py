@@ -136,6 +136,8 @@ KNOWN: dict[str, Setting] = {
                                            "maximum (default and most 8200)", _cap),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
+    "spendable_floor_cents": Setting("spendable every request must leave at its worst case: a midweek fee plus a "
+                                     "week of model spend (default 5300)", lambda v: _whole(v, 0, 60000, "cents")),
     "model_run_cap_cents": Setting("most one agent cycle or replay may spend on model calls (default 100)",
                                    lambda v: _whole(v, 1, 60000, "cents")),
     "model_daily_cap_cents": Setting("most live model calls may spend in one Eastern day (default 400)",

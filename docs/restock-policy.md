@@ -4,7 +4,7 @@
 
 The project brief asks for a "documented restock and dispatch policy, with the derivation of its thresholds, including how it accounts for your available balance" (Project Brief (Revised), section 5; issue #91). This doc gives four rules for our 20 slots, and shows where each number comes from:
 
-1. When a slot gets stock at the Friday visit.
+1. What every restock loads: each slot to its column.
 2. When a $25 midweek visit pays.
 3. When a slow seller is pulled.
 4. How the balance limits every order.
@@ -20,6 +20,7 @@ The project brief asks for a "documented restock and dispatch policy, with the d
 | Our sales on Friday afternoons | 0.2 to 0.4 units an hour from 2 to 4 PM; under 0.7 an hour after 1 PM | `docs/cutover.md` (PR #105, open) |
 | Machine units sold 8 to 11 AM | 66% | `analysis/REPORT.md`, finding 7 |
 | Midweek visit | $25 a request, any number of slots; may take longer than 24 hours | `docs/agent/restocking.md`; config `midweek_fee_cents` |
+| What a visit can change | At any restock visit, the free Friday one or a paid $25 midweek one, any of our slots can be changed (any drink, price or stock, a full fresh board), within the request API and the wildcard rules, with no limit on units or lines. A confirmed fact | Kevin, 19 Nov |
 | Open requests | One at a time today; David may lift this | `docs/process-map.md`; #106 row 12 |
 | Column capacity | Varies by package size | [Column capacity](capacity.md) |
 | Sales tax inside the shelf price | 8% | `vending/pricing.py`, config `tax_percent` |
@@ -39,12 +40,23 @@ Kept full, the 20 slots would sell about 23.3 units a class day (`analysis/REPOR
 
 **The gap between visits: 5 class days.** A Friday afternoon visit lands after the morning rush, so one gap holds Monday to Thursday plus next Friday morning. Friday afternoon adds little (0.2 to 0.4 an hour from 2 to 4 PM). Holiday weeks count class days only (`analysis/golisano_calendar_2026_27.json`; Winter Holiday Break 22 Dec to 1 Jan).
 
-## 1. Friday restock: how much stock a slot needs
+## 1. Each restock: fill every slot to its column
 
-**Rule.** In the Friday request (in-store items by Thursday 23:59; Amazon items by Wednesday 23:59 so they can arrive by Friday. That is a warning, not a deadline: a late Amazon item is stocked at the next scheduled visit, David 17 Nov):
+**Rule** (Kevin, 19 Nov). At every restock visit, the free Friday one or a paid $25 midweek one, fill every one of our slots to its column. All columns are the same, so a column's capacity depends only on the drink's package: 7 for a 20 oz bottle, 8 for a 12 oz can, 11 for an 8.4 oz can (`vending/capacity.py`). Almost every restock is the free Friday one, because $25 is a lot (rule 2). Order for Friday by the store cutoffs: in-store items by Thursday 23:59, Amazon items by Wednesday 23:59 so they can arrive by Friday. The Amazon cutoff is a warning, not a deadline: a late Amazon item is stocked at the next scheduled visit (David, 17 Nov).
 
-1. **Fill every slot to capacity from the closet.** No cash, so no threshold.
-2. **Buy a pack when slot plus closet at the visit covers less than 2 weeks of sales:** `(stock_on_hand + closet units - units_per_day x days until the visit) / units_per_day < 14`.
+1. **Closet first.** A slot loads from the closet when the closet covers its whole gap to the column.
+2. **Buy the rest.** When the closet can't fill the column, buy whole packs. Units beyond the column go to the closet for the next restock.
+3. **Exceptions**, each named as the slot's reason in the plan:
+   - A flagged slow seller is swapped, not refilled (rule 3).
+   - The wildcard follows `docs/agent/wildcard.md`: at most $82.00 a purchase, and no loading more of its product while another slot holds it.
+   - **The $53.00 spendable floor** (rule 4). Fill every column as long as spendable stays at or above $53.00 after the request, at most-we-pay cost. If it can't, fill slots in rule 4's order (most margin per class day first) and name the slots left short.
+4. **Breaks and the end.** Filling is still right before the Winter Holiday Break and in the last weeks. End stock counts at cost (A5, confirmed), so unsold units cost no profit.
+
+This replaces the earlier rule 1: fill from the closet, then buy a pack only when slot plus closet covered less than 2 weeks of sales.
+
+**Known limit: a closet that covers only part of a gap is skipped.** The planner loads each line from one source (`vending/planner.py`, step 4, "Allocate"). If the closet covers only part of a slot's gap, the planner buys the whole gap and those closet units wait for a later restock. The preview warns, and names the `fill_to` that would load them instead, but that leaves the slot part-filled, so the rule above buys. **Follow-up:** let one line load the closet's units and buy only the rest. The planner is unchanged for now.
+
+**What the 2-week figure still means.** It is no longer a buy trigger, and it doesn't set pack counts: the planner buys the fewest whole packs that fill the column, and the rest go to the closet. The derivation below now answers one question: does a full column last a gap between restocks? Where it doesn't, the answer is a second column or a larger-capacity package, not more visits.
 
 **Derivation.** Model a gap's sales as Poisson with mean 5 × rate. Units that cover 95% of gaps:
 
@@ -55,9 +67,7 @@ Kept full, the 20 slots would sell about 23.3 units a class day (`analysis/REPOR
 | Slow, low-priced | 3.8 | 7 | 1.83 |
 | Slow, erratic | 3.6 | 7 | 1.94 |
 
-The factor is 1.6 to 1.9. Poisson understates the spread (rates rest on 11 weeks of one machine; `analysis/REPORT.md`, "Caveats"), so we round up to **2** (Proposed). 2 weeks = 14 days, because `units_per_day` is the last 7 calendar days' sales ÷ 7 (`vending/tools/machine_state.py`). Rounding up is cheap: unsold units keep their cost (A5); a stockout loses the sale.
-
-**Why slot plus closet.** 14 days of `units_per_day` is 2 weeks of mean sales, which equals one gap's 95% cover (1.6 to 1.9 × the mean, rounded to 2), not two gaps' need. Closet units count because step 1 loads them into the slot at this visit. Only slot units serve the gap, so where the cover exceeds a column (below) the excess waits in the closet for next Friday (Proposed).
+The factor is 1.6 to 1.9. Poisson understates the spread (rates rest on 11 weeks of one machine; `analysis/REPORT.md`, "Caveats"), so we round up to **2** (Proposed): a slot should hold about 2 weeks of mean sales. Holding more is cheap: unsold units keep their cost (A5); a stockout loses the sale.
 
 **Capacity limits.** One column holds the 95% cover only for slow sellers (7) or mid sellers in 8.4 oz cans (11). Chance a gap's sales exceed a full column:
 
@@ -68,14 +78,14 @@ The factor is 1.6 to 1.9. Poisson understates the spread (rates rest on 11 weeks
 
 The fix is product choice, not visits: high-capacity packages, or two columns for one product (two 20 oz columns hold 14, the fast seller's 95% cover).
 
-**When a rate counts.** After **5 class days** of our in-stock sales (Proposed). Before that, use the segment rate priced near the product (R3, Proposed), and buy when slot plus closet is below that segment's 95% cover (14, 11, 7 or 7), not `units_per_day`. On the first Friday (Fri 4 Dec; its request is due 23:59 Thu 3 Dec) the cutoffs fall on or before our first sales day, so an expected-fast slot in 12 oz cans with no closet units gets a pack (8 < 14); a slow slot full at 7 does not.
+**When a rate counts.** After **5 class days** of our in-stock sales (Proposed). Before that, use the segment rate priced near the product (R3, Proposed). Rates matter here for two things: which slots to fill first when cash is short (exception 3), and which products need a second column.
 
 **Edge cases.**
 
-- **Sold out in the window:** `units_per_day` counts empty days as zero, so it understates demand (A1). Use `units_per_class_day` from `get_machine_state`, which leaves empty days out, and buy.
+- **Sold out in the window:** `units_per_day` counts empty days as zero, so it understates demand (A1). Rank with `units_per_class_day` from `get_machine_state`, which leaves empty days out. The slot is filled either way.
 - **Holiday in the window:** use the last full class week's rate, or the segment prior.
 - **No rate yet** (new product, day one): segment prior.
-- **Stock, zero sales:** `days_of_stock_left` is null, and null never triggers a purchase (`_days_left`). Go to rule 3. That field also ignores the closet, so it is not the rule's figure.
+- **Stock, zero sales:** after 5 class days holding stock with no sale, the slot is a slow seller: swap it, don't refill it (rule 3).
 
 ## 2. Midweek visit: when $25 pays
 
@@ -127,7 +137,7 @@ The margin is a ceiling (A5). In practice, a cash-short week waits for Friday.
 The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 - **Flag** a slot with no sales for **5 school days in a row while records (a receipt or a count) say it held stock**. Break days don't count. A slot that may be empty is not slow.
-- **Act at the next Friday visit:** lower the price or swap the product. Pulled units go to the closet at cost.
+- **Act at the next restock (normally Friday):** lower the price or swap the product. Pulled units go to the closet at cost.
 
 **Proposed here (not in PR #100):** a flagged slot gets no new purchase; a swapped-in product is priced by PR #99's method (open) under the $6.50 ceiling.
 
@@ -141,10 +151,10 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 ## 4. How the balance limits orders
 
-**Rule.** After an order, at its most-we-pay cost, the spendable balance must still hold the **spendable floor, $53** (Proposed in #90, which owns it). If it would not, cut in this order (Proposed):
+**Rule.** After an order, at its most-we-pay cost, the spendable balance must still hold the **spendable floor, $53.00** (Kevin, 19 Nov; first proposed in #90). The planner enforces it at preview and again at submit, on the balance at that moment (`vending/planner.py`, `SPENDABLE_FLOOR_CENTS`; config `spendable_floor_cents`), and refuses a plan under it with `below_spendable_floor`. A plan that spends nothing (a closet-only load) always passes: the floor limits spending, not loading. If it would not, cut in this order (Proposed):
 
 1. Purchases for slow sellers and flagged slots.
-2. Purchases where the closet already covers a week.
+2. Nothing for a slot the closet can fill without buying: it costs no cash, so it is always filled.
 3. Then keep slots by margin per class day (rate × margin), highest first.
 
 **Day one:** all 20 slots must be filled (#106 rows 2 and 10), so nothing can be dropped. The floor is met by product and pack choice (#90).
@@ -177,13 +187,14 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 
 ## Open decisions
 
-- **Safety factor 2 and the 95% target.** Proposed here.
+- **Safety factor 2 and the 95% target.** Proposed here; now used only to judge whether a column lasts a gap (rule 1).
 - **When a rate counts** (5 class days of in-stock sales). Proposed here; #93 uses the same rule.
 - **Prior for a slot with no rate:** the fall segment rate for the product's price band (R3). Proposed here; #93 uses it for the buy rule.
-- **The $53 spendable floor.** Proposed in #90, which owns it.
+- **The $53 spendable floor.** Kept by Kevin, 19 Nov (first proposed in #90); the planner enforces it (rule 4).
 - **Midweek trigger** (4 or more premium-priced slots empty by Monday; 8 by Tuesday; none after). Proposed here. #90 holds back 2 visits ($50).
 - **Order of cuts when the floor binds** (rule 4). Proposed here.
-- **Slot plus closet in rule 1**, and **no purchase for a flagged slot; swaps priced by PR #99 under $6.50** (rule 3). Proposed here.
+- **Fill every slot to its column at each restock, closet first, subject to the $53 floor** (rules 1 and 4). Decided by Kevin, 19 Nov; it replaces slot plus closet against 2 weeks of sales.
+- **No purchase for a flagged slot; swaps priced by PR #99 under $6.50** (rule 3). Proposed here.
 - **Swap first at a slow-seller flag** (rule 3). Proposed by Kevin, 12 Nov; depends on R6 (#102, P2).
 - **The wildcard slot** (rule 3; ceiling $8.00, same floor). Kevin's proposal on #100, adopted on #110 (item 1), 16 Nov; rules in `docs/agent/wildcard.md`, $82 line in `docs/opening-capital-plan.md`. How a trial is judged (4 units over 5 in-stock class days into a silent slot, Kevin, 18 Nov; below that, research rule 6) is Proposed here.
 - **The floor: break-even or profit.** Today's breaks even after tax. Kevin proposed (unit cost + $0.25) × 1.08, rounded up to 5 cents, with a setting `min_margin_cents` (#100). Not decided.
