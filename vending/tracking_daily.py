@@ -125,15 +125,15 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
 
     `now` pins the clock for the job's own checks (default the database clock). The send itself is
     stamped and re-checked with the clock of each moment (`vending.tracking.send`): under its
-    reservation lock it decides the Eastern day, the window, whether the poll the figures are as of
-    is still fresh enough, the day's tries and their backoff, and whether the day's check is used or
-    may be, and the answer carries its own time. The figures are computed before the lock, in one
-    repeatable-read transaction of their own; the lock validates their poll's age at the moment it
-    reserves, then releases for the request. So a job that runs long cannot send on the facts of
-    when it started: a poll that aged past the limit, or Friday's figures on Saturday morning, is
-    refused, and a replica that passed its own checks before another's refusal was stored still
-    waits out the backoff. A callable `now` is asked once for the job's checks and again for each
-    stamp of the send (a test's way to move the clock mid-send)."""
+    reservation lock it decides the Eastern day, the window, whether the send is past the 21:00
+    dispatch deadline, the day's tries and their backoff, and whether the day's check is used or
+    may be, and the answer carries its own time. The poll is picked and the figures are computed
+    under that lock too, in the reservation's own transaction, so the check is as of the books of
+    the send's moment - a ledger correction or a newer poll committed while the job was on its way
+    is in them, and figures prepared the evening before are not sent the next morning. What the
+    job checks before the lock is only that there is anything to do today. A callable `now` is
+    asked once for the job's checks and again for each stamp of the send (a test's way to move the
+    clock mid-send)."""
     try:
         if not enabled():
             log(f"tracking_daily: off. Set {MODE_SETTING}=on to send one check a day.")
@@ -175,15 +175,28 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     if found is None:
         log("tracking_daily: skipped, no poll of ours since the ledger's opening is in the bridge's books yet.")
         return 0
-    session = found[0]
+    picked: dict = {}
+
+    def prepare(c: psycopg.Connection, moment: datetime) -> tracking.Figures:
+        """The figures of the send's moment, inside the reservation's transaction: the newest settled
+        poll of that moment, and the books as of it, so whatever committed while this job was on its
+        way (a ledger correction, a newer poll, the day itself turning over) is what the check
+        reports. The pre-lock `found` above was only the check that there is anything to do today."""
+        opening = ledger.opening(c)
+        if opening is None:                     # cannot happen: the opening is append-only
+            raise tracking.CantCompute(f"the ledger's opening is gone. {ledger.OPEN_HINT}")
+        found = settled_poll(c, moment, opening.at)
+        if found is None:                       # cannot happen either, and the answer is the same
+            raise tracking.CantCompute("no poll of ours since the ledger's opening is in the bridge's books yet")
+        picked["session"] = found[0]
+        return tracking.figures(c, found[0])
+
     try:
-        figures = tracking.figures(conn, session)
+        outcome = tracking.send(conn, (bridge or _bridge)(), prepare, WORKER, now=stamp, once_a_day=True,
+                                window=(start, LAST_SEND), daily_tries=DAILY_TRIES, stale=STALE_POLL)
     except (tracking.CantCompute, SlotsNotRecorded) as error:
         log(f"tracking_daily: not sent. {error}")
         return 1
-    try:
-        outcome = tracking.send(conn, (bridge or _bridge)(), figures, WORKER, now=stamp, once_a_day=True,
-                                window=(start, LAST_SEND), daily_tries=DAILY_TRIES, stale=STALE_POLL)
     except tracking.AlreadyChecked as error:
         log(f"tracking_daily: {error}")
         return 0
@@ -213,6 +226,7 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
             "and may have used today's check. See: python -m vending.tracking show")
         return 3
     if outcome.results is not None:
+        session = picked.get("session", "?")
         outside = [k for k in tracking.RESULTS if outcome.results[k] == "outside"]
         log(f"tracking_daily: check #{outcome.id} as of poll {session}: {_verdicts(outcome.results)}."
             + (f" OUTSIDE on {', '.join(outside)}: it is in the incident log." if outside else ""))

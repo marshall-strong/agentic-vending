@@ -172,10 +172,11 @@ def test_the_cutoff_is_enforced_again_when_the_send_is_ready(conn):
 
 def test_a_poll_that_ages_past_the_limit_before_the_send_is_refused(conn):
     """A delayed worker: the job's checks pass at 06:05 Eastern on a poll of 05:00, but the send is
-    only ready at 11:05, when that poll is over the six-hour limit. The poll's age is checked again
-    under the send's reservation lock, with the clock of that moment, so nothing is sent."""
+    only ready at 13:05, when even the newest settled poll (06:00 Eastern) is over the six-hour
+    limit. The poll is picked again under the send's reservation lock, with the clock of that
+    moment, and its age is checked there, so nothing is sent."""
     books(conn)
-    stamps = iter([NOW, NOW + timedelta(hours=5), NOW + timedelta(hours=5, minutes=5)])
+    stamps = iter([NOW, NOW + timedelta(hours=7), NOW + timedelta(hours=7, minutes=5)])
     bridge = FakeBridge(answer("p1"))
     code, lines = run(conn, bridge, now=lambda: next(stamps))
     assert (code, bridge.sent, sends(conn)) == (1, [], [])
@@ -227,6 +228,100 @@ def test_two_replicas_racing_cannot_bypass_the_backoff(schema_url):
     assert rows[0][2] == "p1" and rows[0][4] is False
     assert sum("holds the reservation" in line for line in lines) == 1
     assert not any("backing off" in line or "still being recorded" in line for line in lines)
+
+
+def test_a_correction_committed_before_the_lock_is_in_the_sent_figures(schema_url):
+    """The figures are computed under the reservation's lock, in its own transaction: a correction a
+    second connection commits after the job prepared its figures but before it took the lock is in
+    the books the check reports."""
+    from vending import ledger
+
+    with open_in(*schema_url) as setup:
+        books(setup)
+    other = open_in(*schema_url)                    # a second connection, open across the job
+    prepared = utc("2026-12-04T11:05:00+00:00")     # 06:05 Eastern: the job's own checks
+    under_lock = utc("2026-12-04T11:06:00+00:00")   # 06:06 Eastern: the reservation, a minute later
+    steps = iter([prepared, "commit", under_lock, under_lock + timedelta(seconds=5)])
+
+    def clock():
+        when = next(steps)
+        if when == "commit":                        # the job has prepared; the lock is next
+            ledger.record(other, "adjustment", 12345, "counted the closet: $123.45 more", "marshall",
+                          utc("2026-12-04T08:00:00+00:00"))
+            other.commit()
+            return next(steps)
+        return when
+
+    bridge = FakeBridge(answer())
+    with open_in(*schema_url) as job:
+        lines: list[str] = []
+        code = tracking_daily.run(job, lambda: bridge, now=clock, log=lines.append)
+    other.close()
+    body = bridge.sent[0]
+    expected = None
+    with open_in(*schema_url) as conn2:
+        expected = tracking.figures(conn2, "p1").body()["cash"]
+    assert code == 0 and len(bridge.sent) == 1
+    assert body["cash"] == expected and body["cash"] != "357.23"
+
+
+def test_a_poll_committed_before_the_lock_is_the_one_sent(schema_url):
+    """The newest settled poll is picked under the reservation's lock, too: a poll a second connection
+    commits after the job picked its poll but before the lock is the one the check is as of."""
+    with open_in(*schema_url) as setup:
+        books(setup)
+    other = open_in(*schema_url)
+    prepared = utc("2026-12-04T11:05:00+00:00")
+    under_lock = utc("2026-12-04T11:06:00+00:00")
+    steps = iter([prepared, "commit", under_lock, under_lock + timedelta(seconds=5)])
+
+    def clock():
+        when = next(steps)
+        if when == "commit":                        # a newer settled poll lands before the lock
+            poll(other, "p9", "2026-12-04T10:30:00+00:00")   # 05:30 Eastern, settled by the 06:00 hour
+            other.commit()
+            return next(steps)
+        return when
+
+    bridge = FakeBridge(answer("p9"))
+    with open_in(*schema_url) as job:
+        code = tracking_daily.run(job, lambda: bridge, now=clock, log=lambda line: None)
+    other.close()
+    assert code == 0 and [b["as_of"] for b in bridge.sent] == ["p9"]
+
+
+def test_figures_prepared_the_evening_before_are_not_sent_the_next_morning(schema_url):
+    """A job that prepared its figures on Friday evening and only got the lock on Saturday morning
+    sends Saturday's figures - computed at the send, from the books of that moment - not the
+    previous evening's."""
+    from vending import ledger
+
+    with open_in(*schema_url) as setup:
+        books(setup)
+    other = open_in(*schema_url)
+    evening = utc("2026-12-05T01:55:00+00:00")      # 20:55 Eastern Friday: the job prepares here
+    morning = utc("2026-12-06T11:05:00+00:00")      # 06:05 Eastern Saturday: the reservation
+    steps = iter([evening, "commit", morning, morning + timedelta(seconds=5)])
+
+    def clock():
+        when = next(steps)
+        if when == "commit":                        # overnight: a correction, and the sync brought a poll
+            ledger.record(other, "adjustment", -250, "a damaged coil, per David", "marshall",
+                          utc("2026-12-05T01:00:00+00:00"))
+            poll(other, "p9", "2026-12-06T10:00:00+00:00")   # 05:00 Eastern Saturday, settled by 06:00
+            other.commit()
+            return next(steps)
+        return when
+
+    bridge = FakeBridge(answer("p9"))
+    with open_in(*schema_url) as job:
+        code = tracking_daily.run(job, lambda: bridge, now=clock, log=lambda line: None)
+    other.close()
+    assert code == 0 and [b["as_of"] for b in bridge.sent] == ["p9"]
+    expected = None
+    with open_in(*schema_url) as conn2:
+        expected = tracking.figures(conn2, "p9").body()["cash"]
+    assert bridge.sent[0]["cash"] == expected and bridge.sent[0]["cash"] != "357.23"
 
 
 def test_a_stuck_holder_of_the_reservation_lock_skips_the_round(schema_url):

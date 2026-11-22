@@ -427,11 +427,17 @@ def blocking(conn: psycopg.Connection, day: date, now: datetime | None = None) -
     return found
 
 
-def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
-         now: datetime | Callable[[], datetime] | None = None, once_a_day: bool = False,
+def send(conn: psycopg.Connection, bridge: Any, found: Figures | Callable[[psycopg.Connection, datetime], Figures],
+         by: str, now: datetime | Callable[[], datetime] | None = None, once_a_day: bool = False,
          window: tuple[time, time] | None = None, daily_tries: DailyTries | None = None,
          stale: timedelta | None = None) -> Outcome:
     """Send `found` once, never retried, storing the request first and the answer after.
+
+    `found` is the figures as they were when the caller looked, or a callable that computes them
+    here: given the send's own connection and the clock of the send's moment, it picks the poll and
+    computes the figures from the books of that moment, inside the reservation's transaction - so
+    whatever committed while the caller was preparing (a ledger correction, a newer poll, a day's
+    turn) is in the books the check reports. The worker's daily send passes the callable.
 
     `now` stamps the reservation (default the database clock at that moment); a callable is asked
     again for the answer, so a send that runs long records the answer's actual time. Raises
@@ -454,7 +460,6 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
     fixed = now
     stamp: Callable[[], datetime] = (now if callable(now) else (lambda: fixed) if fixed is not None
                                      else (lambda: clock(conn)))
-    body = found.body()
     with conn.transaction():
         # Taken without waiting: a holder stuck since an earlier round must not strand every other
         # replica's round behind it (LockBusy), and the replica that gets it first has it outright.
@@ -473,6 +478,9 @@ def send(conn: psycopg.Connection, bridge: Any, found: Figures, by: str,
                 "one started now could still be checked by the bridge after midnight. Nothing was sent, and "
                 "nothing is recorded")
         day = eastern_day(moment)
+        if callable(found):
+            found = found(conn, moment)
+        body = found.body()
         if stale is not None and moment - found.as_of_time > stale:
             raise StaleFigures(
                 f"the figures are as of the poll at {found.as_of_time.astimezone(EASTERN):%Y-%m-%d %H:%M} "
