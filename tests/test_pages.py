@@ -1617,3 +1617,68 @@ def test_the_public_dashboard_keeps_a_pick_of_ours_through_its_no_script_reload(
     for other in ("12", "15%22%3E%3Cscript%3E", ""):     # not ours, not a selection, empty
         page = _get(site, f"/dashboard?sel={other}")[2]
         assert 'content="30; url=?refresh=1"' in page and "sel=12" not in page.split("<noscript>")[1][:120], other
+
+
+def test_when_the_database_is_down_the_worker_still_names_its_failed_syncs(monkeypatch, capsys, site):
+    """#220: with Postgres unreachable the page can't be drawn, but an open tab must still learn of
+    a failed sync round. The 503s carry the worker's own alert line, and the page's refresh
+    handler lifts that sync line out of the outage page instead of keeping a stale one."""
+    state = site.RequestHandlerClass.state
+    state.results = worker.run_round([("sync_history", lambda: 3)], log=lambda _: None)
+    state.rounds, state.last_round_at = 1, state.started_at
+
+    def down():
+        raise psycopg.OperationalError(SECRET)
+
+    monkeypatch.setattr(pages, "connect", down)
+    status, _, body = _get(site, "/dashboard")
+    assert status == 503 and SECRET not in body
+    assert '<div class="failbanner" role="alert">' in body
+    assert "Sync round failed" in body and "sync_history" in body and "exit 3" in body
+    assert "Can't read the database" in body
+    assert 'data-sync-ok="1"' in body and '<p data-kind="sync">' in body
+    status, _, body = _get(site, "/dashboard/state.json")
+    data = json.loads(body)
+    assert status == 503 and SECRET not in body
+    assert [a["kind"] for a in data["alerts"]] == ["sync_failed"]
+    assert "`sync_history` exit 3" in data["alerts"][0]["text"]
+    # The refresh handler swaps only the sync line in an outage, and the error still reaches the log.
+    assert 'data-kind="sync"' in dashboard.SCRIPT and "data-sync-ok" in dashboard.SCRIPT
+    assert SECRET in capsys.readouterr().err
+    # A worker whose latest round passed: the outage names nothing. It still marks itself, so the
+    # page's refresh handler can tell a marked outage with no banner from another error page and
+    # clear a stale sync line instead of keeping it.
+    state.results = worker.run_round([("sync_history", lambda: 0)], log=lambda _: None)
+    body = _get(site, "/dashboard")[2]
+    assert '<div class="failbanner"' not in body and 'data-sync-ok="1"' in body
+    assert json.loads(_get(site, "/dashboard/state.json")[2])["alerts"] == []
+
+
+def test_a_generic_500_is_not_marked_as_the_outage(monkeypatch, site):
+    """A bug drawing the page is not a database outage: the 500 carries neither the outage marker
+    (which would let the refresh handler swap a banner in) nor the worker's banner, so an open tab
+    keeps what it shows."""
+    def broken(*a, **k):
+        raise RuntimeError("a bug drawing the page")
+
+    monkeypatch.setattr(pages.dashboard, "snapshot", broken)
+    status, _, body = _get(site, "/dashboard")
+    assert status == 500 and 'data-sync-ok="1"' not in body and '<div class="failbanner"' not in body
+    status, _, body = _get(site, "/dashboard/state.json")
+    assert status == 500 and json.loads(body)["alerts"] == []
+
+
+def test_an_outage_without_the_workers_round_is_not_marked(monkeypatch):
+    """The outage marker says "this reply knows the worker's latest sync round": a 503 drawn with no
+    round handed over (the pages run outside the worker) can't tell a recovered sync from an unknown
+    one, so it must not let an open tab clear its sync line."""
+    def down():
+        raise psycopg.OperationalError(SECRET)
+
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "connect", down)
+    reply = pages.respond("/dashboard")
+    assert reply.status == 503 and "Can't read the database" in reply.body
+    assert 'data-sync-ok="1"' not in reply.body
+    handed = pages.respond("/dashboard", worker.State().public())
+    assert handed.status == 503 and 'data-sync-ok="1"' in handed.body

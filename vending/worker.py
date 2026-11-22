@@ -27,7 +27,10 @@ minutes ahead, or a round still running at the first.
 None of them migrates: on a database that is behind each refuses (exit 2), the
 round is logged as failed, and the worker tries again next round,
 so a deploy can never change the shared database's schema. A person runs
-`python -m vending.db migrate`.
+`python -m vending.db migrate`. A round that ends with a failed job is also
+written to `sync_incidents` (migration 026), so the dashboard's incident log
+keeps every failed round, not only the latest; a round the database can't
+record waits and is written after a later round (`vending.worker.record_failed_round`).
 
 Each job gets JOB_TIMEOUT_MINUTES (30). Python can't stop a thread, so a job
 that overruns is reported as timed out and left to finish in the background,
@@ -129,6 +132,31 @@ class JobResult:
     error: str | None = None        # for the log only: /health never shows it
 
 
+# Failed rounds waiting for the database, newest last (`record_failed_round`). An outage takes the
+# rounds' jobs down with it, so their incident rows would be lost without this; a long outage is
+# bounded, so the wait is too.
+PENDING_MAX = 48
+
+# How long the incident write (`record_rounds`) waits for a lock or for the database itself. A
+# timeout raises there, the writer logs it and keeps the round in its wait list, and the sync
+# moves on to its next round — an exclusive lock on `sync_incidents` must not stall it.
+WRITE_TIMEOUT = "5s"
+
+# TCP bounds on the incident writer's connection (libpq connect parameters): a connection that
+# goes silent after login — a dropped tunnel, a dead NAT — must die at the TCP layer instead of
+# blocking the write for the OS's retransmit time. No server-side timeout can do that: a query
+# that never reaches the server has no server to time it out. `tcp_user_timeout` bounds a stalled
+# send where the kernel supports it (libpq ignores it where it doesn't); the keepalives cover the
+# silent rest, about half a minute to a dead connection.
+INCIDENT_TCP = {"keepalives": 1, "keepalives_idle": 15, "keepalives_interval": 5,
+                "keepalives_count": 3, "tcp_user_timeout": 15000}
+
+# The one incident write in flight (`record_failed_round`): the round loop only queues and starts
+# the writer, so a database that never answers cannot stall the next round.
+_INCIDENT_LOCK = threading.Lock()
+_WRITER: threading.Thread | None = None
+
+
 @dataclass
 class State:
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -170,6 +198,97 @@ def _describe(problem: BaseException) -> str:
     if psycopg is not None and isinstance(problem, psycopg.Error):
         return f"{type(problem).__name__}: SQLSTATE {problem.sqlstate or 'none'}"
     return f"{type(problem).__name__}: {problem}"
+
+
+def record_rounds(rows: list, conn) -> bool:
+    """Write failed rounds to `sync_incidents` (migration 026): one row per `(round_id, jobs)`, under
+    its stable id (`State.last_round_at`), so a retried write never doubles a round. True when the
+    writes went through — a round already stored counts, so the caller can drop it from its wait
+    list. Raises when the database refuses, and writes nothing then (each caller decides what a
+    partial write means; the worker retries the whole wait list).
+
+    The writes run in one transaction under `WRITE_TIMEOUT`: an exclusive lock on `sync_incidents`
+    (a backup, a migration) or a stalled database then raises instead of holding the round, and the
+    caller keeps every round in its wait list for the next one."""
+    from psycopg.types.json import Jsonb
+
+    with conn.transaction():
+        conn.execute("select set_config('lock_timeout', %s, true), set_config('statement_timeout', %s, true)",
+                     (WRITE_TIMEOUT, WRITE_TIMEOUT))
+        for at, jobs in rows:
+            conn.execute("insert into sync_incidents (round_id, round_at, jobs)"
+                         " values (%s, %s, %s) on conflict (round_id) do nothing",
+                         (at, datetime.fromisoformat(at), Jsonb(jobs)))
+    return True
+
+
+def record_failed_round(state: State, pending: list,
+                        log: Callable[[str], None] = print) -> threading.Thread | None:
+    """Keep one `sync_incidents` row per failed round (migration 026), for the dashboard's incident
+    log: a round that failed must stay listed after a later round passes, so the row is written when
+    the round ends, not derived from the latest one. The row carries what /health shows (each job's
+    name, exit code, outcome), never error text.
+
+    The write runs off the scheduling path (`_write_incidents`): this queues the round and starts
+    the one background writer if none is in flight, and returns it — None when one is already
+    running, which writes the new rows before it stops. A round stays in `pending` until the
+    database has taken it: one the database refuses — it is down, like the round's own jobs were —
+    is written by a later round's writer. Recording is best-effort: a failure is logged, and never stops the
+    rounds."""
+    from vending import settings
+
+    if not state.healthy and state.last_round_at:
+        with _INCIDENT_LOCK:
+            pending.append((state.last_round_at,
+                            [{"job": r.job, "exit_code": r.exit_code, "outcome": r.outcome}
+                             for r in state.results]))
+            del pending[:-PENDING_MAX]
+    if not pending or not settings.get("DATABASE_URL"):
+        return None
+    return start_incident_writer(pending, log)
+
+
+def start_incident_writer(pending: list,
+                          log: Callable[[str], None] = print) -> threading.Thread | None:
+    """Start the background writer for the queued rounds, unless one is already in flight: a
+    database that never answers then holds that one thread, and the rounds go on queueing in
+    `pending` for it (or for a later round's writer, once it has given up)."""
+    global _WRITER
+    with _INCIDENT_LOCK:
+        if _WRITER is not None and _WRITER.is_alive():
+            return None
+        _WRITER = threading.Thread(target=_write_incidents, args=(pending, log),
+                                   name="sync-incidents", daemon=True)
+        _WRITER.start()
+        return _WRITER
+
+
+def _write_incidents(pending: list, log: Callable[[str], None]) -> None:
+    """The background writer: write everything queued under the same timeouts as before
+    (`record_rounds`), on a connection bounded at the TCP layer (`INCIDENT_TCP`). The rows stay in
+    `pending` until the database has taken them, so a write that hangs or fails loses nothing, and
+    rounds queued while it ran are written before it stops. It gives up its place (`_WRITER`) under
+    the same lock the rounds queue under, so no round waits behind a writer that is leaving."""
+    global _WRITER
+    try:
+        while True:
+            with _INCIDENT_LOCK:
+                rows = list(pending)
+                if not rows:
+                    _WRITER = None
+                    return
+            from vending.db import connect
+
+            with connect(**INCIDENT_TCP) as conn:
+                record_rounds(rows, conn)
+            with _INCIDENT_LOCK:
+                pending[:] = [row for row in pending if row not in rows]
+    except Exception as problem:  # noqa: BLE001 - recording an incident must never stop the rounds
+        log(f"sync_incidents: {_describe(problem)}")
+    finally:
+        with _INCIDENT_LOCK:
+            if _WRITER is threading.current_thread():
+                _WRITER = None
 
 
 def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: float | None = None,
@@ -675,6 +794,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
     ended = getattr(ticks, "run_ended", None)
     jobs = default_jobs() if jobs is None else jobs
     state = State(schedule=scheduler)
+    unrecorded: list = []                 # failed rounds waiting for the database (`record_failed_round`)
     running: dict[str, threading.Thread] = {}
     server = serve_health(state, args.port) if args.port and not args.once else None
     previous = None
@@ -686,6 +806,7 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             state.results = run_round(jobs, log, args.timeout * 60, running, NEEDS)
             state.rounds += 1
             state.last_round_at = datetime.now(timezone.utc).isoformat()
+            record_failed_round(state, unrecorded, log)
             if args.once:
                 return max((r.exit_code if r.exit_code is not None else 1) for r in state.results)
             now = clock()
@@ -731,6 +852,12 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         if server is not None:
             server.shutdown()
             server.server_close()
+        # Give an in-flight incident write a bounded chance to land before the process leaves (it
+        # is bounded at the TCP layer and by `WRITE_TIMEOUT`): a hung one dies with the process.
+        with _INCIDENT_LOCK:
+            writer = _WRITER
+        if writer is not None:
+            writer.join(30)
 
 
 if __name__ == "__main__":

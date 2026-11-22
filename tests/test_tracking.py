@@ -1147,3 +1147,16 @@ def test_the_ledger_counts_receipt_lines_with_no_total_paid(conn):
 def test_the_tolerances_are_davids():
     assert sim.MONEY_TOLERANCE_CENTS == 100 and sim.UNIT_TOLERANCE == 2
     assert Fraction(sim._dollars_cents("1.005")) == Fraction(201, 2)
+
+
+def test_verdicts_keeps_only_the_four_documented_results():
+    """The shared allowlist (`vending.tracking.verdicts`): the stored `results` JSON of a check is
+    the bridge's, so the dashboard and the incident log read only the four documented keys, each
+    only `within` or `outside`. Anything else — an extra key, another value, an array — is dropped."""
+    from vending import tracking
+
+    given = {"cash": "outside", "sales_tax_owed": "within", "coil": "odd", "smuggled": "outside"}
+    assert tracking.verdicts(given) == {"cash": "outside", "sales_tax_owed": "within"}
+    assert tracking.verdicts(["cash", "outside"]) == {}
+    assert tracking.verdicts(None) == {} and tracking.verdicts("cash") == {}
+    assert tracking.verdicts({k: "within" for k in tracking.RESULTS}) == {k: "within" for k in tracking.RESULTS}

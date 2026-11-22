@@ -381,9 +381,19 @@ def _notice(title: str, text: str) -> str:
             "</body></html>")
 
 
-def _problem(path: str, status: int, text: str) -> Reply:
+def _problem(path: str, status: int, text: str, syncs: dict | None = None,
+             outage: bool = False) -> Reply:
+    """A page that can't be drawn. When the worker handed its latest sync round over, the reply
+    still carries what it can name on its own (`dashboard.outage_alerts`): the sync line on the
+    dashboard's outage page — which the page's refresh handler lifts out during an outage — and
+    `alerts` beside the error in `/dashboard/state.json`, so a failed sync shows without Postgres.
+    Only the worker's real outage reply (the database couldn't be read, and the worker handed its
+    round over) marks the page for the handler (`outage`): a generic 500 or another 503 is not an
+    outage of that kind, and carries neither the marker nor the banner."""
     if path == STATE:
-        return Reply(status, JSON, dashboard.to_json({"error": text}))
+        return Reply(status, JSON, dashboard.to_json({"error": text, "alerts": dashboard.outage_alerts(syncs)}))
+    if path == DASHBOARD:
+        return Reply(status, HTML, dashboard.outage_page(text, dashboard.outage_alerts(syncs), outage))
     return Reply(status, HTML, _notice(TITLES[path], text))
 
 
@@ -664,7 +674,9 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
     except (psycopg.Error, settings.SettingsError) as error:
         first = str(error).strip().splitlines()[0] if str(error).strip() else ""
         _log(type(error).__name__, f"{path}: {type(error).__name__}: {first}")
-        return _problem(path, 503, CANT_READ)
+        # The outage marker only when the worker handed its own sync round over: without it the
+        # reply can't say whether the sync recovered, so an open tab keeps what it shows.
+        return _problem(path, 503, CANT_READ, syncs=syncs, outage=syncs is not None)
     except Exception as error:  # noqa: BLE001 - a public page answers, whatever happened
         _log(type(error).__name__, f"{path}: {type(error).__name__}: {error}")
         return _problem(path, 500, BROKEN)

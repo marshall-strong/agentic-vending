@@ -54,7 +54,7 @@ def with_timeouts(connect: Callable[[], psycopg.Connection], seconds: float) -> 
     return opened
 
 
-def connect() -> psycopg.Connection:
+def connect(**extra) -> psycopg.Connection:
     url = settings.require(
         "DATABASE_URL",
         "Copy the DATABASE_URL line from .env.example into .env "
@@ -65,8 +65,10 @@ def connect() -> psycopg.Connection:
     # transaction and a long backfill would lose all its work on any error.
     # A time limit, so a down or unreachable database fails with an error
     # instead of hanging on TCP retries. The session runs in UTC (`UTC_SESSION`).
+    # `extra` are libpq connect parameters for one caller's need, such as the
+    # worker's incident writer bounding its connection at the TCP layer.
     return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT,
-                           options=session_options(url))
+                           options=session_options(url), **extra)
 
 
 def migrate(conn: psycopg.Connection) -> list[str]:

@@ -46,6 +46,17 @@
    "detail": null,
    "cost_usd": null
   },
+  "last_finished": {
+   "id": 5,
+   "started_at": {
+    "$datetime": "2026-12-07T14:00:00+00:00"
+   },
+   "finished_at": {
+    "$datetime": "2026-12-07T14:12:00+00:00"
+   },
+   "status": "submitted"
+  },
+  "stuck_run": null,
   "last_action": {
    "at": {
     "$datetime": "2026-12-09T14:53:00+00:00"
@@ -2573,6 +2584,10 @@
    "answered": null
   }
  },
+ "tracking_alert": {
+  "ok": true,
+  "data": null
+ },
  "purchase_requests": {
   "ok": true,
   "data": [
@@ -2768,6 +2783,9 @@
  "submissions": {
   "ok": true,
   "data": []
+ },
+ "opened_at": {
+  "$datetime": "2026-12-02T15:00:00+00:00"
  },
  "key_dates": {
   "ok": true,
@@ -3743,5 +3761,6 @@
    "text": "Tool calls in the last 24 hours: 1 refused and 1 failed. See Tool calls below."
   }
  ],
+ "alerts": [],
  "demo": true
 }
