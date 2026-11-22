@@ -169,6 +169,9 @@ def build(snap: dict, raw: dict, now: datetime) -> dict:
         cost, basis = (receipt, "receipt") if receipt is not None else (_expected(options, product), "expected")
         if cost is None:
             basis = None
+        # An expected price can itself come from an earlier receipt (`vending.receipt_prices`): say so.
+        primary = (options.get(product) or {}).get("primary") if product else None
+        expected_from = ("receipt" if primary.from_receipt else "person") if basis == "expected" else None
         floor, parts = _floor(receipt, options.get(product), tax)
         legal, problems = _check(price, floor, ceiling)
         if legal is False and receipt is not None and _check(price, floor_cents(receipt, tax), ceiling)[0]:
@@ -180,7 +183,7 @@ def build(snap: dict, raw: dict, now: datetime) -> dict:
         rows.append({
             "slot": slot, "product": product, "product_from": product_from,
             "price": sale.get("price"),
-            "unit_cost": _dollars(cost), "cost_basis": basis,
+            "unit_cost": _dollars(cost), "cost_basis": basis, "expected_from": expected_from,
             "ceiling": _dollars(ceiling),
             "floor": _dollars(floor), "floor_from": parts, "legal": legal, "problems": problems,
             "margin": None if price is None or cost is None else _dollars(Fraction(price * 100, 100 + tax) - cost),
@@ -413,8 +416,12 @@ def _legal_pill(legal: bool | None, floor: str | None) -> str:
 
 
 def _row(r: dict, since: datetime, until: datetime) -> str:
-    cost = (f'{_usd(r["unit_cost"])} <span class="pill {"muted" if r["cost_basis"] == "receipt" else "warn"}">'
-            f'{"receipt" if r["cost_basis"] == "receipt" else "expected"}</span>' if r["unit_cost"] is not None
+    basis = ("receipt" if r["cost_basis"] == "receipt"
+             else "expected · receipt" if r.get("expected_from") == "receipt" else "expected")
+    tip = (' title="The sourcing price, taken from what the worker paid on an earlier receipt"'
+           if r.get("expected_from") == "receipt" else "")
+    cost = (f'{_usd(r["unit_cost"])} <span class="pill {"muted" if r["cost_basis"] == "receipt" else "warn"}"{tip}>'
+            f'{basis}</span>' if r["unit_cost"] is not None
             else '<span class="dim">unknown</span>')
     floor_title = "; ".join(r["floor_from"]) or "no receipt or sourcing cost, so no floor"
     margin = r["margin"]
@@ -476,7 +483,8 @@ def html(panel: dict, ours: dict) -> str:
             if d.get("wildcard") and d.get("wildcard_ceiling") else "")
     lede = (f'<p class="lede sub">Ceiling ${_e(d["ceiling"])}{wild}. Shelf prices include {_e(d["tax_percent"])}% sales tax; '
             f'margin is what one sale keeps after it, less the unit cost. <b>Expected</b> costs are from sourcing '
-            f'(no receipt yet). The line is the shelf price at each poll over the last {_e(d["history_days"])} days.'
+            f'(no receipt for the units in the slot); <b>expected · receipt</b> means that sourcing price is what an '
+            f'earlier receipt paid. The line is the shelf price at each poll over the last {_e(d["history_days"])} days.'
             + (f' <b class="bad-text">{"; ".join(flags)}.</b>' if flags else "")
             + (f' <b class="warn-text">{WILDCARD_STALE}</b>' if d.get("wildcard_stale") else "")
             + "</p>")

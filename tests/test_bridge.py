@@ -2,19 +2,22 @@
 Retries are instant because `time.sleep` is patched, and nothing here goes near
 the real bridge. The two tests at the end fake the network at `urlopen` instead."""
 
+import http.client
 import io
 import json
+import socket
 import threading
 import time
 import urllib.error
+import urllib.parse
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from vending import bridge as bridge_module
-from vending.bridge import RETRIES, Bridge, BridgeError, BridgeRateLimited, BridgeUnreachable
+from vending.bridge import RETRIES, Bridge, BridgeError, BridgeNotFound, BridgeRateLimited, BridgeUnreachable
 
 KEY = "made-up-key"
 DAY = "2026-10-01"
@@ -29,6 +32,10 @@ class Answer:
     body: bytes = b""
     content_length: int | None = None  # What to claim, when it isn't the real length.
     wire: bytes | None = None  # Send exactly this and hang up, instead of a proper response.
+    location: str | None = None  # A `Location` header, for a redirect.
+    headers: dict = field(default_factory=dict)  # Other headers to send.
+    drip: float = 0  # With `wire`: seconds to wait before each byte of it.
+    drip_from: int = 0  # With `drip`: the bytes of `wire` before this are sent at once.
 
 
 DROP = Answer(wire=b"")
@@ -40,8 +47,15 @@ def listing(*polls, **fields):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        # Routes for a POST are keyed "POST /path"; it is recorded the same way.
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self._answer("POST " + self.path.split("?")[0])
+
     def do_GET(self):
-        path = self.path.split("?")[0]
+        self._answer(self.path.split("?")[0])
+
+    def _answer(self, path):
         self.server.requests.append(path)
         self.server.keys.add(self.headers.get("X-API-Key"))
         answers = self.server.routes.get(path, Answer(status=404, body=b"not found"))
@@ -52,9 +66,25 @@ class Handler(BaseHTTPRequestHandler):
             answer = answers
         self.close_connection = True
         if answer.wire is not None:
-            self.wfile.write(answer.wire)
+            if not answer.drip:
+                self.wfile.write(answer.wire)
+                return
+            self.wfile.write(answer.wire[:answer.drip_from])
+            self.wfile.flush()
+            for byte in answer.wire[answer.drip_from:]:   # not `time.sleep`: the `sleeps` fixture makes that instant
+                if self.server.stop.wait(answer.drip):
+                    return
+                try:
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                except OSError:
+                    return
             return
         self.send_response(answer.status)
+        if answer.location:
+            self.send_header("Location", answer.location)
+        for name, value in answer.headers.items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(answer.content_length or len(answer.body)))
         self.end_headers()
         self.wfile.write(answer.body)
@@ -67,13 +97,14 @@ class Handler(BaseHTTPRequestHandler):
 def serve(routes):
     """A fake bridge on a free local port. `routes` maps a path to its answers."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.routes, server.requests, server.keys = routes, [], set()
+    server.routes, server.requests, server.keys, server.stop = routes, [], set(), threading.Event()
     server.url = f"http://127.0.0.1:{server.server_port}"
     thread = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
     thread.start()
     try:
         yield server
     finally:
+        server.stop.set()
         server.shutdown()
         server.server_close()
         thread.join()
@@ -102,10 +133,10 @@ def bridge(sleeps):
 
 
 def refuses_with_plain_error(call, match=""):
-    """`call` raises `BridgeError` itself, the kind that doesn't stop a run."""
+    """`call` raises `BridgeError` itself (or `BridgeNotFound`, for a `404`), the kind that doesn't stop a run."""
     with pytest.raises(BridgeError, match=match) as raised:
         call()
-    assert type(raised.value) is BridgeError
+    assert type(raised.value) is (BridgeNotFound if str(raised.value).startswith("404 ") else BridgeError)
 
 
 def test_raw_returns_the_stored_bytes_and_sends_the_key(bridge, sleeps):
@@ -335,3 +366,367 @@ def test_a_request_read_that_isnt_json_is_a_bridge_error(monkeypatch):
     for read in (b.product_request, b.purchase_request):
         with pytest.raises(BridgeError, match="isn't JSON"):
             read("np_1")
+
+
+# --- A purchase POST: never redirected, and a send error proves nothing (#217) ----------
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_a_post_is_never_redirected(bridge, status):
+    """urllib would follow a POST's 303 with a GET, and that GET's 404 looked like the bridge refusing the order."""
+    from vending.bridge import BridgeAnswered
+
+    client = bridge({"POST /api/v1/purchase-requests": Answer(status=status, location="/api/v1/purchase-requests/pr-1"),
+                     "/api/v1/purchase-requests/pr-1": Answer(status=404, body=b"{}")})
+    with pytest.raises(BridgeAnswered) as raised:
+        client.post("/api/v1/purchase-requests", {"lines": []})
+    assert raised.value.status == status
+    assert client.server.requests == ["POST /api/v1/purchase-requests"]
+
+
+@pytest.mark.parametrize("reason", [ConnectionRefusedError("refused"), OSError("other"), "a string reason"])
+def test_only_a_failure_inside_connect_proves_nothing_left(reason):
+    """`_before_connected` reads where the error was raised, not its type: a refused or unresolved name raised
+    while sending is no proof. A reason that isn't an `OSError` is urllib's own, raised before it connects."""
+    assert bridge_module._before_connected(reason) is isinstance(reason, str)
+
+
+def test_a_refused_connection_proves_nothing_left(sleeps, monkeypatch):
+    with serve({}) as server:
+        url = server.url
+    with pytest.raises(BridgeUnreachable, match="Tailscale"):
+        Bridge(base_url=url, api_key=KEY).post("/api/v1/purchase-requests", {"lines": []})
+
+
+# --- A purchase POST (`post_answer`): its whole answer, or none (#217) -------------------------------
+
+PURCHASES = "/api/v1/purchase-requests"
+JSON = {"Content-Type": "application/json"}
+CREATED = b'{"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00Z"}'
+CRLF = b"\r\n"
+LF = CRLF[1:]
+
+
+def head(status=201, headers=(("Content-Type", "application/json"),), length=None, body=CREATED):
+    """A raw answer: the status line, `headers`, a `Content-Length` (`length`, or the body's; False for none),
+    then `body`."""
+    lines = [f"HTTP/1.1 {status} X"] + [f"{k}: {v}" for k, v in headers]
+    if length is not False:
+        lines.append(f"Content-Length: {len(body) if length is None else length}")
+    return CRLF.join(line.encode() for line in lines) + CRLF + CRLF + body
+
+
+CHUNKED = (("Content-Type", "application/json"), ("Transfer-Encoding", "chunked"))
+
+
+def test_post_answer_gives_a_whole_json_answer(bridge):
+    client = bridge({"POST " + PURCHASES: Answer(status=201, body=CREATED, headers=JSON)})
+    answer = client.post_answer(PURCHASES, {"lines": []})
+    assert (answer.status, answer.body, answer.problem) == (201, json.loads(CREATED), "")
+    assert answer.text == CREATED.decode()
+
+
+def test_post_answer_reads_a_chunked_answer_whole(bridge):
+    body = f"{len(CREATED):x}".encode() + CRLF + CREATED + CRLF + b"0" + CRLF + CRLF
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=CHUNKED, length=False, body=body))})
+    assert client.post_answer(PURCHASES, {"lines": []}).body == json.loads(CREATED)
+
+
+@pytest.mark.parametrize("answer, problem", [
+    pytest.param(Answer(status=201, body=CREATED, headers={"Content-Type": "text/plain"}), "Content-Type",
+                 id="text/plain"),
+    pytest.param(Answer(status=201, body=CREATED), "Content-Type", id="no Content-Type"),
+    pytest.param(Answer(status=201, body=CREATED, headers={"Content-Type": "application/json; charset=latin-1"}),
+                 "Content-Type", id="another charset"),
+    pytest.param(Answer(status=201, body=CREATED, headers={**JSON, "Content-Encoding": "gzip"}), "encoded",
+                 id="gzip"),
+    pytest.param(Answer(status=201, body=b'{"id": "pr-1", "id": "pr-2", "status": "pending"}', headers=JSON),
+                 "strict JSON", id="a key twice"),
+    pytest.param(Answer(status=201, body=b'{"id": NaN}', headers=JSON), "strict JSON", id="NaN"),
+    pytest.param(Answer(status=201, body=b'{"id": "\xff"}', headers=JSON), "strict JSON", id="not UTF-8"),
+    pytest.param(Answer(status=201, body=b"not json", headers=JSON), "strict JSON", id="not JSON"),
+    pytest.param(Answer(wire=head(length=False)), "no length", id="ended by closing, not framed"),
+    pytest.param(Answer(wire=head(length=False, body=b"")[:-4]), "no length", id="headers cut off"),
+])
+def test_an_answer_that_isnt_plain_json_says_why(bridge, answer, problem):
+    client = bridge({"POST " + PURCHASES: answer})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and got.body is None and problem in got.problem
+
+
+@pytest.mark.parametrize("status", [301, 303, 307, 403, 422, 429, 500, 503])
+def test_any_status_is_returned_as_it_came_never_followed(bridge, status):
+    client = bridge({"POST " + PURCHASES: Answer(status=status, location="/api/v1/purchase-requests/pr-1",
+                                                 body=b'{"error": "x", "error_type": "y"}', headers=JSON),
+                     "/api/v1/purchase-requests/pr-1": Answer(status=404, body=b"{}")})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert got.status == status and got.body == {"error": "x", "error_type": "y"}
+    assert client.server.requests == ["POST " + PURCHASES]
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(Answer(status=201, body=CREATED[:20], content_length=len(CREATED), headers=JSON), id="cut off"),
+    pytest.param(Answer(wire=head(headers=CHUNKED, length=False, body=b"zz" + CRLF + CREATED)),
+                 id="chunked, badly framed"),
+    pytest.param(DROP, id="closed with no answer"),
+    pytest.param(Answer(wire=b"NOT HTTP" + CRLF + CRLF), id="not HTTP"),
+])
+def test_an_answer_that_isnt_whole_is_no_answer(bridge, answer):
+    client = bridge({"POST " + PURCHASES: answer})
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="may have arrived"):
+        client.post_answer(PURCHASES, {"lines": []})
+
+
+def test_an_answer_past_the_size_cap_is_no_answer(bridge, monkeypatch):
+    monkeypatch.setattr(bridge_module, "PURCHASE_ANSWER_BYTES", 40)
+    client = bridge({"POST " + PURCHASES: Answer(status=201, body=CREATED, headers=JSON)})
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="ran past 40 bytes"):
+        client.post_answer(PURCHASES, {"lines": []})
+
+
+@pytest.mark.parametrize("part", ["body", "headers"])
+def test_a_slow_drip_is_cut_at_the_total_deadline(bridge, monkeypatch, part):
+    """Each byte comes well inside the time allowed between reads, but the whole answer would take far longer
+    than the deadline: it ends at the deadline, as no answer."""
+    monkeypatch.setattr(bridge_module, "PURCHASE_DEADLINE_SECONDS", 1)
+    if part == "body":
+        wire = head()
+        answer = Answer(wire=wire, drip=0.1, drip_from=wire.index(CRLF + CRLF) + 4)
+    else:
+        answer = Answer(wire=head(headers=[("X-Pad", "p" * 120), ("Content-Type", "application/json")]), drip=0.1)
+    client = bridge({"POST " + PURCHASES: answer})
+    started = time.monotonic()
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="within 1 s"):
+        client.post_answer(PURCHASES, {"lines": []})
+    assert time.monotonic() - started < 4      # the whole answer would take over 10 s
+
+
+@pytest.mark.parametrize("close", [True, False], ids=["Connection: close", "kept alive"])
+def test_a_body_that_drips_after_whole_headers_is_cut_at_the_deadline(bridge, monkeypatch, close):
+    """The headers come at once and only the body drips. With `Connection: close`, `http.client` hands the
+    socket to the response and drops `conn.sock`, so the deadline must shut the socket it kept (#217)."""
+    monkeypatch.setattr(bridge_module, "PURCHASE_DEADLINE_SECONDS", 1)
+    headers = (("Content-Type", "application/json"),) + ((("Connection", "close"),) if close else ())
+    wire = head(headers=headers)
+    client = bridge({"POST " + PURCHASES: Answer(wire=wire, drip=0.1, drip_from=wire.index(CRLF + CRLF) + 4)})
+    started = time.monotonic()
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="within 1 s"):
+        client.post_answer(PURCHASES, {"lines": []})
+    assert time.monotonic() - started < 2.5     # the whole body would take about 7 s
+
+
+@pytest.mark.parametrize("length", ["invalid", "-1", "+68", "6_8", "68, 68", " "])
+def test_a_201_whose_length_cant_be_read_is_not_plain_json(bridge, length):
+    """`http.client` reads a `Content-Length` it can't parse as no length and reads to the close, so the body
+    would look whole. It isn't framed, so it isn't the documented acceptance."""
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(length=length.replace("68", str(len(CREATED)))))})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and got.body is None and "Content-Length" in got.problem
+
+
+@pytest.mark.parametrize("ending", [
+    pytest.param(b"0" + CRLF, id="no blank line after the last chunk"),
+    pytest.param(b"0", id="last chunk cut off"),
+    pytest.param(b"0" + CRLF + LF, id="bare LF for the blank line"),
+    pytest.param(b"0" + CRLF + b"X-Trailer: 1", id="trailer cut off"),
+])
+def test_a_chunked_201_that_doesnt_end_properly_is_no_answer(bridge, ending):
+    body = f"{len(CREATED):x}".encode() + CRLF + CREATED + CRLF + ending
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=CHUNKED, length=False, body=body))})
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="IncompleteRead"):
+        client.post_answer(PURCHASES, {"lines": []})
+
+
+@pytest.mark.parametrize("body", [
+    pytest.param(b"%x" % len(CREATED) + CRLF + CREATED + b"XX0" + CRLF + CRLF, id="chunk not closed by CRLF"),
+    pytest.param(b"0x%x" % len(CREATED) + CRLF + CREATED + CRLF + b"0" + CRLF + CRLF, id="size with 0x"),
+    pytest.param(b"%x" % len(CREATED) + LF + CREATED + CRLF + b"0" + CRLF + CRLF, id="size line ends in LF"),
+])
+def test_a_chunked_201_framed_loosely_is_no_answer(bridge, body):
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=CHUNKED, length=False, body=body))})
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="IncompleteRead"):
+        client.post_answer(PURCHASES, {"lines": []})
+
+
+def test_a_chunked_201_with_a_trailer_is_read_whole(bridge):
+    body = f"{len(CREATED):x};ext=1".encode() + CRLF + CREATED + CRLF + b"0" + CRLF + b"X-Trailer: 1" + CRLF + CRLF
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=CHUNKED, length=False, body=body))})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert (got.body, got.problem) == (json.loads(CREATED), "")
+
+
+def test_only_a_failed_connect_is_unreachable(sleeps):
+    with serve({}) as server:
+        url = server.url
+    with pytest.raises(BridgeUnreachable, match="nothing was sent"):
+        Bridge(base_url=url, api_key=KEY).post_answer(PURCHASES, {"lines": []})
+
+
+def test_an_error_once_connected_is_no_answer(bridge, monkeypatch):
+    import http.client
+
+    client = bridge({"POST " + PURCHASES: Answer(status=201, body=CREATED, headers=JSON)})
+
+    def send(self, data):
+        raise ConnectionRefusedError("simulated: refused while writing, after connecting")
+
+    monkeypatch.setattr(http.client.HTTPConnection, "send", send)
+    with pytest.raises(bridge_module.BridgeNoAnswer, match="ConnectionRefusedError once connected"):
+        client.post_answer(PURCHASES, {"lines": []})
+
+
+@pytest.mark.parametrize("headers", [
+    pytest.param(CHUNKED + (("Content-Length", "999"),), id="chunked and a Content-Length"),
+    pytest.param((("Content-Type", "application/json"), ("Transfer-Encoding", "gzip, chunked")), id="gzip, chunked"),
+    pytest.param((("Content-Type", "application/json"), ("Transfer-Encoding", "chunked, chunked")),
+                 id="chunked twice"),
+    pytest.param(CHUNKED + (("Transfer-Encoding", "chunked"),), id="two Transfer-Encoding headers"),
+])
+def test_a_201_whose_transfer_coding_isnt_plain_chunked_is_not_plain_json(bridge, headers):
+    """Sol round 5, finding 5: `http.client` reads a body as chunked when `Transfer-Encoding` is `chunked` and
+    ignores any `Content-Length` beside it, and reads another coding by its length or to the close. Either
+    way the length is ambiguous, so the answer isn't the documented acceptance."""
+    body = f"{len(CREATED):x}".encode() + CRLF + CREATED + CRLF + b"0" + CRLF + CRLF
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=headers, length=False, body=body))})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and got.body is None and "Transfer-Encoding" in got.problem
+
+
+def test_a_201_with_another_transfer_coding_and_a_content_length_is_not_plain_json(bridge):
+    client = bridge({"POST " + PURCHASES: Answer(wire=head(headers=(("Content-Type", "application/json"),
+                                                                      ("Transfer-Encoding", "identity"))))})
+    got = client.post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and got.body is None and "Transfer-Encoding" in got.problem
+
+
+# --- A purchase POST through the proxy (`http_proxy`), as on Azure (docker/entrypoint.sh) ----------------
+
+HOP_BY_HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "upgrade"}
+
+
+class ProxyHandler(BaseHTTPRequestHandler):
+    """A forward proxy on this machine: takes an absolute-form request and sends it on to `server.origin`
+    (the fake bridge), whatever host it names, as Tailscale's proxy sends ours to the bridge. `server.fail`
+    makes it read the request and hang up instead."""
+
+    def do_POST(self):
+        self.server.lines.append(self.requestline)
+        self.server.hosts.append(self.headers.get("Host"))
+        data = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.close_connection = True
+        if self.server.fail:
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
+        target = urllib.parse.urlsplit(self.path)
+        upstream = http.client.HTTPConnection("127.0.0.1", self.server.origin, timeout=10)
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_BY_HOP | {"host"}}
+        upstream.request(self.command, target.path, body=data or None, headers=headers)
+        answer = upstream.getresponse()
+        body = answer.read()
+        self.send_response(answer.status)
+        for name, value in answer.getheaders():
+            if name.lower() not in HOP_BY_HOP | {"content-length"}:
+                self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        upstream.close()
+
+    do_GET = do_POST
+
+    def log_message(self, *args):
+        pass
+
+
+@contextmanager
+def proxy(origin_port, fail=False):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    server.origin, server.fail, server.lines, server.hosts = origin_port, fail, [], []
+    server.url = f"http://127.0.0.1:{server.server_port}"
+    thread = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def closed_port():
+    """A loopback port nothing listens on: the bridge's address, which only the proxy can reach."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def proxied(monkeypatch):
+    """`proxied(url)` sets `http_proxy` to `url` and `no_proxy` to nothing. The entrypoint adds localhost to
+    no_proxy; here the fake bridge is on loopback too, so it is left out."""
+    for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY",
+                 "all_proxy", "ALL_PROXY", "REQUEST_METHOD"):
+        monkeypatch.delenv(name, raising=False)
+
+    def use(url, no_proxy=""):
+        monkeypatch.setenv("http_proxy", url)
+        monkeypatch.setenv("no_proxy", no_proxy)
+
+    return use
+
+
+def test_post_answer_reaches_the_bridge_through_the_proxy(proxied):
+    """Sol round 5, finding 2: on Azure the bridge is reachable only through `http_proxy`. A purchase POST
+    connected to the bridge directly, so a correct 201 could never arrive. It now goes through the proxy,
+    once, in absolute form, with the bridge's Host, as urllib sends the rest of the bridge client's calls."""
+    bridge_port = closed_port()
+    with serve({"POST " + PURCHASES: Answer(status=201, body=CREATED, headers=JSON)}) as origin, \
+            proxy(origin.server_port) as tailscale:
+        proxied(tailscale.url)
+        got = Bridge(base_url=f"http://127.0.0.1:{bridge_port}/", api_key=KEY).post_answer(PURCHASES, {"lines": []})
+    assert (got.status, got.body, got.problem) == (201, json.loads(CREATED), "")
+    assert tailscale.lines == [f"POST http://127.0.0.1:{bridge_port}{PURCHASES} HTTP/1.1"]
+    assert tailscale.hosts == [f"127.0.0.1:{bridge_port}"]
+    assert origin.requests == ["POST " + PURCHASES] and origin.keys == {KEY}
+
+
+def test_the_catalog_is_read_through_the_proxy_too(proxied):
+    bridge_port = closed_port()
+    with serve({"/api/v1/products": Answer(body=b'{"products": [{"sku": "COKE20"}]}')}) as origin, \
+            proxy(origin.server_port) as tailscale:
+        proxied(tailscale.url)
+        assert Bridge(base_url=f"http://127.0.0.1:{bridge_port}", api_key=KEY).products() == [{"sku": "COKE20"}]
+    assert tailscale.lines == [f"GET http://127.0.0.1:{bridge_port}/api/v1/products HTTP/1.1"]
+
+
+def test_a_proxy_that_drops_the_post_is_no_answer_and_it_is_sent_once(proxied):
+    """The proxy accepted the connection and took the request, then hung up: the bridge may have it, so it is
+    `BridgeNoAnswer` (`unknown`), never retried."""
+    with serve({}) as origin, proxy(origin.server_port, fail=True) as tailscale:
+        proxied(tailscale.url)
+        with pytest.raises(bridge_module.BridgeNoAnswer, match="may have arrived"):
+            Bridge(base_url=f"http://127.0.0.1:{closed_port()}", api_key=KEY).post_answer(PURCHASES, {"lines": []})
+    assert len(tailscale.lines) == 1 and origin.requests == []
+
+
+def test_a_proxy_that_cant_be_reached_is_unreachable_and_nothing_was_sent(proxied):
+    proxied(f"http://127.0.0.1:{closed_port()}")
+    with pytest.raises(BridgeUnreachable, match="nothing was sent"):
+        Bridge(base_url=f"http://127.0.0.1:{closed_port()}", api_key=KEY).post_answer(PURCHASES, {"lines": []})
+
+
+def test_a_502_from_the_proxy_is_returned_as_it_came(proxied):
+    """Tailscale's proxy answers 502 until the node has joined. That came after connecting, so it is an answer
+    (settled `unknown` by `submit`), never `BridgeUnreachable`."""
+    with serve({"POST " + PURCHASES: Answer(status=502, body=b"{}", headers=JSON)}) as origin, \
+            proxy(origin.server_port) as tailscale:
+        proxied(tailscale.url)
+        got = Bridge(base_url=f"http://127.0.0.1:{closed_port()}", api_key=KEY).post_answer(PURCHASES, {"lines": []})
+    assert got.status == 502 and len(tailscale.lines) == 1
+
+
+def test_no_proxy_sends_the_post_straight_to_the_bridge(proxied):
+    with serve({"POST " + PURCHASES: Answer(status=201, body=CREATED, headers=JSON)}) as origin:
+        proxied(f"http://127.0.0.1:{closed_port()}", no_proxy="127.0.0.1")
+        got = Bridge(base_url=origin.url, api_key=KEY).post_answer(PURCHASES, {"lines": []})
+    assert got.status == 201 and origin.requests == ["POST " + PURCHASES]

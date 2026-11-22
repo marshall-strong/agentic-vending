@@ -84,13 +84,29 @@ def test_a_missing_cost_leaves_the_floor_unknown_and_an_expected_cost_is_labelle
     assert unknown["legal"] is None and unknown["problems"] == []
     expected = found["16"]                 # no receipt: the plan's product and its sourcing
     assert (expected["product"], expected["product_from"]) == ("FAKE-FIZZ-12", "plan")
-    assert (expected["unit_cost"], expected["cost_basis"]) == ("0.50", "expected")
+    assert (expected["unit_cost"], expected["cost_basis"], expected["expected_from"]) == ("0.50", "expected", "person")
     assert (expected["floor"], expected["legal"]) == ("0.70", True)   # $14.50 / 24 x 1.08 = 0.6525, up to 0.70
     assert expected["next"] is None        # the plan's price is the shelf's
     panel = section(dashboard.render(snap))
     row15 = panel[panel.index('id="price-15"'):panel.index('id="price-16"')]
     assert "floor unknown" in row15 and "unknown" in row15
     assert '<span class="pill warn">expected</span>' in panel
+
+
+def test_an_expected_cost_taken_from_a_receipt_says_so(conn, page_conn):
+    """#202: a sourcing price that `vending.receipt_prices` took from a receipt is labelled as such."""
+    catalog(conn, ("FAKE-FIZZ-12", "Made-up Fizz", "Made-up", None, "12 oz can"))
+    source(conn, "FAKE-FIZZ-12", pack=24, expected=1200, most=1450)
+    conn.execute("update sourcing_options set checked_by = 'receipt', note = 'receipt pr-1: paid $12.00 for 1 pack'")
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"16": (200, 9)})
+    run = _live_run(conn)
+    agent_runs.finish(conn, run, "skipped", plan=plan(
+        {"slot": "16", "product": "FAKE-FIZZ-12", "fill_to": 8, "sale_price": "2.00", "reason": "start it"}))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    r = rows(snap)["16"]
+    assert (r["unit_cost"], r["cost_basis"], r["expected_from"]) == ("0.50", "expected", "receipt")
+    panel = section(dashboard.render(snap))
+    assert "expected · receipt</span>" in panel and "taken from what the worker paid" in panel
 
 
 def test_an_illegal_price_is_flagged_now_and_in_the_plan(conn, page_conn, open_ledger):

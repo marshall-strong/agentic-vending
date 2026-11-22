@@ -190,6 +190,7 @@ HIDE = {
     "agent_steps": db_explorer.Hide("is_error", "true", ("content",), dashboard.HIDDEN),
     # The bridge's own words for a tracking check (#218); every row, whatever its status.
     "tracking_checks": db_explorer.Hide("", "", ("answer", "error_type"), TRACKING_OTHER),
+    "agent_schedule": db_explorer.Hide("outcome", "failed", ("detail",), dashboard.HIDDEN),
     # The dev machines' hostnames; `when` names no column, so every row is hidden.
     "model_calls": db_explorer.Hide("", "", ("host",), "(hidden)"),
     **TOTALS,

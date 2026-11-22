@@ -101,6 +101,30 @@ def test_an_opening_recorded_ahead_says_when_it_opens():
         "text": "opens Sun 29 Nov, 09:00"}
 
 
+def test_the_11_nov_test_opening_is_not_the_opening_step():   # Sol review of #222, finding 4
+    f = facts(opening=et(11, 11, 9), plan=PLAN, requests=[request("R0", et(11, 12, 0, 4))])
+    f["test_opening"] = True
+    r = rows(et(11, 27), f)
+    opening = check(r["fill_request"], "ledger_opening")
+    assert opening["status"] == "due" and "reset-test-opening" in opening["text"]
+    fill = check(r["fill_request"], "fill_request")
+    assert fill["status"] == "waiting" and "test purchase" in fill["text"]
+
+
+def test_the_test_opening_entry_is_recognised_exactly():
+    from fractions import Fraction
+
+    def entry(id=ledger.TEST_OPENING_ID, at=et(11, 11, 9), detail=ledger.TEST_OPENING_DETAIL):
+        return ledger.Entry(id=id, at=at, kind="opening", amount_cents=Fraction(60000), detail=detail,
+                            reference=None, recorded_by="test")
+
+    assert ledger.is_test_opening(entry())
+    assert not ledger.is_test_opening(None)
+    assert not ledger.is_test_opening(entry(id=2))
+    assert not ledger.is_test_opening(entry(at=et(11, 29, 9)))
+    assert not ledger.is_test_opening(entry(detail="opening capital"))
+
+
 def test_missed_deadlines_read_as_overdue():
     r = rows(et(11, 30, 9), c=counts(approved=10, pending=4))
     assert [check(r["fill_request"], n)["status"] for n in ("plan_picked", "ledger_opening")] == ["overdue", "overdue"]
@@ -285,6 +309,50 @@ def test_the_first_restock_after_the_fill_counts_from_the_database(conn, page_co
     snap = dashboard.snapshot(page_conn, et(12, 2))
     r = {x["key"]: x for x in snap["key_dates"]["data"]["rows"]}
     assert check(r["first_restock_request"], "restock_request")["text"] == "sent Tue 1 Dec, 15:00, pending"
+
+
+def test_with_only_the_test_opening_no_request_counts_for_the_fill_or_the_restock(conn, page_conn, monkeypatch):
+    """Sol review of #222, round 2, finding 3: the 12 and 28 Nov test purchases stand, and the only opening is
+    the 11 Nov test one. Neither is the fill, and neither is the first restock."""
+    monkeypatch.setattr(dashboard, "lock_at", lambda: LOCK)
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (%s, %s, 'opening', 60000, %s, 'marshall')",
+                 (ledger.TEST_OPENING_ID, et(11, 11, 14), ledger.TEST_OPENING_DETAIL))
+    _request(conn, "TEST-12NOV", et(11, 12, 11))
+    _request(conn, "TEST-28NOV", et(11, 28, 11))
+    for now in (et(11, 29, 21), et(12, 2, 12)):
+        snap = dashboard.snapshot(page_conn, now)
+        r = {x["key"]: x for x in snap["key_dates"]["data"]["rows"]}
+        if "fill_request" in r:
+            assert check(r["fill_request"], "ledger_opening")["status"] in ("due", "overdue")
+            assert check(r["fill_request"], "fill_request")["status"] == "waiting"
+        assert check(r["first_restock_request"], "restock_request")["status"] != "done"
+    facts = key_dates.read(page_conn, et(11, 29, 21), ledger.opening(page_conn).at, TEST_SLOTS)
+    assert facts["test_opening"] and key_dates.competition_opening(facts) is None and facts["requests"] == []
+    # Built from facts alone (a snapshot, or a test), the checks still count from no opening.
+    r = rows(et(11, 30, 12), {**facts, "requests": [request("TEST-28NOV", et(11, 28, 11))]})
+    assert check(r["first_restock_request"], "restock_request")["status"] != "done"
+
+
+def test_a_recovery_opening_must_come_before_the_fill_request(conn, page_conn, monkeypatch):
+    """Sol review of #222, round 3, finding 4: the window closed before step 4 (docs/ledger-reset.md). The fill
+    request went in at 20:00 on Sun 29 Nov. Key dates counts the fill by when it was submitted, so an opening
+    dated 23:00 hides it. One dated after the test activity and at or before the submission shows it."""
+    monkeypatch.setattr(dashboard, "lock_at", lambda: LOCK)
+    _request(conn, "TEST-28NOV", et(11, 28, 11))         # the last test purchase
+    _request(conn, "FILL", et(11, 29, 20))
+
+    def fill_check(opened_at):
+        conn.execute("delete from ledger_entries where kind = 'opening'")
+        ledger.record(conn, "opening", 60000, "opening capital", "kevin", at=opened_at)
+        snap = dashboard.snapshot(page_conn, et(11, 30, 9))
+        r = {x["key"]: x for x in snap["key_dates"]["data"]["rows"]}
+        return check(r["fill_request"], "fill_request")
+
+    hidden = fill_check(et(11, 29, 23))                  # the old runbook's example
+    assert hidden["status"] != "done" and "no purchase request since the opening" in hidden["text"]
+    shown = fill_check(et(11, 29, 19))                   # after the test purchase, before the fill
+    assert shown["status"] == "done" and shown["text"].startswith("sent Sun 29 Nov, 20:00")
 
 
 def test_after_a_rejected_fill_the_first_restock_still_counts(conn, page_conn, monkeypatch):

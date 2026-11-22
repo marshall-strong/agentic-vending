@@ -90,3 +90,113 @@ def test_no_agent_topic_gives_the_interloper_prices():
 def test_the_interloper_price_rule_is_where_the_agent_reads_pricing_rules(topic):
     text = (RULES_DIR / f"{topic}.md").read_text(encoding="utf-8").lower()
     assert "never use the interloper's prices" in text or "ignore the interloper's prices" in text, topic
+
+
+def test_the_prompt_gives_each_store_cutoff_the_planner_uses():
+    """Simulated seasons (closed PR #151): "the main run is Thursday" missed the Amazon cutoff every week."""
+    from vending.agent import SYSTEM
+    from vending.planner import AMAZON_CUTOFF, IN_STORE_CUTOFF
+
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    for store, cutoff in (("Amazon items", AMAZON_CUTOFF), ("in-store items", IN_STORE_CUTOFF)):
+        assert f"{store} by {days[cutoff.weekday]} {cutoff.at:%H:%M}" in SYSTEM, store
+    assert "main run is Thursday" not in SYSTEM
+
+
+
+def test_the_card_gives_the_first_fill_deadline_not_just_the_start():
+    """Simulated seasons (closed PR #151): with no receipts the agent called the slots unknown and waited. And a card
+    that only said "opens empty Thu 3 Dec" would miss the first fill's own deadline (David, 17 Nov:
+    docs/planning/2026-11-17-david-answers.md, "The dates")."""
+    card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
+    assert "first fill ordered by sun 29 nov 23:59" in card and "sales from thu 3 dec" in card
+    assert "opens empty thu 3 dec" not in card
+    assert "except before the first fill, when our slots are empty" in (RULES_DIR / "inventory-belief.md").read_text(encoding="utf-8").lower()
+    goal = (RULES_DIR / "goal-and-scoring.md").read_text(encoding="utf-8")
+    for fact in ("**Wed 25 Nov**", "**Sun 29 Nov 23:59**", "**Mon 30 Nov**", "**Thu 3 Dec**",
+                 "one normal purchase request naming every assigned slot", "2026-11-17-david-answers.md"):
+        assert fact in goal, fact
+
+
+
+def test_every_restock_fills_every_slot_to_its_column():
+    """Kevin, 19 Nov: every restock visit (almost always the free Friday one) fills every slot, not only those
+    below a top-up threshold; any visit may change anything in our slots, with no limit on units or lines."""
+    card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8").lower()
+    assert "every restock fills every slot to its column (`restocking`)" in card
+    restocking = (RULES_DIR / "restocking.md").read_text(encoding="utf-8")
+    rule = restocking[restocking.index("**Every restock, fill every slot**"):restocking.index("**Slow sellers**")]
+    assert "each of our slots, not as `keep`, without `fill_to`" in rule and "Friday's: $25 is a lot" in rule
+    assert "closet" in rule and "slow seller gets a swap" in rule and "`wildcard`" in rule and "$82.00" in rule
+    assert "in rule 4's order (most margin per class day first)" in rule and "end stock counts at cost" in rule
+    assert "at least $53.00 spendable after the request" in rule
+    assert "class_days_of_stock_left" not in rule, "the threshold rule is gone"
+    assert "no limit on units or lines (Kevin, 19 Nov)" in restocking
+    assert "next Friday" not in restocking
+
+
+def test_the_docs_quote_the_spendable_floor_the_planner_enforces():
+    """One figure: `planner.SPENDABLE_FLOOR_CENTS`. The money topic no longer calls the balance the only limit."""
+    from vending.planner import SPENDABLE_FLOOR_CENTS
+
+    floor = f"${SPENDABLE_FLOOR_CENTS / 100:.2f}"
+    for topic in ("money", "restocking"):
+        assert floor in (RULES_DIR / f"{topic}.md").read_text(encoding="utf-8"), topic
+    money = (RULES_DIR / "money.md").read_text(encoding="utf-8")
+    assert "only spending limit" not in money and "below_spendable_floor" in money
+    assert "A plan that spends nothing, such as a closet-only load, always passes" in money
+    policy = (RULES_DIR.parent / "restock-policy.md").read_text(encoding="utf-8")
+    assert floor in policy and "SPENDABLE_FLOOR_CENTS" in policy
+
+
+def test_the_prompt_says_the_amazon_cutoff_wins_over_a_thursday_promotion():
+    """Review finding 3: #166's promotion needs Thursday-evening evidence, Amazon orders are due Wednesday 23:59, and
+    only one request may be open. The Amazon order goes in on time; the promotion waits or goes in-store."""
+    from vending.agent import SYSTEM
+
+    assert "Never hold an Amazon order past Wednesday for a promotion" in SYSTEM
+    assert "waits a week" in SYSTEM and "buys nothing from Amazon" in SYSTEM and "by Thursday 23:59" in SYSTEM
+    assert "The wildcard topic's evidence rules still decide whether a promotion qualifies" in SYSTEM
+
+
+def test_the_prompt_gives_the_cash_short_recipe_and_cannot_skip_a_fill_on_cost():
+    """Review finding 4: one entry per assigned slot; a short fill uses fill_to and keep, not entry order; and the
+    prompt's old "if no change is worth what it costs, skip the week" can't override the every-slot rule."""
+    from vending.agent import SYSTEM
+
+    assert "If no change is worth what it costs, skip the week" not in SYSTEM
+    assert "Never skip a fill because it seems not worth its cost" in SYSTEM
+    for phrase in ("one entry per assigned slot", "leave fill_to out for a full fill", "an explicit fill_to",
+                   "keep where no load fits", "preview again", "The order of entries sets no priority",
+                   "Name every slot left short in the update"):
+        assert phrase in SYSTEM, phrase
+    # Sol, round 2: the same recipe for both cash refusals, and none of it may leave a first-fill slot out.
+    assert "If the preview refuses insufficient_balance or below_spendable_floor" in SYSTEM
+    assert ("On the first fill every assigned slot needs a line, so never keep one or leave it out: use a cheaper "
+            "product or pack, or a smaller fill_to") in SYSTEM
+
+
+def test_a_visit_can_change_any_of_our_slots_within_the_api_and_wildcard_rules():
+    """Review finding 5: "can change anything" overstated it. Kevin's "no limit on units or lines" stays."""
+    restocking = (RULES_DIR / "restocking.md").read_text(encoding="utf-8")
+    policy = (RULES_DIR.parent / "restock-policy.md").read_text(encoding="utf-8")
+    for text in (restocking, policy):
+        assert "can change anything" not in text
+        assert "within the request API and the wildcard rules" in text and "no limit on units or lines" in text
+
+
+def test_restocking_lets_a_floor_bound_plan_load_just_the_closet_units():
+    """Review finding 6: one source per line, so when the floor binds a fill_to can load only what the closet holds."""
+    rule = (RULES_DIR / "restocking.md").read_text(encoding="utf-8")
+    assert "If the floor binds, an explicit `fill_to` may load just the closet's units" in rule
+
+
+def test_skips_are_narrow_on_the_card_and_in_the_prompt():
+    """Sol, round 2, finding 3: "if unsure, skip" covers the one uncertain action, not the week; and a week whose every
+    feasible plan is refused is skipped with the refusals reported."""
+    from vending.agent import SYSTEM
+
+    card = (RULES_DIR / "rules-card.md").read_text(encoding="utf-8")
+    assert "If unsure of one action, skip that action, plan the rest, and say why." in card
+    assert "If unsure, skip the action and say why." not in card
+    assert "stock is needed but every feasible plan is refused: report the skip with the refusals" in SYSTEM
