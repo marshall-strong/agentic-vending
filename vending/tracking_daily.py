@@ -323,6 +323,25 @@ def _when(at: datetime | None) -> str:
 _TONE = {"within": "ok", "outside": "bad"}
 
 
+_TABLE_HEAD = ('<div class="tracking-wrap"><table class="tracking"><thead><tr><th scope="col">Sent</th>'
+              '<th scope="col">As of the poll at</th><th scope="col">Cash</th><th scope="col">Sales tax owed</th>'
+              '<th scope="col">Coil</th><th scope="col">Back stock</th></tr></thead>')
+
+
+def _check_cells(c: dict) -> str:
+    if c["verdicts"]:
+        return "".join(f'<td><span class="pill {_TONE[c["verdicts"][k]]}">{escape(c["verdicts"][k])}</span></td>'
+                       for k in tracking.RESULTS)
+    note = c["said"] + ("" if c["used_check"] is False else "; it may have used that day's check")
+    return f'<td colspan="4" class="sub">No verdicts: {escape(note)}.</td>'
+
+
+def _check_row_html(c: dict, note: str = "") -> str:
+    marker = f'<small>{escape(note)}</small>' if note else ""
+    return (f'<tr><td><time>{escape(_when(c["sent_at"]))}</time><small>by {escape(c["by"])}{marker}</small></td>'
+            f'<td><time>{escape(_when(c["as_of_time"]))}</time></td>{_check_cells(c)}</tr>')
+
+
 def panel_html(panel_: dict) -> str:
     if not panel_["ok"]:
         return f'<p class="empty">Not available: {escape(panel_["why"])}</p>'
@@ -341,20 +360,16 @@ def panel_html(panel_: dict) -> str:
     checks = data["checks"]
     if not checks:
         return lede + '<p class="empty">No checks sent yet.</p>'
-    rows = []
-    for c in checks:
-        if c["verdicts"]:
-            cells = "".join(f'<td><span class="pill {_TONE[c["verdicts"][k]]}">{escape(c["verdicts"][k])}</span></td>'
-                            for k in tracking.RESULTS)
-        else:
-            note = c["said"] + ("" if c["used_check"] is False else "; it may have used that day's check")
-            cells = f'<td colspan="4" class="sub">No verdicts: {escape(note)}.</td>'
-        rows.append(f'<tr><td><time>{escape(_when(c["sent_at"]))}</time><small>by {escape(c["by"])}</small></td>'
-                    f'<td><time>{escape(_when(c["as_of_time"]))}</time></td>{cells}</tr>')
-    return (lede + '<div class="tracking-wrap"><table class="tracking"><thead><tr><th scope="col">Sent</th>'
-            '<th scope="col">As of the poll at</th><th scope="col">Cash</th><th scope="col">Sales tax owed</th>'
-            '<th scope="col">Coil</th><th scope="col">Back stock</th></tr></thead>'
-            f'<tbody>{"".join(rows)}</tbody></table></div>')
+    rows = [_check_row_html(c) for c in checks]
+    answered = data.get("answered")
+    last = ""
+    if answered is not None and answered["id"] not in {c["id"] for c in checks}:
+        # Refusals filled the recent list, so the last answered check fell off it: rendered above
+        # the list, with its four verdicts, so they stay visible.
+        last = (f'<p class="sub">Last answered check, older than the recent sends below:</p>'
+                f'{_TABLE_HEAD}<tbody>{_check_row_html(answered)}</tbody></table></div>')
+    return (lede + last + _TABLE_HEAD
+            + f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
 STYLE = """

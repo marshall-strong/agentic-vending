@@ -569,6 +569,25 @@ def test_an_outside_verdict_is_in_the_agents_next_briefing(conn):
     assert "cash OUTSIDE" in text and "coil within" in text
 
 
+def test_the_panel_shows_the_last_answered_check_when_seven_refusals_follow_it(conn):
+    """Seven refusals fill the panel's recent list, so the last answered check falls off it. It is
+    rendered separately, with its four verdicts: an outside verdict must stay visible on the page."""
+    books(conn)
+    run(conn, FakeBridge(answer(outside=("coil",))))
+    for minute in (10, 20, 30, 40, 50, 60, 70):        # seven refusals after the answered check
+        at = NOW + timedelta(minutes=minute)
+        conn.execute(
+            "insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request,"
+            " answered_at, status, error_type, used_check, results)"
+            " values (%s, '2026-12-04', 'kevin', 'p1', %s, '{}', %s, 422, 'invalid_coil', false, null)",
+            (at, SETTLED, at))
+    data = tracking_daily.panel(conn, NOW + timedelta(hours=2))
+    assert data["answered"]["id"] not in [c["id"] for c in data["checks"]]
+    html = tracking_daily.panel_html({"ok": True, "data": data})
+    assert html.count('class="pill bad"') == 1 and html.count('class="pill ok"') == 3
+    assert "Last answered" in html
+
+
 def test_the_briefing_says_when_no_check_has_been_answered(conn):
     from tests.test_briefing import NOW as BRIEF_NOW, sample
     from vending import briefing

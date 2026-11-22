@@ -681,8 +681,9 @@ def test_a_send_is_never_started_after_the_dispatch_deadline(conn):
 
 @pytest.mark.parametrize("day", MIDNIGHTS)
 def test_a_send_still_unanswered_across_midnight_blocks_the_new_day(conn, day):
-    """A request held past midnight stays without an answer, so it may still be checked by the bridge
-    on the new day: nothing else may send until the morning window opens at 06:00 Eastern."""
+    """A request the bridge held past its give-up stays without a usable answer, so it may still be
+    checked by the bridge on the next day: nothing else may send for that day until the morning
+    window opens at 06:00 Eastern."""
     from vending import tracking
 
     books(conn)
