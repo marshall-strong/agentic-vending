@@ -576,7 +576,10 @@ def test_safe_opening_counts_a_visit_fee_with_no_lines(conn):
     (`visit_times`); the old SQL joined lines and never saw it."""
     after_the_reset(conn)
     record_request(conn, "V", et(28, 9), True, BODY, visit_fee_cents=2500)
-    store(conn, "V", fulfilled("V", fulfilled_at=iso(et(29, 19, 20))), AFTER)
+    # `store` keeps out a fulfilled answer with no lines (#225), so the row is put in that state directly: an
+    # older row stored before that rule, or one set by hand.
+    conn.execute("update purchase_requests set status = 'fulfilled', fulfilled_at = %s where request_id = 'V'",
+                 (et(29, 19, 20),))
     assert stock.request_times(stock.receipt_lines(conn)).get("V") is None
     s = ledger.safe_opening(conn, "FILL")
     assert (s.lower, s.suggested) == (et(29, 19, 20), et(29, 19, 21))

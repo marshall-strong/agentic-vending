@@ -75,6 +75,11 @@ def record(conn: psycopg.Connection, request_id: str, submitted_at: datetime, of
     )
 
 
+# Taken by every `store`, and by the day-one fill (`vending.fill`) from its checks through its POST, so a receipt
+# can't change spendable cash between the fill's last check and its send.
+RECEIPTS_LOCK = "vending.purchase_requests.receipts"
+
+
 def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at: datetime) -> Stored:
     """Save one answer from `GET /api/v1/purchase-requests/{id}`.
 
@@ -141,6 +146,7 @@ def store(conn: psycopg.Connection, request_id: str, response: dict, checked_at:
     fulfilled_at = _when(response.get("fulfilled_at"))
 
     with conn.transaction():
+        conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (RECEIPTS_LOCK,))
         # Locked, so two syncs reading the same request decide one after the other, and two keeping out the
         # same answer name it once between them.
         stored = conn.execute("select status, updated_at, last_response from purchase_requests"

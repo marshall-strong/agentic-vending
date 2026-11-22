@@ -115,20 +115,22 @@ class AlreadySettled(RuntimeError):
 
 
 def save_sending(side: psycopg.Connection, plan_hash: str, body: dict,
-                 directive: str | None, visit_fee_cents: int | None = None) -> int:
+                 directive: str | None, visit_fee_cents: int | None = None, purpose: str | None = None) -> int:
     """Commit a `sending` row on `side`, an autocommit connection of its own, so a crash after this can't lose it.
 
     `visit_fee_cents` is the fee the plan quoted for an off-cycle request (None
     otherwise). It is saved here, before the POST, so even a request settled
     later by `resolve` carries the fee that was agreed when it was sent.
+    `purpose` is `fill` for the day-one fill (`vending.fill`), None for the
+    agent's; `settle` and `resolve` keep it.
     """
     if not side.autocommit:
         # In a transaction the row would only commit after the POST, which is what it guards against.
         raise ValueError("save_sending needs an autocommit connection")
     (row,) = side.execute(
-        "insert into purchase_submissions (plan_hash, body, directive, visit_fee_cents)"
-        " values (%s, %s, %s, %s) returning id",
-        (plan_hash, Jsonb(body), directive, visit_fee_cents),
+        "insert into purchase_submissions (plan_hash, body, directive, visit_fee_cents, purpose)"
+        " values (%s, %s, %s, %s, %s) returning id",
+        (plan_hash, Jsonb(body), directive, visit_fee_cents, purpose),
     ).fetchone()
     return row
 
@@ -173,19 +175,20 @@ def settle(side: psycopg.Connection, row: int, status: str, *, request_id: str |
                    body, plan_hash=plan_hash, visit_fee_cents=fee)
 
 
-def open_rows(conn: psycopg.Connection) -> list[tuple]:
+def open_rows(conn: psycopg.Connection, except_row: int | None = None) -> list[tuple]:
     """(id, at, status, line count, detail, created_id) for every submission a person still has to settle.
-    `created_id` is the request the bridge accepted with a validated `201`, or None."""
+    `created_id` is the request the bridge accepted with a validated `201`, or None. `except_row` leaves out
+    one row: the fill's own attempt, when it checks everything again before its POST."""
     return conn.execute(
         "select id, at, status, jsonb_array_length(body->'lines'), detail, created_id from purchase_submissions"
-        " where status = any(%s) order by id",
-        (list(OPEN),),
+        " where status = any(%s) and id is distinct from %s order by id",
+        (list(OPEN), except_row),
     ).fetchall()
 
 
-def unresolved(conn: psycopg.Connection) -> Refusal | None:
+def unresolved(conn: psycopg.Connection, except_row: int | None = None) -> Refusal | None:
     """The refusal both preview and submit raise while any submission is still open, naming every one."""
-    rows = open_rows(conn)
+    rows = open_rows(conn, except_row)
     if not rows:
         return None
     named = ", ".join(f"{row} ({status} since {at:%Y-%m-%d %H:%M} UTC)" for row, at, status, *_ in rows)

@@ -36,6 +36,11 @@ Only `plan_changed` (our own preview, before step 1) and `not_filed` (connecting
 failed) let the agent try once more in the same run. A refusal before step 1
 comes back with no `submission` number.
 
+The day-one fill (`vending.fill`) adds checks of its own through hooks the agent
+never passes: `before_send` before step 1, with the inputs the planner was given,
+and `before_post` between steps 1 and 2, given the row and the body, which settles
+the row `not_filed` if it refuses. It also marks its rows `purpose = 'fill'`.
+
 The reply carries the plan's `warnings` and `notes`, as preview's does.
 
 If the bridge accepted the request but recording that fails anyway, the answer
@@ -99,15 +104,29 @@ class AnswerNotStored(RuntimeError):
 
 def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
                          connect: Callable[[], psycopg.Connection], now: datetime | None = None,
-                         expected_plan_hash: str | None = None,
+                         expected_plan_hash: str | None = None, *, pool: bool = False,
+                         before_send: Callable[[psycopg.Connection, planner.Plan, planning.Gathered],
+                                               list[Refusal]] | None = None,
+                         before_post: Callable[[psycopg.Connection, int, dict], list[Refusal]] | None = None,
+                         purpose: str | None = None, count_takings: bool = True,
                          ) -> Callable[[psycopg.Connection], SubmitReply]:
     """The write action for the gate. `connect` opens the one side connection that records the
-    attempt; it must reach the same database as the gate's."""
+    attempt; it must reach the same database as the gate's. The rest are the fill's (`vending.fill`), never
+    the agent's:
+
+    - `pool`: see "Pooled purchases" in the planner;
+    - `before_send` runs last before anything is recorded or sent, in the gate's transaction, with the plan and
+      the inputs the planner was given; any refusal it returns stops the send;
+    - `before_post` runs after the attempt is saved, right before the POST, with the side connection, the
+      attempt's row and the exact body about to be sent; any refusal it returns settles the attempt as
+      `not_filed` (nothing was sent) and stops the send;
+    - `purpose` is saved on the attempt (`purchase_submissions.purpose`);
+    - `count_takings=False` checks the balance without takings from the polls (`planning.gather`)."""
 
     def action(conn: psycopg.Connection) -> SubmitReply:
         client = bridge()
         try:
-            plan, gathered = planning.plan(conn, desired, client, now)
+            plan, gathered = planning.plan(conn, desired, client, now, pool=pool, count_takings=count_takings)
         except planning.NotReady as blocked:
             return SubmitReply(success=False, message=f"Can't submit yet: {blocked}")
         refusals = list(plan.refusals)
@@ -116,6 +135,8 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
             refusals.append(Refusal("plan_changed", (
                 f"the plan now hashes to {plan.plan_hash}, not {expected_plan_hash} as previewed: the lines, their "
                 "worst-case cost or the visit fee changed since. Preview again and submit what it shows.")))
+        if before_send is not None:
+            refusals.extend(before_send(conn, plan, gathered))
         if unresolved := submissions.unresolved(conn):
             refusals.append(unresolved)
         if refusals:
@@ -127,12 +148,29 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
         # Opened before anything is sent, and reused to settle: a connect that would fail
         # fails now, while nothing has left, not after the bridge has the request.
         with connect() as side:
-            row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee)
+            row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee, purpose)
+            if before_post is not None:
+                _last_check(side, row, body, before_post)
             reply = _send(client, plan, body, row, side, gathered.now)
         # What preview would have said about this plan, so a changed warning since the preview isn't missed.
         return reply.model_copy(update={"warnings": list(plan.warnings), "notes": list(gathered.notes)})
 
     return action
+
+
+def _last_check(side: psycopg.Connection, row: int, body: dict,
+                before_post: Callable[[psycopg.Connection, int, dict], list[Refusal]]) -> None:
+    """Run `before_post` once the attempt is saved. Any refusal, or an error, settles the attempt as never filed
+    (nothing has been sent), so it can't be left open; a refusal is then raised."""
+    try:
+        refusals = before_post(side, row, body)
+    except BaseException as error:
+        submissions.settle(side, row, "not_filed", detail=f"nothing sent: {type(error).__name__} before the POST")
+        raise
+    if refusals:
+        submissions.settle(side, row, "not_filed", detail="nothing sent: " + "; ".join(
+            f"{r.code}: {r.message}" for r in refusals))
+        raise Refused(refusals)
 
 
 def _str(value: object) -> bool:

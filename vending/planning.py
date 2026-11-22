@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 
@@ -57,6 +58,8 @@ class Gathered:
     price_poll_at: datetime | None
     notes: tuple[str, ...]
     sourcing_rows: tuple[sourcing.Option, ...] = ()   # the table rows the planner was given
+    opening_at: datetime | None = None                # the ledger's opening the balance counted from
+    opening: ledger.Entry | None = None               # that opening's entry, to tell the test one (#215)
 
 
 def planner_config(conn: psycopg.Connection, *, stale_wildcard_unset: bool = False) -> planner.Config:
@@ -110,10 +113,13 @@ def wildcard_slot(conn: psycopg.Connection, slots: tuple[str, ...], *, stale_uns
     return value
 
 
-def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None) -> Gathered:
+def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None = None, *,
+           count_takings: bool = True) -> Gathered:
     """The current state from our database. `catalog` is the product list from `read_catalog`.
     "Now" is the database clock, so the balance matches `get_account_balance` (see `ledger.db_now`), read
-    after the pending requests (below). A `now` given (a simulation) is used as it is."""
+    after the pending requests (below). A `now` given (a simulation) is used as it is.
+    `count_takings=False` (the day-one fill only) gives the planner the spendable balance without takings
+    (`Balance.cash_without_takings_cents`), so no poll, and no history backfill, moves its balance gate."""
     settings = planner_config(conn)
     notes: list[str] = []
 
@@ -134,8 +140,21 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     balance = ledger.balance(conn, now)
     if balance is None:
         raise NotReady(ledger.OPEN_HINT)
+    if balance.opening_at > now:
+        # `ledger.balance` counts the opening whenever it is dated, so a future one would lend
+        # money that isn't ours yet. Nothing is spent before the opening.
+        opens = balance.opening_at.astimezone(ZoneInfo(ledger.TIMEZONE))
+        raise NotReady(f"the ledger's opening is dated {opens:%Y-%m-%d %H:%M} ET, after now, so no money is ours "
+                       "to spend yet; wait for it, or re-date the opening if that time is wrong")
     notes.extend(balance.notes)
-    spendable = math.floor(balance.spendable_cents)
+    if count_takings:
+        spendable = math.floor(balance.spendable_cents)
+    else:
+        spendable = math.floor(balance.cash_without_takings_cents)
+        if balance.takings.cents:
+            notes.append(f"the balance gate leaves out {ledger.money(balance.takings.cents)} of takings from the "
+                         "polls, so a history backfill can't change it")
+    opened = ledger.opening(conn)   # the entry the balance counted from: the fill tells the test one by it
 
     receipts = stock.receipt_lines(conn)    # read once: the stock and the trial's loads share these rows
     counted = stock.stock(conn, until=now, lines=receipts)
@@ -189,7 +208,7 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
         silent = frozenset(s.slot for s in report.silent)
     current = planner.CurrentState(slots, closet, pending, products, sourcing.to_planner(list(table_rows)),
                                    spendable, verdict, silent)
-    return Gathered(current, settings, now, poll_at, tuple(notes), table_rows)
+    return Gathered(current, settings, now, poll_at, tuple(notes), table_rows, balance.opening_at, opened)
 
 
 def read_catalog(conn: psycopg.Connection, bridge: Bridge,
@@ -235,8 +254,8 @@ def _bridge_catalog(bridge: Bridge) -> list[dict]:
     return products
 
 
-def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
-    """The validated tool input as the planner's dataclasses."""
+def to_planner(desired: schema.DesiredState, *, pool: bool = False) -> planner.DesiredState:
+    """The validated tool input as the planner's dataclasses. `pool` is never the agent's: see the planner."""
     return planner.DesiredState(
         slots=tuple(planner.DesiredSlot(s.slot, s.keep, s.product, s.sale_price, s.fill_to) for s in desired.slots),
         off_cycle=desired.off_cycle,
@@ -249,12 +268,15 @@ def to_planner(desired: schema.DesiredState) -> planner.DesiredState:
             )
             for s in desired.sourcing
         ),
+        pool=pool,
     )
 
 
 def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
-         now: datetime | None = None) -> tuple[planner.Plan, Gathered]:
-    """Run the planner on live data. Raises `NotReady` when a person has to act first.
+         now: datetime | None = None, *, pool: bool = False,
+         count_takings: bool = True) -> tuple[planner.Plan, Gathered]:
+    """Run the planner on live data. Raises `NotReady` when a person has to act first. `count_takings`: see
+    `gather`; never the agent's.
 
     The halt switch is checked before the catalog is read, so that halted with
     the bridge down tells the agent to stop, not to check Tailscale.
@@ -269,9 +291,9 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
         if halted:
             raise NotReady(f"{HALTED_HINT} (and {blocked})") from None
         raise
-    gathered = gather(conn, catalog, now)
+    gathered = gather(conn, catalog, now, count_takings=count_takings)
     gathered = replace(gathered, notes=(*catalog_notes, *gathered.notes))
-    result = planner.plan_restock(gathered.current, to_planner(desired), gathered.config, gathered.now)
+    result = planner.plan_restock(gathered.current, to_planner(desired, pool=pool), gathered.config, gathered.now)
     stale = _stale_table_prices(gathered.sourcing_rows, result, desired, gathered.now)
     if stale:
         result = replace(result, warnings=(*result.warnings, *stale))
