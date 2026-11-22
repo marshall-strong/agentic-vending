@@ -45,16 +45,12 @@ MAX_STEP_TEXT = 4000
 
 
 def start(conn: psycopg.Connection, *, mode: str, model: str | None = None) -> int:
-    """Record a run as `running` and return its id.
-
-    It also records the slot assignment's revision (migration 023) as this statement reads it: the
-    assignment the run starts on. A change not yet committed isn't in it. None if no assignment is stored."""
+    """Record a run as `running` and return its id."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {', '.join(MODES)}, not {mode!r}")
     with conn.transaction():
         return conn.execute(
-            "insert into agent_runs (mode, model, slots_revision)"
-            " values (%s, %s, (select revision from slot_assignment where id = 1)) returning id", (mode, model)
+            "insert into agent_runs (mode, model) values (%s, %s) returning id", (mode, model)
         ).fetchone()[0]
 
 

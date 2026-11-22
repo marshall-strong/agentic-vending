@@ -203,23 +203,6 @@ def stored(conn: psycopg.Connection) -> Assignment | None:
     return None if row is None else Assignment(row[0], row[1], tuple(row[2]), row[3])
 
 
-def usable_revision(conn: psycopg.Connection) -> int | None:
-    """The revision of the stored assignment (migration 023), or None while none is stored or readers refuse it.
-
-    The revision changes whenever our slots change, and never comes back. An agent run records the one it
-    read when it started (`vending.agent_runs.start`), and its notes are reused only while that is still the
-    current one (#216). Read in one statement, so the checks and the revision are of the same row."""
-    row = conn.execute("select team, device_id, slots, last_checked_at, revision from slot_assignment"
-                       " where id = 1").fetchone()
-    if row is None:
-        return None
-    try:
-        _usable(Assignment(row[0], row[1], tuple(row[2]), row[3]))
-    except SlotsNotRecorded:
-        return None
-    return row[4]
-
-
 def _usable(found: Assignment | None) -> Assignment:
     """`found`, or `SlotsNotRecorded` when nothing is stored or the stored row can't be our assignment."""
     if found is None:
@@ -315,8 +298,7 @@ def _store(conn: psycopg.Connection, answer: Any, at: datetime, lock: datetime, 
                 "the instructors say the new one is right, run: python -m vending.slots record --replace")
         if at < before.last_checked_at:
             raise BadAssignment("This server observation is older than the recorded assignment. Nothing was changed")
-        # first_read_at becomes when this assignment was first read; the log keeps the old one. The new slots
-        # take a new revision (migration 023's trigger), so notes written on the old ones aren't reused.
+        # first_read_at becomes when this assignment was first read; the log keeps the old one.
         conn.execute("update slot_assignment set team = %s, device_id = %s, slots = %s, response = %s,"
                      " first_read_at = %s, last_checked_at = %s where id = 1",
                      (new.team, new.device_id, list(new.slots), Jsonb(answer), at, at))

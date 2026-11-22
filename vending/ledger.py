@@ -432,6 +432,14 @@ def is_test_opening(opened: Entry | None) -> bool:
         TEST_OPENING_ID, TEST_OPENING_DATE, TEST_OPENING_DETAIL)
 
 
+def real_opening(conn: psycopg.Connection) -> Entry | None:
+    """The ledger's opening, or None while there is none or it is the 11 Nov test opening.
+
+    The agent's notes carry over only from runs since this opening (`vending.agent.last_notes`)."""
+    opened = opening(conn)
+    return None if is_test_opening(opened) else opened
+
+
 def reset_refusal(opened: Entry | None, now: datetime, start: datetime | None = None, *,
                   already: tuple[datetime, str] | None = None) -> str | None:
     """Why the opening can't be reset, or None if it can. Pure.

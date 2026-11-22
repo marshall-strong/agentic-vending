@@ -3,7 +3,7 @@ Anthropic API, the bridge or a real server process. Runs and spend land in a thr
 
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -192,6 +192,7 @@ def test_a_dry_run_never_sends_a_write_the_model_makes_up(connect, conn):
 
 
 def test_notes_carry_from_one_run_to_the_next(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="Slot 3 is slow; pull it if under 2 a week.")), Tools())
     client = Script(answer())
     go(connect, client, Tools())
@@ -372,6 +373,7 @@ def test_turning_the_halt_on_mid_run_stops_before_the_next_model_call(connect, c
 
 
 def test_a_live_run_reads_only_live_notes(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="dry: would submit 15")), Tools())
     client = Script(answer())
     go(connect, client, Tools())                                    # a dry run reads it, labelled
@@ -382,91 +384,50 @@ def test_a_live_run_reads_only_live_notes(connect, conn):
     assert "would submit 15" not in opening and "No notes yet" in opening
 
 
-def test_notes_from_before_the_current_slot_assignment_are_left_out(connect, conn):
-    """Run 2's notes name our slots from before the 20 Nov redraw; the next run must not read them (#216)."""
+def open_books(conn, at=None):
+    """Record a real opening (not the 11 Nov test one), now by the database clock unless `at` is given.
+
+    Runs' `started_at` is the database clock, so an opening at `at` (default: now) splits the runs before it
+    from the runs after it."""
+    from vending import ledger
+
+    at = at or conn.execute("select clock_timestamp()").fetchone()[0]
+    return ledger.record(conn, "opening", 60000, "opening capital", "test", at)
+
+
+def test_no_notes_carry_over_before_a_real_opening(connect, conn):
+    """#216: notes count from the real opening. Before it, a run's notes may name slots that aren't ours."""
     go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
-    # The assignment changes after that run, as `slots record` changes it: a new revision.
-    from tests.test_slots import LEFT
-    conn.execute("update slot_assignment set slots = %s", (list(LEFT),))
-    client = Script(answer(notes="New notes."))
+    client = Script(answer())
     go(connect, client, Tools())
     opening = client.sent[0]["messages"][0]["content"]
-    assert "Fill slot 15" not in opening
-    assert "written on an earlier slot assignment than the one stored now" in opening
-    client = Script(answer())
-    go(connect, client, Tools())                                    # notes written since then carry on
-    assert "New notes." in client.sent[0]["messages"][0]["content"]
+    assert "Fill slot 15" not in opening and "real ledger opening isn't recorded yet" in opening
 
 
-def test_notes_from_a_run_while_slots_record_waits_on_the_server_are_left_out(connect, conn):
-    """`slots record` asks the server, a run starts and ends on the old slots, then the answer is stored.
+def test_the_11_nov_test_opening_is_not_a_real_opening_for_notes(connect, conn):
+    from vending import ledger
 
-    The run started after the request, but it never saw the new assignment, so its notes are stale (#216)."""
-    from tests.test_slots import MOVED
-    from vending import slots
-
-    asked_at = slots.clock(conn)                                      # `slots record` sends its request
-    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())  # a run on the old slots, meanwhile
-    far_lock = asked_at + timedelta(days=365)
-    assert slots.record(conn, MOVED, now=asked_at, lock=far_lock) == "changed"   # then the answer is stored
-    client = Script(answer(notes="New notes."))
-    go(connect, client, Tools())
-    opening = client.sent[0]["messages"][0]["content"]
-    assert "Fill slot 15" not in opening
-    assert "written on an earlier slot assignment than the one stored now" in opening
-    client = Script(answer())
-    go(connect, client, Tools())                                      # a run on the new slots carries on
-    assert "New notes." in client.sent[0]["messages"][0]["content"]
-
-
-def test_notes_from_a_run_with_no_recorded_revision_are_left_out(connect, conn):
-    """A run from before migration 023, or one that started with no assignment stored, recorded no revision.
-    Once a revision exists, its notes never carry over: nothing says which slots they were written on."""
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (%s, %s, 'opening', 60000, %s, 'marshall')",
+                 (ledger.TEST_OPENING_ID, datetime(2026, 11, 11, 19, tzinfo=timezone.utc), ledger.TEST_OPENING_DETAIL))
     go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
-    conn.execute("update agent_runs set slots_revision = null")
     client = Script(answer())
     go(connect, client, Tools())
     opening = client.sent[0]["messages"][0]["content"]
-    assert "Fill slot 15" not in opening and "earlier slot assignment" in opening
+    assert "Fill slot 15" not in opening and "real ledger opening isn't recorded yet" in opening
 
 
-def test_notes_from_a_run_that_read_the_assignment_before_a_change_committed_are_left_out(connect, conn, schema_url):
-    """Sol review, round 2, finding 2: `slots record` writes the new assignment, and a run starts before that
-    commits, so it reads the old slots. Its notes are for the old slots, though it started after the write."""
-    from tests.conftest import open_in
-    from tests.test_slots import MOVED
-    from vending import slots
-
-    recorder = open_in(*schema_url)
-    try:
-        recorder.autocommit = False
-        recorder.execute("select 1")       # an open transaction, so `record`'s own block doesn't commit
-        asked_at = slots.clock(recorder)
-        assert slots.record(recorder, MOVED, now=asked_at, lock=asked_at + timedelta(days=365)) == "changed"
-        assert recorder.info.transaction_status.name == "INTRANS"           # written, not committed
-        go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())   # reads the old slots meanwhile
-        recorder.commit()
-    finally:
-        recorder.close()
+def test_notes_from_runs_before_the_real_opening_are_dropped_and_later_ones_kept(connect, conn):
+    """Run 2's notes, from before the 20 Nov redraw, must not reach a run after the real opening (#216)."""
+    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())   # before the opening
+    open_books(conn)
     client = Script(answer(notes="New notes."))
-    go(connect, client, Tools())
+    go(connect, client, Tools())                                         # the first run since the opening
     opening = client.sent[0]["messages"][0]["content"]
-    assert "Fill slot 15" not in opening
+    assert "Fill slot 15" not in opening and "first run since the ledger opening" in opening
     client = Script(answer())
-    go(connect, client, Tools())                                      # a run on the new slots carries on
+    go(connect, client, Tools())                                         # notes since the opening carry on
     assert "New notes." in client.sent[0]["messages"][0]["content"]
-
-
-@pytest.mark.parametrize("clear", ["delete from slot_assignment", "update slot_assignment set device_id = 'vmc2'"])
-def test_no_notes_carry_over_while_there_is_no_usable_assignment(connect, conn, clear):
-    """Sol review, round 2, finding 4: operators clear an invalid assignment before recording again. Until a usable
-    one is stored, no notes carry over: the slots they name may not be ours."""
-    go(connect, Script(answer(notes="Fill slot 15 first.")), Tools())
-    conn.execute(clear)
-    client = Script(answer())
-    go(connect, client, Tools())
-    opening = client.sent[0]["messages"][0]["content"]
-    assert "Fill slot 15" not in opening and "No notes" in opening
 
 
 def test_the_server_never_gets_the_model_key(monkeypatch):
@@ -570,6 +531,7 @@ def test_a_submit_call_that_raises_is_flagged_unresolved(connect, conn):
 # --- The rules card -----------------------------------------------------------------
 
 def test_the_system_prompt_is_the_rules_card_then_the_instructions(connect, conn):
+    open_books(conn, datetime(2026, 11, 20, tzinfo=timezone.utc))
     go(connect, Script(answer(notes="Slot 3 is slow.")), Tools())
     client = Script(tool_turn(use("get_machine_state")), answer())
     go(connect, client, Tools())

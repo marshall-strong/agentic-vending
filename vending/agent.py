@@ -49,10 +49,9 @@ import anyio
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending import agent_runs, db, settings
+from vending import agent_runs, db, ledger, settings
 from vending.config import is_halted
 from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError
-from vending.slots import usable_revision
 from vending.tools.project_rules import RULES_DIR
 
 DEFAULT_MODEL = "claude-opus-5-5"   # pending a team decision
@@ -225,30 +224,26 @@ def recorded_plan(plan: dict | None, answer: dict | None) -> dict | None:
 
 
 def last_notes(conn: psycopg.Connection, *, live: bool) -> str:
-    """The notes from the latest finished run, labelled with where they came from.
+    """The notes from the latest finished run since the real ledger opening, labelled with where they came from.
 
     A live run reads only live runs' notes, so a dry run's "would submit" is never taken as done.
-    Notes are reused only from a run that started on the slot assignment stored now: its recorded
-    revision (`agent_runs.slots_revision`, migration 023) must be the current one. A run with no
-    recorded revision (before migration 023, or with nothing stored) never carries notes. While no
-    usable assignment is stored, for example after an invalid one is cleared, no notes carry over.
-    The slots they name may not be ours (#216).
+    Notes carry over only from a run that started at or after the real opening (`ledger.real_opening`).
+    With no real opening (none yet, or only the 11 Nov test one), no notes carry over. Our slots (the
+    server's assignment) were redrawn on 20 Nov and are final for the quarter. The real opening is recorded
+    on 29 Nov, after the redraw, so every run since then read the current assignment. A run before it may
+    name slots that aren't ours (#216).
     """
+    opened = ledger.real_opening(conn)
+    if opened is None:
+        return ("(No notes: the real ledger opening isn't recorded yet, so earlier runs' notes are left out. "
+                "They may name slots that aren't ours.)")
     modes = ["live"] if live else ["live", "dry-run"]
-    row = conn.execute("select mode, started_at, notes, slots_revision from agent_runs"
-                       " where mode = any(%s) and notes is not null and status <> 'running'"
-                       " order by started_at desc, id desc limit 1", (modes,)).fetchone()
+    row = conn.execute("select mode, started_at, notes from agent_runs"
+                       " where mode = any(%s) and notes is not null and status <> 'running' and started_at >= %s"
+                       " order by started_at desc, id desc limit 1", (modes, opened.at)).fetchone()
     if not row:
-        return "(No notes yet: this is the first run.)"
-    mode, started, notes, revision = row
-    current = usable_revision(conn)
-    if current is None:
-        return ("(No notes: no usable slot assignment is stored, so the last run's notes are left out. "
-                "The slots they name may not be ours.)")
-    if revision != current:
-        return (f"(No notes: the last run's, from {started.astimezone(EASTERN):%A %d %B}, were written on an "
-                "earlier slot assignment than the one stored now, so they are left out. The slots they name may "
-                "not be ours.)")
+        return "(No notes yet: this is the first run since the ledger opening.)"
+    mode, started, notes = row
     kind = "the live run" if mode == "live" else "a dry run (nothing it planned was sent)"
     return f"(From {kind} on {started.astimezone(EASTERN):%A %d %B %H:%M} Eastern.)\n{notes}"
 

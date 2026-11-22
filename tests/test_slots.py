@@ -143,28 +143,6 @@ def test_the_same_answer_again_only_moves_last_checked(empty):
     assert empty.execute("select last_checked_at from slot_assignment").fetchone() == (AFTER,)
 
 
-def test_the_revision_changes_with_our_slots_and_never_comes_back(empty):
-    """Migration 023: agent notes are reused only on the revision they were written on (#216)."""
-    assert slots.usable_revision(empty) is None
-    slots.record(empty, ANSWER, NOW)
-    first = slots.usable_revision(empty)
-    assert first is not None
-    slots.record(empty, ANSWER, NOW + timedelta(days=1))                 # unchanged: the same assignment
-    empty.execute("update slot_assignment set first_read_at = first_read_at - interval '1 day'")
-    assert slots.usable_revision(empty) == first
-    slots.record(empty, MOVED, NOW + timedelta(days=2))                  # changed: a new revision
-    moved = slots.usable_revision(empty)
-    assert moved > first
-    empty.execute("update slot_assignment set slots = %s", (list(TEST_SLOTS),))   # by hand: new too
-    assert slots.usable_revision(empty) > moved
-    by_hand = slots.usable_revision(empty)
-    empty.execute("delete from slot_assignment")                         # cleared and recorded again: new
-    slots.record(empty, ANSWER, NOW + timedelta(days=3))
-    assert slots.usable_revision(empty) > by_hand
-    empty.execute("update slot_assignment set device_id = 'vmc2'")       # one readers refuse: none usable
-    assert slots.usable_revision(empty) is None
-
-
 def test_an_unchanged_check_is_logged_only_when_it_confirms_the_assignment(empty):
     """The worker checks every hour; only the first check since the start says something new."""
     slots.record(empty, ANSWER, NOW)
