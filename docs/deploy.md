@@ -175,8 +175,9 @@ not started yet.
 
 **Live scheduled runs need the team's agreement first.** A live run spends the competition's money and
 sends a purchase request nobody looks at before it goes. Agree as a team, on GitHub, before anyone sets
-`live`. Migration 029 must be on the team database first (`python -m vending.db migrate`): the worker
-refuses to schedule on a database that is behind. Then turn it on in two places:
+`live`. Migrations 029 and 030 must be on the team database first (`python -m vending.db migrate`): the
+worker refuses to schedule on a database that is behind, and the dashboard says so. Apply 030 while no
+submit runs, as 025 below: it waits at most 2 seconds for its lock. Then turn it on in two places:
 `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=live`
 (the worker reads it when it starts, so this makes a new revision), and
 `python -m vending.config set agent_schedule_mode live --by <name>`. Turn it off with one command,
@@ -197,7 +198,7 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 python -m vending.db migrate
 ```
 
-Apply migration 025 (`purchase_submissions.purpose`, for `python -m vending.fill`) while no submit
+Apply migrations 025 and 030 (`purchase_submissions.schedule_due`, #238) (`purchase_submissions.purpose`, for `python -m vending.fill`) while no submit
 runs: the agent paused (`python -m vending.halt on --by NAME`) and no fill being sent. It waits at
 most 2 seconds for its lock. If a submit holds the table, it fails with "lock timeout" and changes
 nothing; run it again once the submit is over.

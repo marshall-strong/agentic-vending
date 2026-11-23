@@ -891,15 +891,35 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
 # old, and every failed, missed or halted row of the last week, with any still `running`, and, however old, any
 # whose agent run still says `running` in agent_runs after the schedule recorded its ending (that ending
 # couldn't be written there). No `detail`: a failed one's can hold an error. What a run sent: its agent run's
-# request ID and the submission that carried it (the newest, if a person resolved an older attempt onto it).
+# request ID and the submission that carried it (the newest, if a person resolved an older attempt onto it), or,
+# from the submissions saved for its time (`purchase_submissions.schedule_due`), an accepted request or any still
+# `sending` or `unknown`: so a run whose ending was lost still says what it sent, or may have sent.
+# A run meant to be live that didn't run live (a check made it a dry run, or stopped it at the lease) carries why
+# (`cause`: the scheduler's own sentence, never an error), and stays until a later live run has run.
 # And the database's `agent_schedule_mode`, to say when it isn't a mode, or says `live`.
-SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.status as agent_status, r.request_id,"
-                     " (select max(p.id) from purchase_submissions p where p.request_id = r.request_id) as submission"
+MEANT_LIVE_SKIP = ("s.outcome = 'skipped' and (s.detail like 'Run as a dry run, not live:%%'"
+                   " or (s.mode = 'live' and s.run_id is null))")
+SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.status as agent_status,"
+                     " coalesce(r.request_id, (select p.request_id from purchase_submissions p"
+                     "  where p.schedule_due = s.due_at and p.status = 'accepted' order by p.id desc limit 1))"
+                     " as request_id,"
+                     " (select max(p.id) from purchase_submissions p where p.request_id = coalesce(r.request_id,"
+                     "  (select q.request_id from purchase_submissions q where q.schedule_due = s.due_at"
+                     "   and q.status = 'accepted' order by q.id desc limit 1))) as submission,"
+                     " array(select p.id::text || ' (' || p.status || ')' from purchase_submissions p"
+                     "  where p.schedule_due = s.due_at and p.status in ('sending', 'unknown') order by p.id)"
+                     " as unsettled,"
+                     f" case when {MEANT_LIVE_SKIP} then left(s.detail, 400) end as cause"
                      " from agent_schedule s left join agent_runs r on r.id = s.run_id")
 SCHEDULED_LATEST_SQL = f"select {SCHEDULED_COLUMNS} order by s.due_at desc limit 1"
 SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS}"
                            " where (s.due_at > %s and s.outcome in ('failed', 'missed', 'halted'))"
                            " or s.outcome = 'running' or (s.outcome <> 'running' and r.status = 'running')"
+                           " or exists (select from purchase_submissions p where p.schedule_due = s.due_at"
+                           "  and p.status in ('sending', 'unknown'))"
+                           f" or ({MEANT_LIVE_SKIP} and not exists (select from agent_schedule later"
+                           "  where later.due_at > s.due_at and later.mode = 'live' and later.run_id is not null"
+                           "  and later.outcome in ('submitted', 'skipped')))"
                            " order by s.due_at desc limit 50")
 SCHEDULED_SETTING_SQL = "select value from config where key = %s"
 # Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
@@ -1355,7 +1375,13 @@ def outage_page(message: str, alerts: list[dict], outage: bool = False) -> str:
 
 def _scheduled(conn: psycopg.Connection, now: datetime) -> dict:
     """The scheduled runs' panel: the newest row, the last week's problems, and whether the database's
-    `agent_schedule_mode` is one of the three words (`setting_ok`)."""
+    `agent_schedule_mode` is one of the three words (`setting_ok`). A database missing migrations says only that
+    (`behind`): no scheduled run can start until they are applied, and the rows may not be readable."""
+    from vending import db
+
+    behind = db.pending(conn)
+    if behind:
+        return {"behind": behind, "latest": None, "incidents": [], "setting_ok": True, "setting_live": False}
     latest = _rows(conn, SCHEDULED_LATEST_SQL)
     setting = _rows(conn, SCHEDULED_SETTING_SQL, (agent_schedule.DB_MODE_KEY,))
     return {"latest": latest[0] if latest else None,
@@ -1386,6 +1412,9 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
                               "the worker probably stopped mid-run")
     if outcome == "skipped" and row.get("mode") == "off":
         what = f"skipped: `{agent_schedule.DB_MODE_KEY}` is off in the database"
+    cause = row.get("cause")
+    if outcome == "skipped" and isinstance(cause, str) and cause:
+        level, what = "warn", f"didn't run live: {cause.rstrip('.')}"
     if outcome != "running" and row.get("agent_status") == "running":
         level, what = "bad", (f"ended {outcome}, but its agent run still says running in agent_runs: its ending "
                               "couldn't be recorded there. Record it by hand once you know how it ended")
@@ -1397,13 +1426,17 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
     kind = {"dry-run": "dry run", "live": "live run"}.get(row.get("mode"), "run")
     run = f" (agent run {int(row['run_id'])})" if isinstance(row.get("run_id"), int) else ""
     sent = ""
-    if outcome != "running":
-        request, submission = row.get("request_id"), row.get("submission")
-        if request:
-            sent = f" Sent: request {request}" + (f" (submission {int(submission)})" if isinstance(submission, int)
-                                                  else "") + "."
-        else:
-            sent = " Nothing sent."
+    request, submission, unsettled = row.get("request_id"), row.get("submission"), row.get("unsettled") or []
+    if request:
+        sent = f" Sent: request {request}" + (f" (submission {int(submission)})" if isinstance(submission, int)
+                                              else "") + "."
+    elif unsettled:
+        level = "bad"
+        first = str(unsettled[0]).split(" ")[0]
+        sent = (f" May have sent: submission {', '.join(str(u) for u in unsettled)}; a person finds out whether "
+                f"the bridge filed it and settles it with `python -m vending.submissions resolve {first}`.")
+    elif outcome != "running":
+        sent = " Nothing sent."
     see = "" if outcome in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
     return level, f"The scheduled {kind}{when} {what}{run}.{sent}{see}"
 
@@ -1432,10 +1465,15 @@ def _scheduled_runs(panel: dict | None, syncs: dict | None, now: datetime) -> li
         out.append(("info", agent_schedule.HALF_LIVE))
     if isinstance(schedule, dict) and schedule.get("model_key") is False:
         out.append(("bad", agent_schedule.NO_KEY_LINE))
+    if isinstance(schedule, dict) and isinstance(schedule.get("problem"), str) and schedule["problem"]:
+        out.append(("bad", schedule["problem"]))
     if panel is None:
         return out
     if not isinstance(data, dict):
         out.append(("warn", SCHEDULE_UNAVAILABLE))
+        return out
+    if data.get("behind"):
+        out.append(("bad", agent_schedule.BEHIND.format(names=", ".join(data["behind"]))))
         return out
     if data.get("setting_ok") is False:
         out.append(("bad", agent_schedule.INVALID_IN_DB))

@@ -103,7 +103,7 @@ def test_the_lower_mode_wins():
 
 
 @pytest.mark.parametrize("name, value", [
-    (agent_schedule.MODE_SETTING, "on"),
+    # AGENT_SCHEDULE_MODE "on" is a dry run with a Problem line now (tests/test_live_schedule.py, Sol #238 finding 7).
     (agent_schedule.TIMES_SETTING, "wed 14:00"),             # no latest start
     (agent_schedule.TIMES_SETTING, "wed 22:00-14:00"),       # latest before due
     (agent_schedule.TIMES_SETTING, "someday 14:00-15:00"),
@@ -853,15 +853,16 @@ def test_a_window_the_clocks_skip_is_recorded_with_the_reason(schema_url, conn, 
     assert outcome == "missed" and detail == agent_schedule.CLOCKS_SKIP.format(day="Sun 08 Mar")
 
 
-def test_a_database_setting_of_the_wrong_type_is_off_and_shown(schema_url, conn, allowed):
-    """Round 2, minor 9: a stored [] raised TypeError, and the worker tried again every minute."""
+def test_a_database_setting_of_the_wrong_type_is_a_dry_run_and_shown(schema_url, conn, allowed):
+    """Round 2, minor 9: a stored [] raised TypeError, and the worker tried again every minute. Sol #238, finding 7:
+    a value that isn't a mode is a dry run (never live, never off), and a Problem line."""
     conn.execute("update config set value = '[]' where key = %s", (agent_schedule.DB_MODE_KEY,))
-    assert agent_schedule.database_mode(conn) == "off"
+    assert agent_schedule.database_mode(conn) == "dry-run"
     agent = FakeAgent(schema_url)
     logged = []
     tick(scheduler(schema_url, agent, LIVE, log=logged.append), at(WED, 14))
-    assert agent.calls == [] and not any("trying again" in line for line in logged)
-    assert rows(conn)[0][1:3] == ("off", "skipped")
+    assert [live for _, live in agent.calls] == [False] and not any("trying again" in line for line in logged)
+    assert rows(conn)[0][1:3] == ("dry-run", "skipped")
     assert ("bad", agent_schedule.INVALID_IN_DB) in attention(conn, at(WED, 15))
 
 

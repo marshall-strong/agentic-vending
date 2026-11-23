@@ -717,3 +717,27 @@ def test_a_201_naming_a_request_we_already_hold_keeps_no_created_id_so_a_person_
     assert db.execute("select status, created_id, response->>'id' from purchase_submissions").fetchall() == [
         ("unknown", None, "r1")]
     assert submissions.resolve(db, 1, None, "kevin").startswith("Submission 1 marked never filed")
+
+
+def test_a_clock_that_crosses_the_thursday_cutoff_between_plan_and_send_sends_nothing(db, fake, monkeypatch):  # noqa: F811
+    """Sol #238, finding 3: planned at Thu 23:59:30 ET, when the in-store cutoff (Thursday 23:59) still holds; the
+    clock passes midnight before the POST. The cutoff is checked again with the clock at the send: refused,
+    and the attempt is settled as never filed."""
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    clock = {"now": datetime(2026, 11, 12, 23, 59, 30, tzinfo=et)}
+    monkeypatch.setattr(ledger, "db_now", lambda conn: clock["now"])
+    prepared(db)
+    real_save = submissions.save_sending
+
+    def save_then_midnight(*args, **kw):
+        row = real_save(*args, **kw)
+        clock["now"] = datetime(2026, 11, 13, 0, 0, 1, tzinfo=et)
+        return row
+    monkeypatch.setattr(submissions, "save_sending", save_then_midnight)
+    reply = submit()
+    assert reply["success"] is False and codes(reply) == ["past_cutoff"]
+    assert fake.posts == []
+    [(status, detail)] = db.execute("select status, detail from purchase_submissions").fetchall()
+    assert status == "not_filed" and "past_cutoff" in detail

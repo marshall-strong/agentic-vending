@@ -61,7 +61,7 @@ from datetime import datetime
 
 import psycopg
 
-from vending import planner, planning, submissions
+from vending import ledger, planner, planning, submissions
 from vending.bridge import Bridge, BridgeNoAnswer, BridgeUnreachable, PostAnswer
 from vending.ledger import money
 from vending.pricing import Refusal
@@ -145,12 +145,15 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
         # The fee the plan quoted goes with the request, so the ledger charges what was
         # agreed now even if config.midweek_fee_cents changes later.
         fee = plan.cost.visit_fee_cents if plan.off_cycle else None
+        # A scheduled run's (the run lease names its time): it is checked again just before the POST. Never the fill's.
+        due = _scheduled_due(conn) if purpose is None else None
         # Opened before anything is sent, and reused to settle: a connect that would fail
         # fails now, while nothing has left, not after the bridge has the request.
         with connect() as side:
-            row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee, purpose)
+            row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee, purpose, due)
             if before_post is not None:
                 _last_check(side, row, body, before_post)
+            _last_check(side, row, body, lambda _side, r, _body: _at_the_send(conn, plan, gathered, now, due, r))
             reply = _send(client, plan, body, row, side, gathered.now)
         # What preview would have said about this plan, so a changed warning since the preview isn't missed.
         return reply.model_copy(update={"warnings": list(plan.warnings), "notes": list(gathered.notes)})
@@ -171,6 +174,28 @@ def _last_check(side: psycopg.Connection, row: int, body: dict,
         submissions.settle(side, row, "not_filed", detail="nothing sent: " + "; ".join(
             f"{r.code}: {r.message}" for r in refusals))
         raise Refused(refusals)
+
+
+def _scheduled_due(conn: psycopg.Connection):
+    from vending import agent_schedule
+
+    return agent_schedule.scheduled_due(conn)
+
+
+def _at_the_send(conn: psycopg.Connection, plan: planner.Plan, gathered: planning.Gathered, given: datetime | None,
+                 due: datetime | None, row: int) -> list[Refusal]:
+    """The last checks, on the gate's connection, just before the POST, with the clock read now (the database's,
+    `ledger.db_now`; a `now` the caller gave stays as given): the plan's store cutoffs again, so a plan made just
+    before Thursday 23:59 isn't sent after it; and for a scheduled run (`due`), both switches, its row, the start
+    and every check before a send (`agent_schedule.send_blocker`), whose locks hold until the POST is answered."""
+    now = given if given is not None else ledger.db_now(conn)
+    refusals = planner.cutoff_refusals(plan, gathered.config, now)
+    if due is not None:
+        from vending import agent_schedule
+
+        if (why := agent_schedule.send_blocker(conn, due, now, row)) is not None:
+            refusals.append(Refusal("schedule_not_live", f"scheduled live run, checked again at the send: {why}"))
+    return refusals
 
 
 def _str(value: object) -> bool:
