@@ -43,6 +43,23 @@ the row `not_filed` if it refuses. It also marks its rows `purpose = 'fill'`.
 
 The reply carries the plan's `warnings` and `notes`, as preview's does.
 
+**The run's own context (`RunContext`).** The agent that starts this server hands it its run lease's token and,
+for a scheduled run, the scheduled time (`VENDING_RUN_LEASE`, `VENDING_SCHEDULE_DUE`, in the child's real
+environment: `vending.agent.server_env`). The submit checks that exact lease, never whichever lease is current, so
+a lease that expired or was taken over after the agent handed the call on can't turn a scheduled submit into a
+manual one: it is refused (`lease_lost`). A scheduled time with no usable lease is refused too (`run_context`).
+A scheduled run never buys an off-cycle visit (`scheduled_off_cycle`): its job is the Friday order. A person's
+run by hand has no scheduled time and keeps the off-cycle choice.
+
+**Locks first, then the clock.** Between steps 1 and 2 the submit takes its locks on the gate's connection: the
+run lease's row (`for key share`, so no takeover until the POST is answered), and for a scheduled run the
+database switch's row and the schedule's row (`for share`, so an `off` waits until after the send). Only once
+the bridge connection is open, right before the request is written (`Bridge.post_answer`'s `ready`), does it
+read the database's clock and run the final checks: the store cutoffs, the lease, and for a scheduled run both
+switches, its row, the start, open submissions, the slot check and one submission per visit
+(`agent_schedule.send_blocker`). So neither a lock wait nor a slow connect can carry a send past a cutoff. A
+failed check sends nothing and settles the attempt `not_filed`.
+
 If the bridge accepted the request but recording that fails anyway, the answer
 is written to stderr and the error the agent sees names the request ID and the
 `resolve` command, so the ID is never only in memory. That includes finding the
@@ -55,13 +72,16 @@ can settle it from the bridge.
 from __future__ import annotations
 
 import json
+import os
 import sys
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 
 import psycopg
 
-from vending import planner, planning, submissions
+from vending import ledger, planner, planning, submissions
 from vending.bridge import Bridge, BridgeNoAnswer, BridgeUnreachable, PostAnswer
 from vending.ledger import money
 from vending.pricing import Refusal
@@ -74,6 +94,52 @@ ACCEPTED_STATUS = 201
 # `PurchaseRequestPending`'s fields (`docs/bridge-openapi-2026-11-20.json`): an acceptance with any other isn't
 # the documented one, so it settles nothing.
 PENDING_FIELDS = frozenset({"id", "status", "created_at", "decision_note"})
+# Set by the agent on the server it starts (`vending.agent.server_env`), in the real environment only, never `.env`.
+RUN_LEASE_ENV = "VENDING_RUN_LEASE"
+SCHEDULE_DUE_ENV = "VENDING_SCHEDULE_DUE"
+RUN_ENV = (RUN_LEASE_ENV, SCHEDULE_DUE_ENV)
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """The agent run this server works for: its run lease's token, and its scheduled time (None by hand).
+    `problem` says why the values the agent passed can't be used; a submit is then refused."""
+    lease: uuid.UUID | None = None
+    due: datetime | None = None
+    problem: str | None = None
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> RunContext:
+        environ = os.environ if environ is None else environ
+        raw_lease = (environ.get(RUN_LEASE_ENV) or "").strip()
+        raw_due = (environ.get(SCHEDULE_DUE_ENV) or "").strip()
+        lease = due = None
+        problems = []
+        if raw_lease:
+            try:
+                lease = uuid.UUID(raw_lease)
+            except ValueError:
+                problems.append(f"{RUN_LEASE_ENV} isn't a run lease token")
+        if raw_due:
+            try:
+                due = datetime.fromisoformat(raw_due)
+                if due.tzinfo is None:
+                    raise ValueError
+            except ValueError:
+                problems.append(f"{SCHEDULE_DUE_ENV} isn't a time with its offset")
+                due = None
+            if not raw_lease:
+                problems.append(f"{SCHEDULE_DUE_ENV} names a scheduled time but {RUN_LEASE_ENV} gives no run lease")
+        return cls(lease, due, "; ".join(problems) or None)
+
+
+class _NotSent(Exception):
+    """The final checks, once the bridge connection is open, said no (`refusals`) or failed (`error`): nothing
+    of the request was written."""
+
+    def __init__(self, refusals: list[Refusal], error: BaseException | None = None):
+        super().__init__("; ".join(f"{r.code}: {r.message}" for r in refusals) or repr(error))
+        self.refusals, self.error = refusals, error
 
 
 class SubmitReply(WriteReply):
@@ -109,6 +175,7 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
                                                list[Refusal]] | None = None,
                          before_post: Callable[[psycopg.Connection, int, dict], list[Refusal]] | None = None,
                          purpose: str | None = None, count_takings: bool = True,
+                         run: RunContext | None = None,
                          ) -> Callable[[psycopg.Connection], SubmitReply]:
     """The write action for the gate. `connect` opens the one side connection that records the
     attempt; it must reach the same database as the gate's. The rest are the fill's (`vending.fill`), never
@@ -121,7 +188,10 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
       attempt's row and the exact body about to be sent; any refusal it returns settles the attempt as
       `not_filed` (nothing was sent) and stops the send;
     - `purpose` is saved on the attempt (`purchase_submissions.purpose`);
-    - `count_takings=False` checks the balance without takings from the polls (`planning.gather`)."""
+    - `count_takings=False` checks the balance without takings from the polls (`planning.gather`).
+
+    `run` is the agent run's own context (the MCP server reads it from its environment): its lease, checked at the
+    send, and for a scheduled run its time. Never the fill's."""
 
     def action(conn: psycopg.Connection) -> SubmitReply:
         client = bridge()
@@ -139,6 +209,17 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
             refusals.extend(before_send(conn, plan, gathered))
         if unresolved := submissions.unresolved(conn):
             refusals.append(unresolved)
+        mine = run if purpose is None else None
+        if mine is not None and mine.problem:
+            refusals.append(Refusal("run_context", (
+                f"this server can't tell which agent run it works for ({mine.problem}), so nothing is sent")))
+        # A scheduled run (the agent passed its time): checked again at the send. Never the fill's.
+        due = mine.due if mine is not None else None
+        if due is not None and plan.off_cycle:
+            refusals.append(Refusal("scheduled_off_cycle", (
+                "a scheduled run orders for the Friday visit and never buys an off-cycle visit (its fee, and the "
+                "cutoffs it skips). Submit with off_cycle false; a person who means an off-cycle visit sends it by "
+                "hand: python -m vending.agent --live.")))
         if refusals:
             raise Refused(refusals)
         body = plan.request()
@@ -148,10 +229,13 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
         # Opened before anything is sent, and reused to settle: a connect that would fail
         # fails now, while nothing has left, not after the bridge has the request.
         with connect() as side:
-            row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee, purpose)
+            row = submissions.save_sending(side, plan.plan_hash, body, plan.directive, fee, purpose, due)
             if before_post is not None:
                 _last_check(side, row, body, before_post)
-            reply = _send(client, plan, body, row, side, gathered.now)
+            # The locks first, held until the POST is answered; the clock is read only after them, at the send.
+            _last_check(side, row, body, lambda _side, _r, _body: _lock_for_send(conn, mine))
+            reply = _send(client, plan, body, row, side, gathered.now,
+                          ready=lambda: _at_the_send(conn, plan, gathered, now, mine, row))
         # What preview would have said about this plan, so a changed warning since the preview isn't missed.
         return reply.model_copy(update={"warnings": list(plan.warnings), "notes": list(gathered.notes)})
 
@@ -171,6 +255,57 @@ def _last_check(side: psycopg.Connection, row: int, body: dict,
         submissions.settle(side, row, "not_filed", detail="nothing sent: " + "; ".join(
             f"{r.code}: {r.message}" for r in refusals))
         raise Refused(refusals)
+
+
+def _lock_for_send(conn: psycopg.Connection, run: RunContext | None) -> list[Refusal]:
+    """Take the send's locks on the gate's connection, before the clock is read: the run lease's row `for key
+    share` (a takeover waits until the POST is answered; the run's own renewals don't), and for a scheduled run
+    the database switch's row and the schedule's row (`agent_schedule.lock_for_send`). Refuses nothing itself."""
+    if run is None or run.lease is None:
+        return []
+    conn.execute("select from agent_run_lease where one for key share")
+    if run.due is not None:
+        from vending import agent_schedule
+
+        agent_schedule.lock_for_send(conn, run.due)
+    return []
+
+
+def lease_blocker(conn: psycopg.Connection, run: RunContext) -> str | None:
+    """Why the run named by `run` can't send now: it no longer holds its own run lease, or that lease is for
+    another scheduled time. None when it holds it."""
+    from vending import run_lease
+
+    found = conn.execute("select schedule_due from agent_run_lease"
+                         " where token = %s and expires_at > clock_timestamp()", (run.lease,)).fetchone()
+    if found is None:
+        return run_lease.LOST
+    if found[0] != run.due:
+        return "this run's lease is held for a different scheduled time than the one it was started for"
+    return None
+
+
+def _at_the_send(conn: psycopg.Connection, plan: planner.Plan, gathered: planning.Gathered, given: datetime | None,
+                 run: RunContext | None, row: int) -> None:
+    """The final checks, on the gate's connection, once the bridge connection is open and before any byte is
+    written, with the clock read now, after the locks (the database's, `ledger.db_now`; a `now` the caller gave
+    stays as given): the plan's store cutoffs again, so a plan made just before Thursday 23:59 isn't sent after it;
+    the run's own lease; and for a scheduled run, both switches, its row, the start and every check before a send
+    (`agent_schedule.send_blocker`). Raises `_NotSent` if any says no, or if a check fails."""
+    try:
+        now = given if given is not None else ledger.db_now(conn)
+        refusals = planner.cutoff_refusals(plan, gathered.config, now)
+        if run is not None and run.lease is not None and (why := lease_blocker(conn, run)) is not None:
+            refusals.append(Refusal("lease_lost", f"checked at the send: {why}"))
+        if run is not None and run.due is not None:
+            from vending import agent_schedule
+
+            if (why := agent_schedule.send_blocker(conn, run.due, now, row)) is not None:
+                refusals.append(Refusal("schedule_not_live", f"scheduled live run, checked again at the send: {why}"))
+    except BaseException as error:
+        raise _NotSent([], error) from error
+    if refusals:
+        raise _NotSent(refusals)
 
 
 def _str(value: object) -> bool:
@@ -205,9 +340,17 @@ def _short(text: str, size: int = 300) -> str:
 
 
 def _send(client: Bridge, plan: planner.Plan, body: dict, row: int, side: psycopg.Connection,
-          now: datetime) -> SubmitReply:
+          now: datetime, ready: Callable[[], None] | None = None) -> SubmitReply:
     try:
-        answer = client.post_answer(ROUTE, body)
+        answer = client.post_answer(ROUTE, body, ready=ready)
+    except _NotSent as stopped:
+        if stopped.error is not None:
+            submissions.settle(side, row, "not_filed",
+                               detail=f"nothing sent: {type(stopped.error).__name__} in the checks before the POST")
+            raise stopped.error from None
+        submissions.settle(side, row, "not_filed", detail="nothing sent: " + "; ".join(
+            f"{r.code}: {r.message}" for r in stopped.refusals))
+        raise Refused(stopped.refusals) from None
     except BridgeUnreachable as error:
         submissions.settle(side, row, "not_filed", detail=str(error))
         return SubmitReply(success=False, status="not_filed", submission=row, plan_hash=plan.plan_hash,

@@ -34,11 +34,23 @@ PENDING = {"id": "pr-1", "status": "pending", "created_at": "2026-11-09T12:00:00
 
 
 def mcp_tools():
-    """The real MCP server, in memory, as the agent's tools."""
+    """The real MCP server, in memory, as the agent's tools. The run's context (`agent.run_context`) goes into the
+    environment the server reads, as it does for the real server's own process, and is taken out after."""
     @asynccontextmanager
-    async def opened():
-        async with create_connected_server_and_client_session(server.mcp._mcp_server) as session:
-            yield (await session.list_tools()).tools, session.call_tool
+    async def opened(context=None):
+        import os
+
+        saved = {k: os.environ.get(k) for k in context or {}}
+        os.environ.update(context or {})
+        try:
+            async with create_connected_server_and_client_session(server.mcp._mcp_server) as session:
+                yield (await session.list_tools()).tools, session.call_tool
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
     return opened
 
 

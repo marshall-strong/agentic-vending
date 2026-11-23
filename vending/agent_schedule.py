@@ -1,9 +1,37 @@
 """Scheduled agent runs, started by the worker (#213). Off unless two settings both turn them on.
 
-**Dry runs only.** Live scheduling is not enabled in this version; it needs a later change approved by
-the team. A scheduled run is always `vending.agent.run(live=False)`, which offers the model no write tool
-(`vending.agent.WRITE_TOOLS`: no purchase request, no catalog request, no price). `live` in either setting
-below is run as `dry-run`, and `/health`, the home page and the dashboard say so (`LIVE_NOT_ENABLED`).
+**Live only when both settings say `live`.** A scheduled run is `vending.agent.run(live=True)` only when the
+container's `AGENT_SCHEDULE_MODE` and the database's `agent_schedule_mode` both say `live`; any other pair
+is a dry run (`live=False`, no write tool: `vending.agent.WRITE_TOOLS`) or off. A live run goes through the
+same entry point as `python -m vending.agent --live`, so every live-run rule holds unchanged: the halt
+switch, the caps, the run lease, only the plan its last preview accepted, at most one submit (with #217's
+retry rules), the `submission_unresolved` block and the planner's spendable floor (#188).
+
+**Checks before a send (`live_blocker`).** Two kinds. A *lasting* one makes a time claimed as live run as a dry
+run instead, with why at the start of its detail: the competition hasn't started (`vending.start.START`, by the
+database's clock), or a scheduled run already sent a submission for this week's visit, whatever became of it
+(`ALREADY_SENT`: one per visit; a person sends another by hand). A *passing* one doesn't spend the window
+(`WAITING`): a purchase submission is still open (`vending.submissions.open_rows`: ORDERS BLOCKED), our slot
+assignment can't be read (`vending.slots.our_slots`) or the worker's hourly `slots check` last confirmed it more
+than `SLOTS_FRESH` ago, or another agent run holds the run lease. The worker then claims nothing and tries again
+every `LIVE_RETRY` until the time's latest start; still blocked then, the time is `missed`, mode `live`, with the
+cause (`LIVE_MISSED`), and the dashboard shows it as a Problem. Before it calls an open submission something only a
+person can settle, it runs the same reconciliation as `python -m vending.submissions check`: a row whose POST got
+a validated `201` is looked up on the bridge and settled, since nobody watches an unattended run. A run whose
+start finds the lease taken after all (between the claim and the lease) puts its time back the same way.
+
+The same checks run again in the transaction that takes the run lease, and there a failed one, or a database
+setting lowered from `live` since the claim, stops the run (`skipped`), because the run's mode was chosen before
+the lease. That transaction marks the lease with the run's time (`agent_run_lease.schedule_due`). The agent hands
+that time and its own lease token to the MCP server it starts (`vending.tools.submit.RunContext`), and the submit
+tool checks it all once more at the send: it takes its locks first (the lease, the database switch, this time's
+row), then, once the bridge connection is open, reads the database's clock and checks the run's own lease, both
+switches, the row, and `live_blocker` (`send_blocker`). A failed one there sends nothing (the attempt is
+`not_filed`, the submit refused `lease_lost` or `schedule_not_live`). A scheduled run never buys an off-cycle
+visit (`scheduled_off_cycle`). The halt switch is the agent's own check: a halted run is recorded as
+`halted` before any model request. Without the model key (`VENDING_ANTHROPIC_API_KEY`) the entry point
+records the time as `failed` (`MODEL_KEY_MISSING`) and never starts the agent; `/health` shows `model_key`,
+and the dashboard says so before the time comes.
 
 The worker's loop asks `Scheduler.next_due` when the next run is due and calls `Scheduler.tick`
 then, as it does for the visit reads (`vending.visit_polls`). The run itself is the agent's own
@@ -11,33 +39,37 @@ entry point, `vending.agent.run`, in a background thread, so the hourly syncs go
 
 **Off by default, twice.** The worker runs the agent only when both of these say so:
 
-- `AGENT_SCHEDULE_MODE` (environment, or `.env`): `off` (unset is off), `dry-run` or `live` (run as
-  `dry-run`). Unset, the worker builds no scheduler at all and never touches `agent_schedule`.
-- `agent_schedule_mode` in the database's `config` table: the same three values; no row, or a value
-  that isn't one of them, is off. Set it with `python -m vending.config set agent_schedule_mode dry-run --by NAME`
-  (a bare word works in every shell, Windows PowerShell 5.1 too). It is read by the same statement
+- `AGENT_SCHEDULE_MODE` (environment, or `.env`): `off` (unset is off), `dry-run` or `live`. Unset, the
+  worker builds no scheduler at all and never touches `agent_schedule`. Anything else is a dry run, never live
+  and never off, and `/health` and the dashboard show it as a Problem (`GARBLED_MODE`).
+- `agent_schedule_mode` in the database's `config` table: the same three values; no row is off, and a value
+  that isn't one of them is a dry run, shown as a Problem (`INVALID_IN_DB`). Set it with `python -m vending.config set agent_schedule_mode dry-run --by NAME`
+  (a bare word works in every shell, Windows PowerShell 5.1 too). The lower of the two is what runs. It is read by the same statement
   that claims a scheduled time, and read again in the transaction that takes the run lease, with its
   row locked, before anything is paid for. So a change reaches every replica at once, an old one left
   over from a deploy too. Turning it off is how to stop the runs: a run that finds it off when it would
   start doesn't start, and an `off` committed while a run is being started waits for that start to be
   recorded (`started_at`), so it is ordered after it.
 
-A dry run is test spend, under `model_test_daily_cap_cents` (`docs/agent.md`).
+A dry run is test spend, under `model_test_daily_cap_cents`; a live run is the competition's money, in the
+ledger, under `model_daily_cap_cents` (`docs/agent.md`).
 
 Other settings (environment, or `.env`):
 
 - `AGENT_SCHEDULE`: when, in Eastern time, as `day HH:MM-HH:MM`, comma-separated. The first time
-  is when the run is due; the second is the latest it may start. Unset: `wed 14:00-22:00`, one
-  restock run each Wednesday afternoon, so its order beats Amazon's Wed 23:59 cutoff (#188). A
-  placeholder until #129 decides.
+  is when the run is due; the second is the latest it may start. Unset: `wed 14:00-22:00,thu 12:00-20:00`
+  (Kevin, 23 Nov): a Wednesday run whose order beats Amazon's Wed 23:59 cutoff (#188), and a Thursday run
+  for the week its Wednesday didn't send (one per visit). Wed 2 Dec is before the start, so a dry run; the
+  first live order is Thu 3 Dec 12:00 ET's, for the Fri 4 Dec visit.
 - `AGENT_SCHEDULE_FROM`: the first Eastern day with runs. Unset: 2026-12-02 (Wed 2 Dec).
 
 Each time in the schedule gets one row in `agent_schedule` (`db/migrations/024_agent_schedule.sql`),
 keyed by the time, so it runs at most once whatever restarts or replicas there are:
 
 - The worker inserts the row before it starts the agent, and records the agent's ending
-  (`submitted`, `skipped`, `halted`, `failed`) and its run id when the agent returns. If that
-  write fails, the worker tries it again every minute until it lands.
+  (`submitted`, live runs only; `skipped`, `halted`, `failed`) and its run id when the agent returns. If that
+  write fails, the worker tries it again every minute until it lands. The agent names its run on the row as it
+  starts (`run_lease.attach`), so the row links its run, and through it what it sent, even before then.
 - A time the database's mode turns off is recorded as `skipped`, with mode `off`.
 - A time the worker never reached before its latest start (it was down, or the schedule was off)
   is recorded as `missed` once a worker runs again. Which times are due, and whether one is past its
@@ -63,8 +95,8 @@ keyed by the time, so it runs at most once whatever restarts or replicas there a
   just after the lease expires (`SWEEP_MARGIN`) to try again. It is never run again.
 - Two entries with the same start are one time, with the later latest start.
 
-`/health` shows what this worker runs (`dry-run`), its `AGENT_SCHEDULE_MODE`, that live scheduling
-isn't enabled, the next time and the last scheduled run's outcome (never its detail, which can hold an
+`/health` shows what this worker runs at most (its `AGENT_SCHEDULE_MODE`), whether it has the model key,
+the next time and the last scheduled run's outcome (never its detail, which can hold an
 error). The dashboard reads the `agent_schedule` table itself, so turning the schedule off never hides a
 failed or missed run. A row whose agent run still says `running` in `agent_runs` after the run returned
 (its ending couldn't be recorded) stays in Needs attention, however old, until `agent_runs` has an ending.
@@ -86,19 +118,43 @@ EASTERN = ZoneInfo("America/New_York")
 MODE_SETTING, TIMES_SETTING, FROM_SETTING = "AGENT_SCHEDULE_MODE", "AGENT_SCHEDULE", "AGENT_SCHEDULE_FROM"
 # The `config` key that must also turn the runs on (`vending.config.KNOWN`).
 DB_MODE_KEY = "agent_schedule_mode"
-# Placeholders until #129 decides: Wednesday 2 PM Eastern, so a run's order beats Amazon's Wed 23:59
-# cutoff (#188), and late until 10 PM, which still leaves time before it.
-DEFAULT_TIMES = "wed 14:00-22:00"
+# Kevin, 23 Nov: Wednesday 2 PM Eastern, so a run's order beats Amazon's Wed 23:59 cutoff (#188), late until 10 PM;
+# and Thursday noon, late until 8 PM, for a week whose Wednesday didn't send. Thu 3 Dec 12:00 is the first live order.
+DEFAULT_TIMES = "wed 14:00-22:00,thu 12:00-20:00"
 DEFAULT_FROM = "2026-12-02"
 MODES = ("dry-run", "live")
 RANK = {"off": 0, "dry-run": 1, "live": 2}
-# The most a scheduled run may be in this version, whatever the settings say.
-CEILING = "dry-run"
-LIVE_NOT_ENABLED = ("Scheduled agent runs are dry runs only: live scheduling is not enabled in this version; "
-                    "it needs a later change approved by the team.")
+# The most a scheduled run may be: live, when both settings say so and the checks before a send pass.
+CEILING = "live"
 DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 # A dry run's endings. Anything else the agent returns (a dry run can't submit) is recorded as failed.
 ENDINGS = ("skipped", "halted", "failed")
+# A live run's: it may also have submitted (`vending.agent.run` sends at most one purchase request).
+LIVE_ENDINGS = ("submitted", *ENDINGS)
+# The worker's `slots check` runs every hourly round. An assignment confirmed longer ago than this means the
+# check has been failing (the server's answer changed, or the bridge is down), so a live run waits for a person.
+SLOTS_FRESH = timedelta(hours=3)
+# What /health and the dashboard say about live runs.
+LIVE_ON = ("Scheduled agent runs are live: both `AGENT_SCHEDULE_MODE` and `agent_schedule_mode` say live, so each "
+           "scheduled run may send a restock request. Turn it off with "
+           "`python -m vending.config set agent_schedule_mode off --by NAME`; it applies from the next scheduled time.")
+HALF_LIVE = ("Scheduled agent runs are dry runs: only one of `AGENT_SCHEDULE_MODE` (the container) and "
+             "`agent_schedule_mode` (the database) says live, and a run is live only when both do.")
+NO_KEY_LINE = ("Scheduled agent runs have no model key: `VENDING_ANTHROPIC_API_KEY` isn't set on the container, so "
+               "each scheduled run will fail before any model request. Deploy with `-SetSecrets` (docs/deploy.md).")
+# A time's detail when the entry point had no model key: the agent never started.
+MODEL_KEY_MISSING = "MODEL KEY MISSING: "
+# A time claimed as live that a check turned into a dry run: why, at the start of its detail.
+DOWNGRADED = "Run as a dry run, not live: {why} "
+# A time claimed as live whose check failed in the transaction that takes the run lease: nothing ran.
+NOT_LIVE = "Not started: this live run's check before a send failed as it was about to start: {why}"
+BEFORE_START = ("the competition starts {start} (vending.start.START), and a scheduled run is never live before "
+                "it.")
+ORDERS_BLOCKED = ("ORDERS BLOCKED: purchase submission {rows} is unresolved, so the bridge may already have a "
+                  "request. A person settles it with python -m vending.submissions resolve.")
+SLOTS_UNREADY = "our slots can't be read ({error})."
+SLOTS_STALE = ("our slot assignment was last confirmed with the inventory server {age} ago, more than {limit}, so "
+               "the worker's slots check has been failing. A person checks with python -m vending.slots check.")
 # Seconds any one of the scheduler's database statements may take, or wait for a lock.
 DB_TIMEOUT = 30.0
 # `wed 14:00-22:00`: a day (3 letters or more of its name), then two 24-hour times. Nothing else.
@@ -134,8 +190,33 @@ LATE_AT_START = ("No run started: this time was claimed, but its latest start ({
 ABANDONED = ("The run hadn't ended {after} after it started, so the worker let it go and went on. "
              "Its own record, if it has one, is in agent_runs.").format(after="1 h 15 min")
 LAUNCH_FAILED = "Not started: the worker couldn't start the run's thread ({error})."
-INVALID_IN_DB = (f"Scheduled agent runs are off: `{DB_MODE_KEY}` in the database isn't \"off\", \"dry-run\" or "
-                 f"\"live\", so the worker treats it as off. Set it with `python -m vending.config set {DB_MODE_KEY} off --by NAME`.")
+INVALID_IN_DB = (f"Scheduled agent runs are dry runs only: `{DB_MODE_KEY}` in the database isn't \"off\", \"dry-run\" "
+                 f"or \"live\", so the worker runs each scheduled time as a dry run, never live. Set it with "
+                 f"`python -m vending.config set {DB_MODE_KEY} off --by NAME` (or dry-run, or live).")
+# AGENT_SCHEDULE_MODE set to something that isn't a mode: never live, never off (a typo must not stop the dry runs
+# a person is watching, nor turn on live ones). `/health` and the dashboard show it as a Problem.
+GARBLED_MODE = ("Scheduled agent runs are dry runs only: the container's AGENT_SCHEDULE_MODE is {value!r}, not off, "
+                "dry-run or live, so the worker runs each scheduled time as a dry run, never live. Fix the setting "
+                "and deploy again (docs/deploy.md).")
+# One scheduled live submission per week's visit (the week turns over on Saturday, after the Friday visit, as the
+# planner's does), whatever became of it: a request the bridge rejected still counts.
+ALREADY_SENT = ("a scheduled run already sent submission {row} (due {when}) for this week's visit, and scheduled "
+                "runs send at most one per visit, even if that request was rejected. A person who means to send "
+                "another does it by hand: python -m vending.agent --live.")
+# A live time held back by a passing blocker: tried again this often until its latest start.
+LIVE_RETRY = timedelta(minutes=5)
+WAITING = ("The scheduled live run due {due} is waiting: {why} The worker tries again every {every} until its "
+           "latest start ({latest}); if it still can't send then, it is recorded as missed.")
+LIVE_MISSED = "LIVE RUN MISSED: it waited from its time to its latest start ({latest}) and couldn't send: {why}"
+LEASE_BUSY = "another agent run{run} holds the run lease, so this live run waits for it to end."
+# The checks again in the submit tool, just before the POST (`send_blocker`).
+SEND_CONTAINER = "the container's AGENT_SCHEDULE_MODE says {mode}, not live."
+SEND_DB = f"{DB_MODE_KEY} in the database says {{mode}} now, not live."
+SEND_ROW = "this scheduled time's row says {state}, not a live run going."
+# The worker couldn't do its scheduled work just now: what /health and the dashboard say.
+TICK_PROBLEM = "Scheduled agent runs can't start: {error}. The worker tries again every minute."
+BEHIND = ("Scheduled agent runs can't start: the database is missing migrations ({names}); run "
+          "python -m vending.db migrate.")
 
 
 @dataclass(frozen=True)
@@ -150,6 +231,7 @@ class Schedule:
     mode: str           # one of MODES: this worker's AGENT_SCHEDULE_MODE, the most it may run
     entries: tuple[Entry, ...]
     first_day: date     # Eastern
+    problem: str | None = None      # AGENT_SCHEDULE_MODE wasn't a mode, so this is a dry run (GARBLED_MODE)
 
 
 def _entry(part: str) -> Entry:
@@ -168,13 +250,15 @@ def _entry(part: str) -> Entry:
 
 
 def schedule() -> Schedule | None:
-    """The schedule from the settings, or None when it is off (the mode unset or `off`).
-    `settings.SettingsError` for a value that isn't one. `live` is kept as given, and run as `dry-run`."""
-    mode = (settings.get(MODE_SETTING) or "off").strip().lower()
+    """The schedule from the settings, or None when it is off (the mode unset or `off`). A mode that isn't one is a
+    dry run, with `problem` saying so (never live, never off). `settings.SettingsError` for times or a first day
+    that aren't."""
+    raw = settings.get(MODE_SETTING) or "off"
+    mode, problem = raw.strip().lower(), None
     if mode == "off":
         return None
     if mode not in MODES:
-        raise settings.SettingsError(f"{MODE_SETTING} is {mode!r}, not off, dry-run or live")
+        mode, problem = "dry-run", GARBLED_MODE.format(value=raw.strip())
     value = settings.get(TIMES_SETTING, DEFAULT_TIMES)
     entries = []
     for part in value.split(","):
@@ -193,7 +277,7 @@ def schedule() -> Schedule | None:
         first_day = date.fromisoformat(first)
     except ValueError:
         raise settings.SettingsError(f"{FROM_SETTING} is {first!r}, not a date like 2026-12-02") from None
-    return Schedule(mode, tuple(entries), first_day)
+    return Schedule(mode, tuple(entries), first_day, problem)
 
 
 def valid_database_mode(value) -> bool:
@@ -202,16 +286,15 @@ def valid_database_mode(value) -> bool:
 
 
 def database_mode(conn, *, lock: bool = False) -> str:
-    """`agent_schedule_mode` from `config`: off when the row is missing or holds anything else. With `lock`,
-    inside a transaction, the row is read `for share`: a change to it waits until that transaction ends."""
-    from vending.config import get_value
-
-    if lock:
-        row = conn.execute("select value from config where key = %s for share", (DB_MODE_KEY,)).fetchone()
-        value = None if row is None else row[0]
-    else:
-        value = get_value(conn, DB_MODE_KEY)
-    return value if valid_database_mode(value) else "off"
+    """`agent_schedule_mode` from `config`: off when the row is missing, dry-run when it holds anything that isn't
+    one of the three words, JSON null included (never live, never off: the dashboard shows it as a Problem). The
+    same mapping as the claim's (`CLAIM_SQL`). With `lock`, inside a transaction, the row is read `for share`: a
+    change to it waits until that transaction ends."""
+    row = conn.execute("select value from config where key = %s" + (" for share" if lock else ""),
+                       (DB_MODE_KEY,)).fetchone()
+    if row is None:
+        return "off"
+    return row[0] if valid_database_mode(row[0]) else "dry-run"
 
 
 def database_now(conn) -> datetime:
@@ -263,18 +346,128 @@ def next_time(sched: Schedule, now: datetime) -> datetime:
         start += timedelta(days=8)      # unreachable with any entry; kept so a bug can't hang the loop for ever
 
 
+def model_key_present() -> bool:
+    """Whether the team's model key is set where `vending.agent.model_client` reads it (never its value)."""
+    from vending.harness import DEFAULT_KEY_ENV
+
+    return bool((settings.get(DEFAULT_KEY_ENV) or "").strip())
+
+
+def visit_week(moment: datetime) -> date:
+    """The Saturday the week of `moment` (Eastern) began: one Friday visit, and its store cutoffs, per week."""
+    from vending.planner import Config, _week_of
+
+    return _week_of(moment.astimezone(EASTERN), Config.__dataclass_fields__["week_starts"].default)
+
+
+def live_blocker(conn, now: datetime, *, due: datetime | None = None, except_row: int | None = None) -> str | None:
+    """Why a run claimed as live must not send now, or None. What a person checks before pressing send that the
+    agent's own run doesn't: the competition has started, no purchase submission is open, our slot
+    assignment is readable and was confirmed by the worker's `slots check` within `SLOTS_FRESH`, and no other
+    scheduled run sent a submission for the same week's visit as `due` (the scheduled time; `now` when None),
+    whatever became of it. `now` is the database's clock. `except_row` leaves out the submission being sent (the
+    submit tool's own check, `send_blocker`). The halt switch and the model key are checked by the agent and the
+    entry point."""
+    return (_before_start(now) or passing_blocker(conn, now, except_row)
+            or _already_sent(conn, now, due=due, except_row=except_row))
+
+
+def lasting_blocker(conn, now: datetime, *, due: datetime | None = None) -> str | None:
+    """The checks before a send that no wait inside the window can change: the competition hasn't started, or a
+    scheduled run already sent this week's submission. A time that fails one runs as a dry run."""
+    return _before_start(now) or _already_sent(conn, now, due=due)
+
+
+def passing_blocker(conn, now: datetime, except_row: int | None = None) -> str | None:
+    """The checks before a send that may clear inside the window: an open submission, or our slots unreadable or
+    not confirmed within `SLOTS_FRESH`. A live time that fails one waits (`WAITING`)."""
+    from vending import slots, submissions
+
+    open_rows = submissions.open_rows(conn, except_row)
+    if open_rows:
+        return ORDERS_BLOCKED.format(rows=", ".join(str(row[0]) for row in open_rows))
+    try:
+        slots.our_slots(conn, now)
+    except slots.SlotsNotRecorded as error:
+        return SLOTS_UNREADY.format(error=str(error).rstrip("."))
+    age = now - slots.stored(conn).last_checked_at
+    if age > SLOTS_FRESH:
+        return SLOTS_STALE.format(age=_span(age), limit=_span(SLOTS_FRESH))
+    return None
+
+
+def _before_start(now: datetime) -> str | None:
+    from vending.start import START
+
+    return BEFORE_START.format(start=_eastern(START)) if now < START else None
+
+
+def _already_sent(conn, now: datetime, *, due: datetime | None = None, except_row: int | None = None) -> str | None:
+    week = visit_week(due or now)
+    for row, sent_for in conn.execute(
+            "select id, schedule_due from purchase_submissions where schedule_due is not null"
+            " and status <> 'not_filed' and id is distinct from %s and schedule_due > %s and schedule_due < %s"
+            " order by id", (except_row, (due or now) - timedelta(days=8), (due or now) + timedelta(days=8))):
+        if visit_week(sent_for) == week:
+            return ALREADY_SENT.format(row=row, when=_eastern(sent_for))
+    return None
+
+
+def lease_busy(conn) -> str | None:
+    """Why a live time must wait for the run lease: another agent run holds it now. None when it is free."""
+    row = conn.execute("select run_id from agent_run_lease"
+                       " where token is not null and expires_at > clock_timestamp()").fetchone()
+    if row is None:
+        return None
+    return LEASE_BUSY.format(run="" if row[0] is None else f" (agent run {row[0]})")
+
+
+def lock_for_send(conn, due: datetime) -> None:
+    """The submit tool's locks for a scheduled run's send, taken before it reads the clock and held until the POST
+    is answered: the database switch's row and this time's row, `for share`, so an `off` committed meanwhile waits
+    and is ordered after the send."""
+    database_mode(conn, lock=True)
+    conn.execute("select from agent_schedule where due_at = %s for share", (due,))
+
+
+def send_blocker(conn, due: datetime, now: datetime, row: int) -> str | None:
+    """Why the scheduled run for `due` must not POST its submission `row` now, or None. The submit tool runs it in
+    the write gate's transaction, after the attempt is saved and just before the POST, so the locks it takes (the
+    database's mode row and this time's row, `for share`) hold until the POST is answered: an `off` committed
+    meanwhile waits and is ordered after the send. Both switches must still say live, the row must still be a live
+    run going, and every check before a send (`live_blocker`) must pass by `now`, the clock at the send."""
+    try:
+        sched = schedule()
+    except settings.SettingsError:
+        sched = None
+    container = "off" if sched is None else sched.mode
+    if container != "live":
+        return SEND_CONTAINER.format(mode=container)
+    in_db = database_mode(conn, lock=True)
+    if in_db != "live":
+        return SEND_DB.format(mode=in_db)
+    state = conn.execute("select mode, outcome from agent_schedule where due_at = %s for share", (due,)).fetchone()
+    if state is None or tuple(state) != ("live", "running"):
+        return SEND_ROW.format(state="nothing" if state is None else f"{state[0]} {state[1]}")
+    return live_blocker(conn, now, due=due, except_row=row)
+
+
 def default_run_agent(live: bool, authorize: Callable[[Any], str | None] | None = None) -> tuple[int | None, Any]:
-    """The agent's own entry point, as `python -m vending.agent` runs it: (run id, outcome). Always a dry run:
-    `live` is refused, whatever the caller passes (live scheduling is not enabled in this version).
+    """The agent's own entry point, as `python -m vending.agent [--live]` runs it: (run id, outcome).
     `authorize` runs in the transaction that takes the run lease, before anything is paid for
-    (`vending.agent.run`)."""
+    (`vending.agent.run`). Without the model key it returns a `failed` outcome and never starts the agent:
+    nothing is recorded in `agent_runs` and no request is made."""
     import anyio
 
     from vending import agent
 
-    if live:
-        raise ValueError(LIVE_NOT_ENABLED)
-    return anyio.run(lambda: agent.run(live=False, authorize=authorize))
+    if not model_key_present():
+        from vending.harness import DEFAULT_KEY_ENV
+
+        return None, agent.Outcome("failed", f"{MODEL_KEY_MISSING}{DEFAULT_KEY_ENV} isn't set on this worker, so the "
+                                             "run didn't start and no model request was made. Deploy with "
+                                             "-SetSecrets (docs/deploy.md).")
+    return anyio.run(lambda: agent.run(live=live, authorize=authorize))
 
 
 def _eastern(moment: datetime) -> str:
@@ -299,13 +492,14 @@ def last_run(conn) -> dict | None:
     return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in out.items()}
 
 
-# A claim, in one statement: the lower of this worker's mode, the database's and `CEILING` (dry-run), read by
-# the statement that inserts the row, so a change committed before it is what runs. Off is `skipped`; past the
-# latest start, by the database's clock read just before, `missed`.
+# A claim, in one statement: the lower of this worker's mode, the database's and `CEILING` (live), read by
+# the statement that inserts the row, so a change committed before it is what runs. No row is off; a value that
+# isn't one of the three words is dry-run. Off is `skipped`; past the latest start, by the database's clock read
+# just before, `missed`.
 CLAIM_SQL = """
 with chosen as (
     select (array['off', 'dry-run', 'live'])[1 + least(%(rank)s, %(ceiling)s, coalesce(
-        (select case when value = '"live"'::jsonb then 2 when value = '"dry-run"'::jsonb then 1 else 0 end
+        (select case when value = '"live"'::jsonb then 2 when value = '"off"'::jsonb then 0 else 1 end
          from config where key = %(key)s), 0))] as mode)
 insert into agent_schedule (due_at, latest_at, mode, outcome, detail, finished_at)
 select %(due)s, %(latest)s, case when %(past)s then %(cap)s else mode end,
@@ -341,17 +535,18 @@ def record(conn, due: datetime, latest: datetime, mode: str, outcome: str, detai
 
 
 def finish(conn, due: datetime, outcome: str, detail: str | None, run_id: int | None) -> None:
-    """Record how the run for `due` ended. Overwrites a `failed` a sweep wrote meanwhile: this is what happened."""
-    conn.execute("update agent_schedule set outcome = %s, detail = %s, run_id = %s, finished_at = now()"
-                 " where due_at = %s", (outcome, detail, run_id, due))
+    """Record how the run for `due` ended. Overwrites a `failed` a sweep wrote meanwhile: this is what happened.
+    A run id the agent already wrote there (`run_lease.attach`) stays when the ending has none."""
+    conn.execute("update agent_schedule set outcome = %s, detail = %s, run_id = coalesce(%s, run_id),"
+                 " finished_at = now() where due_at = %s", (outcome, detail, run_id, due))
 
 
 @dataclass(frozen=True)
 class Claim:
     due: datetime
     latest: datetime
-    mode: str           # what the claim's insert chose: always `dry-run`
-    note: str           # goes before the agent's detail: "Started 6 h 0 min late. "
+    mode: str           # what runs: `live` or `dry-run` (a live claim a check turned into a dry run is `dry-run`)
+    note: str           # goes before the agent's detail: "Started 6 h 0 min late. ", or why it isn't live
 
 
 class Running:
@@ -410,8 +605,10 @@ class Scheduler:
     def __init__(self, sched: Schedule, run_agent: Callable[..., tuple[int | None, Any]] = default_run_agent,
                  connect: Callable[[], Any] | None = None, log: Callable[[str], None] = print,
                  background: bool = True, clock: Callable[[], datetime] | None = None,
-                 db_clock: Callable[[Any], datetime] | None = None):
+                 db_clock: Callable[[Any], datetime] | None = None, bridge: Callable[[], Any] | None = None):
         self.sched, self.run_agent, self.log, self.background = sched, run_agent, log, background
+        # The bridge client the reconciliation of open submissions reads with (`vending.bridge.Bridge` by default).
+        self.bridge = bridge
         self._connect = connect
         # The worker's clock: when to wake, and how long a run has gone. Never what decides a start.
         self.clock = clock or (lambda: datetime.now(timezone.utc))
@@ -432,10 +629,16 @@ class Scheduler:
         # Set when a run's thread ends, so the worker's loop wakes and asks `next_due` again: a second time that
         # day may be due before the next sync. The loop clears it.
         self.run_ended = threading.Event()
+        # Why the last tick couldn't do its work (the database is down or behind), or None: /health shows it, and
+        # the dashboard makes it a Problem.
+        self.problem: str | None = None
+        # A live time held back by a passing blocker, and why (the newest words): it has no row yet, and is tried
+        # again every `LIVE_RETRY` until its latest start (`WAITING`).
+        self.waiting: dict[datetime, tuple[datetime, str]] = {}
 
     @property
     def mode(self) -> str:
-        """The most this worker runs: its AGENT_SCHEDULE_MODE, capped at `CEILING` (dry-run)."""
+        """The most this worker runs: its AGENT_SCHEDULE_MODE (`CEILING` is live, so it is the setting itself)."""
         return lower(self.sched.mode, CEILING)
 
     def connect(self):
@@ -454,6 +657,8 @@ class Scheduler:
         if self._going():
             # Already past it (a round of the worker ran long): now, never a time in the past.
             return max(now, self.running.started + STUCK_AFTER + timedelta(seconds=1))
+        if self.waiting:        # a live time waiting on a passing blocker: try again now (`not_before` spaces it)
+            return now
         if self.unfinished is not None or not self.loaded \
                 or any(d not in self.known for d, _ in due_times(self.sched, now)):
             return now
@@ -463,10 +668,14 @@ class Scheduler:
         return upcoming
 
     def public(self) -> dict:
-        """What `/health` shows: what this worker runs, its setting, that live scheduling isn't enabled, the next
-        time, and the last scheduled run without its detail."""
-        return {"mode": self.mode, "setting": self.sched.mode, "note": LIVE_NOT_ENABLED,
-                "next_at": next_time(self.sched, self.clock()).isoformat(), "last": self.last}
+        """What `/health` shows: the most this worker runs, its setting, whether it has the model key (never the
+        key), the next time, and the last scheduled run without its detail."""
+        waiting = None
+        for due, (latest, why) in sorted(self.waiting.items()):
+            waiting = WAITING.format(due=_eastern(due), why=why, every=_span(LIVE_RETRY), latest=_eastern(latest))
+        return {"mode": self.mode, "setting": self.sched.mode, "model_key": model_key_present(),
+                "next_at": next_time(self.sched, self.clock()).isoformat(), "last": self.last,
+                "problem": self.sched.problem or self.problem, "waiting": waiting}
 
     def tick(self, now: datetime) -> None:
         """Record what is due, and start the run if one may start. Never raises."""
@@ -481,10 +690,12 @@ class Scheduler:
                 self._write_ending(self.unfinished)
                 self.unfinished = None
             self._tick()
+            self.problem = None
         except Exception as error:     # noqa: BLE001 - the worker must go on; the next try is a minute away
             from vending.worker import _describe
 
             self.not_before = now + RETRY
+            self.problem = TICK_PROBLEM.format(error=_describe(error))
             self.log(f"agent schedule: {_describe(error)}; trying again in a minute")
 
     def _going(self) -> bool:
@@ -593,6 +804,8 @@ class Scheduler:
                 continue
             self._miss(conn, d, latest, now)
         claim = self._claim(conn, *newest) if newest is not None else None
+        # Only the newest runnable time can still be waiting; every other one has its row now.
+        self.waiting = {d: w for d, w in self.waiting.items() if newest is not None and d == newest[0]}
         self.known = {d for d, _ in due}
         self.loaded = True
         self.last = last_run(conn)
@@ -603,6 +816,10 @@ class Scheduler:
             detail = CLOCKS_SKIP.format(day=f"{due.astimezone(EASTERN):%a %d %b}")
         else:
             detail = MISSED.format(latest=_eastern(latest)) if now >= latest else SUPERSEDED
+        if due in self.waiting:     # a live time that waited: say what held it back
+            why = self.waiting.pop(due)[1]
+            detail = (LIVE_MISSED.format(latest=_eastern(latest), why=why) if now >= latest
+                      else f"{SUPERSEDED} It had been waiting: {why}")
         if record(conn, due, latest, self.mode, "missed", detail):
             self.log(f"agent schedule: the run due {_eastern(due)} was missed")
 
@@ -612,6 +829,14 @@ class Scheduler:
         if latest <= due:
             self._miss(conn, due, latest, self.db_clock(conn))
             return None
+        if lower(self.mode, database_mode(conn)) == "live" \
+                and (why := self._live_wait(conn, due, self.db_clock(conn))) is not None:
+            if self.waiting.get(due, (None, None))[1] != why:
+                self.log(f"agent schedule: the live run due {_eastern(due)} waits: {why}")
+            self.waiting[due] = (latest, why)
+            self.not_before = self.clock() + LIVE_RETRY
+            return None
+        self.waiting.pop(due, None)
         stored = record(conn, due, latest, self.mode, "running", clock=lambda: self.db_clock(conn))
         if stored is None:
             return None         # another worker has it
@@ -622,10 +847,63 @@ class Scheduler:
         if outcome == "skipped":
             self.log(f"agent schedule: the run due {_eastern(due)} skipped; {DB_MODE_KEY} is off in the database")
             return None
-        late = self.db_clock(conn) - due
+        now = self.db_clock(conn)
+        late = now - due
+        note = f"Started {_span(late)} late. " if late >= LATE_AFTER else ""
+        if mode == "live" and (why := live_blocker(conn, now, due=due)) is not None:
+            # Under the schedule's lock, before the run's thread exists: the row says what will run.
+            conn.execute("update agent_schedule set mode = 'dry-run' where due_at = %s", (due,))
+            mode, note = "dry-run", DOWNGRADED.format(why=why) + note
+            self.log(f"agent schedule: the run due {_eastern(due)} runs as a dry run, not live: {why}")
         self.log(f"agent schedule: starting the {mode} run due {_eastern(due)}"
                  + (f", {_span(late)} late" if late >= LATE_AFTER else ""))
-        return Claim(due, latest, mode, f"Started {_span(late)} late. " if late >= LATE_AFTER else "")
+        return Claim(due, latest, mode, note)
+
+    def _live_wait(self, conn, due: datetime, now: datetime) -> str | None:
+        """Why a time that would run live must wait, or None to claim it now. A lasting blocker doesn't wait: the
+        claim runs it as a dry run and says why. Before an open submission counts as a passing blocker, what the
+        bridge can settle by itself is settled (`reconcile`)."""
+        if lasting_blocker(conn, now, due=due) is not None:
+            return None
+        self.reconcile(conn)
+        return passing_blocker(conn, now) or lease_busy(conn)
+
+    def reconcile(self, conn) -> None:
+        """`python -m vending.submissions check`, unattended: settle each open submission whose POST got a validated
+        `201` from the bridge's own answer. Nothing is sent, and a row in doubt stays open. Never raises."""
+        from vending import submissions
+        from vending.halt import WAIT_NOTICE_MS
+
+        try:
+            if not any(row[5] for row in submissions.open_rows(conn)):
+                return
+            if self.bridge is None:
+                from vending.bridge import Bridge
+
+                self.bridge = Bridge
+            for checked in submissions.check(conn, self.bridge, lock_timeout_ms=WAIT_NOTICE_MS):
+                if checked.status == "accepted":     # the rest stay open, and the wait already says so
+                    self.log(f"agent schedule: settled submission {checked.row}: {checked.why}")
+        except Exception as error:      # noqa: BLE001 - the rows stay open, and the run waits
+            from vending.worker import _describe
+
+            self.log(f"agent schedule: couldn't check the open submissions ({_describe(error)})")
+
+    def _put_back(self, claim: Claim, detail: str) -> bool:
+        """A live run whose start found the run lease taken after all: nothing started, so its row is taken back
+        and its time waits again, as a lease found busy before the claim does. False if that can't be done."""
+        try:
+            with self.connect() as conn:
+                gone = conn.execute("delete from agent_schedule where due_at = %s and outcome = 'running'"
+                                    " and started_at is null returning due_at", (claim.due,)).fetchone()
+        except Exception:       # noqa: BLE001 - recorded as an ending instead
+            return False
+        if gone is None:
+            return False
+        self.waiting[claim.due] = (claim.latest, LEASE_BUSY.format(run="") + f" ({detail.rstrip('.')})")
+        self.not_before = self.clock() + LIVE_RETRY
+        self.log(f"agent schedule: the live run due {_eastern(claim.due)} found the run lease taken; it waits")
+        return True
 
     def _authorize(self, claim: Claim, refused: dict):
         """What the agent runs in the transaction that takes the run lease (`run_lease.take`), once the lease is
@@ -634,7 +912,12 @@ class Scheduler:
         either lock can't carry a start past its latest start. The row must still say `running`, unstarted;
         the latest start must not have passed by that reading; and the mode must not be off. Then it records
         that same reading as the start (`started_at`), in that same transaction. So an `off` committed
-        meanwhile either stops the run, or waits until the start is recorded and is ordered after it."""
+        meanwhile either stops the run, or waits until the start is recorded and is ordered after it.
+
+        A live run also needs the database's mode still `live` (it was chosen live before the lease, and can't
+        become a dry run now), and the checks before a send (`live_blocker`) to pass again, by that same reading
+        of the clock; else nothing runs and the row is `skipped`, with why. A run that starts marks the lease
+        with its time (`agent_run_lease.schedule_due`), so the submit tool checks it all again before the POST."""
         def authorize(conn) -> str | None:
             mode = lower(self.mode, database_mode(conn, lock=True))
             mine = conn.execute("select from agent_schedule where due_at = %s and outcome = 'running'"
@@ -644,10 +927,15 @@ class Scheduler:
                 refused["ending"], refused["keep"] = ("skipped", NOT_CLAIMED), True
             elif now >= claim.latest:
                 refused["ending"] = ("missed", LATE_AT_START.format(latest=_eastern(claim.latest)))
-            elif mode == "off":
+            elif mode == "off" or (claim.mode == "live" and mode != "live"):
                 refused["ending"] = ("skipped", CHANGED.format(mode=mode))
+            elif claim.mode == "live" and (why := live_blocker(conn, now, due=claim.due)) is not None:
+                refused["ending"] = ("skipped", NOT_LIVE.format(why=why))
             else:
                 conn.execute("update agent_schedule set started_at = %s where due_at = %s", (now, claim.due))
+                # The lease about to be taken is this time's: the submit tool checks it all again before a POST
+                # (`send_blocker`), and the agent names its run on this row (`run_lease.attach`).
+                conn.execute("update agent_run_lease set schedule_due = %s where one", (claim.due,))
             return refused["ending"][1] if "ending" in refused else None
         return authorize
 
@@ -666,7 +954,8 @@ class Scheduler:
         try:
             refused: dict = {}
             try:
-                run_id, out = self.run_agent(False, self._authorize(claim, refused))     # never live
+                live = claim.mode == "live"
+                run_id, out = self.run_agent(live, self._authorize(claim, refused))
                 outcome, detail = getattr(out, "status", None), getattr(out, "detail", None)
             except BaseException as error:      # noqa: BLE001 - a thread's error would otherwise be lost
                 run_id, outcome, detail = None, "failed", f"The agent's entry point raised {_describe(error)}"
@@ -675,10 +964,13 @@ class Scheduler:
             if refused.get("keep"):
                 self.log(f"agent schedule: the run due {_eastern(claim.due)} wasn't started: {NOT_CLAIMED}")
                 return      # another worker recorded the row: leave what it wrote
+            if claim.mode == "live" and "ending" not in refused and outcome == "skipped" \
+                    and isinstance(detail, str) and detail.startswith(_busy()) and self._put_back(claim, detail):
+                return      # the lease was taken after the claim: nothing started, so the time waits again
             if "ending" in refused:
                 ending = Ending(claim.due, *refused["ending"], None)
             else:
-                if outcome not in ENDINGS:
+                if outcome not in (LIVE_ENDINGS if claim.mode == "live" else ENDINGS):
                     outcome, detail = ("failed",
                                        f"The agent ended with an unknown status {outcome!r}. {detail or ''}".strip())
                 ending = Ending(claim.due, outcome, (claim.note + (detail or "")).strip() or None, run_id)
@@ -693,6 +985,12 @@ class Scheduler:
             running.let_go()
             running.over = True
             self.run_ended.set()
+
+
+def _busy() -> str:
+    from vending.agent import BUSY
+
+    return BUSY
 
 
 class Invalid:
@@ -713,9 +1011,9 @@ def default_scheduler(log: Callable[[str], None] = print) -> Scheduler | Invalid
     except Exception as error:      # noqa: BLE001 - a wrong setting must never stop the worker
         log(f"scheduled agent runs are off: {error}")
         return Invalid()
-    log(f"scheduled agent runs: dry runs only, {MODE_SETTING} is {sched.mode} ({DB_MODE_KEY} in the database "
-        f"must say so too), next due {_eastern(first)}"
-        + (f". {LIVE_NOT_ENABLED}" if sched.mode == "live" else ""))
+    log(f"scheduled agent runs: {MODE_SETTING} is {sched.mode} ({DB_MODE_KEY} in the database must say so too; "
+        f"the lower of the two runs), next due {_eastern(first)}"
+        + ("" if model_key_present() else ". The model key isn't set, so each run will fail before any request"))
     return Scheduler(sched, log=log)
 
 
@@ -738,7 +1036,8 @@ def main(argv: list[str] | None = None) -> int:
         if sched is None:
             print(f"Scheduled runs are off here ({MODE_SETTING} is unset or off).")
         else:
-            print(f"{MODE_SETTING} here: {sched.mode}, from {sched.first_day:%a %d %b %Y}; "
+            times = ", ".join(f"{DAYS[e.weekday][:3]} {e.due:%H:%M}-{e.latest:%H:%M}" for e in sched.entries)
+            print(f"{MODE_SETTING} here: {sched.mode}, from {sched.first_day:%a %d %b %Y}; times (ET) {times}; "
                   f"next due {_eastern(next_time(sched, datetime.now(timezone.utc)))}.")
     with db.connect() as conn:
         behind = db.pending(conn)
@@ -747,17 +1046,32 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         in_db = database_mode(conn)
         runs = lower(lower(sched.mode, in_db), CEILING) if sched else "off"
-        print(f"{DB_MODE_KEY} in the database: {in_db}. A worker runs {runs} (the lower of the two, "
-              "and never more than dry-run).")
-        if "live" in (in_db, sched.mode if sched else None):
-            print(LIVE_NOT_ENABLED)
-        rows = conn.execute("select due_at, mode, outcome, run_id, detail from agent_schedule"
-                            " order by due_at desc limit %s", (args.rows,)).fetchall()
+        print(f"{DB_MODE_KEY} in the database: {in_db}. A worker runs {runs} (the lower of the two).")
+        if runs == "live":
+            why = live_blocker(conn, database_now(conn))
+            print("A live run may send a restock request." if why is None
+                  else f"A run due now would be a dry run, not live: {why}")
+        if sched is not None and not model_key_present():
+            print("The model key isn't set here, so a run started here would fail before any request.")
+        rows = conn.execute("select s.due_at, s.mode, s.outcome, s.run_id, s.detail,"
+                            " coalesce(r.request_id, (select p.request_id from purchase_submissions p"
+                            "  where p.schedule_due = s.due_at and p.status = 'accepted' order by p.id desc limit 1)),"
+                            " array(select p.id::text || ' ' || p.status from purchase_submissions p"
+                            "  where p.schedule_due = s.due_at and p.status in ('sending', 'unknown') order by p.id)"
+                            " from agent_schedule s left join agent_runs r on r.id = s.run_id"
+                            " order by s.due_at desc limit %s", (args.rows,)).fetchall()
     if not rows:
         print("No scheduled run has been recorded yet.")
-    for due, mode, outcome, run_id, detail in rows:
+    for due, mode, outcome, run_id, detail, request_id, unsettled in rows:
         run = f", agent run {run_id}" if run_id is not None else ""
-        print(f"{_eastern(due)}  {mode}  {outcome}{run}" + (f"\n    {detail}" if detail else ""))
+        if request_id:
+            sent = f", sent request {request_id}"
+        elif unsettled:
+            sent = (f", may have sent submission {', '.join(unsettled)}: a person settles it with "
+                    "python -m vending.submissions resolve")
+        else:
+            sent = "" if outcome == "running" else ", nothing sent"
+        print(f"{_eastern(due)}  {mode}  {outcome}{run}{sent}" + (f"\n    {detail}" if detail else ""))
     return 0
 
 

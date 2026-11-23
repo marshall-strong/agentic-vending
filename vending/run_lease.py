@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Callable
 
 import psycopg
@@ -49,6 +49,10 @@ NEAR_END = "this run's lease ends before a model request could finish (the run i
 class Lease:
     token: uuid.UUID
     took_over: int | None = None    # the agent run whose expired lease this one took, if it had one
+    # The scheduled time this lease was taken for (`authorize` set it), or None for a run by hand. The agent hands
+    # it, with `token`, to the MCP server it starts, so a submit is checked against this run's own lease and time,
+    # never against whichever lease is current when it sends (`vending.tools.submit`).
+    schedule_due: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -72,12 +76,15 @@ def take(conn: psycopg.Connection, *, deadline: float,
             "select token, run_id, expires_at, expires_at <= now() from agent_run_lease where one for update").fetchone()
         if token is not None and not expired:
             return Busy(holder)
+        # Whose scheduled time this lease is for: none, unless `authorize` (the scheduler's) says so below.
+        conn.execute("update agent_run_lease set schedule_due = null where one")
         if authorize is not None and (why := authorize(conn)) is not None:
             return Refused(why)
         mine = uuid.uuid4()
-        conn.execute("update agent_run_lease set token = %s, run_id = null, taken_at = now(), renewed_at = now(),"
-                     " hard_until = now() + %s, expires_at = least(now() + %s, now() + %s) where one",
-                     (mine, timedelta(seconds=deadline) + GRACE, TTL, timedelta(seconds=deadline) + GRACE))
+        due = conn.execute(
+            "update agent_run_lease set token = %s, run_id = null, taken_at = now(), renewed_at = now(),"
+            " hard_until = now() + %s, expires_at = least(now() + %s, now() + %s) where one returning schedule_due",
+            (mine, timedelta(seconds=deadline) + GRACE, TTL, timedelta(seconds=deadline) + GRACE)).fetchone()[0]
         took_over = None
         if token is not None and holder is not None:
             at = f"{expires.astimezone(EASTERN):%a %d %b %H:%M} ET"
@@ -90,13 +97,19 @@ def take(conn: psycopg.Connection, *, deadline: float,
                 (agent_runs.SUBMITTED, agent_runs.AFTERWARDS, EXPIRED.format(at=at), EXPIRED.format(at=at),
                  holder)).fetchone()
             took_over = holder if found else None
-    return Lease(mine, took_over)
+    return Lease(mine, took_over, due)
 
 
 def attach(conn: psycopg.Connection, token: uuid.UUID, run_id: int) -> bool:
-    """Name the holder's run, so a run that finds the lease taken can say which. False if it isn't held."""
-    return conn.execute("update agent_run_lease set run_id = %s where token = %s returning one",
-                        (run_id, token)).fetchone() is not None
+    """Name the holder's run, so a run that finds the lease taken can say which. False if it isn't held. A lease
+    taken for a scheduled time (`schedule_due`) names the run on that `agent_schedule` row too, so the row links
+    its run even if the worker never records the ending."""
+    with conn.transaction():
+        row = conn.execute("update agent_run_lease set run_id = %s where token = %s returning schedule_due",
+                           (run_id, token)).fetchone()
+        if row is not None and row[0] is not None:
+            conn.execute("update agent_schedule set run_id = %s where due_at = %s and run_id is null", (run_id, row[0]))
+    return row is not None
 
 
 def renew(conn: psycopg.Connection, token: uuid.UUID) -> bool:
@@ -122,4 +135,4 @@ def hold(conn: psycopg.Connection, token: uuid.UUID, margin: timedelta) -> str |
 def give_back(conn: psycopg.Connection, token: uuid.UUID) -> None:
     """Free the lease, if this run still holds it."""
     conn.execute("update agent_run_lease set token = null, run_id = null, taken_at = null, renewed_at = null,"
-                 " expires_at = null, hard_until = null where token = %s", (token,))
+                 " expires_at = null, hard_until = null, schedule_due = null where token = %s", (token,))

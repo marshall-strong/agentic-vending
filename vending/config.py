@@ -88,7 +88,8 @@ def _slot(value: Any) -> str | None:
 
 
 # What the worker's scheduled agent runs do (`vending.agent_schedule`). The lower of this and the container's
-# `AGENT_SCHEDULE_MODE` wins, so both must say so before the worker runs the agent.
+# `AGENT_SCHEDULE_MODE` wins, so both must say so before the worker runs the agent, and both must say `live`
+# before a scheduled run may send a restock request. The team agrees before anyone sets `live`.
 SCHEDULE_MODES = ("off", "dry-run", "live")
 
 
@@ -183,7 +184,8 @@ KNOWN: dict[str, Setting] = {
     "model_daily_cap_cents": Setting("most live model calls may spend in one Eastern day (default 400)",
                                      lambda v: _whole(v, 1, 60000, "cents")),
     "agent_schedule_mode": Setting("what the worker's scheduled agent runs do: off, dry-run or live; the lower of "
-                                   "this and the container's AGENT_SCHEDULE_MODE wins (default off)", _schedule_mode),
+                                   "this and the container's AGENT_SCHEDULE_MODE wins, so a run is live only when "
+                                   "both say live (default off)", _schedule_mode),
     "model_test_daily_cap_cents": Setting("most test calls (replays, sweeps) may spend in one Eastern day "
                                           "(default 2000)", lambda v: _whole(v, 1, 60000, "cents")),
     "price_search_searches_per_run": Setting("web searches one live agent run may make to look up pack prices; "

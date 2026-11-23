@@ -679,21 +679,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     # 7. Gates.
     # The cutoffs exist to get stock to the Friday visit. An off-cycle visit
     # happens on another day, so they don't apply to it.
-    used = {} if desired.off_cycle else _stores_used(slots)
-    now_local = now.astimezone(_tz(config.timezone)) if used else now
-    for store, slot_names in sorted(used.items()):
-        cutoff = config.cutoffs.get(store)
-        if cutoff is None or not _past_cutoff(now_local, cutoff, config.week_starts):
-            continue
-        when = f"{_WEEKDAYS[cutoff.weekday]} {cutoff.at:%H:%M}"
-        if store in config.soft_cutoff_stores:
-            warnings.append(
-                f"past the {store} cutoff ({when}) for slots {', '.join(slot_names)}; "
-                f"the order may arrive after the visit")
-        else:
-            refusals.append(Refusal("past_cutoff", (
-                f"past the {store} cutoff ({when}) for slots {', '.join(slot_names)}; "
-                f"switch to Amazon or wait for next week")))
+    late_warnings, late = _cutoff_gates({} if desired.off_cycle else _stores_used(slots), config, now)
+    warnings.extend(late_warnings)
+    refusals.extend(late)
 
     if current.pending:
         ids = ", ".join(p.request_id for p in current.pending)
@@ -1353,6 +1341,46 @@ def _past_cutoff(now_local: datetime, cutoff: Cutoff, week_starts: int) -> bool:
         return ((weekday - week_starts) % 7, hour, minute)
     return (position(now_local.weekday(), now_local.hour, now_local.minute)
             > position(cutoff.weekday, cutoff.at.hour, cutoff.at.minute))
+
+
+def _cutoff_gates(used: Mapping[str, list[str]], config: Config, now: datetime) -> tuple[list[str], list[Refusal]]:
+    """(warnings, refusals) for the stores `used` (store: the slots it stocks) past their cutoff at `now`."""
+    warnings: list[str] = []
+    refusals: list[Refusal] = []
+    now_local = now.astimezone(_tz(config.timezone)) if used else now
+    for store, slot_names in sorted(used.items()):
+        cutoff = config.cutoffs.get(store)
+        if cutoff is None or not _past_cutoff(now_local, cutoff, config.week_starts):
+            continue
+        when = f"{_WEEKDAYS[cutoff.weekday]} {cutoff.at:%H:%M}"
+        if store in config.soft_cutoff_stores:
+            warnings.append(
+                f"past the {store} cutoff ({when}) for slots {', '.join(slot_names)}; "
+                f"the order may arrive after the visit")
+        else:
+            refusals.append(Refusal("past_cutoff", (
+                f"past the {store} cutoff ({when}) for slots {', '.join(slot_names)}; "
+                f"switch to Amazon or wait for next week")))
+    return warnings, refusals
+
+
+def cutoff_refusals(plan: Plan, config: Config, now: datetime) -> list[Refusal]:
+    """The plan's store cutoffs again at `now`: the submit tool's check with the clock at the send, so a plan made
+    at Thursday 23:59 isn't sent after midnight. The same rule as the planner's step 7 (never for an off-cycle
+    visit), from the plan's own lines."""
+    if plan.off_cycle:
+        return []
+    used: dict[str, list[str]] = defaultdict(list)
+    for line in plan.lines:
+        if line.purchase is None:
+            continue
+        for o in (line.purchase.primary, line.purchase.alternate):
+            if o is None:
+                continue
+            for slot in (line.slot, *(f for f, _ in line.purchase.feeds)):
+                if slot not in used[o.store]:
+                    used[o.store].append(slot)
+    return _cutoff_gates(used, config, now)[1]
 
 
 def _week_of(now_local: datetime, week_starts: int) -> date:
